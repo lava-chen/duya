@@ -21,6 +21,7 @@ export {
   getMaxOutputTokens,
   getTemperature,
   validateBudgets,
+  collectDiagnostics,
 } from './utils/simple-options.js';
 
 export type {
@@ -63,6 +64,7 @@ export {
   glmModels,
   kimiModels,
   openAIModels,
+  openaiResponsesModels,
   anthropicModels,
   openrouterModels,
   ollamaModels,
@@ -87,7 +89,9 @@ export function createAIClient(options: AIClientOptions): AIClient {
         import('./api/openai-completions.js').then(m => m.createOpenAICompletionsClient(options))
       );
     case 'openai-responses':
-      throw new Error('openai-responses not yet implemented (P1)');
+      return createLazyClient(() =>
+        import('./api/openai-responses.js').then(m => m.createOpenAIResponsesClient(options))
+      );
     case 'gemini':
       throw new Error('gemini not yet implemented (P2)');
     default:

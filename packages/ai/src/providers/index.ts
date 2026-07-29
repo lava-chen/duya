@@ -5,6 +5,7 @@ export { qwenModels } from './qwen.js';
 export { glmModels } from './glm.js';
 export { kimiModels } from './kimi.js';
 export { openAIModels } from './openai.js';
+export { openaiResponsesModels } from './openai-responses.js';
 export { anthropicModels } from './anthropic.js';
 export { openrouterModels } from './openrouter.js';
 export { ollamaModels } from './ollama.js';
@@ -17,6 +18,7 @@ import { qwenModels } from './qwen.js';
 import { glmModels } from './glm.js';
 import { kimiModels } from './kimi.js';
 import { openAIModels } from './openai.js';
+import { openaiResponsesModels } from './openai-responses.js';
 import { anthropicModels } from './anthropic.js';
 import { openrouterModels } from './openrouter.js';
 import { ollamaModels } from './ollama.js';
@@ -29,6 +31,7 @@ export const allProviderModels: Model[] = [
   ...glmModels,
   ...kimiModels,
   ...openAIModels,
+  ...openaiResponsesModels,
   ...anthropicModels,
   ...openrouterModels,
   ...ollamaModels,

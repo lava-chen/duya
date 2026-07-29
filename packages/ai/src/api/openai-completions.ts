@@ -22,6 +22,7 @@ import type {
 import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
+import { collectDiagnostics } from '../utils/simple-options.js';
 
 // =============================================================================
 // Types
@@ -437,6 +438,22 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
 
       // Map OpenAI tool_call index → contentIndex in assistantMsg.content.
       const toolCallIndexMap = new Map<number, number>();
+
+      // 7.5. Emit parameter diagnostics before the stream starts.
+      const diagnostics = collectDiagnostics(model, {
+        effort: chatOptions?.effort,
+        temperature: chatOptions?.temperature,
+        maxOutputTokens: chatOptions?.maxOutputTokens,
+        reasoningBudget: chatOptions?.reasoningBudget,
+        totalOutputBudget: chatOptions?.totalOutputBudget,
+      });
+      for (const diag of diagnostics) {
+        yield {
+          type: 'system',
+          data: diag.message,
+          metadata: { diagnostic: diag },
+        };
+      }
 
       // 8. Open the stream. Cast to AsyncIterable to satisfy TS — the SDK
       //    return type depends on the `stream` literal, which we set above.

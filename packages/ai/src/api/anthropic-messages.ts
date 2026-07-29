@@ -24,6 +24,7 @@ import type {
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
+import { collectDiagnostics } from '../utils/simple-options.js';
 
 // =============================================================================
 // Constants
@@ -624,6 +625,22 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         timestamp: Date.now(),
       };
       const state = { currentBlockIdx: -1 };
+
+      // 6.5. Emit parameter diagnostics before the stream starts.
+      const diagnostics = collectDiagnostics(model, {
+        effort: chatOptions?.effort,
+        temperature: chatOptions?.temperature,
+        maxOutputTokens: chatOptions?.maxOutputTokens,
+        reasoningBudget: chatOptions?.reasoningBudget,
+        totalOutputBudget: chatOptions?.totalOutputBudget,
+      });
+      for (const diag of diagnostics) {
+        yield {
+          type: 'system',
+          data: diag.message,
+          metadata: { diagnostic: diag },
+        };
+      }
 
       // 7. Open the stream.
       const stream = await client.messages.stream(
