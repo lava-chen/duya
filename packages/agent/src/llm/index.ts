@@ -9,15 +9,14 @@
  * Anthropic is configured).
  */
 
-import type { LLMProvider } from '../types.js';
+import type { LLMProvider, SSEEvent } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { LazyLLMClientProxy } from './base.js';
-import { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
 import type { RetryConfig } from './withRetry.js';
+import { withRetry } from './withRetry.js';
 import { createAIClient } from '@duya/ai';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
 
-export { LLMClientWrapper, createLLMClientWrapper } from './wrapper.js';
 export type { LLMClient, LLMClientOptions, LazyLLMClientProxy } from './base.js';
 
 /**
@@ -119,33 +118,64 @@ export function createLLMClient(
 }
 
 /**
+ * Wraps an LLMClient's `streamChat` with retry logic (`withRetry`).
+ * Non-streaming `chat()` is passed through unchanged; retry only applies
+ * to streaming calls. The per-call `signal` from `streamChat` options is
+ * merged into the retry config so `withRetry` aborts its backoff sleep
+ * when the caller aborts the stream.
+ */
+class RetryableLLMClient implements LLMClient {
+  constructor(
+    private readonly inner: LLMClient,
+    private readonly retryConfig: Partial<RetryConfig>,
+  ) {}
+
+  async *streamChat(
+    messages: Parameters<LLMClient['streamChat']>[0],
+    options?: Parameters<LLMClient['streamChat']>[1],
+  ): AsyncGenerator<SSEEvent, void, unknown> {
+    yield* withRetry(
+      () => this.inner.streamChat(messages, options),
+      { ...this.retryConfig, signal: options?.signal },
+    );
+  }
+
+  async chat(
+    messages: Parameters<NonNullable<LLMClient['chat']>>[0],
+    options?: Parameters<NonNullable<LLMClient['chat']>>[1],
+  ): ReturnType<NonNullable<LLMClient['chat']>> {
+    if (!this.inner.chat) {
+      throw new Error('Underlying LLM client does not support non-streaming chat()');
+    }
+    return this.inner.chat(messages, options);
+  }
+}
+
+/**
  * Create an LLM client with retry support
  *
- * This creates a client that automatically retries on transient failures
- * with exponential backoff.
+ * - `ollama` keeps its native `RetryableOllamaClient` (not migrated to @duya/ai).
+ * - `anthropic` / `openai` delegate to `createLLMClient` (→ @duya/ai) and wrap
+ *   the resulting stream with `withRetry` for automatic retry on transient
+ *   failures with exponential backoff.
  */
 export function createRetryableLLMClient(
   provider: LLMProvider,
-  options: LLMClientOptions & { retryConfig?: Partial<RetryConfig> }
+  options: LLMClientOptionsExtended & { retryConfig?: Partial<RetryConfig> }
 ): LLMClient {
   const { retryConfig, ...clientOptions } = options;
 
-  switch (provider) {
-    case 'anthropic':
-      return new LazyLLMClientProxy(() =>
-        import('./RetryableAnthropicClient.js').then(m => new m.RetryableAnthropicClient({ ...clientOptions, retryConfig }))
-      );
-    case 'openai':
-      return new LazyLLMClientProxy(() =>
-        import('./RetryableOpenAIClient.js').then(m => new m.RetryableOpenAIClient({ ...clientOptions, retryConfig }))
-      );
-    case 'ollama':
-      return new LazyLLMClientProxy(() =>
-        import('./RetryableOllamaClient.js').then(m => new m.RetryableOllamaClient({ ...clientOptions, retryConfig }))
-      );
-    default:
-      throw new Error(`Unsupported LLM provider: ${provider}`);
+  // Ollama stays as-is (not migrated to @duya/ai)
+  if (provider === 'ollama') {
+    return new LazyLLMClientProxy(() =>
+      import('./RetryableOllamaClient.js').then(m => new m.RetryableOllamaClient({ ...clientOptions, retryConfig }))
+    );
   }
+
+  // anthropic / openai → createLLMClient (delegates to @duya/ai) wrapped
+  // with withRetry for transient-failure retry.
+  const baseClient = createLLMClient(provider, clientOptions);
+  return new RetryableLLMClient(baseClient, retryConfig ?? {});
 }
 
 /**

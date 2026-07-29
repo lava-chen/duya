@@ -55,7 +55,7 @@ type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
  *   - glm-style:         thinking { type, budget_tokens }.
  *   - think-tag-fallback: no param; reasoning arrives in <think> tags.
  */
-function resolveOpenAIThinking(
+export function resolveOpenAIThinking(
   model: Model<'openai-chat'>,
   effort?: string,
 ): Record<string, unknown> | undefined {

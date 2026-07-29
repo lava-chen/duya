@@ -29,6 +29,7 @@ import type {
   TokenUsage,
   AgentProgressEvent,
   StopReason,
+  ModelCompat,
 } from '@duya/ai';
 
 export type {
@@ -203,6 +204,10 @@ export interface AgentOptions {
       supportsReasoning?: boolean;
       supportsPromptCache?: boolean;
     };
+    /** Provider-specific compat flags from @duya/ai preset models.
+     *  Drives thinking format selection, forceAdaptiveThinking, etc.
+     *  Resolved by findModelCompat(apiFormat, model) in toRuntimeConfig. */
+    modelCompat?: ModelCompat;
     requestOptions?: Record<string, unknown>;
   };
 }

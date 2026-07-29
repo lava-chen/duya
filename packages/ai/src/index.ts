@@ -12,6 +12,7 @@ export {
   getSupportedThinkingLevels,
   clampThinkingLevel,
   getNativeLevel,
+  findModelCompat,
 } from './models.js';
 
 export type {

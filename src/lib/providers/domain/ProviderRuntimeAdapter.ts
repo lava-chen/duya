@@ -29,6 +29,7 @@ import type {
 } from '../types';
 import { inferApiFormatFromLegacyProviderType } from '../legacy';
 import { redactSecrets } from './ProviderValidation';
+import { findModelCompat } from '@duya/ai';
 
 interface BuildOptions {
   /** Model id to use for this call. */
@@ -146,6 +147,12 @@ export function toRuntimeConfig(
       }
     }
   }
+  // Resolve ModelCompat from @duya/ai preset models.
+  // This provides protocol-level compat flags (forceAdaptiveThinking,
+  // openAIThinkingFormat, etc.) that drive thinking parameter resolution
+  // in the @duya/ai protocol layer.
+  const modelCompat = findModelCompat(provider.apiFormat, options.modelId);
+
   return {
     providerId: provider.id,
     providerName: provider.name,
@@ -156,6 +163,7 @@ export function toRuntimeConfig(
     headers,
     model: options.modelId,
     modelCapabilities: options.capabilities,
+    modelCompat,
     requestOptions,
   };
 }
@@ -201,6 +209,8 @@ export function toRuntimeConfigFromLegacy(
 
   const headers = buildHeaders(apiFormat, auth, apiProvider.headers);
 
+  const modelCompat = findModelCompat(apiFormat, modelId);
+
   return {
     providerId: apiProvider.id,
     providerName: apiProvider.name,
@@ -211,6 +221,7 @@ export function toRuntimeConfigFromLegacy(
     headers,
     model: modelId,
     modelCapabilities: options?.capabilities,
+    modelCompat,
     requestOptions: {
       ...(apiProvider.options ?? {}),
       ...(apiProvider.extraEnv ?? {}),

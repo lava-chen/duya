@@ -28,24 +28,20 @@ import type {
   ToolUse,
   SSEEvent,
   SessionInfo,
-  MCPServerConfig,
-  MCPConnectionStatus,
   ToolUseContext,
   ToolResultContent,
   AgentProgressEvent,
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
-import { getMemoryManager } from '../memory/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
-import { createMemoryReviewService } from '../memory/index.js';
 import { compactHistory } from '../compact/compact.js';
 import type { CompactResult, TokenEstimation } from '../compact/compact.js';
 import { needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from '../compact/compact.js';
 import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
-import { createLLMClient, createRetryableLLMClient, inferProvider, isMiniMaxURL, LLMClientWrapper } from '../llm/index.js';
-import type { LLMClient, RetryConfig } from '../llm/index.js';
+import { createLLMClient, createRetryableLLMClient, inferProvider } from '../llm/index.js';
+import type { LLMClient, LLMClientOptionsExtended, RetryConfig } from '../llm/index.js';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
@@ -305,7 +301,6 @@ export class duyaAgent {
   readonly activeMCPRegistry: ToolRegistry = new ToolRegistry();
   activeMCPRuntimeSnapshot: import('../mcp/apply.js').ActiveMCPRuntimeSnapshot | null = null;
   private providerNameToInternalKey: Map<string, string> = new Map();
-  private registeredMCPToolKeys: Set<string> = new Set();
   private activeMCPToolEntries: Map<string, { definition: Tool; executor: ToolExecutor }> = new Map();
   private activeAgentProfileId: string | undefined;
 
@@ -353,32 +348,28 @@ export class duyaAgent {
       );
     }
 
-    if (isMiniMaxURL(baseURL)) {
-      const wrapper = new LLMClientWrapper({
-        apiKey: options.apiKey,
-        baseURL,
-        model,
-        authStyle: options.authStyle,
-        provider,
-      });
-      this.llmClient = wrapper;
-    } else if (enableRetry) {
+    // Build extended options including @duya/ai fields from runtimeConfig.
+    // apiFormat/providerId/modelCompat flow: ProviderRuntimeAdapter →
+    // runtimeConfig → DuyaAgent → createLLMClient → @duya/ai createAIClient.
+    const llmClientOptions: LLMClientOptionsExtended = {
+      apiKey: options.apiKey,
+      baseURL,
+      model,
+      authStyle: options.authStyle,
+      apiFormat: options.runtimeConfig?.apiFormat,
+      providerId: options.runtimeConfig?.providerId,
+      modelCapabilities: options.runtimeConfig?.modelCompat,
+    };
+
+    if (enableRetry) {
       logger.debug('[duyaAgent] Using retryable LLM client');
       this.llmClient = createRetryableLLMClient(provider, {
-        apiKey: options.apiKey,
-        baseURL,
-        model,
-        authStyle: options.authStyle,
+        ...llmClientOptions,
         retryConfig: options.retryConfig,
       });
     } else {
       logger.debug('[duyaAgent] Using standard LLM client (retry disabled)');
-      this.llmClient = createLLMClient(provider, {
-        apiKey: options.apiKey,
-        baseURL,
-        model,
-        authStyle: options.authStyle,
-      });
+      this.llmClient = createLLMClient(provider, llmClientOptions);
     }
 
     this.apiKey = options.apiKey;
@@ -418,19 +409,6 @@ export class duyaAgent {
       logger.info(`[duyaAgent] Vision model NOT initialized - disabled or not configured`);
     }
 
-    // Load memory snapshot for the session (singleton).
-    // Deferred to next tick so agent construction returns immediately.
-    const projectPath = options.workingDirectory || process.cwd();
-    const memoryManager = getMemoryManager();
-    if (!memoryManager.isLoadedForPath(projectPath)) {
-      setImmediate(() => {
-        try {
-          memoryManager.loadForSession(projectPath);
-        } catch (err) {
-          logger.warn(`[duyaAgent] Memory load failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      });
-    }
     // AGENTS.md is loaded eagerly in streamChat via refreshForTask so it is
     // always available before the first provider request and before any prompt
     // section is resolved.
@@ -488,51 +466,6 @@ export class duyaAgent {
 
       return result.join('').trim();
     });
-
-    // Wire up background memory review service
-    const memoryReviewService = createMemoryReviewService(memoryManager, {
-      enabled: true,
-      nudgeInterval: 10,
-    });
-
-    memoryReviewService.setSummarizer(async (prompt: string): Promise<string> => {
-      const reviewMessages: Message[] = [
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ];
-
-      const result: string[] = [];
-      // Use a child abort controller linked to the agent's main
-      // abortController so user interrupts also cancel the review.
-      const childController = this.abortController
-        ? createChildAbortController(this.abortController)
-        : new AbortController();
-      const stream = this.llmClient.streamChat(reviewMessages, {
-        maxTokens: 2048,
-        temperature: 0.2,
-        signal: childController.signal,
-      });
-
-      try {
-        for await (const event of stream) {
-          if (event.type === 'text') {
-            result.push(event.data);
-          }
-          if (event.type === 'done' || event.type === 'error') {
-            break;
-          }
-        }
-      } finally {
-        const disposable = childController as AbortController & { dispose?: () => void };
-        disposable.dispose?.();
-      }
-
-      return result.join('').trim();
-    });
-
-    memoryManager.setupReviewService(memoryReviewService);
 
     // Initialize permission system
     this.permissionMode = options.permissionMode || 'default';
@@ -743,7 +676,7 @@ export class duyaAgent {
     await getAgentsMdManager().refreshForTask(projectPath);
 
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
-    const { permissionContext, canUseTool } = this._buildPermissionContext();
+    const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
     let messages = this._resolveInitialMessages(prompt, options);
     const contextWindow =
       this.runtimeConfig?.modelCapabilities?.contextWindow &&
@@ -1500,12 +1433,6 @@ export class duyaAgent {
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
 
-          // Trigger background memory review
-          const assistantLength = assistantContent
-            .filter(b => b.type === 'text')
-            .reduce((sum, b) => sum + ((b as { text: string }).text?.length || 0), 0)
-          this._syncMemoryReview(messages, assistantLength)
-
           yield { type: 'done', reason: 'max_turns' };
           return;
         }
@@ -1558,12 +1485,6 @@ export class duyaAgent {
           this.messages = persistableMessages(messages);
           this.sessionInfo.messageCount = this.messages.length;
           this.sessionInfo.updatedAt = Date.now();
-
-          // Trigger background memory review
-          const assistantLength = assistantContent
-            .filter(b => b.type === 'text')
-            .reduce((sum, b) => sum + ((b as { text: string }).text?.length || 0), 0)
-          this._syncMemoryReview(messages, assistantLength)
 
           yield { type: 'done', reason: 'completed' };
           return;
@@ -1841,6 +1762,29 @@ export class duyaAgent {
           browserBackendMode: this.browserBackendMode,
         }
       );
+      // Phase 2A worker closure: merge the active MCP runtime
+      // (installed by applyMCPConfiguration -> setActiveMCPRuntime)
+      // into the per-turn builtin registry. Without this merge the
+      // LLM never sees MCP tools because getAllTools() below only
+      // reads the fresh builtin registry. MCP entries are keyed by
+      // their internalKey (e.g. mcp__server__tool) so they never
+      // collide with builtin names.
+      this.mergeActiveMCPTools(registry);
+
+      // Plan 312: merge App Connection connector tools from the cached
+      // descriptor list (updated on init/reload by reloadAppConnectionTools).
+      // Descriptors contain no tokens; the executor routes invocations back
+      // to the main process via ipcRequest('appConnection:invoke', ...).
+      try {
+        const { getCachedAppConnectionDescriptors, registerAppConnectionTools } =
+          await import('../tool/AppConnectionTool/index.js');
+        const appConnDescriptors = getCachedAppConnectionDescriptors();
+        if (appConnDescriptors.length > 0) {
+          registerAppConnectionTools(registry, appConnDescriptors);
+        }
+      } catch (err) {
+        logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     // Single-pass tool visibility filter.
     //
@@ -2005,7 +1949,7 @@ export class duyaAgent {
    * would let a tool execute when the permission system is in an unknown
    * state, which is the wrong default for a security boundary.
    */
-  private _buildPermissionContext(): {
+  private _buildPermissionContext(registry?: ToolRegistry): {
     permissionContext: ToolPermissionCheckContext;
     canUseTool: CanUseToolFn;
   } {
@@ -2019,6 +1963,11 @@ export class duyaAgent {
           alwaysAskRules: this.alwaysAskRules,
           isBypassPermissionsModeAvailable: true,
           defaultWorkspaceDirectory: this.defaultWorkspaceDirectory,
+          // Plan 312 Phase 4: wire risk-tier lookup to the tool registry
+          // so connector tools are gated by their declared tier.
+          getToolRiskTier: registry
+            ? (toolName: string) => registry.getMeta(toolName)?.riskTier
+            : undefined,
         } as ToolPermissionContext,
       }),
       abortController: this.abortController!,
@@ -2141,7 +2090,7 @@ export class duyaAgent {
         browserBackendMode: this.browserBackendMode,
       }
     );
-    this.registerMCPTools(toolRegistry);
+    this.mergeActiveMCPTools(toolRegistry);
 
     // Plan 241 Phase 1: wire tool_search to the orchestrator's registry
     // so it sees the same tool surface that the orchestrator's main loop
@@ -2224,54 +2173,6 @@ export class duyaAgent {
   // === end streamChat helpers ===========================================
 
   /**
-   * Trigger background memory review when due.
-   *
-   * Extracts recent conversation text and fires off a lightweight LLM review
-   * pass to identify durable facts worth persisting to MEMORY.md files.
-   * Fire-and-forget: does not block the user's next turn.
-   */
-  private _syncMemoryReview(messages: Message[], assistantResponseLength: number): void {
-    try {
-      const memoryManager = getMemoryManager()
-      if (!memoryManager.getReviewService()) return
-
-      const conversationText = this._extractConversationText(messages, 30)
-      const estimatedTokens = Math.max(1, Math.floor(assistantResponseLength / 3))
-
-      memoryManager.syncTurn(conversationText, estimatedTokens)
-    } catch {
-      // Best-effort — silence all errors
-    }
-  }
-
-  private _extractConversationText(messages: Message[], maxMessages: number): string {
-    const recent = messages.slice(-maxMessages)
-    return recent
-      .map(msg => {
-        const role = msg.role.toUpperCase()
-        if (typeof msg.content === 'string') {
-          return `[${role}]: ${msg.content.slice(0, 2000)}`
-        }
-        if (Array.isArray(msg.content)) {
-          const textContent = msg.content
-            .filter(block => block.type === 'text')
-            .map(block => (block as { type: 'text'; text: string }).text)
-            .join('\n')
-          const toolUses = msg.content
-            .filter((b: { type: string; name?: string }) => b.type === 'tool_use')
-            .map((b: { type: string; name?: string }) => `[Tool: ${b.name}]`)
-            .join(', ')
-          let result = `[${role}]: ${textContent.slice(0, 2000)}`
-          if (toolUses) result += `\n${toolUses}`
-          return result
-        }
-        return ''
-      })
-      .filter(Boolean)
-      .join('\n\n')
-  }
-
-  /**
    * 中断当前对话
    */
   interrupt(): void {
@@ -2298,36 +2199,27 @@ export class duyaAgent {
     this.sessionInfo.updatedAt = Date.now();
   }
 
-  async initMCPServers(configs: MCPServerConfig[]): Promise<void> {
-    if (!configs || configs.length === 0) return;
-    this.mcpManager = new MCPManager();
-    for (const config of configs) {
-      try {
-        await this.mcpManager.addServer(config);
-      } catch (err) {
-        logger.warn(`[Agent] Failed to connect to MCP server "${config.name}": ${err instanceof Error ? err.message : String(err)}`);
-      }
+  /**
+   * Phase 2A worker closure: merge the active MCP runtime into a
+   * per-turn registry. Reads from `activeMCPToolEntries` (populated
+   * by `setActiveMCPRuntime`) so every tool carries its
+   * providerName-allocated `definition.name`, its `internalKey`
+   * registry key, and the permission-gate-wired executor closure.
+   *
+   * This replaces the legacy `registerMCPTools` which read from
+   * `this.mcpManager.getAllTools()` and registered under raw tool
+   * names — bypassing providerName allocation, the internalKey
+   * routing, and the runtime permission gate.
+   */
+  private mergeActiveMCPTools(registry: ToolRegistry): void {
+    if (this.activeMCPToolEntries.size === 0) return;
+    let count = 0;
+    for (const [key, { definition, executor }] of this.activeMCPToolEntries) {
+      if (registry.has(key)) continue;
+      registry.registerWithKey(key, definition, executor, 'mcp');
+      count++;
     }
-  }
-
-  private registerMCPTools(registry: ToolRegistry): void {
-    if (!this.mcpManager) return;
-    const tools = this.mcpManager.getAllTools();
-    for (const tool of tools) {
-      registry.register(
-        {
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.input_schema,
-        },
-        {
-          execute: async (input: Record<string, unknown>) => {
-            return this.mcpManager!.callTool(tool.serverName, tool.name, input);
-          },
-        }
-      );
-    }
-    logger.info(`[Agent] Registered ${tools.length} MCP tools from connected servers`);
+    logger.info(`[Agent] Merged ${count} MCP tools into per-turn registry`);
   }
 
   // ==========================================================================
@@ -2372,7 +2264,7 @@ export class duyaAgent {
       'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
       'browser', 'skill', 'brief', 'session_search',
       'vision', 'cron', 'duya_info',
-      'duya_health', 'memory', 'ask_user_question',
+      'duya_health', 'ask_user_question',
       'module',
     ]);
     return builtin;
@@ -2394,7 +2286,6 @@ export class duyaAgent {
   async setActiveMCPRuntime(install: {
     manager: MCPManager;
     providerNameToInternalKey: Map<string, string>;
-    registeredMCPToolKeys: Set<string>;
     toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
     preparedRegistryEntries: Array<{
       key: string;
@@ -2405,7 +2296,6 @@ export class duyaAgent {
   }): Promise<{ removedKeys: string[]; addedKeys: string[]; keptKeys: string[] }> {
     const previousManager = this.mcpManager;
     const previousProviderMap = this.providerNameToInternalKey;
-    const previousRegisteredKeys = this.registeredMCPToolKeys;
     const previousToolEntries = this.activeMCPToolEntries;
     const previousSnapshot = this.activeMCPRuntimeSnapshot;
 
@@ -2416,7 +2306,6 @@ export class duyaAgent {
         install.preparedRegistryEntries,
       );
       this.providerNameToInternalKey = new Map(install.providerNameToInternalKey);
-      this.registeredMCPToolKeys = new Set(install.registeredMCPToolKeys);
       this.activeMCPToolEntries = new Map(install.toolEntries);
       this.mcpManager = install.manager;
       this.activeMCPRuntimeSnapshot = install.snapshot;
@@ -2427,7 +2316,6 @@ export class duyaAgent {
       // post-replace field updates, which require no further
       // rollback of the registry itself.
       this.providerNameToInternalKey = previousProviderMap;
-      this.registeredMCPToolKeys = previousRegisteredKeys;
       this.activeMCPToolEntries = previousToolEntries;
       this.activeMCPRuntimeSnapshot = previousSnapshot;
       this.mcpManager = previousManager;
