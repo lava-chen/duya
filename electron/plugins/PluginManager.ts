@@ -77,7 +77,6 @@ export class PluginManager {
   private readonly trustEngine = new TrustEngine();
   private readonly permissionService = new PermissionService();
   private readonly policyEngine = new PolicyEngine();
-  private readonly secretStore = new PluginSecretStore();
 
   listCatalog(): PluginCatalogEntry[] {
     return getPluginCatalog();
