@@ -88,6 +88,8 @@ coverage/
 !packages/plugin-core/tests/**/*.test.tsx
 !packages/plugin-core/tests/**/*.spec.ts
 !packages/plugin-core/tests/**/*.spec.tsx
+!packages/ai/test/**/*.test.ts
+!packages/ai/test/**/*.test.tsx
 !electron/**/*.test.ts
 # E2E specs (Playwright) live in e2e/ and MUST be tracked — they are
 # integration tests, not scratch. Without this exception the broad
