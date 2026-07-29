@@ -124,6 +124,9 @@ export interface TokenUsage {
   cache_hit_tokens?: number;
   /** Cache creation tokens (cache write) - Anthropic prompt caching */
   cache_creation_tokens?: number;
+  /** Upstream provider name when using an aggregator like OpenRouter.
+   *  E.g., "Anthropic", "OpenAI", "Google". Undefined for direct API calls. */
+  upstreamProvider?: string;
 }
 
 // ─── Stop reason ───

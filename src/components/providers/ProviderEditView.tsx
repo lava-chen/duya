@@ -86,6 +86,7 @@ import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
 import { useProviderEditSave } from '@/lib/providers/hooks/useProviderEditSave';
 import { isMaskedKey } from '@/lib/providers/secret';
 import { getPreset, findPresetByBaseUrl, type QuickPreset } from '@/lib/provider-presets';
+import type { ModelCompat, OpenAIThinkingFormat } from '@duya/ai';
 import { useConversationStore } from '@/stores/conversation-store';
 import { cn } from '@/lib/utils';
 import {
@@ -97,6 +98,21 @@ import {
 const CONTEXT_PRESETS: Array<{ value: number; label: string }> = [
   { value: 200_000, label: '200K' },
   { value: 1_000_000, label: '1M' },
+];
+
+/**
+ * Plan 7.3: dropdown options for the OpenAI thinking format override.
+ * The empty string represents "auto" (use built-in preset or protocol
+ * default). The remaining values mirror `OpenAIThinkingFormat` from
+ * `@duya/ai`.
+ */
+const THINKING_FORMAT_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: '', label: 'Auto (use preset default)' },
+  { value: 'openai-standard', label: 'openai-standard' },
+  { value: 'reasoning-content', label: 'reasoning-content' },
+  { value: 'qwen-style', label: 'qwen-style' },
+  { value: 'glm-style', label: 'glm-style' },
+  { value: 'think-tag-fallback', label: 'think-tag-fallback' },
 ];
 
 function groupByVendor(models: FetchedModel[]): Record<string, FetchedModel[]> {
@@ -282,6 +298,15 @@ export function ProviderEditView() {
   // Auth Token show/hide (local state — not persisted).
   const [apiKeyRevealed, setApiKeyRevealed] = useState(false);
 
+  // Plan 7.3: Model compat override state. These fields let the
+  // user override the built-in preset compat flags (e.g. when a
+  // custom endpoint uses reasoning-content instead of
+  // think-tag-fallback). Empty/unset values are not emitted, so
+  // the built-in preset compat is used as the fallback.
+  const [compatThinkingFormat, setCompatThinkingFormat] = useState<string>('');
+  const [compatForceAdaptive, setCompatForceAdaptive] = useState<boolean>(false);
+  const [compatFixedTemp, setCompatFixedTemp] = useState<string>('');
+
   useEffect(() => {
     if (!preset) return;
     setError(null);
@@ -303,11 +328,36 @@ export function ProviderEditView() {
       } else {
         apiKeyState.setMasked(editProvider.apiKey || '');
       }
+      // Plan 7.3: hydrate compat overrides from the persisted
+      // `options.compatOverrides` field (round-tripped via
+      // `options_json` in the legacy storage layer).
+      try {
+        const opts =
+          typeof editProvider.options === 'string'
+            ? JSON.parse(editProvider.options || '{}')
+            : editProvider.options || {};
+        const co = (opts as { compatOverrides?: ModelCompat }).compatOverrides;
+        setCompatThinkingFormat(co?.openAIThinkingFormat ?? '');
+        setCompatForceAdaptive(co?.forceAdaptiveThinking ?? false);
+        setCompatFixedTemp(
+          typeof co?.fixedTemperature === 'number'
+            ? String(co.fixedTemperature)
+            : '',
+        );
+      } catch {
+        setCompatThinkingFormat('');
+        setCompatForceAdaptive(false);
+        setCompatFixedTemp('');
+      }
     } else {
       baseUrlState.setBaseUrl(preset.baseUrl);
       presetDraft.setName(preset.name);
       apiKeyState.setApiKey('');
       setNotes('');
+      // Plan 7.3: reset compat overrides for new providers.
+      setCompatThinkingFormat('');
+      setCompatForceAdaptive(false);
+      setCompatFixedTemp('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset, isEdit, editProvider?.id]);
@@ -459,6 +509,27 @@ export function ProviderEditView() {
     if (models.customModels.length > 0) {
       optionsJson.custom_models = models.customModels;
     }
+
+    // Plan 7.3: build compat overrides object from the three UI
+    // fields. Only emit fields the user explicitly set so the
+    // built-in preset compat fills in the gaps via findModelCompat.
+    const compatOverrides: ModelCompat = {};
+    if (compatThinkingFormat) {
+      compatOverrides.openAIThinkingFormat =
+        compatThinkingFormat as OpenAIThinkingFormat;
+    }
+    if (compatForceAdaptive) {
+      compatOverrides.forceAdaptiveThinking = true;
+    }
+    const parsedTemp = parseFloat(compatFixedTemp);
+    if (!Number.isNaN(parsedTemp)) {
+      compatOverrides.fixedTemperature = parsedTemp;
+    }
+    const hasCompatOverrides = Object.keys(compatOverrides).length > 0;
+    if (hasCompatOverrides) {
+      optionsJson.compatOverrides = compatOverrides;
+    }
+
     const optionsJsonString =
       Object.keys(optionsJson).length > 0 ? JSON.stringify(optionsJson) : undefined;
 
@@ -490,6 +561,10 @@ export function ProviderEditView() {
           enabled_models: models.enabled,
           options: optionsJson,
           options_json: optionsJsonString,
+          // Plan 7.3: forward compat overrides to the save hook so
+          // it can set the top-level `compatOverrides` field on
+          // the LlmProvider (consumed by toRuntimeConfig).
+          compatOverrides: hasCompatOverrides ? compatOverrides : undefined,
           notes: notes.trim() || undefined,
           preset_id: target?.presetKey,
           existing_provider_dto: editProvider
@@ -946,6 +1021,58 @@ export function ProviderEditView() {
           </SettingsCard>
         </SettingsSection>
 
+        {/* ── 4. COMPAT OVERRIDES (advanced) ─────────── */}
+        <SettingsSection
+          title={locale === 'zh' ? '模型兼容性覆盖' : 'Model Compatibility Overrides'}
+          description={
+            locale === 'zh'
+              ? '覆盖内置预设的兼容性标志。留空则使用预设默认值。'
+              : 'Override built-in preset compat flags. Leave empty to use preset defaults.'
+          }
+          icon={
+            <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground">
+              <InfoIcon size={16} />
+            </div>
+          }
+        >
+          <SettingsCard divided>
+            <SettingsSelectRow
+              label="OpenAI Thinking Format"
+              description={
+                locale === 'zh'
+                  ? '推理内容的序列化格式。Auto 表示使用预设默认值。'
+                  : 'Wire format for reasoning content. Auto uses the preset default.'
+              }
+              value={compatThinkingFormat}
+              onValueChange={(v) => setCompatThinkingFormat(v)}
+              options={THINKING_FORMAT_OPTIONS}
+            />
+
+            <SettingsToggle
+              label="Force Adaptive Thinking"
+              description={
+                locale === 'zh'
+                  ? '即使模型未声明为推理模型，也强制启用自适应思考。'
+                  : 'Force adaptive thinking even if the model is not declared as a reasoning model.'
+              }
+              checked={compatForceAdaptive}
+              onCheckedChange={setCompatForceAdaptive}
+            />
+
+            <SettingsInputRow
+              label="Fixed Temperature"
+              description={
+                locale === 'zh'
+                  ? '固定温度值（如 0.7）。留空则不覆盖。'
+                  : 'Fixed temperature value (e.g. 0.7). Leave empty to not override.'
+              }
+              value={compatFixedTemp}
+              onChange={setCompatFixedTemp}
+              placeholder="0.7"
+              type="text"
+            />
+          </SettingsCard>
+        </SettingsSection>
 
         {/* ── Inline status (non-blocking) ──────────── */}
         {testResult && (

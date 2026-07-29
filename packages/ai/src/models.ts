@@ -116,24 +116,40 @@ export function getNativeLevel(
 
 /**
  * Find the ModelCompat for a given apiFormat + modelId by looking up
- * the built-in provider preset models. Returns undefined if no match
- * is found (callers should fall back to protocol defaults).
+ * the built-in provider preset models, optionally merging with
+ * user-defined overrides. User values take precedence over built-in
+ * preset values. Returns undefined if no match is found and no
+ * overrides are provided (callers should fall back to protocol
+ * defaults).
  *
  * Matching strategy:
  * 1. Match by `model.api === apiFormat && model.id === modelId`
  * 2. If multiple matches, prefer the one with `compat` defined
- * 3. If no match, return undefined
+ * 3. If no match, return undefined (or just `overrides` if provided)
+ *
+ * Override merge:
+ * - If only built-in compat exists, return it.
+ * - If only overrides exist, return them.
+ * - If both exist, merge with `{ ...builtIn, ...overrides }` so
+ *   user values take precedence on a per-field basis.
  */
 export function findModelCompat(
   apiFormat: ApiFormat,
   modelId: string,
+  overrides?: ModelCompat,
 ): ModelCompat | undefined {
   const matches = allProviderModels.filter(
     m => m.api === apiFormat && m.id === modelId,
   );
   // Prefer a match that has compat flags defined
   const withCompat = matches.find(m => m.compat !== undefined);
-  return withCompat?.compat ?? matches[0]?.compat;
+  const builtIn = withCompat?.compat ?? matches[0]?.compat;
+
+  if (!overrides) return builtIn;
+  if (!builtIn) return overrides;
+
+  // Merge: user overrides take precedence over built-in
+  return { ...builtIn, ...overrides };
 }
 
 /**

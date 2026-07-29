@@ -29,7 +29,7 @@ import type {
 } from '../types';
 import { inferApiFormatFromLegacyProviderType } from '../legacy';
 import { redactSecrets } from './ProviderValidation';
-import { findModelCompat } from '@duya/ai';
+import { findModelCompat, type ModelCompat } from '@duya/ai';
 
 interface BuildOptions {
   /** Model id to use for this call. */
@@ -151,7 +151,13 @@ export function toRuntimeConfig(
   // This provides protocol-level compat flags (forceAdaptiveThinking,
   // openAIThinkingFormat, etc.) that drive thinking parameter resolution
   // in the @duya/ai protocol layer.
-  const modelCompat = findModelCompat(provider.apiFormat, options.modelId);
+  // User-defined `compatOverrides` on the LlmProvider take precedence
+  // over built-in preset values (merged per-field in findModelCompat).
+  const modelCompat = findModelCompat(
+    provider.apiFormat,
+    options.modelId,
+    provider.compatOverrides,
+  );
 
   return {
     providerId: provider.id,
@@ -209,7 +215,14 @@ export function toRuntimeConfigFromLegacy(
 
   const headers = buildHeaders(apiFormat, auth, apiProvider.headers);
 
-  const modelCompat = findModelCompat(apiFormat, modelId);
+  // Legacy ApiProvider does not have a top-level `compatOverrides`
+  // field; it is persisted inside `options.compatOverrides` by the
+  // save hook. Extract it here so the legacy bridge also honors
+  // user-defined compat overrides.
+  const compatOverrides = apiProvider.options?.compatOverrides as
+    | ModelCompat
+    | undefined;
+  const modelCompat = findModelCompat(apiFormat, modelId, compatOverrides);
 
   return {
     providerId: apiProvider.id,
