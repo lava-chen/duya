@@ -14,7 +14,7 @@
 
 import type { MCPCandidate } from '@duya/plugin-core';
 
-export type MCPSource = 'bundled' | 'plugin' | 'settings';
+type MCPSource = 'bundled' | 'plugin' | 'settings';
 
 export interface MCPListItem {
   id: string;
@@ -108,50 +108,6 @@ export function resolveAvailableMCPs(candidates: MCPCandidate[]): MCPCandidate[]
     }
   }
   return Array.from(byName.values()).map((e) => e.candidate);
-}
-
-/**
- * Build a list DTO from a collected MCP result. Applies precedence.
- */
-export function toMCPListDTO(
-  collected: CollectedMCP,
-  connectionStatus: Record<string, boolean> = {},
-): MCPListItem[] {
-  const winners = resolveAvailableMCPs(collected.candidates);
-  return winners.map((c) => {
-    const id = idFor(c);
-    const source = publicSourceOf(c);
-    return {
-      id,
-      name: c.rawConfig.name,
-      source,
-      ...(source === 'plugin' && c.pluginId ? { sourceId: c.pluginId } : {}),
-      enabled: c.rawConfig.allowedAgentIds !== undefined
-        ? c.rawConfig.allowedAgentIds.length > 0
-        : true,
-      connected: connectionStatus[id] ?? false,
-    };
-  });
-}
-
-/**
- * Build an info DTO for a single id, or null if not found.
- */
-export function toMCPInfoDTO(
-  collected: CollectedMCP,
-  id: string,
-  connectionStatus: Record<string, boolean> = {},
-): MCPInfoItem | null {
-  const winners = resolveAvailableMCPs(collected.candidates);
-  const found = winners.find((c) => idFor(c) === id);
-  if (!found) return null;
-  const list = toMCPListDTO(collected, connectionStatus).find((x) => x.id === id);
-  if (!list) return null;
-  return {
-    ...list,
-    command: found.rawConfig.command,
-    args: Array.isArray(found.rawConfig.args) ? found.rawConfig.args : [],
-  };
 }
 
 export { idFor as computeMCPId };

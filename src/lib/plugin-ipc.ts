@@ -10,6 +10,7 @@ import type {
   PluginIpcDetailResponse,
   CapabilityIndexItem,
 } from './plugin-types';
+import type { WorkflowTemplate } from '@duya/plugin-core';
 
 interface PluginCatalogFilters {
   search?: string;
@@ -68,6 +69,20 @@ export function getPluginAPI() {
     },
     capabilityIndex: async (): Promise<PluginIpcListResponse<CapabilityIndexItem>> => {
       return api.plugin.capabilityIndex() as unknown as Promise<PluginIpcListResponse<CapabilityIndexItem>>;
+    },
+    // Plan 311 — fetch the full workflow template (including prompt
+    // body) for a given plugin + workflow id. The capability index
+    // only ships summaries; the renderer calls this when the user
+    // opens the launch dialog.
+    workflowGet: async (payload: {
+      pluginId: string;
+      workflowId: string;
+    }): Promise<{ success: boolean; data?: WorkflowTemplate; error?: string }> => {
+      return api.plugin.workflowGet(payload) as unknown as Promise<{
+        success: boolean;
+        data?: WorkflowTemplate;
+        error?: string;
+      }>;
     },
   };
 }

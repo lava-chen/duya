@@ -1,0 +1,44 @@
+id: analyze-web-analytics
+name: Analyze Web Analytics
+description: >-
+  Pull Vercel Web Analytics for a project, surface top pages, traffic
+  trends, and anomalies. Read-only.
+prompt: |
+  Analyze Vercel Web Analytics for the project below.
+
+  Project: {{project_id}}
+  Window: {{window}}
+
+  Steps to follow:
+  1. Run the `deployment-inspection` skill. Confirm the project
+     exists and read the most recent `READY` production deployment
+     for context.
+  2. Call `vercel.get_web_analytics(project_id, window)` to pull
+     the aggregate analytics. The response includes:
+     - Total page views, unique visitors, top pages, top referrers,
+       bounce rate, average session length.
+  3. For each top page, compare the page-view count in the current
+     window against the previous equivalent window (e.g. this week
+     vs last week). Flag pages with > 50% drop or > 100% spike as
+     anomalies.
+  4. For each top referrer, confirm the referrer is expected (a
+     known marketing channel, search engine, or partner site).
+     Flag unknown or suspicious referrers.
+  5. Report findings as:
+     - Top 10 pages with views and trend arrow.
+     - Top 5 referrers with views and trust flag.
+     - Anomalies section: pages or referrers that crossed the
+       threshold above.
+     - One-sentence summary of overall health.
+  6. If the user asks for a deeper dive on a specific page, fetch
+     the per-page analytics via `vercel.get_web_analytics` with a
+     path filter.
+
+  Constraint: do NOT export raw visitor data to disk. Analytics
+  data is aggregate; respect the project's privacy policy. Do NOT
+  attempt to deanonymize visitors by joining analytics with other
+  data sources.
+requiredCapabilities:
+  - mcp:vercel
+  - skill:deployment-inspection
+permissionTier: read

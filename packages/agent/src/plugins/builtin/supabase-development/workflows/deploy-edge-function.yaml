@@ -1,0 +1,42 @@
+id: deploy-edge-function
+name: Deploy Supabase Edge Function
+description: >-
+  Scaffold or update a Supabase Edge Function, test it locally, and
+  deploy to the live project with the correct auth context.
+prompt: |
+  Deploy a Supabase Edge Function for the use case below.
+
+  Function name: {{function_name}}
+  Use case: {{use_case}}
+  Auth context: {{auth_context}}
+
+  Steps to follow:
+  1. Run the `edge-function-workflow` skill. Read the project's
+     existing Edge Functions to match logging, error-response, and
+     auth-header patterns.
+  2. Scaffold the function at `supabase/functions/<name>/index.ts`
+     using the Deno `serve` entry point. Pick the auth context
+     (user JWT vs service-role key) explicitly; document why if the
+     service-role key is used.
+  3. Write a small test that invokes the function via `fetch`
+     against the local endpoint and asserts on the response shape.
+     Run it locally with `supabase functions serve` when available.
+  4. Show the user the function source and the test before
+     deploying. Confirm the auth context and any env vars the
+     function depends on.
+  5. Deploy via `supabase.deploy_edge_function(name, code)`. After
+     deploy, fetch the function logs via
+     `supabase.list_edge_function_logs(name, status >= 400)` and
+     surface any errors.
+  6. If the deploy fails, do not retry blindly — read the error,
+     fix the code, redeploy. A failed deploy leaves the previous
+     version serving, which is safer than a partial deploy.
+
+  Constraint: do NOT log the service-role key or the user JWT.
+  do NOT import Node-only modules (`fs`, `path`). Do NOT add CORS
+  headers globally — add them per-route based on the request
+  origin.
+requiredCapabilities:
+  - mcp:supabase
+  - skill:edge-function-workflow
+permissionTier: modify

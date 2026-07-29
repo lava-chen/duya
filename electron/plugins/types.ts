@@ -1,3 +1,8 @@
+// Type-only import from the shared zod schema (single source of truth for
+// the manifest shape). Erased at compile time — no runtime dependency on
+// src/ is introduced in the main-process bundle.
+import type { PluginPermission } from '../../src/lib/plugin-types';
+
 export type PluginCapabilityKind = 'skills' | 'mcp' | 'cli' | 'ui' | 'hooks';
 export type PluginSource = 'bundled' | 'builtin-directory' | 'marketplace' | 'local' | 'development';
 export type PluginTrustLevel = 'official' | 'verified' | 'local' | 'untrusted';
@@ -20,14 +25,38 @@ export const PLUGIN_SCOPE_PRIORITY: Record<PluginScope, number> = {
   [PluginScope.Local]: 20,
 };
 
-export interface PluginPermissionRequest {
-  name: string;
-  scope?: string;
-  domains?: string[];
-}
+// Converged (R1): the handwritten interface was structurally identical to
+// the zod-inferred `PluginPermission` in src/lib/plugin-types.ts
+// ({ name: string; scope?: string; domains?: string[] }). Replaced by a
+// type alias so the main-process view cannot drift from the renderer/IPC
+// view. Consumed by `PluginManifest.permissions` and
+// `PluginRegistryEntry.grantedPermissions` below.
+export type PluginPermissionRequest = PluginPermission;
 
+// NOTE: mirrors zod schema in src/lib/plugin-types.ts — kept as the
+// main-process view because the shapes are NOT compatible:
+//  - `capabilities.skills` is `string[]` here vs
+//    `Array<{ path: string; description?: string }>` in the zod schema.
+//    The bundled catalog and the on-disk v1 loader both emit plain
+//    skill-name strings; the zod object form would break them.
+//  - `capabilities.mcpServers.args` is optional here (absent → undefined)
+//    but required-with-default in the zod schema, and the zod entry also
+//    carries an `env` field this view does not model.
+//  - `capabilities.cli` has an optional `args` field here that the zod
+//    schema does not declare.
+//  - `capabilities.ui.type` is a plain `string` here vs the zod enum
+//    `'sidebar' | 'panel' | 'settings'`.
+//  - `setup` exists only here (the zod schema has no setup block); it is
+//    read by `readPluginManifest` and consumed by the catalog/UI.
+//  - `entry` and `dependencies` exist only in the zod schema; the
+//    main-process loader does not model them.
+//  - `capabilities` is always required here; the zod schema makes it
+//    optional for v2 (and `components` required for v2 vs optional here).
+// Migrating the loader and the inline catalog manifests to the zod shape
+// is owned by Plan 311 (v1/v2 compat) and is out of scope for the type
+// convergence pass.
 export interface PluginManifest {
-  schemaVersion: 'duya.plugin.v1';
+  schemaVersion: 'duya.plugin.v1' | 'duya.plugin.v2';
   id: string;
   name: string;
   version: string;
@@ -58,12 +87,42 @@ export interface PluginManifest {
       entry: string;
     }>;
   };
+  // Plan 311 — v2 components field. Required for v2 manifests; absent
+  // for v1 manifests (v1 projects `capabilities` into components via
+  // `normalizeManifestComponents` in `src/lib/plugin-types.ts`).
+  components?: {
+    mcpServers?: string[];
+    appConnections?: string[];
+    skills?: string[];
+    workflows?: string[];
+  };
+  // Plan 311 — v2 permission policy. Mirrors the design doc §6
+  // five-tier model.
+  permissionPolicy?: {
+    defaultMode?: 'read' | 'draft' | 'write' | 'modify' | 'dangerous';
+    writeActionsRequireApproval?: boolean;
+    destructiveActionsRequireApproval?: boolean;
+  };
+  // Plan 311 — v2 publisher block. `verified` is a Duya attestation
+  // flag; absent for community plugins.
+  publisher?: {
+    name: string;
+    url?: string;
+    verified?: boolean;
+  };
   permissions: PluginPermissionRequest[];
   setup?: Array<{
     id: string;
     label: string;
-    type: 'text' | 'secret' | 'path' | 'url';
+    /**
+     * `app-connection` (Plan 312): pairs with `connectionId` to render
+     * a Connect/Disconnect control. The plugin declares the connection
+     * in `apps/connections.json`; this field just flags the UI affordance.
+     */
+    type: 'text' | 'secret' | 'path' | 'url' | 'app-connection';
     required?: boolean;
+    /** Plan 312 — only set when type === 'app-connection'. */
+    connectionId?: string;
   }>;
   engines: {
     duya: string;
@@ -73,6 +132,24 @@ export interface PluginManifest {
 
 export type PluginCategory = 'productivity' | 'development' | 'research' | 'data' | 'communication' | 'media' | 'automation' | 'other';
 
+// NOTE: mirrors zod schema in src/lib/plugin-types.ts — kept as the
+// main-process view because the shapes are NOT compatible:
+//  - Optionality is inverted on four fields: `category`, `trustLevel`,
+//    `manifest`, and `capabilityCounts` are each required on exactly one
+//    side and optional on the other (e.g. `trustLevel`/`manifest` are
+//    required here but optional in the zod view; `category`/
+//    `capabilityCounts` are optional here but required in the zod view).
+//  - The zod view carries many renderer-only display fields this view
+//    does not model: `author`, `shortDescription`, `longDescription`,
+//    `developer`, `icon`, `status`, `installed`, `enabled`, `featured`,
+//    `capabilities`, `permissions`, `usageExamples`, `website`,
+//    `documentationUrl`, `updatedAt`. The main-process catalog only
+//    transports the minimal listing payload; the renderer enriches it.
+//  - `capabilityCounts.workflows` is optional here but required in the
+//    zod view.
+// `PluginCatalogEntry['manifest']` also references the handwritten
+// `PluginManifest` above (not the zod manifest), so the two entries
+// cannot be swapped independently.
 export interface PluginCatalogEntry {
   id: string;
   name: string;
@@ -88,6 +165,8 @@ export interface PluginCatalogEntry {
     cli: number;
     ui: number;
     hooks: number;
+    // Plan 311 — workflow template count (manifest v2 / on-disk derived).
+    workflows?: number;
   };
 }
 

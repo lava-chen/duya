@@ -1,0 +1,47 @@
+# Plan 313 Phase 2b — workflow template draft.
+# Activated when Plan 311 lands the `workflows` manifest field and runtime.
+# Until then this file is a structured draft the agent can read on demand.
+
+id: implement-from-figma
+name: Implement from Figma
+description: >-
+  Extract a Figma frame, map it to the project's design system, implement
+  the components, and visually verify the result against the source.
+prompt: |
+  Implement the Figma frame below as a frontend component in this project.
+
+  Figma URL: {{figma_url}}
+  Target framework: {{framework}}
+  Target path: {{target_path}}
+
+  Steps to follow:
+  1. Run the `design-context-extraction` skill on the Figma URL to pull
+     the layout, tokens, and assets into context. Confirm the file key
+     and node id are parsed correctly.
+  2. Run the `design-system-mapping` skill to map Figma components and
+     styles to existing project components and tokens. Surface any token
+     gaps as a checklist before writing code.
+  3. Run the `component-implementation` skill to write the component
+     file(s) at the target path. Reuse existing primitives where the
+     mapping identified a match; apply design tokens instead of
+     hardcoding values.
+  4. Run the `visual-comparison` skill to capture the Figma source
+     screenshot and the local render, then surface the deltas as a
+     checklist. Classify each delta as code bug / token gap / design
+     bug / acceptable drift.
+  5. Fix any code-bug deltas via `component-implementation`. For token
+     gaps and design bugs, draft a Figma annotation via the
+     `write-back-to-figma` skill and confirm with the user before
+     posting.
+
+  Constraint: do NOT hardcode color or spacing literals that have a
+  token equivalent. Do NOT inline base64 assets. Run the project's
+  typecheck and lint on the new file before reporting done.
+requiredCapabilities:
+  - mcp:figma
+  - skill:design-context-extraction
+  - skill:design-system-mapping
+  - skill:component-implementation
+  - skill:visual-comparison
+  - skill:write-back-to-figma
+permissionTier: modify

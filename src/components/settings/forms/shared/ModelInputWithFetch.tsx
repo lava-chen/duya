@@ -32,6 +32,7 @@ import type { FetchedModel } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { Input } from '@/components/ui/Input';
 
 export interface ModelInputWithFetchProps {
   id: string;
@@ -105,14 +106,14 @@ export function ModelInputWithFetch({
   return (
     <div className="space-y-1.5" data-testid={`model-input-${id}`}>
       <div className="flex gap-1.5">
-        <input
+        <Input
           id={id}
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           autoComplete="off"
-          className="flex-1 px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+          className="flex-1 font-mono"
         />
 
         {/* Fetched state: Input + chevron dropdown trigger */}
@@ -134,12 +135,12 @@ export function ModelInputWithFetch({
             >
               {fetchedModels.length > 6 && (
                 <div className="p-1 border-b border-border/30 mb-1">
-                  <input
+                  <Input
                     type="text"
                     value={filter}
                     onChange={(e) => setFilter(e.target.value)}
                     placeholder={t('provider.modelInput.filterPlaceholder')}
-                    className="w-full px-2 py-1 rounded border border-border/50 text-xs bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50"
+                    size="sm"
                   />
                 </div>
               )}

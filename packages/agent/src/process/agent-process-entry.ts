@@ -53,6 +53,8 @@ import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle } from '../session/title-generator.js';
 import { classifyError, APIErrorType } from '../llm/errors.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
+// Plan 312: type-only import for the App Connection tool descriptor.
+import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
 import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
@@ -386,6 +388,124 @@ function conductorIpcRequest<T = unknown>(
       sessionId: outerPayload?.sessionId,
     });
   });
+}
+
+// Plan 312: IPC request for App Connection tool execution.
+//
+// Routes `appConnection:invoke` messages to the main process
+// (ConnectorService). The main process resolves the connection,
+// acquires a valid token, dispatches to the provider connector,
+// and returns a redacted result. Tokens never enter the agent process.
+function appConnectionIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 30000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    const invokePayload = payload as {
+      connectionId?: string;
+      action?: string;
+      args?: unknown;
+    } | undefined;
+
+    sendToMain({
+      type: 'appConnection:invoke',
+      requestId,
+      connectionId: invokePayload?.connectionId,
+      action: invokePayload?.action,
+      args: invokePayload?.args,
+    });
+  });
+}
+
+/**
+ * Unified tool IPC dispatcher: routes based on the `channel` argument.
+ * - `'conductor:executor:rpc'` → conductorIpcRequest (canvas tools)
+ * - `'appConnection:invoke'`    → appConnectionIpcRequest (connector tools)
+ *
+ * Plan 312: always injected into the ToolUseContext so App Connection
+ * tools work without conductor mode being active.
+ */
+function toolIpcRequest<T = unknown>(
+  channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  if (channel === 'appConnection:invoke') {
+    return appConnectionIpcRequest<T>(channel, payload, options);
+  }
+  return conductorIpcRequest<T>(channel, payload, options);
+}
+
+// Plan 312: fetch connector tool descriptors from the main process.
+//
+// Sends `appConnection:listDescriptors` and awaits the response via the
+// same pendingIpcRequests map used by the conductor / appConnection
+// invoke channels. Descriptors contain no tokens.
+function fetchAppConnectionDescriptors(): Promise<{
+  success: boolean;
+  descriptors?: unknown[];
+  error?: { code: string; message: string };
+}> {
+  return new Promise((resolve) => {
+    const requestId = crypto.randomUUID();
+    const timeout = 10_000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `fetch descriptors timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; descriptors?: unknown[]; error?: { code: string; message: string } }),
+      reject: (e) => resolve({ success: false, error: { code: 'INTERNAL', message: e instanceof Error ? e.message : String(e) } }),
+      timeoutHandle,
+    });
+
+    sendToMain({ type: 'appConnection:listDescriptors', requestId });
+  });
+}
+
+/**
+ * Plan 312: reload App Connection tools after init or MCP reload.
+ *
+ * Fetches the current connector tool descriptors from the main process
+ * and caches them. The per-turn registry merge in DuyaAgent._resolveTools
+ * reads from this cache — no IPC round-trip per turn.
+ */
+async function reloadAppConnectionTools(): Promise<void> {
+  try {
+    const { setCachedAppConnectionDescriptors } =
+      await import('../tool/AppConnectionTool/index.js');
+    const response = await fetchAppConnectionDescriptors();
+    if (!response.success || !response.descriptors) {
+      log('[Agent-Process] App Connection: descriptor fetch failed:', response.error?.message);
+      setCachedAppConnectionDescriptors([]);
+      return;
+    }
+    setCachedAppConnectionDescriptors(response.descriptors as AppConnectionToolDescriptor[]);
+    log(`[Agent-Process] App Connection: ${response.descriptors.length} descriptors cached`);
+  } catch (err) {
+    warn('[Agent-Process] App Connection: reload failed:', err);
+  }
 }
 
 // ============================================================================
@@ -1938,9 +2058,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       },
       conductorMode: msg.options?.conductorMode ? true : undefined,
       conductorCanvasId: msg.options?.conductorCanvasId,
-      conductorIpc: msg.options?.conductorMode
-        ? { sendToMain, ipcRequest: conductorIpcRequest }
-        : undefined,
+      // Plan 312: always inject ipcRequest so App Connection tools work
+      // without conductor mode. The unified dispatcher routes by channel.
+      conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
       backgroundTaskResume: msg.options?.backgroundTaskResume,
     });
 
@@ -2528,6 +2648,10 @@ async function reloadMCP(): Promise<void> {
     // `mcp:status:get` (handled in the worker protocol switch
     // below).
     sendToMain(buildMcpReloadedEvent(result));
+    // Plan 312: refresh App Connection descriptors after MCP reload.
+    // The /plugins/reload broadcast triggers reloadMCP; connect/disconnect
+    // triggers /plugins/reload, so this covers both paths.
+    void reloadAppConnectionTools();
   } catch (err) {
     warn('[Agent-Process] Failed to reload MCP:', err);
     sendToMain({ type: 'mcp:reload:error', error: err instanceof Error ? err.message : String(err) });
@@ -2680,6 +2804,13 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             sessionId,
             ...(initError ? { status: 'error', error: initError } : {}),
           });
+
+          // Plan 312: fire-and-forget App Connection descriptor fetch.
+          // Caches the descriptor list so DuyaAgent._resolveTools can
+          // merge connector tools into the per-turn registry.
+          if (!initError) {
+            void reloadAppConnectionTools();
+          }
 
           // Plan 305 Phase B: fire-and-forget memory v2 wakeup. The
           // main-process router intercepts the `memory:wakeup` worker
@@ -2947,6 +3078,56 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending IPC request found for requestId:', requestId);
+          }
+          break;
+        }
+
+        // Plan 312: App Connection tool execution response.
+        case 'appConnection:invoke:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending appConnection IPC request found for requestId:', requestId);
+          }
+          break;
+        }
+
+        // Plan 312: App Connection descriptor list response.
+        case 'appConnection:listDescriptors:response': {
+          const { requestId, success, descriptors, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            descriptors?: unknown[];
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, descriptors });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending appConnection descriptor request found for requestId:', requestId);
           }
           break;
         }

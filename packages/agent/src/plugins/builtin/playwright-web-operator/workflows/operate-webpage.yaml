@@ -1,0 +1,35 @@
+# Plan 313 Phase 1b — workflow template draft.
+# Activated when Plan 311 lands the `workflows` manifest field and runtime.
+# Until then this file is a structured draft the agent can read on demand.
+name: operate-webpage
+description: Navigate to a URL, perform a sequence of clicks and inputs, and report the final page state.
+plugin: com.duya.playwright-web-operator
+trigger:
+  natural: "go to this page and ..." / "fill this form on ..."
+skills:
+  - browser-navigation
+  - form-operation
+steps:
+  - id: navigate
+    tool: browser.navigate
+    inputs:
+      url: ${trigger.url}
+    output: nav
+  - id: snapshot
+    tool: browser.snapshot
+    output: snap
+  - id: perform-actions
+    skill: form-operation
+    using:
+      snapshot: ${snap}
+      actions: ${trigger.actions}
+    output: form_result
+  - id: final-snapshot
+    tool: browser.snapshot
+    output: final_state
+  - id: report
+    value: ${form_result.summary + final_state.summary}
+permissions:
+  read: [browser.navigate, browser.snapshot]
+  write: [browser.click, browser.type, browser.fill_form]
+  modify: [browser.form_submit, browser.file_upload]

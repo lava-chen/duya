@@ -3,11 +3,8 @@
  *
  * Rebuilds the L1 file projection from the DB (the source of truth):
  *   - `rollout_summaries/*.md`       — one file per `stage1_outputs` row
- *   - `raw_memories.md`              — merged projection of rows with raw_memory
- *   - `global/MEMORY.md`             — Phase 2 canonical global entries
- *   - `projects/<id>/MEMORY.md`      — Phase 2 canonical per-project entries
- *   - `global/summary.md`            — Phase 2 summary across all scopes
- *   - `projects/<id>/summary.md`     — Phase 2 per-project summary
+ *   - `MEMORY.md`                    — single searchable canonical projection
+ *   - `summary.md`                   — bounded routing summary
  *   - `phase2_workspace_diff.md`     — last Phase 2 run diff (transient)
  *
  * The reconciler itself NEVER writes or deletes files; every divergence
@@ -28,13 +25,15 @@ import type { Database } from 'better-sqlite3';
 import { computeContentHash, enqueueProjectionOutbox } from './outbox.js';
 import {
   deriveRolloutSummaryFilename,
-  renderGlobalMemoryFile,
-  renderGlobalSummaryFile,
+  renderUnifiedMemoryFile,
+  renderMemorySummaryFile,
   renderPhase2WorkspaceDiff,
-  renderProjectMemoryFile,
-  renderProjectSummaryFile,
-  renderRawMemoriesFile,
   renderRolloutSummaryFile,
+  renderPersonFile,
+  renderAreaFile,
+  renderPeopleIndexFile,
+  renderAreasIndexFile,
+  personAreaSlug,
   type MemoryEntryRow,
   type Phase2Diff,
   type Phase2DiffEntry,
@@ -141,27 +140,16 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
     }
   }
 
-  // 4. raw_memories.md merged projection (Plan 304: ALL rows feed the
-  //    merge, including no-output rollouts; the render returns null
-  //    only when the table is empty).
+  // 4. raw_memories.md duplicated the DB and rollout evidence layer. It is
+  //    retired so broad rg searches do not return the same claim repeatedly.
   const rawPath = path.join(rootDir, 'raw_memories.md');
-  const rawExpected = renderRawMemoriesFile(rows);
-  if (rawExpected !== null) {
-    const diskMatches =
-      fs.existsSync(rawPath) &&
-      computeContentHash(fs.readFileSync(rawPath, 'utf8')) === computeContentHash(rawExpected);
-    if (!diskMatches) {
-      planned.push({ targetPath: rawPath, operation: 'write', content: rawExpected });
-      written.push(rawPath);
-    }
-  } else if (fs.existsSync(rawPath)) {
+  if (fs.existsSync(rawPath)) {
     planned.push({ targetPath: rawPath, operation: 'delete', content: null });
     removed.push(rawPath);
   }
 
-  // 5. Phase 2 projections (Plan 306 Phase B): global/MEMORY.md,
-  //    projects/<id>/MEMORY.md, global/summary.md,
-  //    projects/<id>/summary.md, phase2_workspace_diff.md.
+  // 5. Phase 2 projections (Plan 306 Phase B): root MEMORY.md and
+  //    bounded summary.md, people/areas indexes, and the workspace diff.
   //    Guarded by table-existence so a DB without migration 0005
   //    (e.g. fresh install mid-rollout) skips Phase 2 cleanly.
   if (tableExists(db, 'memory_entries')) {
@@ -199,7 +187,7 @@ function tableExists(db: Database, tableName: string): boolean {
 }
 
 /**
- * Reconcile the 5 Phase 2 projection files. Mutates the `planned`,
+ * Reconcile the Phase 2 projection files. Mutates the `planned`,
  * `written`, and `removed` arrays in place. Each file is compared
  * against the rendered-from-DB content; mismatches become `write`
  * actions and orphans become `delete` actions.
@@ -222,66 +210,118 @@ function reconcilePhase2Projections(
     .prepare('SELECT * FROM projects')
     .all() as ProjectRow[];
 
-  // Collect the set of project IDs that own at least one entry —
-  // used both for per-project file writes and for orphan detection.
-  const projectIdsWithEntries = new Set(
-    entries
-      .filter((e) => e.scope === 'project' && e.project_id !== null)
-      .map((e) => e.project_id as string)
+  // --- unified MEMORY.md + bounded summary.md ---
+  planFileWrite(
+    path.join(rootDir, 'MEMORY.md'),
+    renderUnifiedMemoryFile(entries, projects),
+    planned,
+    written
+  );
+  planFileWrite(
+    path.join(rootDir, 'summary.md'),
+    renderMemorySummaryFile(entries, projects),
+    planned,
+    written
   );
 
-  // --- global/MEMORY.md ---
-  planFileWrite(
+  // --- retire legacy nested projections ---
+  for (const legacyPath of [
     path.join(rootDir, 'global', 'MEMORY.md'),
-    renderGlobalMemoryFile(entries),
-    planned,
-    written
-  );
-
-  // --- projects/<id>/MEMORY.md (only for projects with entries) ---
-  for (const pid of projectIdsWithEntries) {
-    planFileWrite(
-      path.join(rootDir, 'projects', pid, 'MEMORY.md'),
-      renderProjectMemoryFile(entries, pid),
-      planned,
-      written
-    );
-  }
-
-  // --- global/summary.md ---
-  planFileWrite(
     path.join(rootDir, 'global', 'summary.md'),
-    renderGlobalSummaryFile(entries, projects),
-    planned,
-    written
-  );
-
-  // --- projects/<id>/summary.md (only for projects with entries) ---
-  for (const pid of projectIdsWithEntries) {
-    planFileWrite(
-      path.join(rootDir, 'projects', pid, 'summary.md'),
-      renderProjectSummaryFile(entries, pid),
-      planned,
-      written
-    );
+  ]) {
+    if (fs.existsSync(legacyPath)) {
+      planned.push({ targetPath: legacyPath, operation: 'delete', content: null });
+      removed.push(legacyPath);
+    }
   }
 
-  // --- orphan project MEMORY.md / summary.md (project no longer has entries) ---
   const projectsDir = path.join(rootDir, 'projects');
   if (fs.existsSync(projectsDir)) {
     for (const entry of fs.readdirSync(projectsDir)) {
       const projectDir = path.join(projectsDir, entry);
       if (!fs.statSync(projectDir).isDirectory()) continue;
       // Only scan UUID-shaped directories to avoid touching user content.
-      if (!/^[0-9a-fA-F-]{36}$/.test(entry)) continue;
-      if (projectIdsWithEntries.has(entry)) continue;
-
+      if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(entry)) continue;
       for (const filename of ['MEMORY.md', 'summary.md']) {
         const filePath = path.join(projectDir, filename);
         if (fs.existsSync(filePath)) {
           planned.push({ targetPath: filePath, operation: 'delete', content: null });
           removed.push(filePath);
         }
+      }
+    }
+  }
+
+  // --- global/people/<slug>.md and global/areas/<slug>.md (Migration 0006) ---
+  // One file per active person/area entry, plus an index.md per directory.
+  // Orphan detection: a .md file whose slug no longer matches any
+  // active entry is removed. `index.md` is always treated as managed.
+  const personSlugs = new Set<string>();
+  const areaSlugs = new Set<string>();
+  for (const entry of entries) {
+    if (entry.status !== 'active') continue;
+    const slug = personAreaSlug(entry.canonical_key);
+    if (slug === null) continue;
+    if (entry.kind === 'person') personSlugs.add(slug);
+    else if (entry.kind === 'area') areaSlugs.add(slug);
+  }
+
+  // People: write each slug file + index, detect orphans.
+  const peopleDir = path.join(rootDir, 'global', 'people');
+  for (const slug of personSlugs) {
+    planFileWrite(
+      path.join(peopleDir, `${slug}.md`),
+      renderPersonFile(entries, slug),
+      planned,
+      written
+    );
+  }
+  planFileWrite(
+    path.join(peopleDir, 'index.md'),
+    renderPeopleIndexFile(entries),
+    planned,
+    written
+  );
+  if (fs.existsSync(peopleDir)) {
+    for (const entry of fs.readdirSync(peopleDir)) {
+      if (!entry.endsWith('.md')) continue;
+      if (entry === 'index.md') continue;
+      const slug = entry.slice(0, -3); // strip .md
+      if (personSlugs.has(slug)) continue;
+      const filePath = path.join(peopleDir, entry);
+      if (fs.statSync(filePath).isFile()) {
+        planned.push({ targetPath: filePath, operation: 'delete', content: null });
+        removed.push(filePath);
+      }
+    }
+  }
+
+  // Areas: write each slug file + index, detect orphans.
+  const areasDir = path.join(rootDir, 'global', 'areas');
+  for (const slug of areaSlugs) {
+    planFileWrite(
+      path.join(areasDir, `${slug}.md`),
+      renderAreaFile(entries, slug),
+      planned,
+      written
+    );
+  }
+  planFileWrite(
+    path.join(areasDir, 'index.md'),
+    renderAreasIndexFile(entries),
+    planned,
+    written
+  );
+  if (fs.existsSync(areasDir)) {
+    for (const entry of fs.readdirSync(areasDir)) {
+      if (!entry.endsWith('.md')) continue;
+      if (entry === 'index.md') continue;
+      const slug = entry.slice(0, -3); // strip .md
+      if (areaSlugs.has(slug)) continue;
+      const filePath = path.join(areasDir, entry);
+      if (fs.statSync(filePath).isFile()) {
+        planned.push({ targetPath: filePath, operation: 'delete', content: null });
+        removed.push(filePath);
       }
     }
   }

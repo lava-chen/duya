@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import { XIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import type { AutomationTemplate } from '@/types/automation';
 import { useTranslation } from '@/hooks/useTranslation';
 
@@ -77,16 +79,15 @@ export function QuickCronChatModal({
           <span className="flex-1 text-sm font-medium" style={{ color: 'var(--text)' }}>
             {initialTemplate ? t('automation.quickCreateTemplateTitle', { name: initialTemplate.label_en }) : t('automation.quickCreateTitle')}
           </span>
-          <button
-            type="button"
-            className="p-1.5 rounded-md transition-all duration-150"
-            style={{ color: 'var(--muted)' }}
+          <IconButton
+            variant="default"
+            size="sm"
+            shape="square"
+            aria-label="Close"
             onClick={onClose}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted)'; }}
           >
             <XIcon size={18} />
-          </button>
+          </IconButton>
         </div>
 
         <div className="flex-1 p-4">
@@ -113,23 +114,17 @@ export function QuickCronChatModal({
             </span>
           )}
 
-          <button
-            type="button"
-            className="px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
-            style={{
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              border: '1px solid var(--border)',
-            }}
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onClose}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
           >
             {t('automation.cancel')}
-          </button>
-          <button
-            type="button"
-            className="px-4 py-1.5 rounded-md text-xs font-medium transition-all duration-200"
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            className="transition-all duration-200"
             style={{
               background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
               color: '#ffffff',
@@ -147,7 +142,7 @@ export function QuickCronChatModal({
             }}
           >
             {t('automation.quickCreateTitle')}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

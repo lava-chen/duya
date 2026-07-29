@@ -34,15 +34,6 @@ export const PRESET_MCP_SERVERS: PresetMCPServer[] = [
     category: 'search',
   },
   {
-    id: 'github',
-    name: 'GitHub',
-    description: 'GitHub API: repos, issues, PRs, and more',
-    command: 'npx',
-    args: ['-y', '@modelcontextprotocol/server-github'],
-    env: {},
-    category: 'development',
-  },
-  {
     id: 'filesystem',
     name: 'Filesystem',
     description: 'Read, write, and manage files on disk',
@@ -122,15 +113,6 @@ export const PRESET_MCP_SERVERS: PresetMCPServer[] = [
     args: ['-y', '@upstash/context7-mcp'],
     env: {},
     category: 'development',
-  },
-  {
-    id: 'playwright',
-    name: 'Playwright',
-    description: 'Browser automation with Playwright',
-    command: 'npx',
-    args: ['-y', '@playwright/mcp'],
-    env: {},
-    category: 'browser',
   },
   {
     id: 'docker',

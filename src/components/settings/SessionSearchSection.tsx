@@ -5,8 +5,17 @@
 import { useState, useCallback } from "react";
 import { useSettings } from "@/hooks/useSettings";
 import { useTranslation } from "@/hooks/useTranslation";
-import { SpinnerGapIcon, KeyIcon, GlobeIcon, CpuIcon } from "@/components/icons";
+import { SpinnerGapIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsRow,
+  SettingsToggle,
+  SettingsSelectRow,
+  SettingsCardFooter,
+} from "@/components/settings/ui";
 
 export function SessionSearchSection() {
   const { t } = useTranslation();
@@ -70,139 +79,87 @@ export function SessionSearchSection() {
 
   return (
     <div className="settings-section">
-      {/* Header */}
-      <div className="settings-header">
-        <h2 className="settings-title-copernicus">Session Search</h2>
-        <p className="settings-description">
-          Configure an auxiliary LLM to summarize search results when using the session search tool
-        </p>
-      </div>
-
       {/* Error Banner */}
       {error && (
-        <div className="settings-error">
-          <p>{error}</p>
+        <div className="mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3">
+          <p className="text-sm text-destructive">{error}</p>
         </div>
       )}
 
-      {/* Enable Toggle */}
-      <div className="settings-card">
-        <div className="settings-row">
-          <div className="settings-label-group">
-            <label>Enable Session Search Summarization</label>
-            <span className="settings-description">
-              Use an auxiliary LLM to generate better summaries of past session search results.
-              When disabled, template-based summaries will be used instead.
-            </span>
-          </div>
-          <div className="settings-control">
-            <label className="settings-toggle">
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={(e) => setEnabled(e.target.checked)}
-              />
-              <span className="settings-toggle-slider"></span>
-            </label>
-          </div>
-        </div>
-      </div>
+      <SettingsSection
+        title="Session Search"
+        description="Configure an auxiliary LLM to summarize search results when using the session search tool"
+      >
+        <SettingsCard>
+          <SettingsToggle
+            label="Enable Session Search Summarization"
+            description="Use an auxiliary LLM to generate better summaries of past session search results. When disabled, template-based summaries will be used instead."
+            checked={enabled}
+            onCheckedChange={(checked) => setEnabled(checked)}
+          />
+        </SettingsCard>
+      </SettingsSection>
 
-      {/* Configuration Card */}
       {enabled && (
-        <>
-          <div className="settings-card">
-            <div className="settings-row">
-              <div className="settings-label-group">
-                <label>Provider</label>
-                <span className="settings-description">
-                  Select the LLM provider for summarization
-                </span>
-              </div>
-              <div className="settings-control">
-                <select
-                  className="settings-select"
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value as 'anthropic' | 'openai')}
-                >
-                  <option value="anthropic">Anthropic</option>
-                  <option value="openai">OpenAI</option>
-                </select>
-              </div>
-            </div>
+        <SettingsSection title="Configuration" description="Configure the summarization LLM provider">
+          <SettingsCard>
+            <SettingsSelectRow
+              label="Provider"
+              description="Select the LLM provider for summarization"
+              value={provider}
+              onValueChange={(v) => setProvider(v as 'anthropic' | 'openai')}
+              options={[
+                { value: 'anthropic', label: 'Anthropic' },
+                { value: 'openai', label: 'OpenAI' },
+              ]}
+            />
+            <SettingsRow
+              label="API Key"
+              description="API key for the summarization provider"
+            >
+              <Input
+                type="password"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder="sk-..."
+              />
+            </SettingsRow>
+            <SettingsSelectRow
+              label="Model"
+              description="Model to use for summarization"
+              value={model}
+              onValueChange={(v) => setModel(v)}
+              options={
+                provider === 'anthropic'
+                  ? [
+                      { value: 'claude-opus-4-20250514', label: 'Claude Opus 4' },
+                      { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
+                      { value: 'claude-haiku-4-20250514', label: 'Claude Haiku 4' },
+                    ]
+                  : [
+                      { value: 'gpt-4o', label: 'GPT-4o' },
+                      { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
+                      { value: 'gpt-4-turbo', label: 'GPT-4 Turbo' },
+                    ]
+              }
+            />
+            <SettingsRow
+              label="Base URL (optional)"
+              description="Custom API endpoint URL (leave empty for default)"
+            >
+              <Input
+                type="text"
+                value={baseURL}
+                onChange={(e) => setBaseURL(e.target.value)}
+                placeholder={
+                  provider === 'anthropic'
+                    ? 'https://api.anthropic.com'
+                    : 'https://api.openai.com/v1'
+                }
+              />
+            </SettingsRow>
+          </SettingsCard>
 
-            <div className="settings-row">
-              <div className="settings-label-group">
-                <label>API Key</label>
-                <span className="settings-description">
-                  API key for the summarization provider
-                </span>
-              </div>
-              <div className="settings-control flex-1 max-w-xs">
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
-                  className="settings-input w-full"
-                />
-              </div>
-            </div>
-
-            <div className="settings-row">
-              <div className="settings-label-group">
-                <label>Model</label>
-                <span className="settings-description">
-                  Model to use for summarization
-                </span>
-              </div>
-              <div className="settings-control flex-1 max-w-xs">
-                <select
-                  className="settings-select w-full"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                >
-                  {provider === 'anthropic' ? (
-                    <>
-                      <option value="claude-opus-4-20250514">Claude Opus 4</option>
-                      <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
-                      <option value="claude-haiku-4-20250514">Claude Haiku 4</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="gpt-4o">GPT-4o</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                      <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    </>
-                  )}
-                </select>
-              </div>
-            </div>
-
-            <div className="settings-row">
-              <div className="settings-label-group">
-                <label>Base URL (optional)</label>
-                <span className="settings-description">
-                  Custom API endpoint URL (leave empty for default)
-                </span>
-              </div>
-              <div className="settings-control flex-1 max-w-xs">
-                <input
-                  type="text"
-                  value={baseURL}
-                  onChange={(e) => setBaseURL(e.target.value)}
-                  placeholder={
-                    provider === 'anthropic'
-                      ? 'https://api.anthropic.com'
-                      : 'https://api.openai.com/v1'
-                  }
-                  className="settings-input w-full"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Save Button */}
           <div className="flex justify-end gap-2 mt-4">
             <Button
               variant="secondary"
@@ -226,32 +183,28 @@ export function SessionSearchSection() {
               )}
             </Button>
           </div>
-        </>
+        </SettingsSection>
       )}
 
-      {/* Info Card */}
-      <div className="settings-card mt-4">
-        <div className="settings-row">
-          <div className="settings-label-group">
-            <label>About Session Search</label>
-            <span className="settings-description">
+      <SettingsSection title="About" description="Learn more about session search summarization">
+        <SettingsCard divided={false}>
+          <div className="py-4 space-y-3">
+            <p className="text-sm text-muted-foreground">
               The session search tool allows the agent to recall relevant information from past
               conversations. When enabled, an auxiliary LLM generates human-readable summaries of
               matching sessions. When disabled, raw search snippets are shown instead.
-            </span>
+            </p>
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-foreground">Note:</strong> The summarization LLM is only used for generating search
+              summaries. The main conversation still uses your configured chat provider.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              <strong className="text-foreground">Privacy:</strong> Search queries and session content are sent to the
+              summarization LLM. Make sure to use a provider you trust.
+            </p>
           </div>
-        </div>
-        <div className="text-sm text-muted-foreground space-y-2 mt-2">
-          <p>
-            <strong>Note:</strong> The summarization LLM is only used for generating search
-            summaries. The main conversation still uses your configured chat provider.
-          </p>
-          <p>
-            <strong>Privacy:</strong> Search queries and session content are sent to the
-            summarization LLM. Make sure to use a provider you trust.
-          </p>
-        </div>
-      </div>
+        </SettingsCard>
+      </SettingsSection>
     </div>
   );
 }

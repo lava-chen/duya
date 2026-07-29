@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { XIcon, SpinnerGapIcon, ChatCircleIcon } from "@/components/icons";
+import { IconButton } from "@/components/ui/IconButton";
 import { getMessagesBySessionIPC, type GatewaySession } from "@/lib/ipc-client";
 import { subscribeToPhase, getSnapshot } from "@/lib/stream-session-manager";
 import type { Message } from "@/types";
@@ -146,13 +147,16 @@ export function GatewayChatModal({ session, onClose }: GatewayChatModalProps) {
                 Streaming
               </span>
             )}
-            <button
+            <IconButton
+              variant="default"
+              size="lg"
+              shape="square"
+              aria-label="Close"
               className="gateway-chat-modal-close"
               onClick={onClose}
-              aria-label="Close"
             >
               <XIcon size={18} />
-            </button>
+            </IconButton>
           </div>
         </div>
 

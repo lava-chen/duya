@@ -60,10 +60,6 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'workingWithTheUser', compute: getWorkingWithTheUserSection },
     { name: 'rules', compute: getRulesSection },
     { name: 'projectInstructions', compute: getProjectInstructionsSection },
-    {
-      name: 'memory',
-      compute: (ctx) => ctx.enabledTools.has('Memory') ? getMemorySection(ctx) : null,
-    },
   ],
   dynamicSections: [
     { name: 'platform', compute: getPlatformSection, description: 'Communication platform-specific guidance' },
@@ -74,6 +70,7 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'language', compute: getLanguageSection, description: 'Language preference' },
     { name: 'outputStyle', compute: getOutputStyleSection, description: 'Custom output style' },
     { name: 'scratchpad', compute: getScratchpadSection, description: 'Scratchpad directory' },
+    { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },

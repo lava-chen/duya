@@ -1,0 +1,46 @@
+id: spec-to-tasks
+name: Spec to Tasks
+description: >-
+  Parse a spec doc into a task list and create a row per task in the
+  project's Notion Tasks database.
+prompt: |
+  Turn the spec below into tasks in the Notion Tasks database.
+
+  Spec source: {{spec_source}}
+  Tasks database: {{tasks_database}}
+
+  Steps to follow:
+  1. Run the `spec-to-task` skill. Identify the source spec —
+     either a Notion page (read via `notion.get_page` +
+     `notion.get_block_children`) or a pasted spec in chat.
+  2. Verify the target Tasks database via
+     `notion.get_database(database_id)`. Read its schema; map the
+     spec's structure to the database's properties (Title,
+     Description, Assignee, Status, Blocked by, etc.).
+  3. Parse the spec into a task list. Each task should be:
+     - Small enough to ship in one PR — break "Implement
+       authentication" into "Set up auth callback", "Add session
+       middleware", "Wire login UI".
+     - Named with an action verb — "Add", "Update", "Fix",
+       "Remove", not "Authentication" or "Auth stuff".
+     - Owned — if the spec names an owner, include it; if not,
+       leave the assignee unset and flag it.
+  4. Surface the parsed task list in chat before writing. Show
+     the title, assignee, status, and dependencies for each task.
+     After confirmation, create each task via
+     `notion.create_database_item(database_id, properties)`.
+     Batch in groups of 10 to respect Notion's rate limit.
+  5. If the database has a `Blocked by` relation, wire
+     dependencies in a second pass via
+     `notion.update_page_properties(page_id, properties)`.
+  6. Report the count of tasks created and a link to the database
+     view filtered to the new tasks.
+
+  Constraint: do NOT create tasks without showing the user the
+  parsed list first. Do NOT guess owners — flag unassigned tasks
+  in the report. Do NOT create one giant task per spec heading —
+  break sections down into shippable units.
+requiredCapabilities:
+  - mcp:notion
+  - skill:spec-to-task
+permissionTier: write

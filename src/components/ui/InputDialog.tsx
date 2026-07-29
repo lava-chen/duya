@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 
 interface InputDialogProps {
   isOpen: boolean;
@@ -77,33 +78,23 @@ export function InputDialog({
               </p>
             )}
           </div>
-          <button
+          <IconButton
             onClick={onCancel}
-            className="p-1 rounded-lg transition-colors"
-            style={{ color: "var(--muted)" }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = "var(--surface-hover)")
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = "transparent")
-            }
+            aria-label="Close"
+            variant="default"
+            size="md"
           >
             <XIcon size={18} />
-          </button>
+          </IconButton>
         </div>
 
-        <input
+        <Input
           ref={inputRef}
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={placeholder}
-          className="w-full px-3 py-2 rounded-lg text-sm mb-4 focus:outline-none"
-          style={{
-            backgroundColor: "var(--chip)",
-            color: "var(--text)",
-            border: "1px solid var(--border)",
-          }}
+          className="w-full mb-4"
         />
 
         <div className="flex justify-end gap-2">

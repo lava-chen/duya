@@ -4,6 +4,7 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { Button } from '@/components/ui/Button';
 
 export type PermissionMode = 'ask' | 'auto' | 'bypass';
 
@@ -95,8 +96,10 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
 
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={handleToggle}
         disabled={disabled}
         className={`
@@ -108,7 +111,7 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
       >
         {getModeIcon()}
         <span>{getModeLabel()}</span>
-      </button>
+      </Button>
 
       {showWarning && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -133,10 +136,10 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
               </p>
             </div>
             <div className="flex items-center justify-end gap-2 pt-1">
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={cancelMode}
-                className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors"
                 style={{
                   backgroundColor: 'var(--surface)',
                   color: 'var(--text)',
@@ -144,17 +147,18 @@ export function PermissionModeSelector({ value, onChange, disabled = false }: Pe
                 }}
               >
                 {t('common.cancel')}
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 onClick={confirmMode}
-                className="px-3 py-1.5 rounded-md text-xs font-medium transition-colors text-white"
+                className="text-white"
                 style={{ backgroundColor: pendingMode === 'auto' ? 'var(--accent)' : 'var(--error)' }}
               >
                 {pendingMode === 'auto'
                   ? t('permissionMode.autoConfirm')
                   : t('permissionMode.bypassConfirm')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

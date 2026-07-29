@@ -126,7 +126,7 @@ export function AppearanceSection() {
       {/* Theme Section */}
       <SettingsSection title={t('settings.appearance.themeTitle')} description={t('settings.appearance.themeDesc')}>
         <SettingsCard>
-          <div className="px-4 py-3.5">
+          <div className="py-3.5">
             <label className="text-sm font-medium text-foreground block mb-3">{t('settings.appearance.colorTheme')}</label>
             <SettingsSegmented
               value={theme}
@@ -157,7 +157,7 @@ export function AppearanceSection() {
             onValueChange={applyFont}
             options={fonts}
           />
-          <div className="px-4 py-3.5 border-t border-border">
+          <div className="-mx-4 px-4 py-3.5 border-t border-border">
             <label className="text-sm font-medium text-foreground block mb-3">
               {t('settings.appearance.fontSize')}
             </label>

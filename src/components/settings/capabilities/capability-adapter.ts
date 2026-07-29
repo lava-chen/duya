@@ -1,4 +1,5 @@
-import type { PluginCatalogEntry, PluginManifest, PluginRegistryEntry } from "@/lib/plugin-types";
+import type { PluginCatalogEntry, PluginManifest, PluginRegistryEntry, CapabilityIndexItem } from "@/lib/plugin-types";
+import type { WorkflowTemplateSummary } from "@duya/plugin-core";
 
 export type IncludeItemKind =
   | "app"
@@ -232,4 +233,42 @@ export function getKindFirstLetter(kind: IncludeItemKind): string {
     case "ui":
       return "U";
   }
+}
+
+// Plan 311 — workflow template summaries.
+
+/**
+ * Permission tier display metadata. Maps the five-tier model from
+ * the design doc §6 to a label and color class for the badge.
+ */
+export interface PermissionTierDisplay {
+  label: string;
+  /** Tailwind color classes for the tier badge. */
+  badgeClass: string;
+}
+
+const TIER_DISPLAY: Record<string, PermissionTierDisplay> = {
+  read: { label: "Read", badgeClass: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400" },
+  draft: { label: "Draft", badgeClass: "bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400" },
+  write: { label: "Write", badgeClass: "bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400" },
+  modify: { label: "Modify", badgeClass: "bg-orange-100 text-orange-700 dark:bg-orange-500/10 dark:text-orange-400" },
+  dangerous: { label: "Dangerous", badgeClass: "bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400" },
+};
+
+export function getPermissionTierDisplay(tier: string | undefined): PermissionTierDisplay {
+  if (!tier) return TIER_DISPLAY.read;
+  return TIER_DISPLAY[tier] ?? TIER_DISPLAY.read;
+}
+
+/**
+ * Extract workflow template summaries from a capability index item.
+ * Returns an empty array when the plugin has no workflows or the
+ * index entry is absent (Plan 241 progressive disclosure — the
+ * summary is always present in the index when workflows exist).
+ */
+export function getWorkflows(
+  indexItem: CapabilityIndexItem | null | undefined,
+): WorkflowTemplateSummary[] {
+  if (!indexItem?.workflows) return [];
+  return indexItem.workflows;
 }

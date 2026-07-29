@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { PluginError } from './plugin-error-types';
 import type { PluginTrustLevel } from './plugin-security-types';
+import type {
+  WorkflowTemplateSummary,
+  PermissionTier,
+} from '@duya/plugin-core';
 
 // ============================================================================
 // MCP re-exports from @duya/plugin-core (plan 97, Phase 0)
@@ -97,11 +101,18 @@ export interface CapabilityIndexItem {
     hooks: number;
     commands: number;
     agents: number;
+    // Plan 311 — workflow template count (manifest v2 / on-disk derived).
+    workflows: number;
   };
   permissionSummary: {
     granted: string[];
     denied: string[];
   };
+  // Plan 311 — workflow template summaries. Empty for v1 plugins.
+  // Full templates are fetched on demand via `plugin:workflow:get`
+  // (Plan 241 progressive disclosure — prompt body stays out of the
+  // always-on capability index payload).
+  workflows?: WorkflowTemplateSummary[];
 }
 
 // ============================================================================
@@ -170,7 +181,53 @@ export const PluginEnginesSchema = z.object({
   node: z.string().optional(),
 });
 
-export const PluginManifestSchema = z.object({
+// ----------------------------------------------------------------------------
+// Plan 311 — v2 manifest components & permission policy
+// ----------------------------------------------------------------------------
+
+/**
+ * v2 `components` field. Each entry is a stable string ID; the on-disk
+ * implementation lives under the corresponding subdirectory (e.g.
+ * `skills/<id>.md`, `workflows/<id>.yaml`). All arrays default to
+ * empty so a v2 manifest can omit any subset.
+ */
+export const PluginComponentsSchema = z.object({
+  mcpServers: z.array(z.string()).default([]),
+  appConnections: z.array(z.string()).default([]),
+  skills: z.array(z.string()).default([]),
+  workflows: z.array(z.string()).default([]),
+});
+
+export type PluginComponents = z.infer<typeof PluginComponentsSchema>;
+
+/**
+ * v2 `permissionPolicy` field. Maps to the design doc §6 five-tier
+ * model. All fields optional; when omitted, the runtime applies the
+ * design doc defaults (`defaultMode: 'read'`, write/destructive
+ * require approval).
+ */
+export const PermissionPolicySchema = z.object({
+  defaultMode: z.enum(['read', 'draft', 'write', 'modify', 'dangerous']).optional(),
+  writeActionsRequireApproval: z.boolean().optional(),
+  destructiveActionsRequireApproval: z.boolean().optional(),
+});
+
+export type PermissionPolicy = z.infer<typeof PermissionPolicySchema>;
+
+/**
+ * v2 `publisher` field. `verified` is a boolean (Duya attestation);
+ * absent for community plugins. Mirrors the design doc §7 trust
+ * states.
+ */
+export const PluginPublisherSchema = z.object({
+  name: z.string().min(1),
+  url: z.string().url().optional(),
+  verified: z.boolean().optional(),
+});
+
+export type PluginPublisher = z.infer<typeof PluginPublisherSchema>;
+
+const PluginManifestV1Schema = z.object({
   schemaVersion: z.literal('duya.plugin.v1'),
   id: z.string().min(1),
   name: z.string().min(1),
@@ -184,9 +241,85 @@ export const PluginManifestSchema = z.object({
   engines: PluginEnginesSchema,
 });
 
+const PluginManifestV2Schema = z.object({
+  schemaVersion: z.literal('duya.plugin.v2'),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  version: z.string().min(1),
+  description: z.string().min(1),
+  author: PluginAuthorSchema,
+  entry: PluginEntrySchema.optional(),
+  capabilities: PluginCapabilitiesSchema.optional(),
+  components: PluginComponentsSchema,
+  permissionPolicy: PermissionPolicySchema.optional(),
+  publisher: PluginPublisherSchema.optional(),
+  permissions: z.array(PluginPermissionSchema).default([]),
+  dependencies: z.record(z.string(), z.string()).optional(),
+  engines: PluginEnginesSchema,
+});
+
+export const PluginManifestSchema = z.discriminatedUnion('schemaVersion', [
+  PluginManifestV1Schema,
+  PluginManifestV2Schema,
+]);
+
 export type PluginManifest = z.infer<typeof PluginManifestSchema>;
+export type PluginManifestV1 = z.infer<typeof PluginManifestV1Schema>;
+export type PluginManifestV2 = z.infer<typeof PluginManifestV2Schema>;
 export type PluginCapabilities = z.infer<typeof PluginCapabilitiesSchema>;
 export type PluginPermission = z.infer<typeof PluginPermissionSchema>;
+
+/**
+ * Normalized components view, used by capability counting and the
+ * capability index. v1 manifests project their `capabilities` field
+ * into the components shape (with `workflows: []`); v2 manifests
+ * pass `components` through. This lets the rest of the codebase
+ * treat every manifest as v2-shaped regardless of schema version.
+ */
+export interface NormalizedPluginComponents {
+  mcpServers: string[];
+  appConnections: string[];
+  skills: string[];
+  workflows: string[];
+}
+
+export function normalizeManifestComponents(
+  manifest: PluginManifest,
+): NormalizedPluginComponents {
+  if (manifest.schemaVersion === 'duya.plugin.v2') {
+    return {
+      mcpServers: manifest.components.mcpServers,
+      appConnections: manifest.components.appConnections,
+      skills: manifest.components.skills,
+      workflows: manifest.components.workflows,
+    };
+  }
+  // v1: project `capabilities` into components, no workflows.
+  return {
+    mcpServers: manifest.capabilities.mcpServers.map((s) => s.name),
+    appConnections: [],
+    skills: manifest.capabilities.skills.map((s) =>
+      typeof s === 'string' ? s : (s as { path: string }).path,
+    ),
+    workflows: [],
+  };
+}
+
+/**
+ * Type guard for v2 manifests.
+ */
+export function isManifestV2(
+  manifest: PluginManifest,
+): manifest is PluginManifestV2 {
+  return manifest.schemaVersion === 'duya.plugin.v2';
+}
+
+/**
+ * Re-export the workflow summary / permission tier types from
+ * `@duya/plugin-core` so renderer code can `import { WorkflowTemplateSummary } from '@/lib/plugin-types'`
+ * without reaching across the package boundary directly.
+ */
+export type { WorkflowTemplateSummary, PermissionTier };
 
 // ============================================================================
 // Plugin Catalog Types (for marketplace listing)
@@ -306,6 +439,8 @@ export interface PluginCatalogEntry {
     cli: number;
     ui: number;
     hooks: number;
+    // Plan 311 — workflow template count (manifest v2 / on-disk derived).
+    workflows: number;
   };
   capabilities?: PluginCapabilityDisplay[];
   permissions?: PluginPermissionDisplay[];
@@ -344,12 +479,22 @@ export interface PluginRegistryEntry {
 export interface PluginSetupField {
   key: string;
   label: string;
-  type: 'text' | 'password' | 'path' | 'url' | 'select' | 'boolean';
+  /**
+   * `app-connection` (Plan 312): renders a Connect/Disconnect control
+   * bound to the named `connectionId` instead of a text input. The
+   * field's `required` flag drives the `needs_setup` health state.
+   */
+  type: 'text' | 'password' | 'path' | 'url' | 'select' | 'boolean' | 'app-connection';
   required: boolean;
   description?: string;
   defaultValue?: string | boolean;
   options?: Array<{ label: string; value: string }>;
   placeholder?: string;
+  /**
+   * Plan 312 — only set when `type === 'app-connection'`. References
+   * the plugin-local connection id declared in `apps/connections.json`.
+   */
+  connectionId?: string;
 }
 
 // ============================================================================

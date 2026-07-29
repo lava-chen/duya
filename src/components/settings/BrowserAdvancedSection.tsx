@@ -14,6 +14,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
 import { useBrowserExtension } from '@/hooks/useBrowserExtension';
 import { SettingsSection, SettingsCard, SettingsRow } from '@/components/settings/ui';
+import { Button } from '@/components/ui/Button';
 
 type CookieBrowser = 'chrome' | 'edge';
 
@@ -121,21 +122,21 @@ export function BrowserAdvancedSection() {
 
   const extensionActionButtons = (
     <div className="mt-1.5 flex items-center gap-2">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={handleOpenExtensions}
-        className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all"
       >
         {t('browserAdvanced.openExtensions')}
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={handleRefreshExtension}
         disabled={extensionStatus === 'checking'}
-        className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-surface border border-border/50 text-foreground hover:bg-muted transition-all disabled:opacity-50"
       >
         {t('browserAdvanced.refreshExtension')}
-      </button>
+      </Button>
     </div>
   );
 
@@ -156,7 +157,7 @@ export function BrowserAdvancedSection() {
               </span>
             }
           />
-          <div className="px-4 pb-3.5">
+          <div className="pb-3.5">
             <div className="flex items-center gap-2">
               <input
                 type="text"
@@ -191,25 +192,27 @@ export function BrowserAdvancedSection() {
             action={
               <div className="flex items-center gap-2">
                 {settings.browserDownloadPath && (
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="sm"
                     onClick={handleClearDownloadFolder}
                     disabled={saving}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-surface border border-border/50 text-muted-foreground hover:text-foreground hover:bg-muted transition-all disabled:opacity-50"
                   >
                     {t('browserAdvanced.resetDefault')}
-                  </button>
+                  </Button>
                 )}
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={handleSelectDownloadFolder}
                   disabled={saving}
-                  className="px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
                 >
                   {t('browserAdvanced.change')}
-                </button>
+                </Button>
               </div>
             }
           />
-          <div className="px-4 pb-3.5">
+          <div className="pb-3.5">
             <code className="block w-full px-3 py-2 rounded-lg text-xs font-mono truncate bg-surface border border-border/50 text-foreground">
               {settings.browserDownloadPath || t('browserAdvanced.defaultDownloadPath')}
             </code>
@@ -219,7 +222,7 @@ export function BrowserAdvancedSection() {
 
         {/* Cookie import */}
         <SettingsCard>
-            <div className="px-4 py-3.5">
+            <div className="py-3.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <CookieIcon size={18} className="text-muted-foreground" />
@@ -227,14 +230,15 @@ export function BrowserAdvancedSection() {
                     {t('browserAdvanced.cookieImport')}
                   </span>
                 </div>
-                <button
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={handleImportCookies}
                   disabled={importing}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
                 >
                   {importing && <SpinnerGapIcon size={12} className="animate-spin" />}
                   {importing ? t('browserAdvanced.importing') : t('browserAdvanced.importCookies')}
-                </button>
+                </Button>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2">
                 <label className="text-xs text-muted-foreground">
@@ -315,7 +319,7 @@ export function BrowserAdvancedSection() {
 
         {/* Clear data */}
         <SettingsCard>
-          <div className="px-4 py-3.5">
+          <div className="py-3.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <TrashIcon size={18} className="text-muted-foreground" />
@@ -323,14 +327,15 @@ export function BrowserAdvancedSection() {
                   {t('browserAdvanced.clearData')}
                 </span>
               </div>
-              <button
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={handleClearData}
                 disabled={clearing}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-destructive/10 text-destructive hover:bg-destructive/20 transition-all disabled:opacity-50"
               >
                 {clearing && <SpinnerGapIcon size={12} className="animate-spin" />}
                 {t('browserAdvanced.clearData')}
-              </button>
+              </Button>
             </div>
             {cleared && (
               <div className="mt-2 flex items-center gap-1.5 text-xs text-green-500">

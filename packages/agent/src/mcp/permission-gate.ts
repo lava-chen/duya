@@ -25,7 +25,7 @@ import type { PermissionMode } from '../permissions/types.js';
 
 export type McpToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
 
-export type McpGateDecision =
+type McpGateDecision =
   | { kind: 'allow'; reason: string }
   | { kind: 'deny'; reason: string }
   | { kind: 'prompt'; reason: string };

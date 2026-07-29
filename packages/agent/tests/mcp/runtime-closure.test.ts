@@ -327,7 +327,6 @@ function makeFakeAgent() {
   let activeManager: { disconnectAll: () => Promise<void> } | null = null;
   let activeMCPRuntimeSnapshot: ActiveMCPRuntimeSnapshot | null = null;
   const providerNameToInternalKey = new Map<string, string>();
-  const registeredMCPToolKeys = new Set<string>();
   const toolEntries = new Map<string, { definition: Tool; executor: ToolExecutor }>();
   let activeAgentProfileId: string | undefined;
   return {
@@ -341,7 +340,6 @@ function makeFakeAgent() {
     async setActiveMCPRuntime(install: {
       manager: { disconnectAll: () => Promise<void> };
       providerNameToInternalKey: Map<string, string>;
-      registeredMCPToolKeys: Set<string>;
       toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
       preparedRegistryEntries: Array<{
         key: string;
@@ -358,8 +356,6 @@ function makeFakeAgent() {
       activeManager = install.manager;
       providerNameToInternalKey.clear();
       for (const [k, v] of install.providerNameToInternalKey) providerNameToInternalKey.set(k, v);
-      registeredMCPToolKeys.clear();
-      for (const k of install.registeredMCPToolKeys) registeredMCPToolKeys.add(k);
       toolEntries.clear();
       for (const [k, v] of install.toolEntries) toolEntries.set(k, v);
       activeMCPRuntimeSnapshot = install.snapshot;
@@ -372,7 +368,6 @@ function makeFakeAgent() {
     _activeManager: () => activeManager,
     _activeMCPRuntimeSnapshot: () => activeMCPRuntimeSnapshot,
     _providerNameToInternalKey: () => providerNameToInternalKey,
-    _registeredMCPToolKeys: () => registeredMCPToolKeys,
     _toolEntries: () => toolEntries,
     _activeMCPRegistry: () => activeMCPRegistry,
   };
@@ -486,7 +481,7 @@ describe('Case 1: reload to zero clears old MCP runtime', () => {
     expect(r2.action.clientsConnected).toBe(0);
     expect(r2.action.toolsAdded).toBe(0);
     expect(agent._activeMCPRegistry().size).toBe(0);
-    expect(agent._registeredMCPToolKeys().size).toBe(0);
+    expect(agent._toolEntries().size).toBe(0);
     expect(agent._providerNameToInternalKey().size).toBe(0);
   });
 });
@@ -950,7 +945,7 @@ describe('Case 9: concurrent apply serializes via mutex', () => {
     // Final state converges to one of the three. The active
     // MCP registry holds exactly one entry.
     expect(agent._activeMCPRegistry().size).toBe(1);
-    expect(agent._registeredMCPToolKeys().size).toBe(1);
+    expect(agent._toolEntries().size).toBe(1);
   });
 });
 

@@ -30,11 +30,14 @@ import * as path from 'path';
 import type { Database } from 'better-sqlite3';
 import { enqueueProjectionOutbox } from './outbox.js';
 import {
-  renderGlobalMemoryFile,
-  renderProjectMemoryFile,
-  renderGlobalSummaryFile,
-  renderProjectSummaryFile,
+  renderUnifiedMemoryFile,
+  renderMemorySummaryFile,
   renderPhase2WorkspaceDiff,
+  renderPersonFile,
+  renderAreaFile,
+  renderPeopleIndexFile,
+  renderAreasIndexFile,
+  personAreaSlug,
   type MemoryEntryRow,
   type ProjectRow,
   type Phase2Diff,
@@ -47,6 +50,17 @@ import {
 
 /** Default lock timeout: 5 minutes. */
 const DEFAULT_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Maximum number of `phase2_runs` rows to retain. Older rows are
+ * pruned after each successful consolidator run to prevent unbounded
+ * growth (the table is an operational log, not a permanent audit trail).
+ */
+const PHASE2_RUNS_RETENTION_COUNT = 50;
+const ACTIVE_MEMORY_LIMIT_PER_SCOPE = 64;
+// Bump whenever normalization, scope, or retention semantics change so an
+// unchanged Stage 1 input set is re-consolidated exactly once.
+const CONSOLIDATOR_INPUT_VERSION = 3;
 
 const AD_HOC_DIR_NAME = 'extensions/ad_hoc';
 const DIGESTED_SUBDIR = '.digested';
@@ -107,6 +121,7 @@ interface ParsedItem {
   itemIndex: number;
   claim: string;
   claimType: string;
+  scopeHint?: 'global' | 'project';
   canonicalKey: string;
   evidence: ParsedEvidence[];
   generatedAt: number;
@@ -179,20 +194,113 @@ function d8AllowsKind(item: ParsedItem): boolean {
   return true;
 }
 
+/**
+ * True when the canonical_key belongs to a person or area entry
+ * (prefix `person:` or `area:`). These kinds are always global scope.
+ */
+function isPersonAreaKey(canonicalKey: string): boolean {
+  return canonicalKey.startsWith('person:') || canonicalKey.startsWith('area:');
+}
+
+/** Normalize historical free-form keys into the controlled v2 taxonomy. */
+export function normalizeCanonicalKey(
+  claimType: string,
+  canonicalKey: string,
+  claim: string
+): string {
+  const raw = canonicalKey.trim().toLowerCase().replace(/_/g, '-');
+  if (
+    claimType === 'preference' &&
+    (/(^|[-:])(language|lang)([-:]|$)/.test(raw) || /response-language/.test(raw)) &&
+    !/(utf|file|structured|brief|markdown|canvas|widget|brand)/.test(raw) &&
+    /(chinese|zh-cn|zh\b|中文|汉语)/i.test(`${raw} ${claim}`)
+  ) {
+    return 'preference:response-language';
+  }
+  if (
+    claimType === 'preference' &&
+    /(visual.*(verify|verification|self-check)|verify.*visual)/.test(raw)
+  ) {
+    return 'preference:visual-verification';
+  }
+
+  const prefixAliases: Record<string, string> = {
+    pref: 'preference',
+    preference: 'preference',
+    procedure: 'procedure',
+    proc: 'procedure',
+    workflow: 'procedure',
+    fact: 'fact',
+    project: 'fact',
+    ref: 'reference',
+    reference: 'reference',
+    person: 'person',
+    area: 'area',
+  };
+  const type = prefixAliases[claimType] ?? claimType;
+  let topic = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
+  topic = topic
+    .replace(/^(user|project)[-:]+/, '')
+    .replace(/^(pref(erence)?|proc(edure)?|workflow|fact|ref(erence)?|project)[-:]+/, '')
+    .replace(/[^a-z0-9\u4e00-\u9fff-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return `${type}:${topic || 'unspecified'}`;
+}
+
+function isExplicitlyGlobal(item: ParsedItem, normalizedKey: string): boolean {
+  return (
+    item.scopeHint === 'global' ||
+    isPersonAreaKey(normalizedKey) ||
+    normalizedKey === 'preference:response-language' ||
+    normalizedKey === 'preference:visual-verification' ||
+    (item.scopeHint === undefined &&
+      item.projectId === 'global' &&
+      /\b(across|all|every) projects?\b|\bdefault preferences?\b|跨项目|所有项目|默认偏好/i.test(item.claim))
+  );
+}
+
+/**
+ * Merge all claims for a person/area group into a single content body
+ * in the `## Summary` + `## Details` format.
+ *
+ * The most recent claim (by generatedAt DESC) becomes the summary;
+ * all unique claims (including the summary) become the details list.
+ * This ensures every session that mentioned this person/area
+ * contributes to the details, not just the winner.
+ */
+function mergePersonAreaContent(items: ParsedItem[]): string {
+  const sorted = [...items].sort((a, b) => b.generatedAt - a.generatedAt);
+  const seen = new Set<string>();
+  const details: string[] = [];
+  for (const item of sorted) {
+    const claim = item.claim.trim();
+    if (claim.length === 0) continue;
+    if (seen.has(claim)) continue;
+    seen.add(claim);
+    details.push(claim);
+  }
+  const summary = details[0] ?? '';
+  const lines: string[] = ['## Summary', '', summary, '', '## Details', ''];
+  for (const d of details) {
+    lines.push(`- ${d}`);
+  }
+  return lines.join('\n');
+}
+
 function computeInputSetHash(db: Database): string {
   const rows = db
     .prepare(
       `SELECT rollout_id, source_content_hash
        FROM stage1_outputs
        WHERE job_status = 'succeeded'
-         AND content_outcome IN ('success', 'partial')
        ORDER BY rollout_id ASC`
     )
     .all() as Array<{ rollout_id: string; source_content_hash: string }>;
 
-  const payload = rows
+  const payload = [`consolidator:${CONSOLIDATOR_INPUT_VERSION}`, ...rows
     .map((r) => `${r.rollout_id}:${r.source_content_hash}`)
-    .join('\n');
+  ].join('\n');
   return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
 }
 
@@ -274,6 +382,25 @@ function releaseLock(
   ).run(now, status, inputSetHash, outputDiffSummary, runId, token);
 }
 
+/**
+ * Delete old `phase2_runs` rows, keeping only the most recent
+ * `PHASE2_RUNS_RETENTION_COUNT`. Best-effort: if the table has fewer
+ * rows than the retention count, this is a no-op.
+ */
+function prunePhase2Runs(db: Database): number {
+  const result = db
+    .prepare(
+      `DELETE FROM phase2_runs
+       WHERE id NOT IN (
+         SELECT id FROM phase2_runs
+         ORDER BY id DESC
+         LIMIT ?
+       )`
+    )
+    .run(PHASE2_RUNS_RETENTION_COUNT);
+  return result.changes;
+}
+
 // ---------------------------------------------------------------------------
 // Stage 1 item parsing
 // ---------------------------------------------------------------------------
@@ -287,6 +414,7 @@ interface RawMemoryItem {
     verification?: string;
   }>;
   canonical_key?: string;
+  scope?: 'global' | 'project';
 }
 
 function parseStage1Items(db: Database): ParsedItem[] {
@@ -294,8 +422,7 @@ function parseStage1Items(db: Database): ParsedItem[] {
     .prepare(
       `SELECT rollout_id, project_id, raw_memory, generated_at
        FROM stage1_outputs
-       WHERE job_status = 'succeeded'
-         AND content_outcome IN ('success', 'partial')`
+       WHERE job_status = 'succeeded'`
     )
     .all() as Array<{
     rollout_id: string;
@@ -345,7 +472,13 @@ function parseStage1Items(db: Database): ParsedItem[] {
         itemIndex: i,
         claim: item.claim,
         claimType: item.claim_type,
-        canonicalKey: item.canonical_key,
+        scopeHint: item.scope,
+        // `ad-hoc:*` is a reserved historical namespace. Keeping it intact
+        // lets an explicitly authored note remain authoritative when an old
+        // Stage 1 row happens to reference the same key.
+        canonicalKey: item.canonical_key.startsWith('ad-hoc:')
+          ? item.canonical_key
+          : normalizeCanonicalKey(item.claim_type, item.canonical_key, item.claim),
         evidence,
         generatedAt: row.generated_at,
         projectId: row.project_id,
@@ -424,7 +557,12 @@ function groupItems(items: ParsedItem[]): ItemGroup[] {
   const groups = new Map<string, ItemGroup>();
   for (const item of items) {
     if (!d8AllowsKind(item)) continue;
-    const scope = scopeForProject(item.projectId);
+    // Person and area entries are always global scope (cross-project).
+    const global = isExplicitlyGlobal(item, item.canonicalKey);
+    // Historical rows used the `global` sentinel even when scope had never
+    // been decided. Do not promote those ambiguous facts into every project.
+    if (!global && item.projectId === 'global') continue;
+    const scope = global ? 'global' : scopeForProject(item.projectId);
     const projectId = scope === 'global' ? null : item.projectId;
     const key = `${scope}|${projectId ?? ''}|${item.canonicalKey}`;
     let group = groups.get(key);
@@ -440,6 +578,134 @@ function groupItems(items: ParsedItem[]): ItemGroup[] {
 function stage1ItemId(item: ParsedItem): string {
   if (item.isAdHoc) return `ad-hoc#${item.canonicalKey}`;
   return `${item.rolloutId}#${item.itemIndex}`;
+}
+
+function retireCanonicalAliases(
+  db: Database,
+  targetMemoryId: string,
+  group: ItemGroup,
+  kind: MemoryEntryRow['kind'],
+  now: number,
+  retiredDiff: Phase2DiffEntry[]
+): number {
+  const candidates = db
+    .prepare("SELECT * FROM memory_entries WHERE status = 'active' AND kind = ?")
+    .all(kind) as MemoryEntryRow[];
+  let retired = 0;
+  for (const candidate of candidates) {
+    if (candidate.memory_id === targetMemoryId) continue;
+    if (candidate.scope !== group.scope) continue;
+    if (normalizeCanonicalKey(candidate.kind, candidate.canonical_key, candidate.content) !== group.canonicalKey) {
+      continue;
+    }
+    if (group.scope === 'project' && candidate.project_id !== group.projectId) continue;
+
+    db.prepare(
+      `INSERT OR IGNORE INTO memory_evidence (memory_id, rollout_id, stage1_item_id, relation)
+       SELECT ?, rollout_id, stage1_item_id, 'supporting'
+       FROM memory_evidence WHERE memory_id = ?`
+    ).run(targetMemoryId, candidate.memory_id);
+    db.prepare(
+      "UPDATE memory_entries SET status = 'retired', updated_at = ? WHERE memory_id = ?"
+    ).run(now, candidate.memory_id);
+    retiredDiff.push({
+      memory_id: candidate.memory_id,
+      canonical_key: candidate.canonical_key,
+      content: candidate.content,
+      kind: candidate.kind,
+      scope: candidate.scope,
+      project_id: candidate.project_id,
+    });
+    retired++;
+  }
+  return retired;
+}
+
+function enforceActiveMemoryBudgets(
+  db: Database,
+  now: number,
+  retiredDiff: Phase2DiffEntry[]
+): number {
+  const active = db
+    .prepare("SELECT * FROM memory_entries WHERE status = 'active'")
+    .all() as MemoryEntryRow[];
+  const buckets = new Map<string, MemoryEntryRow[]>();
+  for (const entry of active) {
+    if (entry.kind === 'person' || entry.kind === 'area') continue;
+    const bucket = `${entry.scope}:${entry.project_id ?? 'global'}`;
+    const values = buckets.get(bucket) ?? [];
+    values.push(entry);
+    buckets.set(bucket, values);
+  }
+
+  let retired = 0;
+  for (const values of buckets.values()) {
+    values.sort((a, b) => {
+      const protectedA = a.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
+      const protectedB = b.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
+      return protectedB - protectedA || summaryEntryRank(b) - summaryEntryRank(a) || b.updated_at - a.updated_at;
+    });
+    for (const entry of values.slice(ACTIVE_MEMORY_LIMIT_PER_SCOPE)) {
+      db.prepare(
+        "UPDATE memory_entries SET status = 'retired', updated_at = ? WHERE memory_id = ?"
+      ).run(now, entry.memory_id);
+      retiredDiff.push({
+        memory_id: entry.memory_id,
+        canonical_key: entry.canonical_key,
+        content: entry.content,
+        kind: entry.kind,
+        scope: entry.scope,
+        project_id: entry.project_id,
+      });
+      retired++;
+    }
+  }
+  return retired;
+}
+
+function retireUnsupportedGlobalEntries(
+  db: Database,
+  supportedKeys: Set<string>,
+  now: number,
+  retiredDiff: Phase2DiffEntry[]
+): number {
+  const active = db
+    .prepare("SELECT * FROM memory_entries WHERE status = 'active' AND scope = 'global'")
+    .all() as MemoryEntryRow[];
+  let retired = 0;
+  for (const entry of active) {
+    if (
+      entry.canonical_key.startsWith('ad-hoc:') ||
+      entry.kind === 'person' ||
+      entry.kind === 'area' ||
+      supportedKeys.has(entry.canonical_key)
+    ) {
+      continue;
+    }
+    db.prepare(
+      "UPDATE memory_entries SET status = 'retired', updated_at = ? WHERE memory_id = ?"
+    ).run(now, entry.memory_id);
+    retiredDiff.push({
+      memory_id: entry.memory_id,
+      canonical_key: entry.canonical_key,
+      content: entry.content,
+      kind: entry.kind,
+      scope: entry.scope,
+      project_id: entry.project_id,
+    });
+    retired += 1;
+  }
+  return retired;
+}
+
+function summaryEntryRank(entry: MemoryEntryRow): number {
+  switch (entry.kind) {
+    case 'preference': return 5;
+    case 'procedure': return 4;
+    case 'fact': return 3;
+    case 'reference': return 2;
+    default: return 1;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -544,10 +810,18 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
       let retired = 0;
       const diffAdded: Phase2DiffEntry[] = [];
       const diffSuperseded: Phase2DiffEntry[] = [];
+      const diffRetired: Phase2DiffEntry[] = [];
 
       // Steps 6-8: per-group UPSERT + evidence.
       for (const group of groups) {
         const winner = pickWinner(group.items);
+
+        // Person/area entries merge all claims into a summary+details
+        // body; other kinds use the winner's claim as-is.
+        const isPersonArea = isPersonAreaKey(group.canonicalKey);
+        const groupContent = isPersonArea
+          ? mergePersonAreaContent(group.items)
+          : winner.content;
 
         // Query existing entry for this canonical_key.
         const existing = group.projectId
@@ -583,7 +857,7 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
               group.projectId,
               winner.claimType as MemoryEntryRow['kind'],
               group.canonicalKey,
-              winner.content,
+              groupContent,
               start,
               start
             );
@@ -591,23 +865,23 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
           diffAdded.push({
             memory_id: memoryId,
             canonical_key: group.canonicalKey,
-            content: winner.content,
+            content: groupContent,
             kind: winner.claimType,
             scope: group.scope,
             project_id: group.projectId,
           });
         } else {
           memoryId = existing.memory_id;
-          if (existing.content !== winner.content) {
+          if (existing.content !== groupContent || existing.status !== 'active') {
             // Merge: version bump + new content (winner preferred).
             input.db
               .prepare(
                 `UPDATE memory_entries
-                   SET content = ?, version = version + 1, updated_at = ?, kind = ?
+                   SET content = ?, version = version + 1, updated_at = ?, kind = ?, status = 'active'
                  WHERE memory_id = ?`
               )
               .run(
-                winner.content,
+                groupContent,
                 start,
                 winner.claimType as MemoryEntryRow['kind'],
                 memoryId
@@ -616,7 +890,7 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
             diffSuperseded.push({
               memory_id: memoryId,
               canonical_key: group.canonicalKey,
-              content: winner.content,
+              content: groupContent,
               kind: winner.claimType,
               scope: group.scope,
               project_id: group.projectId,
@@ -636,7 +910,27 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
             )
             .run(memoryId, item.rolloutId, itemId, relation);
         }
+
+        retired += retireCanonicalAliases(
+          input.db,
+          memoryId,
+          group,
+          winner.claimType as MemoryEntryRow['kind'],
+          start,
+          diffRetired
+        );
       }
+
+      const supportedGlobalKeys = new Set(
+        groups.filter((group) => group.scope === 'global').map((group) => group.canonicalKey)
+      );
+      retired += retireUnsupportedGlobalEntries(
+        input.db,
+        supportedGlobalKeys,
+        start,
+        diffRetired
+      );
+      retired += enforceActiveMemoryBudgets(input.db, start, diffRetired);
 
       // Step 9: Render + enqueue 5 projection files.
       const entries = input.db
@@ -646,53 +940,67 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
         .prepare('SELECT * FROM projects')
         .all() as ProjectRow[];
 
-      const projectIds = new Set(
-        entries
-          .filter((e) => e.scope === 'project' && e.project_id !== null)
-          .map((e) => e.project_id as string)
-      );
-
-      // global/MEMORY.md
+      // Single searchable projections. Project identity remains in SQLite
+      // and in semantic headings, not in a projects/<uuid> directory tree.
       enqueueProjectionOutbox(input.db, {
-        targetPath: path.join(rootDir, 'global', 'MEMORY.md'),
+        targetPath: path.join(rootDir, 'MEMORY.md'),
         operation: 'write',
-        content: renderGlobalMemoryFile(entries),
+        content: renderUnifiedMemoryFile(entries, projects),
+        now: start,
+      });
+      enqueueProjectionOutbox(input.db, {
+        targetPath: path.join(rootDir, 'summary.md'),
+        operation: 'write',
+        content: renderMemorySummaryFile(entries, projects),
         now: start,
       });
 
-      // projects/<id>/MEMORY.md
-      for (const pid of projectIds) {
+      // global/people/<slug>.md — one file per active person entry.
+      // global/areas/<slug>.md  — one file per active area entry.
+      const personSlugs = new Set<string>();
+      const areaSlugs = new Set<string>();
+      for (const entry of entries) {
+        if (entry.status !== 'active') continue;
+        const slug = personAreaSlug(entry.canonical_key);
+        if (slug === null) continue;
+        if (entry.kind === 'person') personSlugs.add(slug);
+        else if (entry.kind === 'area') areaSlugs.add(slug);
+      }
+      for (const slug of personSlugs) {
         enqueueProjectionOutbox(input.db, {
-          targetPath: path.join(rootDir, 'projects', pid, 'MEMORY.md'),
+          targetPath: path.join(rootDir, 'global', 'people', `${slug}.md`),
           operation: 'write',
-          content: renderProjectMemoryFile(entries, pid),
+          content: renderPersonFile(entries, slug),
           now: start,
         });
       }
-
-      // global/summary.md
+      for (const slug of areaSlugs) {
+        enqueueProjectionOutbox(input.db, {
+          targetPath: path.join(rootDir, 'global', 'areas', `${slug}.md`),
+          operation: 'write',
+          content: renderAreaFile(entries, slug),
+          now: start,
+        });
+      }
+      // People/areas index files.
       enqueueProjectionOutbox(input.db, {
-        targetPath: path.join(rootDir, 'global', 'summary.md'),
+        targetPath: path.join(rootDir, 'global', 'people', 'index.md'),
         operation: 'write',
-        content: renderGlobalSummaryFile(entries, projects),
+        content: renderPeopleIndexFile(entries),
         now: start,
       });
-
-      // projects/<id>/summary.md
-      for (const pid of projectIds) {
-        enqueueProjectionOutbox(input.db, {
-          targetPath: path.join(rootDir, 'projects', pid, 'summary.md'),
-          operation: 'write',
-          content: renderProjectSummaryFile(entries, pid),
-          now: start,
-        });
-      }
+      enqueueProjectionOutbox(input.db, {
+        targetPath: path.join(rootDir, 'global', 'areas', 'index.md'),
+        operation: 'write',
+        content: renderAreasIndexFile(entries),
+        now: start,
+      });
 
       // phase2_workspace_diff.md
       const diff: Phase2Diff = {
         added: diffAdded,
         superseded: diffSuperseded,
-        retired: [],
+        retired: diffRetired,
         runId,
         inputHash: inputSetHash,
         timestamp: start,
@@ -743,6 +1051,14 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
   // Move ad-hoc files to .digested/ after successful transaction.
   for (const file of adHocFiles) {
     moveAdHocToDigested(file, rootDir);
+  }
+
+  // Prune old phase2_runs rows (best-effort; outside the main
+  // transaction so a failure here does not roll back the run).
+  try {
+    prunePhase2Runs(input.db);
+  } catch {
+    // Non-critical: the table just grows until next successful run.
   }
 
   return {

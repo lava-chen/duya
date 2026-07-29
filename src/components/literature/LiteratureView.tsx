@@ -18,6 +18,7 @@ import {
   listLiteratureSources,
   saveLiteratureEvidence,
 } from "@/lib/literature-ipc";
+import { Button } from "@/components/ui/Button";
 
 type ImportResultState =
   | { status: "idle" }
@@ -272,13 +273,14 @@ export function LiteratureView() {
               className="hidden"
               onChange={handleFileChange}
             />
-            <button
-              type="button"
+            <Button
+              variant="primary"
+              size="md"
               onClick={handlePickPdf}
-              className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+              className="hover:opacity-90 hover:bg-accent"
             >
               Import PDF
-            </button>
+            </Button>
           </div>
         </div>
         <div
@@ -486,13 +488,14 @@ export function LiteratureView() {
                         {style}
                       </button>
                     ))}
-                    <button
-                      type="button"
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       onClick={handleCopyCitation}
-                      className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)]"
+                      className="text-sm text-[var(--muted)]"
                     >
                       Copy
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <pre className="mt-4 overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg)] px-4 py-4 text-sm whitespace-pre-wrap text-[var(--text)]">
@@ -573,14 +576,15 @@ export function LiteratureView() {
                               <span>{chunk.charCount} chars</span>
                               <span>{chunk.pageNumber != null ? `Page ${chunk.pageNumber}` : "No exact PDF page"}</span>
                             </div>
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="sm"
                               onClick={() => void handleSaveEvidence(chunk)}
                               disabled={isSavingThisChunk}
-                              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] disabled:opacity-60"
+                              className="text-sm text-[var(--muted)]"
                             >
                               {isSavingThisChunk ? "Saving..." : "Save as Evidence"}
-                            </button>
+                            </Button>
                           </div>
                           <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-[var(--text)]">
                             {chunk.text}

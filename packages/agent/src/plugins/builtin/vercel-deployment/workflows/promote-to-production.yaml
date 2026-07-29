@@ -1,0 +1,55 @@
+id: promote-to-production
+name: Promote to Production
+description: >-
+  Promote a verified Vercel deployment to production. Destructive-tier —
+  requires explicit confirmation and restating the deployment URL, commit
+  SHA, and the production deployment that will be replaced.
+prompt: |
+  Promote the verified Vercel deployment below to production.
+
+  Project: {{project_id}}
+  Deployment: {{deployment_id}}
+
+  Steps to follow:
+  1. Run the `production-release` skill. Re-confirm the deployment
+     context one final time, in chat and immediately before the
+     promote call:
+     - Deployment URL and alias.
+     - Commit SHA and commit message.
+     - Author of the commit.
+     - Preview-validation report (or a one-line "validation passed
+       at <timestamp>").
+  2. Confirm with the user. This is destructive-tier — not a
+     yes/no prompt, but an explicit opt-in:
+     - Restate the deployment URL and commit SHA.
+     - Restate what the change does (one sentence from the commit
+       message).
+     - Name the current production deployment that will be replaced
+       (alias + commit SHA).
+     - Ask the user to confirm with the exact phrase "promote to
+       production" or an equivalent explicit confirmation.
+  3. After confirmation, call
+     `vercel.promote_to_production(deployment_id)`. The call
+     returns the new alias mapping; the promotion is synchronous
+     at the alias level but may take 30–60 seconds to propagate
+     globally.
+  4. Verify the promotion:
+     - `vercel.list_aliases(project_id)` shows the production
+       alias now points at the promoted deployment.
+     - Fetch the production URL via the Playwright plugin or HTTP
+       and confirm it returns the expected content.
+  5. Report the promotion: production URL, deployment URL, commit
+     SHA, and the previous production deployment (for rollback
+     reference). Save the previous production deployment ID in
+     chat so the user can roll back if needed.
+
+  Constraint: do NOT promote without the explicit confirmation
+  step, even if the user said "ship it" earlier — the state may
+  have changed between validation and promotion. do NOT batch
+  promotions. Do NOT skip the verification fetch — a promotion
+  that doesn't propagate looks like a success but is a silent
+  failure.
+requiredCapabilities:
+  - mcp:vercel
+  - skill:production-release
+permissionTier: dangerous

@@ -31,12 +31,14 @@ import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import type { MCPCandidate, MCPCollectionResult } from '@duya/plugin-core';
 import {
   loadAndResolveMCPServers,
-  getLastMCPLoadResult,
-  clearLastMCPLoadResult,
   resolvedToLegacyConfig,
   filterDefinedEnv,
   type MCPLoadResult,
 } from '../../src/mcp/loader.js';
+import {
+  getLastMCPLoadResult,
+  clearLastMCPLoadResult,
+} from '../../src/mcp/apply.js';
 import type { MCPServerConfig, ResolvedMCPServerConfig } from '@duya/plugin-core';
 
 const mockedCollect = vi.mocked(collectWorkerMCPCandidates);
@@ -59,11 +61,9 @@ describe('loadAndResolveMCPServers — module-scope cache lifecycle', () => {
   });
 
   it('before any apply, getLastMCPLoadResult returns null', () => {
-    // Phase 2A: the canonical `lastMCPLoadResult` is written by
+    // The canonical `lastMCPLoadResult` is written by
     // `applyMCPConfiguration` (PHASE C commit), not by
-    // `loadAndResolveMCPServers` (which is now a pure compute
-    // step). `loader` re-exports the apply accessors for
-    // backward compatibility.
+    // `loadAndResolveMCPServers` (which is a pure compute step).
     expect(getLastMCPLoadResult()).toBeNull();
   });
 });

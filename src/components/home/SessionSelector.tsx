@@ -10,6 +10,7 @@ import {
   useOptionPanelPlacement,
 } from "@/components/ui/OptionPanel";
 import { ReferencesPanel } from "./ReferencesPanel";
+import { Button } from "@/components/ui/Button";
 
 interface SessionSelectorProps {
   selectedProject: { workingDirectory: string; projectName: string } | null;
@@ -118,24 +119,24 @@ export function SessionSelector({
               emptyMessage={t('project.noProjectMatches')}
               footer={
                 <div className="grid gap-1">
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-colors hover:bg-[var(--surface-hover)]"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start px-2 text-left"
                     onClick={handleNewBlankProject}
-                    style={{ color: 'var(--text)' }}
                   >
-                    <FileIcon size={14} style={{ color: 'var(--muted)' }} />
+                    <FileIcon size={14} className="text-[var(--muted)]" />
                     <span>{t('project.newBlankProject')}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left text-xs transition-colors hover:bg-[var(--surface-hover)]"
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start px-2 text-left"
                     onClick={handleUseExistingFolder}
-                    style={{ color: 'var(--text)' }}
                   >
-                    <FolderOpenIcon size={14} style={{ color: 'var(--muted)' }} />
+                    <FolderOpenIcon size={14} className="text-[var(--muted)]" />
                     <span>{t('project.useExistingFolder')}</span>
-                  </button>
+                  </Button>
                 </div>
               }
             />

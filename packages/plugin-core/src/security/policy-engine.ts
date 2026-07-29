@@ -22,6 +22,15 @@ export interface EnterprisePolicy {
       config: Record<string, unknown>;
     }
   >;
+
+  /**
+   * Plan 312 Phase 4: App Connection providers blocked by enterprise
+   * policy. When a provider id appears in this list, the
+   * AppConnectionService refuses to start the OAuth flow with a
+   * `provider_blocked` error. The policy schema + UI belong to Plan 92;
+   * this is the runtime hook.
+   */
+  blockedAppConnectionProviders?: string[];
 }
 
 export const DEFAULT_POLICY: EnterprisePolicy = {
@@ -32,6 +41,7 @@ export const DEFAULT_POLICY: EnterprisePolicy = {
   autoRevokeTemporaryPermissions: true,
   defaultTemporaryPermissionDuration: 30 * 60 * 1000,
   managedPlugins: {},
+  blockedAppConnectionProviders: [],
 };
 
 export class PolicyEngine {
@@ -90,6 +100,22 @@ export class PolicyEngine {
       return {
         allowed: false,
         reason: `Plugin "${pluginId}" is in the blocklist`,
+      };
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Plan 312 Phase 4: check if an App Connection provider is blocked
+   * by enterprise policy. Called by AppConnectionService.connect before
+   * starting the OAuth flow. The policy schema + admin UI belong to
+   * Plan 92; this is the runtime gate.
+   */
+  isProviderBlocked(providerId: string): { allowed: boolean; reason?: string } {
+    if (this.policy.blockedAppConnectionProviders?.includes(providerId)) {
+      return {
+        allowed: false,
+        reason: `App Connection provider "${providerId}" is blocked by enterprise policy`,
       };
     }
     return { allowed: true };

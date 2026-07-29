@@ -23,7 +23,7 @@ export function SettingsToggle({
   return (
     <div
       className={cn(
-        "flex items-center justify-between px-4 py-3.5",
+        "flex items-center justify-between py-3.5",
         disabled && "opacity-50",
         className
       )}

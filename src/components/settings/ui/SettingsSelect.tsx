@@ -32,7 +32,7 @@ export function SettingsSelect({
   const id = React.useId();
 
   return (
-    <div className={cn("px-4 py-3.5", className)}>
+    <div className={cn("py-3.5", className)}>
       {(label || description) && (
         <div className="mb-2">
           {label && (
@@ -74,7 +74,7 @@ export function SettingsSelectRow({
   return (
     <div
       className={cn(
-        "flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between",
+        "flex flex-col gap-3 py-3.5 sm:flex-row sm:items-center sm:justify-between",
         disabled && "opacity-50",
         className
       )}

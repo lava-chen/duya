@@ -1,0 +1,42 @@
+name: verify-local-frontend
+description: Verify a local frontend change renders and behaves correctly — satisfies the AGENTS.md Playwright verification gate.
+plugin: com.duya.playwright-web-operator
+trigger:
+  natural: "verify the UI" / "check the new layout"
+  event:
+    - type: file.saved
+      filter:
+        glob: "src/**/*.{tsx,css}"
+skills:
+  - frontend-verification
+steps:
+  - id: ensure-dev-server
+    value: ${dev.server_url}
+    output: server_url
+  - id: navigate
+    tool: browser.navigate
+    inputs:
+      url: ${server_url}
+    output: nav
+  - id: screenshot
+    tool: browser.take_screenshot
+    inputs:
+      fullPage: true
+    output: baseline
+  - id: snapshot
+    tool: browser.snapshot
+    output: snap
+  - id: verify
+    skill: frontend-verification
+    using:
+      snapshot: ${snap}
+      screenshot: ${baseline}
+      expectations: ${trigger.expectations}
+    output: report
+  - id: console-check
+    tool: browser.console_messages
+    output: console
+  - id: final
+    value: ${report.merge(console)}
+permissions:
+  read: [browser.navigate, browser.take_screenshot, browser.snapshot, browser.console_messages]

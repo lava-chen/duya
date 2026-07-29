@@ -251,7 +251,7 @@ export default function BrowserExtensionSection() {
 
         {/* Built-in browser toggle / primary control */}
         <SettingsCard className="mb-8">
-          <div className="flex items-center gap-4 px-4 py-4">
+          <div className="flex items-center gap-4 py-4">
             <div className="w-11 h-11 rounded-xl flex items-center justify-center bg-accent/10 text-accent shrink-0">
               <GlobeIcon size={22} />
             </div>
@@ -320,7 +320,7 @@ export default function BrowserExtensionSection() {
               }
             />
             {lastChecked && (
-              <div className="px-4 pb-3 text-[11px] font-mono text-muted-foreground">
+              <div className="pb-3 text-[11px] font-mono text-muted-foreground">
                 {t('browserExtension.lastChecked')}: {lastChecked.toLocaleTimeString()}
               </div>
             )}
@@ -426,7 +426,7 @@ export default function BrowserExtensionSection() {
           className="mt-8"
         >
           <SettingsCard divided={false}>
-            <div className="px-4 py-3.5">
+            <div className="py-3.5">
               <div className="flex items-center gap-2 mb-3">
                 <input
                   type="text"

@@ -163,7 +163,7 @@ Duya separates responsibilities so one chat loop does not own the entire applica
 
 This process separation improves interruption, recovery, and session isolation. It is not a promise of a hardened operating-system sandbox on every platform.
 
-Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [docs/SECURITY.md](./docs/SECURITY.md) for the current security model and limitations.
+Core stack: Electron, Vite, React 19, TypeScript, SQLite / better-sqlite3, HTTP + SSE, and child-process agent workers. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the detailed data flows and [docs/SECURITY.md](./docs/design-docs/SECURITY.md) for the current security model and limitations.
 
 ---
 

@@ -12,6 +12,7 @@
 
 import { ipcMain } from 'electron';
 import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import * as http from 'http';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
@@ -30,6 +31,14 @@ import type { PluginError } from '../../packages/plugin-core/src/types';
 import { getKnownMarketplacesManager } from '../plugins/marketplace/known-marketplaces-manager';
 import { isBlockedMarketplaceName } from '../plugins/marketplace/impersonation-detector';
 import type { MarketplaceEntry } from '../plugins/marketplace/types';
+// Plan 311 — workflow template discovery & summary projection.
+import { listBuiltinPlugins } from '../../packages/agent/src/plugins/builtin/_registry.js';
+import { discoverWorkflows } from '../../packages/agent/src/plugins/builtin/capability-discovery.js';
+import {
+  toWorkflowSummary,
+  type WorkflowTemplate,
+  type WorkflowTemplateSummary,
+} from '../../packages/plugin-core/src/workflows/schema.js';
 
 const COMPONENT = 'PluginHandlers' as LogComponent;
 
@@ -93,6 +102,66 @@ function handleResult<T>(result: { success: true; data: T } | { success: false; 
     pluginError: result.error,
     healthIssue: buildHealthIssue(result.error),
   };
+}
+
+/**
+ * Plan 311 — Resolve the on-disk directory to scan for workflow templates.
+ *
+ * Installed plugins copy their files to a cache dir (`installPath`), but
+ * bundled plugins are staged from `packages/agent/src/plugins/builtin/`
+ * and the cache copy may not include the `workflows/` subdirectory. This
+ * helper tries `installPath` first (works for local / marketplace plugins
+ * and bundled plugins whose cache includes workflows), then falls back to
+ * scanning the builtin plugin directories by matching the plugin id
+ * against each directory's `plugin.json` / `plugin.md` frontmatter.
+ *
+ * Returns `undefined` when no directory with a `workflows/` subfolder can
+ * be resolved — callers treat that as "no workflows".
+ */
+function resolvePluginDiscoveryDir(pluginId: string, installPath?: string): string | undefined {
+  // 1. Install path (cache copy). Works when the install staging copied
+  //    the full plugin directory (local source) or when a bundled plugin
+  //    was installed with its workflows dir intact. When `installPath`
+  //    is omitted (bundled-but-not-installed), skip straight to the
+  //    builtin-dir fallback.
+  if (installPath && existsSync(join(installPath, 'workflows'))) {
+    return installPath;
+  }
+
+  // 2. Bundled plugins live under packages/agent/src/plugins/builtin/.
+  //    Scan each directory and match by manifest id. The literature
+  //    plugin only ships `plugin.md` (no `plugin.json`), so we check
+  //    both files. The `plugin.md` frontmatter uses `name` (not `id`);
+  //    the catalog synthesises the id as `com.duya.<name>`.
+  for (const candidate of listBuiltinPlugins()) {
+    const jsonPath = join(candidate.dir, 'plugin.json');
+    if (existsSync(jsonPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(jsonPath, 'utf8')) as { id?: string };
+        if (raw.id === pluginId) return candidate.dir;
+      } catch {
+        // skip unreadable manifest
+      }
+      continue;
+    }
+
+    // plugin.md frontmatter: id is `com.duya.<name>`.
+    const mdPath = join(candidate.dir, 'plugin.md');
+    if (existsSync(mdPath)) {
+      try {
+        const content = readFileSync(mdPath, 'utf8');
+        const nameMatch = content.match(/^name:\s*(.+)$/m);
+        if (nameMatch) {
+          const derivedId = `com.duya.${nameMatch[1].trim()}`;
+          if (derivedId === pluginId) return candidate.dir;
+        }
+      } catch {
+        // skip unreadable plugin.md
+      }
+    }
+  }
+
+  return undefined;
 }
 
 export function registerPluginHandlers(): void {
@@ -351,29 +420,53 @@ export function registerPluginHandlers(): void {
   });
 
   // --- plugin:capability-index ---
+  // Plan 311 — workflows count is now discovery-driven (scans the
+  // plugin's on-disk `workflows/` directory) and each item carries
+  // template summaries (id/name/description/permissionTier). The
+  // prompt body is NOT included — full templates are fetched on
+  // demand via `plugin:workflow:get` (Plan 241 progressive
+  // disclosure). The existing grantedPermissions-prefix counts for
+  // skills/mcp/cli/ui/hooks are retained unchanged.
   ipcMain.handle('plugin:capability-index', async () => {
     try {
       const enabled = manager.listInstalled().filter(
         (p) => p.enabled && p.health?.status !== 'disabled',
       );
-      const index = enabled.map((p) => ({
-        pluginId: p.id,
-        name: p.name,
-        version: p.version,
-        status: 'enabled' as const,
-        trustLevel: p.trustLevel,
-        capabilities: {
-          skills: p.grantedPermissions?.filter((x) => x.name.startsWith('skills.')).length ?? 0,
-          mcpServers: p.grantedPermissions?.filter((x) => x.name.startsWith('mcp.')).length ?? 0,
-          cli: p.grantedPermissions?.filter((x) => x.name.startsWith('cli.')).length ?? 0,
-          ui: p.grantedPermissions?.filter((x) => x.name.startsWith('ui.')).length ?? 0,
-          hooks: p.grantedPermissions?.filter((x) => x.name.startsWith('hooks.')).length ?? 0,
-        },
-        permissionSummary: {
-          granted: p.grantedPermissions?.map((x) => x.name) ?? [],
-          denied: [],
-        },
-      }));
+      const index = enabled.map((p) => {
+        // Plan 311 — discover workflow templates from the plugin's
+        // on-disk directory. Falls back to an empty list when no
+        // directory with `workflows/` can be resolved (e.g. the
+        // plugin was installed from a marketplace that did not ship
+        // workflow files).
+        const discoveryDir = resolvePluginDiscoveryDir(p.id, p.installPath);
+        const templates: WorkflowTemplate[] = discoveryDir
+          ? discoverWorkflows(discoveryDir)
+          : [];
+        const workflowSummaries: WorkflowTemplateSummary[] = templates.map(toWorkflowSummary);
+
+        return {
+          pluginId: p.id,
+          name: p.name,
+          version: p.version,
+          status: 'enabled' as const,
+          trustLevel: p.trustLevel,
+          capabilities: {
+            skills: p.grantedPermissions?.filter((x) => x.name.startsWith('skills.')).length ?? 0,
+            mcpServers: p.grantedPermissions?.filter((x) => x.name.startsWith('mcp.')).length ?? 0,
+            cli: p.grantedPermissions?.filter((x) => x.name.startsWith('cli.')).length ?? 0,
+            ui: p.grantedPermissions?.filter((x) => x.name.startsWith('ui.')).length ?? 0,
+            hooks: p.grantedPermissions?.filter((x) => x.name.startsWith('hooks.')).length ?? 0,
+            // Plan 311 — workflow count from on-disk discovery.
+            workflows: workflowSummaries.length,
+          },
+          permissionSummary: {
+            granted: p.grantedPermissions?.map((x) => x.name) ?? [],
+            denied: [],
+          },
+          // Plan 311 — workflow template summaries (no prompt body).
+          workflows: workflowSummaries,
+        };
+      });
 
       logger.debug('plugin:capability-index generated', { count: index.length }, COMPONENT);
       return { success: true, data: index };
@@ -383,6 +476,71 @@ export function registerPluginHandlers(): void {
       return { success: false, data: [], error: message };
     }
   });
+
+  // --- plugin:workflow:get (Plan 311) ---
+  // Fetch the full workflow template (including prompt body) for a
+  // given plugin + workflow id. The capability index only ships
+  // summaries; the renderer calls this when the user actually opens
+  // the launch dialog. Returns `null` when the workflow is not found
+  // so the renderer can show a "template missing" message.
+  ipcMain.handle(
+    'plugin:workflow:get',
+    async (_event, payload: { pluginId: string; workflowId: string }) => {
+      try {
+        const { pluginId, workflowId } = payload;
+        if (!pluginId || !workflowId) {
+          return {
+            success: false,
+            data: null,
+            error: 'pluginId and workflowId are required',
+          };
+        }
+
+        // Resolve the discovery directory. For installed plugins we
+        // use the registry entry's installPath; for bundled plugins
+        // that are not yet installed we fall back to the builtin dir
+        // scan inside `resolvePluginDiscoveryDir`.
+        const installed = manager.listInstalled().find((p) => p.id === pluginId);
+        const installPath = installed?.installPath;
+        const discoveryDir = resolvePluginDiscoveryDir(pluginId, installPath);
+
+        if (!discoveryDir) {
+          logger.warn('plugin:workflow:get — no discovery dir resolved', { pluginId }, COMPONENT);
+          return {
+            success: false,
+            data: null,
+            error: `Plugin directory not found: ${pluginId}`,
+          };
+        }
+
+        const templates = discoverWorkflows(discoveryDir);
+        const template = templates.find((t) => t.id === workflowId);
+        if (!template) {
+          logger.warn(
+            'plugin:workflow:get — workflow not found',
+            { pluginId, workflowId, available: templates.map((t) => t.id) },
+            COMPONENT,
+          );
+          return {
+            success: false,
+            data: null,
+            error: `Workflow not found: ${workflowId}`,
+          };
+        }
+
+        logger.debug('plugin:workflow:get', { pluginId, workflowId }, COMPONENT);
+        return { success: true, data: template };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.error(
+          'plugin:workflow:get failed',
+          err instanceof Error ? err : new Error(message),
+          COMPONENT,
+        );
+        return { success: false, data: null, error: message };
+      }
+    },
+  );
 
   // --- plugin:security:trust-info ---
   ipcMain.handle('plugin:security:trust-info', async (_event, payload: { pluginId: string; source: string; marketplace?: string }) => {

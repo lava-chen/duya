@@ -1,0 +1,31 @@
+{
+  "defaultMode": "read",
+  "writeActionsRequireApproval": true,
+  "destructiveActionsRequireApproval": true,
+  "tiers": {
+    "read": [
+      "query.select",
+      "schema.list_databases",
+      "schema.list_tables",
+      "schema.describe_table",
+      "schema.list_indexes",
+      "schema.list_views"
+    ],
+    "draft": [],
+    "write": [],
+    "modify": [],
+    "destructive": [
+      "query.insert",
+      "query.update",
+      "query.delete",
+      "table.drop",
+      "table.truncate",
+      "schema.alter"
+    ]
+  },
+  "notes": [
+    "Every write-capable action is pinned to the destructive tier so the",
+    "policy stays safe even if the configured role accidentally grants",
+    "write access. The recommended setup uses a read-only role."
+  ]
+}

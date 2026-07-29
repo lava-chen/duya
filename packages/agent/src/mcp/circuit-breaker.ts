@@ -9,12 +9,12 @@ import { logger } from '../utils/logger.js';
 /**
  * Circuit breaker states
  */
-export type CircuitState = 'closed' | 'open' | 'half-open';
+type CircuitState = 'closed' | 'open' | 'half-open';
 
 /**
  * Circuit breaker configuration
  */
-export interface CircuitBreakerConfig {
+interface CircuitBreakerConfig {
   /** Number of failures before opening the circuit */
   failureThreshold: number;
   /** Time in milliseconds before attempting to close the circuit */
@@ -26,7 +26,7 @@ export interface CircuitBreakerConfig {
 /**
  * Default circuit breaker configuration
  */
-export const DEFAULT_CIRCUIT_CONFIG: CircuitBreakerConfig = {
+const DEFAULT_CIRCUIT_CONFIG: CircuitBreakerConfig = {
   failureThreshold: 3,
   resetTimeoutMs: 30000, // 30 seconds
   successThreshold: 2,
@@ -126,7 +126,7 @@ export class CircuitBreaker {
 /**
  * Circuit breaker manager for all MCP servers
  */
-export class CircuitBreakerManager {
+class CircuitBreakerManager {
   private breakers: Map<string, CircuitBreaker> = new Map();
 
   /**
@@ -197,8 +197,4 @@ export function getCircuitBreakerManager(): CircuitBreakerManager {
     globalCircuitBreakerManager = new CircuitBreakerManager();
   }
   return globalCircuitBreakerManager;
-}
-
-export function resetCircuitBreakerManager(): void {
-  globalCircuitBreakerManager = null;
 }

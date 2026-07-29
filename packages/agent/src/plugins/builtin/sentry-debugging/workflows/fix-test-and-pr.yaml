@@ -1,0 +1,49 @@
+id: fix-test-and-pr
+name: Fix, Test, and PR
+description: >-
+  Implement the fix for a Sentry issue, write a regression test, open a
+  PR, and verify the post-deploy event count drops.
+prompt: |
+  Fix the Sentry issue below, write a regression test, and open a PR.
+
+  Issue ID: {{issue_id}}
+  Diagnosis: {{diagnosis}}
+  Target branch: {{target_branch}}
+
+  Steps to follow:
+  1. Run the `fix-and-verify` skill. Read the diagnosis (from
+     `stacktrace-analysis`) and confirm the target file, line, and
+     proposed diff are in context.
+  2. Implement the fix in the workspace. Keep the diff minimal —
+     unrelated changes make the PR harder to review and harder to
+     revert.
+  3. Write a regression test that reproduces the original failure
+     (the test fails on the pre-fix code) and passes on the
+     post-fix code. Name the test after the Sentry issue (e.g.
+     `test_issue_<short_id>_<slug>`) so future maintainers can
+     trace it back.
+  4. Run the test locally. Run the project's typecheck and lint.
+     Surface any failures in chat before opening a PR.
+  5. Open a PR via the GitHub Development plugin
+     (`pull_requests.create`). The PR body must:
+     - Reference the Sentry issue (`Fixes SENTRY-<short-id>` or
+       the issue URL).
+     - Summarize the root cause in one sentence.
+     - List the test added and how it reproduces the original
+       failure.
+  6. After merge and deploy, run the `regression-detection` skill
+     to confirm the issue's event count dropped. Do NOT resolve
+     the Sentry issue manually until the regression check confirms
+     it — an early "resolve" hides the issue if the fix didn't
+     actually work.
+
+  Constraint: do NOT push directly to `main` — open a PR and let
+  the user review. Do NOT resolve or ignore the Sentry issue from
+  this workflow without explicit destructive-tier confirmation.
+  Do NOT add a try/catch that suppresses the error without fixing
+  the root cause.
+requiredCapabilities:
+  - mcp:sentry
+  - skill:fix-and-verify
+  - skill:regression-detection
+permissionTier: write

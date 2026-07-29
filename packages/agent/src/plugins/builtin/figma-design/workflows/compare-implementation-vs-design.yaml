@@ -1,0 +1,39 @@
+id: compare-implementation-vs-design
+name: Compare Implementation vs Design
+description: >-
+  Capture a screenshot of the local implementation and the Figma source,
+  surface the deltas as a checklist, and propose fixes.
+prompt: |
+  Compare the local implementation against the Figma source of truth
+  and report the deltas.
+
+  Figma URL: {{figma_url}}
+  Local URL: {{local_url}}
+  Viewport: {{viewport}}
+
+  Steps to follow:
+  1. Run the `visual-comparison` skill. Capture the Figma screenshot
+     via `figma.get_image` at the same scale as the local viewport.
+  2. Navigate to the local URL via the Playwright plugin and capture
+     a screenshot at the same viewport. If the Playwright plugin is
+     not available, ask the user to provide a screenshot file.
+  3. Place the two screenshots side by side in chat. Surface the
+     deltas as a checklist, classified as:
+     - Code bug (implementation diverges from the agreed mapping)
+     - Token gap (design uses a token not present in the code system)
+     - Design bug (Figma itself is inconsistent)
+     - Acceptable drift (sub-pixel / anti-aliasing, no action needed)
+  4. For each code bug, propose a concrete fix in the implementation
+     but do not apply it without confirmation. Hand off to the
+     `component-implementation` skill once the user approves.
+  5. For token gaps and design bugs, draft a Figma annotation via
+     `write-back-to-figma` and confirm with the user before posting.
+
+  Constraint: do NOT auto-apply code fixes without confirmation. Do
+  NOT post Figma annotations without showing the user the proposed
+  text and target node.
+requiredCapabilities:
+  - mcp:figma
+  - skill:visual-comparison
+  - skill:write-back-to-figma
+permissionTier: read

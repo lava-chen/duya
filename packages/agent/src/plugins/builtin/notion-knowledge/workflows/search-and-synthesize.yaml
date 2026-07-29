@@ -1,0 +1,42 @@
+id: search-and-synthesize
+name: Search and Synthesize
+description: >-
+  Search the Notion workspace for a topic, read the top results, and
+  synthesize an answer with citations.
+prompt: |
+  Search the Notion workspace for the topic below and synthesize an
+  answer.
+
+  Topic: {{topic}}
+  Scope: {{scope}}
+
+  Steps to follow:
+  1. Run the `workspace-search` skill. Call `notion.search(query=<topic>,
+     filter=page, page_size=10)`. Confirm the integration's shared
+     scope covers the topic area — a zero-result search may be a scope
+     issue, not a missing doc.
+  2. For each top result, call `notion.get_page(page_id)` to read the
+     parent and properties, then `notion.get_block_children(page_id)`
+     to read the content. Stop after 5 results unless the user asks
+     for more.
+  3. Synthesize the answer:
+     - Lead with the direct answer in 1–3 sentences.
+     - Cite each source as a Notion page link.
+     - Surface contradictions between sources explicitly — do not
+       paper over them.
+     - Note when the source is outdated (last edited > 6 months ago)
+       and the topic is fast-moving.
+  4. If the search returned zero results, say so explicitly. Do NOT
+     fabricate answers from general knowledge — Notion search is the
+     source of truth for this workflow.
+  5. If the user asked for a follow-up (e.g. "also check the
+     engineering database"), run a second search scoped to the named
+     database via `notion.query_database(database_id, filter=...)`.
+
+  Constraint: do NOT paste raw block JSON into the answer. Summarize
+  the content. Do NOT include content from archived pages unless the
+  user explicitly asked.
+requiredCapabilities:
+  - mcp:notion
+  - skill:workspace-search
+permissionTier: read

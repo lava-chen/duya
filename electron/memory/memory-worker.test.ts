@@ -37,6 +37,7 @@ import {
 import { migration0001 } from '../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';
+import { migration0005 } from '../memory-state/migrations/0005_phase2.sql';
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -61,6 +62,7 @@ function createWorkerFixture(): WorkerFixture {
   memoryDb.exec(migration0001.sql);
   memoryDb.exec(migration0002.sql);
   memoryDb.exec(migration0003.sql);
+  memoryDb.exec(migration0005.sql);
 
   // Stub main DB — only needs a `messages` table for the extractor's
   // readMessages path, and a `chat_sessions` table for catalog sync.
@@ -108,7 +110,10 @@ function createWorkerFixture(): WorkerFixture {
 
   const llmClient: LLMClient = {
     streamChat: vi.fn().mockImplementation(async function* () {
-      // Stub — worker never streams; it only uses chat().
+      // Extractor uses streamChat (not chat) to avoid the 10-min
+      // non-streaming API limit. Yield a no-output success payload.
+      yield { type: 'text', data: '{"job_status":"succeeded_no_output","rollout_slug":"noop-test"}' };
+      yield { type: 'done' };
     }),
     chat: vi.fn().mockResolvedValue({ content: '{"job_status":"succeeded_no_output","rollout_slug":"noop-test"}' }),
   };
@@ -181,7 +186,7 @@ function insertEligibleRollout(
     '/tmp/workspace',
     null,
     null,
-    1,
+    10,
     null,
     lastMessageAt,
     'active',
@@ -360,14 +365,14 @@ describe('memory-worker (Plan 305 Phase A)', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     // LLM should never have been called (no ticks, no extracts).
-    expect(fixture.llmClient.chat).not.toHaveBeenCalled();
+    expect(fixture.llmClient.streamChat).not.toHaveBeenCalled();
 
     // forceSweep ignores pause and still returns a valid (empty) result.
     const result = await h.forceSweep();
     expect(result.selected).toBe(0);
 
     // forceSweep on an empty eligible set still does not call the LLM.
-    expect(fixture.llmClient.chat).not.toHaveBeenCalled();
+    expect(fixture.llmClient.streamChat).not.toHaveBeenCalled();
   });
 
   it('5. shutdown while extract in flight finishes cleanly', async () => {
@@ -444,20 +449,21 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     const result = await h.forceSweep();
 
     expect(result.reconciled).not.toBeNull();
-    expect(result.reconciled!.written).toBe(0);
+    // Reconcile writes the two root projections and the people/areas indexes.
+    expect(result.reconciled!.written).toBe(4);
     expect(result.reconciled!.removed).toBe(0);
     expect(result.reconciled!.mismatched).toBe(0);
 
-    // No projection files should exist.
+    // No Stage 1 projection files should exist (no stage1_outputs rows).
     const summariesDir = path.join(fixture.memoryRoot, 'rollout_summaries');
     expect(fs.existsSync(summariesDir)).toBe(false);
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
   });
 
-  it('2. first startup with DB rows but missing files — writes summaries + raw_memories.md', async () => {
-    // Plant one stage1_outputs row (no rollout_catalog entry → not eligible
-    // for extraction, so reconcile runs in isolation).
-    const row = insertStage1Output(fixture.memoryDb);
+  it('2. first startup with DB rows but missing files — writes summary + unified memory', async () => {
+    // Plant one stage1_outputs row. No rollout_catalog entry → not eligible
+    // for extraction, so reconcile runs in isolation.
+    const row = insertStage1Output(fixture.memoryDb, { raw_memory: '# Memory\n\n- **pref-a** — user prefers concise replies' });
 
     const h = startMemoryWorker(toDeps(fixture), {
       instancesPerMinute: 1,
@@ -467,16 +473,19 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
 
     const result = await h.forceSweep();
 
-    // Reconcile should plan 2 writes: 1 summary file + 1 raw_memories.md.
+    // Reconcile plans one rollout summary, two root projections, and the
+    // people/areas indexes.
     expect(result.reconciled).not.toBeNull();
-    expect(result.reconciled!.written).toBe(2);
+    expect(result.reconciled!.written).toBe(5);
     expect(result.reconciled!.removed).toBe(0);
     expect(result.reconciled!.mismatched).toBe(0);
 
     // The outbox has a 1-second ENQUEUE_DELAY_MS, so the drain inside
     // forceSweep did NOT write files yet. Force-drain with a future now.
+    // 5 reconcile + 5 consolidator projections (MEMORY, summary, diff,
+    // people index, areas index).
     const drained = forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);
-    expect(drained).toBe(2);
+    expect(drained).toBe(10);
 
     // Verify the summary file exists with the D11 filename shape.
     const summariesDir = path.join(fixture.memoryRoot, 'rollout_summaries');
@@ -486,12 +495,9 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     const expectedFilename = deriveRolloutSummaryFilename(row);
     expect(files[0]).toBe(expectedFilename);
 
-    // Verify raw_memories.md exists and contains the thread entry.
-    const rawPath = path.join(fixture.memoryRoot, 'raw_memories.md');
-    expect(fs.existsSync(rawPath)).toBe(true);
-    const rawContent = fs.readFileSync(rawPath, 'utf8');
-    expect(rawContent).toContain(`## Thread ${row.thread_id}`);
-    expect(rawContent).toContain(`rollout_id: ${row.rollout_id}`);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'MEMORY.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'summary.md'))).toBe(true);
   });
 
   it('3. first startup with orphan files — 0 written, M removed', async () => {
@@ -509,22 +515,24 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
 
     const result = await h.forceSweep();
 
-    // Reconcile should plan 1 removal (the orphan file).
+    // Reconcile plans four baseline projection writes plus the orphan removal.
     expect(result.reconciled).not.toBeNull();
-    expect(result.reconciled!.written).toBe(0);
+    expect(result.reconciled!.written).toBe(4);
     expect(result.reconciled!.removed).toBe(1);
     expect(result.reconciled!.mismatched).toBe(0);
 
-    // Force-drain to actually delete the file.
+    // Force-drain to actually delete the orphan + write Phase 2 files.
+    // 5 reconcile (1 orphan delete + 4 writes) + 5 consolidator.
     const drained = forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);
-    expect(drained).toBe(1);
+    expect(drained).toBe(10);
     expect(fs.existsSync(orphanPath)).toBe(false);
   });
 
   it('4. second startup (idempotent) — 0 written, 0 removed', async () => {
-    // Plant a row, run first sweep + drain to write files, then run a
-    // second sweep to verify reconcile finds everything in sync.
-    insertStage1Output(fixture.memoryDb);
+    // Plant a row so the rollout projection is written,
+    // run first sweep + drain to write files, then run a second sweep
+    // to verify reconcile finds everything in sync.
+    insertStage1Output(fixture.memoryDb, { raw_memory: '# Memory\n\n- **pref-b** — user prefers tabs over spaces' });
 
     const h = startMemoryWorker(toDeps(fixture), {
       instancesPerMinute: 1,
@@ -532,9 +540,9 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
       reconcileOnStart: true,
     });
 
-    // First sweep: enqueues 2 writes (summary + raw_memories.md).
+    // First sweep: rollout summary + four baseline projections.
     const first = await h.forceSweep();
-    expect(first.reconciled!.written).toBe(2);
+    expect(first.reconciled!.written).toBe(5);
 
     // Drain to write files to disk.
     forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);

@@ -7,6 +7,7 @@ import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
 import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
+import { getConnectorService } from '../services/app-connections/connector-service';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -167,6 +168,73 @@ export function spawnAgentServer(): Promise<number> {
               });
             }
           });
+        return;
+      }
+
+      // Plan 312: route appConnection:invoke to ConnectorService (main process).
+      // The agent-side tool executor sends this via context.ipcRequest; the
+      // agent-server forwards it here. ConnectorService resolves the connection,
+      // acquires a valid token, dispatches to the provider connector, and
+      // returns a redacted result. Tokens never cross this boundary.
+      if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string') {
+        const connectorService = getConnectorService();
+        const payload = {
+          connectionId: msg.connectionId as string,
+          action: msg.action as string,
+          args: msg.args,
+        };
+        connectorService
+          .invoke(payload)
+          .then((result) => {
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:invoke:response',
+                requestId: msg.requestId,
+                success: result.success,
+                data: result.success ? result.data : undefined,
+                error: result.success ? undefined : result.error,
+              });
+            }
+          })
+          .catch((err) => {
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:invoke:response',
+                requestId: msg.requestId,
+                success: false,
+                error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
+              });
+            }
+          });
+        return;
+      }
+
+      // Plan 312: list connector tool descriptors for all connected
+      // connections. Called by the agent process after init/reload to
+      // register discoverable connector tools. Descriptors contain no
+      // tokens — only name/description/inputSchema/riskTier/connectionId.
+      if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string') {
+        const connectorService = getConnectorService();
+        try {
+          const descriptors = connectorService.listDescriptorsForConnected();
+          if (!child.killed) {
+            child.send({
+              type: 'appConnection:listDescriptors:response',
+              requestId: msg.requestId,
+              success: true,
+              descriptors,
+            });
+          }
+        } catch (err) {
+          if (!child.killed) {
+            child.send({
+              type: 'appConnection:listDescriptors:response',
+              requestId: msg.requestId,
+              success: false,
+              error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
+            });
+          }
+        }
         return;
       }
 

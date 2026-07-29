@@ -14,6 +14,7 @@ import {
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import {
   SettingsSection,
@@ -145,7 +146,7 @@ function SkillListItem({
 }) {
   return (
     <div
-      className="group flex items-center gap-3 px-4 py-3 hover:bg-muted/40 transition-colors cursor-pointer"
+      className="group flex items-center gap-3 py-3 hover:bg-muted/40 transition-colors cursor-pointer"
       onClick={onClick}
     >
       <SkillIcon category={skill.category} size="sm" />
@@ -554,16 +555,12 @@ export function SkillsSection() {
     <div className="settings-section">
       {/* Search */}
       <SettingsSection title={t('skills.title')} description={t('skills.description')}>
-        <div className="relative mb-6">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-            <SearchIcon size={18} />
-          </div>
-          <input
-            type="text"
+        <div className="mb-6">
+          <Input
+            type="search"
             placeholder={t('skills.searchPlaceholder')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full bg-surface border border-border/50 rounded-xl py-2.5 pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent"
           />
         </div>
       </SettingsSection>

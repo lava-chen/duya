@@ -1,0 +1,54 @@
+id: create-meeting-notes
+name: Create Meeting Notes
+description: >-
+  Produce meeting notes with decisions, action items, and owners from a
+  transcript or raw notes, then optionally push action items to a Tasks
+  database.
+prompt: |
+  Create meeting notes from the source below.
+
+  Meeting title: {{meeting_title}}
+  Date: {{date}}
+  Attendees: {{attendees}}
+  Source: {{source}}
+  Target parent: {{parent_page}}
+  Tasks database: {{tasks_database}}
+
+  Steps to follow:
+  1. Run the `meeting-knowledge-capture` skill. Confirm the source
+     (transcript, raw notes, or chat thread) with the user.
+  2. Verify the parent page via `notion.get_page(parent_page_id)`.
+     If the target is a database (e.g. "Meetings"), verify its
+     schema via `notion.get_database(database_id)` and identify
+     the required properties (date, attendees, status).
+  3. Parse the source into the canonical meeting structure:
+     - Context — title, date, attendees, agenda link.
+     - Summary — 1–3 sentence TL;DR.
+     - Decisions — bullets, each with the decision and who made it.
+     - Action items — `to_do` blocks, each with owner, due date
+       (if mentioned), and the action.
+     - Open questions — bullets, things that need follow-up.
+     - References — links to docs, PRs, tickets mentioned.
+  4. Identify owners explicitly. If an action item's owner is
+     ambiguous, flag it and ask the user to assign before writing.
+     Do NOT guess owners.
+  5. Surface the parsed structure in chat before writing. Show the
+     title, parent, and the action-items checklist. After
+     confirmation, call `notion.create_page(parent_id, properties,
+     children)` with the full block list.
+  6. If the user provided a Tasks database, push each action item
+     to it via `notion.create_database_item(database_id,
+     properties)`. Confirm with the user before this second write.
+     Each task should reference the meeting notes page (a relation
+     property or a URL in the description).
+  7. Report the meeting notes permalink and the count of tasks
+     pushed (if any).
+
+  Constraint: do NOT push action items to the Tasks database
+  without explicit confirmation — that is a separate write. Do
+  NOT paste raw transcripts into the notes page; filter to the
+  decisions and actions. Do NOT guess owners or due dates.
+requiredCapabilities:
+  - mcp:notion
+  - skill:meeting-knowledge-capture
+permissionTier: write

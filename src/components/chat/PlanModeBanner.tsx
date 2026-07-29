@@ -12,6 +12,7 @@
  */
 
 import React from 'react';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 
@@ -54,14 +55,16 @@ export function PlanModeBanner({ mode, onRequestExit }: PlanModeBannerProps) {
       <span className="plan-mode-banner-label">{t(MODE_LABEL_KEY[mode])}</span>
       <span className="plan-mode-banner-message">{t(MODE_DESC_KEY[mode])}</span>
       {onRequestExit && (
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           className="plan-mode-banner-exit"
           onClick={onRequestExit}
           aria-label={t('planMode.requestExit')}
         >
           {t('planMode.requestExit')}
-        </button>
+        </Button>
       )}
     </div>
   );

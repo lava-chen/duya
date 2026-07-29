@@ -3,6 +3,7 @@ import {
   PlusIcon,
   SquaresFourIcon,
 } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 
 interface AutomationEmptyStateProps {
@@ -29,9 +30,10 @@ export function AutomationEmptyState({
       </p>
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
+        <Button
+          variant="primary"
+          size="md"
+          className="whitespace-nowrap transition-all duration-200"
           style={{
             background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
             color: '#ffffff',
@@ -50,32 +52,26 @@ export function AutomationEmptyState({
         >
           <PlusIcon size={16} />
           {t('automation.newAutomation')}
-        </button>
+        </Button>
 
-        <button
-          type="button"
-          className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors"
-          style={{ background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}
+        <Button
+          variant="secondary"
+          size="md"
+          className="whitespace-nowrap"
           onClick={onChatCreate}
         >
           通过对话创建
-        </button>
+        </Button>
 
-        <button
-          type="button"
-          className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-all duration-200"
-          style={{
-            background: 'var(--surface)',
-            color: 'var(--text)',
-            border: '1px solid var(--border)',
-          }}
+        <Button
+          variant="secondary"
+          size="md"
+          className="whitespace-nowrap"
           onClick={onViewTemplates}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
         >
           <SquaresFourIcon size={16} />
           {t('automation.templates')}
-        </button>
+        </Button>
       </div>
     </div>
   );

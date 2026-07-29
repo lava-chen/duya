@@ -111,7 +111,7 @@ export function insertCatalogRow(db: BetterSqlite3Database, overrides: CatalogRo
     overrides.working_directory ?? null,
     null,
     null,
-    overrides.message_count ?? 1,
+    overrides.message_count ?? 10,
     overrides.last_message_id ?? null,
     overrides.last_message_at ?? now,
     overrides.source_status ?? 'active',

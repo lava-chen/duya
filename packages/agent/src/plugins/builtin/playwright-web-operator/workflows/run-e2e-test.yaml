@@ -1,0 +1,32 @@
+name: run-e2e-test
+description: Generate a Playwright E2E test from a user-described flow, write it to the repo, and run it.
+plugin: com.duya.playwright-web-operator
+trigger:
+  natural: "write an E2E test for ..." / "generate a regression test"
+skills:
+  - browser-navigation
+  - end-to-end-testing
+steps:
+  - id: trace-flow
+    skill: browser-navigation
+    using:
+      url: ${trigger.url}
+      flow: ${trigger.flow}
+    output: trace
+  - id: generate-test
+    skill: end-to-end-testing
+    using:
+      trace: ${trace}
+      feature: ${trigger.feature}
+    output: test_file
+  - id: run-test
+    tool: shell.run
+    inputs:
+      command: npm run test:e2e -- ${test_file.path}
+    output: result
+  - id: report
+    value: ${test_file.path + result.summary}
+permissions:
+  read: [browser.navigate, browser.snapshot]
+  write: [browser.click, browser.type]
+  modify: []

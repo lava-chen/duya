@@ -1,0 +1,51 @@
+{
+  "defaultMode": "read",
+  "writeActionsRequireApproval": true,
+  "destructiveActionsRequireApproval": true,
+  "tiers": {
+    "read": [
+      "vercel.list_projects",
+      "vercel.get_project",
+      "vercel.list_deployments",
+      "vercel.get_deployment",
+      "vercel.get_build_logs",
+      "vercel.get_runtime_logs",
+      "vercel.list_env_vars",
+      "vercel.get_env_var",
+      "vercel.list_aliases",
+      "vercel.get_alias",
+      "vercel.get_web_analytics",
+      "vercel.list_domains"
+    ],
+    "draft": [],
+    "write": [
+      "vercel.create_deployment",
+      "vercel.create_env_var",
+      "vercel.update_env_var",
+      "vercel.create_alias"
+    ],
+    "modify": [
+      "vercel.promote_to_production",
+      "vercel.update_project",
+      "vercel.delete_alias"
+    ],
+    "destructive": [
+      "vercel.delete_deployment",
+      "vercel.delete_env_var",
+      "vercel.delete_project",
+      "vercel.rollback_production"
+    ]
+  },
+  "notes": [
+    "Listing projects, deployments, env vars (non-secret), and logs",
+    "runs automatically. Creating a preview deployment or updating env",
+    "vars is write-tier — confirm before the first write. Promoting a",
+    "deployment to production is modify-tier because it is the",
+    "single-step path to a live production change; always require",
+    "explicit confirmation and surface the deployment URL, commit",
+    "hash, and alias. Deleting a deployment, deleting an env var, or",
+    "rolling back production is destructive-tier — strong explicit",
+    "confirmation. Unlisted actions are bumped one tier above the",
+    "conservative default per the design doc §6."
+  ]
+}

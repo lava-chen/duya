@@ -16,7 +16,7 @@
  *
  * Shadow mode (D1, revised by Plan 306 Phase B): the worker writes to
  * the memory-state DB and projection files under `~/.duya/memory`
- * (including global/ and projects/ Phase 2 projections). It never
+ * (including the unified root Phase 2 projections). It never
  * touches `packages/agent/src/memory/` (the existing MemoryManager
  * path) — the agent read path still goes through MemoryManager until
  * Plan 306 Phase E flips the switch.
@@ -92,6 +92,24 @@ export interface MemoryWorkerConfig {
    * always triggers a sync regardless of this value.
    */
   catalogSyncIntervalMs: number;
+  /**
+   * Minimum gap between extraction batches in ms. Prevents LLM rate-limit
+   * spikes when many sessions become eligible simultaneously (e.g. a burst
+   * of short sessions 6h ago all crossing the idle threshold at once).
+   * Default 120_000 (2 min).
+   */
+  extractCooldownMs: number;
+  /**
+   * Minimum message count for a session to be eligible for extraction.
+   * Filters out thin sessions that produce low-quality rollouts. Default 6.
+   */
+  minMessageCount: number;
+  /**
+   * Suppress extraction for a project when a sibling session was recently
+   * extracted. Prevents batch floods within a single project.
+   * Default 600_000 (10 min).
+   */
+  projectCooldownMs: number;
 }
 
 export interface ForceSweepResult {
@@ -132,6 +150,9 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   consolidatorIntervalMs: 5 * 60_000, // 5 min
   consolidatorOnForceSweep: true,
   catalogSyncIntervalMs: 60_000, // 1 min
+  extractCooldownMs: 120_000, // 2 min — space batches to avoid LLM rate-limit spikes
+  minMessageCount: 6, // filter thin sessions
+  projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
 };
 
 // ---------------------------------------------------------------------------
@@ -207,6 +228,7 @@ interface WorkerState {
   inFlightExtracts: Set<Promise<unknown>>;
   shutdownSignal: boolean;
   lastCatalogSyncAt: number;
+  lastExtractAt: number;
 }
 
 function createWorker(
@@ -235,6 +257,7 @@ function createWorker(
     inFlightExtracts: new Set(),
     shutdownSignal: false,
     lastCatalogSyncAt: 0,
+    lastExtractAt: 0,
   };
 
   const tickIntervalMs = Math.max(1_000, Math.floor(60_000 / Math.max(1, cfg.instancesPerMinute)));
@@ -348,26 +371,50 @@ function createWorker(
     }
 
     // Select eligible rollouts (limit to concurrency per tick).
+    // Skip when extract cooldown has not elapsed (prevents LLM rate-limit
+    // spikes when many sessions become eligible simultaneously). forceSweep
+    // ignores the cooldown.
     let eligible: ReturnType<typeof selectEligible> = [];
+    const cooldownActive =
+      cfg.extractCooldownMs > 0 && now - state.lastExtractAt < cfg.extractCooldownMs;
+    if (options.force || !cooldownActive) {
+      try {
+        eligible = selectEligible(memoryDb, {
+          now,
+          limit: cfg.concurrency,
+          idleMs: cfg.idleMs,
+          windowMs: cfg.windowMs,
+          minMessageCount: cfg.minMessageCount,
+          projectCooldownMs: cfg.projectCooldownMs,
+        });
+      } catch (err) {
+        logger.warn(
+          'MemoryWorkerSelectEligible failed',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.DB,
+        );
+      }
+    }
+
+    // Pre-compute existing canonical_keys once per batch so all parallel
+    // extracts share the same dedup context. Passing the same list to
+    // every extract avoids N independent DB queries and ensures
+    // consistent key reuse decisions across the batch.
+    let existingKeys: string[] | null = null;
     try {
-      eligible = selectEligible(memoryDb, {
-        now,
-        limit: cfg.concurrency,
-        idleMs: cfg.idleMs,
-        windowMs: cfg.windowMs,
-      });
-    } catch (err) {
-      logger.warn(
-        'MemoryWorkerSelectEligible failed',
-        { error: err instanceof Error ? err.message : String(err) },
-        LogComponent.DB,
-      );
+      const rows = memoryDb
+        .prepare("SELECT DISTINCT canonical_key FROM memory_entries WHERE status = 'active' ORDER BY canonical_key ASC")
+        .all() as Array<{ canonical_key: string }>;
+      existingKeys = rows.map((r) => r.canonical_key);
+    } catch {
+      // Table missing (pre-migration) — omit keys section.
+      existingKeys = null;
     }
 
     // Fire extracts in parallel; allSettled so one failure doesn't kill the batch.
     const extractPromises = eligible.map((r) =>
       state.extractor
-        .extract({ rolloutId: r.rolloutId, claimedBy: workerId })
+        .extract({ rolloutId: r.rolloutId, claimedBy: workerId, existingKeys })
         .catch((err) => {
           // Extractor returns failures as ExtractResult; only unexpected throws land here.
           logger.warn(
@@ -394,6 +441,9 @@ function createWorker(
       } else if (r.status === 'noop_skipped' || r.status === 'stale_source') {
         skippedNoop += 1;
       }
+    }
+    if (extracted > 0) {
+      state.lastExtractAt = Date.now();
     }
 
     // Drain outbox. Pass the configured rootDir as an allowed root so

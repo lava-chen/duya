@@ -1,6 +1,7 @@
 import React from 'react';
 import type { PluginError } from '../../../lib/plugin-error-types';
 import type { PluginErrorSeverity } from '../../../lib/plugin-error-types';
+import { Button } from '@/components/ui/Button';
 
 interface PluginErrorBannerProps {
   error: PluginError;
@@ -75,20 +76,14 @@ export function PluginErrorBanner({
           </span>
         </div>
         {onDismiss && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onDismiss}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: styles.text,
-              opacity: 0.6,
-              fontSize: '16px',
-              padding: '0 4px',
-            }}
+            style={{ color: styles.text, opacity: 0.6 }}
           >
             x
-          </button>
+          </Button>
         )}
       </div>
 
@@ -101,21 +96,14 @@ export function PluginErrorBanner({
       {suggestedAction && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {onAction && (
-            <button
+            <Button
+              variant="primary"
+              size="sm"
               onClick={onAction}
-              style={{
-                background: styles.badge,
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                fontSize: '12px',
-                fontWeight: 500,
-                cursor: 'pointer',
-              }}
+              style={{ background: styles.badge }}
             >
               Fix
-            </button>
+            </Button>
           )}
           <span style={{ color: styles.text, fontSize: '12px', opacity: 0.7 }}>
             {suggestedAction}

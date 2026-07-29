@@ -1,0 +1,43 @@
+id: audit-auth-security
+name: Audit Supabase Auth Security
+description: >-
+  Audit auth providers, RLS coverage, and service-role key exposure.
+  Reports findings as a checklist and proposes fixes; never auto-applies.
+prompt: |
+  Audit the Supabase project below for auth and security issues.
+
+  Project ref: {{project_ref}}
+
+  Steps to follow:
+  1. Run the `auth-and-security` skill. List the project's auth
+     providers via `supabase.list_auth_providers` and confirm only
+     the intended providers are enabled.
+  2. Read the auth config via `supabase.get_auth_config`. Verify
+     `SITE_URL`, `API_EXTERNAL_URL`, `JWT_EXPIRY`, and `MFA_*`
+     settings match the project's intended posture.
+  3. For every table returned by `supabase.list_tables`, run
+     `supabase.list_policies(table)` and verify:
+     - RLS is enabled (`ALTER TABLE ... ENABLE ROW LEVEL SECURITY`).
+     - Every policy has a predicate (`USING (...)`).
+     - The `anon` role grants match the intended public surface.
+     - The `authenticated` role grants respect
+       `auth.uid() = <user_column>`.
+  4. For every Edge Function returned by
+     `supabase.list_edge_functions`, fetch recent logs via
+     `supabase.list_edge_function_logs(name, status >= 400)` and
+     scan for service-role key leaks in stack traces.
+  5. Search the workspace source for the literal service-role key
+     prefix to confirm it never ships in a client bundle.
+  6. Report findings as a checklist, classified as critical / warn
+     / info. Propose concrete fixes for each finding but do NOT
+     apply them without confirmation. Auth changes touch every
+     user — surface the proposed diff and ask before applying.
+
+  Constraint: do NOT rotate the service-role key from this workflow
+  without explicit destructive-tier confirmation. Do NOT disable an
+  auth provider without warning the user that every user
+  authenticated via it will be logged out.
+requiredCapabilities:
+  - mcp:supabase
+  - skill:auth-and-security
+permissionTier: read

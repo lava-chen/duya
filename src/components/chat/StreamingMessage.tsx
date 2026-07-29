@@ -18,6 +18,7 @@ import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
 import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
+import { Button } from '@/components/ui/Button';
  
 // ─── Adaptive Typewriter — moved to src/hooks/useAdaptiveTypewriter.ts ──────
 //
@@ -137,12 +138,14 @@ function StreamingStatusBar({
       <span className="text-muted-foreground/50">|</span>
       <ElapsedTimer startedAt={startedAt} />
       {isCritical && onForceStop && (
-        <button
+        <Button
+          variant="danger"
+          size="sm"
           onClick={onForceStop}
           className="ml-auto px-2 py-0.5 text-[10px] font-medium rounded bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20 transition-colors"
         >
           {t('streaming.forceStop')}
-        </button>
+        </Button>
       )}
     </div>
   );

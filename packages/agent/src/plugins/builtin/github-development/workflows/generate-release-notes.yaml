@@ -1,0 +1,42 @@
+name: generate-release-notes
+description: Generate release notes from commits between the previous tag and HEAD, classify them, and draft a GitHub release.
+plugin: com.duya.github-development
+trigger:
+  natural: "cut release X" / "what changed since the last tag?"
+skills:
+  - release-notes
+  - repository-exploration
+steps:
+  - id: list-tags
+    tool: tags.list
+    output: tags
+  - id: previous-tag
+    value: ${tags[0]}
+    output: prev
+  - id: list-commits
+    tool: repos.list_commits
+    inputs:
+      sha: ${git.default_branch}
+      since: ${prev.commit.sha}
+    output: commits
+  - id: prior-releases
+    tool: releases.list
+    output: prior_releases
+  - id: draft
+    skill: release-notes
+    using:
+      commits: ${commits}
+      prev: ${prev}
+      prior_releases: ${prior_releases}
+    output: notes
+  - id: create-release
+    tool: releases.create
+    inputs:
+      tag_name: ${notes.tag}
+      name: ${notes.title}
+      body: ${notes.body}
+      prerelease: ${notes.prerelease}
+    confirm: destructive
+permissions:
+  read: [tags.list, repos.list_commits, releases.list]
+  destructive: [releases.create]

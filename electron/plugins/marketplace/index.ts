@@ -2,7 +2,6 @@ export { KnownMarketplacesManager, getKnownMarketplacesManager } from './known-m
 export { isBlockedMarketplaceName } from './impersonation-detector';
 export { CatalogCache, getCatalogCache } from './catalog-cache';
 export { CatalogFetcher, getCatalogFetcher } from './catalog-fetcher';
-export { PolicyManager, getPolicyManager } from './policy-manager';
 export { MarketplaceSyncManager, getMarketplaceSyncManager } from './sync-manager';
 export type {
   MarketplaceEntry,
@@ -11,5 +10,4 @@ export type {
   MarketplacePluginEntry,
   MarketplaceCatalog,
   CachedMarketplaceCatalog,
-  MarketplacePolicy,
 } from './types';

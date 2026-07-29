@@ -300,6 +300,19 @@ async function handlePostChat(
         if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
           workerDbRequests.set(`rpc:${msg.requestId}`, child);
           process.send(msg);
+          return;
+        }
+        // Plan 312: forward appConnection:invoke to the main process
+        // (ConnectorService lives in the Electron main process).
+        if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
+          workerDbRequests.set(`rpc:${msg.requestId}`, child);
+          process.send(msg);
+          return;
+        }
+        // Plan 312: forward appConnection:listDescriptors to the main process.
+        if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
+          workerDbRequests.set(`rpc:${msg.requestId}`, child);
+          process.send(msg);
         }
       });
 
@@ -1240,6 +1253,18 @@ async function lazySpawnWorkerForCompact(
       return;
     }
     if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+      return;
+    }
+    // Plan 312: forward appConnection:invoke to the main process.
+    if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+      return;
+    }
+    // Plan 312: forward appConnection:listDescriptors to the main process.
+    if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }

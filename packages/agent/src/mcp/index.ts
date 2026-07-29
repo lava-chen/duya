@@ -10,12 +10,12 @@ import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../
 import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
 import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
-export { getCircuitBreakerManager, CircuitBreaker };
 
 /**
- * MCP Client - Manages connection to a single MCP server
+ * MCP Client - Manages connection to a single MCP server.
+ * Internal to this module — only `MCPManager` is used externally.
  */
-export class MCPClient {
+class MCPClient {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
   private config: MCPServerConfig;
@@ -413,20 +413,4 @@ export class MCPManager {
       toolCount: client.getTools().length,
     }));
   }
-}
-
-/**
- * Global MCP manager instance
- */
-let globalMCPManager: MCPManager | null = null;
-
-export function getMCPManager(): MCPManager {
-  if (!globalMCPManager) {
-    globalMCPManager = new MCPManager();
-  }
-  return globalMCPManager;
-}
-
-export function resetMCPManager(): void {
-  globalMCPManager = null;
 }

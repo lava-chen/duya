@@ -1,0 +1,52 @@
+id: generate-issues-from-spec
+name: Generate Issues from Spec
+description: >-
+  Parse a spec into shippable Linear issues with labels, estimates, and
+  dependencies. Confirms the parsed list before creating any issue.
+prompt: |
+  Generate Linear issues from the spec below.
+
+  Spec source: {{spec_source}}
+  Team: {{team_id}}
+  Project: {{project_id}}
+
+  Steps to follow:
+  1. Run the `spec-to-issues` skill. Identify the source spec —
+     either a pasted spec in chat or a Notion page (read via the
+     Notion plugin).
+  2. Verify the target team and project via `linear.list_teams`
+     and `linear.list_projects(team_id)`. Confirm the team's
+     estimate scale (Fibonacci / T-shirt) by reading its settings.
+  3. Parse the spec into issues. Each issue should be:
+     - Small enough to ship in one PR — break "Implement
+       authentication" into "Set up auth callback", "Add session
+       middleware", "Wire login UI".
+     - Named with an action verb — "Add", "Update", "Fix",
+       "Remove", not "Authentication" or "Auth stuff".
+     - Estimated — assign a rough estimate based on the section's
+       complexity. Surface the estimate as a proposal.
+     - Labeled — apply the team's existing labels. Do not invent
+       new labels without confirmation.
+  4. Identify dependencies between issues. If issue B depends on
+     issue A, note it — Linear supports `blocked_by` relations.
+  5. Surface the parsed issue list in chat before writing. Show
+     the title, description, estimate, labels, and dependencies
+     for each issue.
+  6. After confirmation, create each issue via
+     `linear.create_issue(team_id, project_id, title, description,
+     labels, estimate)`. Batch the writes.
+  7. After all issues are created, wire dependencies via
+     `linear.update_issue(issue_id, blocked_by=[issue_id_a, ...])`.
+     Confirm with the user before this second write.
+  8. Report the count of issues created and a link to the project
+     view filtered to the new issues.
+
+  Constraint: do NOT create issues without showing the user the
+  parsed list first. Do NOT invent labels — use the team's
+  existing labels or ask before creating new ones. Do NOT create
+  one giant issue per spec heading — break sections down into
+  shippable units.
+requiredCapabilities:
+  - mcp:linear
+  - skill:spec-to-issues
+permissionTier: write

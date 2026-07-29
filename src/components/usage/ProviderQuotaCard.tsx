@@ -4,6 +4,7 @@ import React from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { I18nContextValue } from "@/components/layout/I18nProvider";
 import { ProviderIcon } from "./ProviderIcon";
+import { Button } from "@/components/ui/Button";
 
 export interface QuotaItem {
   used: number;
@@ -133,13 +134,14 @@ export const ProviderQuotaCard: React.FC<ProviderQuotaCardProps> = ({ state, onR
               {state.message || t("usage.quotaError")}
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onRetry}
-            className="shrink-0 text-[11px] px-2.5 py-1 rounded-md border border-[var(--border)] text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-colors"
+            className="shrink-0"
           >
             {t("usage.quotaRetry")}
-          </button>
+          </Button>
         </div>
       </div>
     );

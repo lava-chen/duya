@@ -7,6 +7,7 @@ import {
   useContextBreakdown,
   type ContextUsage,
 } from '@/hooks/useContextUsage';
+import { Button } from '@/components/ui/Button';
 import { ContextUsagePopover } from './ContextUsagePopover';
 import { ContextBreakdownModal } from './ContextBreakdownModal';
 
@@ -88,8 +89,10 @@ export function ContextUsageRing({
         }}
         onMouseLeave={scheduleHide}
       >
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           className="context-usage-ring-trigger"
           aria-label="Context usage"
           aria-expanded={hovered}
@@ -125,7 +128,7 @@ export function ContextUsageRing({
               />
             )}
           </svg>
-        </button>
+        </Button>
 
         {/* Transparent bridge covers the 8px gap so the cursor can travel
             from the trigger into the popover without leaving the wrapper. */}

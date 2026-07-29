@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SettingsSection } from "@/components/settings/ui";
+import { SettingsSection, SettingsCard } from "@/components/settings/ui";
+import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import { useConversationStore } from "@/stores/conversation-store";
@@ -194,6 +195,25 @@ export function CapabilitiesSection() {
     }
   }, [createThread, setActiveThread, setCurrentView, pluginApi]);
 
+  // Plan 311 — navigate to chat after a workflow template is launched.
+  // The detail view already dispatched the prefill event (which stashes
+  // the prompt as pending); here we just create a fresh session and
+  // switch views so `MessageInput` mounts and consumes the stash.
+  const handleLaunchWorkflow = useCallback(
+    async (_prompt: string) => {
+      try {
+        const thread = await createThread();
+        if (thread) {
+          setActiveThread(thread.id);
+          setCurrentView("chat");
+        }
+      } catch {
+        void 0;
+      }
+    },
+    [createThread, setActiveThread, setCurrentView],
+  );
+
   const handleBackToDiscover = useCallback(() => {
     setView("discover");
     setSelectedPluginId(null);
@@ -205,9 +225,9 @@ export function CapabilitiesSection() {
         title={t("settings.plugins.title" as never)}
         description={t("settings.plugins.description" as never)}
       >
-        <div className="rounded-xl border border-border/50 bg-surface/50 px-4 py-8 text-sm text-muted-foreground text-center">
+        <SettingsCard divided={false} className="py-8 text-sm text-muted-foreground text-center">
           Plugin API not available
-        </div>
+        </SettingsCard>
       </SettingsSection>
     );
   }
@@ -245,13 +265,13 @@ export function CapabilitiesSection() {
           />
           {capabilityApiAvailable ? (
             capabilityLoading && !capabilitySnapshot ? (
-              <div className="rounded-xl border border-border/50 bg-surface/40 px-4 py-3 text-xs text-muted-foreground">
+              <SettingsCard divided={false} className="text-xs text-muted-foreground">
                 Loading capabilities…
-              </div>
+              </SettingsCard>
             ) : capabilityError ? (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-xs text-red-500">
+              <SettingsCard variant="danger" divided={false} className="text-xs text-red-500">
                 Capability snapshot failed: {capabilityError}
-              </div>
+              </SettingsCard>
             ) : capabilitySnapshot ? (
               <CapabilityByPluginView snapshot={capabilitySnapshot} />
             ) : null
@@ -270,9 +290,9 @@ export function CapabilitiesSection() {
           title={t("settings.plugins.title" as never)}
           description={t("settings.plugins.description" as never)}
         >
-          <div className="rounded-xl border border-border/50 bg-surface/50 px-4 py-8 text-sm text-muted-foreground text-center">
+          <SettingsCard divided={false} className="py-8 text-sm text-muted-foreground text-center">
             Plugin not found
-          </div>
+          </SettingsCard>
         </SettingsSection>
       );
     }
@@ -307,6 +327,7 @@ export function CapabilitiesSection() {
             )
           }
           busy={busyPluginId === selectedPluginId}
+          onLaunchWorkflow={(prompt) => void handleLaunchWorkflow(prompt)}
         />
       </SettingsSection>
     );
@@ -319,38 +340,38 @@ export function CapabilitiesSection() {
       description="Add tools and workflows to help Duya research, write, and build."
       action={
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={() => setView("manage")}
           >
             Manage
-          </button>
-          <button
-            type="button"
-            className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
             onClick={handleCreatePlugin}
           >
             Create plugin
-          </button>
+          </Button>
         </div>
       }
     >
       {error ? (
-        <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-sm text-red-500">
+        <SettingsCard variant="danger" divided={false} className="mb-4 text-sm text-red-500">
           {error}
-        </div>
+        </SettingsCard>
       ) : null}
 
       {capabilityApiAvailable ? (
         capabilityLoading && !capabilitySnapshot ? (
-          <div className="mb-3 rounded-xl border border-border/50 bg-surface/40 px-4 py-3 text-xs text-muted-foreground">
+          <SettingsCard divided={false} className="mb-3 text-xs text-muted-foreground">
             Loading capabilities…
-          </div>
+          </SettingsCard>
         ) : capabilityError ? (
-          <div className="mb-3 rounded-xl border border-red-500/20 bg-red-500/[0.03] px-4 py-3 text-xs text-red-500">
+          <SettingsCard variant="danger" divided={false} className="mb-3 text-xs text-red-500">
             Capability snapshot failed: {capabilityError}
-          </div>
+          </SettingsCard>
         ) : capabilitySnapshot ? (
           <CapabilityBanner
             snapshot={capabilitySnapshot}
@@ -361,13 +382,13 @@ export function CapabilitiesSection() {
       ) : null}
 
       {loading ? (
-        <div className="rounded-xl border border-border/50 bg-surface/50 px-4 py-8 text-sm text-muted-foreground text-center">
+        <SettingsCard divided={false} className="py-8 text-sm text-muted-foreground text-center">
           {t("settings.capabilities.loading" as never)}
-        </div>
+        </SettingsCard>
       ) : catalog.length === 0 ? (
-        <div className="rounded-xl border border-border/50 bg-surface/50 px-4 py-8 text-center text-sm text-muted-foreground">
+        <SettingsCard divided={false} className="py-8 text-center text-sm text-muted-foreground">
           {t("settings.capabilities.emptyMarketplaceDesc" as never)}
-        </div>
+        </SettingsCard>
       ) : (
         <div className="space-y-2">
           {catalog.map((item) => {

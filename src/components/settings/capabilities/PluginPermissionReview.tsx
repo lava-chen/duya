@@ -2,6 +2,7 @@
 
 import { SettingsCard } from "@/components/settings/ui";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 import type { PluginRegistryEntry, PluginPermission } from "@/lib/plugin-types";
 
 interface PluginPermissionReviewProps {
@@ -70,21 +71,17 @@ export function PluginPermissionReview({
                       )}
                     </div>
                   </div>
-                  <button
-                    type="button"
+                  <Button
+                    variant={isGranted ? "danger" : "secondary"}
+                    size="sm"
                     onClick={() =>
                       isGranted ? onRevoke(perm.name) : onGrant(perm.name)
                     }
-                    className={`text-xs px-2 py-1 rounded ${
-                      isGranted
-                        ? "bg-red-500/10 text-red-400 hover:bg-red-500/20"
-                        : "bg-accent/10 text-accent hover:bg-accent/20"
-                    }`}
                   >
                     {isGranted
                       ? t("settings.capabilities.permissions.revoke" as never)
                       : "Grant"}
-                  </button>
+                  </Button>
                 </div>
               );
             })}

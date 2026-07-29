@@ -2,6 +2,7 @@
 
 import { SettingsCard } from "@/components/settings/ui";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 import { CapabilityBadge, type CapabilityKind } from "./CapabilityBadge";
 import type { PluginCatalogEntry } from "@/lib/plugin-types";
 
@@ -88,16 +89,17 @@ export function PluginMarketplaceCard({
                     &#x2713; {t("settings.capabilities.actionInstalled" as never)}
                   </span>
                 ) : (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 rounded-full bg-accent px-3.5 py-1.5 text-xs font-medium text-black transition-opacity hover:opacity-90"
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="rounded-full"
                     onClick={(e) => {
                       e.stopPropagation();
                       onInstall(plugin.id);
                     }}
                   >
                     {t("settings.capabilities.actionInstall" as never)}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>

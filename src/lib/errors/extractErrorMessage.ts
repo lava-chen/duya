@@ -49,7 +49,9 @@ const SECRET_PATTERNS: RegExp[] = [
   /AIza[A-Za-z0-9_-]{16,}/g,       // Google API key
   /AKIA[A-Z0-9]{12,}/g,            // AWS access key
   /ASIA[A-Z0-9]{12,}/g,            // AWS session key
-  /ya29\.[A-Za-z0-9_-]{16,}/g,     // Google OAuth
+  /ya29\.[A-Za-z0-9_-]{16,}/g,     // Google OAuth access token
+  /xox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack (bot/app/user/refresh/etc.)
+  /eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, // JWT (MS Graph, etc.)
   /Bearer\s+[A-Za-z0-9._-]{12,}/gi, // Bearer tokens
   /api[_-]?key["':= ]+[A-Za-z0-9._-]{8,}/gi, // generic "apiKey: xxx"
 ];
@@ -73,7 +75,7 @@ export function redactSecrets(input: string | undefined | null): string {
       //   - "apiKey ", "api_key ", "api-key ", "apikey " (label, no colon)
       //   - "\"apiKey\":\"", "\"api_key\":\"", "apikey:\"", "apiKey\":\"" (JSON form)
       const labelMatch = match.match(
-        /^(sk-ant-|sk-or-|sk-proj-|sk-|ghp_|gho_|github_pat_|xai-|AIza|AKIA|ASIA|ya29\.|Bearer\s+|api[_-]?key["':= ]+|"api[_-]?key"[:= ]+)/i,
+        /^(sk-ant-|sk-or-|sk-proj-|sk-|ghp_|gho_|github_pat_|xai-|AIza|AKIA|ASIA|ya29\.|xox[baprs]-|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.|Bearer\s+|api[_-]?key["':= ]+|"api[_-]?key"[:= ]+)/i,
       );
       const prefix = labelMatch ? labelMatch[1] : '';
       return `${prefix}***`;

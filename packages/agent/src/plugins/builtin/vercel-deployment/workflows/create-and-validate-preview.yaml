@@ -1,0 +1,52 @@
+id: create-and-validate-preview
+name: Create and Validate Preview
+description: >-
+  Deploy a preview from the current branch, walk a critical-path checklist
+  on the preview URL, and report pass/fail per item.
+prompt: |
+  Create or pick a preview deployment and validate it against the
+  checklist below.
+
+  Project: {{project_id}}
+  Branch: {{branch}}
+  Critical paths: {{critical_paths}}
+
+  Steps to follow:
+  1. Run the `preview-validation` skill. Either pick the most recent
+     `READY` preview deployment on the branch via
+     `vercel.list_deployments(project_id, target=preview,
+     state=READY, limit=1)`, or trigger a new one via
+     `vercel.create_deployment(project_id, branch)`. Confirm with
+     the user before creating a new deployment.
+  2. Read the deployment's commit context from `meta` (commit SHA,
+     commit message, author) and confirm it matches the change the
+     user wants to ship.
+  3. Build the validation checklist:
+     - Build state — `state === READY`.
+     - Build env parity — compare
+       `vercel.list_env_vars(target=preview)` with
+       `target=production`; surface any diff.
+     - Smoke test — fetch the preview URL and confirm the homepage
+       returns 200; use the Playwright plugin to verify the page
+       actually rendered.
+     - Critical path — for each user-named critical path, walk it
+       on the preview URL via the Playwright plugin. Confirm it
+       succeeds; capture browser console messages.
+     - Analytics signal — `vercel.get_web_analytics` for the
+       preview over the validation window; zero page-views after
+       the smoke test is suspicious.
+  4. Report the checklist as a table. For each item, mark pass /
+     fail / warn. For failures, propose a concrete next step
+     (rebuild, fix code, update env var).
+  5. Only when every critical-path item passes, hand off to
+     `production-release`. Otherwise stop and surface the blockers.
+
+  Constraint: do NOT promote to production from this workflow.
+  Promote requires a separate destructive-tier confirmation via
+  the `production-release` skill. Do NOT assume the preview URL
+  is unauthenticated — if the project requires auth, log in via
+  the Playwright plugin before walking the critical path.
+requiredCapabilities:
+  - mcp:vercel
+  - skill:preview-validation
+permissionTier: write

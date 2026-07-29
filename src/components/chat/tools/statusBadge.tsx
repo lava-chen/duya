@@ -3,8 +3,8 @@
 // successfully / failed / is still running" once the user opens it.
 // Hoisted out of each row file because the same 14-line JSX block was
 // copy-pasted in BashToolRow, DuyaCliToolRow, ReadToolRow,
-// AskUserQuestionResultRow, MemoryToolRow, FileEditToolRow, and the
-// generic ToolActionRow — keeping one source of truth avoids drift
+// AskUserQuestionResultRow, FileEditToolRow, and the generic
+// ToolActionRow — keeping one source of truth avoids drift
 // (e.g. a future tone tweak landing in 6 of 7 rows).
 
 'use client';

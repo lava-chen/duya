@@ -55,6 +55,7 @@ const LLM_RESPONSE_SUCCEEDED = JSON.stringify({
       {
         claim: 'User prefers tabs over spaces for indentation',
         claim_type: 'preference',
+        scope: 'project',
         evidence: [
           {
             source_type: 'user_message',
@@ -62,7 +63,7 @@ const LLM_RESPONSE_SUCCEEDED = JSON.stringify({
             verification: 'observed',
           },
         ],
-        canonical_key: 'user:indentation:tabs-over-spaces',
+        canonical_key: 'preference:indentation-style',
       },
     ],
   },
@@ -148,9 +149,14 @@ function createShadowFixture(
   `);
 
   const llmClient: LLMClient = {
-    streamChat: vi.fn().mockImplementation(async function* () {
-      // Stub — worker never streams.
-    }),
+    streamChat: llmError
+      ? vi.fn().mockImplementation(async function* () {
+          throw llmError;
+        })
+      : vi.fn().mockImplementation(async function* () {
+          yield { type: 'text', data: llmResponse };
+          yield { type: 'done' };
+        }),
     chat: llmError
       ? vi.fn().mockRejectedValue(llmError)
       : vi.fn().mockResolvedValue({ content: llmResponse }),
@@ -230,7 +236,7 @@ function insertCatalogRow(
     '/tmp/workspace',
     null,
     null,
-    1,
+    10,
     null,
     lastMessageAt,
     overrides.source_status ?? 'active',
@@ -256,6 +262,16 @@ function insertMessage(
     `INSERT INTO messages (id, session_id, role, content, seq_index, created_at, status)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(msgId, sessionId, role, content, seqIndex, Date.now(), 'complete');
+  // Insert filler messages so message_count >= minMessageCount (6).
+  // Catalog sync recomputes message_count from actual messages, so the
+  // value set in insertCatalogRow is overwritten.
+  for (let i = 1; i < 10; i++) {
+    const fillerId = `msg-${crypto.randomUUID().slice(0, 8)}`;
+    db.prepare(
+      `INSERT INTO messages (id, session_id, role, content, seq_index, created_at, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(fillerId, sessionId, 'user', `filler ${i}`, seqIndex + i, Date.now() + i, 'complete');
+  }
   return msgId;
 }
 
@@ -341,7 +357,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(output!.rollout_summary).toBe('User discussed a feature and modified a file.');
 
     // LLM was called exactly once.
-    expect(fixture.llmClient.chat).toHaveBeenCalledTimes(1);
+    expect(fixture.llmClient.streamChat).toHaveBeenCalledTimes(1);
   });
 
   it('3. after extraction, tick again — idempotent (0 selected)', async () => {
@@ -366,7 +382,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(second.extracted).toBe(0);
 
     // LLM called only once (first sweep).
-    expect(fixture.llmClient.chat).toHaveBeenCalledTimes(1);
+    expect(fixture.llmClient.streamChat).toHaveBeenCalledTimes(1);
   });
 
   it('4. bump source_fingerprint — re-eligible with new output_updated_at', async () => {
@@ -491,7 +507,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(result.skippedNoop).toBe(1);
 
     // LLM was never called (lease acquire failed before LLM).
-    expect(fixture.llmClient.chat).not.toHaveBeenCalled();
+    expect(fixture.llmClient.streamChat).not.toHaveBeenCalled();
   });
 
   it('8. reconcile with missing files — outbox writes, drain creates them', async () => {
@@ -593,26 +609,26 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
 
     // Stage 1 projections (Phase 1, always written):
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'rollout_summaries'))).toBe(true);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
 
     // Phase 2 projections (Plan 306 Phase B): consolidator writes
-    // global/MEMORY.md, global/summary.md, phase2_workspace_diff.md.
+    // root MEMORY.md, root summary.md, phase2_workspace_diff.md.
     // The shadow-mode contract (D1 revised by Plan 306) is that the
     // agent READ path still goes through MemoryManager — the worker
     // itself is allowed to write these projection files.
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'global', 'MEMORY.md'))).toBe(true);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'global', 'summary.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'MEMORY.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'summary.md'))).toBe(true);
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'phase2_workspace_diff.md'))).toBe(true);
 
-    // global/MEMORY.md should follow the Codex v1 shape even when empty.
+    // MEMORY.md is the single searchable projection.
     const globalMemoryContent = fs.readFileSync(
-      path.join(fixture.memoryRoot, 'global', 'MEMORY.md'),
+      path.join(fixture.memoryRoot, 'MEMORY.md'),
       'utf8',
     );
-    expect(globalMemoryContent).toContain('# Memory');
+    expect(globalMemoryContent).toContain('# Durable Memory');
   });
 
-  it('11. Codex filename shape + raw_memories.md content', async () => {
+  it('11. Codex filename shape + unified MEMORY.md content', async () => {
     const rolloutId = insertCatalogRow(fixture.memoryDb);
     insertMessage(fixture.mainDb, rolloutId, 'user', 'I prefer tabs over spaces.');
 
@@ -643,28 +659,10 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     const expectedShortId = rolloutId.replace(/-/g, '').slice(0, 8).toLowerCase();
     expect(files[0]).toContain(expectedShortId);
 
-    // Verify raw_memories.md exists and contains the thread entry.
-    // Format is from rebuildRawMemoriesProjection() in rawMemoriesProjection.ts:
-    //   ## Thread: <thread_id>
-    //   - rollout_id: <rollout_id>
-    //   - slug: <rollout_slug>
-    //   - job_status: <status>
-    const rawPath = path.join(fixture.memoryRoot, 'raw_memories.md');
-    expect(fs.existsSync(rawPath)).toBe(true);
-    const rawContent = fs.readFileSync(rawPath, 'utf8');
-
-    // Header
-    expect(rawContent).toContain('# Raw Memories');
-
-    // Thread entry for this rollout
-    expect(rawContent).toContain(`## Thread: ${rolloutId}`);
-    expect(rawContent).toContain(`rollout_id: ${rolloutId}`);
-    expect(rawContent).toContain('slug: feature-discussion');
-    expect(rawContent).toContain('job_status: succeeded');
-
-    // The raw_memory item from the LLM response (rendered as one-line summary)
-    expect(rawContent).toContain('canonical_key: user:indentation:tabs-over-spaces');
-    expect(rawContent).toContain('claim: User prefers tabs over spaces');
-    expect(rawContent).toContain('claim_type: preference');
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
+    const memoryContent = fs.readFileSync(path.join(fixture.memoryRoot, 'MEMORY.md'), 'utf8');
+    expect(memoryContent).toContain('# Durable Memory');
+    expect(memoryContent).toContain('**preference:indentation-style**');
+    expect(memoryContent).toContain('User prefers tabs over spaces');
   });
 });

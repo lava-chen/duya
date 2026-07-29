@@ -160,10 +160,11 @@ export class WorkerManager {
     });
 
     child.on('message', (msg: Record<string, unknown>) => {
-      // db:request and conductor:executor:rpc are handled by the per-request
-      // handlers in router.ts (they forward to main process). All other
-      // messages go to the centralized handler (used by InteragentRouter).
-      if (msg.type === 'db:request' || msg.type === 'conductor:executor:rpc') {
+      // db:request, conductor:executor:rpc, appConnection:invoke, and
+      // appConnection:listDescriptors are handled by the per-request handlers
+      // in router.ts (they forward to main process). All other messages go
+      // to the centralized handler (used by InteragentRouter).
+      if (msg.type === 'db:request' || msg.type === 'conductor:executor:rpc' || msg.type === 'appConnection:invoke' || msg.type === 'appConnection:listDescriptors') {
         return;
       }
       if (this.onWorkerMessage) {
