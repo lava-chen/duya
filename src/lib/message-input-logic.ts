@@ -39,7 +39,6 @@ export const BUILT_IN_COMMANDS: BuiltInCommand[] = [
     })),
   // Session commands that need badge mode
   { label: pickLabelByName('compact'), value: '/compact', description: '压缩对话上下文以节省 token', descriptionEn: 'Compress conversation context to save tokens', builtIn: true, kind: 'agent_command' as const },
-  { label: pickLabelByName('memory'), value: '/memory', description: '查看或管理会话记忆', descriptionEn: 'View or manage session memory', builtIn: true, kind: 'agent_command' as const },
   { label: pickLabelByName('export'), value: '/export', description: '将会话导出为 markdown/json/html', descriptionEn: 'Export conversation to markdown/json/html', builtIn: true, kind: 'agent_command' as const },
   // Skill commands
   { label: pickLabelByName('review'), value: '/review', description: '审查代码变更并给出详细反馈', descriptionEn: 'Review code changes with detailed feedback', builtIn: true, kind: 'agent_skill' as const },

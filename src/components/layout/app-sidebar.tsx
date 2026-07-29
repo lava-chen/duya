@@ -13,7 +13,6 @@ import {
   MonitorIcon,
   WifiHighIcon,
   LightningIcon,
-  BrainIcon,
   ClockCounterClockwiseIcon,
   ChromeIcon,
   ShieldCheckIcon,
@@ -46,7 +45,7 @@ import { InputDialog } from "@/components/ui/InputDialog";
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.memory';
+type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor';
 
 const CHILD_THREAD_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 
@@ -84,7 +83,6 @@ const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.Compone
   { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
-  { view: 'memory', labelKey: 'nav.memory', icon: BrainIcon },
 ];
 
 const settingsNavGroups: {
@@ -164,7 +162,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     } = useConversationStore();
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
-    const wikiAgentEnabled = settings?.wikiAgentEnabled === true;
 
     const systemDark = useMemo(
       () =>
@@ -198,12 +195,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           ? "dark"
           : "light"
         : bootTheme ?? (systemDark ? "dark" : "light");
-
-    useEffect(() => {
-      if (!wikiAgentEnabled && currentView === 'memory') {
-        setCurrentView('home');
-      }
-    }, [wikiAgentEnabled, currentView, setCurrentView]);
 
     // Load from SQLite database on mount
     useEffect(() => {
@@ -440,9 +431,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         <nav className="sidebar-primary-nav" aria-label="Primary Navigation">
           <NewThreadDropdown />
 
-          {mainNavItems
-            .filter((item) => wikiAgentEnabled || item.view !== 'memory')
-            .map((item) => {
+          {mainNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = currentView === item.view;
 

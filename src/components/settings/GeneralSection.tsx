@@ -496,12 +496,6 @@ export function GeneralSection() {
               </div>
             }
           />
-          <SettingsToggle
-            label={t("settings.general.wikiAgent")}
-            description={t("settings.general.wikiAgentDesc")}
-            checked={settings?.wikiAgentEnabled ?? false}
-            onCheckedChange={(checked) => save({ wikiAgentEnabled: checked })}
-          />
           </SettingsCard>
       </SettingsSection>
 

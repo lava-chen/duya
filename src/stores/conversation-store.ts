@@ -62,7 +62,7 @@ export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
 export type ProjectGroupBy = 'byProject' | 'singleList';
 
 // View types for state-driven UI
-export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'memory';
+export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor';
 // Plan 205: sub-views inside the `providers` settings tab.
 // `provider-picker` lists the preset cards; `provider-edit` shows
 // the inline edit form for the chosen preset (create) or existing

@@ -15,7 +15,6 @@ import { registerAgentHandlers } from '../agents/agent-communicator';
 import { registerNetHandlers } from './net-handlers';
 import { registerAgentServerHandlers } from './agent-server-handlers';
 import { registerRecapHandlers } from './recap-handlers';
-import { registerWikiAgentHandlers } from './wiki-agent-handlers';
 import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerGitHandlers } from './git-handlers';
@@ -35,7 +34,6 @@ export {
   registerNetHandlers,
   registerAgentServerHandlers,
   registerRecapHandlers,
-  registerWikiAgentHandlers,
   registerPluginHandlers,
   registerProjectDatabaseHandlers,
   registerGitHandlers,

@@ -26,7 +26,6 @@ export interface ChatOptions {
   providerConfig?: Record<string, unknown>;
   workingDirectory?: string;
   mode?: string;
-  wikiAgentEnabled?: boolean;
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
   /**
@@ -119,7 +118,6 @@ export class AgentServerClient {
         mode: options?.mode,
         conductorMode: options?.conductorMode,
         conductorCanvasId: options?.conductorCanvasId,
-        wikiAgentEnabled: options?.wikiAgentEnabled,
         effort: options?.effort,
       },
     });
@@ -148,7 +146,6 @@ export class AgentServerClient {
             mode: options?.mode,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
-            wikiAgentEnabled: options?.wikiAgentEnabled,
             securityScanEnabled: options?.securityScanEnabled,
             effort: options?.effort,
             conductorMode: options?.conductorMode,
