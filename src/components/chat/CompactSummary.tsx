@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Button } from '@/components/ui/Button';
 
 interface CompactSummaryProps {
   content: string;
@@ -10,14 +11,16 @@ export function CompactSummary({ content, compactedMessageCount }: CompactSummar
 
   return (
     <div className="compact-summary">
-      <button
+      <Button
+        variant="ghost"
+        size="sm"
         className="compact-summary-toggle"
         onClick={() => setExpanded(!expanded)}
         type="button"
       >
         <span className="compact-summary-icon">{expanded ? '▾' : '▸'}</span>
         Context compacted ({compactedMessageCount} messages summarized)
-      </button>
+      </Button>
       {expanded && (
         <div className="compact-summary-content">
           {content}

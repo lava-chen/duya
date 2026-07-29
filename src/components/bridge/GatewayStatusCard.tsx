@@ -10,6 +10,7 @@ import {
   WarningIcon,
 } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 import { listGatewaySessionsIPC } from "@/lib/ipc-client";
 
 interface AdapterHealth {
@@ -187,10 +188,12 @@ export function GatewayStatusCard() {
           </div>
         </div>
 
-        <button
+        <Button
+          variant={displayRunning ? "danger" : "primary"}
+          size="md"
+          className={`gateway-control-button ${displayRunning ? "stop" : "start"}`}
           onClick={() => controlBridge(displayRunning ? "stop" : "start")}
           disabled={controlling}
-          className={`gateway-control-button ${displayRunning ? "stop" : "start"}`}
         >
           {controlling ? (
             <SpinnerGapIcon size={14} className="animate-spin" />
@@ -205,7 +208,7 @@ export function GatewayStatusCard() {
               {t("gateway.startBridge")}
             </>
           )}
-        </button>
+        </Button>
       </div>
 
       {error && (

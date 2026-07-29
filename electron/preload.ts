@@ -5,6 +5,9 @@ import type {
   ProjectDatabaseRequest,
 } from '../packages/conductor/src/database/types'
 import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
+// Plan 312 — App Connection status DTO is the only shape returned to the
+// renderer. Token fields never appear here.
+import type { AppConnectionStatusDTO } from './services/app-connections/types'
 
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
 // (e.g. Electron 28 in this project) `File.path` still works for dragged
@@ -867,8 +870,11 @@ export interface PluginAPI {
   doctor: (pluginId?: string) => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
   capabilityIndex: () => Promise<{ success: boolean; data: Array<{
     pluginId: string; name: string; version: string; status: string;
-    capabilities: { skills: number; mcpServers: number; cli: number; ui: number; hooks: number };
+    capabilities: { skills: number; mcpServers: number; cli: number; ui: number; hooks: number; workflows: number };
     permissionSummary: { granted: string[]; denied: string[] };
+    // Plan 311 — workflow template summaries (id/name/description/tier).
+    // Prompt body is fetched on demand via `workflowGet`.
+    workflows?: Array<{ id: string; name: string; description: string; permissionTier: string }>;
   }>; error?: string }>
   checkUpdate: () => Promise<{ success: boolean; data: PluginUpdateInfo[]; error?: string }>
   update: (payload: { pluginId: string; targetVersion: string }) => Promise<{ success: boolean; data?: { success: boolean; previousVersion: string; newVersion: string }; error?: string }>
@@ -877,6 +883,9 @@ export interface PluginAPI {
   checkoutVersion: (payload: { pluginId: string; version: string }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   cacheStats: () => Promise<{ success: boolean; data?: { totalPlugins: number; totalVersions: number; totalSizeBytes: number }; error?: string }>
   cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => Promise<{ success: boolean; data?: { removed: string[] }; error?: string }>
+  // Plan 311 — fetch the full workflow template (including prompt body)
+  // for a given plugin + workflow id. Returns null when not found.
+  workflowGet: (payload: { pluginId: string; workflowId: string }) => Promise<{ success: boolean; data?: unknown; error?: string }>
 }
 
 export interface MarketplaceEntry {
@@ -886,6 +895,33 @@ export interface MarketplaceEntry {
   description?: string
   autoUpdate: boolean
   trusted?: boolean
+}
+
+/**
+ * App Connection API — Plan 312.
+ *
+ * Renderer-facing surface for OAuth App Connections. All methods
+ * return status DTOs only; tokens NEVER cross this boundary.
+ */
+export interface AppConnectionAPI {
+  list: () => Promise<{ success: boolean; data?: AppConnectionStatusDTO[]; error?: string }>
+  status: (connectionId: string) => Promise<{
+    success: boolean
+    data?: AppConnectionStatusDTO
+    error?: string
+    errorCode?: string
+  }>
+  connect: (payload: { provider: string; scopes?: string[] }) => Promise<{
+    success: boolean
+    data?: AppConnectionStatusDTO
+    error?: string
+    errorCode?: string
+  }>
+  disconnect: (connectionId: string) => Promise<{
+    success: boolean
+    data?: { disconnected: boolean }
+    error?: string
+  }>
 }
 
 export interface MarketplaceAPI {
@@ -1059,6 +1095,7 @@ export interface ElectronAPI {
   literature: LiteratureAPI
   agentProfile: AgentProfileAPI
   plugin: PluginAPI
+  appConnection: AppConnectionAPI
   marketplace: MarketplaceAPI
   terminal: TerminalAPI
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
@@ -1928,6 +1965,15 @@ const electronAPI: ElectronAPI = {
     checkoutVersion: (payload: { pluginId: string; version: string }) => ipcRenderer.invoke('plugin:checkout-version', payload),
     cacheStats: () => ipcRenderer.invoke('plugin:cache:stats'),
     cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => ipcRenderer.invoke('plugin:cache:cleanup', payload),
+    workflowGet: (payload: { pluginId: string; workflowId: string }) => ipcRenderer.invoke('plugin:workflow:get', payload),
+  },
+  // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
+  // in the main process.
+  appConnection: {
+    list: () => ipcRenderer.invoke('appConnection:list'),
+    status: (connectionId: string) => ipcRenderer.invoke('appConnection:status', connectionId),
+    connect: (payload: { provider: string; scopes?: string[] }) => ipcRenderer.invoke('appConnection:connect', payload),
+    disconnect: (connectionId: string) => ipcRenderer.invoke('appConnection:disconnect', connectionId),
   },
   marketplace: {
     list: () => ipcRenderer.invoke('marketplace:list'),

@@ -1,0 +1,38 @@
+id: create-migration
+name: Create Supabase Migration
+description: >-
+  Draft a Supabase migration from a schema change request, review the
+  SQL with the user, write the migration file, and apply it to the live
+  project.
+prompt: |
+  Create and apply a Supabase migration for the schema change below.
+
+  Change request: {{change_request}}
+  Project ref: {{project_ref}}
+
+  Steps to follow:
+  1. Run the `postgres-best-practices` skill to design the schema
+     change. Pick data types, indexes, and RLS policies appropriate
+     for the change. Surface the proposed SQL in chat.
+  2. Run the `migration-workflow` skill to wrap the SQL in a
+     timestamped migration file. Use the canonical filename pattern
+     `<timestamp>_<slug>.sql` under `supabase/migrations/`.
+  3. Show the user the proposed file path and SQL. If the change
+     includes a destructive operation (`DROP COLUMN`, `DROP TABLE`,
+     `TRUNCATE`), split it into a rename/archive migration and a
+     drop migration with a verification window between them.
+  4. After confirmation, write the migration file to disk and call
+     `supabase.apply_migration(name, sql)` to apply it to the live
+     project.
+  5. Verify via `supabase.list_migrations` that the new migration is
+     at the head, and via `supabase.describe_table` that the schema
+     change landed as expected.
+
+  Constraint: do NOT run schema-changing SQL via `supabase.query`
+  directly. Every schema change goes through `apply_migration`. Do
+  NOT edit a previously-applied migration file — add a new one.
+requiredCapabilities:
+  - mcp:supabase
+  - skill:postgres-best-practices
+  - skill:migration-workflow
+permissionTier: modify

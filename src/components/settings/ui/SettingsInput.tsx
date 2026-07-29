@@ -38,7 +38,7 @@ export function SettingsInput({
   const inputType = isPassword && showPassword ? "text" : type;
 
   return (
-    <div className={cn("px-4 py-3.5 space-y-2", className)}>
+    <div className={cn("py-3.5 space-y-2", className)}>
       {label && (
         <div>
           <label htmlFor={id} className="text-sm font-medium text-foreground block">
@@ -106,7 +106,7 @@ export function SettingsInputRow({
   return (
     <div
       className={cn(
-        "flex items-center justify-between px-4 py-3.5",
+        "flex items-center justify-between py-3.5",
         disabled && "opacity-50",
         className
       )}

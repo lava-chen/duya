@@ -28,6 +28,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { Input } from '@/components/ui/Input';
 
 interface PendingPairing {
   platform: string;
@@ -608,7 +609,7 @@ export default function BridgeSection() {
             }
           />
           {proxyStatus && (
-            <div className="px-4 pb-3.5">
+            <div className="pb-3.5">
               {proxyStatus.effective ? (
                 <div className="flex items-center gap-2 text-xs">
                   <GlobeHemisphereWestIcon size={12} className="text-green-500" />
@@ -674,7 +675,7 @@ export default function BridgeSection() {
           )}
 
           {/* Manual pairing code input */}
-          <div className="px-4 py-3">
+          <div className="py-3">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
               Enter Pairing Code
             </p>
@@ -691,14 +692,14 @@ export default function BridgeSection() {
                 <option value="discord">Discord</option>
                 <option value="whatsapp">WhatsApp</option>
               </select>
-              <input
+              <Input
                 type="text"
                 value={pairingCode}
                 onChange={(e) => { setPairingCode(e.target.value); setPairingError(null); }}
                 onKeyDown={(e) => { if (e.key === 'Enter') handlePairingApprove(); }}
                 placeholder="8-character code"
                 maxLength={8}
-                className="flex-1 h-9 rounded-lg border border-border/50 bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-accent"
+                className="flex-1"
               />
               <Button
                 variant="primary"
@@ -717,7 +718,7 @@ export default function BridgeSection() {
 
           {/* Approved users */}
           {pairingApproved.length > 0 && (
-            <div className="px-4 pb-3 pt-1 border-t border-border/30">
+            <div className="pb-3 pt-1 border-t border-border/30">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
                 Approved Users ({pairingApproved.length})
               </p>
@@ -747,7 +748,7 @@ export default function BridgeSection() {
           )}
 
           {pairingPending.length === 0 && pairingApproved.length === 0 && (
-            <div className="px-4 py-4 text-center">
+            <div className="py-4 text-center">
               <p className="text-xs text-muted-foreground">
                 No pairing requests yet. When someone DMs the bot (with DM policy set to "pairing"), their code will appear here.
               </p>

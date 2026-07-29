@@ -22,7 +22,6 @@ import {
   TrustEngine,
   PermissionService,
   PolicyEngine,
-  PluginSecretStore,
   withPluginError,
   type PluginResult,
 } from '../../packages/plugin-core/src';
@@ -364,7 +363,6 @@ export class PluginManager {
       }
 
       this.permissionService.revokeAllPermissions(pluginId);
-      this.secretStore.removeAllSecrets(pluginId);
       this.installedMgr.removePlugin(pluginId);
 
       this.logger.info('Plugin removed', { pluginId, deleteData }, LogComponent.Main);
@@ -398,10 +396,6 @@ export class PluginManager {
 
   getPermissionService(): PermissionService {
     return this.permissionService;
-  }
-
-  getSecretStore(): PluginSecretStore {
-    return this.secretStore;
   }
 
   getInstalledV2(): Record<string, InstalledPluginInfoV2> {

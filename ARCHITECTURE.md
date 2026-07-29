@@ -1077,10 +1077,137 @@ Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredT
 
 27 个单测覆盖 Phase 1/2/3 全链路([packages/agent/tests/unit/ToolSearchTool.test.ts](./packages/agent/tests/unit/ToolSearchTool.test.ts) 17 条 + [packages/agent/tests/unit/tool-search-discovery.test.ts](./packages/agent/tests/unit/tool-search-discovery.test.ts) 10 条),全绿。
 
+## First-Party Plugin Catalog (Plan 313)
+
+The first-party plugin catalog is the curated set of plugins shipped with
+DUYA itself. They live under
+`packages/agent/src/plugins/builtin/<plugin-name>/` and are registered in
+`electron/plugins/catalog.ts` as `BUNDLED_PLUGIN_CATALOG` entries with
+`source: 'bundled'` and `trustLevel: 'official'`. Catalog entries are
+default-off: `installed: false, enabled: false` — the user opts in per
+plugin.
+
+### Directory convention
+
+Every first-party plugin follows the v2 layout:
+
+```
+packages/agent/src/plugins/builtin/<plugin-name>/
+├── plugin.json              # v2 manifest (schemaVersion: 'duya.plugin.v1')
+├── plugin.md                # human-readable overview, setup, and status
+├── mcp/servers.json         # MCP server config (stdio until Phase 2a)
+├── skills/<skill>/SKILL.md  # one subdirectory per skill (v2 layout)
+├── workflows/<wf>.yaml      # WorkflowTemplateSchema-compliant templates
+└── permissions/policy.json  # five-tier permission policy
+```
+
+`discoverSkills()` reads both the legacy flat `skills/*.md` layout and the
+v2 subdirectory `skills/<name>/SKILL.md` layout. `deriveCapabilityCounts`
+derives counts from the on-disk directory so the catalog stays in sync
+with the actual files.
+
+### Five-tier permission model
+
+`permissions/policy.json` maps each MCP tool call to one of five tiers.
+The default safety posture is read-only; write actions require explicit
+confirmation.
+
+| Tier | Behavior | Example |
+| --- | --- | --- |
+| `read` | Automatic, no confirmation | `list_issues`, `get_file`, `query` (SELECT) |
+| `draft` | Automatic, but visible in review surface | (reserved) |
+| `write` | Confirm before execute | `create_issue`, `create_page`, `create_review` |
+| `modify` | Strong confirm; mutates existing state | `apply_migration`, `deploy_edge_function`, `archive_*` |
+| `dangerous` | Strong explicit confirm; irreversible or production-impacting | `merge_pull_request`, `promote_to_production`, `delete_issue`, `DROP TABLE` |
+
+Unlisted actions are conservatively promoted one tier higher than `read`.
+
+### Bundled plugin roster (9 plugins)
+
+| Plugin ID | Directory | Category | Skills | MCP server | Transitional transport |
+| --- | --- | --- | --- | --- | --- |
+| `com.duya.postgres-readonly` | `postgres-readonly/` | `data` | 3 | `@modelcontextprotocol/server-postgres --read-only` | stdio (final) |
+| `com.duya.github-development` | `github-development/` | `development` | 5 | `github-mcp-server stdio` | stdio → Remote MCP |
+| `com.duya.playwright-web-operator` | `playwright-web-operator/` | `automation` | 5 | `@playwright/mcp` | stdio (final) |
+| `com.duya.figma-design` | `figma-design/` | `development` | 5 | `figma-developer-mcp --stdio` | stdio → Figma Remote MCP |
+| `com.duya.supabase-development` | `supabase-development/` | `development` | 4 | `@supabase/mcp-server-supabase` | stdio (final) |
+| `com.duya.sentry-debugging` | `sentry-debugging/` | `development` | 4 | `@sentry/mcp-server` | stdio → Sentry Remote MCP |
+| `com.duya.vercel-deployment` | `vercel-deployment/` | `development` | 4 | `vercel-mcp-adapter` | stdio → Vercel Remote MCP |
+| `com.duya.notion-knowledge` | `notion-knowledge/` | `productivity` | 5 | `@notionhq/notion-mcp-server` | stdio → Notion Remote MCP |
+| `com.duya.linear-project-execution` | `linear-project-execution/` | `development` | 5 | `@tacticlaunch/mcp-linear` | stdio → Linear Remote MCP |
+
+### trustLevel mapping
+
+| `source` | `trustLevel` | Meaning |
+| --- | --- | --- |
+| `bundled` | `official` | Shipped with DUYA, maintained by the DUYA team |
+| `local` | `local` | Installed from the local marketplace, user-managed |
+| (future) `marketplace` | `community` | Published by third parties (Plan 312) |
+
+### Remote MCP transport status
+
+Plan 313 Phase 2a (Remote MCP HTTP transport) is not yet implemented.
+Until it lands, the six remote-MCP plugins (Figma, Supabase, Sentry,
+Vercel, Notion, Linear) use official stdio MCP server packages as a
+transitional transport. Each plugin's `plugin.md` marks
+`_status: transitional` and documents the target Remote MCP endpoint.
+When Phase 2a ships, these plugins migrate to HTTP transport without
+breaking skills or workflows — only `mcp/servers.json` changes.
+
+### PostgreSQL read-only defense-in-depth
+
+`postgres-readonly` enforces read-only access through three independent
+layers:
+
+1. MCP server flag: `--read-only` passed to
+   `@modelcontextprotocol/server-postgres`.
+2. Permission policy: every write-capable tool call is pinned to the
+   `dangerous` tier in `permissions/policy.json`.
+3. Recommended role: the setup label instructs the user to connect with
+   a Postgres role whose grants are read-only (e.g. `duya_reader`).
+
+### References
+
+- Plan: [docs/exec-plans/active/313-first-party-plugin-catalog.md](./docs/exec-plans/active/313-first-party-plugin-catalog.md)
+- Product definition: [docs/design-docs/2026-07-29-plugin-product-definition.md](./docs/design-docs/2026-07-29-plugin-product-definition.md)
+- Catalog loader: [electron/plugins/catalog.ts](./electron/plugins/catalog.ts)
+- Capability discovery: [packages/agent/src/plugins/builtin/capability-discovery.ts](./packages/agent/src/plugins/builtin/capability-discovery.ts)
+- Workflow schema: [packages/plugin-core/src/workflows/schema.ts](./packages/plugin-core/src/workflows/schema.ts)
+
+## Memory v2: bounded projection and rg retrieval
+
+SQLite is the authoritative memory state. `projects` and
+`project_path_aliases` identify scope across moved or renamed roots; they do not
+create a filesystem hierarchy. Agent-facing files under `~/.duya/memory` are
+deterministic, replaceable projections:
+
+- `summary.md`: always-read routing layer, hard-capped at 6000 characters. It
+  contains up to 12 global essentials and 16 recent semantic project routes.
+- `MEMORY.md`: the single normal `rg` target, grouped into global and project
+  sections. Project headings use the root basename and canonical path, never a
+  UUID directory. At most 30 recently seen projects are projected.
+- `rollout_summaries/`: append-only evidence, searched only when a claim needs
+  verification.
+- `global/people/` and `global/areas/`: semantic entity projections with index
+  files; these are queried explicitly rather than through a broad root search.
+
+The extractor emits at most five durable candidates with typed canonical keys
+and explicit scope. The consolidator normalizes known aliases, transfers
+evidence before retiring duplicates, keeps alias retirement scope-safe, and
+limits active non-entity entries to 64 per global/project bucket. Overflow is
+retired, not destroyed; the latest 50 consolidation runs are retained.
+
+`raw_memories.md`, `global/{MEMORY,summary}.md`, and
+`projects/<UUID>/{MEMORY,summary}.md` are legacy projections. Startup
+reconciliation removes their managed files through the projection outbox and
+prunes empty parents only. The prompt tells the Agent to read `summary.md`,
+search only `MEMORY.md`, and consult rollout evidence on demand. No dedicated
+recall tool is registered.
+
 ## 相关文档
 
 - [AGENTS.md](./AGENTS.md) - 开发规则和流程
-- [docs/SECURITY.md](./docs/SECURITY.md) - 安全架构与防护机制详解
+- [docs/SECURITY.md](./docs/design-docs/SECURITY.md) - 安全架构与防护机制详解
 - [docs/exec-plans/active/26-prompt-mode-architecture.md](./docs/exec-plans/active/26-prompt-mode-architecture.md) - PromptMode 架构设计
 - [exec-plans/README](./docs/exec-plans/README.md) - 执行计划索引
 - [electron_multi_agent_architecture.svg](./docs/design-docs/electron_multi_agent_architecture.svg) - 架构图（目标架构）

@@ -1,0 +1,34 @@
+name: extract-structured-info
+description: Navigate to a page, extract structured data (table, list, JSON-LD), and return it as a JSON dataset.
+plugin: com.duya.playwright-web-operator
+trigger:
+  natural: "scrape this page" / "get me the table from ..."
+skills:
+  - browser-navigation
+  - structured-extraction
+steps:
+  - id: navigate
+    tool: browser.navigate
+    inputs:
+      url: ${trigger.url}
+    output: nav
+  - id: snapshot
+    tool: browser.snapshot
+    output: snap
+  - id: extract
+    skill: structured-extraction
+    using:
+      snapshot: ${snap}
+      selector: ${trigger.record_selector}
+    output: dataset
+  - id: paginate
+    skill: structured-extraction
+    using:
+      dataset: ${dataset}
+      next_link: ${trigger.next_link_selector}
+    output: full_dataset
+    condition: ${trigger.paginate == true}
+  - id: report
+    value: ${full_dataset.summary}
+permissions:
+  read: [browser.navigate, browser.snapshot, browser.evaluate.readonly]

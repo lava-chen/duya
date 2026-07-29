@@ -58,54 +58,6 @@ export interface BuiltinPluginDescriptor {
 }
 
 // ============================================================================
-// Track B — Code-level `registerBuiltinPlugin`
-// ============================================================================
-//
-// Mirrors `claude-code-haha/src/plugins/builtinPlugins.ts:28`. Track A is
-// the default path; Track B is for plugins that need TS-driven logic
-// (e.g. DevTools Plus) and is interface-only in this plan — no body is
-// wired. The first Track B body lands in plan 104.
-
-export interface BundledSkillDefinition {
-  name: string;
-  description?: string;
-  source: 'bundled';
-  [key: string]: unknown;
-}
-
-export interface BundledMcpServerConfig {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-}
-
-export interface BuiltinPluginDefinition {
-  name: string;
-  description: string;
-  version: string;
-  defaultEnabled?: boolean;
-  isAvailable?: () => boolean;
-  skills?: BundledSkillDefinition[];
-  mcpServers?: BundledMcpServerConfig[];
-  hooks?: Record<string, unknown>;
-}
-
-const BUILTIN_PLUGINS: Map<string, BuiltinPluginDefinition> = new Map();
-
-export function registerBuiltinPlugin(def: BuiltinPluginDefinition): void {
-  BUILTIN_PLUGINS.set(def.name, def);
-}
-
-export function getBuiltinPluginDefinition(name: string): BuiltinPluginDefinition | undefined {
-  return BUILTIN_PLUGINS.get(name);
-}
-
-export function listBuiltinPluginDefinitions(): BuiltinPluginDefinition[] {
-  return Array.from(BUILTIN_PLUGINS.values());
-}
-
-// ============================================================================
 // Descriptor cache (Track A) + the directory scan
 // ============================================================================
 
@@ -228,8 +180,7 @@ function registerDirectoryHooks(
 // plugin via `registerFromDirectory`. The current `createTools()` returns
 // `[]` for directory-based plugins, so this loop is a structural pass:
 // it ensures the directory convention is honoured (cache, descriptor
-// availability) and lays the groundwork for future Track B bodies in
-// plan 104.
+// availability).
 
 export function registerBundledAgentPlugins(
   registry: ToolRegistry,
@@ -244,15 +195,6 @@ export function registerBundledAgentPlugins(
 
     registerFromDirectory(descriptor.dir);
     registeredPluginIds.push(descriptor.name);
-  }
-
-  // Track B: any code-registered builtins can register their tools here
-  // once plan 104 lands. For now this loop is a no-op.
-  for (const def of BUILTIN_PLUGINS.values()) {
-    if (def.isAvailable && !def.isAvailable()) continue;
-    if (def.defaultEnabled === false) continue;
-    if (options?.enabledPluginIds && !options.enabledPluginIds.has(def.name)) continue;
-    registeredPluginIds.push(def.name);
   }
 
   // Touch `registry` so the parameter is not "unused" — the function

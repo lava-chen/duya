@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SettingsCard, SettingsSection } from "@/components/settings/ui";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 import { getMarketplaceAPI, type MarketplaceEntry } from "@/lib/marketplace-ipc";
 
 export function MarketplaceManagementCard() {
@@ -188,13 +189,13 @@ export function MarketplaceManagementCard() {
                             className="rounded border-border/50"
                           />
                         </div>
-                        <button
-                          type="button"
-                          className="px-2 py-1 text-xs rounded-md border border-border/60 text-muted-foreground hover:text-red-400 hover:border-red-400/30 transition-colors"
+                        <Button
+                          variant="danger"
+                          size="sm"
                           onClick={() => handleRemove(mp.key)}
                         >
                           Remove
-                        </button>
+                        </Button>
                       </div>
                     </div>
                   ))
@@ -204,32 +205,32 @@ export function MarketplaceManagementCard() {
 
             <div className="flex items-center gap-2">
               {!showAddForm ? (
-                <button
-                  type="button"
-                  className="px-3 py-1.5 text-xs rounded-md bg-accent text-black hover:opacity-90 transition-opacity"
+                <Button
+                  variant="primary"
+                  size="sm"
                   onClick={() => setShowAddForm(true)}
                 >
                   Add Marketplace
-                </button>
+                </Button>
               ) : (
-                <button
-                  type="button"
-                  className="px-3 py-1.5 text-xs rounded-md border border-border/60 text-muted-foreground hover:text-foreground"
+                <Button
+                  variant="secondary"
+                  size="sm"
                   onClick={() => {
                     setShowAddForm(false);
                     setNameError(null);
                   }}
                 >
                   Cancel
-                </button>
+                </Button>
               )}
-              <button
-                type="button"
-                className="px-3 py-1.5 text-xs rounded-md border border-border/60 text-muted-foreground hover:text-foreground"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={handleReset}
               >
                 Reset to Defaults
-              </button>
+              </Button>
             </div>
 
             {showAddForm && (
@@ -310,14 +311,14 @@ export function MarketplaceManagementCard() {
                     <div className="text-xs text-red-400">{nameError}</div>
                   )}
                   <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="px-3 py-1.5 text-xs rounded-md bg-accent text-black hover:opacity-90 transition-opacity disabled:opacity-50"
+                    <Button
+                      variant="primary"
+                      size="sm"
                       disabled={!addKey.trim() || !addName.trim() || !addUrl.trim()}
                       onClick={handleAdd}
                     >
                       Add
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </SettingsCard>

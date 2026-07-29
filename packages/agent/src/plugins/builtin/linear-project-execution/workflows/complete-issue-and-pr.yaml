@@ -1,0 +1,52 @@
+id: complete-issue-and-pr
+name: Complete Issue and PR
+description: >-
+  Read a Linear issue, locate the code, implement the change, open a PR
+  that closes the issue, and post the PR link back to the issue thread.
+prompt: |
+  Implement the Linear issue below and open a PR that closes it.
+
+  Issue: {{issue_id}}
+  Target branch: {{target_branch}}
+
+  Steps to follow:
+  1. Run the `issue-to-code` skill. Call `linear.get_issue(issue_id)`
+     to read the title, description, labels, and linked PRs. Read
+     the comments via `linear.list_comments(issue_id)` to check for
+     an existing PR — duplicates are common.
+  2. Run the GitHub Development plugin's `repository-exploration`
+     skill if you have not already built a layout map in this
+     session. Use `repos.get_file_contents` to read candidate files
+     — do not guess from file names alone.
+  3. Implement the change locally in the workspace (via the file
+     edit tools). Keep the diff minimal and focused on the issue
+     scope.
+  4. Create a branch with `repos.create_branch` from the default
+     branch HEAD. Do not push directly to `main`.
+  5. Push the commits with `repos.create_or_update_file` (single
+     file) or the workspace push flow (multiple files). Use a
+     conventional commit message matching the repo's style.
+  6. Open a PR with `pull_requests.create` via the GitHub
+     Development plugin. The PR body must:
+     - Reference the Linear issue (`Closes LIN-<id>` or the issue
+       URL — Linear auto-links the PR to the issue when the
+       identifier is in the PR body).
+     - Summarize what changed and why.
+     - Call out anything the reviewer should test manually.
+  7. After the PR is open, post a comment on the Linear issue via
+     `linear.create_comment(issue_id, body=<PR url + summary>)`
+     so the issue thread has the link. Confirm with the user
+     before posting — this is a write action.
+  8. Optionally, move the Linear issue to `In Review` state via
+     `linear.set_issue_status(issue_id, "In Review")`. Confirm
+     with the user before applying.
+
+  Constraint: do NOT push directly to `main` — open a PR. Do NOT
+  close the Linear issue manually before the PR merges — that
+  hides the issue from the active cycle. Do NOT post the comment
+  without showing the user the proposed body. Do NOT add a fix
+  that just disables a failing test — fix the root cause.
+requiredCapabilities:
+  - mcp:linear
+  - skill:issue-to-code
+permissionTier: modify

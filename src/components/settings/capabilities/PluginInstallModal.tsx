@@ -40,6 +40,10 @@ function buildDisplayCapabilities(plugin: PluginCatalogEntry): PluginCapabilityD
   const items: PluginCapabilityDisplay[] = [];
   const manifest = plugin.manifest;
   if (!manifest) return items;
+  // Plan 311 made `PluginManifest.capabilities` optional on v2 manifests;
+  // guard here so the install modal degrades to "no capabilities" instead
+  // of throwing when a v2 manifest has no `capabilities` block.
+  if (!manifest.capabilities) return items;
 
   if (manifest.capabilities.skills) {
     for (const s of manifest.capabilities.skills) {

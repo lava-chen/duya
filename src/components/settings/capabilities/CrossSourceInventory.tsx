@@ -15,6 +15,7 @@
 
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/Button";
 import type { CapabilityDTO, CapabilityManagementSnapshotPhase1B } from "@/lib/capability-management-types";
 
 interface CrossSourceInventoryProps {
@@ -72,8 +73,8 @@ export function CrossSourceInventory({ snapshot }: CrossSourceInventoryProps) {
 
   return (
     <div className="rounded-xl border border-border/50 bg-surface/30 mt-3">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         className="w-full text-left px-4 py-3 flex items-center justify-between gap-2"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
@@ -85,7 +86,7 @@ export function CrossSourceInventory({ snapshot }: CrossSourceInventoryProps) {
           </div>
         </div>
         <span className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
-      </button>
+      </Button>
       {open ? (
         <div className="border-t border-border/50 px-4 py-3 space-y-3 text-xs">
           <Section title={`Skills (${skills.length})`} capabilities={skills} />

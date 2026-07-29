@@ -1,0 +1,54 @@
+name: analyze-ci-failure
+description: Diagnose the most recent failing Actions run on the current branch, localize the failure, fix it, and push.
+plugin: com.duya.github-development
+trigger:
+  natural: "CI is red" / "why is the build failing?"
+  event:
+    - type: check_run.completed
+      filter:
+        conclusion: failure
+skills:
+  - fix-ci
+  - repository-exploration
+steps:
+  - id: list-runs
+    tool: actions.list_runs
+    inputs:
+      branch: ${git.current_branch}
+      status: completed
+      conclusion: failure
+    output: runs
+  - id: pick-run
+    value: ${runs[0]}
+    output: run
+  - id: list-jobs
+    tool: actions.list_jobs
+    inputs:
+      run_id: ${run.id}
+    output: jobs
+  - id: read-logs
+    tool: actions.get_job_logs
+    inputs:
+      job_id: ${jobs[?(@.conclusion == 'failure')][0].id}
+    output: logs
+  - id: classify
+    skill: fix-ci
+    using:
+      run: ${run}
+      jobs: ${jobs}
+      logs: ${logs}
+    output: diagnosis
+  - id: implement-fix
+    skill: fix-ci
+    using: ${diagnosis}
+    output: changes
+  - id: push-fix
+    tool: repos.create_or_update_file
+    inputs:
+      path: ${changes.path}
+      content: ${changes.content}
+      message: ${changes.commit_message}
+    confirm: modify
+permissions:
+  read: [actions.list_runs, actions.list_jobs, actions.get_job_logs]
+  modify: [repos.create_or_update_file]

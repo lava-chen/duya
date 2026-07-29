@@ -29,11 +29,6 @@ export {
 export type { EnterprisePolicy } from './security/policy-engine';
 
 export {
-  PluginSecretStore,
-} from './security/secret-store';
-export type { SecretEntry } from './security/secret-store';
-
-export {
   isPluginError,
   toPluginError,
 } from './types';
@@ -107,3 +102,31 @@ export {
   withMCPError,
 } from './error-wrapper';
 export type { MCPResult } from './error-wrapper';
+
+// Workflows — Plan 311.
+export {
+  PermissionTierSchema,
+  PERMISSION_TIER_ORDER,
+  tierRank,
+  compareTiers,
+  mergeTiers,
+  bumpPermissionTier,
+  tierRequiresConfirmation,
+  tierRequiresExplicitConfirmation,
+  WorkflowStepSchema,
+  WorkflowTemplateSchema,
+  toWorkflowSummary,
+  instantiateWorkflow,
+  extractVariables,
+  getTemplatePrompt,
+  effectiveTier,
+  WorkflowInstantiateError,
+} from './workflows';
+export type {
+  PermissionTier,
+  WorkflowStep,
+  WorkflowTemplate,
+  WorkflowTemplateSummary,
+  InstantiateOptions,
+  InstantiateResult,
+} from './workflows';

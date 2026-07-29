@@ -11,6 +11,7 @@ import {
   SettingsToggle,
   SettingsSelectRow,
 } from "@/components/settings/ui";
+import { Button } from "@/components/ui/Button";
 
 export function SecuritySection() {
   const { settings, loading, saving, error, save } = useSettings();
@@ -184,14 +185,14 @@ export function SecuritySection() {
         {isDirty && (
           <div className="mt-4 flex items-center justify-end gap-3">
             <span className="text-xs text-muted-foreground">{t('settings.security.unsavedChanges')}</span>
-            <button
+            <Button
+              variant="primary"
               onClick={handleSave}
               disabled={saving}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent/90 transition-all disabled:opacity-50"
             >
               {saving && <SpinnerGapIcon size={14} className="animate-spin" />}
               {saving ? t('settings.security.saving') : t('settings.security.saveChanges')}
-            </button>
+            </Button>
           </div>
         )}
       </SettingsSection>

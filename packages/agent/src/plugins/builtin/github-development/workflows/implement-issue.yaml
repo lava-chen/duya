@@ -1,0 +1,41 @@
+# Plan 313 Phase 1a — workflow template draft.
+# Activated when Plan 311 lands the `workflows` manifest field and runtime.
+# Until then this file is a structured draft the agent can read on demand.
+name: implement-issue
+description: Read a GitHub Issue, locate the relevant code, implement the change, and open a pull request that closes the issue.
+plugin: com.duya.github-development
+trigger:
+  natural: "implement issue #N" / "fix issue #N"
+  event:
+    - type: issue.assigned
+skills:
+  - repository-exploration
+  - issue-to-implementation
+steps:
+  - id: read-issue
+    tool: issues.get
+    inputs:
+      number: ${trigger.issue_number}
+    output: issue
+  - id: locate-code
+    skill: repository-exploration
+    using: ${issue.body}
+    output: code_map
+  - id: implement
+    skill: issue-to-implementation
+    using:
+      issue: ${issue}
+      code_map: ${code_map}
+    output: changes
+  - id: open-pr
+    tool: pull_requests.create
+    inputs:
+      title: ${changes.title}
+      body: ${changes.body}
+      head: ${changes.branch}
+      base: ${issue.base_branch}
+    confirm: write
+permissions:
+  read: [issues.get, repos.get_file_contents, repos.list_commits]
+  modify: [repos.create_branch, repos.create_or_update_file]
+  write: [pull_requests.create]

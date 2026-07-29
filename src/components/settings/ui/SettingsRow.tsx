@@ -29,7 +29,7 @@ export function SettingsRow({
       disabled={disabled}
       className={cn(
         "w-full flex items-center justify-between text-left",
-        "px-4 py-3.5",
+        "py-3.5",
         onClick && "hover:bg-muted/50 transition-colors cursor-pointer",
         disabled && "opacity-50 pointer-events-none",
         className

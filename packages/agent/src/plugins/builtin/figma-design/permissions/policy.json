@@ -1,0 +1,37 @@
+{
+  "defaultMode": "read",
+  "writeActionsRequireApproval": true,
+  "destructiveActionsRequireApproval": true,
+  "tiers": {
+    "read": [
+      "figma.get_metadata",
+      "figma.get_code",
+      "figma.get_image",
+      "figma.get_variable_defs",
+      "figma.list_files",
+      "figma.list_components",
+      "figma.list_styles",
+      "figma.list_variables"
+    ],
+    "draft": [],
+    "write": [],
+    "modify": [
+      "figma.create_comment",
+      "figma.create_annotation",
+      "figma.set_variable"
+    ],
+    "destructive": [
+      "figma.delete_node",
+      "figma.delete_file",
+      "figma.delete_variable"
+    ]
+  },
+  "notes": [
+    "Reading Figma files, frames, variables, and assets is automatic.",
+    "Writing comments and annotations back to Figma is modify-tier —",
+    "confirm before the first write and always surface the proposed",
+    "annotation text. Delete actions, if exposed by the server, are",
+    "destructive-tier. Unlisted actions are bumped one tier above the",
+    "conservative default per the design doc §6."
+  ]
+}

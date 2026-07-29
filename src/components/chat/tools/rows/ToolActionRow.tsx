@@ -1,6 +1,6 @@
 // ToolActionRow — router that decides which dedicated row file should
 // render a given tool action. Each tool name family (bash, duya_cli,
-// subagent, file edit/create, read, askuserquestion, memory, skill,
+// subagent, file edit/create, read, askuserquestion, skill,
 // read_module, task) routes to its own row file. Anything not handled
 // by a dedicated row falls through to the generic renderer (which
 // uses ToolResultRenderer to format the result payload).
@@ -41,7 +41,6 @@ import { SubAgentToolRow } from './SubAgentToolRow';
 import { FileEditToolRow } from './FileEditToolRow';
 import { ReadToolRow } from './ReadToolRow';
 import { AskUserQuestionResultRow } from './AskUserQuestionResultRow';
-import { MemoryToolRow } from './MemoryToolRow';
 import { MessageSessionToolRow } from './MessageSessionToolRow';
 import { SkillToolRow } from './SkillToolRow';
 import { ModuleToolRow } from './ModuleToolRow';
@@ -103,10 +102,6 @@ const ROUTES: RouteEntry[] = [
   {
     match: (t) => isAskUserQuestionTool(t.name),
     render: (tool) => <AskUserQuestionResultRow tool={tool} />,
-  },
-  {
-    match: (t) => t.name.toLowerCase() === 'memory',
-    render: (tool) => <MemoryToolRow tool={tool} />,
   },
   {
     // Skill row owns its own header (chrome), markdown rendering, and

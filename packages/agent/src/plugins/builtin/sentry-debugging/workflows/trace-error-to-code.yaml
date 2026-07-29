@@ -1,0 +1,46 @@
+id: trace-error-to-code
+name: Trace Error to Code
+description: >-
+  Map a Sentry stacktrace to the project's source files, identify the
+  root cause, and propose a fix without applying it.
+prompt: |
+  Trace the Sentry error below to the code that caused it.
+
+  Issue ID: {{issue_id}}
+  Event ID: {{event_id}}
+
+  Steps to follow:
+  1. Run the `stacktrace-analysis` skill. Call
+     `sentry.get_event(issue_id, event_id)` to read the full event
+     payload, including the stacktrace and breadcrumbs.
+  2. Filter the stacktrace frames to the project's own code. Drop
+     frames from `node_modules/`, vendor directories, and framework
+     internals unless they are the only frames. Use the `in_app`
+     flag when available.
+  3. For each in-app frame, read the file at the referenced line in
+     the local checkout. If the file/line doesn't match (line past
+     EOF, file missing), the release mapping is stale — call
+     `sentry.listCommits(organization, project, version)` to find
+     the exact commit and read the file at that revision.
+  4. Identify the root cause. Common patterns:
+     - Null deref / undefined access — read where the value should
+       have been set.
+     - Type error — read the function signature and the call site;
+       the call site is usually the bug.
+     - Network / external failure — read the error handler; the
+       unhandled case is the bug, not the network.
+     - Assertion / invariant — read what the assertion protected
+       and work backwards.
+  5. Propose a concrete fix in chat. Reference the file and line,
+     explain what's wrong, and show the proposed diff. Do NOT apply
+     the fix — hand off to `fix-and-verify` for the actual code
+     change and PR.
+
+  Constraint: do NOT assume the top frame is the bug. Read the full
+  in-app call chain before proposing a fix. Do NOT propose a fix
+  that just adds a try/catch around the failing code — that
+  suppresses the symptom without fixing the root cause.
+requiredCapabilities:
+  - mcp:sentry
+  - skill:stacktrace-analysis
+permissionTier: read

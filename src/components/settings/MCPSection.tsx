@@ -35,6 +35,7 @@ import {
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 
 interface MCPServerFormData {
   name: string;
@@ -158,6 +159,8 @@ export function MCPSection() {
     }
     return true;
   });
+
+  const availablePresetCount = PRESET_MCP_SERVERS.length;
 
   const validateForm = useCallback((): boolean => {
     const errors: Record<string, string> = {};
@@ -317,12 +320,12 @@ export function MCPSection() {
       <SettingsCard className="mb-4">
         <Button
           variant="ghost"
-          className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/50 transition-colors rounded-lg"
+          className="w-full py-3 flex items-center justify-between hover:bg-muted/50 transition-colors rounded-lg"
           onClick={() => setPresetExpanded(!presetExpanded)}
         >
           <span className="font-medium text-sm">Recommended MCP Servers</span>
           <span className="text-xs text-muted-foreground">
-            {PRESET_MCP_SERVERS.length} available
+            {availablePresetCount} available
             <span className="ml-2">{presetExpanded ? '▴' : '▾'}</span>
           </span>
         </Button>
@@ -352,12 +355,12 @@ export function MCPSection() {
               ))}
             </div>
             <div className="mb-3">
-              <input
+              <Input
                 type="text"
                 placeholder="Search presets..."
                 value={presetSearch}
                 onChange={(e) => setPresetSearch(e.target.value)}
-                className="w-full px-3 py-1.5 text-sm rounded-lg border bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50"
+                size="sm"
               />
             </div>
             <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -437,7 +440,7 @@ export function MCPSection() {
         <>
           {servers.map((server) => (
             <SettingsCard key={server.name} className="mb-4">
-              <div className="px-4 py-4">
+              <div className="py-4">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div
@@ -539,7 +542,7 @@ export function MCPSection() {
           </h3>
           {pluginMCPs.map((pmcp) => (
             <SettingsCard key={`${pmcp.pluginId}-${pmcp.name}`} className="mb-3">
-              <div className="px-4 py-4">
+              <div className="py-4">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600">
@@ -631,7 +634,7 @@ export function MCPSection() {
                     <Button
                       key={idx}
                       variant="ghost"
-                      className="w-full px-4 py-3 rounded-lg border border-border/50 hover:bg-muted transition-colors text-left"
+                      className="w-full py-3 rounded-lg border border-border/50 hover:bg-muted transition-colors text-left"
                       onClick={() => selectImportResult(cfg)}
                     >
                       <div className="font-medium">{cfg.name}</div>
@@ -697,7 +700,7 @@ export function MCPSection() {
                 <label className="block text-sm font-medium mb-1.5">
                   Server Name <span className="text-red-500">*</span>
                 </label>
-                <input
+                <Input
                   type="text"
                   placeholder="e.g., filesystem, github"
                   value={formData.name}
@@ -705,13 +708,7 @@ export function MCPSection() {
                     setFormData((prev) => ({ ...prev, name: e.target.value }))
                   }
                   disabled={!!editingServer}
-                  className={cn(
-                    "w-full px-3 py-2 rounded-lg border bg-surface text-foreground",
-                    "focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent",
-                    "disabled:opacity-50 disabled:cursor-not-allowed",
-                    "border-border/50",
-                    formErrors.name && "border-red-500 focus:ring-red-500/50 focus:border-red-500"
-                  )}
+                  error={!!formErrors.name}
                 />
                 {formErrors.name && (
                   <p className="text-sm text-red-500 mt-1">{formErrors.name}</p>
@@ -722,19 +719,14 @@ export function MCPSection() {
                 <label className="block text-sm font-medium mb-1.5">
                   Command <span className="text-red-500">*</span>
                 </label>
-                <input
+                <Input
                   type="text"
                   placeholder="e.g., npx, node, python"
                   value={formData.command}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, command: e.target.value }))
                   }
-                  className={cn(
-                    "w-full px-3 py-2 rounded-lg border bg-surface text-foreground",
-                    "focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent",
-                    "border-border/50",
-                    formErrors.command && "border-red-500 focus:ring-red-500/50 focus:border-red-500"
-                  )}
+                  error={!!formErrors.command}
                 />
                 {formErrors.command && (
                   <p className="text-sm text-red-500 mt-1">{formErrors.command}</p>
@@ -745,14 +737,13 @@ export function MCPSection() {
                 <label className="block text-sm font-medium mb-1.5">
                   Arguments (space-separated)
                 </label>
-                <input
+                <Input
                   type="text"
                   placeholder="e.g., -y @modelcontextprotocol/server-filesystem"
                   value={formData.args}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, args: e.target.value }))
                   }
-                  className="w-full px-3 py-2 rounded-lg border bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50"
                 />
               </div>
 

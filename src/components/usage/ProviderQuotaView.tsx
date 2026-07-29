@@ -7,6 +7,7 @@ import { listProvidersIPC } from "@/lib/ipc-client";
 import type { Provider as IpccProvider } from "@/lib/ipc-client";
 import { isQuotaSupported } from "@/lib/providers/canCheckQuota";
 import { ProviderQuotaCard, type ProviderQuotaState } from "./ProviderQuotaCard";
+import { Button } from "@/components/ui/Button";
 
 interface ProviderQuotaViewProps {
   onBack: () => void;
@@ -187,14 +188,14 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={onBack}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all"
           >
             <ArrowLeftIcon size={14} />
             {t("usage.backToUsage")}
-          </button>
+          </Button>
           <div>
             <h2 className="text-xl font-bold text-[var(--text)] font-[family-name:--font-copernicus]">
               {t("usage.providerQuotaTitle")}
@@ -202,15 +203,15 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
             <p className="text-sm text-[var(--muted)]">{t("usage.providerQuotaSubtitle")}</p>
           </div>
         </div>
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={handleRefresh}
           disabled={refreshing || supportedProviders.length === 0}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <ArrowsClockwiseIcon size={14} className={refreshing ? "animate-spin" : ""} />
           {refreshing ? t("usage.refreshing") : t("usage.refresh")}
-        </button>
+        </Button>
       </div>
 
       {/* Content */}

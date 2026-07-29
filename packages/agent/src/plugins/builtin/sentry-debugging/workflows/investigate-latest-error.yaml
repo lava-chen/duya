@@ -1,0 +1,39 @@
+id: investigate-latest-error
+name: Investigate Latest Production Error
+description: >-
+  Find the highest-impact unresolved Sentry issue, read its recent events
+  and breadcrumbs, and summarize the user-visible impact.
+prompt: |
+  Investigate the latest production error in Sentry.
+
+  Project: {{project}}
+  Time window: {{stats_period}}
+
+  Steps to follow:
+  1. Run the `issue-investigation` skill. Call `sentry.search_issues`
+     with `is:unresolved level:error environment:production`,
+     sorted by `last_seen`, limited to the time window above.
+  2. Take the top 1–3 issues. For each, call `sentry.get_issue` to
+     read the metadata: title, culprit, first seen, last seen, event
+     count, user count, status, assigned team.
+  3. For the top issue, call `sentry.list_issue_events(issue_id,
+     limit=5)` and read the most recent event. Inspect tags
+     (`environment`, `release`, `os`, `browser`), breadcrumbs
+     (the action sequence leading to the error), and the `request`
+     block (URL, method — redact any auth headers).
+  4. Summarize the investigation: the issue title, the user-visible
+     impact, the most likely trigger based on breadcrumbs, and the
+     tags that distinguish failing from healthy sessions.
+  5. Hand off to `stacktrace-analysis` for the code-level root cause
+     if the user wants to fix it. Do NOT resolve or ignore the issue
+     from this workflow — that requires destructive-tier
+     confirmation.
+
+  Constraint: do NOT paste raw breadcrumbs into the summary without
+  redacting obvious PII (email, phone, token prefixes). Do NOT
+  assume the top issue is the only issue — surface the top 3 so the
+  user can pick.
+requiredCapabilities:
+  - mcp:sentry
+  - skill:issue-investigation
+permissionTier: read

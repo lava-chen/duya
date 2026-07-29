@@ -1,0 +1,48 @@
+id: organize-conversation-to-doc
+name: Organize Conversation to Doc
+description: >-
+  Turn the current chat thread into a structured Notion doc under a
+  user-named parent page.
+prompt: |
+  Organize the current conversation into a Notion doc.
+
+  Parent page: {{parent_page}}
+  Title: {{title}}
+
+  Steps to follow:
+  1. Run the `research-documentation` skill. Identify the source
+     messages — confirm with the user which portion of the chat
+     thread is the source.
+  2. Verify the parent page via `notion.get_page(parent_page_id)`.
+     Confirm the integration has access to it; if not, ask the user
+     to share the page with the integration in Notion's share
+     dialog.
+  3. Structure the document:
+     - Title — action-oriented for investigations ("Investigation:
+       X failed because Y") or descriptive for research ("Research:
+       topic Z").
+     - TL;DR callout — 1–3 sentences, the answer up top.
+     - Background — the question and why it matters.
+     - Findings — one sub-heading per finding, with evidence from
+       the chat.
+     - Decisions — only if decisions were made; otherwise omit.
+     - Open questions — only if any; otherwise omit.
+     - References — links to source pages, commits, PRs, external
+       docs mentioned in the chat.
+  4. Draft the full block tree in chat before writing. Show the
+     user the proposed title, parent, and section outline. After
+     confirmation, call `notion.create_page(parent_id, properties,
+     children)` with the first 100 blocks. For longer docs, follow
+     with `notion.append_block_children(page_id, ...)` for the
+     rest.
+  5. Report the permalink back to chat so the user can jump to it.
+
+  Constraint: do NOT include sensitive content (PII, secrets,
+  internal identifiers) in the doc — Notion pages are shareable.
+  Do NOT edit the parent page's properties — only its children.
+  Do NOT create the page without showing the user the proposed
+  outline.
+requiredCapabilities:
+  - mcp:notion
+  - skill:research-documentation
+permissionTier: write

@@ -58,9 +58,17 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [204-provider-card-redesign](./completed/204-provider-card-redesign.md) | Provider Card UX 重做 — 在 Plan 203 4 层架构之上，对齐 cc-switch 卡片视觉（hover 操作区 + 右上角 Add + 测试/限额查询/删除 + 删诊断）— `ProvidersSection` 1066→246 LoC | P1 | Plan 204 done 2026-06-10 |
 | [205-provider-inline-edit-page](./active/205-provider-inline-edit-page.md) | Provider Inline Edit Page + Two-Step Add Flow — 用 settingsTab 子页面（picker → edit）替代 modal `ProviderConnectDialog`，store 驱动 | P1 | Phase A-F done, G in progress |
 
-### Plugin System Enhancement Plans (Claude Code Alignment)
+### Plugin Product Definition (五元组能力包)
 
-> Reference: [claude-code-haha plugin system comparison analysis](../design-docs/2026-05-28-plugin-system-comparison.md)
+> Design doc: [2026-07-29-plugin-product-definition.md](../design-docs/2026-07-29-plugin-product-definition.md) — Plugin = MCP/App Connection + Skills + Workflow Templates + Permissions + UI
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [311-plugin-workflow-templates](./active/311-plugin-workflow-templates.md) | Workflow Templates 一等公民 — manifest v2 `components.workflows` + 加载/摘要暴露 + 模板启动入口 + 五档权限联动 | P0 | Planning |
+| [312-app-connection-oauth](./active/312-app-connection-oauth.md) | App Connection 基础设施 — safeStorage token vault + loopback/PKCE OAuth + connector 工具暴露（Google/Slack/MS365） | P0 | Planning |
+| [313-first-party-plugin-catalog](./active/313-first-party-plugin-catalog.md) | 首发 12 个一方插件目录 — GitHub/Playwright P0 先行 + Remote MCP 批次（含 HTTP transport 前置）+ App Connection 批次 | P0 | Planning |
+
+### Plugin System Enhancement Plans (Claude Code Alignment)
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
@@ -125,16 +133,16 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 > Design doc: [docs/design-docs/2026-07-24-memory-architecture-v2-design.md](../../design-docs/2026-07-24-memory-architecture-v2-design.md)
 >
-> Parent design is the v2 revision (job_status 拆出 / source version / lease heartbeat+CAS / memory_entries 实体 / schema 修正 / projects workspace root / 取消根级 summary / provenance 下沉 / extractor 保时序 / scheduler 长在 main / projection outbox). Phase 1 ships in **shadow mode** — v2 writes only to its own SQLite + projection files; the existing `MemoryManager` / `MemoryReviewService` / Plan 104 hooks continue to serve the user unchanged. Migration to dual-write or full takeover is decided in a future plan after 4 weeks of shadow data.
+> Parent design is the v2 revision (job_status 拆出 / source version / lease heartbeat+CAS / memory_entries 实体 / provenance 下沉 / extractor 保时序 / scheduler 长在 main / projection outbox). The 2026-07-29 correction keeps project identity in SQLite but replaces UUID project folders with a bounded root `summary.md` and one unified, semantic `MEMORY.md` search projection.
 
 | Plan | Description | Priority | Status |
 | ------ | ------------ | -------- | ------ |
 | [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory DB co-located with `duya-main.db` (via `boot.json`) + migration runner + **migration 0001** (`projects` / `project_path_aliases` / `rollout_catalog`) + `ProjectResolver` (override > working_directory > cwd fallback; git never changes identity; UUID project_id) + `catalogSync` (transactional sync from `chat_sessions` + `messages`) | P0 | ✅ Complete 2026-07-25 |
 | [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | **Migration 0002** (`rollout_leases` / `rollout_retired` / `stage1_outputs`) + `lease.ts`: acquire / heartbeat (TTL/6) / CAS complete (vs. token / heartbeat / source version) / fail + backoff / retire at ≥10 attempts + `selectEligible` eligibility query. Concurrency-correct, idempotency-token-aware. | P0 | ✅ Complete 2026-07-25 |
-| [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | **Migration 0003** (create `projection_outbox` + `ALTER stage1_outputs ADD content_hash_at_write`) + `outbox.ts` (DB ↔ file atomicity sweeper, allowlisted paths, symlink-safe) + `reconcile.ts` (startup rebuild from DB; covers `rollout_summaries/*` and `raw_memories.md`). | P0 | ✅ Complete 2026-07-25 |
-| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Stage 1 extractor: `compactMessages` (chronological budgeted, preserves corrections/acceptances/exit codes/final artifacts per D9) + `prompt.ts` (per-candidate provenance, blocks external→preference per D8, Codex body structure) + `writer.ts` (Codex-shape filename `<YYYY-MM-DD>T<HH-MM-SS>-<shortid>-<slug>.md`, Codex-superset frontmatter, credential redaction) + `rawMemoriesProjection` (full-rebuild `raw_memories.md`) + `extractor.ts` (lease → compact → LLM → parse → complete; heartbeat TTL/6). | P0 | ✅ Complete 2026-07-26 |
+| [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | **Migration 0003** (create `projection_outbox` + `ALTER stage1_outputs ADD content_hash_at_write`) + `outbox.ts` (DB ↔ file atomicity sweeper, allowlisted paths, symlink-safe) + `reconcile.ts` (startup DB→file rebuild). Phase 2 retires the former `raw_memories.md` projection. | P0 | ✅ Complete 2026-07-25 |
+| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Stage 1 extractor: chronological compaction + per-candidate provenance + D8 guard + bounded five-item durable-value gate + controlled canonical-key taxonomy + explicit scope; rollout summaries remain the evidence projection. | P0 | ✅ Complete 2026-07-26 |
 | [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Long-lived `memory-worker.ts` in Electron main process; `DuyaAgent.startup()` fire-and-forget wakeup IPC; reconcile + outbox sweeper wiring; shadow-mode e2e suite (MockLLM, 11 tests; DB path resolved via `boot.json`); env-gated by `DUYA_MEMORY_V2_ENABLED` (default **off** until promotion plan). Phase E manual 30-min validation deferred. | P0 | ✅ Complete 2026-07-26 |
-| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory v2 Phase 2 — migration 0005 (`memory_entries` / `memory_evidence` / `memory_usage_events` / `phase2_runs`) + consolidator (global lock + dedupe by canonical_key + ad-hoc digestion) + `phase2_workspace_diff.md` + `memory_recall` tool + read-path promotion (`code.ts:65` swap from MemoryManager to v2). Closes shadow mode; deprecates legacy `MemoryManager` after 2-week migration window. | P0 | Planning |
+| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory v2 sustainable consolidation/retrieval — controlled extraction, alias dedupe, per-scope active caps, bounded `summary.md`, unified semantic `MEMORY.md`, and retirement of `projects/<UUID>` / `raw_memories.md`; Agent retrieval uses progressive `rg`, not a recall tool. | P0 | Implementation; live migration verification pending |
 | [307-code-review-workspace](./completed/307-code-review-workspace.md) | Read-only sidebar Code Review workspace: working tree vs `HEAD`, change navigator, unified/split diff, context folding, and DUYA review handoff. | P1 | ✅ Complete 2026-07-27 |
 | [308-turn-review-history](./active/308-turn-review-history.md) | Persisted per-chat-turn Git deltas, with the latest completed turn as the Code Review default. | P1 | In progress |
 | [309-button-unification](./active/309-button-unification.md) | Button Unification — shared `Button` + `IconButton` components with variant/size hierarchy; migrate 372 fragmented `<button>` call sites in phases, starting with inline-style anti-patterns | P1 | Phase 1 in progress |
@@ -233,7 +241,7 @@ Moved here when finished. Each includes:
 | [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory v2 Phase 1A — Memory state foundation + project registry + main-DB catalog sync (shadow mode; no production callers) | 2026-07-25 |
 | [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | Memory v2 Phase 1A.2 — migration 0002 + lease lifecycle (acquire / heartbeat / CAS complete / fail+backoff / retire) + `selectEligible` (shadow mode; no production callers) | 2026-07-25 |
 | [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | Memory v2 Phase 1A.3 — migration 0003 + projection outbox (DB ↔ file atomicity sweeper) + startup reconciliation (shadow mode; no production callers) | 2026-07-25 |
-| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Memory v2 Phase 1B — Stage 1 extractor (`compactMessages` + `prompt` + `writer` + `rawMemoriesProjection` + `extractor` lifecycle; 18 tests pass; D8 promotion guard enforced at parse time before any DB write; shadow mode, no production callers) | 2026-07-26 |
+| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Memory v2 Phase 1B — Stage 1 extractor (`compactMessages` + `prompt` + `writer` + `extractor` lifecycle; D8 promotion guard enforced before DB write). The former `rawMemoriesProjection` output was retired by the Phase 2 architecture correction. | 2026-07-26 |
 | [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Memory v2 Phase 1C — long-lived `memory-worker.ts` in Electron main + wakeup IPC + reconcile/outbox sweeper wiring + 11 shadow-mode e2e tests (MockLLM); closes the 3xx subsystem (first production caller). Phase E manual 30-min validation deferred; env-gated off. | 2026-07-26 |
 
 ## Tech Debt

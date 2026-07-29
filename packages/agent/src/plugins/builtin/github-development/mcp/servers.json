@@ -1,0 +1,15 @@
+{
+  "servers": [
+    {
+      "name": "github",
+      "command": "github-mcp-server",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${setup.githubToken}"
+      },
+      "envPassthrough": "allowlist",
+      "_status": "transitional",
+      "_migration": "Will migrate to GitHub official Remote MCP endpoint once Plan 313 Phase 2a lands the HTTP transport. Long-lived PATs are discouraged; prefer GitHub App installation tokens or OAuth tokens."
+    }
+  ]
+}

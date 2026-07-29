@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperati
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
+import { Button } from '@/components/ui/Button';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -443,9 +444,11 @@ function ChatMessageNavigator({
   return (
     <nav className="chat-message-navigator" aria-label="Message navigation">
       {items.map((item, index) => (
-        <button
+        <Button
           key={item.id}
           type="button"
+          variant="ghost"
+          size="sm"
           className={`chat-message-navigator-dot ${item.targetMessageId === activeMessageId ? 'active' : ''}`}
           onClick={() => onJump(item.targetMessageId)}
           aria-label={`Jump to message ${index + 1}`}
@@ -469,7 +472,7 @@ function ChatMessageNavigator({
               </span>
             )}
           </span>
-        </button>
+        </Button>
       ))}
     </nav>
   );
@@ -879,12 +882,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
       {hasMore && (
         <div className="flex justify-center p-4">
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={onLoadMore}
-            className="px-4 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-lg hover:bg-muted/30"
+            className="hover:bg-muted/30"
           >
             Load earlier messages
-          </button>
+          </Button>
         </div>
       )}
 

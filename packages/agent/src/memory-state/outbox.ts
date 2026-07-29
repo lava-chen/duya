@@ -260,6 +260,7 @@ function processOutboxRow(
   } else {
     try {
       fs.rmSync(row.target_path, { force: true });
+      pruneEmptyProjectionParents(row.target_path, allowedRoots);
     } catch (err) {
       recordFailure(db, row, now, maxAttempts, err);
       return;
@@ -272,6 +273,24 @@ function processOutboxRow(
      SET completed_at = ?, attempt_count = attempt_count + 1
      WHERE projection_id = ? AND completed_at IS NULL`
   ).run(now, row.projection_id);
+}
+
+/**
+ * Delete empty generated directories after a managed file is removed. The
+ * walk stops before every allowlisted root and never removes a non-empty
+ * directory, so user-owned files make the cleanup fail closed.
+ */
+function pruneEmptyProjectionParents(targetPath: string, allowedRoots?: string[]): void {
+  const roots = [defaultMemoryRoot(), ...(allowedRoots ?? [])].map((root) => path.resolve(root));
+  let current = path.dirname(path.resolve(targetPath));
+  while (isWithin(current, roots, false)) {
+    try {
+      fs.rmdirSync(current);
+    } catch {
+      return;
+    }
+    current = path.dirname(current);
+  }
 }
 
 function recordFailure(

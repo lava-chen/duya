@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { getInterruptedSessions } from "@/lib/agent-sse-client";
 import { useConversationStore } from "@/stores/conversation-store";
+import { Button } from "@/components/ui/Button";
 
 interface InterruptedSession {
   id: string;
@@ -114,33 +115,37 @@ export function InterruptedSessionBanner() {
               <span className="interrupted-banner-session-title" title={s.working_directory}>
                 {s.title || s.id}
               </span>
-              <button
+              <Button
+                variant="primary"
                 className="interrupted-banner-btn interrupted-banner-btn-primary"
                 onClick={() => handleContinue(s.id)}
               >
                 Continue
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 className="interrupted-banner-btn"
                 onClick={() => handleViewHistory(s.id)}
               >
                 View History
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
                 className="interrupted-banner-btn"
                 onClick={() => handleDismiss(s.id)}
               >
                 Dismiss
-              </button>
+              </Button>
             </div>
           ))}
           {sessions.length > 1 && (
-            <button
+            <Button
+              variant="ghost"
               className="interrupted-banner-btn interrupted-banner-dismiss-all"
               onClick={handleDismissAll}
             >
               Dismiss All
-            </button>
+            </Button>
           )}
         </div>
       </div>

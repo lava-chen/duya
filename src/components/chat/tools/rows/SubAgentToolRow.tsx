@@ -98,7 +98,6 @@ function getToolVerb(toolName?: string): string {
   if (SHELL_TOOLS.has(name)) return '执行命令';
   if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') return '浏览网页';
   if (name === 'task') return '操作任务';
-  if (name === 'memory') return '更新记忆';
   if (name === 'askuserquestion') return '询问用户';
   if (name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') return '运行 CLI';
   if (name === 'agent' || name === 'subagent' || name === 'sub_agent') return '运行子代理';

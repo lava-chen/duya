@@ -1,0 +1,44 @@
+name: review-current-pr
+description: Review the pull request on the current branch — read the diff, draft inline and summary comments, submit a review.
+plugin: com.duya.github-development
+trigger:
+  natural: "review this PR" / "what do you think of the current PR"
+  event:
+    - type: pull_request.opened
+    - type: pull_request.ready_for_review
+skills:
+  - repository-exploration
+  - pull-request-review
+steps:
+  - id: detect-pr
+    tool: pull_requests.list
+    inputs:
+      head: ${git.current_branch}
+      state: open
+    output: pr
+  - id: fetch-diff
+    tool: pull_requests.get_diff
+    inputs:
+      number: ${pr.number}
+    output: diff
+  - id: read-context
+    skill: repository-exploration
+    using: ${pr.base.ref}
+    output: code_map
+  - id: draft-review
+    skill: pull-request-review
+    using:
+      pr: ${pr}
+      diff: ${diff}
+      code_map: ${code_map}
+    output: review
+  - id: submit-review
+    tool: pull_requests.create_review
+    inputs:
+      event: ${review.event}
+      body: ${review.body}
+      comments: ${review.comments}
+    confirm: write
+permissions:
+  read: [pull_requests.get, pull_requests.get_diff, pull_requests.list_reviews, pull_requests.list_comments]
+  write: [pull_requests.create_review]

@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { Button } from '@/components/ui/Button';
 
 interface WidgetErrorBoundaryProps {
   children: React.ReactNode;
@@ -50,13 +51,14 @@ export class WidgetErrorBoundary extends React.Component<
           </p>
           {this.props.widgetCode && (
             <div className="mt-2">
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={this.toggleSource}
                 className="text-[11px] text-[var(--accent)] hover:underline cursor-pointer"
               >
                 {this.state.showSource ? 'Hide source' : 'View source'}
-              </button>
+              </Button>
               {this.state.showSource && (
                 <pre className="mt-2 p-2 rounded bg-[var(--bg-canvas)] border border-[var(--border)] text-[11px] font-mono overflow-auto max-h-48 whitespace-pre-wrap">
                   {this.props.widgetCode}

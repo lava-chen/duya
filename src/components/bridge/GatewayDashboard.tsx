@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { GearSixIcon } from "@/components/icons";
+import { IconButton } from "@/components/ui/IconButton";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { GatewayStatusCard } from "./GatewayStatusCard";
@@ -44,13 +45,17 @@ export function GatewayDashboard() {
             <h1 className="gateway-dashboard-title">
               {t("gateway.title")}
             </h1>
-            <button
+            <IconButton
+              variant="default"
+              size="lg"
+              shape="square"
+              aria-label={t("gateway.settings")}
               className="gateway-settings-btn"
               onClick={handleSettingsClick}
               title={t("gateway.settings")}
             >
               <GearSixIcon size={18} />
-            </button>
+            </IconButton>
           </div>
 
           <GatewayStatusCard />

@@ -35,6 +35,7 @@ import { testProviderIPC, getOllamaModelsIPC, type OllamaModel } from "@/lib/ipc
 import { PresetIcon } from "./PresetIcon";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 import { useApiKeyState } from "./forms/hooks/useApiKeyState";
 import { useBaseUrlState } from "./forms/hooks/useBaseUrlState";
 import { useModelSelection } from "./forms/hooks/useModelSelection";
@@ -514,22 +515,20 @@ export function ProviderConnectDialog({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">{t("provider.name")}</label>
-                <input
+                <Input
                   type="text"
                   value={presetDraft.draftLlmProvider?.name || ""}
                   onChange={(e) => presetDraft.setName(e.target.value)}
                   placeholder={preset.name}
-                  className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
                 />
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-muted-foreground">{t("provider.notes")}</label>
-                <input
+                <Input
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder={t("provider.notesPlaceholder")}
-                  className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50"
                 />
               </div>
             </div>
@@ -539,12 +538,12 @@ export function ProviderConnectDialog({
           {preset.fields.includes("base_url") && (
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Base URL</label>
-              <input
+              <Input
                 type="text"
                 value={baseUrlState.baseUrl}
                 onChange={(e) => baseUrlState.setBaseUrl(e.target.value)}
                 placeholder={preset.baseUrl}
-                className="w-full px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                className="font-mono"
               />
             </div>
           )}
@@ -555,30 +554,30 @@ export function ProviderConnectDialog({
               <label className="text-xs font-medium text-muted-foreground">
                 {preset.authStyle === "auth_token" ? "Auth Token" : "API Key"}
               </label>
-              <div className="flex gap-2">
-                <input
-                  type={apiKeyState.revealApiKey ? "text" : "password"}
-                  value={apiKeyState.apiKey}
-                  onChange={(e) => apiKeyState.setApiKey(e.target.value)}
-                  placeholder={
-                    apiKeyState.maskedApiKey
-                      ? t("provider.apiKeyKeepCurrent")
-                      : preset.authStyle === "auth_token"
-                        ? "token-..."
-                        : "sk-..."
-                  }
-                  className="flex-1 px-3 py-2 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
-                  autoFocus
-                />
-                <IconButton
-                  variant="default"
-                  size="sm"
-                  aria-label={apiKeyState.revealApiKey ? "Hide API key" : "Show API key"}
-                  onClick={apiKeyState.toggleReveal}
-                >
-                  {apiKeyState.revealApiKey ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
-                </IconButton>
-              </div>
+              <Input
+                type={apiKeyState.revealApiKey ? "text" : "password"}
+                value={apiKeyState.apiKey}
+                onChange={(e) => apiKeyState.setApiKey(e.target.value)}
+                placeholder={
+                  apiKeyState.maskedApiKey
+                    ? t("provider.apiKeyKeepCurrent")
+                    : preset.authStyle === "auth_token"
+                      ? "token-..."
+                      : "sk-..."
+                }
+                className="font-mono"
+                autoFocus
+                suffix={
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label={apiKeyState.revealApiKey ? "Hide API key" : "Show API key"}
+                    onClick={apiKeyState.toggleReveal}
+                  >
+                    {apiKeyState.revealApiKey ? <EyeSlashIcon size={14} /> : <EyeIcon size={14} />}
+                  </IconButton>
+                }
+              />
               <p className="text-[10px] text-muted-foreground">
                 {t("provider.authMethod")}:{" "}
                 {preset.authStyle === "auth_token"
@@ -616,16 +615,13 @@ export function ProviderConnectDialog({
               </div>
 
               <div className="relative">
-                <input
+                <Input
                   type="text"
                   value={modelName}
                   onChange={(e) => setModelName(e.target.value)}
                   placeholder={isOllamaPreset ? "llama3.2" : "ark-code-latest"}
-                  className={`w-full px-3 py-2 rounded-lg border text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono ${
-                    modelWarning
-                      ? "border-destructive/70 focus:ring-destructive/50"
-                      : "border-border/50"
-                  }`}
+                  className="font-mono"
+                  error={!!modelWarning}
                 />
 
                 {modelWarning && (
@@ -712,12 +708,13 @@ export function ProviderConnectDialog({
                 {t("provider.titleModel")}
               </label>
               <p className="text-[10px] text-muted-foreground">{t("provider.titleModelHint")}</p>
-              <input
+              <Input
                 type="text"
                 value={titleModel}
                 onChange={(e) => setTitleModel(e.target.value)}
                 placeholder="claude-3-5-haiku-20241022"
-                className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                size="sm"
+                className="font-mono"
               />
             </div>
           )}
@@ -748,32 +745,35 @@ export function ProviderConnectDialog({
                         <span className="text-xs text-muted-foreground text-right">
                           {t("provider.Sonnet")}
                         </span>
-                        <input
+                        <Input
                           type="text"
                           value={mapSonnet}
                           onChange={(e) => setMapSonnet(e.target.value)}
                           placeholder="claude-sonnet-4-6"
-                          className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                          size="sm"
+                          className="font-mono"
                         />
                         <span className="text-xs text-muted-foreground text-right">
                           {t("provider.Opus")}
                         </span>
-                        <input
+                        <Input
                           type="text"
                           value={mapOpus}
                           onChange={(e) => setMapOpus(e.target.value)}
                           placeholder="claude-opus-4-6"
-                          className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                          size="sm"
+                          className="font-mono"
                         />
                         <span className="text-xs text-muted-foreground text-right">
                           {t("provider.Haiku")}
                         </span>
-                        <input
+                        <Input
                           type="text"
                           value={mapHaiku}
                           onChange={(e) => setMapHaiku(e.target.value)}
                           placeholder="claude-haiku-4-5"
-                          className="w-full px-3 py-1.5 rounded-lg border border-border/50 text-sm bg-chip text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 font-mono"
+                          size="sm"
+                          className="font-mono"
                         />
                       </div>
                     </div>

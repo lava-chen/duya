@@ -2,7 +2,7 @@
  * Stage 1 extractor orchestration (Plan 304 Phase E, design v3 D2/D8/D9).
  *
  * Lifecycle: lease → compact → LLM → validate → write projection → complete
- * → rebuild raw_memories.md. Heartbeats every TTL/6 for the duration of
+ * → persist Stage 1 output. Heartbeats every TTL/6 for the duration of
  * the LLM call. Validation enforces the D8 promotion constraints BEFORE
  * any stage1_outputs row is written.
  *
@@ -27,7 +27,6 @@ import {
   redactCredentials,
   MAX_SUMMARY_CHARS,
 } from './writer.js';
-import { rebuildRawMemoriesProjection } from './rawMemoriesProjection.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -44,6 +43,13 @@ export interface ExtractInput {
   rolloutId: string;
   claimedBy: string;
   leaseTtlMs?: number;
+  /**
+   * Existing canonical_keys from `memory_entries`, injected into the user
+   * prompt so the LLM can reuse semantically equivalent keys instead of
+   * inventing new ones. When undefined, the extractor queries the memory
+   * DB itself; when explicitly null, the keys section is omitted.
+   */
+  existingKeys?: string[] | null;
 }
 
 export interface ExtractResult {
@@ -61,7 +67,7 @@ export interface ExtractResult {
 
 const VALID_JOB_STATUS = new Set(['succeeded', 'succeeded_no_output']);
 const VALID_CONTENT_OUTCOME = new Set(['success', 'partial', 'fail', 'uncertain']);
-const VALID_CLAIM_TYPE = new Set(['preference', 'fact', 'reference', 'procedure']);
+const VALID_CLAIM_TYPE = new Set(['preference', 'fact', 'reference', 'procedure', 'person', 'area']);
 const VALID_SOURCE_TYPE = new Set([
   'user_message',
   'local_tool_output',
@@ -82,6 +88,7 @@ export interface ParsedExtraction {
     items: Array<{
       claim: string;
       claim_type: string;
+      scope: 'global' | 'project';
       evidence: Array<{
         source_type: string;
         source_id: string;
@@ -175,6 +182,10 @@ export function parseAndValidate(response: string): ValidationResult {
   const seenKeys = new Set<string>();
   const validatedItems: ParsedExtraction['raw_memory']['items'] = [];
 
+  if (items.length > 5) {
+    return { valid: false, error: 'schema-violation' };
+  }
+
   for (const item of items) {
     if (typeof item !== 'object' || item === null) {
       return { valid: false, error: 'schema-violation' };
@@ -191,6 +202,11 @@ export function parseAndValidate(response: string): ValidationResult {
       return { valid: false, error: 'schema-violation' };
     }
 
+    const scope = itemObj.scope;
+    if (scope !== 'global' && scope !== 'project') {
+      return { valid: false, error: 'schema-violation' };
+    }
+
     const canonicalKey = itemObj.canonical_key;
     if (typeof canonicalKey !== 'string' || canonicalKey.length === 0) {
       return { valid: false, error: 'schema-violation' };
@@ -200,13 +216,28 @@ export function parseAndValidate(response: string): ValidationResult {
     }
     seenKeys.add(canonicalKey);
 
+    // Enforce canonical_key prefix for person/area claim types.
+    if (claimType === 'person' && !canonicalKey.startsWith('person:')) {
+      return { valid: false, error: 'invalid-promotion' };
+    }
+    if (claimType === 'area' && !canonicalKey.startsWith('area:')) {
+      return { valid: false, error: 'invalid-promotion' };
+    }
+    const expectedPrefix = `${claimType}:`;
+    if (!canonicalKey.startsWith(expectedPrefix)) {
+      return { valid: false, error: 'invalid-promotion' };
+    }
+    if ((claimType === 'person' || claimType === 'area') && scope !== 'global') {
+      return { valid: false, error: 'invalid-promotion' };
+    }
+
     const evidence = itemObj.evidence;
     if (!Array.isArray(evidence) || evidence.length === 0) {
       return { valid: false, error: 'schema-violation' };
     }
 
-    let hasExternalSource = false;
-    let hasUnverifiedAssistantOnly = false;
+    let externalSourceCount = 0;
+    let unverifiedAssistantCount = 0;
 
     for (const ev of evidence) {
       if (typeof ev !== 'object' || ev === null) {
@@ -229,26 +260,30 @@ export function parseAndValidate(response: string): ValidationResult {
         return { valid: false, error: 'schema-violation' };
       }
       if (EXTERNAL_SOURCE_TYPES.has(sourceType)) {
-        hasExternalSource = true;
+        externalSourceCount += 1;
       }
       if (sourceType === 'assistant_only' && (verification === 'none' || verification === undefined)) {
-        hasUnverifiedAssistantOnly = true;
+        unverifiedAssistantCount += 1;
       }
     }
 
-    // D8: external sources cannot become preference or procedure.
-    if (hasExternalSource && (claimType === 'preference' || claimType === 'procedure')) {
+    // D8: external-only evidence cannot become preference or procedure.
+    if (
+      externalSourceCount === evidence.length &&
+      (claimType === 'preference' || claimType === 'procedure')
+    ) {
       return { valid: false, error: 'invalid-promotion' };
     }
 
     // D8: unverified assistant-only claims cannot become preference.
-    if (hasUnverifiedAssistantOnly && claimType === 'preference') {
+    if (unverifiedAssistantCount === evidence.length && claimType === 'preference') {
       return { valid: false, error: 'invalid-promotion' };
     }
 
     validatedItems.push({
       claim,
       claim_type: claimType,
+      scope,
       evidence: evidence as ParsedExtraction['raw_memory']['items'][0]['evidence'],
       canonical_key: canonicalKey,
     });
@@ -367,6 +402,7 @@ export class Stage1Extractor {
         catalog,
         ttlMs,
         startTime,
+        input.existingKeys,
       );
     } finally {
       clearInterval(heartbeatInterval);
@@ -380,6 +416,7 @@ export class Stage1Extractor {
     catalog: CatalogMappingRow,
     _ttlMs: number,
     startTime: number,
+    existingKeysInput?: string[] | null,
   ): Promise<ExtractResult> {
     const elapsed = (): number => Date.now() - startTime;
     const { source_updated_at, source_content_hash } = leaseRow;
@@ -391,8 +428,23 @@ export class Stage1Extractor {
       sourceContentHash: source_content_hash,
     });
 
+    // 4b. Resolve existing canonical_keys for cross-session dedup.
+    // When existingKeysInput is undefined, query the memory DB; when null,
+    // omit the keys section entirely. This lets the worker pre-compute
+    // keys once per batch and pass them to all parallel extracts.
+    let existingKeysSection = '';
+    if (existingKeysInput !== null) {
+      const keys = existingKeysInput ?? this.queryExistingKeys();
+      if (keys.length > 0) {
+        existingKeysSection = `Existing canonical keys (reuse if semantically equivalent):\n${keys.map((k) => `- ${k}`).join('\n')}\n\n`;
+      }
+    }
+
     // 5. LLM call (streaming — avoids Anthropic's 10-min non-streaming limit).
     const userContent = STAGE1_USER_PROMPT_TEMPLATE.replace(
+      '{{existing_keys}}',
+      existingKeysSection,
+    ).replace(
       '{{compacted}}',
       compacted.lines.join('\n'),
     );
@@ -465,7 +517,6 @@ export class Stage1Extractor {
         return { status: 'stale_source', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: status };
       }
 
-      rebuildRawMemoriesProjection(this.memoryDb, { rootDir: this.opts?.rootDir });
       return { status: 'succeeded_no_output', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
     }
 
@@ -517,9 +568,6 @@ export class Stage1Extractor {
       return { status: 'stale_source', contentOutcome: data.content_outcome, projectionPath: writeResult.projectionPath, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: status };
     }
 
-    // 9. Rebuild raw_memories.md.
-    rebuildRawMemoriesProjection(this.memoryDb, { rootDir: this.opts?.rootDir });
-
     return { status: 'committed', contentOutcome: data.content_outcome, projectionPath: writeResult.projectionPath, stage1RowId: rolloutId, durationMs: elapsed() };
   }
 
@@ -528,6 +576,25 @@ export class Stage1Extractor {
    * inferred source_type (user→user_message, tool→local_tool_output,
    * assistant→assistant_only).
    */
+
+  /**
+   * Query active canonical_keys from `memory_entries` for cross-session
+   * dedup. Returns an empty array when the table does not exist (e.g.
+   * before migration 0005/0006). Guards against table-missing errors so
+   * the extractor degrades gracefully on fresh installs.
+   */
+  private queryExistingKeys(): string[] {
+    try {
+      const rows = this.memoryDb
+        .prepare("SELECT DISTINCT canonical_key FROM memory_entries WHERE status = 'active' ORDER BY canonical_key ASC")
+        .all() as Array<{ canonical_key: string }>;
+      return rows.map((r) => r.canonical_key);
+    } catch {
+      // Table missing (pre-migration) — no existing keys to reuse.
+      return [];
+    }
+  }
+
   private readMessages(sessionId: string): MessageEvent[] {
     const rows = this.mainDb
       .prepare(

@@ -9,6 +9,7 @@ import type { Provider } from "@/lib/ipc-client";
 import {
   SettingsSection,
   SettingsCard,
+  SettingsCardFooter,
 } from "@/components/settings/ui";
 import { Button } from "@/components/ui/Button";
 
@@ -311,17 +312,6 @@ export function ModelSelectionSection() {
 
   return (
     <div className="settings-section">
-      {/* Header */}
-      <div className="settings-header mb-6">
-        <h2 className="settings-title-copernicus text-xl flex items-center gap-2">
-          <CpuIcon size={20} />
-          {t(tKey('settings.modelSelection')) || 'Model Selection'}
-        </h2>
-        <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-          {t(tKey('settings.modelSelectionDesc')) || 'Configure models for different tasks'}
-        </p>
-      </div>
-
       {/* Save Status */}
       {saveStatus && (
         <div className={`mb-4 p-3 rounded-lg text-sm ${
@@ -333,13 +323,13 @@ export function ModelSelectionSection() {
         </div>
       )}
 
-      {/* Model Selection Card */}
       <SettingsSection
-        title={t(tKey('settings.models')) || 'Models'}
-        description={t(tKey('settings.modelsDesc')) || 'Select models for different purposes'}
+        title={t(tKey('settings.modelSelection')) || 'Model Selection'}
+        description={t(tKey('settings.modelSelectionDesc')) || 'Configure models for different tasks'}
+        icon={<CpuIcon size={20} />}
       >
         <SettingsCard>
-          <div className="space-y-6">
+          <div className="space-y-6 py-4">
             {/* Vision Model */}
             <ModelSelectorRow
               label={t(tKey('settings.visionModel')) || 'Vision Model'}
@@ -381,8 +371,7 @@ export function ModelSelectionSection() {
             />
           </div>
 
-          {/* Save Button */}
-          <div className="flex items-center justify-end mt-6 pt-4 border-t" style={{ borderColor: 'var(--border)' }}>
+          <SettingsCardFooter>
             <Button
               variant="primary"
               size="sm"
@@ -394,28 +383,25 @@ export function ModelSelectionSection() {
               ) : null}
               {saving ? (t(tKey('settings.saving')) || 'Saving...') : (t(tKey('settings.save')) || 'Save')}
             </Button>
-          </div>
+          </SettingsCardFooter>
         </SettingsCard>
       </SettingsSection>
 
-      {/* Info Card */}
-      <div
-        className="p-4 rounded-xl mt-6"
-        style={{
-          backgroundColor: 'var(--surface)',
-          border: '1px solid var(--border)',
-        }}
+      <SettingsSection
+        title={t(tKey('settings.modelSelectionHowItWorks')) || 'How it works'}
+        description="Details about model selection"
       >
-        <h4 className="text-xs font-semibold mb-2" style={{ color: 'var(--text)' }}>
-          {t(tKey('settings.modelSelectionHowItWorks')) || 'How it works'}
-        </h4>
-        <ul className="space-y-1.5 text-xs" style={{ color: 'var(--muted)' }}>
-          <li>• {t(tKey('settings.modelSelectionInfo1')) || 'Vision Model: Analyzes images and extracts descriptions'}</li>
-          <li>• {t(tKey('settings.modelSelectionInfo2')) || 'Gateway Model: Handles external channel interactions'}</li>
-          <li>• {t(tKey('settings.modelSelectionInfo3')) || 'Title Generation: Automatically generates conversation titles'}</li>
-          <li>• {t(tKey('settings.modelSelectionInfo4')) || 'Embedding Model: Used for semantic search and retrieval (coming soon)'}</li>
-        </ul>
-      </div>
+        <SettingsCard divided={false}>
+          <div className="py-4">
+            <ul className="space-y-2 text-sm text-muted-foreground">
+              <li>• {t(tKey('settings.modelSelectionInfo1')) || 'Vision Model: Analyzes images and extracts descriptions'}</li>
+              <li>• {t(tKey('settings.modelSelectionInfo2')) || 'Gateway Model: Handles external channel interactions'}</li>
+              <li>• {t(tKey('settings.modelSelectionInfo3')) || 'Title Generation: Automatically generates conversation titles'}</li>
+              <li>• {t(tKey('settings.modelSelectionInfo4')) || 'Embedding Model: Used for semantic search and retrieval (coming soon)'}</li>
+            </ul>
+          </div>
+        </SettingsCard>
+      </SettingsSection>
     </div>
   );
 }

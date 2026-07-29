@@ -1,17 +1,24 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon } from "@/components/icons";
+import { useMemo, useState, useEffect, useCallback } from "react";
+import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon, ArrowRightIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/utils";
-import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay } from "@/lib/plugin-types";
+import { getPluginAPI } from "@/lib/plugin-ipc";
+import { dispatchPrefillChatInput } from "@/lib/prefill-chat-input-event";
+import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay, CapabilityIndexItem } from "@/lib/plugin-types";
+import type { WorkflowTemplate, WorkflowTemplateSummary } from "@duya/plugin-core";
+import { instantiateWorkflow, extractVariables, WorkflowInstantiateError, getTemplatePrompt } from "@duya/plugin-core";
+import { tierRequiresConfirmation, tierRequiresExplicitConfirmation, bumpPermissionTier } from "@duya/plugin-core";
 import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
 import {
   buildIncludes,
   getUsageExamples,
   getKindIconClass,
   getKindFirstLetter,
+  getWorkflows,
+  getPermissionTierDisplay,
 } from "./capability-adapter";
 
 interface PluginDetailViewProps {
@@ -22,6 +29,12 @@ interface PluginDetailViewProps {
   onDisable: () => void;
   onRemove: () => void;
   busy: boolean;
+  /**
+   * Plan 311 — called after a workflow template is instantiated and
+   * the prefill event has been dispatched. The parent navigates to
+   * the chat view so `MessageInput` can consume the pending prefill.
+   */
+  onLaunchWorkflow?: (prompt: string) => void;
 }
 
 function buildCapabilities(
@@ -36,6 +49,10 @@ function buildCapabilities(
   if (!manifest) return [];
 
   const items: PluginCapabilityDisplay[] = [];
+  // Plan 311 made `PluginManifest.capabilities` optional on v2 manifests;
+  // guard here so the detail view degrades to "no capabilities" instead of
+  // throwing when a v2 manifest has no `capabilities` block.
+  if (!manifest.capabilities) return items;
   if (manifest.capabilities.skills) {
     for (const s of manifest.capabilities.skills) {
       const skillPath = typeof s === "string" ? s : (s as { path: string }).path ?? "";
@@ -150,9 +167,105 @@ export function PluginDetailView({
   onDisable,
   onRemove,
   busy,
+  onLaunchWorkflow,
 }: PluginDetailViewProps) {
   const [techExpanded, setTechExpanded] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
+
+  // Plan 311 — workflow template discovery + launch state.
+  const [indexItem, setIndexItem] = useState<CapabilityIndexItem | null>(null);
+  const [launchingWorkflowId, setLaunchingWorkflowId] = useState<string | null>(null);
+  const [fullTemplate, setFullTemplate] = useState<WorkflowTemplate | null>(null);
+  const [variableValues, setVariableValues] = useState<Record<string, string>>({});
+  const [dangerConfirmed, setDangerConfirmed] = useState(false);
+  const [launchError, setLaunchError] = useState<string | null>(null);
+  const [launchLoading, setLaunchLoading] = useState(false);
+
+  const pluginApi = useMemo(() => getPluginAPI(), []);
+  const workflows = useMemo(() => getWorkflows(indexItem), [indexItem]);
+  const launchVariables = useMemo(
+    () => (fullTemplate ? extractVariables(fullTemplate) : []),
+    [fullTemplate],
+  );
+
+  // Fetch the capability index entry for this plugin so we can show
+  // workflow summaries. The index is the only source of workflow
+  // summaries in the renderer (Plan 241 progressive disclosure).
+  useEffect(() => {
+    if (!pluginApi) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await pluginApi.capabilityIndex();
+        if (cancelled) return;
+        if (res.success && res.data) {
+          const entry = res.data.find((item) => item.pluginId === installed.id) ?? null;
+          setIndexItem(entry);
+        }
+      } catch {
+        // Silent — workflows section just stays empty.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginApi, installed.id]);
+
+  const handleLaunchClick = useCallback(
+    async (workflowId: string) => {
+      if (!pluginApi) return;
+      setLaunchLoading(true);
+      setLaunchError(null);
+      try {
+        const res = await pluginApi.workflowGet({
+          pluginId: installed.id,
+          workflowId,
+        });
+        if (!res.success || !res.data) {
+          setLaunchError(res.error ?? "Failed to load workflow template");
+          return;
+        }
+        setFullTemplate(res.data);
+        setLaunchingWorkflowId(workflowId);
+        setVariableValues({});
+        setDangerConfirmed(false);
+      } catch (err) {
+        setLaunchError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setLaunchLoading(false);
+      }
+    },
+    [pluginApi, installed.id],
+  );
+
+  const handleLaunchConfirm = useCallback(() => {
+    if (!fullTemplate || !onLaunchWorkflow) return;
+    setLaunchError(null);
+    try {
+      const result = instantiateWorkflow(fullTemplate, { variables: variableValues });
+      dispatchPrefillChatInput(result.prompt);
+      onLaunchWorkflow(result.prompt);
+      // Reset launch state after successful handoff.
+      setLaunchingWorkflowId(null);
+      setFullTemplate(null);
+      setVariableValues({});
+      setDangerConfirmed(false);
+    } catch (err) {
+      if (err instanceof WorkflowInstantiateError) {
+        setLaunchError(err.message);
+      } else {
+        setLaunchError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }, [fullTemplate, variableValues, onLaunchWorkflow]);
+
+  const handleLaunchCancel = useCallback(() => {
+    setLaunchingWorkflowId(null);
+    setFullTemplate(null);
+    setVariableValues({});
+    setDangerConfirmed(false);
+    setLaunchError(null);
+  }, []);
 
   const entry = catalog || installed;
   const capabilities = useMemo(() => buildCapabilities(catalog, installed), [catalog, installed]);
@@ -350,6 +463,49 @@ export function PluginDetailView({
                       &ldquo;{example.prompt}&rdquo;
                     </p>
                   </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Plan 311 — Workflow Templates section */}
+          {workflows.length > 0 && (
+            <section className="space-y-3">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Workflows</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Pre-built task templates. Launch one to pre-fill the chat input — you can review
+                  and edit before sending.
+                </p>
+              </div>
+              <div className="space-y-2">
+                {workflows.map((wf) => (
+                  <WorkflowLaunchCard
+                    key={wf.id}
+                    workflow={wf}
+                    isLaunching={launchingWorkflowId === wf.id}
+                    fullTemplate={launchingWorkflowId === wf.id ? fullTemplate : null}
+                    launchVariables={launchingWorkflowId === wf.id ? launchVariables : []}
+                    variableValues={launchingWorkflowId === wf.id ? variableValues : {}}
+                    onVariableChange={(name, value) =>
+                      setVariableValues((prev) => ({ ...prev, [name]: value }))
+                    }
+                    dangerConfirmed={dangerConfirmed}
+                    onDangerConfirmChange={setDangerConfirmed}
+                    launchError={launchingWorkflowId === wf.id ? launchError : null}
+                    launchLoading={launchingWorkflowId === wf.id ? launchLoading : false}
+                    onLaunch={() => void handleLaunchClick(wf.id)}
+                    onConfirm={handleLaunchConfirm}
+                    onCancel={handleLaunchCancel}
+                    canConfirm={
+                      !!onLaunchWorkflow &&
+                      (launchingWorkflowId !== wf.id ||
+                        !tierRequiresExplicitConfirmation(
+                          bumpPermissionTier(fullTemplate?.permissionTier ?? wf.permissionTier),
+                        ) ||
+                        dangerConfirmed)
+                    }
+                  />
                 ))}
               </div>
             </section>
@@ -641,6 +797,179 @@ export function PluginDetailView({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Plan 311 — WorkflowLaunchCard
+// ----------------------------------------------------------------------------
+
+interface WorkflowLaunchCardProps {
+  workflow: WorkflowTemplateSummary;
+  isLaunching: boolean;
+  fullTemplate: WorkflowTemplate | null;
+  launchVariables: string[];
+  variableValues: Record<string, string>;
+  onVariableChange: (name: string, value: string) => void;
+  dangerConfirmed: boolean;
+  onDangerConfirmChange: (confirmed: boolean) => void;
+  launchError: string | null;
+  launchLoading: boolean;
+  onLaunch: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  canConfirm: boolean;
+}
+
+function WorkflowLaunchCard({
+  workflow,
+  isLaunching,
+  fullTemplate,
+  launchVariables,
+  variableValues,
+  onVariableChange,
+  dangerConfirmed,
+  onDangerConfirmChange,
+  launchError,
+  launchLoading,
+  onLaunch,
+  onConfirm,
+  onCancel,
+  canConfirm,
+}: WorkflowLaunchCardProps) {
+  const tierDisplay = getPermissionTierDisplay(workflow.permissionTier);
+  const effectiveTier = bumpPermissionTier(workflow.permissionTier);
+  const requiresConfirmation = tierRequiresConfirmation(effectiveTier);
+  const requiresExplicit = tierRequiresExplicitConfirmation(effectiveTier);
+
+  return (
+    <div className="rounded-xl border border-border/40 bg-surface/35 px-4 py-3">
+      {/* Summary row — always visible */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-foreground">{workflow.name}</span>
+            <span
+              className={cn(
+                "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase",
+                tierDisplay.badgeClass,
+              )}
+            >
+              {tierDisplay.label}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">{workflow.description}</p>
+        </div>
+        {!isLaunching && (
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={launchLoading}
+            onClick={onLaunch}
+          >
+            {launchLoading ? "Loading…" : "Launch"}
+            {!launchLoading && <ArrowRightIcon size={14} />}
+          </Button>
+        )}
+      </div>
+
+      {/* Launch panel — visible when launching */}
+      {isLaunching && (
+        <div className="mt-3 space-y-3 border-t border-border/30 pt-3">
+          {/* Required capabilities */}
+          {fullTemplate && fullTemplate.requiredCapabilities.length > 0 && (
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Required capabilities
+              </p>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {fullTemplate.requiredCapabilities.map((cap) => (
+                  <span
+                    key={cap}
+                    className="rounded border border-border/50 bg-background/60 px-2 py-0.5 text-xs font-mono text-foreground/70"
+                  >
+                    {cap}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Variable inputs */}
+          {launchVariables.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                Variables
+              </p>
+              {launchVariables.map((varName) => (
+                <div key={varName} className="flex flex-col gap-1">
+                  <label className="text-xs text-foreground" htmlFor={`wf-var-${varName}`}>
+                    {varName}
+                  </label>
+                  <input
+                    id={`wf-var-${varName}`}
+                    type="text"
+                    value={variableValues[varName] ?? ""}
+                    onChange={(e) => onVariableChange(varName, e.target.value)}
+                    className="rounded-lg border border-border/50 bg-background/60 px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent/50"
+                    placeholder={`Enter ${varName}…`}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Permission tier warning */}
+          {requiresConfirmation && (
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-600 dark:text-amber-400">
+              This workflow has a <strong>{tierDisplay.label}</strong> permission tier.
+              {" "}
+              {requiresExplicit
+                ? "Confirm the checkbox below before launching."
+                : "Review the pre-filled prompt carefully before sending."}
+            </div>
+          )}
+
+          {/* Danger confirmation checkbox */}
+          {requiresExplicit && (
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={dangerConfirmed}
+                onChange={(e) => onDangerConfirmChange(e.target.checked)}
+                className="h-4 w-4 rounded border-border"
+              />
+              <span>
+                I understand this workflow may make dangerous changes. Confirm to proceed.
+              </span>
+            </label>
+          )}
+
+          {/* Error message */}
+          {launchError && (
+            <div className="rounded-lg border border-red-500/20 bg-red-500/[0.05] px-3 py-2 text-xs leading-5 text-red-500">
+              {launchError}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={!canConfirm}
+              onClick={onConfirm}
+            >
+              Start
+              <ArrowRightIcon size={14} />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

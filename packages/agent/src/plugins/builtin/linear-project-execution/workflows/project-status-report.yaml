@@ -1,0 +1,58 @@
+id: project-status-report
+name: Project Status Report
+description: >-
+  Read the current Linear project state and produce a status report for
+  stakeholders. Read-only.
+prompt: |
+  Produce a status report for the Linear project below.
+
+  Project: {{project_id}}
+  Window: {{window}}
+
+  Steps to follow:
+  1. Run the `implementation-status` skill. Read the project via
+     `linear.get_project(project_id)` to confirm the name,
+     description, target date, and current milestone.
+  2. Read the project's issues via `linear.list_issues(team_id,
+     project_id=<project_id>, limit=200)`. For each issue,
+     capture: state, assignee, estimate, priority, last update
+     time, `blocked_by` relations.
+  3. Read the project's milestones via
+     `linear.list_project_milestones(project_id)` to identify the
+     current and upcoming milestones.
+  4. Aggregate the status:
+     - Count of issues per state.
+     - Sum of estimates per state.
+     - Completion % (done estimate / total estimate).
+     - List of blockers (with the blocking issue).
+     - List of stale issues (last update > 3 days ago).
+     - Milestone progress (current milestone completion %, target
+       date, days remaining).
+  5. Surface the report as:
+     - Top-level summary (project name, target date, completion %,
+       health call: "on track" / "at risk" / "behind").
+     - Per-milestone breakdown (name, target date, completion %,
+       days remaining).
+     - Per-state breakdown (count + estimate sum).
+     - Blockers section (each blocker + the blocking issue + the
+       blocking issue's owner).
+     - Stale issues section (each stale issue + last update + the
+       assignee).
+     - One-sentence health call with the underlying numbers.
+  6. Propose concrete next steps for each risk:
+     - For each blocker: surface the blocking issue and the owner.
+       Do NOT re-assign without confirmation.
+     - For each stale issue: propose a check-in. Do NOT post a
+       comment without confirmation.
+     - For a milestone at risk (target date < 1 week, completion
+       < 70%): surface the gap and propose dropping scope. Do NOT
+       move the target date without confirmation.
+
+  Constraint: do NOT post comments or update issue state from
+  this workflow — those are write actions that require separate
+  confirmation. The report is read-only and meant for
+  stakeholders.
+requiredCapabilities:
+  - mcp:linear
+  - skill:implementation-status
+permissionTier: read

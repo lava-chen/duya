@@ -34,6 +34,12 @@ export type ExposeMode = 'always' | 'discoverable' | 'internal';
 export interface ToolMetaInput {
   inputSchemaSummary?: string;
   exposeMode?: ExposeMode;
+  /**
+   * Plan 312 Phase 4: risk tier for connector tools. When present,
+   * the permission gate applies tier-based gating before the
+   * mode-based bypass check. See `riskTierPermissions.ts`.
+   */
+  riskTier?: import('../permissions/riskTierPermissions.js').RiskTier;
 }
 
 /**
@@ -62,7 +68,7 @@ interface RegisteredTool {
    * `exposeMode: 'always'` by the prompt builder and the search
    * scorer — preserves backward compatibility.
    */
-  meta?: { inputSchemaSummary?: string; exposeMode?: ExposeMode };
+  meta?: { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/riskTierPermissions.js').RiskTier };
 }
 
 /**
@@ -339,7 +345,7 @@ export class ToolRegistry {
    * shape stored via the third `meta` argument of `register`, or
    * `undefined` for tools registered without explicit metadata.
    */
-  getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode } | undefined {
+  getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/riskTierPermissions.js').RiskTier } | undefined {
     return this.tools.get(name)?.meta;
   }
 

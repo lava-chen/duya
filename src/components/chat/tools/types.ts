@@ -69,7 +69,6 @@ export type SummaryCategoryKey =
   | 'browser'
   | 'agent'
   | 'ask'
-  | 'memory'
   | 'skill'
   | 'module'
   | 'tasks'

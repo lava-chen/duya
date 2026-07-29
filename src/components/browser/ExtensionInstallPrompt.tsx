@@ -4,6 +4,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { Button } from '@/components/ui/Button';
+import { IconButton } from '@/components/ui/IconButton';
 import { 
   XIcon, 
   ChromeIcon, 
@@ -204,19 +206,14 @@ export function ExtensionInstallPrompt({
               </p>
             </div>
           </div>
-          <button
+          <IconButton
+            variant="default"
+            size="md"
+            aria-label="Close"
             onClick={onClose}
-            className="p-2 rounded-lg transition-colors"
-            style={{ color: 'var(--muted)' }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = 'transparent')
-            }
           >
             <XIcon size={18} />
-          </button>
+          </IconButton>
         </div>
 
         {/* Content */}
@@ -326,15 +323,17 @@ export function ExtensionInstallPrompt({
 
           {/* Chrome Web Store Button - Primary */}
           {!showManualInstall && (
-            <button
+            <Button
+              variant="primary"
+              size="lg"
               onClick={handleOpenChromeStore}
-              className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 mb-4"
+              className="w-full rounded-xl gap-2.5 py-3 text-sm hover:opacity-90 mb-4"
               style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
             >
               <ChromeIcon size={18} />
               {t('extensionInstall.openChromeStore') || 'Install from Chrome Web Store'}
               <ExternalLinkIcon size={14} />
-            </button>
+            </Button>
           )}
 
           {/* Manual Install Section */}
@@ -355,22 +354,27 @@ export function ExtensionInstallPrompt({
                   >
                     {extensionPath || '...'}
                   </code>
-                  <button
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label="Copy path"
                     onClick={handleCopyPath}
-                    className="shrink-0 p-1.5 rounded-lg transition-colors"
-                    style={{ color: copyFeedback ? 'var(--accent)' : 'var(--muted)' }}
+                    className="shrink-0"
+                    style={{ color: copyFeedback ? 'var(--accent)' : undefined }}
                     title={copyFeedback ? 'Copied!' : 'Copy path'}
                   >
                     <CopyIcon size={14} />
-                  </button>
-                  <button
+                  </IconButton>
+                  <IconButton
+                    variant="default"
+                    size="sm"
+                    aria-label="Open folder"
                     onClick={handleOpenFolder}
-                    className="shrink-0 p-1.5 rounded-lg transition-colors"
-                    style={{ color: 'var(--muted)' }}
+                    className="shrink-0"
                     title="Open folder"
                   >
                     <FolderOpenIcon size={14} />
-                  </button>
+                  </IconButton>
                 </div>
                 {copyFeedback && (
                   <p className="text-[10px] mt-1" style={{ color: 'var(--accent)' }}>
@@ -379,32 +383,26 @@ export function ExtensionInstallPrompt({
                 )}
               </div>
 
-              <button
+              <Button
+                variant="primary"
+                size="lg"
                 onClick={handleOpenExtensions}
-                className="w-full flex items-center justify-center gap-2.5 px-6 py-3 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 mb-4"
+                className="w-full rounded-xl gap-2.5 py-3 text-sm hover:opacity-90 mb-4"
                 style={{ background: 'linear-gradient(140deg, #5f71ff, #7286ff)' }}
               >
                 <ChromeIcon size={18} />
                 {t('extensionInstall.openChrome') || 'Open Chrome Extensions'}
                 <ArrowRightIcon size={14} />
-              </button>
+              </Button>
             </>
           )}
 
           {/* Toggle between store and manual install */}
-          <button
+          <Button
+            variant="secondary"
+            size="md"
             onClick={() => setShowManualInstall(!showManualInstall)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs transition-colors"
-            style={{ 
-              color: 'var(--muted)',
-              backgroundColor: 'var(--surface)',
-            }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = 'var(--surface)')
-            }
+            className="w-full text-xs text-[var(--muted)]"
           >
             <ChevronDownIcon 
               size={14} 
@@ -417,7 +415,7 @@ export function ExtensionInstallPrompt({
               ? (t('extensionInstall.useStoreInstall') || 'Install from Chrome Web Store instead')
               : (t('extensionInstall.useManualInstall') || 'Can\'t access store? Use manual install')
             }
-          </button>
+          </Button>
         </div>
 
         {/* Footer */}
@@ -427,29 +425,25 @@ export function ExtensionInstallPrompt({
         >
           <div className="flex items-center gap-2">
             {onDontShowAgain && (
-              <button
+              <Button
+                variant="ghost"
+                size="sm"
                 onClick={onDontShowAgain}
-                className="text-[11px] transition-colors hover:opacity-80"
-                style={{ color: 'var(--muted)' }}
+                className="text-[11px]"
               >
                 {t('extensionInstall.dontShowAgain') || 'Don\'t show again'}
-              </button>
+              </Button>
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={onClose}
-              className="px-4 py-2 rounded-lg text-xs transition-colors"
-              style={{ color: 'var(--muted)' }}
-              onMouseEnter={(e) =>
-                (e.currentTarget.style.backgroundColor = 'var(--surface-hover)')
-              }
-              onMouseLeave={(e) =>
-                (e.currentTarget.style.backgroundColor = 'transparent')
-              }
+              className="px-4 py-2"
             >
               {t('common.later') || 'Later'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>
@@ -492,30 +486,24 @@ export function ExtensionBanner({ onInstall, onDismiss }: ExtensionBannerProps) 
       </div>
       <div className="flex items-center gap-1 shrink-0">
         {onDismiss && (
-          <button
+          <IconButton
+            variant="default"
+            size="sm"
+            aria-label="Dismiss"
             onClick={onDismiss}
-            className="p-1.5 rounded-lg transition-colors"
-            style={{ color: 'var(--muted)' }}
-            onMouseEnter={(e) =>
-              (e.currentTarget.style.backgroundColor = 'rgba(94, 109, 255, 0.1)')
-            }
-            onMouseLeave={(e) =>
-              (e.currentTarget.style.backgroundColor = 'transparent')
-            }
+            className="hover:bg-[rgba(94,109,255,0.1)]"
           >
             <XIcon size={14} />
-          </button>
+          </IconButton>
         )}
-        <button
+        <Button
+          variant="primary"
+          size="sm"
           onClick={onInstall}
-          className="px-3 py-1.5 rounded-lg text-xs transition-colors hover:opacity-90"
-          style={{
-            backgroundColor: 'var(--accent)',
-            color: '#fff',
-          }}
+          className="hover:opacity-90 hover:bg-accent"
         >
           {t('extensionInstall.install') || 'Install'}
-        </button>
+        </Button>
       </div>
     </div>
   );

@@ -135,7 +135,6 @@ vi.mock('../../packages/plugin-core/src', () => ({
       return false;
     }
   },
-  PluginSecretStore: class {},
   withPluginError: async (_pluginId: string, _action: string, fn: () => Promise<unknown>) => fn(),
 }));
 

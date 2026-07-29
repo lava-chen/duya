@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "duya.plugin.v2",
+  "id": "com.duya.github-development",
+  "name": "GitHub Development",
+  "version": "0.1.0",
+  "publisher": { "name": "Duya", "verified": true },
+  "categories": ["development"],
+  "components": {
+    "mcpServers": ["github"],
+    "appConnections": [],
+    "skills": [
+      "repository-exploration",
+      "issue-to-implementation",
+      "pull-request-review",
+      "fix-ci",
+      "release-notes"
+    ],
+    "workflows": [
+      "implement-issue",
+      "review-current-pr",
+      "analyze-ci-failure",
+      "generate-release-notes"
+    ]
+  },
+  "permissionPolicy": {
+    "defaultMode": "read",
+    "writeActionsRequireApproval": true,
+    "destructiveActionsRequireApproval": true
+  },
+  "setup": [
+    {
+      "id": "githubToken",
+      "label": "GitHub App installation token or OAuth token (long-lived PAT discouraged)",
+      "type": "secret",
+      "required": true
+    }
+  ],
+  "platforms": ["windows", "macos", "linux"],
+  "scope": ["user", "project", "workspace"]
+}

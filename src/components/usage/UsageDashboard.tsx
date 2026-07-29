@@ -10,6 +10,7 @@ import { UsageHeatmap } from './UsageHeatmap';
 import { SessionList } from './SessionList';
 import { ProviderQuotaView } from './ProviderQuotaView';
 import { ChartBarIcon, ArrowUpRightIcon, DownloadSimpleIcon } from '@/components/icons';
+import { Button } from '@/components/ui/Button';
 
 export const UsageDashboard: React.FC = () => {
   const { t } = useTranslation();
@@ -73,14 +74,15 @@ export const UsageDashboard: React.FC = () => {
           <p className="text-sm text-[var(--muted)]">{t('usage.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleExport}
             disabled={isExporting || !hasData}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-[var(--border)] text-xs font-medium text-[var(--muted)] hover:text-[var(--text)] hover:border-[var(--accent-soft)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <DownloadSimpleIcon size={14} />
             {t('usage.export')}
-          </button>
+          </Button>
         </div>
       </div>
 

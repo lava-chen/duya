@@ -1,0 +1,15 @@
+{
+  "servers": [
+    {
+      "name": "figma",
+      "command": "npx",
+      "args": ["-y", "figma-developer-mcp", "--stdio"],
+      "env": {
+        "FIGMA_API_KEY": "${setup.figmaApiKey}"
+      },
+      "envPassthrough": "allowlist",
+      "_status": "transitional",
+      "_migration": "Will migrate to the official Figma Remote MCP endpoint (https://mcp.figma.com/cmc) once Plan 313 Phase 2a lands the HTTP transport. Until then the stdio fallback wraps the Figma Dev Mode MCP Server; the personal access token is scoped to Dev Mode and rotated via Figma account settings."
+    }
+  ]
+}

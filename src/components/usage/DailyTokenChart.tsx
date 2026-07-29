@@ -3,6 +3,7 @@ import type { DailyUsageEntry } from '@/types/usage';
 import type { ChartMode, ChartStackMode } from '@/types/usage';
 import { useTranslation } from '@/hooks/useTranslation';
 import { formatNumber, formatCurrency } from '@/hooks/useUsageData';
+import { Button } from '@/components/ui/Button';
 
 interface DailyTokenChartProps {
   data: DailyUsageEntry[];
@@ -108,48 +109,56 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
         <h3 className="text-sm font-semibold text-[var(--text)]">{t('usage.dailyUsage')}</h3>
         <div className="flex gap-2">
           <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setMode('tokens')}
-              className={`px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-none px-3 py-1 ${
                 mode === 'tokens'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--muted)] hover:text-[var(--text)]'
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)] hover:text-white'
+                  : ''
               }`}
             >
               {t('usage.tokens')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setMode('cost')}
-              className={`px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-none px-3 py-1 ${
                 mode === 'cost'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--muted)] hover:text-[var(--text)]'
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)] hover:text-white'
+                  : ''
               }`}
             >
               {t('usage.cost')}
-            </button>
+            </Button>
           </div>
           <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setStackMode('total')}
-              className={`px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-none px-3 py-1 ${
                 stackMode === 'total'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--muted)] hover:text-[var(--text)]'
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)] hover:text-white'
+                  : ''
               }`}
             >
               {t('usage.totalBtn')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setStackMode('breakdown')}
-              className={`px-3 py-1 text-xs font-medium transition-colors ${
+              className={`rounded-none px-3 py-1 ${
                 stackMode === 'breakdown'
-                  ? 'bg-[var(--accent)] text-white'
-                  : 'text-[var(--muted)] hover:text-[var(--text)]'
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)] hover:text-white'
+                  : ''
               }`}
             >
               {t('usage.breakdown')}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

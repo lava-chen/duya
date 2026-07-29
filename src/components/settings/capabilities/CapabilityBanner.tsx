@@ -10,6 +10,7 @@
 
 import { useMemo } from "react";
 
+import { Button } from "@/components/ui/Button";
 import type {
   CapabilityDTO,
   CapabilityManagementSnapshot,
@@ -53,8 +54,8 @@ export function CapabilityBanner({ snapshot, mcpInventory, onOpenManage }: Capab
   const pluginCounts = useMemo(() => countEnabledPlugins(snapshot.plugins), [snapshot.plugins]);
 
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
       onClick={onOpenManage}
       className="w-full text-left rounded-xl border border-border/50 bg-surface/40 hover:bg-surface/60 transition-colors px-4 py-3 mb-3"
     >
@@ -91,7 +92,7 @@ export function CapabilityBanner({ snapshot, mcpInventory, onOpenManage }: Capab
           {pluginCounts.disabled} disabled plugin{pluginCounts.disabled === 1 ? "" : "s"} — capabilities hidden in the snapshot are listed under each disabled plugin.
         </div>
       ) : null}
-    </button>
+    </Button>
   );
 }
 

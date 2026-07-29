@@ -27,6 +27,7 @@ import {
 import { classifyAction } from './yoloClassifier.js'
 import { recordAutoModeDenial } from './autoModeDenials.js'
 import { isAutoModeAllowlistedTool } from './classifierDecision.js'
+import { riskTierToBehavior } from './riskTierPermissions.js'
 import type { LLMClient } from '../llm/base.js'
 import type { Message } from '../types.js'
 import { checkSecurity, isReadOnlyCommand } from '../tool/BashTool/BashTool.js'
@@ -313,6 +314,42 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
         },
         message: createPermissionRequestMessage(toolName),
       }
+    }
+
+    // 4.5 Plan 312 Phase 4: risk-tier gating for connector tools.
+    // Connector tools declare a `riskTier` (read/draft/write/modify/
+    // destructive). The tier is looked up via the context's
+    // `getToolRiskTier` callback (wired to ToolRegistry.getMeta).
+    // `write`/`modify` → ask; `destructive` → strong confirm that
+    // overrides bypassPermissions; `read`/`draft` → fall through to
+    // the normal flow. Missing tier → conservative bump to `write`.
+    const riskTier = appState.toolPermissionContext.getToolRiskTier?.(toolName);
+    if (riskTier !== undefined) {
+      const tierBehavior = riskTierToBehavior(riskTier, appState.toolPermissionContext.mode);
+      if (tierBehavior === 'strong-confirm') {
+        return {
+          behavior: 'ask',
+          message: `${toolName} is a destructive connector action and requires explicit confirmation.`,
+          decisionReason: {
+            type: 'safetyCheck',
+            reason: `riskTier=destructive requires strong confirmation regardless of permission mode.`,
+            classifierApprovable: false,
+          },
+        };
+      }
+      if (tierBehavior === 'ask') {
+        return {
+          behavior: 'ask',
+          message: createPermissionRequestMessage(toolName),
+          decisionReason: {
+            type: 'safetyCheck',
+            reason: `riskTier=${riskTier} requires confirmation before execution.`,
+            classifierApprovable: false,
+          },
+        };
+      }
+      // tierBehavior === undefined → fall through (read/draft or
+      // write/modify in bypass mode). The normal flow handles it.
     }
 
     // 5. Check mode-based permissions

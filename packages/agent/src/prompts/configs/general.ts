@@ -10,7 +10,8 @@
  * by volatility: global preferences first, then environment state,
  * then task-level constraints.
  *
- * Memory sections removed (under refactor).
+ * Memory section restored: guides the agent to read auto-generated memory
+ * projection files under ~/.duya/memory/ and use the Memory tool for writes.
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
@@ -42,6 +43,7 @@ import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSect
 import { getSessionGuidanceSection } from '../sections/dynamic/sessionGuidance.js'
 import { getVisionGuidelinesSection } from '../sections/dynamic/visionGuidelines.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
+import { getMemorySection } from '../sections/dynamic/memorySection.js'
 
 export const generalConfig: PromptSystemConfig = {
   name: 'general',
@@ -70,6 +72,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'mcp', compute: getMcpInstructionsSection, description: 'MCP servers can change' },
     { name: 'skills', compute: getSkillsMetadataSection, description: 'Skills can be loaded/unloaded' },
     { name: 'scratchpad', compute: getScratchpadSection, description: 'Scratchpad directory' },
+    { name: 'memory', compute: getMemorySection, description: 'Persistent memory projection files may have been updated since last turn' },
     { name: 'sessionSearch', compute: getSessionSearchSection, description: 'Past-session decisions may be relevant to the current task' },
     { name: 'recentSessions', compute: getRecentSessionsSection, description: 'Recent session metadata can change between turns' },
     // Task-level constraints

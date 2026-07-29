@@ -1,0 +1,20 @@
+{
+  "servers": [
+    {
+      "name": "supabase",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase",
+        "--access-token",
+        "${setup.supabaseAccessToken}",
+        "--project-ref",
+        "${setup.supabaseProjectRef}"
+      ],
+      "env": {},
+      "envPassthrough": "allowlist",
+      "_status": "transitional",
+      "_migration": "Supabase has not shipped an official Remote MCP endpoint as of 2026-07. This stdio fallback wraps @supabase/mcp-server-supabase. When the remote transport (Plan 313 Phase 2a) lands and Supabase exposes a hosted endpoint, this plugin will migrate to it and exchange the personal access token for an OAuth flow."
+    }
+  ]
+}

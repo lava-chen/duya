@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "duya.plugin.v2",
+  "id": "com.duya.vercel-deployment",
+  "name": "Vercel Deployment",
+  "version": "0.1.0",
+  "publisher": { "name": "Duya", "verified": true },
+  "categories": ["development"],
+  "components": {
+    "mcpServers": ["vercel"],
+    "appConnections": [],
+    "skills": [
+      "deployment-inspection",
+      "log-diagnosis",
+      "preview-validation",
+      "production-release"
+    ],
+    "workflows": [
+      "diagnose-deployment-failure",
+      "create-and-validate-preview",
+      "analyze-web-analytics",
+      "promote-to-production"
+    ]
+  },
+  "permissionPolicy": {
+    "defaultMode": "read",
+    "writeActionsRequireApproval": true,
+    "destructiveActionsRequireApproval": true
+  },
+  "setup": [
+    {
+      "id": "vercelToken",
+      "label": "Vercel access token (scoped to the target team)",
+      "type": "secret",
+      "required": true
+    },
+    {
+      "id": "vercelTeamId",
+      "label": "Vercel team slug or ID",
+      "type": "text",
+      "required": true
+    }
+  ],
+  "platforms": ["windows", "macos", "linux"],
+  "scope": ["user", "project", "workspace"]
+}

@@ -371,4 +371,10 @@ export type ToolPermissionContext = {
   readonly awaitAutomatedChecksBeforeDialog?: boolean
   readonly prePlanMode?: PermissionMode
   readonly defaultWorkspaceDirectory?: string
+  /**
+   * Plan 312 Phase 4: optional lookup for connector tool risk tiers.
+   * Returns `undefined` for non-connector tools (no tier-based gating).
+   * The DuyaAgent wires this to `ToolRegistry.getMeta(name)?.riskTier`.
+   */
+  readonly getToolRiskTier?: (toolName: string) => import('./riskTierPermissions.js').RiskTier | undefined
 }

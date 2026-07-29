@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "duya.plugin.v2",
+  "id": "com.duya.linear-project-execution",
+  "name": "Linear Project Execution",
+  "version": "0.1.0",
+  "publisher": { "name": "Duya", "verified": true },
+  "categories": ["development"],
+  "components": {
+    "mcpServers": ["linear"],
+    "appConnections": [],
+    "skills": [
+      "issue-triage",
+      "spec-to-issues",
+      "sprint-planning",
+      "implementation-status",
+      "issue-to-code"
+    ],
+    "workflows": [
+      "generate-issues-from-spec",
+      "analyze-sprint-risks",
+      "complete-issue-and-pr",
+      "project-status-report"
+    ]
+  },
+  "permissionPolicy": {
+    "defaultMode": "read",
+    "writeActionsRequireApproval": true,
+    "destructiveActionsRequireApproval": true
+  },
+  "setup": [
+    {
+      "id": "linearApiKey",
+      "label": "Linear personal API key (scoped to read/write issues)",
+      "type": "secret",
+      "required": true
+    }
+  ],
+  "platforms": ["windows", "macos", "linux"],
+  "scope": ["user", "project", "workspace"]
+}

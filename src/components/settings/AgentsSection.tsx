@@ -26,6 +26,7 @@ import {
 } from "@/components/settings/ui";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
+import { Input } from "@/components/ui/Input";
 import {
   listAgentProfiles,
   type AgentProfile,
@@ -242,7 +243,7 @@ export function AgentsSection() {
       >
         <SettingsCard>
           {/* Selected favorites preview */}
-          <div className="px-4 py-3.5">
+          <div className="py-3.5">
             <label className="text-sm font-medium text-foreground block mb-2">
               {t("settings.agents.selectedAgents")}
               <span className="text-xs text-muted-foreground font-normal ml-2">
@@ -286,7 +287,7 @@ export function AgentsSection() {
           </div>
 
           {/* Available agents grid */}
-          <div className="px-4 py-3.5">
+          <div className="py-3.5">
             <label className="text-sm font-medium text-foreground block mb-3">
               {t("settings.agents.availableAgents")}
             </label>
@@ -410,16 +411,15 @@ export function AgentsSection() {
       >
         <SettingsCard>
           {(isCreatingStyle || editingStyle) ? (
-            <div className="px-4 py-4 space-y-3">
+            <div className="py-4 space-y-3">
               <div>
                 <label className="text-sm font-medium text-foreground block mb-1.5">
                   {t("outputStyles.name") || "Name"}
                 </label>
-                <input
+                <Input
                   type="text"
                   value={styleFormName}
                   onChange={(e) => setStyleFormName(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-border/50 bg-surface text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent"
                   placeholder={t("outputStyles.namePlaceholder") || "Style name"}
                   disabled={styleSaving}
                 />
@@ -428,11 +428,10 @@ export function AgentsSection() {
                 <label className="text-sm font-medium text-foreground block mb-1.5">
                   {t("outputStyles.descriptionLabel") || "Description"}
                 </label>
-                <input
+                <Input
                   type="text"
                   value={styleFormDescription}
                   onChange={(e) => setStyleFormDescription(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-border/50 bg-surface text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent"
                   placeholder={t("outputStyles.descriptionPlaceholder") || "Optional description"}
                   disabled={styleSaving}
                 />
@@ -500,7 +499,7 @@ export function AgentsSection() {
               ) : (
                 <div className="divide-y divide-border/30">
                   {outputStyles.map((style) => (
-                    <div key={style.id} className="flex items-center justify-between px-4 py-3">
+                    <div key={style.id} className="flex items-center justify-between py-3">
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         <FeatherIcon size={18} className="text-muted-foreground shrink-0" />
                         <div className="min-w-0">

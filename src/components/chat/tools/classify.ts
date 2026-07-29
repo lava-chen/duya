@@ -176,9 +176,6 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (name === 'askuserquestion') {
     return { count: 1, categoryKey: 'ask' };
   }
-  if (name === 'memory') {
-    return { count: 1, categoryKey: 'memory' };
-  }
   if (name === 'skill') {
     return { count: 1, categoryKey: 'skill' };
   }

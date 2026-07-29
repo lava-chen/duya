@@ -3,9 +3,10 @@
  * D11/D12).
  *
  * This module is the single source of truth for what the L1 file
- * projection SHOULD contain for a given `stage1_outputs` row set:
- *   - `rollout_summaries/<derived-filename>.md` per row
- *   - `raw_memories.md` merged across rows that carry `raw_memory`
+ * projection SHOULD contain for a given DB state:
+ *   - `rollout_summaries/<derived-filename>.md` per Stage 1 row
+ *   - one bounded `summary.md` routing layer
+ *   - one unified `MEMORY.md` searchable layer
  *
  * `reconcile.ts` compares disk against these renderings; Plan 304's
  * writer will align to this module so the write path and the reconcile
@@ -124,149 +125,6 @@ export function renderRolloutSummaryFile(row: Stage1OutputRow): string {
 }
 
 // ---------------------------------------------------------------------------
-// raw_memories.md merged projection (Plan 304 Phase D, design v3 D7/D12)
-// ---------------------------------------------------------------------------
-
-/** Parsed shape of one `raw_memory` JSON evidence entry (loose: every
- * field optional so unparseable/partial items degrade gracefully). */
-interface RawMemoryEvidence {
-  source_type?: string;
-  source_id?: string;
-  verification?: string;
-}
-
-/** Parsed shape of one `raw_memory` JSON item. */
-interface RawMemoryItem {
-  canonical_key?: string;
-  claim?: string;
-  claim_type?: string;
-  evidence?: RawMemoryEvidence[];
-}
-
-/** Section titles in their deterministic document order. */
-const RAW_MEMORY_SECTIONS = ['Preference signals', 'Reusable knowledge', 'References'] as const;
-
-/** claim_type → section title; unknown types are dropped. */
-function sectionForClaimType(claimType: string | undefined): (typeof RAW_MEMORY_SECTIONS)[number] | null {
-  switch (claimType) {
-    case 'preference':
-      return 'Preference signals';
-    case 'fact':
-    case 'procedure':
-      return 'Reusable knowledge';
-    case 'reference':
-      return 'References';
-    default:
-      return null;
-  }
-}
-
-function formatEvidence(evidence: RawMemoryEvidence[] | undefined): string {
-  return (evidence ?? [])
-    .map(
-      (e) =>
-        `${e.source_type ?? ''} ${e.source_id ?? ''}` +
-        (e.verification ? ` [${e.verification}]` : '')
-    )
-    .join('; ');
-}
-
-/**
- * Parse `raw_memory` JSON into section-grouped items, preserving item
- * order within each group. Returns null when the JSON is missing,
- * unparseable, or has no `items` array (the caller still renders the
- * thread header and summary; only the sections are skipped).
- */
-function parseRawMemoryGroups(rawMemory: string | null): Map<string, RawMemoryItem[]> | null {
-  if (rawMemory == null) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawMemory);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const items = (parsed as { items?: unknown }).items;
-  if (!Array.isArray(items) || items.length === 0) return null;
-  const groups = new Map<string, RawMemoryItem[]>();
-  for (const item of items as RawMemoryItem[]) {
-    if (typeof item !== 'object' || item === null) continue;
-    const section = sectionForClaimType(item.claim_type);
-    if (section === null) continue;
-    const list = groups.get(section);
-    if (list) {
-      list.push(item);
-    } else {
-      groups.set(section, [item]);
-    }
-  }
-  return groups;
-}
-
-/**
- * Merged projection of ALL Stage 1 outputs, including no-output
- * rollouts (Plan 304, design v3 D7: `raw_memories.md` is the Stage 1
- * output merge projection; a `succeeded_no_output` row still appears in
- * the thread listing so the file reflects that the rollout was
- * processed and will not be re-extracted).
- *
- * Rows are stably sorted by `thread_id` ASC, then `generated_at` ASC.
- * Returns null only when the table is empty (reconcile then treats an
- * existing file as stale and removes it). Rendering is pure: the same
- * rows always produce a byte-identical string.
- */
-export function renderRawMemoriesFile(rows: Stage1OutputRow[]): string | null {
-  if (rows.length === 0) return null;
-  const sorted = [...rows].sort((a, b) => {
-    if (a.thread_id < b.thread_id) return -1;
-    if (a.thread_id > b.thread_id) return 1;
-    return a.generated_at - b.generated_at;
-  });
-
-  const header = [
-    '# Raw Memories',
-    '',
-    '<!-- Merged Stage 1 projection. Rebuilt from memory-state.db:stage1_outputs. Do not edit. -->',
-  ].join('\n');
-
-  const threadBlocks = sorted.map((row) => {
-    const lines: string[] = [
-      `## Thread ${row.thread_id}`,
-      '',
-      `- rollout_id: ${row.rollout_id}`,
-      `- rollout_slug: ${row.rollout_slug}`,
-      `- job_status: ${row.job_status}`,
-      `- content_outcome: ${row.content_outcome ?? 'null'}`,
-      `- generated_at: ${new Date(row.generated_at).toISOString()}`,
-      `- source_content_hash: ${row.source_content_hash}`,
-      '',
-    ];
-    if (row.job_status === 'succeeded_no_output') {
-      lines.push('_No durable knowledge extracted from this rollout._');
-    } else {
-      lines.push(row.rollout_summary ?? '');
-      const groups = parseRawMemoryGroups(row.raw_memory);
-      if (groups !== null) {
-        for (const section of RAW_MEMORY_SECTIONS) {
-          const items = groups.get(section);
-          if (!items || items.length === 0) continue;
-          lines.push('');
-          lines.push(`### ${section}`);
-          for (const item of items) {
-            lines.push(
-              `- **${item.canonical_key ?? ''}** — ${item.claim ?? ''} _(evidence: ${formatEvidence(item.evidence)})_`
-            );
-          }
-        }
-      }
-    }
-    return lines.join('\n');
-  });
-
-  return [header, ...threadBlocks].join('\n\n');
-}
-
-// ---------------------------------------------------------------------------
 // Phase 2 renderers (Plan 306 Phase B)
 // ---------------------------------------------------------------------------
 
@@ -277,7 +135,7 @@ export interface MemoryEntryRow {
   memory_id: string;
   scope: 'global' | 'project';
   project_id: string | null;
-  kind: 'preference' | 'fact' | 'reference' | 'procedure';
+  kind: 'preference' | 'fact' | 'reference' | 'procedure' | 'person' | 'area';
   canonical_key: string;
   content: string;
   version: number;
@@ -314,6 +172,14 @@ export interface Phase2Diff {
   timestamp: number;
 }
 
+/** Hard limits keep the always-read summary from growing with history. */
+export const MEMORY_SUMMARY_MAX_CHARS = 6_000;
+const MEMORY_SUMMARY_GLOBAL_LIMIT = 12;
+const MEMORY_SUMMARY_PROJECT_LIMIT = 16;
+const MEMORY_PROJECTION_PROJECT_LIMIT = 30;
+const MEMORY_SUMMARY_CLAIM_MAX_CHARS = 220;
+const MEMORY_SUMMARY_PATH_MAX_CHARS = 120;
+
 /** Codex MEMORY.md section titles in deterministic document order. */
 const MEMORY_FILE_SECTIONS = [
   'User preferences',
@@ -329,9 +195,8 @@ function kindToMemorySection(
       return 'User preferences';
     case 'fact':
     case 'procedure':
-      return 'Reusable knowledge';
     case 'reference':
-      return 'Failures and how to do differently';
+      return 'Reusable knowledge';
     default:
       return null;
   }
@@ -342,13 +207,10 @@ function maxUpdatedAt(entries: MemoryEntryRow[]): number {
   return entries.reduce((max, e) => (e.updated_at > max ? e.updated_at : max), 0);
 }
 
-function renderCodexMemoryFile(entries: MemoryEntryRow[], title: string): string {
+function renderCodexMemorySections(entries: MemoryEntryRow[], headingLevel = 2): string[] {
   const active = entries.filter((e) => e.status === 'active');
-  const lines: string[] = [
-    `# ${title}`,
-    '',
-    '<!-- Auto-generated by DUYA Memory v2 Phase 2. Do not edit. -->',
-  ];
+  const lines: string[] = [];
+  const heading = '#'.repeat(headingLevel);
 
   for (const section of MEMORY_FILE_SECTIONS) {
     const sectionEntries = active
@@ -356,7 +218,7 @@ function renderCodexMemoryFile(entries: MemoryEntryRow[], title: string): string
       .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
 
     lines.push('');
-    lines.push(`## ${section}`);
+    lines.push(`${heading} ${section}`);
 
     if (sectionEntries.length === 0) {
       lines.push('');
@@ -369,34 +231,125 @@ function renderCodexMemoryFile(entries: MemoryEntryRow[], title: string): string
     }
   }
 
+  return lines;
+}
+
+/**
+ * Human-readable project label. UUIDs remain DB identities and never leak
+ * into the Agent-facing projection.
+ */
+export function projectDisplayName(project: ProjectRow): string {
+  const normalized = project.canonical_root.replace(/[\\/]+$/, '');
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? project.canonical_root;
+}
+
+/**
+ * Render the single searchable `MEMORY.md` projection. Project scope is
+ * preserved as metadata and semantic headings, but no per-project files are
+ * created. This keeps `rg` retrieval simple without weakening isolation in
+ * the SQLite source of truth.
+ */
+export function renderUnifiedMemoryFile(
+  entries: MemoryEntryRow[],
+  projects: ProjectRow[]
+): string {
+  const active = entries.filter((entry) => entry.status === 'active');
+  const lines: string[] = [
+    '# Durable Memory',
+    '',
+    '<!-- Auto-generated by DUYA Memory v2. Do not edit. Search with rg; do not edit. -->',
+    '',
+    '## Global',
+  ];
+
+  lines.push(...renderCodexMemorySections(active.filter((entry) => entry.scope === 'global'), 3));
+
+  const projectsById = new Map(projects.map((project) => [project.project_id, project]));
+  const grouped = new Map<string, MemoryEntryRow[]>();
+  for (const entry of active) {
+    if (entry.scope !== 'project' || entry.project_id === null) continue;
+    const list = grouped.get(entry.project_id) ?? [];
+    list.push(entry);
+    grouped.set(entry.project_id, list);
+  }
+
+  const projectGroups = [...grouped.entries()]
+    .map(([projectId, projectEntries]) => ({
+      project: projectsById.get(projectId),
+      entries: projectEntries,
+    }))
+    .sort((a, b) =>
+      (b.project?.last_seen_at ?? 0) - (a.project?.last_seen_at ?? 0)
+    )
+    .slice(0, MEMORY_PROJECTION_PROJECT_LIMIT);
+
+  lines.push('');
+  lines.push('## Projects');
+  if (projectGroups.length === 0) {
+    lines.push('');
+    lines.push('_(none)_');
+  }
+
+  for (const group of projectGroups) {
+    const name = group.project ? projectDisplayName(group.project) : 'unknown project';
+    lines.push('');
+    lines.push(`### ${name}`);
+    if (group.project) {
+      lines.push(`Project root: \`${group.project.canonical_root}\``);
+    }
+    lines.push(...renderCodexMemorySections(group.entries, 4));
+  }
+
+  if (grouped.size > projectGroups.length) {
+    lines.push('');
+    lines.push(`_${grouped.size - projectGroups.length} older projects omitted; they return when opened again._`);
+  }
+
   return lines.join('\n');
 }
 
-/**
- * Render `global/MEMORY.md` — global-scope active entries in the Codex
- * MEMORY.md shape. Pure function; same input → byte-identical output.
- */
-export function renderGlobalMemoryFile(entries: MemoryEntryRow[]): string {
-  const global = entries.filter((e) => e.scope === 'global');
-  return renderCodexMemoryFile(global, 'Memory (Global)');
+function summaryPriority(entry: MemoryEntryRow): number {
+  if (entry.canonical_key.startsWith('ad-hoc:')) return 1_000;
+  switch (entry.kind) {
+    case 'preference':
+      return 500;
+    case 'procedure':
+      return 400;
+    case 'fact':
+      return 300;
+    case 'reference':
+      return 200;
+    default:
+      return 0;
+  }
+}
+
+function appendSummaryLine(lines: string[], line: string): boolean {
+  const nextLength = lines.reduce((total, value) => total + value.length + 1, 0) + line.length + 1;
+  if (nextLength > MEMORY_SUMMARY_MAX_CHARS) return false;
+  lines.push(line);
+  return true;
+}
+
+function compactSummaryText(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function compactSummaryPath(value: string): string {
+  if (value.length <= MEMORY_SUMMARY_PATH_MAX_CHARS) return value;
+  const side = Math.floor((MEMORY_SUMMARY_PATH_MAX_CHARS - 1) / 2);
+  return `${value.slice(0, side)}…${value.slice(-side)}`;
 }
 
 /**
- * Render `projects/<id>/MEMORY.md` — project-scoped active entries in
- * the Codex MEMORY.md shape.
+ * Render the bounded `summary.md` routing layer. It contains useful claims,
+ * not a linear dump of canonical keys, and its size is independent of the
+ * total number of memories after the configured caps are reached.
  */
-export function renderProjectMemoryFile(entries: MemoryEntryRow[], projectId: string): string {
-  const project = entries.filter(
-    (e) => e.scope === 'project' && e.project_id === projectId
-  );
-  return renderCodexMemoryFile(project, `Memory (Project ${projectId})`);
-}
-
-/**
- * Render `global/summary.md` — Codex v1 header + What's in Memory
- * grouped by project (global first, then each project with entries).
- */
-export function renderGlobalSummaryFile(
+export function renderMemorySummaryFile(
   entries: MemoryEntryRow[],
   projects: ProjectRow[]
 ): string {
@@ -409,87 +362,46 @@ export function renderGlobalSummaryFile(
     '',
     `Updated: ${updatedIso}`,
     '',
-    'This file is automatically generated by DUYA Memory v2. Do not edit.',
+    'This is a bounded routing summary. Search `MEMORY.md` for full details.',
     '',
-    "## What's in Memory",
+    '## Global essentials',
   ];
 
-  // Global section.
   const globalEntries = active
-    .filter((e) => e.scope === 'global')
-    .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
-  lines.push('');
-  lines.push(`### Global (${globalEntries.length} entries)`);
+    .filter((entry) => entry.scope === 'global' && kindToMemorySection(entry.kind) !== null)
+    .sort((a, b) => summaryPriority(b) - summaryPriority(a) || b.updated_at - a.updated_at)
+    .slice(0, MEMORY_SUMMARY_GLOBAL_LIMIT);
   if (globalEntries.length === 0) {
     lines.push('_(none)_');
   } else {
     for (const entry of globalEntries) {
-      lines.push(`- ${entry.canonical_key} [${entry.kind}]: ${entry.content}`);
+      const content = compactSummaryText(entry.content, MEMORY_SUMMARY_CLAIM_MAX_CHARS);
+      if (!appendSummaryLine(lines, `- [${entry.kind}] ${content}`)) break;
     }
   }
 
-  // Per-project sections (only projects with entries).
-  const projectIds = new Set(
-    active
-      .filter((e) => e.scope === 'project' && e.project_id !== null)
-      .map((e) => e.project_id as string)
-  );
-  const sortedProjects = projects
-    .filter((p) => projectIds.has(p.project_id))
-    .sort((a, b) => a.project_id.localeCompare(b.project_id));
-
-  for (const project of sortedProjects) {
-    const projectEntries = active
-      .filter((e) => e.scope === 'project' && e.project_id === project.project_id)
-      .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
-    lines.push('');
-    lines.push(`### Project ${project.project_id} (${projectEntries.length} entries)`);
-    lines.push(`- canonical_root: ${project.canonical_root}`);
-    for (const entry of projectEntries) {
-      lines.push(`- ${entry.canonical_key} [${entry.kind}]: ${entry.content}`);
+  lines.push('');
+  lines.push('## Project catalog');
+  const counts = new Map<string, number>();
+  for (const entry of active) {
+    if (entry.scope === 'project' && entry.project_id) {
+      counts.set(entry.project_id, (counts.get(entry.project_id) ?? 0) + 1);
     }
   }
-
-  return lines.join('\n');
-}
-
-/**
- * Render `projects/<id>/summary.md` — Codex v1 header + project-scoped
- * entries.
- */
-export function renderProjectSummaryFile(
-  entries: MemoryEntryRow[],
-  projectId: string
-): string {
-  const active = entries
-    .filter(
-      (e) =>
-        e.status === 'active' &&
-        e.scope === 'project' &&
-        e.project_id === projectId
-    )
-    .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
-  const updatedMs = maxUpdatedAt(active);
-  const updatedIso = updatedMs > 0 ? new Date(updatedMs).toISOString() : 'never';
-
-  const lines: string[] = [
-    '# Memory Summary',
-    '',
-    `Updated: ${updatedIso}`,
-    '',
-    `Project: ${projectId}`,
-    '',
-    'This file is automatically generated by DUYA Memory v2. Do not edit.',
-    '',
-    "## What's in Memory",
-  ];
-
-  if (active.length === 0) {
-    lines.push('_(none)_');
-  } else {
-    for (const entry of active) {
-      lines.push(`- ${entry.canonical_key} [${entry.kind}]: ${entry.content}`);
-    }
+  const catalog = projects
+    .filter((project) => counts.has(project.project_id))
+    .sort((a, b) => b.last_seen_at - a.last_seen_at)
+    .slice(0, MEMORY_SUMMARY_PROJECT_LIMIT);
+  let appendedProjects = 0;
+  for (const project of catalog) {
+    const root = compactSummaryPath(project.canonical_root);
+    const line = `- ${projectDisplayName(project)} — \`${root}\` (${counts.get(project.project_id)} memories)`;
+    if (!appendSummaryLine(lines, line)) break;
+    appendedProjects += 1;
+  }
+  const omitted = counts.size - appendedProjects;
+  if (omitted > 0) {
+    appendSummaryLine(lines, `- ${omitted} older projects omitted; search \`MEMORY.md\` by path or keyword.`);
   }
 
   return lines.join('\n');
@@ -538,5 +450,131 @@ export function renderPhase2WorkspaceDiff(diff: Phase2Diff): string {
     }
   }
 
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// People and Areas renderers (Migration 0006)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the slug from a person/area canonical_key.
+ * `person:zhang-san` -> `zhang-san`; `area:frontend-build` -> `frontend-build`.
+ * Returns null when the key does not match the expected prefix.
+ */
+export function personAreaSlug(canonicalKey: string): string | null {
+  if (canonicalKey.startsWith('person:')) return canonicalKey.slice('person:'.length);
+  if (canonicalKey.startsWith('area:')) return canonicalKey.slice('area:'.length);
+  return null;
+}
+
+/**
+ * Render `global/people/<slug>.md` — one file per person entry.
+ *
+ * The `content` field is produced by the consolidator's
+ * `mergePersonAreaContent` and already contains the `## Summary` +
+ * `## Details` body. This function adds the document title and the
+ * auto-generated marker.
+ */
+export function renderPersonFile(entries: MemoryEntryRow[], slug: string): string {
+  const active = entries.filter(
+    (e) =>
+      e.kind === 'person' &&
+      e.status === 'active' &&
+      e.canonical_key === `person:${slug}`
+  );
+  const title = slug.replace(/-/g, ' ');
+  const header = [
+    `# ${title}`,
+    '',
+    '<!-- Auto-generated by DUYA Memory v2 Phase 2. Do not edit. -->',
+    '',
+  ].join('\n');
+  if (active.length === 0) {
+    return `${header}_(no active entries)_`;
+  }
+  return `${header}${active[0].content}`;
+}
+
+/**
+ * Render `global/areas/<slug>.md` — one file per area entry.
+ * Same structure as `renderPersonFile`.
+ */
+export function renderAreaFile(entries: MemoryEntryRow[], slug: string): string {
+  const active = entries.filter(
+    (e) =>
+      e.kind === 'area' &&
+      e.status === 'active' &&
+      e.canonical_key === `area:${slug}`
+  );
+  const title = slug.replace(/-/g, ' ');
+  const header = [
+    `# ${title}`,
+    '',
+    '<!-- Auto-generated by DUYA Memory v2 Phase 2. Do not edit. -->',
+    '',
+  ].join('\n');
+  if (active.length === 0) {
+    return `${header}_(no active entries)_`;
+  }
+  return `${header}${active[0].content}`;
+}
+
+/**
+ * Render `global/people/index.md` — index of all person entries
+ * (slug + canonical_key). Full content lives in per-person files.
+ */
+export function renderPeopleIndexFile(entries: MemoryEntryRow[]): string {
+  const active = entries
+    .filter((e) => e.kind === 'person' && e.status === 'active')
+    .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
+  const updatedMs = maxUpdatedAt(active);
+  const updatedIso = updatedMs > 0 ? new Date(updatedMs).toISOString() : 'never';
+
+  const lines: string[] = [
+    '# People Index',
+    '',
+    `Updated: ${updatedIso}`,
+    '',
+    'This file is automatically generated by DUYA Memory v2. Do not edit.',
+    '',
+  ];
+  if (active.length === 0) {
+    lines.push('_(none)_');
+  } else {
+    for (const entry of active) {
+      const slug = personAreaSlug(entry.canonical_key) ?? entry.canonical_key;
+      lines.push(`- [${slug}](./${slug}.md)`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Render `global/areas/index.md` — index of all area entries.
+ */
+export function renderAreasIndexFile(entries: MemoryEntryRow[]): string {
+  const active = entries
+    .filter((e) => e.kind === 'area' && e.status === 'active')
+    .sort((a, b) => a.canonical_key.localeCompare(b.canonical_key));
+  const updatedMs = maxUpdatedAt(active);
+  const updatedIso = updatedMs > 0 ? new Date(updatedMs).toISOString() : 'never';
+
+  const lines: string[] = [
+    '# Areas Index',
+    '',
+    `Updated: ${updatedIso}`,
+    '',
+    'This file is automatically generated by DUYA Memory v2. Do not edit.',
+    '',
+  ];
+  if (active.length === 0) {
+    lines.push('_(none)_');
+  } else {
+    for (const entry of active) {
+      const slug = personAreaSlug(entry.canonical_key) ?? entry.canonical_key;
+      lines.push(`- [${slug}](./${slug}.md)`);
+    }
+  }
   return lines.join('\n');
 }

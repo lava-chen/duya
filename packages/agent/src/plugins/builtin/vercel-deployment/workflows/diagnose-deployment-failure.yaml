@@ -1,0 +1,47 @@
+id: diagnose-deployment-failure
+name: Diagnose Deployment Failure
+description: >-
+  Read build or runtime logs for a failing Vercel deployment, classify
+  the failure, and propose a fix without applying it.
+prompt: |
+  Diagnose the failing Vercel deployment below.
+
+  Project: {{project_id}}
+  Deployment: {{deployment_id}}
+
+  Steps to follow:
+  1. Run the `deployment-inspection` skill. Call
+     `vercel.list_deployments(project_id, limit=10)` to confirm the
+     target deployment's state and commit context.
+  2. Run the `log-diagnosis` skill. If the deployment state is
+     `ERROR`, call `vercel.get_build_logs(deployment_id)` and parse
+     the log by stage: environment setup, npm script, compile error,
+     build completion.
+  3. Classify the build failure:
+     - TypeScript / typecheck — fix in source; error includes file
+       and line.
+     - Missing dependency — `Cannot find module 'X'`; install or
+       fix the import path.
+     - Build script error — `npm run build` exited non-zero; read
+       the underlying command in `package.json`.
+     - Environment variable missing — `ReferenceError: X is not
+       defined`; check `vercel.list_env_vars`.
+     - Out of memory / timeout — circular import or unbounded loop.
+  4. If the deployment is `READY` but the user reports runtime
+     errors, call `vercel.get_runtime_logs(deployment_id)` and
+     filter by status >= 500. Read the stack traces and identify
+     the failing route.
+  5. Propose a concrete fix in chat. Reference the file and line,
+     explain what's wrong, and show the proposed diff. Do NOT apply
+     the fix from this workflow — hand off to the project's normal
+     git workflow.
+
+  Constraint: do NOT assume the build machine and the local
+  machine have the same Node version, platform, or env vars. A
+  build that passes locally can fail on Vercel — cross-reference
+  the build env header in the log.
+requiredCapabilities:
+  - mcp:vercel
+  - skill:deployment-inspection
+  - skill:log-diagnosis
+permissionTier: read

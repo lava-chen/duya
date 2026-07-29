@@ -18,6 +18,7 @@
 
 import { useMemo, useState } from "react";
 
+import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
 
 import type {
@@ -91,8 +92,8 @@ export function CapabilityByPluginView({ snapshot }: CapabilityByPluginViewProps
 
   return (
     <div className="rounded-xl border border-border/50 bg-surface/40">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         className="w-full text-left px-4 py-3 flex items-center justify-between gap-2"
         onClick={() => setOpen((prev) => !prev)}
         aria-expanded={open}
@@ -104,15 +105,15 @@ export function CapabilityByPluginView({ snapshot }: CapabilityByPluginViewProps
           </div>
         </div>
         <span className="text-xs text-muted-foreground">{open ? "▾" : "▸"}</span>
-      </button>
+      </Button>
       {open ? (
         <div className="border-t border-border/50 divide-y divide-border/40">
           {groups.map((group) => {
             const isOpen = expandedPlugins.has(group.plugin.id);
             return (
               <div key={group.plugin.id} className="px-4 py-3">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
                   className="w-full text-left flex items-center justify-between gap-2"
                   onClick={() => {
                     setExpandedPlugins((prev) => {
@@ -143,7 +144,7 @@ export function CapabilityByPluginView({ snapshot }: CapabilityByPluginViewProps
                     </div>
                   </div>
                   <span className="text-xs text-muted-foreground shrink-0">{isOpen ? "▾" : "▸"}</span>
-                </button>
+                </Button>
                 {isOpen ? (
                   <div className="mt-2 space-y-2">
                     {group.capabilities.length === 0 ? (

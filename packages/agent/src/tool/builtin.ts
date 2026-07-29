@@ -30,8 +30,6 @@ import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { messageSessionTool } from './MessageSessionTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
-import { getMemoryTool } from '../memory/index.js';
-import { getMemoryRecallTool } from './MemoryRecallTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
@@ -162,16 +160,6 @@ export function createBuiltinRegistry(
   // through `duya_cli { argv: ["config", …] }` /
   // `duya_cli { argv: ["mcp", …] }`.
   registry.register(duyaCliTool.toTool(), duyaCliTool, { exposeMode: 'discoverable' });
-
-  // Memory tool
-  const memoryTool = getMemoryTool();
-  registry.register(memoryTool.toTool(), memoryTool, { exposeMode: 'discoverable' });
-
-  // Memory v2 recall tool (Plan 306 Phase D) — reads durable memories
-  // from the v2 memory store and records usage telemetry. Discoverable
-  // so the LLM loads it on demand via tool_search.
-  const memoryRecallTool = getMemoryRecallTool();
-  registry.register(memoryRecallTool.toTool(), memoryRecallTool, { exposeMode: 'discoverable' });
 
   // AskUserQuestion tool - prompt the user with multi-choice questions
   registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'discoverable' });

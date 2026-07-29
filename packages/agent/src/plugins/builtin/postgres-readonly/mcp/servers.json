@@ -1,0 +1,19 @@
+{
+  "servers": [
+    {
+      "name": "postgres-readonly",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "--read-only"],
+      "env": {
+        "DATABASE_URL": "${setup.connectionString}"
+      },
+      "envPassthrough": "allowlist",
+      "_read_only_enforced": [
+        "mcp-arg",
+        "policy",
+        "recommended-role"
+      ],
+      "_notes": "Three layers enforce read-only: (1) the `--read-only` flag on the MCP server blocks INSERT/UPDATE/DELETE at the server boundary; (2) `permissions/policy.json` pins every write-capable action to the destructive tier so the agent must confirm before even attempting a write; (3) the recommended setup uses a Postgres role whose grants are read-only, so even a server bypass cannot mutate data. All three layers are intentional defense-in-depth."
+    }
+  ]
+}

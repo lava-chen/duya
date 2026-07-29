@@ -1,0 +1,36 @@
+# Plan 311 — example workflow template for the literature plugin.
+# Demonstrates: requiredCapabilities referencing the literature MCP,
+# `read` permission tier (auto-execution), and a `{{topic}}` variable
+# the user fills in at launch time. End-to-end verification target for
+# the Plan 311 success criteria.
+
+id: literature-review
+name: Literature Review
+description: >-
+  Survey the literature on a given topic, extract structured paper
+  cards, and produce an evidence table summarising the strongest
+  findings. Best for the start of a research project.
+prompt: |
+  Run a literature review on the topic below.
+
+  Topic: {{topic}}
+
+  Steps to follow:
+  1. Use `literature:search_sources` to find papers already in my library
+     that match the topic. If fewer than 5 are found, say so and proceed
+     with what is available.
+  2. For each relevant paper, call `literature:extract_paper_card` (or
+     reuse an existing card) to capture problem / method / findings /
+     limitations.
+  3. Call `literature:search_evidence` across the matching sources to
+     pull the strongest supporting AND contradicting evidence spans.
+  4. Produce an evidence table with columns:
+     `Paper | Claim | For/Against | Quote | Source ID`.
+  5. End with a 3–5 sentence synthesis paragraph.
+
+  Constraint: do NOT fetch new papers from the web — work only with
+  what is already in my local literature library. If the topic has
+  zero coverage, say so explicitly rather than fabricating citations.
+requiredCapabilities:
+  - mcp:literature
+permissionTier: read

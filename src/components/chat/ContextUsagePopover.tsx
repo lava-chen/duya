@@ -18,6 +18,7 @@ import {
   formatTokens,
   type ContextUsage,
 } from '@/hooks/useContextUsage';
+import { Button } from '@/components/ui/Button';
 import {
   getCategoryLabel,
   type ContextBreakdown,
@@ -239,16 +240,20 @@ export function ContextUsagePopover({
       )}
 
       <div className="ctx-popover__footer">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           className="ctx-popover__details"
           onClick={onOpenDetails}
         >
           {t('context.viewDetails')} ▸
-        </button>
+        </Button>
         {onCompress && usage.state !== 'normal' && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="ctx-popover__compress"
             onClick={onCompress}
             disabled={isCompacting}
@@ -257,7 +262,7 @@ export function ContextUsagePopover({
             {isCompacting
               ? t('context.compressing')
               : t('context.compress')}
-          </button>
+          </Button>
         )}
       </div>
 

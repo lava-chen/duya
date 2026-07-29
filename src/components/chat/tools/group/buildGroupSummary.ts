@@ -60,7 +60,6 @@ export function buildGroupSummary(
     'browser',
     'agent',
     'ask',
-    'memory',
     'skill',
     'module',
     'tasks',

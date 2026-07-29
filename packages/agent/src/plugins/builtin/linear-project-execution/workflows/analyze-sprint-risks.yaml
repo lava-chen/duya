@@ -1,0 +1,61 @@
+id: analyze-sprint-risks
+name: Analyze Sprint Risks
+description: >-
+  Read the current Linear cycle, surface blockers, stale issues, and
+  estimate-vs-capacity gaps. Read-only.
+prompt: |
+  Analyze the risks in the current Linear cycle below.
+
+  Team: {{team_id}}
+  Cycle: {{cycle_id}}
+
+  Steps to follow:
+  1. Run the `implementation-status` skill. Read the cycle via
+     `linear.get_cycle(team_id, cycle_id)` to confirm the window
+     and the team.
+  2. Read the in-flight issues via `linear.list_issues(team_id,
+     state="started", cycle_id=<cycle_id>, limit=100)`. For each
+     issue, capture: state, assignee, estimate, last update time,
+     last comment, `blocked_by` relations.
+  3. Classify each issue:
+     - On track — `In Progress` with recent activity (last update
+       < 2 days ago).
+     - Stale — `In Progress` with no activity for > 3 days.
+     - Blocked — has a `blocked_by` relation or the last comment
+       says "blocked".
+     - In review — `In Review` state.
+     - Done — `Done` state in the cycle window.
+  4. Aggregate the status:
+     - Count of issues per state.
+     - Sum of estimates per state.
+     - List of blockers (with the blocking issue).
+     - List of stale issues (with the last update time).
+  5. Compute the cycle completion:
+     - Done estimate sum / total estimate sum = completion %.
+     - Days remaining in the cycle.
+     - Throughput needed (remaining estimate / days remaining)
+       vs historical throughput (last cycle's done estimate /
+       cycle length in days).
+  6. Surface the report as:
+     - Top-level summary (cycle name, completion %, days
+       remaining, throughput delta).
+     - Per-state breakdown (count + estimate sum).
+     - Blockers section (each blocker + the blocking issue).
+     - Stale issues section (each stale issue + last update).
+     - One-sentence health call ("on track", "at risk", "behind").
+  7. Propose concrete next steps for each risk:
+     - For each blocker: surface the blocking issue and the owner.
+     - For each stale issue: propose either a check-in comment or
+       a re-assignment. Do NOT post the comment without
+       confirmation.
+     - For a throughput gap: propose dropping the lowest-priority
+       items. Do NOT move them out of the cycle without
+       confirmation.
+
+  Constraint: do NOT post comments or update issue state from
+  this workflow — those are write actions that require separate
+  confirmation. The report is read-only.
+requiredCapabilities:
+  - mcp:linear
+  - skill:implementation-status
+permissionTier: read
