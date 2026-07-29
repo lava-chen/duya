@@ -387,7 +387,10 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       }
 
       // 4. Resolve thinking params from model + effort.
-      const thinkingParams = resolveOpenAIThinking(model, chatOptions?.effort);
+      // reasoningSettings takes precedence over the simple effort field.
+      const effectiveEffort = chatOptions?.reasoningSettings?.intensity
+        ?? chatOptions?.effort;
+      const thinkingParams = resolveOpenAIThinking(model, effectiveEffort);
 
       // 5. Setup think-tag parser if format requires it.
       const useThinkTagParser = model.compat?.openAIThinkingFormat === 'think-tag-fallback';

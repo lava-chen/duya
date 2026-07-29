@@ -5,7 +5,7 @@
  * Keeps model compat logic in one place so protocol files stay thin.
  */
 
-import type { Model, ParameterDiagnostic } from '../types.js';
+import type { Model, ParameterDiagnostic, DuyaReasoningSettings, ThinkingLevel } from '../types.js';
 
 /**
  * Returns true if thinking should be disabled for this model.
@@ -156,4 +156,35 @@ export function collectDiagnostics(
   }
 
   return diagnostics;
+}
+
+/**
+ * Resolves the effective reasoning settings by merging the new
+ * `reasoningSettings` field with the legacy `effort` field.
+ * `reasoningSettings.intensity` takes precedence over `effort`.
+ *
+ * Returns the effective effort string and the resolved settings.
+ */
+export function resolveReasoningSettings(
+  effort?: string,
+  reasoningSettings?: DuyaReasoningSettings,
+): {
+  effectiveEffort: string | undefined;
+  settings: DuyaReasoningSettings | undefined;
+} {
+  if (!reasoningSettings) {
+    return { effectiveEffort: effort, settings: undefined };
+  }
+
+  const effectiveEffort = reasoningSettings.intensity
+    ? (reasoningSettings.intensity === 'off' ? undefined : reasoningSettings.intensity)
+    : effort;
+
+  return {
+    effectiveEffort,
+    settings: {
+      ...reasoningSettings,
+      intensity: reasoningSettings.intensity ?? (effort as ThinkingLevel | undefined),
+    },
+  };
 }

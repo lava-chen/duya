@@ -586,13 +586,26 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         ?? chatOptions?.maxTokens
         ?? 4096;
 
-      let thinking = resolveAnthropicThinking(model, chatOptions?.effort);
+      // reasoningSettings takes precedence over the simple effort field.
+      const effectiveEffort = chatOptions?.reasoningSettings?.intensity
+        ?? chatOptions?.effort;
+      let thinking = resolveAnthropicThinking(model, effectiveEffort);
 
       // Override budget_tokens if reasoningBudget is explicitly set.
       // For Anthropic, thinking.budget_tokens must be < max_tokens.
       if (thinking && chatOptions?.reasoningBudget && thinking.type === 'enabled') {
         const clampedBudget = Math.min(chatOptions.reasoningBudget, maxTokens - 1);
         thinking = { ...thinking, budget_tokens: clampedBudget };
+      }
+
+      // 'deep' mode: boost budget by 2x for extended thinking.
+      if (chatOptions?.reasoningSettings?.mode === 'deep' && thinking?.type === 'enabled') {
+        const currentBudget = thinking.budget_tokens ?? 4096;
+        thinking = { ...thinking, budget_tokens: Math.min(currentBudget * 2, model.maxTokens - 1) };
+      }
+      // 'fast' mode: use minimal thinking budget.
+      if (chatOptions?.reasoningSettings?.mode === 'fast' && thinking?.type === 'enabled') {
+        thinking = { ...thinking, budget_tokens: 1024 };
       }
 
       // 5. Build request params.

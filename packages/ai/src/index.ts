@@ -22,6 +22,7 @@ export {
   getTemperature,
   validateBudgets,
   collectDiagnostics,
+  resolveReasoningSettings,
 } from './utils/simple-options.js';
 
 export type {
@@ -31,6 +32,7 @@ export type {
   AgentProgressEvent,
   AssistantMessage,
   AssistantMessageEvent,
+  DuyaReasoningSettings,
   ImageContent,
   Message,
   MessageContent,
