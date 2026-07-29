@@ -36,6 +36,12 @@ class ConfigManagerReader implements ProviderStoreReader {
   readDefault() {
     return this.cm.getDefaultProvider();
   }
+  readMemory() {
+    return this.cm.getMemoryProvider();
+  }
+  writeMemory(id: string | null): boolean {
+    return this.cm.setMemoryProvider(id);
+  }
   writeAll(map: Record<string, ApiProvider>): boolean {
     return this.cm.setConfig('apiProviders', map, 'renderer');
   }

@@ -15,7 +15,7 @@
  *
  * What stays here:
  *   - The `ModelSelectionCard` — picks a default model for each
- *     task (vision / gateway / wiki / title). It is a per-task
+ *     task (vision / gateway / title). It is a per-task
  *     model assignment UI, not a provider-listing concern, so it
  *     does not move to `ProviderManagement`.
  *   - The page-level error / success banners that were once used
@@ -39,7 +39,11 @@ import {
   SettingsSelectRow,
 } from "@/components/settings/ui";
 import { ProviderManagement } from "./ProviderManagement";
-import { updateProviderIPC } from "@/lib/ipc-client";
+import {
+  updateProviderIPC,
+  getMemoryLlmProviderIPC,
+  setMemoryLlmProviderIPC,
+} from "@/lib/ipc-client";
 
 type Provider = RendererLlmProviderDTO;
 
@@ -63,13 +67,81 @@ export function ProvidersSection() {
         <ProviderManagement appId="duya" />
       </SettingsSection>
 
+      <MemoryProviderCard providers={sorted} />
+
       <ModelSelectionCard providers={sorted} />
     </div>
   );
 }
 
 /**
- * Compact model selection card for different tasks (vision, gateway, wiki agent, title).
+ * Memory system provider selector. Lets the user pick a dedicated
+ * provider for the background memory worker (Stage 1 extraction +
+ * Phase 2 consolidator). When set to "use default", the worker
+ * falls back to the soft default provider.
+ *
+ * Changes take effect after app restart — the memory worker is
+ * started once at boot with a fixed LLM client.
+ */
+function MemoryProviderCard({ providers }: { providers: Provider[] }) {
+  const { t } = useTranslation();
+  const [memoryProviderId, setMemoryProviderId] = useState<string>("");
+
+  // Load the current memory provider on mount + when providers change
+  // (so the label resolves correctly after lazy-load).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const p = await getMemoryLlmProviderIPC();
+        if (!cancelled) {
+          setMemoryProviderId(p?.id ?? "");
+        }
+      } catch {
+        // IPC not available (e.g. web-only mode) — leave as ""
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleChange = (value: string) => {
+    setMemoryProviderId(value);
+    // Empty string = use default (null on the backend)
+    void setMemoryLlmProviderIPC(value || null);
+  };
+
+  const options = useMemo(() => {
+    const opts: { value: string; label: string }[] = [
+      { value: "", label: t("settings.providers.memoryProviderUseDefault") },
+    ];
+    for (const p of providers) {
+      opts.push({ value: p.id, label: p.name });
+    }
+    return opts;
+  }, [providers, t]);
+
+  if (providers.length === 0) return null;
+
+  return (
+    <SettingsSection
+      title={t("settings.providers.memoryProvider")}
+      description={t("settings.providers.memoryProviderDesc")}
+    >
+      <SettingsCard>
+        <SettingsSelectRow
+          label={t("settings.providers.memoryProvider")}
+          description={t("settings.providers.memoryProviderHint")}
+          value={memoryProviderId}
+          onValueChange={handleChange}
+          options={options}
+        />
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
+/**
+ * Compact model selection card for different tasks (vision, gateway, title).
  * Kept here because it's a per-task model assignment UI, not a
  * provider-listing concern. Plan 205 may move it into
  * ProviderManagement as a sub-card.
@@ -107,7 +179,6 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   // Current selections from settings - use useEffect to sync with settings
   const [visionModel, setVisionModel] = useState("");
   const [gatewayModel, setGatewayModel] = useState("");
-  const [wikiAgentModel, setWikiAgentModel] = useState("");
   const [titleModel, setTitleModel] = useState("");
 
   // Sync vision model from settings when settings or providers change
@@ -124,11 +195,6 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   useEffect(() => {
     setGatewayModel(settings?.gatewayModel || "");
   }, [settings?.gatewayModel]);
-
-  // Sync wiki agent model from settings
-  useEffect(() => {
-    setWikiAgentModel(settings?.wikiAgentModel || "");
-  }, [settings?.wikiAgentModel]);
 
   // Sync title model from settings
   useEffect(() => {
@@ -192,16 +258,6 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
     }
   };
 
-  const handleWikiAgentChange = (value: string) => {
-    const trimmedValue = value.trim();
-    setWikiAgentModel(trimmedValue);
-    if (window.electronAPI?.settingsDb?.setJson) {
-      window.electronAPI.settingsDb.setJson('wikiAgentModel', trimmedValue);
-    } else {
-      save({ wikiAgentModel: trimmedValue });
-    }
-  };
-
   if (allModels.length === 0) {
     return null;
   }
@@ -224,13 +280,6 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
           description={t("settings.providers.gatewayModelDesc") || "For bridge/channel sessions"}
           value={gatewayModel}
           onValueChange={handleGatewayChange}
-          options={allModels}
-        />
-        <SettingsSelectRow
-          label={t("settings.providers.wikiAgentModel") || "WikiAgent Model"}
-          description={t("settings.providers.wikiAgentModelDesc") || "For background memory extraction and merge"}
-          value={wikiAgentModel}
-          onValueChange={handleWikiAgentChange}
           options={allModels}
         />
         <SettingsSelectRow

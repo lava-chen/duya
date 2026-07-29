@@ -622,6 +622,21 @@ export async function getDefaultLlmProviderIPC(): Promise<Provider | null> {
   return (await window.electronAPI!.provider!.getDefault()) as Provider | null
 }
 
+/**
+ * Set the memory worker provider. When set to null, the memory worker
+ * (Stage 1 extractor + Phase 2 consolidator) falls back to the default
+ * provider. Lets users pick a cheaper model for background memory
+ * extraction without affecting chat.
+ */
+export async function setMemoryLlmProviderIPC(id: string | null): Promise<boolean> {
+  return (await window.electronAPI!.provider!.setMemory({ id })) as boolean
+}
+
+/** Get the memory worker provider (masked DTO). */
+export async function getMemoryLlmProviderIPC(): Promise<Provider | null> {
+  return (await window.electronAPI!.provider!.getMemory()) as Provider | null
+}
+
 export function testProviderIPC(
   payload: { providerId: string; presetKey?: string },
 ): Promise<ProviderHealthDTO>

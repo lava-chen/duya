@@ -1,5 +1,5 @@
 /**
- * Memory v2 long-lived worker (Plan 305 Phase A, design v3 D10).
+ * Memory v2 long-lived worker (Plan 305 Phase A + Plan 306 Phase B).
  *
  * Runs in the Electron main process. Owns a `setInterval` loop that
  * periodically:
@@ -9,10 +9,17 @@
  *   3. fires `Stage1Extractor.extract` for each, in parallel, via
  *      `Promise.allSettled` (one failing rollout does NOT kill the batch)
  *   4. drains the projection outbox (`drainOutbox`)
+ *   5. runs the Phase 2 consolidator (`runConsolidator`) on a separate
+ *      interval, and immediately after any tick that produced new
+ *      Stage 1 outputs, so fresh extractions are promoted to canonical
+ *      memory entries without waiting for the next sweep.
  *
- * Shadow mode (D1): the worker only writes to the memory-state DB and
- * its projection files under `~/.duya/memory`. It never touches
- * `packages/agent/src/memory/` (the existing MemoryManager path).
+ * Shadow mode (D1, revised by Plan 306 Phase B): the worker writes to
+ * the memory-state DB and projection files under `~/.duya/memory`
+ * (including global/ and projects/ Phase 2 projections). It never
+ * touches `packages/agent/src/memory/` (the existing MemoryManager
+ * path) — the agent read path still goes through MemoryManager until
+ * Plan 306 Phase E flips the switch.
  *
  * Gated by `DUYA_MEMORY_V2_ENABLED` at the call site (electron/main.ts);
  * this module itself is import-safe and does nothing until
@@ -31,6 +38,11 @@ import {
 } from '../../packages/agent/src/memory-state/eligibility.js';
 import { drainOutbox } from '../../packages/agent/src/memory-state/outbox.js';
 import { reconcileProjections } from '../../packages/agent/src/memory-state/reconcile.js';
+import {
+  runConsolidator,
+  type ConsolidatorResult,
+} from '../../packages/agent/src/memory-state/consolidator.js';
+import { syncAllFromMainDb } from '../memory-state/catalogSync';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -62,6 +74,24 @@ export interface MemoryWorkerConfig {
   idleMs: number;
   /** Lookback window for eligibility (ms). Default 30d. */
   windowMs: number;
+  /**
+   * Phase 2 consolidator sweep interval in ms. Default 300_000 (5 min).
+   * The consolidator also runs immediately after any tick that produced
+   * new Stage 1 outputs, so this interval mainly covers ad-hoc file
+   * digestion when no extractions are happening.
+   */
+  consolidatorIntervalMs: number;
+  /**
+   * When true, the consolidator runs on every forceSweep regardless of
+   * the interval timer. Default true (manual trigger should be eager).
+   */
+  consolidatorOnForceSweep: boolean;
+  /**
+   * Catalog sync interval in ms. The main DB is rescanned for new/changed
+   * chat_sessions at most this often. Default 60_000 (1 min). forceSweep
+   * always triggers a sync regardless of this value.
+   */
+  catalogSyncIntervalMs: number;
 }
 
 export interface ForceSweepResult {
@@ -70,6 +100,10 @@ export interface ForceSweepResult {
   skippedNoop: number;
   outboxDrained: number;
   reconciled: { written: number; removed: number; mismatched: number } | null;
+  /** Phase 2 consolidator result; null when the consolidator was not run. */
+  consolidated: ConsolidatorResult | null;
+  /** Catalog sync result; null when sync was not run this tick. */
+  catalogSynced: { inserted: number; updated: number; tombstoned: number; errors: number } | null;
   durationMs: number;
 }
 
@@ -95,6 +129,9 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   paused: false,
   idleMs: DEFAULT_IDLE_MS,
   windowMs: DEFAULT_WINDOW_MS,
+  consolidatorIntervalMs: 5 * 60_000, // 5 min
+  consolidatorOnForceSweep: true,
+  catalogSyncIntervalMs: 60_000, // 1 min
 };
 
 // ---------------------------------------------------------------------------
@@ -161,12 +198,15 @@ interface WorkerState {
   workerId: string;
   tickTimer: ReturnType<typeof setInterval> | null;
   outboxTimer: ReturnType<typeof setInterval> | null;
+  consolidatorTimer: ReturnType<typeof setInterval> | null;
   paused: boolean;
   tickInFlight: boolean;
   forceSweepInFlight: boolean;
+  consolidatorInFlight: boolean;
   reconciledThisInstance: boolean;
   inFlightExtracts: Set<Promise<unknown>>;
   shutdownSignal: boolean;
+  lastCatalogSyncAt: number;
 }
 
 function createWorker(
@@ -186,22 +226,68 @@ function createWorker(
     workerId,
     tickTimer: null,
     outboxTimer: null,
+    consolidatorTimer: null,
     paused: cfg.paused,
     tickInFlight: false,
     forceSweepInFlight: false,
+    consolidatorInFlight: false,
     reconciledThisInstance: false,
     inFlightExtracts: new Set(),
     shutdownSignal: false,
+    lastCatalogSyncAt: 0,
   };
 
   const tickIntervalMs = Math.max(1_000, Math.floor(60_000 / Math.max(1, cfg.instancesPerMinute)));
+
+  // Phase 2 consolidator — single-flight wrapper around runConsolidator.
+  // Returns null when a previous run is still in flight (the global lock
+  // in phase2_runs would skip anyway, but this avoids a redundant
+  // transaction). Logs the result for observability.
+  const consolidatorTick = (options: {
+    force: boolean;
+  }): ConsolidatorResult | null => {
+    if (state.consolidatorInFlight) return null;
+    state.consolidatorInFlight = true;
+    try {
+      const result = runConsolidator({
+        db: deps.memoryDb,
+        rootDir: deps.rootDir,
+      });
+      if (!result.skipped) {
+        logger.info(
+          'MemoryWorkerConsolidator',
+          {
+            runId: result.runId,
+            added: result.added,
+            merged: result.merged,
+            superseded: result.superseded,
+            retired: result.retired,
+            adHocDigested: result.adHocDigested,
+            durationMs: result.durationMs,
+            forced: options.force,
+          },
+          LogComponent.DB,
+        );
+      }
+      return result;
+    } catch (err) {
+      logger.warn(
+        'MemoryWorkerConsolidator failed',
+        { error: err instanceof Error ? err.message : String(err), forced: options.force },
+        LogComponent.DB,
+      );
+      return null;
+    } finally {
+      state.consolidatorInFlight = false;
+    }
+  };
 
   // The loop body. Shared between the interval tick and forceSweep.
   const runTick = async (options: {
     force: boolean;
   }): Promise<ForceSweepResult> => {
     const start = Date.now();
-    const { memoryDb, rootDir } = deps;
+    const { memoryDb, mainDb, rootDir } = deps;
     const now = Date.now();
 
     // Reconcile on first non-paused tick (or any forceSweep when not yet done).
@@ -223,6 +309,38 @@ function createWorker(
       } catch (err) {
         logger.warn(
           'MemoryWorkerReconcile failed',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.DB,
+        );
+      }
+    }
+
+    // Catalog sync: materialize chat_sessions from the main DB into
+    // rollout_catalog. Throttled to catalogSyncIntervalMs on regular
+    // ticks; always runs on forceSweep. Without this step, the catalog
+    // stays empty and selectEligible returns nothing forever.
+    let catalogSynced: ForceSweepResult['catalogSynced'] = null;
+    const syncStale = now - state.lastCatalogSyncAt >= cfg.catalogSyncIntervalMs;
+    if (options.force || syncStale) {
+      try {
+        const syncResult = syncAllFromMainDb({ mainDb, memoryDb });
+        state.lastCatalogSyncAt = now;
+        catalogSynced = {
+          inserted: syncResult.inserted,
+          updated: syncResult.updated,
+          tombstoned: syncResult.tombstoned,
+          errors: syncResult.errors,
+        };
+        if (syncResult.inserted > 0 || syncResult.updated > 0 || syncResult.tombstoned > 0) {
+          logger.info(
+            'MemoryWorkerCatalogSync',
+            { inserted: syncResult.inserted, updated: syncResult.updated, tombstoned: syncResult.tombstoned, errors: syncResult.errors, durationMs: syncResult.durationMs, forced: options.force },
+            LogComponent.DB,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          'MemoryWorkerCatalogSync failed',
           { error: err instanceof Error ? err.message : String(err) },
           LogComponent.DB,
         );
@@ -293,9 +411,39 @@ function createWorker(
       );
     }
 
+    // Phase 2 consolidator: run eagerly when this tick produced new
+    // Stage 1 outputs (so fresh extractions are promoted without
+    // waiting for the interval), or when forceSweep requests it.
+    // The consolidator's own global lock + CAS-skip make this cheap
+    // when there is nothing to do.
+    let consolidated: ConsolidatorResult | null = null;
+    if (extracted > 0 || (options.force && cfg.consolidatorOnForceSweep)) {
+      consolidated = consolidatorTick({ force: options.force });
+      // Drain again so the consolidator's projection writes are flushed
+      // within the same forceSweep window (useful for tests + IPC
+      // callers that expect files on disk after forceSweep returns).
+      if (consolidated && !consolidated.skipped) {
+        try {
+          const allowedRoots = deps.rootDir ? [deps.rootDir] : undefined;
+          drainOutbox(memoryDb, { batchSize: 32, allowedRoots });
+        } catch {
+          // Best-effort; the outbox sweeper will catch up on its own.
+        }
+      }
+    }
+
     logger.info(
       'MemoryWorkerTick',
-      { selected: eligible.length, extracted, skippedNoop, outboxDrained, forced: options.force, durationMs: Date.now() - start },
+      {
+        selected: eligible.length,
+        extracted,
+        skippedNoop,
+        outboxDrained,
+        consolidated: consolidated ? !consolidated.skipped : false,
+        catalogSynced: catalogSynced ? (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) : 0,
+        forced: options.force,
+        durationMs: Date.now() - start,
+      },
       LogComponent.DB,
     );
 
@@ -305,6 +453,8 @@ function createWorker(
       skippedNoop,
       outboxDrained,
       reconciled,
+      consolidated,
+      catalogSynced,
       durationMs: Date.now() - start,
     };
   };
@@ -353,17 +503,35 @@ function createWorker(
     }
   };
 
+  // Consolidator sweeper — independent interval so ad-hoc `.md` files
+  // dropped into `extensions/ad_hoc/` are digested even when no Stage 1
+  // extractions are happening. The consolidator's own CAS-skip makes
+  // this cheap when the input set is unchanged.
+  const sweepConsolidator = (): void => {
+    if (state.shutdownSignal || state.paused) return;
+    consolidatorTick({ force: false });
+  };
+
   state.tickTimer = setInterval(tick, tickIntervalMs);
   state.outboxTimer = setInterval(sweepOutbox, cfg.sweepOutboxEveryMs);
+  state.consolidatorTimer = setInterval(sweepConsolidator, cfg.consolidatorIntervalMs);
   // setInterval keeps the event loop alive; unref so the worker doesn't
   // block Electron shutdown on its own. Graceful shutdown is handled by
   // `performGracefulShutdown` calling `handle.shutdown()`.
   state.tickTimer.unref?.();
   state.outboxTimer.unref?.();
+  state.consolidatorTimer.unref?.();
 
   logger.info(
     'MemoryWorker started',
-    { workerId, tickIntervalMs, concurrency: cfg.concurrency, paused: state.paused },
+    {
+      workerId,
+      tickIntervalMs,
+      concurrency: cfg.concurrency,
+      consolidatorIntervalMs: cfg.consolidatorIntervalMs,
+      catalogSyncIntervalMs: cfg.catalogSyncIntervalMs,
+      paused: state.paused,
+    },
     LogComponent.DB,
   );
 
@@ -393,6 +561,10 @@ function createWorker(
         clearInterval(state.outboxTimer);
         state.outboxTimer = null;
       }
+      if (state.consolidatorTimer) {
+        clearInterval(state.consolidatorTimer);
+        state.consolidatorTimer = null;
+      }
       // Let in-flight extracts settle (best-effort; extractor's heartbeat
       // interval will be cleared by its own finally block). We do NOT abort
       // them — partial extraction progress is better than a dangling lease.
@@ -416,6 +588,8 @@ function createWorker(
           skippedNoop: 0,
           outboxDrained: 0,
           reconciled: null,
+          consolidated: null,
+          catalogSynced: null,
           durationMs: 0,
         };
       }

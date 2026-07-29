@@ -39,6 +39,7 @@ import {
 import { migration0001 } from '../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';
+import { migration0005 } from '../memory-state/migrations/0005_phase2.sql';
 
 // ---------------------------------------------------------------------------
 // LLM response templates
@@ -101,8 +102,10 @@ function createShadowFixture(
   memoryDb.exec(migration0001.sql);
   memoryDb.exec(migration0002.sql);
   memoryDb.exec(migration0003.sql);
+  memoryDb.exec(migration0005.sql);
 
-  // Stub main DB with messages table (what the extractor reads).
+  // Stub main DB with messages table (what the extractor reads) and
+  // chat_sessions table (what catalog sync reads).
   const mainDb = new Database(path.join(dbDir, 'main.db'));
   mainDb.exec(`
     CREATE TABLE messages (
@@ -117,6 +120,30 @@ function createShadowFixture(
       seq_index INTEGER,
       created_at INTEGER,
       status TEXT
+    );
+    CREATE TABLE chat_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      created_at INTEGER,
+      updated_at INTEGER,
+      model TEXT,
+      system_prompt TEXT,
+      working_directory TEXT,
+      project_name TEXT,
+      status TEXT,
+      mode TEXT,
+      permission_profile TEXT,
+      provider_id TEXT,
+      context_summary TEXT,
+      context_summary_updated_at INTEGER,
+      is_deleted INTEGER,
+      generation INTEGER,
+      agent_profile_id TEXT,
+      parent_id TEXT,
+      agent_type TEXT,
+      agent_name TEXT,
+      conductor_mode_enabled INTEGER,
+      conductor_canvas_id TEXT
     );
   `);
 
@@ -550,7 +577,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(messagesAfter.n).toBe(messagesBefore.n);
   });
 
-  it('10. shadow-mode scope — no files under global/ or projects/', async () => {
+  it('10. shadow-mode scope — Phase 2 projections written under memory root', async () => {
     const rolloutId = insertCatalogRow(fixture.memoryDb);
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Test message.');
 
@@ -564,14 +591,25 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     await h.forceSweep();
     forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);
 
-    // Shadow-mode scope rule: only rollout_summaries/ and raw_memories.md
-    // are written. The global/ and projects/ dirs must NOT exist.
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'global'))).toBe(false);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'projects'))).toBe(false);
-
-    // Positive: rollout_summaries/ and raw_memories.md SHOULD exist.
+    // Stage 1 projections (Phase 1, always written):
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'rollout_summaries'))).toBe(true);
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(true);
+
+    // Phase 2 projections (Plan 306 Phase B): consolidator writes
+    // global/MEMORY.md, global/summary.md, phase2_workspace_diff.md.
+    // The shadow-mode contract (D1 revised by Plan 306) is that the
+    // agent READ path still goes through MemoryManager — the worker
+    // itself is allowed to write these projection files.
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'global', 'MEMORY.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'global', 'summary.md'))).toBe(true);
+    expect(fs.existsSync(path.join(fixture.memoryRoot, 'phase2_workspace_diff.md'))).toBe(true);
+
+    // global/MEMORY.md should follow the Codex v1 shape even when empty.
+    const globalMemoryContent = fs.readFileSync(
+      path.join(fixture.memoryRoot, 'global', 'MEMORY.md'),
+      'utf8',
+    );
+    expect(globalMemoryContent).toContain('# Memory');
   });
 
   it('11. Codex filename shape + raw_memories.md content', async () => {

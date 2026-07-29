@@ -63,7 +63,8 @@ function createWorkerFixture(): WorkerFixture {
   memoryDb.exec(migration0003.sql);
 
   // Stub main DB — only needs a `messages` table for the extractor's
-  // readMessages path. Most tests never hit it.
+  // readMessages path, and a `chat_sessions` table for catalog sync.
+  // Most tests never hit either.
   const mainDb = new Database(path.join(dbDir, 'main.db'));
   mainDb.exec(`
     CREATE TABLE messages (
@@ -78,6 +79,30 @@ function createWorkerFixture(): WorkerFixture {
       seq_index INTEGER,
       created_at INTEGER,
       status TEXT
+    );
+    CREATE TABLE chat_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      created_at INTEGER,
+      updated_at INTEGER,
+      model TEXT,
+      system_prompt TEXT,
+      working_directory TEXT,
+      project_name TEXT,
+      status TEXT,
+      mode TEXT,
+      permission_profile TEXT,
+      provider_id TEXT,
+      context_summary TEXT,
+      context_summary_updated_at INTEGER,
+      is_deleted INTEGER,
+      generation INTEGER,
+      agent_profile_id TEXT,
+      parent_id TEXT,
+      agent_type TEXT,
+      agent_name TEXT,
+      conductor_mode_enabled INTEGER,
+      conductor_canvas_id TEXT
     );
   `);
 

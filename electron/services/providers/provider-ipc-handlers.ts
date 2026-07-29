@@ -12,6 +12,8 @@
  *   - provider:setActiveLlm        (deprecated: use setDefaultLlm)
  *   - provider:setDefaultLlm
  *   - provider:getDefault          (renderer-mask; returns the default's masked DTO)
+ *   - provider:setMemory           (set the memory worker provider)
+ *   - provider:getMemory           (renderer-mask; returns the memory worker's masked DTO)
  *   - provider:getActiveRuntimeConfig   (privileged: agent / main only)
  *   - provider:getRuntimeConfig          (privileged: agent / main only)
  *   - provider:test
@@ -120,6 +122,17 @@ export function registerProviderIpcHandlers(opts?: {
   // --- get default (masked) ---
   ipcMain.handle('provider:getDefault', () => {
     const p = store.getDefaultLlmProvider();
+    return p ? toMaskedDto(p) : null;
+  });
+
+  // --- set memory worker provider ---
+  ipcMain.handle('provider:setMemory', (_event, payload: { id: string | null }) => {
+    return store.setMemoryLlmProvider(payload?.id ?? null);
+  });
+
+  // --- get memory worker provider (masked) ---
+  ipcMain.handle('provider:getMemory', () => {
+    const p = store.getMemoryLlmProvider();
     return p ? toMaskedDto(p) : null;
   });
 
