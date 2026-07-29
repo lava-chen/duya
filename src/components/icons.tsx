@@ -2,6 +2,15 @@
 
 // All icons now sourced from @tabler/icons-react. Export names are preserved
 // so business files keep importing `XxxIcon` from `@/components/icons` unchanged.
+// We re-export every icon through a thin wrapper that defaults stroke to 1.25,
+// which gives a lighter visual weight than tabler's default 2px.
+import {
+  forwardRef,
+  type ComponentPropsWithoutRef,
+  type RefAttributes,
+  type ForwardRefExoticComponent,
+} from "react";
+import type { TablerIcon, IconProps as TablerIconProps } from "@tabler/icons-react";
 import {
   // Original phosphor-equivalent icons
   IconArrowUpRight,
@@ -11,7 +20,7 @@ import {
   IconBolt,
   IconWand,
   IconSparkles,
-  IconHistory,
+  IconHistory as TablerIconHistory,
   IconPlayerPlay,
   IconRepeat,
   IconSettings,
@@ -23,7 +32,7 @@ import {
   IconDatabase,
   IconWorld,
   IconDots,
-  IconSearch,
+  IconSearch as TablerIconSearch,
   IconEdit,
   IconPencil,
   IconLayoutGrid,
@@ -45,7 +54,7 @@ import {
   IconCommand,
   IconPlus,
   IconMinus,
-  IconChevronDown,
+  IconChevronDown as TablerIconChevronDown,
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
@@ -55,7 +64,7 @@ import {
   IconEraser,
   IconChartLine,
   IconChartBar,
-  IconCopy,
+  IconCopy as TablerIconCopy,
   IconCheck,
   IconMessageCircle,
   IconMessage2,
@@ -65,7 +74,7 @@ import {
   IconCircleX,
   IconFolder,
   IconFolderOpen,
-  IconGitBranch,
+  IconGitBranch as TablerIconGitBranch,
   IconArchive,
   IconEye,
   IconEyeOff,
@@ -80,7 +89,7 @@ import {
   IconFileTypeCsv,
   IconFileTypeDoc,
   IconPhoto,
-  IconFileCode,
+  IconFileCode as TablerIconFileCode,
   IconMusic,
   IconVideo,
   IconFileTypeZip,
@@ -102,7 +111,7 @@ import {
   // Bridge icons
   IconWifi,
   IconBrandTelegram,
-  IconRefresh,
+  IconRefresh as TablerIconRefresh,
   // Browser extension icons
   IconBrandChrome,
   IconExternalLink,
@@ -120,20 +129,20 @@ import {
   IconCardboards,
   IconBrain,
   IconRobot,
-  IconLayoutSidebarRight,
+  IconLayoutSidebarRight as TablerIconLayoutSidebarRight,
   // CodeReviewPanel icons (kept under their original tabler names so the panel
   // can import them from this central file without renaming)
-  IconAlertCircle,
-  IconColumns2,
-  IconFileDiff,
-  IconFileMinus,
-  IconFilePlus,
-  IconFileX,
-  IconFold,
-  IconGitCompare,
-  IconMessagePlus,
-  IconRoute,
-  IconTextWrap,
+  IconAlertCircle as TablerIconAlertCircle,
+  IconColumns2 as TablerIconColumns2,
+  IconFileDiff as TablerIconFileDiff,
+  IconFileMinus as TablerIconFileMinus,
+  IconFilePlus as TablerIconFilePlus,
+  IconFileX as TablerIconFileX,
+  IconFold as TablerIconFold,
+  IconGitCompare as TablerIconGitCompare,
+  IconMessagePlus as TablerIconMessagePlus,
+  IconRoute as TablerIconRoute,
+  IconTextWrap as TablerIconTextWrap,
   // Business file icons — added for phosphor→tabler migration
   IconAdjustmentsHorizontal,
   IconArrowDownRight,
@@ -189,265 +198,272 @@ import {
   IconTriangle,
 } from "@tabler/icons-react";
 
-// Re-export all icons - export names preserved for backward compatibility
-export {
-  IconArrowUpRight as ArrowUpRightIcon,
-  IconArrowLeft as ArrowLeftIcon,
-  IconArrowRight as ArrowRightIcon,
-  IconBolt as LightningIcon,
-  IconWand as MagicWandIcon,
-  IconSparkles as SparkleIcon,
-  IconHistory as ClockCounterClockwiseIcon,
-  IconPlayerPlay as PlayCircleIcon,
-  IconRepeat as RepeatIcon,
-  IconSettings as GearSixIcon,
-  IconKey as KeyIcon,
-  IconDeviceDesktop as MonitorIcon,
-  IconPlugConnected as PlugIcon,
-  IconShieldCheck as ShieldCheckIcon,
-  IconCode as CodeIcon,
-  IconDatabase as DatabaseIcon,
-  IconWorld as GlobeHemisphereWestIcon,
-  IconWorld as GlobeIcon,
-  IconDots as DotsThreeIcon,
-  IconSearch as MagnifyingGlassIcon,
-  IconEdit as NotePencilIcon,
-  IconPencil as PencilIcon,
-  IconLayoutGrid as SquaresFourIcon,
-  IconMinimize as CornersInIcon,
-  IconMaximize as CornersOutIcon,
-  IconSun as SunIcon,
-  IconMoon as MoonIcon,
-  IconMoonStars as MoonStarsIcon,
-  IconSend as PaperPlaneRightIcon,
-  IconSend as PaperPlaneTiltIcon,
-  IconPlayerStop as StopIcon,
-  IconUser as UserIcon,
-  IconHome as HouseIcon,
-  IconCpu as CpuIcon,
-  IconCube as CubeIcon,
-  IconLoader2 as SpinnerGapIcon,
-  IconInfoCircle as InfoIcon,
-  IconShield as ShieldIcon,
-  IconX as XIcon,
-  IconCommand as CommandIcon,
-  IconPlus as PlusIcon,
-  IconMinus as MinusIcon,
-  IconChevronDown as CaretDownIcon,
-  IconChevronLeft as CaretLeftIcon,
-  IconChevronRight as CaretRightIcon,
-  IconChevronUp as CaretUpIcon,
-  IconMicrophone as MicrophoneIcon,
-  IconArrowUp as ArrowUpIcon,
-  IconTerminal as TerminalIcon,
-  IconHelpCircle as QuestionIcon,
-  IconEraser as EraserIcon,
-  IconChartLine as ChartLineIcon,
-  IconChartBar as ChartBarIcon,
-  IconWorld as GlobeSimpleIcon,
-  IconCopy as CopyIcon,
-  IconCheck as CheckIcon,
-  IconMessageCircle as ChatCircleIcon,
-  IconFile as FileIcon,
-  IconTool as WrenchIcon,
-  IconCircleCheck as CheckCircleIcon,
-  IconCircleX as XCircleIcon,
-  IconFolder as FolderIcon,
-  IconFolderOpen as FolderOpenIcon,
-  IconGitBranch as GitBranchIcon,
-  IconArchive as ArchiveIcon,
-  IconEye as EyeIcon,
-  IconEyeOff as EyeSlashIcon,
-  IconCircle as CircleIcon,
-  IconLoader as CircleNotchIcon,
-  IconTrash as TrashIcon,
-  IconFileText as FileTextIcon,
-  IconFileTypePdf as FilePdfIcon,
-  IconFileTypeXls as FileXlsIcon,
-  IconFileTypePpt as FilePptIcon,
-  IconFileTypeCsv as FileCsvIcon,
-  IconFileTypeDoc as FileDocIcon,
-  IconPhoto as FileImageIcon,
-  IconFileCode as FileCodeIcon,
-  IconMusic as FileAudioIcon,
-  IconVideo as FileVideoIcon,
-  IconFileTypeZip as FileZipIcon,
-  IconUpload as UploadSimpleIcon,
-  IconAlertTriangle as WarningIcon,
-  IconBan as ProhibitIcon,
-  IconServer as HardDrivesIcon,
-  IconPower as PowerIcon,
-  IconMessage2 as ChatCircleTextIcon,
-  IconBulb as LightbulbIcon,
-  IconPhoto as ImageIcon,
-  IconHandClick as CursorClickIcon,
-  IconCookie as CookieIcon,
-  IconAt as AtSignIcon,
-  IconSearch as SearchIcon,
-  IconChevronDown as ChevronDownIcon,
-  IconChevronUp as ChevronUpIcon,
-  IconStar as StarIcon,
-  IconBold as TextBolderIcon,
-  IconItalic as TextItalicIcon,
-  IconUnderline as TextUnderlineIcon,
-  IconStrikethrough as TextStrikethroughIcon,
+// Thin wrapper around tabler icons. Defaults stroke to 1.25 for a lighter
+// look. Call sites can still override stroke/size/color as before.
+type IconComponent = ForwardRefExoticComponent<TablerIconProps & RefAttributes<SVGSVGElement>>;
+
+function wrapIcon(Icon: TablerIcon): IconComponent {
+  return forwardRef<SVGSVGElement, TablerIconProps>(function WrappedIcon(props, ref) {
+    const { stroke, ...rest } = props;
+    return <Icon ref={ref} stroke={stroke ?? 1.25} {...rest} />;
+  }) as IconComponent;
+}
+
+export const ArrowUpRightIcon = wrapIcon(IconArrowUpRight);
+export const ArrowLeftIcon = wrapIcon(IconArrowLeft);
+export const ArrowRightIcon = wrapIcon(IconArrowRight);
+export const LightningIcon = wrapIcon(IconBolt);
+export const MagicWandIcon = wrapIcon(IconWand);
+export const SparkleIcon = wrapIcon(IconSparkles);
+export const ClockCounterClockwiseIcon = wrapIcon(TablerIconHistory);
+export const PlayCircleIcon = wrapIcon(IconPlayerPlay);
+export const RepeatIcon = wrapIcon(IconRepeat);
+export const GearSixIcon = wrapIcon(IconSettings);
+export const KeyIcon = wrapIcon(IconKey);
+export const MonitorIcon = wrapIcon(IconDeviceDesktop);
+export const PlugIcon = wrapIcon(IconPlugConnected);
+export const ShieldCheckIcon = wrapIcon(IconShieldCheck);
+export const CodeIcon = wrapIcon(IconCode);
+export const DatabaseIcon = wrapIcon(IconDatabase);
+export const GlobeHemisphereWestIcon = wrapIcon(IconWorld);
+export const GlobeIcon = wrapIcon(IconWorld);
+export const DotsThreeIcon = wrapIcon(IconDots);
+export const MagnifyingGlassIcon = wrapIcon(TablerIconSearch);
+export const NotePencilIcon = wrapIcon(IconEdit);
+export const PencilIcon = wrapIcon(IconPencil);
+export const SquaresFourIcon = wrapIcon(IconLayoutGrid);
+export const CornersInIcon = wrapIcon(IconMinimize);
+export const CornersOutIcon = wrapIcon(IconMaximize);
+export const SunIcon = wrapIcon(IconSun);
+export const MoonIcon = wrapIcon(IconMoon);
+export const MoonStarsIcon = wrapIcon(IconMoonStars);
+export const PaperPlaneRightIcon = wrapIcon(IconSend);
+export const PaperPlaneTiltIcon = wrapIcon(IconSend);
+export const StopIcon = wrapIcon(IconPlayerStop);
+export const UserIcon = wrapIcon(IconUser);
+export const HouseIcon = wrapIcon(IconHome);
+export const CpuIcon = wrapIcon(IconCpu);
+export const CubeIcon = wrapIcon(IconCube);
+export const SpinnerGapIcon = wrapIcon(IconLoader2);
+export const InfoIcon = wrapIcon(IconInfoCircle);
+export const ShieldIcon = wrapIcon(IconShield);
+export const XIcon = wrapIcon(IconX);
+export const CommandIcon = wrapIcon(IconCommand);
+export const PlusIcon = wrapIcon(IconPlus);
+export const MinusIcon = wrapIcon(IconMinus);
+export const CaretDownIcon = wrapIcon(TablerIconChevronDown);
+export const CaretLeftIcon = wrapIcon(IconChevronLeft);
+export const CaretRightIcon = wrapIcon(IconChevronRight);
+export const CaretUpIcon = wrapIcon(IconChevronUp);
+export const MicrophoneIcon = wrapIcon(IconMicrophone);
+export const ArrowUpIcon = wrapIcon(IconArrowUp);
+export const TerminalIcon = wrapIcon(IconTerminal);
+export const QuestionIcon = wrapIcon(IconHelpCircle);
+export const EraserIcon = wrapIcon(IconEraser);
+export const ChartLineIcon = wrapIcon(IconChartLine);
+export const ChartBarIcon = wrapIcon(IconChartBar);
+export const GlobeSimpleIcon = wrapIcon(IconWorld);
+export const CopyIcon = wrapIcon(TablerIconCopy);
+export const CheckIcon = wrapIcon(IconCheck);
+export const ChatCircleIcon = wrapIcon(IconMessageCircle);
+export const FileIcon = wrapIcon(IconFile);
+export const WrenchIcon = wrapIcon(IconTool);
+export const CheckCircleIcon = wrapIcon(IconCircleCheck);
+export const XCircleIcon = wrapIcon(IconCircleX);
+export const FolderIcon = wrapIcon(IconFolder);
+export const FolderOpenIcon = wrapIcon(IconFolderOpen);
+export const GitBranchIcon = wrapIcon(TablerIconGitBranch);
+export const ArchiveIcon = wrapIcon(IconArchive);
+export const EyeIcon = wrapIcon(IconEye);
+export const EyeSlashIcon = wrapIcon(IconEyeOff);
+export const CircleIcon = wrapIcon(IconCircle);
+export const CircleNotchIcon = wrapIcon(IconLoader);
+export const TrashIcon = wrapIcon(IconTrash);
+export const FileTextIcon = wrapIcon(IconFileText);
+export const FilePdfIcon = wrapIcon(IconFileTypePdf);
+export const FileXlsIcon = wrapIcon(IconFileTypeXls);
+export const FilePptIcon = wrapIcon(IconFileTypePpt);
+export const FileCsvIcon = wrapIcon(IconFileTypeCsv);
+export const FileDocIcon = wrapIcon(IconFileTypeDoc);
+export const FileImageIcon = wrapIcon(IconPhoto);
+export const FileCodeIcon = wrapIcon(TablerIconFileCode);
+export const FileAudioIcon = wrapIcon(IconMusic);
+export const FileVideoIcon = wrapIcon(IconVideo);
+export const FileZipIcon = wrapIcon(IconFileTypeZip);
+export const UploadSimpleIcon = wrapIcon(IconUpload);
+export const WarningIcon = wrapIcon(IconAlertTriangle);
+export const ProhibitIcon = wrapIcon(IconBan);
+export const HardDrivesIcon = wrapIcon(IconServer);
+export const PowerIcon = wrapIcon(IconPower);
+export const ChatCircleTextIcon = wrapIcon(IconMessage2);
+export const LightbulbIcon = wrapIcon(IconBulb);
+export const ImageIcon = wrapIcon(IconPhoto);
+export const CursorClickIcon = wrapIcon(IconHandClick);
+export const CookieIcon = wrapIcon(IconCookie);
+export const AtSignIcon = wrapIcon(IconAt);
+export const SearchIcon = wrapIcon(TablerIconSearch);
+export const ChevronDownIcon = wrapIcon(TablerIconChevronDown);
+export const ChevronUpIcon = wrapIcon(IconChevronUp);
+export const StarIcon = wrapIcon(IconStar);
+export const TextBolderIcon = wrapIcon(IconBold);
+export const TextItalicIcon = wrapIcon(IconItalic);
+export const TextUnderlineIcon = wrapIcon(IconUnderline);
+export const TextStrikethroughIcon = wrapIcon(IconStrikethrough);
   // Bridge icons
-  IconWifi as WifiHighIcon,
-  IconBrandTelegram as TelegramLogoIcon,
-  IconRefresh as ArrowsClockwiseIcon,
+export const WifiHighIcon = wrapIcon(IconWifi);
+export const TelegramLogoIcon = wrapIcon(IconBrandTelegram);
+export const ArrowsClockwiseIcon = wrapIcon(TablerIconRefresh);
   // Browser extension icons
-  IconBrandChrome as GoogleChromeLogoIcon,
-  IconExternalLink as ArrowSquareOutIcon,
+export const GoogleChromeLogoIcon = wrapIcon(IconBrandChrome);
+export const ArrowSquareOutIcon = wrapIcon(IconExternalLink);
   // Attachment menu icons
-  IconPaperclip as PaperclipIcon,
-  IconBrandGithub as GithubLogoIcon,
-  IconFeather as FeatherIcon,
-  IconDownload as DownloadSimpleIcon,
+export const PaperclipIcon = wrapIcon(IconPaperclip);
+export const GithubLogoIcon = wrapIcon(IconBrandGithub);
+export const FeatherIcon = wrapIcon(IconFeather);
+export const DownloadSimpleIcon = wrapIcon(IconDownload);
   // Reset icon
-  IconArrowBackUp as ArrowCounterClockwiseIcon,
+export const ArrowCounterClockwiseIcon = wrapIcon(IconArrowBackUp);
   // Plan 204 — provider actions icons
-  IconTestPipe as TestTubeIcon,
-  IconUsersGroup as UsersThreeIcon,
-  IconBook as BookOpenIcon,
-  IconListCheck as ListChecksIcon,
+export const TestTubeIcon = wrapIcon(IconTestPipe);
+export const UsersThreeIcon = wrapIcon(IconUsersGroup);
+export const BookOpenIcon = wrapIcon(IconBook);
+export const ListChecksIcon = wrapIcon(IconListCheck);
   // Tabler Icons - Agent icons (using IconCardboards as main agent icon)
-  IconCardboards as RobotIcon,
-  IconBrain as BrainIcon,
-  IconCode as TablerCodeIcon,
-  IconMessageCircle as TablerMessageCircleIcon,
-  IconRobot as TablerRobotIcon,
+export const RobotIcon = wrapIcon(IconCardboards);
+export const BrainIcon = wrapIcon(IconBrain);
+export const TablerCodeIcon = wrapIcon(IconCode);
+export const TablerMessageCircleIcon = wrapIcon(IconMessageCircle);
+export const TablerRobotIcon = wrapIcon(IconRobot);
   // Tabler Icons - Channel icons
-  IconMessageCircle as ChannelIcon,
+export const ChannelIcon = wrapIcon(IconMessageCircle);
   // Browser extension aliases
-  IconBrandChrome as ChromeIcon,
-  IconExternalLink as ExternalLinkIcon,
+export const ChromeIcon = wrapIcon(IconBrandChrome);
+export const ExternalLinkIcon = wrapIcon(IconExternalLink);
   // CodeReviewPanel icons - re-exported under their original tabler names so
   // the panel can import them from this central file unchanged.
-  IconAlertCircle,
-  IconChevronDown,
-  IconColumns2,
-  IconCopy,
-  IconFileCode,
-  IconFileDiff,
-  IconFileMinus,
-  IconFilePlus,
-  IconFileX,
-  IconFold,
-  IconGitBranch,
-  IconGitCompare,
-  IconHistory,
-  IconLayoutSidebarRight,
-  IconMessagePlus,
-  IconRefresh,
-  IconRoute,
-  IconSearch,
-  IconTextWrap,
+export const IconAlertCircle = wrapIcon(TablerIconAlertCircle);
+export const IconChevronDown = wrapIcon(TablerIconChevronDown);
+export const IconColumns2 = wrapIcon(TablerIconColumns2);
+export const IconCopy = wrapIcon(TablerIconCopy);
+export const IconFileCode = wrapIcon(TablerIconFileCode);
+export const IconFileDiff = wrapIcon(TablerIconFileDiff);
+export const IconFileMinus = wrapIcon(TablerIconFileMinus);
+export const IconFilePlus = wrapIcon(TablerIconFilePlus);
+export const IconFileX = wrapIcon(TablerIconFileX);
+export const IconFold = wrapIcon(TablerIconFold);
+export const IconGitBranch = wrapIcon(TablerIconGitBranch);
+export const IconGitCompare = wrapIcon(TablerIconGitCompare);
+export const IconHistory = wrapIcon(TablerIconHistory);
+export const IconLayoutSidebarRight = wrapIcon(TablerIconLayoutSidebarRight);
+export const IconMessagePlus = wrapIcon(TablerIconMessagePlus);
+export const IconRefresh = wrapIcon(TablerIconRefresh);
+export const IconRoute = wrapIcon(TablerIconRoute);
+export const IconSearch = wrapIcon(TablerIconSearch);
+export const IconTextWrap = wrapIcon(TablerIconTextWrap);
   // Business file icons — phosphor-name aliases for tabler icons
-  IconPlayerPlay as PlayIcon,
-  IconPencil as PencilSimpleIcon,
-  IconAlertCircle as WarningCircleIcon,
-  IconGitCompare as GitDiffIcon,
-  IconRefresh as ArrowClockwiseIcon,
-  IconAdjustmentsHorizontal as SlidersHorizontalIcon,
-  IconArrowDownRight as ArrowBendDownRightIcon,
-  IconArrowsVertical as ArrowsInLineVerticalIcon,
-  IconArrowsDiagonalMinimize as ArrowsInSimpleIcon,
-  IconArrowsMaximize as ArrowsOutSimpleIcon,
-  IconSquareHalf as SquareHalfIcon,
-  IconSquareCheck as CheckSquareIcon,
-  IconCamera as CameraIcon,
-  IconVector as PathIcon,
-  IconQuote as QuotesIcon,
-  IconFiles as FilesIcon,
-  IconZoomIn as MagnifyingGlassPlusIcon,
-  IconZoomOut as MagnifyingGlassMinusIcon,
-  IconMarkdown as FileMdIcon,
-  IconFileTypeRs as FileRsIcon,
-  IconFileTypeTs as FileTsIcon,
-  IconFileTypeJs as FileJsIcon,
-  IconFileTypeJsx as FileJsxIcon,
-  IconFileTypeCss as FileCssIcon,
-  IconFileTypeHtml as FileHtmlIcon,
-  IconFileTypeJpg as FileJpgIcon,
-  IconFileTypePng as FilePngIcon,
-  IconFileTypeSql as FileSqlIcon,
-  IconFileTypeSvg as FileSvgIcon,
-  IconFileTypeVue as FileVueIcon,
-  IconFileCode as FileCIcon,
-  IconFileCode as FileCppIcon,
-  IconFileTypeDoc as MicrosoftWordLogoIcon,
-  IconFileTypePpt as MicrosoftPowerpointLogoIcon,
-  IconFileTypeXls as MicrosoftExcelLogoIcon,
+export const PlayIcon = wrapIcon(IconPlayerPlay);
+export const PencilSimpleIcon = wrapIcon(IconPencil);
+export const WarningCircleIcon = wrapIcon(TablerIconAlertCircle);
+export const GitDiffIcon = wrapIcon(TablerIconGitCompare);
+export const ArrowClockwiseIcon = wrapIcon(TablerIconRefresh);
+export const SlidersHorizontalIcon = wrapIcon(IconAdjustmentsHorizontal);
+export const ArrowBendDownRightIcon = wrapIcon(IconArrowDownRight);
+export const ArrowsInLineVerticalIcon = wrapIcon(IconArrowsVertical);
+export const ArrowsInSimpleIcon = wrapIcon(IconArrowsDiagonalMinimize);
+export const ArrowsOutSimpleIcon = wrapIcon(IconArrowsMaximize);
+export const SquareHalfIcon = wrapIcon(IconSquareHalf);
+export const CheckSquareIcon = wrapIcon(IconSquareCheck);
+export const CameraIcon = wrapIcon(IconCamera);
+export const PathIcon = wrapIcon(IconVector);
+export const QuotesIcon = wrapIcon(IconQuote);
+export const FilesIcon = wrapIcon(IconFiles);
+export const MagnifyingGlassPlusIcon = wrapIcon(IconZoomIn);
+export const MagnifyingGlassMinusIcon = wrapIcon(IconZoomOut);
+export const FileMdIcon = wrapIcon(IconMarkdown);
+export const FileRsIcon = wrapIcon(IconFileTypeRs);
+export const FileTsIcon = wrapIcon(IconFileTypeTs);
+export const FileJsIcon = wrapIcon(IconFileTypeJs);
+export const FileJsxIcon = wrapIcon(IconFileTypeJsx);
+export const FileCssIcon = wrapIcon(IconFileTypeCss);
+export const FileHtmlIcon = wrapIcon(IconFileTypeHtml);
+export const FileJpgIcon = wrapIcon(IconFileTypeJpg);
+export const FilePngIcon = wrapIcon(IconFileTypePng);
+export const FileSqlIcon = wrapIcon(IconFileTypeSql);
+export const FileSvgIcon = wrapIcon(IconFileTypeSvg);
+export const FileVueIcon = wrapIcon(IconFileTypeVue);
+export const FileCIcon = wrapIcon(TablerIconFileCode);
+export const FileCppIcon = wrapIcon(TablerIconFileCode);
+export const MicrosoftWordLogoIcon = wrapIcon(IconFileTypeDoc);
+export const MicrosoftPowerpointLogoIcon = wrapIcon(IconFileTypePpt);
+export const MicrosoftExcelLogoIcon = wrapIcon(IconFileTypeXls);
   // Conductor renderer icons — added for phosphor→tabler migration (plan 2nd batch)
-  IconArrowLoopLeft as ArrowArcLeftIcon,
-  IconArrowLoopRight as ArrowArcRightIcon,
-  IconArrowElbowRight as ArrowElbowDownRightIcon,
-  IconArrowsMaximize as ArrowsOutIcon,
-  IconVectorBezier as BezierCurveIcon,
-  IconDiamond as DiamondIcon,
-  IconGripVertical as DotsSixVerticalIcon,
-  IconHandStop as HandIcon,
-  IconHexagon as HexagonIcon,
-  IconPointer as CursorIcon,
-  IconLink as LinkSimpleIcon,
-  IconList as ListBulletsIcon,
-  IconNote as NoteIcon,
-  IconBucket as PaintBucketIcon,
-  IconPolygon as ParallelogramIcon,
-  IconScan as SelectionAllIcon,
-  IconShieldExclamation as ShieldWarningIcon,
-  IconSquare as SquareIcon,
-  IconTable as TableIcon,
-  IconTypography as TextAaIcon,
-  IconAlignCenter as TextAlignCenterIcon,
-  IconAlignLeft as TextAlignLeftIcon,
-  IconAlignRight as TextAlignRightIcon,
-  IconLetterT as TextTIcon,
-  IconTriangle as TriangleIcon,
-  IconPhoto as ImageSquareIcon,
-  IconFilePlus as FilePlusIcon,
-  IconLayoutGrid as GridFourIcon,
-  IconBold as TextBIcon,
-  IconCopy as CopySimpleIcon,
-  IconBell as BellIcon,
-  IconRectangle as RectangleIcon,
-};
+export const ArrowArcLeftIcon = wrapIcon(IconArrowLoopLeft);
+export const ArrowArcRightIcon = wrapIcon(IconArrowLoopRight);
+export const ArrowElbowDownRightIcon = wrapIcon(IconArrowElbowRight);
+export const ArrowsOutIcon = wrapIcon(IconArrowsMaximize);
+export const BezierCurveIcon = wrapIcon(IconVectorBezier);
+export const DiamondIcon = wrapIcon(IconDiamond);
+export const DotsSixVerticalIcon = wrapIcon(IconGripVertical);
+export const HandIcon = wrapIcon(IconHandStop);
+export const HexagonIcon = wrapIcon(IconHexagon);
+export const CursorIcon = wrapIcon(IconPointer);
+export const LinkSimpleIcon = wrapIcon(IconLink);
+export const ListBulletsIcon = wrapIcon(IconList);
+export const NoteIcon = wrapIcon(IconNote);
+export const PaintBucketIcon = wrapIcon(IconBucket);
+export const ParallelogramIcon = wrapIcon(IconPolygon);
+export const SelectionAllIcon = wrapIcon(IconScan);
+export const ShieldWarningIcon = wrapIcon(IconShieldExclamation);
+export const SquareIcon = wrapIcon(IconSquare);
+export const TableIcon = wrapIcon(IconTable);
+export const TextAaIcon = wrapIcon(IconTypography);
+export const TextAlignCenterIcon = wrapIcon(IconAlignCenter);
+export const TextAlignLeftIcon = wrapIcon(IconAlignLeft);
+export const TextAlignRightIcon = wrapIcon(IconAlignRight);
+export const TextTIcon = wrapIcon(IconLetterT);
+export const TriangleIcon = wrapIcon(IconTriangle);
+export const ImageSquareIcon = wrapIcon(IconPhoto);
+export const FilePlusIcon = wrapIcon(TablerIconFilePlus);
+export const GridFourIcon = wrapIcon(IconLayoutGrid);
+export const TextBIcon = wrapIcon(IconBold);
+export const CopySimpleIcon = wrapIcon(TablerIconCopy);
+export const BellIcon = wrapIcon(IconBell);
+export const RectangleIcon = wrapIcon(IconRectangle);
 
 // Aliases for backward compatibility - right-hand sides updated to tabler
 // import names.
-export const ServerIcon = IconServer;
-export const MessageCircleIcon = IconMessage2;
-export const ZapIcon = IconBolt;
-export const PowerOffIcon = IconPower;
+export const ServerIcon = wrapIcon(IconServer);
+export const MessageCircleIcon = wrapIcon(IconMessage2);
+export const ZapIcon = wrapIcon(IconBolt);
+export const PowerOffIcon = wrapIcon(IconPower);
 
 // SpinnerIcon is an alias for CircleNotchIcon
-export const SpinnerIcon = IconLoader;
+export const SpinnerIcon = wrapIcon(IconLoader);
 
 // DocumentTextIcon is an alias for FileTextIcon
-export const DocumentTextIcon = IconFileText;
+export const DocumentTextIcon = wrapIcon(IconFileText);
 
 // ClockIcon is an alias for ClockCounterClockwiseIcon
-export const ClockIcon = IconHistory;
+export const ClockIcon = wrapIcon(TablerIconHistory);
 
 // SidebarRightIcon is an alias for IconLayoutSidebarRight (tabler)
-export const SidebarRightIcon = IconLayoutSidebarRight;
+export const SidebarRightIcon = wrapIcon(TablerIconLayoutSidebarRight);
 
 // FilePyIcon: Tabler has no Python file-type icon, use generic code file icon
-export const FilePyIcon = IconFileCode;
+export const FilePyIcon = wrapIcon(TablerIconFileCode);
 // FileIniIcon: Tabler has no INI file-type icon, use generic text file icon
-export const FileIniIcon = IconFileText;
+export const FileIniIcon = wrapIcon(IconFileText);
 
 // TelescopeIcon has no equivalent in @tabler/icons-react, so we ship a small
 // inline SVG instead. Shape: a tilted telescope tube on a tripod stand.
 // Matches the IconProps contract used by every other icon in this file so
 // `size`, `color`, and standard SVG attributes pass through unchanged.
-import { forwardRef, type ComponentPropsWithoutRef, type RefAttributes } from 'react';
 type TelescopeIconProps = ComponentPropsWithoutRef<'svg'> & RefAttributes<SVGSVGElement> & {
   size?: string | number;
   color?: string;
 };
 export const TelescopeIcon = forwardRef<SVGSVGElement, TelescopeIconProps>(
-  ({ size = 16, color = 'currentColor', ...rest }, ref) => (
+  ({ size = 16, color = 'currentColor', stroke = 1.25, ...rest }, ref) => (
     <svg
       ref={ref}
       xmlns="http://www.w3.org/2000/svg"
@@ -456,7 +472,7 @@ export const TelescopeIcon = forwardRef<SVGSVGElement, TelescopeIconProps>(
       viewBox="0 0 256 256"
       fill="none"
       stroke={color}
-      strokeWidth={16}
+      strokeWidth={typeof stroke === 'number' ? (stroke * 12.8) : stroke}
       strokeLinecap="round"
       strokeLinejoin="round"
       {...rest}
