@@ -456,6 +456,27 @@ export function initializeSchema(db: BetterSqlite3Db): void {
     )
   `);
 
+  // Plan 312: App Connection metadata. Tokens NEVER live here — they
+  // go in the safeStorage-encrypted vault at
+  // {userData}/app-connections/tokens.vault. This table only stores
+  // connection state (provider, account, scopes, status, expiry).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_connections (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      account_label TEXT NOT NULL DEFAULT '',
+      account_id TEXT NOT NULL DEFAULT '',
+      scopes TEXT NOT NULL DEFAULT '[]',
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      expires_at INTEGER,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_app_connections_provider ON app_connections(provider)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_app_connections_status ON app_connections(status)`);
+
   initializeFts5(db);
 
   const insertSetting = db.prepare(`
@@ -2161,6 +2182,31 @@ const migrations: Migration[] = [
         )
       `);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_turn_reviews_latest ON chat_turn_reviews(session_id, captured_at DESC)`);
+    },
+  },
+  {
+    id: 44,
+    name: 'add_provider_state-and-signature-columns',
+    migrate(db: BetterSqlite3Db): void {
+      // Add provider_state and per-content signature columns to messages.
+      // provider_state stores the provider-native state JSON (api, providerId,
+      // model, responseId). *_signature columns store the signature fields
+      // from provider content blocks (thinkingSignature / thoughtSignature /
+      // textSignature) so they round-trip through the DB without being
+      // lossily merged into content.
+      const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
+      const columns = tableInfo.map((col) => col.name);
+      const newColumns: Array<{ name: string; ddl: string }> = [
+        { name: 'provider_state', ddl: 'ALTER TABLE messages ADD COLUMN provider_state TEXT' },
+        { name: 'thinking_signature', ddl: 'ALTER TABLE messages ADD COLUMN thinking_signature TEXT' },
+        { name: 'tool_signature', ddl: 'ALTER TABLE messages ADD COLUMN tool_signature TEXT' },
+        { name: 'text_signature', ddl: 'ALTER TABLE messages ADD COLUMN text_signature TEXT' },
+      ];
+      for (const col of newColumns) {
+        if (!columns.includes(col.name)) {
+          db.exec(col.ddl);
+        }
+      }
     },
   },
 ];

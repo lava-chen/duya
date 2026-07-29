@@ -2,7 +2,7 @@
  * Base interface for LLM clients
  */
 
-import type { Message, SSEEvent, TokenUsage } from '../types.js';
+import type { AssistantMessage, Message, SSEEvent, TokenUsage } from '../types.js';
 
 export interface LLMClient {
   /**
@@ -30,7 +30,7 @@ export interface LLMClient {
        */
       maxOutputTokens?: number;
     }
-  ): AsyncGenerator<SSEEvent, void, unknown>;
+  ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown>;
 
   /**
    * Non-streaming chat completion for classifier/automated decisions.
@@ -99,7 +99,7 @@ export class LazyLLMClientProxy implements LLMClient {
       effort?: string;
       maxOutputTokens?: number;
     },
-  ): AsyncGenerator<SSEEvent, void, unknown> {
+  ): AsyncGenerator<SSEEvent, AssistantMessage | void, unknown> {
     const client = await this.getClient();
     yield* client.streamChat(messages, options);
   }
