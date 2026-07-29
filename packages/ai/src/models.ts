@@ -135,3 +135,45 @@ export function findModelCompat(
   const withCompat = matches.find(m => m.compat !== undefined);
   return withCompat?.compat ?? matches[0]?.compat;
 }
+
+/**
+ * Find a Model by its id from the built-in provider preset models.
+ * Returns the first match. If multiple providers use the same model id,
+ * prefers the one with thinkingLevelMap defined.
+ * Returns undefined if no match is found.
+ */
+export function findModelById(modelId: string): Model | undefined {
+  const matches = allProviderModels.filter(m => m.id === modelId);
+  const withMap = matches.find(m => m.thinkingLevelMap !== undefined);
+  return withMap ?? matches[0];
+}
+
+/**
+ * Returns the list of effort options for a given model id.
+ * Each option has a `value` (the effort string, or '' for auto) and
+ * a `level` (the ModelThinkingLevel, or 'off' for auto).
+ *
+ * Returns null if the model is not found or doesn't support reasoning.
+ * The caller should fall back to the default 5 options in that case.
+ */
+export function getEffortOptionsForModel(
+  modelId: string,
+): Array<{ value: string; level: ModelThinkingLevel }> | null {
+  const model = findModelById(modelId);
+  if (!model || !model.reasoning) return null;
+
+  const levels = getSupportedThinkingLevels(model);
+  if (levels.length === 0) return null;
+
+  // Always include 'off' (auto) as the first option
+  const options: Array<{ value: string; level: ModelThinkingLevel }> = [
+    { value: '', level: 'off' },
+  ];
+
+  for (const level of levels) {
+    if (level === 'off') continue;
+    options.push({ value: level, level });
+  }
+
+  return options;
+}

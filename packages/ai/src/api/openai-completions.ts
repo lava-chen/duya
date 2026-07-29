@@ -393,7 +393,14 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       const thinkParser = useThinkTagParser ? new ThinkTagParser() : null;
 
       // 6. Build request params.
-      const maxTokens = chatOptions?.maxOutputTokens ?? chatOptions?.maxTokens ?? 4096;
+      // totalOutputBudget takes precedence. For OpenAI, max_tokens (or
+      // max_completion_tokens for reasoning models) is the total output budget.
+      // reasoningBudget is intentionally not used here: OpenAI's reasoning_effort
+      // controls the reasoning budget implicitly.
+      const maxTokens = chatOptions?.totalOutputBudget
+        ?? chatOptions?.maxOutputTokens
+        ?? chatOptions?.maxTokens
+        ?? 4096;
       const params: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
         model: options.model,
         messages: openaiMessages,

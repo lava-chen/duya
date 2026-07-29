@@ -329,6 +329,16 @@ export interface AIClient {
       signal?: AbortSignal;
       effort?: string;
       maxOutputTokens?: number;
+      /** Tokens reserved specifically for reasoning/thinking.
+       *  For Anthropic: maps to thinking.budget_tokens.
+       *  For OpenAI: ignored (reasoning_effort controls budget).
+       *  When set, totalOutputBudget must be >= reasoningBudget + 1. */
+      reasoningBudget?: number;
+      /** Total output token budget (thinking + text combined).
+       *  For Anthropic: maps to max_tokens.
+       *  For OpenAI: maps to max_tokens (max_completion_tokens).
+       *  When set, takes precedence over maxOutputTokens/maxTokens. */
+      totalOutputBudget?: number;
     },
   ): AsyncGenerator<SSEEvent, AssistantMessage, unknown>;
 

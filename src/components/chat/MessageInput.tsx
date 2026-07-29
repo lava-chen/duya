@@ -27,6 +27,7 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelSelector, type ModelOption } from './ModelSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
+import { getEffortOptionsForModel } from '@duya/ai';
 import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
 import { AttachmentBar } from './AttachmentBar';
 import {
@@ -34,6 +35,10 @@ import {
   ADD_ATTACHMENT_EVENT,
   type AddAttachmentDetail,
 } from '@/lib/add-attachment-event';
+import {
+  PREFILL_CHAT_INPUT_EVENT,
+  consumePendingPrefill,
+} from '@/lib/prefill-chat-input-event';
 import { useTranslation } from '@/hooks/useTranslation';
 import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
 import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
@@ -156,7 +161,40 @@ function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
   return next;
 }
 
-function useEffortOptions(t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string): EffortOption[] {
+/**
+ * Inline labels for thinking levels not covered by i18n keys.
+ * The 5 standard levels (auto/low/medium/high/max) use i18n; minimal
+ * and xhigh fall back to these English strings.
+ */
+const EFFORT_LABELS: Partial<Record<string, string>> = {
+  minimal: 'Minimal',
+  xhigh: 'Extra High',
+};
+
+function useEffortOptions(
+  t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string,
+  modelId?: string,
+): EffortOption[] {
+  // Try to get model-specific options from @duya/ai
+  if (modelId) {
+    const modelOptions = getEffortOptionsForModel(modelId);
+    if (modelOptions) {
+      return modelOptions.map(opt => {
+        const inline = EFFORT_LABELS[opt.level];
+        if (inline) return { value: opt.value, label: inline };
+        switch (opt.level) {
+          case 'off': return { value: opt.value, label: t('messageInput.effortAuto') };
+          case 'low': return { value: opt.value, label: t('messageInput.effortLow') };
+          case 'medium': return { value: opt.value, label: t('messageInput.effortMedium') };
+          case 'high': return { value: opt.value, label: t('messageInput.effortHigh') };
+          case 'max': return { value: opt.value, label: t('messageInput.effortMax') };
+          default: return { value: opt.value, label: opt.level };
+        }
+      });
+    }
+  }
+
+  // Fallback: show all 5 default options
   return [
     { value: '', label: t('messageInput.effortAuto') },
     { value: 'low', label: t('messageInput.effortLow') },
@@ -169,11 +207,12 @@ function useEffortOptions(t: (key: 'messageInput.effortAuto' | 'messageInput.eff
 interface EffortSelectorProps {
   value: string | undefined;
   onChange: (value: string) => void;
+  modelId?: string;
 }
 
-function EffortSelector({ value, onChange }: EffortSelectorProps) {
+function EffortSelector({ value, onChange, modelId }: EffortSelectorProps) {
   const { t } = useTranslation();
-  const options = useEffortOptions(t);
+  const options = useEffortOptions(t, modelId);
   const selectedLabel = options.find(opt => opt.value === (value || ''))?.label || t('messageInput.effortAuto');
 
   return (
@@ -607,6 +646,22 @@ export function MessageInput({
     };
     window.addEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
 
+    // Plan 311: `duya:prefill-chat-input` lets panels (e.g. the
+    // Capabilities detail page) drop a workflow template prompt into
+    // the input box. The value is visible and editable — it is NOT
+    // auto-sent. The user reviews it and presses Enter when ready.
+    const handlePrefillChatInput = (e: Event) => {
+      const detail = (e as CustomEvent<{ value: string }>).detail;
+      if (typeof detail?.value === 'string') {
+        setInputValue(detail.value);
+        requestAnimationFrame(() => {
+          textareaRef.current?.focus();
+          adjustTextareaHeight();
+        });
+      }
+    };
+    window.addEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
+
     // Conductor canvas UI (ObjectAgentPrompt / ConductorComposer) forwards
     // submissions here. We enable conductor mode on the current session and
     // populate the input box with the forwarded text (+ element context).
@@ -652,10 +707,27 @@ export function MessageInput({
       window.removeEventListener('terminal-add-to-input', legacyTerminal as EventListener);
       window.removeEventListener('browser-add-to-input', legacyBrowser as EventListener);
       window.removeEventListener('duya:set-hidden-prompt', handleSetHiddenPrompt as EventListener);
+      window.removeEventListener(PREFILL_CHAT_INPUT_EVENT, handlePrefillChatInput as EventListener);
       window.removeEventListener('conductor:forward-message', handleForwardMessage as EventListener);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachments, onConductorChange]);
+
+  // Plan 311: consume a pending workflow prefill that arrived while
+  // `MessageInput` was unmounted (e.g. the user launched a workflow
+  // from the Capabilities settings page, which then navigated to
+  // chat). The stash is cleared on read so it only fires once.
+  useEffect(() => {
+    const pending = consumePendingPrefill();
+    if (pending) {
+      setInputValue(pending);
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustTextareaHeight();
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Build content with attachments + hidden prompt baked in. The
   // `hiddenPrompt` is the auto-injected context that the LLM should
@@ -1318,6 +1390,9 @@ export function MessageInput({
             setSelectedEffort(effort ?? undefined);
             onEffortChange?.(effort ?? undefined);
           }}
+          // Strip the `[provider] ` prefix so @duya/ai sees the raw model id
+          // (e.g. 'MiniMax-M3') it can look up in allProviderModels.
+          modelId={selectedModel.replace(/^\[[^\]]+\]\s*/, '')}
           responseStyles={responseStyles.map(s => ({ id: s.id, name: s.name, description: s.description }))}
           selectedStyle={selectedStyleId}
           onSelectStyle={(styleId) => setSelectedStyleId(styleId)}
@@ -1524,16 +1599,18 @@ export function MessageInput({
                   <StopIcon size={16} />
                 </IconButton>
               )}
-              <button
+              <IconButton
                 type="submit"
+                variant="primary"
+                shape="round"
+                size="md"
+                aria-label="Send"
+                title="Send"
                 disabled={disabled || (!inputValue.trim() && attachments.length === 0)}
-                className="w-8 h-8 rounded-full text-white flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed transition-colors ml-1"
-                style={{ backgroundColor: 'var(--send-btn)' }}
-                onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn-hover)'; }}
-                onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'var(--send-btn)'; }}
+                className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
               >
                 <ArrowUpIcon size={16} />
-              </button>
+              </IconButton>
             </div>
           </div>
         </div>

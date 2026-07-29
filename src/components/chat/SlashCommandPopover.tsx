@@ -2,7 +2,7 @@
 
 'use client';
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import type { PopoverItem, PopoverMode, SettingsSubmenu } from '@/types/slash-command';
 import {
   CubeIcon,
@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/Button';
 import type { ModeModifierId } from '@/types/mode-id';
 import { isModeExcludedByActive } from '@/types/mode-id';
+import { getEffortOptionsForModel } from '@duya/ai';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -55,6 +56,48 @@ const THINKING_EFFORT_OPTIONS: ThinkingEffortOption[] = [
   { value: 'max', label: 'Max', description: 'Maximum capability' },
 ];
 
+/**
+ * Label and description lookup for every possible ModelThinkingLevel.
+ * Used to map `getEffortOptionsForModel` output (which returns level
+ * identifiers) into the { label, description } shape the popover renders.
+ * Levels beyond the standard 5 (minimal, xhigh) get English fallbacks
+ * since they don't have i18n keys.
+ */
+const LEVEL_META: Record<string, { label: string; description: string }> = {
+  off: { label: 'Auto', description: 'Default thinking level' },
+  minimal: { label: 'Minimal', description: 'Fastest responses' },
+  low: { label: 'Low', description: 'Quick responses' },
+  medium: { label: 'Medium', description: 'Balanced approach' },
+  high: { label: 'High', description: 'Deep reasoning' },
+  xhigh: { label: 'Extra High', description: 'Deeper than high' },
+  max: { label: 'Max', description: 'Maximum capability' },
+};
+
+/**
+ * Returns the effort options to show in the thinking submenu for the
+ * given model. When `modelId` is provided and the model is found in the
+ * built-in presets with reasoning support, only the levels the model
+ * actually supports are returned. Otherwise falls back to the default
+ * 5-option list (auto/low/medium/high/max).
+ *
+ * `modelId` should be the raw model id (e.g. 'MiniMax-M3'), without the
+ * `[provider]` prefix the ModelSelector uses internally. The caller is
+ * responsible for stripping the prefix.
+ */
+function resolveEffortOptions(modelId?: string): ThinkingEffortOption[] {
+  if (modelId) {
+    const modelOptions = getEffortOptionsForModel(modelId);
+    if (modelOptions) {
+      return modelOptions.map(opt => {
+        const meta = LEVEL_META[opt.level] ?? { label: opt.level, description: '' };
+        // getEffortOptionsForModel uses '' for auto; SlashCommandPopover uses null.
+        return { value: opt.value || null, label: meta.label, description: meta.description };
+      });
+    }
+  }
+  return THINKING_EFFORT_OPTIONS;
+}
+
 interface SlashCommandPopoverProps {
   popoverMode: PopoverMode;
   popoverRef: React.RefObject<HTMLDivElement | null>;
@@ -70,6 +113,13 @@ interface SlashCommandPopoverProps {
   // Settings state + callbacks
   thinkingEffort: string | null;
   onSelectThinkingEffort: (effort: string | null) => void;
+  /**
+   * Raw model id (without `[provider]` prefix) used to filter the thinking
+   * effort options to only the levels the current model supports. When
+   * undefined or the model is not found in presets, all 5 default options
+   * are shown.
+   */
+  modelId?: string;
   responseStyles: ResponseStyleInfo[];
   selectedStyle: string | null;
   onSelectStyle: (styleId: string) => void;
@@ -118,6 +168,7 @@ export function SlashCommandPopover({
 
   thinkingEffort,
   onSelectThinkingEffort,
+  modelId,
   responseStyles,
   selectedStyle,
   onSelectStyle,
@@ -152,6 +203,11 @@ export function SlashCommandPopover({
   // 'keyboard' = ArrowUp/Down changed selection → should auto-scroll to keep
   //              the highlighted row visible.
   const lastSelectSource = useRef<'mouse' | 'keyboard'>('mouse');
+
+  // Resolve the thinking-effort options for the currently-selected model.
+  // When the model is a known reasoning model, only the levels it supports
+  // are shown; otherwise the full 5-option fallback list is used.
+  const effortOptions = useMemo(() => resolveEffortOptions(modelId), [modelId]);
 
   const requestRecap = useCallback(async () => {
     setRecapState({ status: 'loading' });
@@ -348,7 +404,7 @@ export function SlashCommandPopover({
     // Current value label for submenu items
     let currentValueLabel: string | null = null;
     if (item.submenu === 'thinking') {
-      const opt = THINKING_EFFORT_OPTIONS.find(o => o.value === thinkingEffort);
+      const opt = effortOptions.find(o => o.value === thinkingEffort);
       currentValueLabel = opt?.label ?? null;
     } else if (item.submenu === 'style') {
       const style = responseStyles.find(s => s.id === selectedStyle);
@@ -529,7 +585,7 @@ export function SlashCommandPopover({
             <div className="px-2.5 pb-1 pt-1 text-[11px] font-medium" style={{ color: 'var(--command-menu-muted)' }}>
               Thinking effort
             </div>
-            {THINKING_EFFORT_OPTIONS.map((option) => {
+            {effortOptions.map((option) => {
               const isActive = thinkingEffort === option.value;
               return (
                 <div

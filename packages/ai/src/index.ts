@@ -13,7 +13,15 @@ export {
   clampThinkingLevel,
   getNativeLevel,
   findModelCompat,
+  findModelById,
+  getEffortOptionsForModel,
 } from './models.js';
+export {
+  shouldDisableThinking,
+  getMaxOutputTokens,
+  getTemperature,
+  validateBudgets,
+} from './utils/simple-options.js';
 
 export type {
   ApiFormat,
