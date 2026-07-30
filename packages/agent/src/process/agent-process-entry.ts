@@ -71,6 +71,7 @@ import { detectModelCapability } from '../llm/model-capability-cache.js';
 import type { ProbeConfig } from '../llm/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
+import type { ApiFormat, ModelCompat } from '@duya/ai';
 
 // Polyfill globalThis.crypto for Node.js
 if (typeof globalThis.crypto === 'undefined' || !globalThis.crypto.randomUUID) {
@@ -167,7 +168,14 @@ interface ChatStartMessage {
     displayContent?: string;
     mode?: string;
     titleGenerationModel?: string;
-    titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
+    titleGenerationModelConfig?: {
+      provider: string;
+      apiKey: string;
+      baseURL: string;
+      model: string;
+      apiFormat?: string;
+      modelCompat?: ModelCompat;
+    };
     effort?: string;
     /**
      * Allowlist of tool names permitted for this chat turn. When set, only
@@ -207,7 +215,14 @@ const visionTool = new VisionTool();
 // Track title generation per session (Map<sessionId, lastGeneratedTitle>)
 const titleGeneratedBySession = new Map<string, string>();
 // Title generation model config (from settings)
-let titleGenerationModelConfig: { provider: string; apiKey: string; baseURL: string; model: string } | null = null;
+let titleGenerationModelConfig: {
+  provider: string;
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  apiFormat?: string;
+  modelCompat?: ModelCompat;
+} | null = null;
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 // Heartbeat tracking for long-running operations
 let lastPongTime = Date.now();
@@ -1459,6 +1474,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       apiKey: titleModelConfigOption.apiKey,
       baseURL: titleModelConfigOption.baseURL,
       model: titleModelConfigOption.model,
+      apiFormat: titleModelConfigOption.apiFormat,
+      modelCompat: titleModelConfigOption.modelCompat,
     };
     log('[Agent-Process] Title generation model configured from options:', titleGenerationModelConfig.model);
   } else if (titleModelOption) {
@@ -2373,12 +2390,31 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             } else {
               try {
                 const { createLLMClient } = await import('../llm/index.js');
+                const { findModelCompat } = await import('@duya/ai');
+
+                // Resolve apiFormat: use provided value, or infer from the
+                // legacy provider discriminator. This matches the inference
+                // already done inside createLLMClient, but we materialize it
+                // here so findModelCompat can be called with a concrete value.
+                const titleApiFormat = (titleGenerationModelConfig.apiFormat
+                  ?? (titleGenerationModelConfig.provider === 'anthropic' ? 'anthropic' : 'openai-chat')) as
+                  ApiFormat;
+
+                // Resolve modelCompat: use provided value, or look up from
+                // @duya/ai presets so reasoning models (DeepSeek, Qwen, GLM,
+                // Kimi, etc.) parse reasoning content correctly.
+                const titleModelCompat = titleGenerationModelConfig.modelCompat
+                  ?? findModelCompat(titleApiFormat, titleGenerationModelConfig.model);
+
                 titleLLMClient = createLLMClient(
                   titleGenerationModelConfig.provider as 'anthropic' | 'openai' | 'ollama',
                   {
                     apiKey: titleGenerationModelConfig.apiKey,
                     baseURL: titleGenerationModelConfig.baseURL,
                     model: titleGenerationModelConfig.model,
+                    apiFormat: titleApiFormat,
+                    providerId: titleGenerationModelConfig.provider,
+                    modelCapabilities: titleModelCompat,
                   }
                 );
                 log(`[Agent-Process] Using custom title model: ${titleGenerationModelConfig.model}`);

@@ -304,6 +304,7 @@ if (gotTheLock) {
         const { createRetryableLLMClient } = await import('../packages/agent/src/llm/index.js');
         const { getDatabasePath } = await import('./config/boot-config');
         const { toLLMProvider } = await import('./config/index');
+        const { toRuntimeConfigFromLegacy } = await import('../src/lib/providers/domain/ProviderRuntimeAdapter.js');
 
         const mainDb = getDatabase();
         if (!mainDb) {
@@ -331,9 +332,22 @@ if (gotTheLock) {
               llmProvider === 'anthropic' ? 'claude-3-5-sonnet-20241022'
               : llmProvider === 'openai' ? 'gpt-4o-mini'
               : 'llama3.2'; // ollama
+            const model = provider.model || defaultModel;
+            // Build a ProviderRuntimeConfig from the legacy ApiProvider so
+            // domestic providers (MiniMax, DeepSeek, Qwen, GLM, Kimi) get
+            // the correct apiFormat + modelCompat flags. Without these,
+            // the Stage 1 extractor may misparse reasoning content.
+            const runtime = toRuntimeConfigFromLegacy(provider, model);
             llmClient = createRetryableLLMClient(
               llmProvider,
-              { apiKey: provider.apiKey, baseURL: provider.baseUrl, model: provider.model || defaultModel },
+              {
+                apiKey: provider.apiKey,
+                baseURL: provider.baseUrl,
+                model,
+                apiFormat: runtime.apiFormat,
+                providerId: runtime.providerId,
+                modelCapabilities: runtime.modelCompat,
+              },
             );
           }
         } catch (llmErr) {

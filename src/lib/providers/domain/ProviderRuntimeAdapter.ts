@@ -153,10 +153,16 @@ export function toRuntimeConfig(
   // in the @duya/ai protocol layer.
   // User-defined `compatOverrides` on the LlmProvider take precedence
   // over built-in preset values (merged per-field in findModelCompat).
+  // Read from the top-level field first, then fall back to
+  // `options.compatOverrides` for legacy providers that only persist
+  // it inside options (e.g. after migrateLegacyApiProvider without
+  // promotion, or any code path that stored it only in options).
+  const compatOverrides = provider.compatOverrides
+    ?? (provider.options?.compatOverrides as ModelCompat | undefined);
   const modelCompat = findModelCompat(
     provider.apiFormat,
     options.modelId,
-    provider.compatOverrides,
+    compatOverrides,
   );
 
   return {

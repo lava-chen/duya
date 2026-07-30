@@ -27,7 +27,6 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { CaretRightIcon } from '@/components/icons';
 import type { ToolUseInfo, ToolResultInfo } from '@/types';
-import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import { computeSegments } from './tools/segments';
 import {
@@ -174,8 +173,9 @@ function ToolActionsGroupImpl({
     0,
   );
   const hasDuration = totalDurationMs > 0;
-  const collapsedSummary = t('streaming.actions.completed', { count: toolCount }) +
-    (hasDuration ? ` · ${t('streaming.actions.workedFor', { duration: formatDuration(totalDurationMs) })}` : '');
+  const collapsedSummary = hasDuration
+    ? t('streaming.actions.processed', { duration: formatDuration(totalDurationMs) })
+    : t('streaming.actions.completed', { count: toolCount });
 
   const handleToggle = () => {
     setUserExpanded((prev) => prev !== null ? !prev : !expanded);
@@ -183,12 +183,10 @@ function ToolActionsGroupImpl({
 
   return (
     <div className="w-full">
-      <Button
+      <button
         type="button"
-        variant="ghost"
-        size="sm"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
+        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors border-b border-border/50"
       >
         <span className="text-muted-foreground/60 truncate">
           {collapsedSummary}
@@ -196,9 +194,9 @@ function ToolActionsGroupImpl({
 
         <CaretRightIcon
           size={12}
-          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ml-auto ${expanded ? 'rotate-90' : ''}`}
+          className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
-      </Button>
+      </button>
 
       <AnimatePresence initial={false}>
         {expanded && (

@@ -104,6 +104,11 @@ export function useUpsertProviderMutation() {
         headers: finalLlm.headers,
         options: finalLlm.options,
         extraEnv: finalLlm.extraEnv,
+        // Plan 7.3: top-level compatOverrides MUST be carried over
+        // the IPC boundary so toRuntimeConfig can read it without
+        // relying on options.compatOverrides. The field is also
+        // kept inside options for legacy round-trip storage.
+        compatOverrides: finalLlm.compatOverrides,
       };
       const res = await upsertLlmProviderIPC(payload);
       if (!res.ok || !res.provider) {

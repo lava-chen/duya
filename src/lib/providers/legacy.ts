@@ -25,6 +25,7 @@ import type {
   ProviderCategory,
   ProviderPreset,
 } from './types';
+import type { ModelCompat } from '@duya/ai';
 
 /** Map a legacy `providerType` string to the new `apiFormat`. */
 export function inferApiFormatFromLegacyProviderType(
@@ -110,6 +111,14 @@ export function migrateLegacyApiProvider(
   const authType: LlmProvider['auth']['type'] =
     apiFormat === 'ollama' ? 'none' : 'api-key';
 
+  // Plan 7.3: promote `options.compatOverrides` to the top-level
+  // `compatOverrides` field so `toRuntimeConfig` can read it
+  // directly. Keep it inside `options` too so the legacy
+  // `options_json` storage layer round-trips it back unchanged.
+  const compatOverrides = apiProvider.options?.compatOverrides as
+    | ModelCompat
+    | undefined;
+
   return {
     id: apiProvider.id,
     name: apiProvider.name,
@@ -135,6 +144,7 @@ export function migrateLegacyApiProvider(
     headers: apiProvider.headers,
     options: apiProvider.options,
     extraEnv: apiProvider.extraEnv,
+    compatOverrides,
   };
 }
 
