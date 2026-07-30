@@ -44,7 +44,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../logging/logger', () => ({
+vi.mock('../../logging/logger', () => ({
   getLogger: () => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -56,8 +56,12 @@ vi.mock('../logging/logger', () => ({
   },
 }));
 
-vi.mock('../services/app-connections/app-connection-service', () => ({
+vi.mock('../../services/app-connections/app-connection-service', () => ({
   getAppConnectionService: () => mocks.service,
+}));
+
+vi.mock('../../db/connection', () => ({
+  getDatabase: () => ({}),
 }));
 
 import { registerAppConnectionHandlers } from '../app-connection-handlers';
@@ -79,7 +83,12 @@ describe('appConnection IPC handlers', () => {
     registerAppConnectionHandlers();
   });
 
-  it('installs reload hook on registration', () => {
+  it('defers service construction until the boot database is ready', async () => {
+    expect(mocks.service.setReloadHook).not.toHaveBeenCalled();
+    mocks.service.list.mockReturnValue([]);
+
+    await invoke('appConnection:list');
+
     expect(mocks.service.setReloadHook).toHaveBeenCalledTimes(1);
     expect(typeof mocks.service.setReloadHook.mock.calls[0]![0]).toBe('function');
   });
@@ -190,6 +199,22 @@ describe('appConnection IPC handlers', () => {
     expect(res.data?.accessToken).toBeUndefined();
     expect(res.data?.status).toBe('connected');
     expect(mocks.service.connect).toHaveBeenCalledWith('google', ['drive.read']);
+  });
+
+  it('accepts an official Remote MCP provider without a local client id', async () => {
+    mocks.service.connect.mockResolvedValue({
+      id: 'notion-1', provider: 'notion', accountLabel: 'Notion', accountId: '',
+      scopes: [], status: 'connected', expiresAt: null, lastError: null, createdAt: 1, updatedAt: 1,
+    });
+
+    const res = (await invoke('appConnection:connect', { provider: 'notion' })) as {
+      success: boolean;
+      data?: { provider: string };
+    };
+
+    expect(res.success).toBe(true);
+    expect(res.data?.provider).toBe('notion');
+    expect(mocks.service.connect).toHaveBeenCalledWith('notion', undefined);
   });
 
   it('appConnection:connect on FlowError returns structured errorCode', async () => {

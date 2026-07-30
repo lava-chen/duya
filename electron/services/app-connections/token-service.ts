@@ -91,6 +91,18 @@ export class TokenService {
       return failure('connection_revoked', 'vault entry missing; re-authorization required', false);
     }
 
+    // Remote MCP OAuth uses the MCP SDK's authorization provider, which
+    // performs refresh-token rotation with the discovered authorization
+    // server. Do not send these tokens to the normal provider refresh path.
+    if (getProviderConfig(conn.provider).remoteMcpUrl) {
+      return ok({
+        accessToken: tokens.accessToken,
+        tokenType: tokens.tokenType,
+        expiresAt: tokens.expiresAt,
+        refreshed: false,
+      });
+    }
+
     // No expiry → assume forever valid (some Slack bot tokens don't expire).
     if (tokens.expiresAt === null) {
       return ok({ accessToken: tokens.accessToken, tokenType: tokens.tokenType, expiresAt: null, refreshed: false });

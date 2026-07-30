@@ -51,7 +51,7 @@ export function buildIncludes(
         name: s.name,
         kind: "mcp",
         kindLabel: KIND_LABELS.mcp,
-        description: s.command,
+        description: s.command ?? s.name,
         enabled: true,
         configurable: false,
       });

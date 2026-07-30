@@ -215,26 +215,27 @@ export function spawnAgentServer(): Promise<number> {
       // tokens — only name/description/inputSchema/riskTier/connectionId.
       if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string') {
         const connectorService = getConnectorService();
-        try {
-          const descriptors = connectorService.listDescriptorsForConnected();
-          if (!child.killed) {
-            child.send({
-              type: 'appConnection:listDescriptors:response',
-              requestId: msg.requestId,
-              success: true,
-              descriptors,
-            });
-          }
-        } catch (err) {
-          if (!child.killed) {
-            child.send({
-              type: 'appConnection:listDescriptors:response',
-              requestId: msg.requestId,
-              success: false,
-              error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
-            });
-          }
-        }
+        void connectorService.listDescriptorsForConnected()
+          .then((descriptors) => {
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:listDescriptors:response',
+                requestId: msg.requestId,
+                success: true,
+                descriptors,
+              });
+            }
+          })
+          .catch((err) => {
+            if (!child.killed) {
+              child.send({
+                type: 'appConnection:listDescriptors:response',
+                requestId: msg.requestId,
+                success: false,
+                error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
+              });
+            }
+          });
         return;
       }
 

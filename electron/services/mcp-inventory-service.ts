@@ -57,6 +57,8 @@ function toEffectiveServerDTO(
     command: candidate.rawConfig.command,
     args: Array.isArray(candidate.rawConfig.args) ? candidate.rawConfig.args : [],
     env: candidate.rawConfig.env ?? {},
+    url: candidate.rawConfig.url,
+    headers: candidate.rawConfig.headers,
     writable: source === 'settings',
     connected: false,
     effectiveEnabled: true,

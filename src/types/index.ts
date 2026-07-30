@@ -52,6 +52,19 @@ export interface MCPServerConfig {
   allowedAgentIds?: string[];
 }
 
+export interface MemoryEntry {
+  memory_id: string;
+  scope: 'global' | 'project';
+  project_id: string | null;
+  kind: 'preference' | 'fact' | 'reference' | 'procedure' | 'person' | 'area';
+  canonical_key: string;
+  content: string;
+  version: number;
+  status: 'active' | 'superseded' | 'retired';
+  created_at: number;
+  updated_at: number;
+}
+
 export interface AppSettings {
   apiKey: string;
   baseURL: string;
@@ -110,4 +123,11 @@ export interface AppSettings {
   gatewayPermissionMode?: "default" | "bypass" | "auto";
   // Default workspace directory for creating new projects
   workspaceDir?: string;
+  /**
+   * Default thinking effort for new chat sessions. Persisted across sessions
+   * so the last user selection carries over. `undefined` / `null` means auto.
+   */
+  defaultThinkingEffort?: string | null;
+  // Memory system toggle
+  memoryEnabled: boolean;
 }

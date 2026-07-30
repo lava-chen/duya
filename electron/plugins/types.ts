@@ -65,12 +65,34 @@ export interface PluginManifest {
     name: string;
     url?: string;
   };
+  /** Audited official upstream MCP/skill provenance for a bundled preset. */
+  officialAssets?: {
+    mcp: {
+      provider: string;
+      transport: 'stdio' | 'streamable-http';
+      authentication: 'oauth' | 'local' | 'none';
+      url?: string;
+      package?: string;
+      repository?: string;
+      ref?: string;
+    };
+    skills: {
+      mode: 'upstream-sync' | 'duya-overlay';
+      repository?: string;
+      ref?: string;
+      path?: string;
+    };
+  };
   capabilities: {
     skills?: string[];
     mcpServers?: Array<{
       name: string;
-      command: string;
+      transport?: 'stdio' | 'streamable-http';
+      command?: string;
       args?: string[];
+      env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
     }>;
     cli?: Array<{
       name: string;
@@ -159,6 +181,22 @@ export interface PluginCatalogEntry {
   category?: PluginCategory;
   trustLevel: PluginTrustLevel;
   manifest: PluginManifest;
+  /**
+   * Distinguishes a standalone skill marketplace entry (`'skill'`) from a
+   * regular plugin entry (`'plugin'`, the default). Skill entries are
+   * sourced from `packages/agent/skills/` and install only a single
+   * skill directory; plugin entries follow the normal plugin install
+   * path. Absent values are treated as `'plugin'` for backward compat.
+   */
+  kind?: 'plugin' | 'skill';
+  /**
+   * For `kind === 'skill'` entries: absolute path to the bundled skill
+   * source directory (e.g. `packages/agent/skills/office/pdf`). Used by
+   * `PluginManager.installFromCatalog` to copy skill files into the
+   * installed plugin's `skills/<name>/` directory. Undefined for
+   * regular plugin entries.
+   */
+  skillSourceDir?: string;
   capabilityCounts?: {
     skills: number;
     mcpServers: number;

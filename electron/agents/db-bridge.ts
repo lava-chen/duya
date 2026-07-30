@@ -14,6 +14,7 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
 import { getPairingStore } from '../gateway/pairing';
 import { getPluginManager } from '../plugins/PluginManager';
+import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 
@@ -2252,7 +2253,19 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'plugin:registry:list': {
       const pluginManager = getPluginManager();
-      return pluginManager.listInstalled();
+      const items = pluginManager.listInstalled();
+      // Attach manifest so the worker MCP collector can read
+      // capabilities.mcpServers. Without this, the collector sees
+      // manifest=undefined and never discovers plugin-declared MCP
+      // servers. Mirrors collect-main.ts which reads from disk.
+      return items.map((item) => {
+        if (!item.installPath) return item;
+        try {
+          return { ...item, manifest: readPluginManifest(item.installPath) };
+        } catch {
+          return item;
+        }
+      });
     }
 
     case 'modelCapability:get': {

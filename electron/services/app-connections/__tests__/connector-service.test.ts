@@ -131,10 +131,10 @@ describe('ConnectorService', () => {
     connectorService = new ConnectorService({ service });
   });
 
-  it('listDescriptorsForConnected returns descriptors for connected connections only', () => {
+  it('listDescriptorsForConnected returns descriptors for connected connections only', async () => {
     // Add a disconnected connection
     seedConnection(db, { id: 'c-disc', provider: 'google', status: 'disconnected' });
-    const descriptors = connectorService.listDescriptorsForConnected();
+    const descriptors = await connectorService.listDescriptorsForConnected();
     // Only c-google should produce descriptors
     expect(descriptors).toHaveLength(1);
     expect(descriptors[0]!.connectionId).toBe('c-google');

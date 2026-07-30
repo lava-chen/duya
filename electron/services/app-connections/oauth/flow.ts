@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../../../logging/logger';
 import { buildPkceChallenge } from './pkce.js';
 import { startLoopbackServer, LoopbackServerError } from './loopback-server.js';
-import { getProviderConfig, getClientSecret } from '../providers/registry.js';
+import { getProviderConfig, getClientSecret, getProviderReadiness } from '../providers/registry.js';
 import { fetchGoogleAccountIdentity } from '../providers/google.js';
 import { fetchSlackAccountIdentity } from '../providers/slack.js';
 import { fetchMicrosoft365AccountIdentity } from '../providers/microsoft365.js';
@@ -73,7 +73,7 @@ type IdentityFetcher = (
   fetchImpl: typeof fetch,
 ) => Promise<{ accountId: string; accountLabel: string }>;
 
-const IDENTITY_FETCHERS: Record<ProviderId, IdentityFetcher> = {
+const IDENTITY_FETCHERS: Partial<Record<ProviderId, IdentityFetcher>> = {
   google: fetchGoogleAccountIdentity,
   slack: fetchSlackAccountIdentity,
   microsoft365: fetchMicrosoft365AccountIdentity,
@@ -113,6 +113,10 @@ export async function startAuthorization(
 ): Promise<AppConnectionStatusDTO> {
   const logger = getLogger();
   const config = getProviderConfig(provider);
+  const readiness = getProviderReadiness(provider);
+  if (!readiness.configured) {
+    throw new FlowError('provider_not_configured', readiness.reason ?? `Provider ${provider} is not configured`);
+  }
   const fetchImpl = options.fetchImpl ?? fetch;
   const openExternal = options.openExternal ?? shell.openExternal;
   const scopes = options.scopes ?? config.defaultScopes;
@@ -188,9 +192,14 @@ export async function startAuthorization(
   let accountId = '';
   let accountLabel = '';
   try {
-    const identity = await IDENTITY_FETCHERS[provider](tokens.accessToken, fetchImpl);
-    accountId = identity.accountId;
-    accountLabel = identity.accountLabel;
+    const fetchIdentity = IDENTITY_FETCHERS[provider];
+    if (fetchIdentity) {
+      const identity = await fetchIdentity(tokens.accessToken, fetchImpl);
+      accountId = identity.accountId;
+      accountLabel = identity.accountLabel;
+    } else {
+      accountLabel = provider;
+    }
   } catch (err) {
     logger.warn(
       'App Connection: account identity fetch failed; using placeholder',
@@ -356,7 +365,8 @@ export class FlowError extends Error {
       | 'invalid_grant'
       | 'missing_client_secret'
       | 'vault_unavailable'
-      | 'provider_blocked',
+      | 'provider_blocked'
+      | 'provider_not_configured',
     message: string,
   ) {
     super(message);

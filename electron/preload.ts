@@ -122,6 +122,7 @@ export interface SkillsAPI {
   setEnabled: (skillName: string, enabled: boolean) => Promise<{ success: boolean; overrides?: Record<string, boolean>; error?: string }>
   getSecurityBypass: () => Promise<{ success: boolean; skills: string[]; error?: string }>
   setSecurityBypass: (skillName: string, bypass: boolean) => Promise<{ success: boolean; skills: string[]; error?: string }>
+  uploadSkill: (filePath: string) => Promise<{ success: boolean; skillName?: string; error?: string }>
 }
 
 export interface ProviderAPI {
@@ -262,6 +263,13 @@ export interface VisionAPI {
     model: string
     baseUrl: string
     apiKey: string
+    enabled: boolean
+  }>
+}
+
+export interface MemoryAPI {
+  list: () => Promise<{
+    entries: import('../src/types').MemoryEntry[]
     enabled: boolean
   }>
 }
@@ -905,6 +913,16 @@ export interface MarketplaceEntry {
  */
 export interface AppConnectionAPI {
   list: () => Promise<{ success: boolean; data?: AppConnectionStatusDTO[]; error?: string }>
+  providers: () => Promise<{
+    success: boolean
+    data?: Array<{
+      id: string
+      label: string
+      configured: boolean
+      configurationHint?: string
+    }>
+    error?: string
+  }>
   status: (connectionId: string) => Promise<{
     success: boolean
     data?: AppConnectionStatusDTO
@@ -914,6 +932,16 @@ export interface AppConnectionAPI {
   connect: (payload: { provider: string; scopes?: string[] }) => Promise<{
     success: boolean
     data?: AppConnectionStatusDTO
+    error?: string
+    errorCode?: string
+  }>
+  configureProvider: (payload: {
+    provider: string
+    clientId: string
+    clientSecret?: string
+  }) => Promise<{
+    success: boolean
+    data?: { id: string; label: string; configured: boolean; configurationHint?: string }
     error?: string
     errorCode?: string
   }>
@@ -1034,6 +1062,7 @@ export interface ElectronAPI {
   }
   mcpInventory: {
     snapshot: () => Promise<{ success: boolean; data?: MCPInventorySnapshotDTO; error?: string }>
+    tools: (serverId: string) => Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -1109,6 +1138,8 @@ export interface ElectronAPI {
   }
   // Vision API
   vision: VisionAPI
+  // Memory API
+  memory: MemoryAPI
   // Session management
   getInterruptedSessions: () => Promise<string[]>
   // Logger API
@@ -1519,6 +1550,7 @@ const electronAPI: ElectronAPI = {
   },
   mcpInventory: {
     snapshot: () => ipcRenderer.invoke('mcp:inventory:snapshot'),
+    tools: (serverId: string) => ipcRenderer.invoke('mcp:inventory:tools', { serverId }),
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
@@ -1677,6 +1709,9 @@ const electronAPI: ElectronAPI = {
     set: (config: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) =>
       ipcRenderer.invoke('config:vision:set', config),
   },
+  memory: {
+    list: () => ipcRenderer.invoke('memory:list'),
+  },
   permission: {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:permission:create', data),
     get: (id: string) => ipcRenderer.invoke('db:permission:get', id),
@@ -1742,6 +1777,7 @@ const electronAPI: ElectronAPI = {
     setEnabled: (skillName: string, enabled: boolean) => ipcRenderer.invoke('skills:setEnabled', skillName, enabled),
     getSecurityBypass: () => ipcRenderer.invoke('skills:getSecurityBypass'),
     setSecurityBypass: (skillName: string, bypass: boolean) => ipcRenderer.invoke('skills:setSecurityBypass', skillName, bypass),
+    uploadSkill: (filePath: string) => ipcRenderer.invoke('skills:uploadSkill', filePath),
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
@@ -1971,8 +2007,11 @@ const electronAPI: ElectronAPI = {
   // in the main process.
   appConnection: {
     list: () => ipcRenderer.invoke('appConnection:list'),
+    providers: () => ipcRenderer.invoke('appConnection:providers'),
     status: (connectionId: string) => ipcRenderer.invoke('appConnection:status', connectionId),
     connect: (payload: { provider: string; scopes?: string[] }) => ipcRenderer.invoke('appConnection:connect', payload),
+    configureProvider: (payload: { provider: string; clientId: string; clientSecret?: string }) =>
+      ipcRenderer.invoke('appConnection:configureProvider', payload),
     disconnect: (connectionId: string) => ipcRenderer.invoke('appConnection:disconnect', connectionId),
   },
   marketplace: {

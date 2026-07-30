@@ -5,18 +5,17 @@ import {
   GeneralSection,
   AppearanceSection,
   ProvidersSection,
-  SkillsSection,
   BridgeSection,
   BrowserExtensionSection,
   SecuritySection,
-  MCPSection,
   AgentsSection,
   SupportSection,
-  CapabilitiesSection,
+  MemorySection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
 import { ProviderPickerView } from "@/components/providers/ProviderPickerView";
 import { ProviderEditView } from "@/components/providers/ProviderEditView";
+import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
 
 export function SettingsView() {
   const { settingsTab } = useConversationStore();
@@ -30,15 +29,14 @@ export function SettingsView() {
         {/* Plan 205: inline sub-views for adding / editing a provider. */}
         {settingsTab === "provider-picker" && <ProviderPickerView />}
         {settingsTab === "provider-edit" && <ProviderEditView />}
-        {settingsTab === "skills" && <SkillsSection />}
-        {settingsTab === "mcp" && <MCPSection />}
+        {settingsTab === "extensions" && <ExtensionsPage />}
         {settingsTab === "channels" && <BridgeSection />}
         {settingsTab === "browser" && <BrowserExtensionSection />}
         {settingsTab === "security" && <SecuritySection />}
         {settingsTab === "usage" && <UsageDashboard />}
         {settingsTab === "agents" && <AgentsSection />}
         {settingsTab === "support" && <SupportSection />}
-        {settingsTab === "plugins" && <CapabilitiesSection />}
+        {settingsTab === "memory" && <MemorySection />}
       </div>
     </div>
   );

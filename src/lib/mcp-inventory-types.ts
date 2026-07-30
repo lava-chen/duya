@@ -39,6 +39,10 @@ export interface MCPEffectiveServerDTO {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Streamable HTTP endpoint when the server uses HTTP transport. */
+  url?: string;
+  /** Optional request headers for HTTP transport. */
+  headers?: Record<string, string>;
   writable: boolean;
   connected: boolean;
   effectiveEnabled: boolean;

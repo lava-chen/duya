@@ -115,7 +115,6 @@ vi.mock('./updater/auto-updater', () => ({
 }));
 
 vi.mock('../../packages/plugin-core/src', () => ({
-  PathSafetyValidator: class {},
   TrustEngine: class {
     determineTrustLevel() {
       return { level: 'official' };
@@ -136,6 +135,10 @@ vi.mock('../../packages/plugin-core/src', () => ({
     }
   },
   withPluginError: async (_pluginId: string, _action: string, fn: () => Promise<unknown>) => fn(),
+}));
+
+vi.mock('../../packages/plugin-core/src/security/path-validator', () => ({
+  PathSafetyValidator: class {},
 }));
 
 import { PluginManager } from './PluginManager';
@@ -187,5 +190,10 @@ describe('PluginManager.installFromCatalog', () => {
       id: 'com.duya.literature',
       name: 'Literature Plugin',
     });
+
+    expect(
+      fs.existsSync(path.join(state.cacheDir, 'skills', 'paper-analysis.md'))
+        || fs.existsSync(path.join(state.cacheDir, 'skills', 'paper-analysis', 'SKILL.md')),
+    ).toBe(true);
   });
 });

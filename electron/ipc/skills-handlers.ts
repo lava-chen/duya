@@ -1,4 +1,4 @@
-/**
+﻿/**
  * ipc/skills-handlers.ts - Skills-related IPC handlers
  *
  * Handlers for:
@@ -10,7 +10,8 @@ import { ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
-import { homedir, platform as getPlatform } from 'os';
+import { homedir, platform as getPlatform, tmpdir } from 'os';
+import extractZip from 'extract-zip';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getConfigManager } from '../config/manager';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
@@ -38,6 +39,53 @@ async function getAgentServerUrl(): Promise<string | null> {
     return cachedAgentServerUrl;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the provenance marker for a skill directory. Returns the parsed
+ * marker object if valid, otherwise null.
+ */
+function readOriginMarker(skillDir: string): { schemaVersion: number; origin: string; skillName: string } | null {
+  const markerPath = path.join(skillDir, PROVENANCE_MARKER_FILENAME);
+  try {
+    if (!fs.existsSync(markerPath)) return null;
+    const raw = fs.readFileSync(markerPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      parsed.schemaVersion === 1 &&
+      typeof parsed.origin === 'string' &&
+      typeof parsed.skillName === 'string'
+    ) {
+      return parsed as { schemaVersion: number; origin: string; skillName: string };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Recursively copy a directory, preserving sub-folders. The existing
+ * provenance marker is intentionally skipped so the installer can write
+ * its own.
+ */
+function copyDirRecursiveSync(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name === PROVENANCE_MARKER_FILENAME) continue;
+
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirRecursiveSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
   }
 }
 
@@ -98,6 +146,7 @@ export function registerSkillsHandlers(): void {
         allowedTools?: string[];
         platforms?: string[];
         content: string;
+        updatedAt: string;
         frontmatter: Record<string, unknown>;
         security?: {
           verdict: 'safe' | 'caution' | 'dangerous';
@@ -309,6 +358,7 @@ export function registerSkillsHandlers(): void {
                   content: markdownContent,
                   frontmatter,
                   skillRoot: skillPath,
+                  updatedAt: skillStat.mtime.toISOString(),
                   security: { verdict, findings, scanned: true },
                 });
                 loadedNames.add(skillEntry);
@@ -353,7 +403,8 @@ export function registerSkillsHandlers(): void {
                 content: markdownContent,
                 frontmatter,
                 skillRoot: entryPath,
-                security: { verdict: verdict2, findings: findings2, scanned: true },
+                  updatedAt: stat.mtime.toISOString(),
+                  security: { verdict: verdict2, findings: findings2, scanned: true },
               });
               loadedNames.add(entry);
             } catch (error) {
@@ -363,6 +414,9 @@ export function registerSkillsHandlers(): void {
         }
       };
 
+      // Bundled skills are now installed on-demand via the plugin marketplace;
+      // they are no longer auto-synced at startup. syncStatus is kept in the
+      // unsynced state to preserve the return shape for downstream consumers.
       let syncStatus: {
         synced: boolean;
         added: string[];
@@ -371,27 +425,6 @@ export function registerSkillsHandlers(): void {
         removed: string[];
         error?: string;
       } = { synced: false, added: [], updated: [], skipped: [], removed: [] };
-
-      try {
-        const { syncBundledSkills } = await import('../../packages/agent/src/skills/skillsSync.js');
-        const syncResult = await syncBundledSkills();
-        syncStatus = {
-          synced: true,
-          added: syncResult.added,
-          updated: syncResult.updated,
-          skipped: syncResult.skipped,
-          removed: syncResult.removed,
-        };
-        if (syncResult.added.length > 0 || syncResult.updated.length > 0) {
-          logger.info('Bundled skills synced to user directory', {
-            added: syncResult.added,
-            updated: syncResult.updated,
-          }, LogComponent.Skills);
-        }
-      } catch (e) {
-        logger.warn('Failed to sync bundled skills', { error: String(e) }, LogComponent.Skills);
-        syncStatus = { synced: false, added: [], updated: [], skipped: [], removed: [], error: String(e) };
-      }
 
       // Load user skills
       if (fs.existsSync(userSkillsDir)) {
@@ -423,10 +456,38 @@ export function registerSkillsHandlers(): void {
       const pluginManager = getPluginManager();
       const enabledPlugins = pluginManager.listInstalled().filter(p => p.enabled);
       for (const plugin of enabledPlugins) {
-        const pluginSkillsDir = path.join(plugin.installPath, 'skills');
-        if (fs.existsSync(pluginSkillsDir)) {
-          loadSkillsFromDir(pluginSkillsDir, 'plugin', plugin.id);
+        // Check install path first (cache copy may have skills)
+        if (plugin.installPath) {
+          const pluginSkillsDir = path.join(plugin.installPath, 'skills');
+          if (fs.existsSync(pluginSkillsDir)) {
+            loadSkillsFromDir(pluginSkillsDir, 'plugin', plugin.id);
+          }
         }
+      }
+
+      // Also scan builtin plugin source directories. The install cache
+      // only contains plugin.json — the skills/ directory lives in the
+      // source tree (packages/agent/src/plugins/builtin/<name>/skills/).
+      // This makes builtin plugin skills visible even before install.
+      try {
+        const { listBuiltinPlugins } = await import('../../packages/agent/src/plugins/builtin/_registry.js');
+        for (const candidate of listBuiltinPlugins()) {
+          const skillsDir = path.join(candidate.dir, 'skills');
+          if (fs.existsSync(skillsDir)) {
+            // Derive plugin id from plugin.json if present
+            let pluginId = candidate.name;
+            try {
+              const jsonPath = path.join(candidate.dir, 'plugin.json');
+              if (fs.existsSync(jsonPath)) {
+                const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+                if (raw.id) pluginId = raw.id;
+              }
+            } catch { /* use name fallback */ }
+            loadSkillsFromDir(skillsDir, 'plugin', pluginId);
+          }
+        }
+      } catch (e) {
+        logger.warn('Failed to scan builtin plugin skills', { error: String(e) }, LogComponent.Skills);
       }
 
       let skillOverrides: SkillEnabledOverrides = {};
@@ -527,6 +588,153 @@ export function registerSkillsHandlers(): void {
       const logger = getLogger();
       logger.error('Failed to update security bypass list', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Skills);
       return { success: false, error: String(error) };
+    }
+  });
+
+  // Upload a single SKILL.md or a packaged skill archive
+  ipcMain.handle('skills:uploadSkill', async (_event, filePath: string) => {
+    const logger = getLogger();
+    let tempDir: string | undefined;
+
+    try {
+      if (typeof filePath !== 'string' || filePath.length === 0) {
+        return { success: false, error: 'Invalid file path' };
+      }
+
+      const resolvedPath = path.resolve(filePath);
+      if (!fs.existsSync(resolvedPath)) {
+        return { success: false, error: `File not found: ${resolvedPath}` };
+      }
+
+      const stat = fs.statSync(resolvedPath);
+      if (stat.isDirectory()) {
+        return { success: false, error: 'Uploading directories directly is not supported' };
+      }
+
+      const ext = path.extname(resolvedPath).toLowerCase();
+      const userSkillsDir = path.join(homedir(), '.duya', 'skills');
+      fs.mkdirSync(userSkillsDir, { recursive: true });
+
+      let sourceDir: string;
+      let skillMdPath: string;
+      let fallbackName: string;
+
+      if (ext === '.md') {
+        tempDir = fs.mkdtempSync(path.join(tmpdir(), 'duya-skill-upload-'));
+        sourceDir = tempDir;
+        skillMdPath = path.join(sourceDir, 'SKILL.md');
+        fs.copyFileSync(resolvedPath, skillMdPath);
+        fallbackName = path.basename(resolvedPath, ext);
+      } else if (ext === '.zip' || ext === '.skill') {
+        tempDir = fs.mkdtempSync(path.join(tmpdir(), 'duya-skill-upload-'));
+        const extractDir = tempDir;
+        await extractZip(resolvedPath, { dir: extractDir });
+
+        const rootSkillMd = path.join(extractDir, 'SKILL.md');
+        if (fs.existsSync(rootSkillMd)) {
+          sourceDir = extractDir;
+          skillMdPath = rootSkillMd;
+          fallbackName = path.basename(resolvedPath, ext);
+        } else {
+          const entries = fs.readdirSync(extractDir, { withFileTypes: true });
+          const candidate = entries.find(
+            (e) => e.isDirectory() && fs.existsSync(path.join(extractDir, e.name, 'SKILL.md')),
+          );
+
+          if (!candidate) {
+            return { success: false, error: 'No SKILL.md found in archive' };
+          }
+
+          sourceDir = path.join(extractDir, candidate.name);
+          skillMdPath = path.join(sourceDir, 'SKILL.md');
+          fallbackName = candidate.name;
+        }
+      } else {
+        return { success: false, error: `Unsupported file type: ${ext || 'none'}` };
+      }
+
+      const content = fs.readFileSync(skillMdPath, 'utf-8');
+      const { frontmatter, content: markdownContent } = parseSkillFrontmatter(content);
+
+      const findings = scanSkillFile(markdownContent, 'SKILL.md');
+      const criticalFindings = findings.filter((f) => f.severity === 'critical');
+      if (criticalFindings.length > 0) {
+        const messages = criticalFindings
+          .map((f) => `[${f.patternId}] ${f.description} (line ${f.line})`)
+          .join('; ');
+        logger.warn(
+          'Skill upload rejected due to critical security findings',
+          { filePath: resolvedPath, count: criticalFindings.length },
+          LogComponent.Skills,
+        );
+        return { success: false, error: `Upload blocked: critical security findings detected: ${messages}` };
+      }
+
+      const rawSkillName =
+        typeof frontmatter.name === 'string' && frontmatter.name.trim().length > 0
+          ? frontmatter.name.trim()
+          : fallbackName;
+
+      const skillName = rawSkillName.replace(/[\\/]/g, '_');
+
+      if (!skillName) {
+        return { success: false, error: 'Could not determine skill name' };
+      }
+
+      const targetDir = path.join(userSkillsDir, skillName);
+      const existingOrigin = readOriginMarker(targetDir);
+      if (existingOrigin?.origin === 'bundled') {
+        logger.warn(
+          `Refusing to overwrite bundled skill '${skillName}'`,
+          { targetDir },
+          LogComponent.Skills,
+        );
+        return { success: false, error: `Cannot overwrite bundled skill '${skillName}'` };
+      }
+
+      logger.info(
+        `Installing user skill '${skillName}'`,
+        { source: resolvedPath, targetDir },
+        LogComponent.Skills,
+      );
+
+      if (fs.existsSync(targetDir)) {
+        fs.rmSync(targetDir, { recursive: true, force: true });
+      }
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      copyDirRecursiveSync(sourceDir, targetDir);
+
+      const markerPath = path.join(targetDir, PROVENANCE_MARKER_FILENAME);
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({ schemaVersion: 1, origin: 'user', skillName }, null, 2) + '\n',
+        'utf-8',
+      );
+
+      await notifyAgentServerSkillsReload();
+      logger.info(
+        `User skill '${skillName}' installed successfully`,
+        { targetDir },
+        LogComponent.Skills,
+      );
+      return { success: true, skillName };
+    } catch (error) {
+      logger.error(
+        'Failed to upload skill',
+        error instanceof Error ? error : new Error(String(error)),
+        undefined,
+        LogComponent.Skills,
+      );
+      return { success: false, error: String(error) };
+    } finally {
+      if (tempDir) {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore cleanup failures
+        }
+      }
     }
   });
 }

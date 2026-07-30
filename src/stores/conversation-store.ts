@@ -71,8 +71,8 @@ export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'aut
 export type SettingsTab =
   | 'general' | 'appearance' | 'providers'
   | 'provider-picker' | 'provider-edit'
-  | 'skills' | 'mcp' | 'channels' | 'browser' | 'security'
-  | 'usage' | 'agents' | 'support' | 'plugins';
+  | 'extensions' | 'channels' | 'browser' | 'security'
+  | 'usage' | 'agents' | 'support' | 'memory';
 
 /**
  * Plan 205: the target of the `provider-edit` page. Either
@@ -248,7 +248,14 @@ export const useConversationStore = create<ConversationState>()(
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => set({ currentView: view }),
-      setSettingsTab: (tab) => set({ settingsTab: tab }),
+      setSettingsTab: (tab) => {
+        const legacy: Record<string, SettingsTab> = {
+          plugins: 'extensions',
+          skills: 'extensions',
+          mcp: 'extensions',
+        };
+        set({ settingsTab: legacy[tab] ?? tab });
+      },
       enterProviderEdit: (target) =>
         set({ settingsTab: 'provider-edit', providerEditTarget: target }),
       clearProviderEdit: () => set({ providerEditTarget: null }),

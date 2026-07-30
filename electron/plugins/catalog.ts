@@ -1,11 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
-import type { PluginCatalogEntry, PluginCategory } from './types';
+import type { PluginCatalogEntry, PluginCategory, PluginManifest } from './types';
 import { readPluginManifest } from './manifest';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
+import { getOfficialPluginAssets } from '../../packages/agent/src/plugins/builtin/official-assets.js';
 import { deriveCapabilityCounts } from './capability-counts.js';
+import { parseSkillFrontmatter } from '../utils/skill-parser';
 
 const COMPONENT = 'PluginCatalog' as LogComponent;
 
@@ -143,6 +145,7 @@ function bundledCatalogEntry(
   manifest: PluginCatalogEntry['manifest'],
 ): PluginCatalogEntry {
   const dir = getBuiltinPluginDir(builtinDirName);
+  const officialAssets = getOfficialPluginAssets(id);
   return {
     id,
     name,
@@ -152,7 +155,7 @@ function bundledCatalogEntry(
     category,
     trustLevel: 'official',
     capabilityCounts: deriveCapabilityCounts(manifest, dir),
-    manifest,
+    manifest: officialAssets ? { ...manifest, officialAssets } : manifest,
     author: manifest.author,
   };
 }
@@ -701,7 +704,8 @@ export function getPluginCatalog(): PluginCatalogEntry[] {
   }
 
   const localEntries = getLocalCatalogEntries();
-  cachedCatalog = [...BUNDLED_PLUGIN_CATALOG, ...localEntries];
+  const skillEntries = getBundledSkillCatalogEntries();
+  cachedCatalog = [...BUNDLED_PLUGIN_CATALOG, ...localEntries, ...skillEntries];
   cachedCatalogAt = now;
   return cachedCatalog;
 }
@@ -731,4 +735,189 @@ export function getLocalPluginPaths(): Map<string, string> {
   }
 
   return result;
+}
+
+// ----------------------------------------------------------------------------
+// Bundled Skills Catalog
+// ----------------------------------------------------------------------------
+// Skills under `packages/agent/skills/` are exposed as standalone marketplace
+// entries (`kind: 'skill'`) so users can selectively install them instead of
+// having all skills auto-synced at runtime. Each skill becomes one catalog
+// entry; installing copies the skill directory into the plugin's `skills/`
+// folder, from where the existing skill loader picks it up.
+
+/**
+ * Resolve the bundled skills directory in the main process.
+ * - Dev: `<repo>/packages/agent/skills`
+ * - Prod: `<resourcesPath>/agent/skills` (electron-builder extraResources)
+ */
+function getBundledSkillsDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'agent', 'skills');
+  }
+  return path.join(app.getAppPath(), 'packages', 'agent', 'skills');
+}
+
+/**
+ * Map a skill category directory name to a `PluginCategory` for marketplace
+ * grouping. Skill categories follow the directory layout under
+ * `packages/agent/skills/` (agentic, apple, cognition, communication,
+ * development, media, office, research, websearch, visualize).
+ */
+const SKILL_CATEGORY_TO_PLUGIN_CATEGORY: Record<string, PluginCategory> = {
+  agentic: 'development',
+  apple: 'productivity',
+  cognition: 'other',
+  communication: 'communication',
+  development: 'development',
+  media: 'media',
+  office: 'productivity',
+  research: 'research',
+  websearch: 'research',
+  visualize: 'other',
+};
+
+interface BundledSkillInfo {
+  /** Skill name from frontmatter `name` field. */
+  name: string;
+  /** Skill description from frontmatter. */
+  description: string;
+  /** Skill version from frontmatter, defaults to `'0.1.0'`. */
+  version: string;
+  /** Author name from frontmatter, defaults to `'DUYA Team'`. */
+  author: string;
+  /** Category directory name (e.g. `'office'`, `'research'`). */
+  categoryDir: string;
+  /** Absolute path to the skill source directory. */
+  skillDir: string;
+}
+
+/**
+ * Scan the bundled skills directory and collect one `BundledSkillInfo` per
+ * skill (per category subdirectory containing a `SKILL.md`). Categories
+ * without a `SKILL.md` child are skipped silently. Platform-conditional
+ * skills (e.g. `apple/*` on non-macOS) are still listed — the marketplace
+ * shows them, but the loader will skip them on incompatible platforms
+ * after install.
+ */
+function scanBundledSkills(): BundledSkillInfo[] {
+  const logger = getLogger();
+  const root = getBundledSkillsDir();
+  const skills: BundledSkillInfo[] = [];
+
+  if (!fs.existsSync(root)) {
+    logger.warn('Bundled skills directory not found', { dir: root }, COMPONENT);
+    return skills;
+  }
+
+  let categoryDirs: fs.Dirent[];
+  try {
+    categoryDirs = fs.readdirSync(root, { withFileTypes: true });
+  } catch (err) {
+    logger.warn('Failed to read bundled skills directory', {
+      dir: root,
+      error: err instanceof Error ? err.message : String(err),
+    }, COMPONENT);
+    return skills;
+  }
+
+  for (const catEntry of categoryDirs) {
+    if (!catEntry.isDirectory() || catEntry.name.startsWith('.')) continue;
+    const categoryDir = catEntry.name;
+    const categoryPath = path.join(root, categoryDir);
+
+    let skillDirs: fs.Dirent[];
+    try {
+      skillDirs = fs.readdirSync(categoryPath, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const skillEntry of skillDirs) {
+      if (!skillEntry.isDirectory() || skillEntry.name.startsWith('.')) continue;
+      const skillDirPath = path.join(categoryPath, skillEntry.name);
+      const skillMdPath = path.join(skillDirPath, 'SKILL.md');
+      if (!fs.existsSync(skillMdPath)) continue;
+
+      try {
+        const raw = fs.readFileSync(skillMdPath, 'utf8');
+        const { frontmatter } = parseSkillFrontmatter(raw);
+        const name = (frontmatter.name as string) || skillEntry.name;
+        const description = (frontmatter.description as string) || `Skill: ${name}`;
+        const version = (frontmatter.version as string) || '0.1.0';
+        const author = (frontmatter.author as string) || 'DUYA Team';
+        skills.push({
+          name,
+          description,
+          version,
+          author,
+          categoryDir,
+          skillDir: skillDirPath,
+        });
+      } catch (err) {
+        logger.warn('Failed to read skill frontmatter', {
+          skill: skillEntry.name,
+          category: categoryDir,
+          error: err instanceof Error ? err.message : String(err),
+        }, COMPONENT);
+      }
+    }
+  }
+
+  return skills;
+}
+
+let cachedSkillCatalog: PluginCatalogEntry[] | null = null;
+
+/**
+ * Build catalog entries for every bundled skill. Each entry is a
+ * `kind: 'skill'` marketplace item that installs a single skill directory.
+ * Results are cached for the process lifetime — the bundled skill set only
+ * changes across app updates.
+ */
+function getBundledSkillCatalogEntries(): PluginCatalogEntry[] {
+  if (cachedSkillCatalog) return cachedSkillCatalog;
+
+  const skills = scanBundledSkills();
+  cachedSkillCatalog = skills.map((skill) => {
+    const id = `com.duya.skill.${skill.name}`;
+    const manifest: PluginManifest = {
+      schemaVersion: 'duya.plugin.v2',
+      id,
+      name: skill.name,
+      version: skill.version,
+      description: skill.description,
+      author: { name: skill.author },
+      components: {
+        mcpServers: [],
+        appConnections: [],
+        skills: [skill.name],
+        workflows: [],
+      },
+      permissions: [],
+      engines: { duya: '>=0.1.0' },
+    };
+    return {
+      id,
+      name: skill.name,
+      version: skill.version,
+      description: skill.description,
+      source: 'bundled' as const,
+      category: SKILL_CATEGORY_TO_PLUGIN_CATEGORY[skill.categoryDir] || 'other',
+      trustLevel: 'official' as const,
+      kind: 'skill' as const,
+      skillSourceDir: skill.skillDir,
+      manifest,
+      capabilityCounts: {
+        skills: 1,
+        mcpServers: 0,
+        cli: 0,
+        ui: 0,
+        hooks: 0,
+        workflows: 0,
+      },
+    };
+  });
+
+  return cachedSkillCatalog;
 }

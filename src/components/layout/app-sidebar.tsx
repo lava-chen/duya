@@ -26,6 +26,7 @@ import {
   FileIcon,
   FolderOpenIcon,
   DotsThreeIcon,
+  BrainIcon,
   CaretRightIcon,
   CaretDownIcon,
   CheckIcon,
@@ -113,9 +114,7 @@ const settingsNavGroups: {
     id: 'extensions',
     labelKey: 'settings.group.extensions',
     items: [
-      { id: 'plugins', labelKey: 'settings.plugins', icon: PlugIcon },
-      { id: 'skills', labelKey: 'settings.skills', icon: LightningIcon },
-      { id: 'mcp', labelKey: 'settings.mcp', icon: CubeIcon },
+      { id: 'extensions', labelKey: 'settings.extensions', icon: PlugIcon },
     ],
   },
   {
@@ -124,6 +123,13 @@ const settingsNavGroups: {
     items: [
       { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
       { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
+    ],
+  },
+  {
+    id: 'customize',
+    labelKey: 'settings.group.customize',
+    items: [
+      { id: 'memory', labelKey: 'settings.memory', icon: BrainIcon },
     ],
   },
 ];

@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
+import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
 import { PluginRegistryStore } from './PluginRegistryStore';
 import { getInstalledPluginsManager } from './installed/installed-plugins-manager';
 import {
@@ -18,13 +19,13 @@ import {
 import { resolvePluginVersion } from './cache/version-resolver';
 import { getPluginAutoUpdater } from './updater/auto-updater';
 import {
-  PathSafetyValidator,
   TrustEngine,
   PermissionService,
   PolicyEngine,
   withPluginError,
   type PluginResult,
 } from '../../packages/plugin-core/src';
+import { PathSafetyValidator } from '../../packages/plugin-core/src/security/path-validator';
 import {
   getPluginErrorMessage,
   getPluginErrorSeverity,
@@ -151,8 +152,38 @@ export class PluginManager {
           fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
         }
       } else {
+        // Bundled catalog rows are backed by real package directories. Without
+        // these assets an install only contains plugin.json, which leaves the
+        // marketplace advertising skills and MCP declarations that the runtime
+        // can never discover.
+        const builtinDirName = catalogEntry.id.replace(/^com\.duya\./, '');
+        const bundledSourceDir =
+          catalogEntry.source === 'bundled'
+            ? getBuiltinPluginDir(builtinDirName)
+            : undefined;
+        if (bundledSourceDir && fs.existsSync(bundledSourceDir)) {
+          copyBundledPluginAssets(bundledSourceDir, stagingPath);
+        }
+
         const manifestPath = path.join(stagingPath, 'plugin.json');
         fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
+
+        // Skill marketplace entries ship a single skill directory alongside
+        // the synthetic plugin.json. Copy the bundled skill source into
+        // `skills/<name>/` so the existing skill loader can discover it via
+        // the plugin install path.
+        if (catalogEntry.kind === 'skill' && catalogEntry.skillSourceDir) {
+          const skillName = catalogEntry.manifest.components?.skills?.[0] || catalogEntry.name;
+          if (fs.existsSync(catalogEntry.skillSourceDir)) {
+            const skillDestDir = path.join(stagingPath, 'skills', skillName);
+            copyDirectoryRecursive(catalogEntry.skillSourceDir, skillDestDir);
+          } else {
+            this.logger.warn('Skill source directory not found, installing manifest only', {
+              pluginId: catalogEntry.id,
+              skillSourceDir: catalogEntry.skillSourceDir,
+            }, LogComponent.Main);
+          }
+        }
       }
 
       removeDirSafe(cacheDir);
@@ -196,7 +227,7 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
-      this.installedMgr.addPlugin({
+      this.installedMgr.upsertPlugin(pluginId, {
         id: pluginId,
         version,
         scope,
@@ -286,7 +317,7 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
-      this.installedMgr.addPlugin({
+      this.installedMgr.upsertPlugin(pluginId, {
         id: pluginId,
         version,
         scope,
@@ -409,4 +440,25 @@ export function getPluginManager(): PluginManager {
     pluginManagerSingleton = new PluginManager();
   }
   return pluginManagerSingleton;
+}
+
+/**
+ * Copy a bundled package's capability assets while retaining the catalog
+ * manifest as the installation manifest. The package's authoring manifest is
+ * v2 and is not yet the main-process runtime contract.
+ */
+function copyBundledPluginAssets(sourceDir: string, destDir: string): void {
+  ensureDir(destDir);
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (entry.name === 'plugin.json') continue;
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destPath = path.join(destDir, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destPath);
+    } else if (entry.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(sourcePath), destPath);
+    } else {
+      fs.copyFileSync(sourcePath, destPath);
+    }
+  }
 }

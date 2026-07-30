@@ -19,6 +19,7 @@ import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerGitHandlers } from './git-handlers';
 import { registerMemoryWakeupHandlers } from './memory-wakeup';
+import { registerMemoryListHandlers } from './memory-handlers';
 
 export {
   registerSystemHandlers,
@@ -38,6 +39,7 @@ export {
   registerProjectDatabaseHandlers,
   registerGitHandlers,
   registerMemoryWakeupHandlers,
+  registerMemoryListHandlers,
 };
 
 /**
@@ -60,4 +62,5 @@ export function registerAllIpcHandlers(): void {
   registerProjectDatabaseHandlers();
   registerGitHandlers();
   registerMemoryWakeupHandlers();
+  registerMemoryListHandlers();
 }

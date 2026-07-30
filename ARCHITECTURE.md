@@ -1174,6 +1174,18 @@ layers:
 - Capability discovery: [packages/agent/src/plugins/builtin/capability-discovery.ts](./packages/agent/src/plugins/builtin/capability-discovery.ts)
 - Workflow schema: [packages/plugin-core/src/workflows/schema.ts](./packages/plugin-core/src/workflows/schema.ts)
 
+### Official remote MCP assets (2026-07-30)
+
+`MCPServerConfig` supports both local stdio and HTTPS-only
+`streamable-http` MCP servers. The agent constructs a Streamable HTTP client
+for remote endpoints and expands optional request headers only from managed
+configuration; plugin packages must not include credentials. Official endpoint
+and upstream Skill provenance is centralized in
+`packages/agent/src/plugins/builtin/official-assets.ts`. Provider-specific
+OAuth token brokering remains the responsibility of the app-connection layer
+(Plan 312), so a remote preset must retain its stdio fallback until it has an
+authorized connection.
+
 ## Memory v2: bounded projection and rg retrieval
 
 SQLite is the authoritative memory state. `projects` and
@@ -1464,3 +1476,19 @@ or more `tool_use` blocks, followed immediately by its `tool_result` blocks in
 the same call order. The Agent normalizes complete legacy rounds before a
 provider request or persistence, so a corrected canvas tool call cannot leave
 strict Anthropic-compatible providers with an invalid history.
+
+## Official app connections and Remote MCP
+
+`AppConnectionService` is the sole owner of application credentials. Google,
+Slack, and Microsoft 365 use OAuth authorization-code + PKCE; official hosted
+MCP providers (Figma, Supabase, Sentry, Vercel, Notion, and Linear) use MCP
+protected-resource discovery, dynamic client registration, PKCE, and a
+127.0.0.1 loopback callback. Access tokens, refresh tokens, client registration
+data, and PKCE state are stored only in the safeStorage-encrypted app-connection
+vault.
+
+For Remote MCP, Electron main owns the SDK client and attaches authorization
+there. It fetches tool schemas, exposes only token-free descriptors to the
+Agent through `appConnection:listDescriptors`, and executes selected tools
+through `appConnection:invoke`. Remote tools default to the `modify` risk tier
+until a provider adapter supplies an audited action-level classification.

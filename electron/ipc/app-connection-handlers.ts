@@ -12,13 +12,16 @@
 
 import { ipcMain } from 'electron';
 import * as http from 'http';
+import { getDatabase } from '../db/connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   getAppConnectionService,
 } from '../services/app-connections/app-connection-service';
 import { FlowError } from '../services/app-connections/oauth/flow';
+import { isKnownProvider } from '../services/app-connections/providers/registry';
 import type {
   AppConnectionStatusDTO,
+  AppConnectionProviderDTO,
   ProviderId,
 } from '../services/app-connections/types';
 
@@ -68,6 +71,19 @@ export interface AppConnectionListResponse {
   error?: string;
 }
 
+export interface AppConnectionProviderListResponse {
+  success: boolean;
+  data?: AppConnectionProviderDTO[];
+  error?: string;
+}
+
+export interface AppConnectionProviderResponse {
+  success: boolean;
+  data?: AppConnectionProviderDTO;
+  error?: string;
+  errorCode?: string;
+}
+
 export interface AppConnectionSingleResponse {
   success: boolean;
   data?: AppConnectionStatusDTO;
@@ -76,17 +92,45 @@ export interface AppConnectionSingleResponse {
   errorCode?: string;
 }
 
-export function registerAppConnectionHandlers(): void {
-  const logger = getLogger();
+/**
+ * Resolve the connection service only after the boot database is ready.
+ *
+ * IPC handlers are registered while Electron is still booting, before
+ * `initDatabaseFromBoot()` completes. Constructing the singleton during
+ * registration used to capture a null database permanently, so every later
+ * `appConnection:list` request failed even though boot had completed.
+ */
+function getReadyAppConnectionService() {
+  if (!getDatabase()) {
+    throw new Error('App connection database is not ready');
+  }
   const service = getAppConnectionService();
   service.setReloadHook(notifyAgentServerAppConnectionReload);
+  return service;
+}
+
+function getErrorCode(error: unknown): string {
+  if (error instanceof FlowError) return error.code;
+  if (
+    error &&
+    typeof error === 'object' &&
+    'code' in error &&
+    typeof (error as { code?: unknown }).code === 'string'
+  ) {
+    return (error as { code: string }).code;
+  }
+  return 'internal';
+}
+
+export function registerAppConnectionHandlers(): void {
+  const logger = getLogger();
 
   // --- appConnection:list ---
   ipcMain.handle(
     'appConnection:list',
     async (): Promise<AppConnectionListResponse> => {
       try {
-        const list = service.list();
+        const list = getReadyAppConnectionService().list();
         return { success: true, data: list };
       } catch (err) {
         logger.error(
@@ -100,6 +144,24 @@ export function registerAppConnectionHandlers(): void {
     },
   );
 
+  // --- appConnection:providers ---
+  ipcMain.handle(
+    'appConnection:providers',
+    async (): Promise<AppConnectionProviderListResponse> => {
+      try {
+        return { success: true, data: getReadyAppConnectionService().listProviders() };
+      } catch (err) {
+        logger.error(
+          'appConnection:providers failed',
+          err instanceof Error ? err : new Error(String(err)),
+          undefined,
+          COMPONENT,
+        );
+        return { success: false, error: 'Failed to list app connection providers' };
+      }
+    },
+  );
+
   // --- appConnection:status ---
   ipcMain.handle(
     'appConnection:status',
@@ -108,7 +170,7 @@ export function registerAppConnectionHandlers(): void {
         return { success: false, error: 'connectionId is required' };
       }
       try {
-        const dto = service.getStatus(connectionId);
+        const dto = getReadyAppConnectionService().getStatus(connectionId);
         return dto ? { success: true, data: dto } : { success: false, error: 'Connection not found', errorCode: 'connection_not_found' };
       } catch (err) {
         logger.error(
@@ -128,19 +190,19 @@ export function registerAppConnectionHandlers(): void {
     async (
       _event,
       payload: { provider: ProviderId; scopes?: string[] },
-    ): Promise<AppConnectionSingleResponse> => {
+    ): Promise<AppConnectionProviderResponse> => {
       if (!payload || typeof payload.provider !== 'string') {
         return { success: false, error: 'provider is required' };
       }
-      const provider = payload.provider as ProviderId;
-      if (provider !== 'google' && provider !== 'slack' && provider !== 'microsoft365') {
-        return { success: false, error: `Unsupported provider: ${provider}`, errorCode: 'unsupported_provider' };
+      if (!isKnownProvider(payload.provider)) {
+        return { success: false, error: `Unsupported provider: ${payload.provider}`, errorCode: 'unsupported_provider' };
       }
+      const provider = payload.provider;
       try {
-        const dto = await service.connect(provider, payload.scopes);
+        const dto = await getReadyAppConnectionService().connect(provider, payload.scopes);
         return { success: true, data: dto };
       } catch (err) {
-        const errorCode = err instanceof FlowError ? err.code : 'internal';
+        const errorCode = getErrorCode(err);
         const message = err instanceof Error ? err.message : String(err);
         logger.warn(
           'appConnection:connect failed',
@@ -157,6 +219,46 @@ export function registerAppConnectionHandlers(): void {
     },
   );
 
+  // --- appConnection:configureProvider ---
+  ipcMain.handle(
+    'appConnection:configureProvider',
+    async (
+      _event,
+      payload: { provider: ProviderId; clientId: string; clientSecret?: string },
+    ): Promise<AppConnectionSingleResponse> => {
+      if (!payload || typeof payload.provider !== 'string' || typeof payload.clientId !== 'string') {
+        return { success: false, error: 'provider and clientId are required' };
+      }
+      if (!isKnownProvider(payload.provider)) {
+        return { success: false, error: `Unsupported provider: ${payload.provider}`, errorCode: 'unsupported_provider' };
+      }
+      const provider = payload.provider;
+      if (payload.clientId.length > 2048 || (payload.clientSecret?.length ?? 0) > 4096) {
+        return { success: false, error: 'OAuth client configuration exceeds the allowed length' };
+      }
+      try {
+        const providerState = getReadyAppConnectionService().configureProvider(provider, {
+          clientId: payload.clientId,
+          clientSecret: payload.clientSecret,
+        });
+        if (!providerState.configured) {
+          return {
+            success: false,
+            error: providerState.configurationHint ?? 'OAuth provider is not configured',
+            errorCode: 'provider_not_configured',
+          };
+        }
+        return { success: true, data: providerState };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          errorCode: getErrorCode(err),
+        };
+      }
+    },
+  );
+
   // --- appConnection:disconnect ---
   ipcMain.handle(
     'appConnection:disconnect',
@@ -165,7 +267,7 @@ export function registerAppConnectionHandlers(): void {
         return { success: false, error: 'connectionId is required' };
       }
       try {
-        const disconnected = await service.disconnect(connectionId);
+        const disconnected = await getReadyAppConnectionService().disconnect(connectionId);
         return { success: true, data: { disconnected } };
       } catch (err) {
         logger.error(

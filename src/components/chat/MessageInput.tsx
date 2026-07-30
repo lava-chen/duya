@@ -35,6 +35,7 @@ import {
   ADD_ATTACHMENT_EVENT,
   type AddAttachmentDetail,
 } from '@/lib/add-attachment-event';
+import { fetchMCPInventorySnapshot } from '@/lib/mcp-inventory-ipc';
 import {
   PREFILL_CHAT_INPUT_EVENT,
   consumePendingPrefill,
@@ -912,8 +913,19 @@ export function MessageInput({
           }
         }
 
-        // Fetch MCP servers (prefer ConfigManager agentSettings source)
-        if (window.electronAPI?.settings?.getMcpServers) {
+        // Fetch MCP servers from inventory snapshot (includes both
+        // settings-configured and plugin-declared servers)
+        const snapshot = await fetchMCPInventorySnapshot();
+        if (snapshot) {
+          const servers = snapshot.effectiveServers
+            .filter((s) => s.name && s.effectiveEnabled)
+            .map((s) => ({
+              name: s.name,
+              description: s.command,
+              enabled: s.effectiveEnabled,
+            }));
+          setMcpServers(servers);
+        } else if (window.electronAPI?.settings?.getMcpServers) {
           const mcpResult = await window.electronAPI.settings.getMcpServers();
           if (mcpResult.success && Array.isArray(mcpResult.data)) {
             setMcpServers(
