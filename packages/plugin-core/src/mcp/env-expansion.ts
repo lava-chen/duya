@@ -207,26 +207,42 @@ function expandField(
 
 /**
  * Expand env vars in every field of a server config: `command`, `args[]`,
- * `env{}`. Returns the expanded record plus the aggregated missing vars
+ * `env{}`, `url`, and `headers{}`. Returns the expanded record plus the aggregated missing vars
  * and missing user-config keys. Pure.
  */
 export function expandMcpServerConfig(
-  config: { command: string; args?: string[]; env?: Record<string, string> },
+  config: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  },
   ctx: {
     environment: Record<string, string>;
     plugin?: { root?: string; dataPath?: string };
     userConfig?: Record<string, string>;
   },
 ): {
-  expanded: { command: string; args: string[]; env: Record<string, string> };
+  expanded: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args: string[];
+    env: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  };
   missingVars: string[];
   missingKeys: string[];
 } {
   const missingVars: string[] = [];
   const missingKeys: string[] = [];
-  const command = expandField(config.command, ctx);
-  missingVars.push(...command.missingVars);
-  missingKeys.push(...command.missingKeys);
+  const command = config.command === undefined ? undefined : expandField(config.command, ctx);
+  if (command) {
+    missingVars.push(...command.missingVars);
+    missingKeys.push(...command.missingKeys);
+  }
   const args: string[] = [];
   for (const a of config.args ?? []) {
     const r = expandField(a, ctx);
@@ -241,8 +257,27 @@ export function expandMcpServerConfig(
     missingVars.push(...r.missingVars);
     missingKeys.push(...r.missingKeys);
   }
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(config.headers ?? {})) {
+    const r = expandField(v, ctx);
+    headers[k] = r.expanded;
+    missingVars.push(...r.missingVars);
+    missingKeys.push(...r.missingKeys);
+  }
+  const url = config.url === undefined ? undefined : expandField(config.url, ctx);
+  if (url) {
+    missingVars.push(...url.missingVars);
+    missingKeys.push(...url.missingKeys);
+  }
   return {
-    expanded: { command: command.expanded, args, env },
+    expanded: {
+      transport: config.transport,
+      command: command?.expanded,
+      args,
+      env,
+      url: url?.expanded,
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+    },
     missingVars,
     missingKeys,
   };

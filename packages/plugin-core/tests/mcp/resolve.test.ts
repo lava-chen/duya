@@ -49,6 +49,38 @@ describe('resolveMCPDiscovery — shape and basic flow', () => {
     expect(r.issues).toHaveLength(0);
   });
 
+  it('resolves a HTTPS Streamable HTTP server without stdio path checks', async () => {
+    const r = await resolveMCPDiscovery([{
+      source: 'settings',
+      sourceSubOrigin: 'agentSettings',
+      rawConfig: {
+        name: 'notion',
+        transport: 'streamable-http',
+        url: 'https://mcp.notion.com/mcp',
+      },
+    }], baseCtx);
+    expect(r.inventory[0].discoveryStatus).toBe('configured');
+    expect(r.resolvedConfigs).toHaveLength(1);
+    expect(r.resolvedConfigs[0].rawConfig).toMatchObject({
+      transport: 'streamable-http',
+      url: 'https://mcp.notion.com/mcp',
+    });
+  });
+
+  it('rejects a non-HTTPS Streamable HTTP endpoint', async () => {
+    const r = await resolveMCPDiscovery([{
+      source: 'settings',
+      sourceSubOrigin: 'agentSettings',
+      rawConfig: {
+        name: 'unsafe',
+        transport: 'streamable-http',
+        url: 'http://127.0.0.1:3000/mcp',
+      },
+    }], baseCtx);
+    expect(r.inventory[0].discoveryStatus).toBe('manifest_invalid');
+    expect(r.resolvedConfigs).toHaveLength(0);
+  });
+
   it('emits a manifest_invalid issue for an invalid candidate but keeps it in inventory', async () => {
     const bad: MCPCandidate = {
       source: 'settings',

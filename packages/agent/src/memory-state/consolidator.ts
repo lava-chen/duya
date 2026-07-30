@@ -8,9 +8,9 @@
  *   - re-enforces the D8 guard (external-only evidence cannot form
  *     preference/procedure)
  *   - digests ad-hoc `.md` files from `extensions/ad_hoc/`
- *   - groups items by (scope, project_id, canonical_key), picks a
- *     winner per group (highest evidence.verification, tiebreak by
- *     generated_at DESC; ad-hoc entries always win)
+ *   - groups items by canonical_key, picks a winner per group
+ *     (highest evidence.verification, tiebreak by generated_at DESC;
+ *     ad-hoc entries always win)
  *   - UPSERTs memory_entries + inserts memory_evidence rows
  *   - renders + enqueues 5 projection files via the outbox
  *   - releases the lock
@@ -39,7 +39,6 @@ import {
   renderAreasIndexFile,
   personAreaSlug,
   type MemoryEntryRow,
-  type ProjectRow,
   type Phase2Diff,
   type Phase2DiffEntry,
 } from './projectionContent.js';
@@ -121,18 +120,15 @@ interface ParsedItem {
   itemIndex: number;
   claim: string;
   claimType: string;
-  scopeHint?: 'global' | 'project';
+  scopeHint?: 'global';
   canonicalKey: string;
   evidence: ParsedEvidence[];
   generatedAt: number;
-  projectId: string;
   isAdHoc: boolean;
   content: string;
 }
 
 interface ItemGroup {
-  scope: 'global' | 'project';
-  projectId: string | null;
   canonicalKey: string;
   items: ParsedItem[];
 }
@@ -141,18 +137,12 @@ interface AdHocFile {
   filename: string;
   filePath: string;
   content: string;
-  scope: 'global' | 'project';
-  projectId: string | null;
   canonicalKey: string;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function scopeForProject(projectId: string): 'global' | 'project' {
-  return projectId === 'global' ? 'global' : 'project';
-}
 
 function maxVerificationRank(evidence: ParsedEvidence[]): number {
   let max = 0;
@@ -196,7 +186,7 @@ function d8AllowsKind(item: ParsedItem): boolean {
 
 /**
  * True when the canonical_key belongs to a person or area entry
- * (prefix `person:` or `area:`). These kinds are always global scope.
+ * (prefix `person:` or `area:`).
  */
 function isPersonAreaKey(canonicalKey: string): boolean {
   return canonicalKey.startsWith('person:') || canonicalKey.startsWith('area:');
@@ -231,7 +221,6 @@ export function normalizeCanonicalKey(
     proc: 'procedure',
     workflow: 'procedure',
     fact: 'fact',
-    project: 'fact',
     ref: 'reference',
     reference: 'reference',
     person: 'person',
@@ -240,8 +229,8 @@ export function normalizeCanonicalKey(
   const type = prefixAliases[claimType] ?? claimType;
   let topic = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
   topic = topic
-    .replace(/^(user|project)[-:]+/, '')
-    .replace(/^(pref(erence)?|proc(edure)?|workflow|fact|ref(erence)?|project)[-:]+/, '')
+    .replace(/^user[-:]+/, '')
+    .replace(/^(pref(erence)?|proc(edure)?|workflow|fact|ref(erence)?)[-:]+/, '')
     .replace(/[^a-z0-9\u4e00-\u9fff-]+/g, '-')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '');
@@ -253,10 +242,7 @@ function isExplicitlyGlobal(item: ParsedItem, normalizedKey: string): boolean {
     item.scopeHint === 'global' ||
     isPersonAreaKey(normalizedKey) ||
     normalizedKey === 'preference:response-language' ||
-    normalizedKey === 'preference:visual-verification' ||
-    (item.scopeHint === undefined &&
-      item.projectId === 'global' &&
-      /\b(across|all|every) projects?\b|\bdefault preferences?\b|跨项目|所有项目|默认偏好/i.test(item.claim))
+    normalizedKey === 'preference:visual-verification'
   );
 }
 
@@ -414,19 +400,18 @@ interface RawMemoryItem {
     verification?: string;
   }>;
   canonical_key?: string;
-  scope?: 'global' | 'project';
+  scope?: 'global';
 }
 
 function parseStage1Items(db: Database): ParsedItem[] {
   const rows = db
     .prepare(
-      `SELECT rollout_id, project_id, raw_memory, generated_at
+      `SELECT rollout_id, raw_memory, generated_at
        FROM stage1_outputs
        WHERE job_status = 'succeeded'`
     )
     .all() as Array<{
     rollout_id: string;
-    project_id: string;
     raw_memory: string | null;
     generated_at: number;
   }>;
@@ -481,7 +466,6 @@ function parseStage1Items(db: Database): ParsedItem[] {
           : normalizeCanonicalKey(item.claim_type, item.canonical_key, item.claim),
         evidence,
         generatedAt: row.generated_at,
-        projectId: row.project_id,
         isAdHoc: false,
         content: item.claim,
       });
@@ -495,12 +479,9 @@ function parseStage1Items(db: Database): ParsedItem[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Ad-hoc project prefix regex. Uses `__` (double underscore) as the
- * separator because colons are illegal in Windows filenames. Format:
- *   `project__<uuid>__<name>.md`
+ * Ad-hoc notes are global-only. Legacy `project__<uuid>__<name>.md`
+ * filenames are digested as-is but treated as global entries.
  */
-const PROJECT_PREFIX_RE = /^project__([0-9a-fA-F-]{36})__(.+)$/;
-
 function scanAdHocFiles(rootDir: string): AdHocFile[] {
   const adHocDir = path.join(rootDir, AD_HOC_DIR_NAME);
   if (!fs.existsSync(adHocDir)) return [];
@@ -512,25 +493,12 @@ function scanAdHocFiles(rootDir: string): AdHocFile[] {
     const stat = fs.statSync(fullPath);
     if (!stat.isFile()) continue;
 
-    let scope: 'global' | 'project' = 'global';
-    let projectId: string | null = null;
-    let filenameForkey = entry;
-
-    const match = PROJECT_PREFIX_RE.exec(entry);
-    if (match) {
-      scope = 'project';
-      projectId = match[1];
-      filenameForkey = match[2];
-    }
-
     const content = fs.readFileSync(fullPath, 'utf8');
     files.push({
       filename: entry,
       filePath: fullPath,
       content,
-      scope,
-      projectId,
-      canonicalKey: `ad-hoc:${filenameForkey}`,
+      canonicalKey: `ad-hoc:${entry}`,
     });
   }
   return files;
@@ -557,17 +525,12 @@ function groupItems(items: ParsedItem[]): ItemGroup[] {
   const groups = new Map<string, ItemGroup>();
   for (const item of items) {
     if (!d8AllowsKind(item)) continue;
-    // Person and area entries are always global scope (cross-project).
-    const global = isExplicitlyGlobal(item, item.canonicalKey);
-    // Historical rows used the `global` sentinel even when scope had never
-    // been decided. Do not promote those ambiguous facts into every project.
-    if (!global && item.projectId === 'global') continue;
-    const scope = global ? 'global' : scopeForProject(item.projectId);
-    const projectId = scope === 'global' ? null : item.projectId;
-    const key = `${scope}|${projectId ?? ''}|${item.canonicalKey}`;
+    // The memory system is global-only; every surviving item joins a
+    // single canonical_key group.
+    const key = item.canonicalKey;
     let group = groups.get(key);
     if (!group) {
-      group = { scope, projectId, canonicalKey: item.canonicalKey, items: [] };
+      group = { canonicalKey: key, items: [] };
       groups.set(key, group);
     }
     group.items.push(item);
@@ -594,11 +557,9 @@ function retireCanonicalAliases(
   let retired = 0;
   for (const candidate of candidates) {
     if (candidate.memory_id === targetMemoryId) continue;
-    if (candidate.scope !== group.scope) continue;
     if (normalizeCanonicalKey(candidate.kind, candidate.canonical_key, candidate.content) !== group.canonicalKey) {
       continue;
     }
-    if (group.scope === 'project' && candidate.project_id !== group.projectId) continue;
 
     db.prepare(
       `INSERT OR IGNORE INTO memory_evidence (memory_id, rollout_id, stage1_item_id, relation)
@@ -629,36 +590,32 @@ function enforceActiveMemoryBudgets(
   const active = db
     .prepare("SELECT * FROM memory_entries WHERE status = 'active'")
     .all() as MemoryEntryRow[];
-  const buckets = new Map<string, MemoryEntryRow[]>();
+  const candidates: MemoryEntryRow[] = [];
   for (const entry of active) {
     if (entry.kind === 'person' || entry.kind === 'area') continue;
-    const bucket = `${entry.scope}:${entry.project_id ?? 'global'}`;
-    const values = buckets.get(bucket) ?? [];
-    values.push(entry);
-    buckets.set(bucket, values);
+    candidates.push(entry);
   }
 
+  candidates.sort((a, b) => {
+    const protectedA = a.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
+    const protectedB = b.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
+    return protectedB - protectedA || summaryEntryRank(b) - summaryEntryRank(a) || b.updated_at - a.updated_at;
+  });
+
   let retired = 0;
-  for (const values of buckets.values()) {
-    values.sort((a, b) => {
-      const protectedA = a.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
-      const protectedB = b.canonical_key.startsWith('ad-hoc:') ? 1 : 0;
-      return protectedB - protectedA || summaryEntryRank(b) - summaryEntryRank(a) || b.updated_at - a.updated_at;
+  for (const entry of candidates.slice(ACTIVE_MEMORY_LIMIT_PER_SCOPE)) {
+    db.prepare(
+      "UPDATE memory_entries SET status = 'retired', updated_at = ? WHERE memory_id = ?"
+    ).run(now, entry.memory_id);
+    retiredDiff.push({
+      memory_id: entry.memory_id,
+      canonical_key: entry.canonical_key,
+      content: entry.content,
+      kind: entry.kind,
+      scope: entry.scope,
+      project_id: entry.project_id,
     });
-    for (const entry of values.slice(ACTIVE_MEMORY_LIMIT_PER_SCOPE)) {
-      db.prepare(
-        "UPDATE memory_entries SET status = 'retired', updated_at = ? WHERE memory_id = ?"
-      ).run(now, entry.memory_id);
-      retiredDiff.push({
-        memory_id: entry.memory_id,
-        canonical_key: entry.canonical_key,
-        content: entry.content,
-        kind: entry.kind,
-        scope: entry.scope,
-        project_id: entry.project_id,
-      });
-      retired++;
-    }
+    retired++;
   }
   return retired;
 }
@@ -670,7 +627,7 @@ function retireUnsupportedGlobalEntries(
   retiredDiff: Phase2DiffEntry[]
 ): number {
   const active = db
-    .prepare("SELECT * FROM memory_entries WHERE status = 'active' AND scope = 'global'")
+    .prepare("SELECT * FROM memory_entries WHERE status = 'active'")
     .all() as MemoryEntryRow[];
   let retired = 0;
   for (const entry of active) {
@@ -779,7 +736,6 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
       },
     ],
     generatedAt: start,
-    projectId: f.projectId ?? 'global',
     isAdHoc: true,
     content: f.content,
   }));
@@ -824,21 +780,9 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
           : winner.content;
 
         // Query existing entry for this canonical_key.
-        const existing = group.projectId
-          ? (input.db
-              .prepare(
-                'SELECT * FROM memory_entries WHERE scope = ? AND project_id = ? AND canonical_key = ?'
-              )
-              .get(group.scope, group.projectId, group.canonicalKey) as
-              | MemoryEntryRow
-              | undefined)
-          : (input.db
-              .prepare(
-                'SELECT * FROM memory_entries WHERE scope = ? AND project_id IS NULL AND canonical_key = ?'
-              )
-              .get(group.scope, group.canonicalKey) as
-              | MemoryEntryRow
-              | undefined);
+        const existing = input.db
+          .prepare('SELECT * FROM memory_entries WHERE canonical_key = ?')
+          .get(group.canonicalKey) as MemoryEntryRow | undefined;
 
         let memoryId: string;
         if (!existing) {
@@ -849,12 +793,11 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
               `INSERT INTO memory_entries
                  (memory_id, scope, project_id, kind, canonical_key, content,
                   version, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 1, 'active', ?, ?)`
+               VALUES (?, ?, NULL, ?, ?, ?, 1, 'active', ?, ?)`
             )
             .run(
               memoryId,
-              group.scope,
-              group.projectId,
+              'global',
               winner.claimType as MemoryEntryRow['kind'],
               group.canonicalKey,
               groupContent,
@@ -867,8 +810,8 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
             canonical_key: group.canonicalKey,
             content: groupContent,
             kind: winner.claimType,
-            scope: group.scope,
-            project_id: group.projectId,
+            scope: 'global',
+            project_id: null,
           });
         } else {
           memoryId = existing.memory_id;
@@ -892,8 +835,8 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
               canonical_key: group.canonicalKey,
               content: groupContent,
               kind: winner.claimType,
-              scope: group.scope,
-              project_id: group.projectId,
+              scope: 'global',
+              project_id: null,
             });
           }
         }
@@ -921,12 +864,10 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
         );
       }
 
-      const supportedGlobalKeys = new Set(
-        groups.filter((group) => group.scope === 'global').map((group) => group.canonicalKey)
-      );
+      const supportedKeys = new Set(groups.map((group) => group.canonicalKey));
       retired += retireUnsupportedGlobalEntries(
         input.db,
-        supportedGlobalKeys,
+        supportedKeys,
         start,
         diffRetired
       );
@@ -936,22 +877,19 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
       const entries = input.db
         .prepare('SELECT * FROM memory_entries')
         .all() as MemoryEntryRow[];
-      const projects = input.db
-        .prepare('SELECT * FROM projects')
-        .all() as ProjectRow[];
 
-      // Single searchable projections. Project identity remains in SQLite
-      // and in semantic headings, not in a projects/<uuid> directory tree.
+      // Single searchable projections. The memory system is global-only;
+      // no per-project files or sections are maintained.
       enqueueProjectionOutbox(input.db, {
         targetPath: path.join(rootDir, 'MEMORY.md'),
         operation: 'write',
-        content: renderUnifiedMemoryFile(entries, projects),
+        content: renderUnifiedMemoryFile(entries),
         now: start,
       });
       enqueueProjectionOutbox(input.db, {
         targetPath: path.join(rootDir, 'summary.md'),
         operation: 'write',
-        content: renderMemorySummaryFile(entries, projects),
+        content: renderMemorySummaryFile(entries),
         now: start,
       });
 

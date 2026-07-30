@@ -5,6 +5,7 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../types.js';
 import { PermissionRequiredError } from './BaseTool.js';
+import type { ToolSnapshot } from './snapshot.js';
 
 /**
  * 工具执行器接口
@@ -334,6 +335,51 @@ export class ToolRegistry {
   }
 
   /**
+   * Plan 314: build an immutable per-turn snapshot of the catalog.
+   *
+   * The snapshot captures tools, executors, metadata, and the
+   * providerName→internalKey alias map at a single point in time.
+   * Lookup helpers key on `definition.name` (the model-visible
+   * name), which is correct for both builtin tools (registry key
+   * === name) and MCP tools (registry key === internalKey, name
+   * === providerName).
+   *
+   * The returned `tools` array is frozen; callers must not mutate.
+   * The catalog may continue to mutate after the snapshot is taken
+   * (e.g. `tools/list_changed`); the snapshot remains stable for
+   * the duration of the turn that requested it.
+   */
+  snapshot(
+    providerNameToInternalKey: ReadonlyMap<string, string>,
+  ): ToolSnapshot {
+    const tools: Tool[] = [];
+    const exposeModeMap = new Map<string, ExposeMode>();
+    const executorMap = new Map<string, ToolExecutor>();
+    const metaMap = new Map<string, ToolMeta>();
+    for (const [, rt] of this.tools) {
+      const name = rt.definition.name;
+      tools.push(rt.definition);
+      exposeModeMap.set(name, rt.meta?.exposeMode ?? 'always');
+      executorMap.set(name, rt.executor);
+      metaMap.set(name, {
+        name,
+        description: rt.definition.description,
+        category: 'unknown',
+        inputSchemaSummary: rt.meta?.inputSchemaSummary,
+        exposeMode: rt.meta?.exposeMode,
+      });
+    }
+    return {
+      tools: Object.freeze(tools) as readonly Tool[],
+      providerNameToInternalKey,
+      getExposeMode: (n: string) => exposeModeMap.get(n) ?? 'always',
+      getExecutor: (n: string) => executorMap.get(n),
+      getMeta: (n: string) => metaMap.get(n),
+      createdAt: Date.now(),
+    };
+  }
+
+  /**
    * 获取工具执行器实例
    */
   getExecutor(name: string): ToolExecutor | undefined {
@@ -358,6 +404,27 @@ export class ToolRegistry {
    */
   getExposeMode(name: string): ExposeMode {
     return this.tools.get(name)?.meta?.exposeMode ?? 'always';
+  }
+
+  /**
+   * Plan 314: look up the ownership tag of a tool by its
+   * model-visible `definition.name`. Builtin / plugin /
+   * app-connection tools are keyed by `definition.name` (fast
+   * path); MCP tools are keyed by `internalKey`, so a miss on the
+   * fast path falls through to a linear scan over
+   * `definition.name`. Returns `undefined` for unknown names.
+   *
+   * Used by `DuyaAgent.getNonMCPModelVisibleToolNames` to derive
+   * the providerName allocator seed from the live catalog instead
+   * of a hardcoded builtin list.
+   */
+  getOwner(name: string): 'non-mcp' | 'mcp' | undefined {
+    const direct = this.tools.get(name);
+    if (direct) return direct.owner;
+    for (const [, entry] of this.tools) {
+      if (entry.definition.name === name) return entry.owner;
+    }
+    return undefined;
   }
 
   /**

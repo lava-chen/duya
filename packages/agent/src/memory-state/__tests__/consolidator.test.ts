@@ -495,8 +495,8 @@ describe('runConsolidator', () => {
     expect(entries[0].scope).toBe('global');
   });
 
-  // 14. Ad-hoc: project-scoped filename prefix.
-  it('14. ad-hoc: project__<uuid>__ prefix sets scope=project', () => {
+  // 14. Ad-hoc: legacy project-scoped filename prefix is treated as global.
+  it('14. ad-hoc: project__<uuid>__ prefix is treated as global', () => {
     const projectId = '550e8400-e29b-41d4-a716-446655440000';
     writeAdHocFile(fx.adHocDir, `project__${projectId}__my-note.md`, 'Project fact');
 
@@ -505,9 +505,9 @@ describe('runConsolidator', () => {
 
     const entries = getMemoryEntries(fx.db);
     expect(entries.length).toBe(1);
-    expect(entries[0].scope).toBe('project');
-    expect(entries[0].project_id).toBe(projectId);
-    expect(entries[0].canonical_key).toBe('ad-hoc:my-note.md');
+    expect(entries[0].scope).toBe('global');
+    expect(entries[0].project_id).toBeNull();
+    expect(entries[0].canonical_key).toBe('ad-hoc:project__550e8400-e29b-41d4-a716-446655440000__my-note.md');
   });
 
   // 15. Ad-hoc: .digested/ subdirectory ignored.
@@ -565,7 +565,6 @@ describe('runConsolidator', () => {
   // 18. Unified projections written via outbox drain.
   it('18. projections: unified memory and bounded summary are written via outbox drain', () => {
     makeStage1Row(fx.db, {
-      projectId: 'global',
       rawMemory: makeRawMemory([
         {
           claim: 'Global pref',
@@ -584,7 +583,7 @@ describe('runConsolidator', () => {
 
     const globalSummary = drainAndRead(fx.db, fx.memoryRoot, 'summary.md');
     expect(globalSummary).toContain('Memory Summary');
-    expect(globalSummary).toContain('Global essentials');
+    expect(globalSummary).toContain('## Essentials');
     expect(fs.existsSync(path.join(fx.memoryRoot, 'projects'))).toBe(false);
 
     const diff = drainAndRead(fx.db, fx.memoryRoot, 'phase2_workspace_diff.md');
@@ -647,28 +646,23 @@ describe('runConsolidator', () => {
     expect(entries[0].version).toBe(1);
   });
 
-  it('21. canonical alias retirement never crosses scope boundaries', () => {
-    const projectId = crypto.randomUUID();
+  it('21. canonical alias retirement merges entries with the same normalized key', () => {
     makeStage1Row(fx.db, {
-      projectId,
       rawMemory: makeRawMemory([
         {
           claim: 'Use the dark theme in this project.',
           claim_type: 'preference',
           canonical_key: 'ui-theme',
-          scope: 'project',
           evidence: [{ source_type: 'user_message', source_id: 'm-project', verification: 'verified_user' }],
         },
       ]),
     });
     makeStage1Row(fx.db, {
-      projectId,
       rawMemory: makeRawMemory([
         {
           claim: 'Use the dark theme globally.',
           claim_type: 'preference',
           canonical_key: 'preference:ui-theme',
-          scope: 'global',
           evidence: [{ source_type: 'user_message', source_id: 'm-global', verification: 'verified_user' }],
         },
       ]),
@@ -677,23 +671,24 @@ describe('runConsolidator', () => {
     runConsolidator({ db: fx.db, now: FIXED_NOW, rootDir: fx.memoryRoot });
 
     const entries = getMemoryEntries(fx.db).filter((item) => item.status === 'active');
-    expect(entries).toHaveLength(2);
-    expect(entries.map((item) => item.scope).sort()).toEqual(['global', 'project']);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].scope).toBe('global');
+    expect(entries[0].canonical_key).toBe('preference:ui-theme');
   });
 
-  it('22. ambiguous historical global rows are retired from the active read path', () => {
+  it('22. legacy global rows are merged when a new global item shares the same key', () => {
     fx.db.prepare(
       `INSERT INTO memory_entries
          (memory_id, scope, project_id, kind, canonical_key, content, version, status, created_at, updated_at)
-       VALUES (?, 'global', NULL, 'fact', 'fact:project-only-detail', ?, 1, 'active', ?, ?)`
-    ).run('legacy-global', 'A project-specific implementation detail.', FIXED_NOW - 1, FIXED_NOW - 1);
+       VALUES (?, 'global', NULL, 'fact', 'fact:legacy-detail', ?, 1, 'active', ?, ?)`
+    ).run('legacy-global', 'A legacy implementation detail.', FIXED_NOW - 1, FIXED_NOW - 1);
     makeStage1Row(fx.db, {
       rawMemory: JSON.stringify({
         items: [
           {
-            claim: 'A project-specific implementation detail.',
+            claim: 'A legacy implementation detail.',
             claim_type: 'fact',
-            canonical_key: 'fact:project-only-detail',
+            canonical_key: 'fact:legacy-detail',
             evidence: [{ source_type: 'user_message', source_id: 'm-legacy', verification: 'verified_user' }],
           },
         ],
@@ -703,6 +698,7 @@ describe('runConsolidator', () => {
     runConsolidator({ db: fx.db, now: FIXED_NOW, rootDir: fx.memoryRoot });
 
     const legacy = getMemoryEntries(fx.db).find((item) => item.memory_id === 'legacy-global');
-    expect(legacy?.status).toBe('retired');
+    expect(legacy?.status).toBe('active');
+    expect(legacy?.version).toBe(1);
   });
 });

@@ -37,7 +37,6 @@ import {
   type MemoryEntryRow,
   type Phase2Diff,
   type Phase2DiffEntry,
-  type ProjectRow,
   type Stage1OutputRow,
 } from './projectionContent.js';
 
@@ -206,20 +205,17 @@ function reconcilePhase2Projections(
   const entries = db
     .prepare('SELECT * FROM memory_entries')
     .all() as MemoryEntryRow[];
-  const projects = db
-    .prepare('SELECT * FROM projects')
-    .all() as ProjectRow[];
 
   // --- unified MEMORY.md + bounded summary.md ---
   planFileWrite(
     path.join(rootDir, 'MEMORY.md'),
-    renderUnifiedMemoryFile(entries, projects),
+    renderUnifiedMemoryFile(entries),
     planned,
     written
   );
   planFileWrite(
     path.join(rootDir, 'summary.md'),
-    renderMemorySummaryFile(entries, projects),
+    renderMemorySummaryFile(entries),
     planned,
     written
   );

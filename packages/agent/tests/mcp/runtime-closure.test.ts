@@ -235,17 +235,13 @@ vi.mock('../../src/mcp/index.js', async () => {
   };
 });
 
-vi.mock('@duya/plugin-core', async () => {
-  const actual = await vi.importActual<typeof import('@duya/plugin-core')>('@duya/plugin-core');
-  return {
-    ...actual,
-    resolveMCPDiscovery: vi.fn(),
-  };
-});
+vi.mock('@duya/plugin-core/src/mcp/resolve.js', () => ({
+  resolveMCPDiscovery: vi.fn(),
+}));
 
 import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import * as mcpModule from '../../src/mcp/index.js';
-import { resolveMCPDiscovery } from '@duya/plugin-core';
+import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
 
 const mockedCollect = vi.mocked(collectWorkerMCPCandidates);
 const mockedResolve = vi.mocked(resolveMCPDiscovery);
@@ -340,7 +336,6 @@ function makeFakeAgent() {
     async setActiveMCPRuntime(install: {
       manager: { disconnectAll: () => Promise<void> };
       providerNameToInternalKey: Map<string, string>;
-      toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
       preparedRegistryEntries: Array<{
         key: string;
         definition: Tool;
@@ -356,8 +351,13 @@ function makeFakeAgent() {
       activeManager = install.manager;
       providerNameToInternalKey.clear();
       for (const [k, v] of install.providerNameToInternalKey) providerNameToInternalKey.set(k, v);
+      // Plan 314: apply.ts no longer passes a separate `toolEntries`
+      // map; derive the inspector view from preparedRegistryEntries
+      // so tests that assert on `_toolEntries()` keep their semantics.
       toolEntries.clear();
-      for (const [k, v] of install.toolEntries) toolEntries.set(k, v);
+      for (const e of install.preparedRegistryEntries) {
+        toolEntries.set(e.key, { definition: e.definition, executor: e.executor });
+      }
       activeMCPRuntimeSnapshot = install.snapshot;
       if (previousManager && previousManager !== install.manager) {
         void previousManager.disconnectAll().catch(() => undefined);

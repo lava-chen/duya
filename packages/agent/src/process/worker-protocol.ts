@@ -343,7 +343,6 @@ export interface CompactErrorEvent {
 export interface MemoryWakeupEvent {
   type: 'memory:wakeup';
   sessionId?: string;
-  project_id?: string;
 }
 
 export type WorkerEvent =

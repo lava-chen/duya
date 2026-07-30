@@ -26,19 +26,15 @@ export const DEFAULT_IDLE_MS = 6 * 3600 * 1000; // 6h
 export const DEFAULT_WINDOW_MS = 30 * 86400 * 1000; // 30d
 /** Minimum message count for a session to be eligible for extraction. Filters out thin sessions. */
 export const DEFAULT_MIN_MESSAGE_COUNT = 6;
-/** Suppress extraction for a project when a sibling session was recently extracted. Prevents batch floods. */
-export const DEFAULT_PROJECT_COOLDOWN_MS = 10 * 60 * 1000; // 10min
 
 export interface EligibleRollout {
   rolloutId: string;
-  projectId: string | null;
-  scopeKind: 'global' | 'project';
   lastMessageAt: number; // ms
   sourceFingerprint: string;
 }
 
 const SELECT_ELIGIBLE_SQL = `
-SELECT r.rollout_id, r.project_id, r.scope_kind, r.last_message_at, r.source_fingerprint
+SELECT r.rollout_id, r.last_message_at, r.source_fingerprint
 FROM rollout_catalog r
 WHERE r.agent_type = 'main'
   AND (r.mode IS NULL OR r.mode != 'automation')
@@ -64,22 +60,12 @@ WHERE r.agent_type = 'main'
         AND (l.next_retry_at IS NULL OR l.next_retry_at <= :now))
   )
   AND NOT EXISTS (SELECT 1 FROM rollout_retired t WHERE t.rollout_id = r.rollout_id)
-  AND NOT EXISTS (
-    SELECT 1 FROM stage1_outputs s
-    JOIN rollout_catalog r2 ON r2.rollout_id = s.rollout_id
-    WHERE r2.project_id = r.project_id
-      AND r.project_id IS NOT NULL
-      AND s.output_updated_at > :now - :projectCooldownMs
-      AND s.job_status IN ('succeeded','succeeded_no_output')
-  )
 ORDER BY (:now - r.last_message_at) DESC
 LIMIT :limit
 `;
 
 interface EligibleRow {
   rollout_id: string;
-  project_id: string | null;
-  scope_kind: 'global' | 'project';
   last_message_at: number;
   source_fingerprint: string | null;
 }
@@ -92,7 +78,6 @@ export function selectEligible(
     idleMs?: number; // default 6h
     windowMs?: number; // default 30d
     minMessageCount?: number; // default 6
-    projectCooldownMs?: number; // default 10min
   }
 ): EligibleRollout[] {
   const rows = db
@@ -103,13 +88,10 @@ export function selectEligible(
       idleMs: input.idleMs ?? DEFAULT_IDLE_MS,
       windowMs: input.windowMs ?? DEFAULT_WINDOW_MS,
       minMessageCount: input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT,
-      projectCooldownMs: input.projectCooldownMs ?? DEFAULT_PROJECT_COOLDOWN_MS,
     }) as EligibleRow[];
 
   return rows.map((row) => ({
     rolloutId: row.rollout_id,
-    projectId: row.project_id,
-    scopeKind: row.scope_kind,
     lastMessageAt: row.last_message_at,
     sourceFingerprint: row.source_fingerprint ?? '',
   }));

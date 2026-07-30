@@ -9,8 +9,8 @@
         "VERCEL_TEAM_ID": "${setup.vercelTeamId}"
       },
       "envPassthrough": "allowlist",
-      "_status": "transitional",
-      "_migration": "Will migrate to the official Vercel Remote MCP endpoint (https://mcp.vercel.com) once Plan 313 Phase 2a lands the HTTP transport. Until then the stdio fallback wraps a Vercel MCP adapter. The access token will be exchanged for an OAuth flow managed by Vercel once the remote endpoint lands."
+      "_status": "fallback",
+      "_officialRemote": { "transport": "streamable-http", "url": "https://mcp.vercel.com", "authentication": "oauth" }
     }
   ]
 }

@@ -51,9 +51,12 @@ import {
  */
 export interface PluginManifestMcpServer {
   name: string;
-  command: string;
+  transport?: 'stdio' | 'streamable-http';
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
 }
 
 /**
@@ -380,7 +383,7 @@ export function buildCandidatesFromPluginEntry(
   const mcpServers = entry.manifest?.capabilities?.mcpServers ?? [];
   const out: MCPCandidate[] = [];
   for (const server of mcpServers) {
-    if (!server.name || !server.command) continue;
+    if (!server.name || (!server.command && !server.url)) continue;
     out.push({
       source: 'plugin',
       pluginId: entry.id,
@@ -389,9 +392,12 @@ export function buildCandidatesFromPluginEntry(
       pluginDataPath: entry.dataPath,
       rawConfig: {
         name: server.name,
+        transport: server.transport,
         command: server.command,
         args: server.args,
         env: server.env,
+        url: server.url,
+        headers: server.headers,
       },
     });
   }
@@ -405,15 +411,18 @@ export function buildCandidatesFromSettingsEntries(
   const out: MCPCandidate[] = [];
   for (const item of entries) {
     if (item.enabled === false) continue;
-    if (!item.name || !item.command) continue;
+    if (!item.name || (!item.command && !item.url)) continue;
     out.push({
       source: 'settings',
       sourceSubOrigin,
       rawConfig: {
         name: item.name,
+        transport: item.transport,
         command: item.command,
         args: item.args,
         env: item.env,
+        url: item.url,
+        headers: item.headers,
         allowedAgentIds: item.allowedAgentIds,
       },
     });

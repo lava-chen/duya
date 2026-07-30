@@ -72,4 +72,6 @@ export {
 export { applySourceShadowing } from './shadow';
 export type { ShadowApplicationResult } from './shadow';
 
-export { resolveMCPDiscovery } from './resolve';
+// resolveMCPDiscovery is NOT re-exported here — './resolve' imports Node
+// builtins ('fs', 'path'). Import it directly in Node-side code:
+//   import { resolveMCPDiscovery } from '../resolve'

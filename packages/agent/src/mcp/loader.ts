@@ -23,7 +23,7 @@ import type {
 } from '@duya/plugin-core';
 import type { MCPServerConfig } from '../types.js';
 import { collectWorkerMCPCandidates } from './collect-worker.js';
-import { resolveMCPDiscovery } from '@duya/plugin-core';
+import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
 
 // ============================================================================
 // Public types
@@ -60,9 +60,12 @@ export interface MCPLoadResult {
 export function resolvedToLegacyConfig(r: ResolvedMCPServerConfig): MCPServerConfig {
   return {
     name: r.scopedServerName,
+    transport: r.rawConfig.transport,
     command: r.rawConfig.command,
     args: r.rawConfig.args,
     env: r.rawConfig.env,
+    url: r.rawConfig.url,
+    headers: r.rawConfig.headers,
     allowedAgentIds: r.allowedAgentIds,
   };
 }

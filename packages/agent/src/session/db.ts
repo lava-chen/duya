@@ -42,16 +42,22 @@ function getIpcClient(): typeof ipcClient {
 function serializeMessageContent(value: unknown, role?: unknown): string {
   if (typeof value === 'string') return value;
   if (value === null || value === undefined) return '';
-  if (Array.isArray(value) && role === 'user') {
+  if (Array.isArray(value) && (role === 'user' || role === 'tool')) {
+    // Both user and tool messages can carry inline ImageContent blocks
+    // (user pastes, ReadTool on pure image files). Extract text blocks and
+    // drop image blocks entirely — base64 payloads must not bloat the
+    // messages.content column. Tool images are re-attached on reload via
+    // the message_attachments table (extractAndStoreAttachments handles
+    // tool messages too as of this change) or stay accessible through the
+    // vision tool / recentImageAttachments.
     const textBlocks = value.filter(
       (block: unknown) => (block as Record<string, unknown>).type === 'text',
     );
     if (textBlocks.length > 0) {
       return textBlocks.map((block: unknown) => (block as Record<string, string>).text || '').join('\n');
     }
-    // User messages that contain only non-text blocks (e.g. image blocks with
+    // Messages that contain only non-text blocks (e.g. image blocks with
     // inline base64) must not have their payload serialized into messages.content.
-    // Image data belongs in the attachments / message_attachments tables.
     return '';
   }
   return JSON.stringify(value);
@@ -2652,7 +2658,12 @@ export function extractAndStoreAttachments(
 
   const allAttachments: ExtractedAttachment[] = [];
   for (const msg of messages) {
-    if (msg.role === 'user' && msg.id) {
+    // Both user messages (pasted images) and tool messages (ReadTool on a
+    // pure image file) can carry inline ImageContent blocks. Persist them to
+    // message_attachments so the tool_result images survive session reload
+    // — without this, serializeMessageContent strips the base64 payload
+    // from messages.content and the image would be lost on next launch.
+    if ((msg.role === 'user' || msg.role === 'tool') && msg.id) {
       const attachments = extractAttachmentsFromContent(msg.id, msg.content);
       allAttachments.push(...attachments);
     }

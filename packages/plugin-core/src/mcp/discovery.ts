@@ -36,8 +36,9 @@ export interface MCPSourceContext {
  * (collectMainMCPCandidates). The resolution engine consumes these and
  * performs no I/O of its own.
  *
- * Note: `command` and `args` are pre-expansion at this stage. The engine
- * applies env expansion via the `environment` field in ResolutionContext.
+ * Note: stdio `command`/`args`, remote `url`, and request `headers` are
+ * pre-expansion at this stage. The engine applies variable expansion via the
+ * `environment` field in ResolutionContext.
  */
 export interface MCPCandidate {
   source: MCPSource;
@@ -50,9 +51,12 @@ export interface MCPCandidate {
   pluginDataPath?: string;
   rawConfig: {
     name: string;
-    command: string;
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
     args?: string[];
     env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
     allowedAgentIds?: string[];
     /** Optional reserved-for-future cross-source override key. Not consulted this round. */
     overrideTarget?: string;
@@ -85,7 +89,15 @@ export interface MCPServerInventoryEntry {
   pluginName?: string;
   serverName: string;             // unscoped display name (rawConfig.name)
   scopedServerName: string;       // internal identifier (plugin:<id>:<name> for plugins, plain for others)
-  rawConfig: { command: string; args?: string[]; env?: Record<string, string>; allowedAgentIds?: string[] };
+  rawConfig: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args?: string[];
+    env?: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+    allowedAgentIds?: string[];
+  };
   discoveryStatus: MCPDiscoveryStatus;
   allowedAgentIds?: string[];
   /** Reserved for a future cross-source override plan; unused this round. */
@@ -107,7 +119,14 @@ export interface ResolvedMCPServerConfig {
   pluginId?: string;
   pluginName?: string;
   scopedServerName: string;
-  rawConfig: { command: string; args: string[]; env: Record<string, string> };
+  rawConfig: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args: string[];
+    env: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  };
   allowedAgentIds?: string[];
 }
 

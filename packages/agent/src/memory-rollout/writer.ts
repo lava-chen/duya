@@ -152,7 +152,6 @@ export interface WriteProjectionInput {
   rolloutId: string;
   cwd: string;
   threadId: string;
-  projectId: string;
   gitBranch: string | null;
   outcome: 'succeeded' | 'succeeded_no_output';
   contentOutcome: 'success' | 'partial' | 'fail' | 'uncertain' | null;
@@ -210,7 +209,7 @@ export function writeRolloutProjection(
     rollout_id: input.rolloutId,
     thread_id: input.threadId,
     cwd: input.cwd,
-    project_id: input.projectId,
+    project_id: 'global',
     git_branch: input.gitBranch,
     job_status: input.outcome,
     content_outcome: input.contentOutcome,

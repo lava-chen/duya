@@ -1123,8 +1123,10 @@ async function initAgent(
 
 async function loadAgentSkills(workDir?: string, skillPaths?: string[], securityScanEnabled?: boolean): Promise<void> {
   try {
+    // Bundled skills are now installed on-demand via the plugin marketplace;
+    // do not auto-sync the entire bundled set at agent startup.
     const loadOptions: { additionalPaths?: string[]; syncBundled?: boolean; securityBypassSkills?: string[]; skipSecurityScan?: boolean } = {
-      syncBundled: true,
+      syncBundled: false,
     };
 
     // Discover plugin skill directories dynamically
@@ -1458,6 +1460,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     sendToMain({ type: 'chat:error', message: 'Agent not initialized', sessionId: msg.sessionId });
     return;
   }
+
+  // Plan 314: wait for the long-lived ToolCatalog to have MCP tools
+  // registered before resolving tools for this turn. The gate is
+  // released once after applyMCPConfiguration completes (init), or
+  // after an 8s timeout — whichever is first. Subsequent turns
+  // resolve immediately since the promise stays settled.
+  await agent.waitForMcpReady(8000);
 
   let rolloutLogger: ReturnType<typeof getRolloutLogger> = null;
   let rolloutTurn: RolloutTurn | null = null;
@@ -2769,6 +2778,13 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               initMsg.permissionRules,
             );
 
+            // Plan 314: register builtin tools into the long-lived
+            // ToolCatalog once, before any streamChat. MCP tools are
+            // added later by applyMCPConfiguration.
+            if (agent) {
+              await agent.initToolCatalog();
+            }
+
             try {
               // Parallel: skills loading (disk I/O) + DB message loading (IPC)
               // Skills errors are handled inside loadAgentSkills; DB errors caught below
@@ -2882,6 +2898,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               );
             } catch (mcpErr) {
               warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
+            } finally {
+              // Plan 314: release the mcpReady gate regardless of outcome
+              // so first chat is never permanently blocked. Success →
+              // tools are in catalog; failure → degraded turn without MCP.
+              agent.notifyMcpReady();
             }
           })();
           break;
@@ -2903,7 +2924,18 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
           backgroundResumeSignalledForSession = null;
           chatInProgress = true;
-          handleChatStart(chatMsg).finally(() => {
+          handleChatStart(chatMsg).catch((err) => {
+            // Defensive: any uncaught error inside handleChatStart
+            // (e.g. turn-review temp-dir cleanup EBUSY on Windows)
+            // must not crash the worker. Log and let the finally
+            // block reset chatInProgress.
+            warn('[Agent-Process] handleChatStart error:', err);
+            sendToMain({
+              type: 'chat:error',
+              message: err instanceof Error ? err.message : String(err),
+              sessionId: chatMsg.sessionId,
+            });
+          }).finally(() => {
             chatInProgress = false;
             setImmediate(() => {
               void drainQueuedChatStart();

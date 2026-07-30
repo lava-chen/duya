@@ -371,7 +371,7 @@ describe('complete happy path + acquire guards', () => {
     expect(getLease(db, 'ok1')).toBeUndefined();
   });
 
-  it('12. complete maps a project-scope catalog row to its project_id', () => {
+  it('12. complete always writes the global sentinel for project_id', () => {
     const lastMessageAt = T0 - 12 * HOUR;
     db.prepare(
       'INSERT INTO projects (project_id, canonical_root, created_at, last_seen_at) VALUES (?, ?, ?, ?)'
@@ -403,7 +403,7 @@ describe('complete happy path + acquire guards', () => {
     const row = db
       .prepare('SELECT project_id FROM stage1_outputs WHERE rollout_id = ?')
       .get('ok2') as { project_id: string };
-    expect(row.project_id).toBe('proj-1');
+    expect(row.project_id).toBe('global');
   });
 
   it('13. acquire without a rollout_catalog row throws', () => {

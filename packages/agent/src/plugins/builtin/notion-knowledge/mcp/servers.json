@@ -8,8 +8,8 @@
         "OPENAPI_MCP_HEADERS": "{\"Authorization\":\"Bearer ${setup.notionApiKey}\",\"Notion-Version\":\"2022-06-28\"}"
       },
       "envPassthrough": "allowlist",
-      "_status": "transitional",
-      "_migration": "Will migrate to the official Notion Remote MCP endpoint (https://mcp.notion.com) once Plan 313 Phase 2a lands the HTTP transport. Until then the stdio fallback wraps @notionhq/notion-mcp-server. The internal integration token will be exchanged for an OAuth flow managed by Notion once the remote endpoint lands."
+      "_status": "fallback",
+      "_officialRemote": { "transport": "streamable-http", "url": "https://mcp.notion.com/mcp", "authentication": "oauth" }
     }
   ]
 }

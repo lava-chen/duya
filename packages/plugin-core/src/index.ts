@@ -1,11 +1,12 @@
 export { withPluginError, withPluginErrorSync, isSuccess, isFailure, unwrapResult, unwrapOr } from './error-wrapper';
 export type { PluginResult } from './error-wrapper';
 
-export {
-  PathSafetyValidator,
-} from './security/path-validator';
-export type { PathValidationResult } from './security/path-validator';
-
+// NOTE: PathSafetyValidator is NOT re-exported here. It lives in
+// './security/path-validator' which imports Node builtins ('path', 'fs').
+// Re-exporting it from this barrel would force Vite to load that module in
+// the browser, triggering "Module path has been externalized for browser
+// compatibility" errors. Node-side consumers import it directly:
+//   import { PathSafetyValidator } from '@duya/plugin-core/src/security/path-validator'
 export {
   PluginTrustLevel,
   TrustEngine,
@@ -66,7 +67,9 @@ export {
   substituteUserConfigVariables,
   expandMcpServerConfig,
   applySourceShadowing,
-  resolveMCPDiscovery,
+  // resolveMCPDiscovery is NOT re-exported here — it lives in './mcp/resolve'
+  // which imports Node builtins ('fs', 'path'). Node-side consumers import it
+  // directly: import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve'
   getMCPErrorMessage,
   getMCPErrorSeverity,
   getMCPSuggestedAction,
