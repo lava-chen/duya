@@ -10,7 +10,7 @@
 // own tests cannot import the worker (wrong-direction dependency).
 
 import { describe, it, expect } from 'vitest';
-import { resolveMCPDiscovery } from '@duya/plugin-core';
+import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
 import { buildWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 
 describe('collector → engine contract: bundled script missing produces a TYPED mcp-bundled-missing issue', () => {
@@ -29,7 +29,9 @@ describe('collector → engine contract: bundled script missing produces a TYPED
     const bundled = result.candidates.find((c) => c.source === 'bundled');
     expect(bundled).toBeDefined();
     expect(bundled!.rawConfig.args[0]).toContain('literature-mcp-server.js');
-    expect(bundled!.rawConfig.command).toBe('node');
+    // The bundled runtime is launched with the current Node/Electron binary
+    // so packaged builds do not depend on a separate `node` executable.
+    expect(bundled!.rawConfig.command).toBe(process.execPath);
 
     // 2. Run the engine.
     const r = await resolveMCPDiscovery(result.candidates, {

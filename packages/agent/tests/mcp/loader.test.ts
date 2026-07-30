@@ -235,7 +235,7 @@ describe('loadAndResolveMCPServers — literature shadow contract (thin)', () =>
     //
     // The shadow RULE itself is tested exhaustively in
     // packages/plugin-core/tests/mcp/resolve.test.ts.
-    const { resolveMCPDiscovery } = await import('@duya/plugin-core');
+    const { resolveMCPDiscovery } = await import('@duya/plugin-core/src/mcp/resolve.js');
     const tmp = mkdtempSync(join(tmpdir(), 'duya-loader-shadow-'));
     const prev = process.cwd();
     try {

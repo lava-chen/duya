@@ -59,8 +59,25 @@ function validateRawConfig(raw: MCPCandidate['rawConfig']): ValidationResult {
   if (typeof raw.name !== 'string' || raw.name.trim().length === 0) {
     return { ok: false, reason: 'rawConfig.name must be a non-empty string' };
   }
-  if (typeof raw.command !== 'string') {
-    return { ok: false, reason: 'rawConfig.command must be a string' };
+  const transport = raw.transport ?? 'stdio';
+  if (transport !== 'stdio' && transport !== 'streamable-http') {
+    return { ok: false, reason: 'rawConfig.transport must be stdio or streamable-http when present' };
+  }
+  if (transport === 'stdio' && typeof raw.command !== 'string') {
+    return { ok: false, reason: 'stdio rawConfig.command must be a string' };
+  }
+  if (transport === 'streamable-http') {
+    if (typeof raw.url !== 'string') {
+      return { ok: false, reason: 'streamable-http rawConfig.url must be a string' };
+    }
+    try {
+      const url = new URL(raw.url);
+      if (url.protocol !== 'https:') {
+        return { ok: false, reason: 'streamable-http rawConfig.url must use https' };
+      }
+    } catch {
+      return { ok: false, reason: 'streamable-http rawConfig.url must be a valid URL' };
+    }
   }
   if (raw.args !== undefined && !Array.isArray(raw.args)) {
     return { ok: false, reason: 'rawConfig.args must be an array when present' };
@@ -77,6 +94,16 @@ function validateRawConfig(raw: MCPCandidate['rawConfig']): ValidationResult {
     for (const [k, v] of Object.entries(raw.env)) {
       if (typeof v !== 'string') {
         return { ok: false, reason: `rawConfig.env.${k} must be a string` };
+      }
+    }
+  }
+  if (raw.headers !== undefined) {
+    if (typeof raw.headers !== 'object' || raw.headers === null) {
+      return { ok: false, reason: 'rawConfig.headers must be an object when present' };
+    }
+    for (const [k, v] of Object.entries(raw.headers)) {
+      if (typeof v !== 'string') {
+        return { ok: false, reason: `rawConfig.headers.${k} must be a string` };
       }
     }
   }
@@ -120,13 +147,27 @@ function expandCandidate(
   c: MCPCandidate,
   ctx: ResolutionContext,
 ): {
-  expanded: { command: string; args: string[]; env: Record<string, string> };
+  expanded: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args: string[];
+    env: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  };
   missingVars: string[];
   missingKeys: string[];
 } {
   const userConfig = c.pluginId ? ctx.userConfigByPlugin[c.pluginId] : undefined;
   return expandMcpServerConfig(
-    { command: c.rawConfig.command, args: c.rawConfig.args, env: c.rawConfig.env },
+    {
+      transport: c.rawConfig.transport,
+      command: c.rawConfig.command,
+      args: c.rawConfig.args,
+      env: c.rawConfig.env,
+      url: c.rawConfig.url,
+      headers: c.rawConfig.headers,
+    },
     {
       environment: ctx.environment,
       plugin:
@@ -342,15 +383,26 @@ function isNodeCompatibleRuntime(
 
 function staticPathCheck(
   c: MCPCandidate,
-  expanded: { command: string; args: string[]; env: Record<string, string> },
+  expanded: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args: string[];
+    env: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  },
   inventoryId: string,
 ): PathCheckResult {
-  if (expanded.command.trim().length === 0) {
+  if (expanded.transport === 'streamable-http') {
+    return { status: 'configured' };
+  }
+  const command = expanded.command ?? '';
+  if (command.trim().length === 0) {
     return { status: 'command_missing', issue: emptyCommandIssue(c, inventoryId) };
   }
 
   // `node` command: check args[0] existence when resolvable.
-  if (isNodeCompatibleRuntime(expanded.command, expanded.env) && expanded.args.length > 0) {
+  if (isNodeCompatibleRuntime(command, expanded.env) && expanded.args.length > 0) {
     const scriptArg = expanded.args[0];
     if (scriptArg.startsWith('./') || scriptArg.startsWith('../') || isAbsolute(scriptArg)) {
       const resolved = c.pluginRoot
@@ -395,13 +447,13 @@ function staticPathCheck(
   // `./` or `../` command with pluginRoot.
   if (
     c.pluginRoot &&
-    (expanded.command.startsWith('./') || expanded.command.startsWith('../'))
+    (command.startsWith('./') || command.startsWith('../'))
   ) {
-    const resolved = pathResolve(c.pluginRoot, expanded.command);
+    const resolved = pathResolve(c.pluginRoot, command);
     if (!existsSync(resolved)) {
       return {
         status: 'command_missing',
-        issue: commandMissingIssue(c, inventoryId, expanded.command),
+        issue: commandMissingIssue(c, inventoryId, command),
       };
     }
   }
@@ -415,7 +467,14 @@ function staticPathCheck(
 
 interface ProcessedCandidate {
   inventory: MCPServerInventoryEntry;
-  expanded: { command: string; args: string[]; env: Record<string, string> };
+  expanded: {
+    transport?: 'stdio' | 'streamable-http';
+    command?: string;
+    args: string[];
+    env: Record<string, string>;
+    url?: string;
+    headers?: Record<string, string>;
+  };
   /** Set only when staticPathCheck reported an issue. */
   pathIssue?: MCPIssue;
 }
@@ -464,9 +523,12 @@ function processCandidate(
     serverName: c.rawConfig.name,
     scopedServerName: buildScopedServerName(c),
     rawConfig: {
+      transport: c.rawConfig.transport,
       command: c.rawConfig.command,
       args: c.rawConfig.args,
       env: c.rawConfig.env,
+      url: c.rawConfig.url,
+      headers: c.rawConfig.headers,
       allowedAgentIds: c.rawConfig.allowedAgentIds,
     },
     discoveryStatus: status,

@@ -20,6 +20,8 @@ import { DESCRIPTION } from './prompt.js';
 import { getDb, getMessages } from '../../session/db.js';
 import { createLLMClient } from '../../llm/index.js';
 import type { LLMClient } from '../../llm/base.js';
+import { findModelCompat } from '@duya/ai';
+import type { ApiFormat } from '@duya/ai';
 import type BetterSqlite3 from 'better-sqlite3';
 import {
   loadRecentSessionDirectory,
@@ -1147,10 +1149,20 @@ export class SessionSearchTool extends BaseTool {
       throw new Error('Summary LLM not configured');
     }
 
+    // Resolve apiFormat + modelCompat so summary requests also flow
+    // through the @duya/ai protocol layer. Without these flags,
+    // reasoning-capable models (DeepSeek/Qwen/GLM/Kimi) would not get
+    // their reasoning_content parsed correctly.
+    const summaryApiFormat: ApiFormat = this.summaryLLMConfig.provider === 'anthropic' ? 'anthropic' : 'openai-chat';
+    const summaryModelCompat = findModelCompat(summaryApiFormat, this.summaryLLMConfig.model);
+
     return createLLMClient(this.summaryLLMConfig.provider, {
       apiKey: this.summaryLLMConfig.apiKey,
       model: this.summaryLLMConfig.model,
       baseURL: this.summaryLLMConfig.baseURL || '',
+      apiFormat: summaryApiFormat,
+      providerId: this.summaryLLMConfig.provider,
+      modelCapabilities: summaryModelCompat,
     });
   }
 }

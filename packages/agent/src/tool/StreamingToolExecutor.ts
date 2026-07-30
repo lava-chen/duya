@@ -1466,12 +1466,32 @@ export class StreamingToolExecutor {
         }
       }
 
-      messages.push({
-        role: 'tool' as const,
+      // Build the tool_result message. When the tool returned inline images
+      // (e.g. ReadTool on a pure image file), attach them as ImageContent
+      // blocks so vision-capable main models see the image directly in the
+      // tool_result. Non-vision models get the image downgraded to placeholder
+      // text by transformMessages; OpenAI tool messages cannot carry images
+      // and strip them with a fallback hint in the OpenAI adapter.
+      const toolMessage: Message = {
+        role: 'tool',
         content: resultContent,
         tool_call_id: tool.id,
         duration_ms: Date.now() - startTime,
-      })
+      };
+      if (result.images && result.images.length > 0) {
+        toolMessage.content = [
+          { type: 'text', text: resultContent },
+          ...result.images.map((img) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: img.mediaType,
+              data: img.data,
+            },
+          })),
+        ];
+      }
+      messages.push(toolMessage);
 
       // Capture deferred extra result (e.g. visual self-review from
       // show_widget). The executor will await and yield this as a second

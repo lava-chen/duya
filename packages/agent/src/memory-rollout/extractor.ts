@@ -88,7 +88,7 @@ export interface ParsedExtraction {
     items: Array<{
       claim: string;
       claim_type: string;
-      scope: 'global' | 'project';
+      scope: 'global';
       evidence: Array<{
         source_type: string;
         source_id: string;
@@ -203,7 +203,7 @@ export function parseAndValidate(response: string): ValidationResult {
     }
 
     const scope = itemObj.scope;
-    if (scope !== 'global' && scope !== 'project') {
+    if (scope !== 'global') {
       return { valid: false, error: 'schema-violation' };
     }
 
@@ -225,9 +225,6 @@ export function parseAndValidate(response: string): ValidationResult {
     }
     const expectedPrefix = `${claimType}:`;
     if (!canonicalKey.startsWith(expectedPrefix)) {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-    if ((claimType === 'person' || claimType === 'area') && scope !== 'global') {
       return { valid: false, error: 'invalid-promotion' };
     }
 
@@ -535,7 +532,6 @@ export class Stage1Extractor {
       rolloutId,
       cwd: catalog.working_directory ?? '',
       threadId: rolloutId,
-      projectId: catalog.project_id ?? 'global',
       gitBranch: null,
       outcome: 'succeeded',
       contentOutcome: data.content_outcome!,

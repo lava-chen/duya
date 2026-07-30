@@ -324,9 +324,25 @@ export interface SessionInfo {
 // MCP 服务器配置
 export interface MCPServerConfig {
   name: string;
-  command: string;
+  /**
+   * Local stdio transport command. Required when `transport` is omitted or
+   * set to `stdio`; forbidden for remote transports.
+   */
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  /**
+   * MCP transport. Stdio remains the backwards-compatible default.
+   * Streamable HTTP is the current remote MCP transport standard.
+   */
+  transport?: 'stdio' | 'streamable-http';
+  /** HTTPS endpoint for a `streamable-http` server. */
+  url?: string;
+  /**
+   * Request headers supplied by the credential broker at runtime. Plugin
+   * manifests must never contain literal credentials in this field.
+   */
+  headers?: Record<string, string>;
   allowedAgentIds?: string[];
   /**
    * Source bucket for the runtime permission gate. Set by

@@ -75,6 +75,13 @@ export interface SerializeOptions {
 export interface SerializedResult {
   result: string;
   metadata: Record<string, unknown>;
+  /**
+   * Inline image payloads for multimodal main models. Only populated for
+   * pure image files (extractMethod === 'vision' with no text body) so
+   * document formats with embedded images (PDF/DOCX/PPTX) don't balloon
+   * the tool_result token cost. The ReadTool copies this onto ToolResult.images.
+   */
+  images?: Array<{ data: string; mediaType: string }>;
 }
 
 /**
@@ -118,6 +125,18 @@ export function serializeParseResult(
   const omittedChunks = textChunks.length - includedChunks;
   const body = bodyLines.join('\n\n').trim();
 
+  // Pure image file: no text body, images present, parsed via vision method.
+  // Inline the image payloads so multimodal main models see them directly in
+  // the tool_result. Document formats with embedded images (PDF/DOCX/PPTX)
+  // keep the legacy "call the vision tool" reminder to avoid token blowup
+  // from attaching dozens of embedded images.
+  const isPureImageFile = body.length === 0
+    && imageChunks.length > 0
+    && parsed.extractMethod === 'vision';
+  const inlineImages = isPureImageFile
+    ? imageChunks.map((c) => ({ data: c.base64, mediaType: c.mediaType }))
+    : undefined;
+
   // Tail reminders
   const reminders: string[] = [];
   if (omittedChunks > 0) {
@@ -126,12 +145,18 @@ export function serializeParseResult(
     );
   }
   if (imageChunks.length > 0) {
-    const imgList = imageChunks
-      .map((c) => (c.page !== undefined ? `page ${c.page + 1}` : 'inline'))
-      .join(', ');
-    reminders.push(
-      `[Read metadata: file contains ${imageChunks.length} image(s) (${imgList}). The read tool surfaces text only. Call the vision tool on the same path to analyze images.]`,
-    );
+    if (isPureImageFile) {
+      reminders.push(
+        `[Read metadata: ${imageChunks.length} image(s) attached as image content. Vision-capable models can see them directly. If you cannot see images, use the vision tool on the same path to analyze them.]`,
+      );
+    } else {
+      const imgList = imageChunks
+        .map((c) => (c.page !== undefined ? `page ${c.page + 1}` : 'inline'))
+        .join(', ');
+      reminders.push(
+        `[Read metadata: file contains ${imageChunks.length} image(s) (${imgList}). The read tool surfaces text only. Call the vision tool on the same path to analyze images.]`,
+      );
+    }
   }
   const result = reminders.length > 0
     ? `${headerParts.join('\n')}\n\n${body}\n\n${reminders.join('\n\n')}`
@@ -162,7 +187,7 @@ export function serializeParseResult(
     }
   }
 
-  return { result, metadata };
+  return { result, metadata, images: inlineImages };
 }
 
 /**

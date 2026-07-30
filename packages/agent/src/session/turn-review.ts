@@ -78,7 +78,16 @@ function captureWorkingTree(cwd: string): string | null {
     const tree = stdoutOf(runGit(cwd, ['write-tree'], { env, maxBuffer: 16 * 1024 }));
     return tree?.trim() || null;
   } finally {
-    rmSync(tempDirectory, { recursive: true, force: true });
+    // Best-effort cleanup. On Windows the git child process may have
+    // just exited but the OS can still hold `index.lock` for a few
+    // milliseconds, causing EBUSY/EPERM. `force: true` only ignores
+    // ENOENT, so swallow transient FS errors here — the OS temp-dir
+    // reaper will eventually clean up.
+    try {
+      rmSync(tempDirectory, { recursive: true, force: true });
+    } catch {
+      // Intentionally empty: temp dir cleanup is best-effort.
+    }
   }
 }
 

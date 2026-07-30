@@ -42,6 +42,8 @@ import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
 import { createLLMClient, createRetryableLLMClient, inferProvider } from '../llm/index.js';
 import type { LLMClient, LLMClientOptionsExtended, RetryConfig } from '../llm/index.js';
+import { findModelCompat } from '@duya/ai';
+import type { ApiFormat } from '@duya/ai';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
@@ -231,6 +233,18 @@ export class duyaAgent {
   private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   /**
+   * Plan 314: mcpReady gate. First chat:start awaits this promise
+   * (with timeout) so MCP tools are registered into the catalog
+   * before streamChat resolves tools. Resolved by notifyMcpReady()
+   * after applyMCPConfiguration completes (success or failure).
+   * `mcpReadyResolve` is assigned synchronously by the Promise
+   * constructor, so it is non-null after field init.
+   */
+  private mcpReadyResolve: (() => void) | null = null;
+  private mcpReady: Promise<void> = new Promise((resolve) => {
+    this.mcpReadyResolve = resolve;
+  });
+  /**
    * Rolling history of recent widget/dynamic style signatures.
    * Canvas tools push to this via ToolUseContext so the conductor
    * prompt can nudge the model away from repeating the same palette
@@ -288,20 +302,20 @@ export class duyaAgent {
    */
   onMessagesCompacted?: (newMessageCount: number) => void;
 
-  // Phase 2A worker closure: the agent owns the long-lived MCP
-  // runtime. `activeMCPRegistry` is the ToolRegistry slot that
-  // holds `owner === 'mcp'` entries between streamChat
-  // invocations; `activeMCPRuntimeSnapshot` is the post-commit
-  // snapshot that UI/diagnostic consumers read; the alias map
-  // converts model-returned providerNames to internalKeys;
-  // `toolEntries` is a stash of the current entries for ad-hoc
-  // dispatch. `activeAgentProfileId` is used by
+  // Plan 314: `activeMCPRegistry` is the long-lived ToolCatalog.
+  // It holds ALL tools (builtin + mcp + plugin + app-connection)
+  // registered once at init via `initToolCatalog()` (builtin) and
+  // via `replaceByOwner('mcp', ...)` (MCP). Per-turn snapshots
+  // are taken via `snapshot()` so the streaming loop sees a stable
+  // view even if the catalog mutates mid-turn (tools/list_changed).
+  // `activeMCPRuntimeSnapshot` is the post-commit diagnostic
+  // snapshot; the alias map converts model-returned providerNames
+  // to internalKeys; `activeAgentProfileId` is used by
   // `filterResolvedMCPServersForAgent` to apply allowedAgentIds
   // filtering consistently across init and reload.
   readonly activeMCPRegistry: ToolRegistry = new ToolRegistry();
   activeMCPRuntimeSnapshot: import('../mcp/apply.js').ActiveMCPRuntimeSnapshot | null = null;
   private providerNameToInternalKey: Map<string, string> = new Map();
-  private activeMCPToolEntries: Map<string, { definition: Tool; executor: ToolExecutor }> = new Map();
   private activeAgentProfileId: string | undefined;
 
   constructor(options: AgentOptions) {
@@ -396,10 +410,19 @@ export class duyaAgent {
       const visionProvider = inferProvider(options.visionConfig.baseURL || '', options.visionConfig.provider);
       logger.info(`[duyaAgent] Vision provider inferred: provider=${options.visionConfig.provider}, baseURL=${options.visionConfig.baseURL} -> resolved=${visionProvider}`);
       try {
+        // Resolve apiFormat + modelCompat so vision requests also flow
+        // through the @duya/ai protocol layer. Without these flags,
+        // reasoning-capable vision models (GLM-4V, Qwen-VL, etc.) would
+        // not get their reasoning_content parsed correctly.
+        const visionApiFormat: ApiFormat = visionProvider === 'anthropic' ? 'anthropic' : 'openai-chat';
+        const visionModelCompat = findModelCompat(visionApiFormat, options.visionConfig.model);
         this.visionClient = createLLMClient(visionProvider, {
           apiKey: options.visionConfig.apiKey,
           baseURL: options.visionConfig.baseURL || this.getDefaultBaseURL(visionProvider),
           model: options.visionConfig.model,
+          apiFormat: visionApiFormat,
+          providerId: options.visionConfig.provider,
+          modelCapabilities: visionModelCompat,
         });
         logger.info(`[duyaAgent] Vision model initialized: ${options.visionConfig.model} (resolved provider: ${visionProvider})`);
       } catch (err) {
@@ -1030,6 +1053,10 @@ export class duyaAgent {
       let needsFollowUp = false;
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
+      // Guard against providers that emit more than one `done` event per
+      // stream (a protocol-layer bug duplicated every assistant message).
+      // One LLM stream produces exactly one assistant message push.
+      let doneEventHandled = false;
       // Plan 224 follow-up: track mode-switch tool_use ids so we can emit
       // a `mode_changed` SSE event right after their tool_result lands.
       // Keyed by tool_use_id, value is the tool name.
@@ -1213,6 +1240,15 @@ export class duyaAgent {
             yield event;
 
           } else if (event.type === 'done') {
+            // Ignore duplicate `done` events from the same LLM stream.
+            // The first one already pushed the assistant message and
+            // drained tool results; a second would re-push identical
+            // content under a fresh UUID and duplicate the reply in DB/UI.
+            if (doneEventHandled) {
+              logger.warn(`[Agent] Turn ${turnCount}: Ignoring duplicate done event from LLM stream`);
+              continue;
+            }
+            doneEventHandled = true;
             // LLM stream is done for this turn
             // IMPORTANT: Add assistant message BEFORE tool results for OpenAI API compatibility
             // OpenAI requires: assistant (tool_calls) -> tool (result) message order
@@ -1742,39 +1778,15 @@ export class duyaAgent {
     logger.info(`[Agent] streamChat: Loading tools...`);
     let registry = options?.toolRegistry;
     if (!registry) {
-      const { createBuiltinRegistry } = await import('../tool/builtin.js');
-      let enabledPluginIds: Set<string> | undefined;
-      try {
-        const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown }>;
-        const enabledIds = installed
-          .filter((item) => item.enabled === true && typeof item.id === 'string')
-          .map((item) => item.id as string);
-        enabledPluginIds = new Set(enabledIds);
-      } catch (err) {
-        logger.warn(
-          `[Agent] Failed to load plugin registry; falling back to default plugin tool set: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
-      registry = createBuiltinRegistry(
-        this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
-        {
-          enabledPluginIds,
-          browserBackendMode: this.browserBackendMode,
-        }
-      );
-      // Phase 2A worker closure: merge the active MCP runtime
-      // (installed by applyMCPConfiguration -> setActiveMCPRuntime)
-      // into the per-turn builtin registry. Without this merge the
-      // LLM never sees MCP tools because getAllTools() below only
-      // reads the fresh builtin registry. MCP entries are keyed by
-      // their internalKey (e.g. mcp__server__tool) so they never
-      // collide with builtin names.
-      this.mergeActiveMCPTools(registry);
+      // Plan 314: use the long-lived ToolCatalog (activeMCPRegistry).
+      // Builtin tools were registered once at init via initToolCatalog();
+      // MCP tools via replaceByOwner('mcp', ...). No per-turn
+      // createBuiltinRegistry or mergeActiveMCPTools needed.
+      registry = this.activeMCPRegistry;
 
       // Plan 312: merge App Connection connector tools from the cached
-      // descriptor list (updated on init/reload by reloadAppConnectionTools).
-      // Descriptors contain no tokens; the executor routes invocations back
-      // to the main process via ipcRequest('appConnection:invoke', ...).
+      // descriptor list. registerAppConnectionTools uses definition.name
+      // as key so re-registration is idempotent (overwrites stale entries).
       try {
         const { getCachedAppConnectionDescriptors, registerAppConnectionTools } =
           await import('../tool/AppConnectionTool/index.js');
@@ -1801,9 +1813,14 @@ export class duyaAgent {
       profileAllowedPatterns: appliedProfile?.allowedTools,
       profileDisallowedPatterns: appliedProfile?.disallowedTools,
     };
-    const allTools = registry.getAllTools();
+    // Plan 314: take an immutable snapshot of the catalog for this
+    // turn. The snapshot guarantees the tools array and lookup helpers
+    // remain stable even if the catalog mutates mid-turn (e.g.
+    // tools/list_changed).
+    const snapshot = registry.snapshot(this.providerNameToInternalKey);
+    const allTools = snapshot.tools;
     const tools: Tool[] = allTools.filter((t) =>
-      isToolVisible(t.name, registry.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
+      isToolVisible(t.name, snapshot.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
     );
     logger.info(
       `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,
@@ -2068,29 +2085,10 @@ export class duyaAgent {
       ? prompt
       : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
 
-    // Build tool registry for orchestrator (same construction as legacy
-    // path — plugin + MCP tools are available to orchestrator modes).
-    const { createBuiltinRegistry } = await import('../tool/builtin.js');
-    let enabledPluginIds: Set<string> | undefined;
-    try {
-      const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown }>;
-      const enabledIds = installed
-        .filter((item) => item.enabled === true && typeof item.id === 'string')
-        .map((item) => item.id as string);
-      enabledPluginIds = new Set(enabledIds);
-    } catch (err) {
-      logger.warn(
-        `[Agent] Orchestrator mode tool setup: Failed plugin registry; ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    const toolRegistry = createBuiltinRegistry(
-      this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
-      {
-        enabledPluginIds,
-        browserBackendMode: this.browserBackendMode,
-      }
-    );
-    this.mergeActiveMCPTools(toolRegistry);
+    // Plan 314: use the long-lived ToolCatalog for orchestrator mode
+    // (same as the normal streamChat path). Builtin + MCP tools are
+    // already registered; no per-turn construction needed.
+    const toolRegistry = this.activeMCPRegistry;
 
     // Plan 241 Phase 1: wire tool_search to the orchestrator's registry
     // so it sees the same tool surface that the orchestrator's main loop
@@ -2199,32 +2197,45 @@ export class duyaAgent {
     this.sessionInfo.updatedAt = Date.now();
   }
 
+  // ==========================================================================
+  // Plan 314: long-lived ToolCatalog + per-turn snapshot
+  // ==========================================================================
+
   /**
-   * Phase 2A worker closure: merge the active MCP runtime into a
-   * per-turn registry. Reads from `activeMCPToolEntries` (populated
-   * by `setActiveMCPRuntime`) so every tool carries its
-   * providerName-allocated `definition.name`, its `internalKey`
-   * registry key, and the permission-gate-wired executor closure.
-   *
-   * This replaces the legacy `registerMCPTools` which read from
-   * `this.mcpManager.getAllTools()` and registered under raw tool
-   * names — bypassing providerName allocation, the internalKey
-   * routing, and the runtime permission gate.
+   * Plan 314: Block first chat:start until MCP tools are registered
+   * into the catalog, or until `timeoutMs` elapses (whichever is
+   * first). On timeout the chat proceeds without MCP tools — better
+   * a degraded turn than a hung UI. Subsequent calls after the
+   * promise has already resolved return immediately.
    */
-  private mergeActiveMCPTools(registry: ToolRegistry): void {
-    if (this.activeMCPToolEntries.size === 0) return;
-    let count = 0;
-    for (const [key, { definition, executor }] of this.activeMCPToolEntries) {
-      if (registry.has(key)) continue;
-      registry.registerWithKey(key, definition, executor, 'mcp');
-      count++;
-    }
-    logger.info(`[Agent] Merged ${count} MCP tools into per-turn registry`);
+  waitForMcpReady(timeoutMs = 8000): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    return Promise.race([
+      this.mcpReady,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          logger.warn(`[Agent] MCP ready timeout after ${timeoutMs}ms; proceeding without MCP tools`);
+          resolve();
+        }, timeoutMs);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
-  // ==========================================================================
-  // Phase 2A worker closure: agent-owned MCP runtime
-  // ==========================================================================
+  /**
+   * Plan 314: Called by agent-process-entry after
+   * `applyMCPConfiguration` completes — success OR failure. Failure
+   * still resolves the gate so first chat is not permanently blocked.
+   * Idempotent: subsequent calls are no-ops.
+   */
+  notifyMcpReady(): void {
+    if (this.mcpReadyResolve) {
+      const resolve = this.mcpReadyResolve;
+      this.mcpReadyResolve = null;
+      resolve();
+    }
+  }
 
   /**
    * Get the active agent profile id used for `allowedAgentIds`
@@ -2241,33 +2252,69 @@ export class duyaAgent {
   }
 
   /**
-   * The set of model-visible tool names that are NOT MCP-owned.
-   * This is the seed usedNames set for the providerName
-   * allocator in PHASE B1: the next apply must never collide
-   * with builtin / mode-specific non-MCP tool names. It
-   * intentionally does NOT include currently active MCP
-   * provider names — full-replace removes them before computing
-   * the next state, and including them would cause
-   * collision-suffix drift on every repeated reload.
+   * Plan 314: Initialize the long-lived ToolCatalog by registering
+   * all builtin tools once at agent init, before the first
+   * `streamChat`. MCP tools are added later via
+   * `applyMCPConfiguration` → `setActiveMCPRuntime` →
+   * `replaceByOwner('mcp', ...)`.
    *
-   * Builtin names never start with `mcp_`, so this seed is a
-   * clean lower bound for the allocator. The actual
-   * mode-specific non-MCP tools are dynamic per mode; we seed
-   * with the canonical builtin set and rely on the allocator's
-   * `usedNames` parameter to absorb whatever the caller wants.
+   * Replaces the per-turn `createBuiltinRegistry()` call that
+   * previously ran inside `_resolveTools`. Builtin tools use
+   * `owner='non-mcp'` so `replaceByOwner('mcp')` never touches them.
+   */
+  async initToolCatalog(): Promise<void> {
+    const { createBuiltinRegistry } = await import('../tool/builtin.js');
+    // Fetch enabled plugin IDs so plugin-declared tools are filtered
+    // correctly (mirrors the per-turn logic previously in _resolveTools).
+    let enabledPluginIds: Set<string> | undefined;
+    try {
+      const installed = await pluginDb.registryList() as Array<{ id?: unknown; enabled?: unknown }>;
+      const enabledIds = installed
+        .filter((item) => item.enabled === true && typeof item.id === 'string')
+        .map((item) => item.id as string);
+      enabledPluginIds = new Set(enabledIds);
+    } catch {
+      // Fallback: register all builtin tools without plugin filtering.
+    }
+    const temp = createBuiltinRegistry(
+      this.blockedDomains.length > 0 ? { blockedDomains: this.blockedDomains } : undefined,
+      {
+        enabledPluginIds,
+        browserBackendMode: this.browserBackendMode,
+      },
+    );
+    // Migrate all tools from the temp registry into the long-lived
+    // catalog. Builtin tools use owner='non-mcp' so replaceByOwner('mcp')
+    // never touches them.
+    for (const tool of temp.getAllTools()) {
+      const executor = temp.getExecutor(tool.name);
+      const meta = temp.getMeta(tool.name);
+      if (executor) this.activeMCPRegistry.register(tool, executor, meta);
+    }
+  }
+
+  /**
+   * Plan 314: The set of model-visible tool names that are NOT
+   * MCP-owned. Derived from the live catalog instead of a
+   * hardcoded list, so plugin / app-connection tools added after
+   * init are automatically included.
+   *
+   * This is the seed `usedNames` set for the providerName
+   * allocator in PHASE B1: the next apply must never collide with
+   * builtin / mode-specific non-MCP tool names. It intentionally
+   * does NOT include currently active MCP provider names —
+   * full-replace removes them before computing the next state, and
+   * including them would cause collision-suffix drift on every
+   * repeated reload.
    */
   getNonMCPModelVisibleToolNames(): Set<string> {
-    const builtin = new Set<string>([
-      'bash', 'powershell', 'read', 'write', 'edit', 'glob', 'grep',
-      'agent',
-      'task',
-      'enter_plan_mode', 'exit_plan_mode', 'switch_mode',
-      'browser', 'skill', 'brief', 'session_search',
-      'vision', 'cron', 'duya_info',
-      'duya_health', 'ask_user_question',
-      'module',
-    ]);
-    return builtin;
+    const names = new Set<string>();
+    for (const tool of this.activeMCPRegistry.getAllTools()) {
+      if (this.activeMCPRegistry.getOwner(tool.name) !== 'mcp') {
+        names.add(tool.name);
+      }
+    }
+    return names;
   }
 
   /**
@@ -2286,7 +2333,6 @@ export class duyaAgent {
   async setActiveMCPRuntime(install: {
     manager: MCPManager;
     providerNameToInternalKey: Map<string, string>;
-    toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
     preparedRegistryEntries: Array<{
       key: string;
       definition: Tool;
@@ -2296,7 +2342,6 @@ export class duyaAgent {
   }): Promise<{ removedKeys: string[]; addedKeys: string[]; keptKeys: string[] }> {
     const previousManager = this.mcpManager;
     const previousProviderMap = this.providerNameToInternalKey;
-    const previousToolEntries = this.activeMCPToolEntries;
     const previousSnapshot = this.activeMCPRuntimeSnapshot;
 
     let replaceResult: { removedKeys: string[]; addedKeys: string[]; keptKeys: string[] };
@@ -2306,7 +2351,6 @@ export class duyaAgent {
         install.preparedRegistryEntries,
       );
       this.providerNameToInternalKey = new Map(install.providerNameToInternalKey);
-      this.activeMCPToolEntries = new Map(install.toolEntries);
       this.mcpManager = install.manager;
       this.activeMCPRuntimeSnapshot = install.snapshot;
     } catch (err) {
@@ -2316,7 +2360,6 @@ export class duyaAgent {
       // post-replace field updates, which require no further
       // rollback of the registry itself.
       this.providerNameToInternalKey = previousProviderMap;
-      this.activeMCPToolEntries = previousToolEntries;
       this.activeMCPRuntimeSnapshot = previousSnapshot;
       this.mcpManager = previousManager;
       throw err;

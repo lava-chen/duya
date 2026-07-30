@@ -13,8 +13,8 @@
       ],
       "env": {},
       "envPassthrough": "allowlist",
-      "_status": "transitional",
-      "_migration": "Supabase has not shipped an official Remote MCP endpoint as of 2026-07. This stdio fallback wraps @supabase/mcp-server-supabase. When the remote transport (Plan 313 Phase 2a) lands and Supabase exposes a hosted endpoint, this plugin will migrate to it and exchange the personal access token for an OAuth flow."
+      "_status": "fallback",
+      "_officialRemote": { "transport": "streamable-http", "url": "https://mcp.supabase.com/mcp", "authentication": "oauth" }
     }
   ]
 }

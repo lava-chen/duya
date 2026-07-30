@@ -10,9 +10,12 @@ import { join } from 'path';
  */
 export interface MCPConfigItem {
   name: string;
-  command: string;
+  transport?: 'stdio' | 'streamable-http';
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
   enabled: boolean;
   allowedAgentIds?: string[];
 }

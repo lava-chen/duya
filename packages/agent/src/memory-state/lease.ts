@@ -42,9 +42,9 @@ export const BACKOFF_SEQUENCE_MINUTES = [5, 15, 60, 360, 360, 360, 1440, 1440, 1
 export const STALE_WORKER_GRACE_MS = 2 * (DEFAULT_LEASE_TTL_MS / HEARTBEAT_DIVISOR); // 200_000
 
 /**
- * Sentinel project_id written to stage1_outputs for global-scope
- * rollouts (catalog.project_id is NULL there; the outputs column is
- * NOT NULL).
+ * Sentinel value written to stage1_outputs.project_id. The memory system
+ * is global-only; the column remains NOT NULL for backward compatibility
+ * and is always set to 'global'.
  */
 const GLOBAL_PROJECT_ID = 'global';
 
@@ -410,7 +410,7 @@ export function complete(
       rolloutId,
       rolloutId, // thread_id
       catalog.working_directory ?? '',
-      catalog.project_id ?? GLOBAL_PROJECT_ID,
+      GLOBAL_PROJECT_ID,
       input.outcome,
       contentOutcome,
       rolloutSummary,

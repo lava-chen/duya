@@ -109,9 +109,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       enableSections: [
         'identity', 'communication', 'finalAnswer', 'system', 'tasks',
         'destructiveActions', 'tools', 'project', 'duyaDesktopContext',
-        'language', 'platform', 'environment',
+        'language', 'platform', 'environment', 'memory',
       ],
-      disableSections: ['rules', 'memory', 'memoryContent'],
+      disableSections: ['rules', 'memoryContent'],
     },
     promptSystem: 'general',
     userVisible: true,

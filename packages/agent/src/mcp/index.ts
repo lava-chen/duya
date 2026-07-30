@@ -5,6 +5,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { Tool, ToolResult, MCPServerConfig, MCPConnectionStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -17,7 +18,7 @@ import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js
  */
 class MCPClient {
   private client: Client | null = null;
-  private transport: StdioClientTransport | null = null;
+  private transport: StdioClientTransport | StreamableHTTPClientTransport | null = null;
   private config: MCPServerConfig;
   private connectionStatus: MCPConnectionStatus = 'disconnected';
   private tools: Tool[] = [];
@@ -81,20 +82,34 @@ class MCPClient {
     try {
       this.connectionStatus = 'connecting';
 
-      // Security layer 1 (env allowlist): strip secrets from the subprocess
-      // environment before spawning the MCP server process. MCP servers are
-      // untrusted external code; without this, any API key / token in the
-      // agent process env leaks to them. `envPassthrough: 'inherit'` opts
-      // out for trusted bundled servers that depend on inherited env.
-      const safeEnv = buildSafeEnv(this.config.env, {
-        forceInherit: this.config.envPassthrough === 'inherit',
-      });
+      if (this.config.transport === 'streamable-http') {
+        if (!this.config.url) {
+          throw new Error('Streamable HTTP MCP server requires a URL');
+        }
+        this.transport = new StreamableHTTPClientTransport(new URL(this.config.url), {
+          requestInit: this.config.headers
+            ? { headers: this.config.headers }
+            : undefined,
+        });
+      } else {
+        if (!this.config.command) {
+          throw new Error('Stdio MCP server requires a command');
+        }
+        // Security layer 1 (env allowlist): strip secrets from the subprocess
+        // environment before spawning the MCP server process. MCP servers are
+        // untrusted external code; without this, any API key / token in the
+        // agent process env leaks to them. `envPassthrough: 'inherit'` opts
+        // out for trusted bundled servers that depend on inherited env.
+        const safeEnv = buildSafeEnv(this.config.env, {
+          forceInherit: this.config.envPassthrough === 'inherit',
+        });
 
-      this.transport = new StdioClientTransport({
-        command: this.config.command,
-        args: this.config.args,
-        env: safeEnv,
-      });
+        this.transport = new StdioClientTransport({
+          command: this.config.command,
+          args: this.config.args,
+          env: safeEnv,
+        });
+      }
 
       this.client = new Client(
         {

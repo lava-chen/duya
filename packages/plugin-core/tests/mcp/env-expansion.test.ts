@@ -168,4 +168,19 @@ describe('expandMcpServerConfig', () => {
     expect(expanded.args).toEqual(['${PATH}']);
     expect(missingVars).toEqual(['PATH']);
   });
+
+  it('expands remote endpoint and request headers without inventing a command', () => {
+    const { expanded, missingVars } = expandMcpServerConfig(
+      {
+        transport: 'streamable-http',
+        url: 'https://${MCP_HOST}/mcp',
+        headers: { Authorization: 'Bearer ${ACCESS_TOKEN}' },
+      },
+      { environment: { MCP_HOST: 'mcp.example.com', ACCESS_TOKEN: 'token' } },
+    );
+    expect(expanded.command).toBeUndefined();
+    expect(expanded.url).toBe('https://mcp.example.com/mcp');
+    expect(expanded.headers).toEqual({ Authorization: 'Bearer token' });
+    expect(missingVars).toEqual([]);
+  });
 });

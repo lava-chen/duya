@@ -102,18 +102,16 @@ interface DuyaAgentLike {
    *      acceptable and is the documented known limit);
    *   2) install the new manager;
    *   3) install the new providerNameToInternalKey map;
-   *   4) stash toolEntries for mergeActiveMCPTools;
-   *   5) call activeMCPRegistry.replaceByOwner('mcp', prepared)
-   *      so the long-lived active MCP registry holds the
-   *      new entries atomically;
-   *   6) record the active snapshot.
+   *   4) call activeMCPRegistry.replaceByOwner('mcp', prepared)
+   *      so the long-lived ToolCatalog holds the new MCP entries
+   *      atomically (builtin entries are preserved);
+   *   5) record the active snapshot.
    * This is a single call so the active runtime transitions
    * atomically from the caller's point of view.
    */
   setActiveMCPRuntime(install: {
     manager: MCPManager;
     providerNameToInternalKey: Map<string, string>;
-    toolEntries: Map<string, { definition: Tool; executor: ToolExecutor }>;
     preparedRegistryEntries: Array<{
       key: string;
       definition: Tool;
@@ -279,9 +277,12 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
   for (const resolved of next.resolvedConfigs) {
     const cfg: MCPServerConfig = {
       name: resolved.scopedServerName,
+      transport: resolved.rawConfig.transport,
       command: resolved.rawConfig.command,
       args: resolved.rawConfig.args,
       env: resolved.rawConfig.env,
+      url: resolved.rawConfig.url,
+      headers: resolved.rawConfig.headers,
       allowedAgentIds: resolved.allowedAgentIds,
       // Stamp the source bucket for the runtime permission gate.
       // The engine resolves every `ResolvedMCPServerConfig.source`
@@ -447,9 +448,6 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     replaceResult = await agent.setActiveMCPRuntime({
       manager: nextManager,
       providerNameToInternalKey,
-      toolEntries: new Map(
-        preparedEntries.map((e) => [e.key, { definition: e.definition, executor: e.executor }]),
-      ),
       preparedRegistryEntries: preparedEntries,
       snapshot,
     });

@@ -234,13 +234,10 @@ describe('selectEligible', () => {
   });
 
   it('result shape maps catalog columns to camelCase fields', () => {
-    db.prepare(
-      'INSERT INTO projects (project_id, canonical_root, created_at, last_seen_at) VALUES (?, ?, ?, ?)'
-    ).run('proj-shape', '/tmp/proj-shape', T0, T0);
     insertCatalogRow(db, {
       rollout_id: 'shape',
-      scope_kind: 'project',
-      project_id: 'proj-shape',
+      scope_kind: 'global',
+      project_id: null,
       last_message_at: BASE_LAST_MESSAGE_AT,
       source_fingerprint: 'fp-shape',
     });
@@ -248,8 +245,6 @@ describe('selectEligible', () => {
     const [row] = selectEligible(db, { now: T0 });
     expect(row).toEqual({
       rolloutId: 'shape',
-      projectId: 'proj-shape',
-      scopeKind: 'project',
       lastMessageAt: BASE_LAST_MESSAGE_AT,
       sourceFingerprint: 'fp-shape',
     });

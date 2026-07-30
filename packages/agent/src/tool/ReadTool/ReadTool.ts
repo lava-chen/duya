@@ -167,7 +167,7 @@ export function _resetSharedParser(): void {
 
 export class ReadTool extends BaseTool {
   readonly name = 'read';
-  readonly description = 'Read the contents of a file from the file system. Supports text files (with optional line ranges), PDFs, Word documents (.docx), PowerPoint files (.pptx), and images. Use the `pages` parameter for PDFs to read specific page ranges. Use the vision tool for actual image analysis.';
+  readonly description = 'Read the contents of a file from the file system. Supports text files (with optional line ranges), PDFs, Word documents (.docx), PowerPoint files (.pptx), and images (png, jpg, gif, webp). Image files are attached directly as image content for vision-capable models. Use the `pages` parameter for PDFs to read specific page ranges. For models without vision support, use the vision tool to analyze images.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -356,7 +356,7 @@ export class ReadTool extends BaseTool {
       }
 
       const result = await this.resolveParser(context).parseFile(resolved, context?.abortController?.signal);
-      const { result: text, metadata } = serializeParseResult(result, {
+      const { result: text, metadata, images } = serializeParseResult(result, {
         maxTokens: input.max_tokens ?? DEFAULT_MAX_TOKENS,
         resolvedPath: normalizePath(resolved),
       });
@@ -366,7 +366,7 @@ export class ReadTool extends BaseTool {
         finalText = filterChunksByCellRange(text, input.cell_range, result.chunks);
       }
 
-      return { id, name: 'read', result: finalText, metadata };
+      return { id, name: 'read', result: finalText, metadata, images };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };

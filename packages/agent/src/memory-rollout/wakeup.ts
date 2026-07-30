@@ -18,14 +18,11 @@ import { getLogger } from '../utils/logger.js';
 export interface MemoryWakeupEvent {
   type: 'memory:wakeup';
   sessionId?: string;
-  project_id?: string;
 }
 
 export type SendWakeupFn = (event: MemoryWakeupEvent) => void;
 
 export interface SendMemoryWakeupOptions {
-  /** Project identifier for the active session, if known. */
-  projectId?: string;
   /** Session identifier, if known. */
   sessionId?: string;
   /**
@@ -60,7 +57,6 @@ export function sendMemoryWakeup(
     send({
       type: 'memory:wakeup',
       sessionId: opts.sessionId,
-      project_id: opts.projectId,
     });
     return 1;
   } catch (err) {
