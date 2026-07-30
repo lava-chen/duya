@@ -10,9 +10,14 @@
  * can stay type-safe without importing from `electron/services`.
  */
 
-import type { AppConnectionStatusDTO } from '../../electron/services/app-connections/types';
+import type {
+  AppConnectionProviderDTO,
+  AppConnectionStatusDTO,
+  ProviderId,
+} from '../../electron/services/app-connections/types';
 
 export type { AppConnectionStatusDTO } from '../../electron/services/app-connections/types';
+export type { AppConnectionProviderDTO } from '../../electron/services/app-connections/types';
 
 export type { ProviderId, AppConnectionStatus } from '../../electron/services/app-connections/types';
 
@@ -25,6 +30,19 @@ export interface AppConnectionListResponse {
 export interface AppConnectionSingleResponse {
   success: boolean;
   data?: AppConnectionStatusDTO;
+  error?: string;
+  errorCode?: string;
+}
+
+export interface AppConnectionProviderListResponse {
+  success: boolean;
+  data?: AppConnectionProviderDTO[];
+  error?: string;
+}
+
+export interface AppConnectionProviderResponse {
+  success: boolean;
+  data?: AppConnectionProviderDTO;
   error?: string;
   errorCode?: string;
 }
@@ -44,14 +62,24 @@ export function getAppConnectionAPI() {
     list: async (): Promise<AppConnectionListResponse> => {
       return api.appConnection.list() as Promise<AppConnectionListResponse>;
     },
+    providers: async (): Promise<AppConnectionProviderListResponse> => {
+      return api.appConnection.providers() as Promise<AppConnectionProviderListResponse>;
+    },
     status: async (connectionId: string): Promise<AppConnectionSingleResponse> => {
       return api.appConnection.status(connectionId) as Promise<AppConnectionSingleResponse>;
     },
     connect: async (payload: {
-      provider: 'google' | 'slack' | 'microsoft365';
+      provider: ProviderId;
       scopes?: string[];
     }): Promise<AppConnectionSingleResponse> => {
       return api.appConnection.connect(payload) as Promise<AppConnectionSingleResponse>;
+    },
+    configureProvider: async (payload: {
+      provider: ProviderId;
+      clientId: string;
+      clientSecret?: string;
+    }): Promise<AppConnectionProviderResponse> => {
+      return api.appConnection.configureProvider(payload) as Promise<AppConnectionProviderResponse>;
     },
     disconnect: async (connectionId: string): Promise<AppConnectionDisconnectResponse> => {
       return api.appConnection.disconnect(connectionId) as Promise<AppConnectionDisconnectResponse>;

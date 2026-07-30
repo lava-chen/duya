@@ -1,15 +1,18 @@
 /**
- * mcp-inventory-handlers.test.ts — Unit tests for `mcp:inventory:snapshot`.
+ * mcp-inventory-handlers.test.ts — Unit tests for `mcp:inventory:snapshot`
+ * and `mcp:inventory:tools`.
  *
- * The handler wraps `getMCPInventoryService().buildSnapshot()` in a
+ * The handlers wrap `getMCPInventoryService().buildSnapshot()` in a
  * `{ success, data, error }` envelope. Tests cover the happy path
  * and the error envelope.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  snapshotReturn: { servers: [], tools: [] } as unknown,
+  snapshotReturn: { effectiveServers: [] } as unknown,
   shouldThrow: false,
+  listToolsReturn: { tools: [] as Array<{ name: string; description?: string }> },
+  transportType: 'stdio' as 'stdio' | 'http',
   logger: {
     info: vi.fn(),
     error: vi.fn(),
@@ -19,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   captured: {
     handle: new Map<string, (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>>(),
   },
+  clientClose: vi.fn(),
+  stdioClose: vi.fn(),
+  httpClose: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -55,19 +61,44 @@ vi.mock('../../services/mcp-inventory-service', () => ({
   }),
 }));
 
-async function invokeHandler(channel: string, event: unknown = {}): Promise<unknown> {
+vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
+  Client: vi.fn().mockImplementation(() => ({
+    connect: vi.fn().mockResolvedValue(undefined),
+    listTools: vi.fn().mockResolvedValue(mocks.listToolsReturn),
+    close: mocks.clientClose,
+  })),
+}));
+
+vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({
+  StdioClientTransport: vi.fn().mockImplementation(() => ({
+    close: mocks.stdioClose,
+  })),
+}));
+
+vi.mock('@modelcontextprotocol/sdk/client/streamableHttp.js', () => ({
+  StreamableHTTPClientTransport: vi.fn().mockImplementation(() => ({
+    close: mocks.httpClose,
+  })),
+}));
+
+async function invokeHandler(channel: string, payload: unknown = {}): Promise<unknown> {
   const handler = mocks.captured.handle.get(channel);
   if (!handler) throw new Error(`No handler for ${channel}`);
-  return await handler(event);
+  return await handler({}, payload);
 }
 
 import { registerMCPInventoryHandlers } from '../mcp-inventory-handlers';
 
 describe('mcp-inventory-handlers', () => {
   beforeEach(() => {
-    mocks.snapshotReturn = { servers: [], tools: [] };
+    mocks.snapshotReturn = { effectiveServers: [] };
     mocks.shouldThrow = false;
+    mocks.listToolsReturn = { tools: [] };
+    mocks.transportType = 'stdio';
     mocks.logger.error.mockClear();
+    mocks.clientClose.mockClear().mockResolvedValue(undefined);
+    mocks.stdioClose.mockClear().mockResolvedValue(undefined);
+    mocks.httpClose.mockClear().mockResolvedValue(undefined);
     mocks.captured.handle.clear();
     registerMCPInventoryHandlers();
   });
@@ -77,14 +108,14 @@ describe('mcp-inventory-handlers', () => {
   });
 
   it('returns the snapshot wrapped in { success, data } on the happy path', async () => {
-    mocks.snapshotReturn = { servers: [{ id: 's1', name: 'first' }], tools: [{ id: 't1' }] };
+    mocks.snapshotReturn = { effectiveServers: [{ id: 's1', name: 'first' }] };
     const result = await invokeHandler('mcp:inventory:snapshot');
     expect(result).toEqual({ success: true, data: mocks.snapshotReturn });
   });
 
   it('returns success: true with the empty snapshot when no servers are registered', async () => {
     const result = await invokeHandler('mcp:inventory:snapshot');
-    expect(result).toEqual({ success: true, data: { servers: [], tools: [] } });
+    expect(result).toEqual({ success: true, data: { effectiveServers: [] } });
   });
 
   it('returns success: false with error message when buildSnapshot throws', async () => {
@@ -105,5 +136,100 @@ describe('mcp-inventory-handlers', () => {
     // pattern; here we trust the handler's instanceof Error check.)
     const result = await invokeHandler('mcp:inventory:snapshot');
     expect(result).toMatchObject({ success: false });
+  });
+
+  it('registers the mcp:inventory:tools channel', () => {
+    expect(mocks.captured.handle.has('mcp:inventory:tools')).toBe(true);
+  });
+
+  it('returns tools for a matching effective server via stdio transport', async () => {
+    mocks.snapshotReturn = {
+      effectiveServers: [
+        {
+          id: 'plugin:demo:server-a',
+          name: 'server-a',
+          source: 'plugin',
+          sourceId: 'demo',
+          command: 'npx',
+          args: ['-y', 'server-a'],
+          env: {},
+        },
+      ],
+    };
+    mocks.listToolsReturn = {
+      tools: [
+        { name: 'tool_one', description: 'First tool' },
+        { name: 'tool_two' },
+      ],
+    };
+
+    const result = await invokeHandler('mcp:inventory:tools', { serverId: 'plugin:demo:server-a' });
+    expect(result).toEqual({
+      success: true,
+      data: [
+        { name: 'tool_one', description: 'First tool' },
+        { name: 'tool_two' },
+      ],
+    });
+    expect(mocks.clientClose).toHaveBeenCalledOnce();
+    expect(mocks.stdioClose).toHaveBeenCalledOnce();
+  });
+
+  it('uses HTTP transport when the server has a url', async () => {
+    mocks.snapshotReturn = {
+      effectiveServers: [
+        {
+          id: 'plugin:demo:server-b',
+          name: 'server-b',
+          source: 'plugin',
+          sourceId: 'demo',
+          command: '',
+          args: [],
+          env: {},
+          url: 'http://localhost:3000/mcp',
+          headers: { Authorization: 'Bearer token' },
+        },
+      ],
+    };
+    mocks.listToolsReturn = { tools: [{ name: 'http_tool' }] };
+
+    const result = await invokeHandler('mcp:inventory:tools', { serverId: 'plugin:demo:server-b' });
+    expect(result).toEqual({ success: true, data: [{ name: 'http_tool' }] });
+    expect(mocks.httpClose).toHaveBeenCalledOnce();
+  });
+
+  it('returns success: false when the server is not found', async () => {
+    mocks.snapshotReturn = { effectiveServers: [] };
+    const result = await invokeHandler('mcp:inventory:tools', { serverId: 'missing' });
+    expect(result).toEqual({ success: false, error: 'MCP server not found' });
+  });
+
+  it('returns success: false when listTools throws', async () => {
+    mocks.snapshotReturn = {
+      effectiveServers: [
+        {
+          id: 'plugin:demo:server-c',
+          name: 'server-c',
+          source: 'plugin',
+          sourceId: 'demo',
+          command: 'npx',
+          args: [],
+          env: {},
+        },
+      ],
+    };
+    mocks.listToolsReturn = new Proxy(
+      { tools: [] },
+      {
+        get() {
+          throw new Error('connection refused');
+        },
+      },
+    ) as unknown as { tools: Array<{ name: string; description?: string }> };
+
+    const result = await invokeHandler('mcp:inventory:tools', { serverId: 'plugin:demo:server-c' });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('connection refused') });
+    expect(mocks.clientClose).toHaveBeenCalledOnce();
+    expect(mocks.stdioClose).toHaveBeenCalledOnce();
   });
 });

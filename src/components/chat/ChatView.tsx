@@ -137,7 +137,19 @@ export function ChatView({
   const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
   const [agentMode, setAgentMode] = useState<AgentMode>('main');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
-  const [effort, setEffort] = useState<string | undefined>(undefined);
+  const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
+
+  // Sync effort from settings when settings load for the first time.
+  useEffect(() => {
+    setEffortState(settings.defaultThinkingEffort ?? undefined);
+  }, [settings.defaultThinkingEffort]);
+
+  const setEffort = useCallback((newEffort: string | undefined) => {
+    setEffortState(newEffort);
+    if (newEffort !== settings.defaultThinkingEffort) {
+      saveSettings({ defaultThinkingEffort: newEffort ?? null }).catch(console.error);
+    }
+  }, [saveSettings, settings.defaultThinkingEffort]);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
   const [compactionStatus, setCompactionStatus] = useState<'idle' | 'compacting' | 'done' | 'error'>('idle');

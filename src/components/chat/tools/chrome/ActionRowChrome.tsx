@@ -18,7 +18,6 @@ import {
   SpinnerGapIcon,
   XCircleIcon,
 } from '@/components/icons';
-import { Button } from '@/components/ui/Button';
 import { useTranslation } from '@/hooks/useTranslation';
 import type { TranslationKey } from '@/i18n';
 import type { ToolStatus } from '../types';
@@ -66,10 +65,8 @@ export function ActionRowChrome({
   const verb = verbKey ? t(verbKey) : null;
   const showCaret = canExpand && (expanded || hovered);
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="sm"
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -132,7 +129,7 @@ export function ActionRowChrome({
       <span className="ml-2">
         <StatusDot status={status} />
       </span>
-    </Button>
+    </button>
   );
 }
 

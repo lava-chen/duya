@@ -33,12 +33,13 @@ import { isBlockedMarketplaceName } from '../plugins/marketplace/impersonation-d
 import type { MarketplaceEntry } from '../plugins/marketplace/types';
 // Plan 311 — workflow template discovery & summary projection.
 import { listBuiltinPlugins } from '../../packages/agent/src/plugins/builtin/_registry.js';
-import { discoverWorkflows } from '../../packages/agent/src/plugins/builtin/capability-discovery.js';
+import { discoverWorkflows, discoverSkills } from '../../packages/agent/src/plugins/builtin/capability-discovery.js';
 import {
   toWorkflowSummary,
   type WorkflowTemplate,
   type WorkflowTemplateSummary,
 } from '../../packages/plugin-core/src/workflows/schema.js';
+import { readPluginManifest } from '../plugins/manifest.js';
 
 const COMPONENT = 'PluginHandlers' as LogComponent;
 
@@ -443,6 +444,14 @@ export function registerPluginHandlers(): void {
           ? discoverWorkflows(discoveryDir)
           : [];
         const workflowSummaries: WorkflowTemplateSummary[] = templates.map(toWorkflowSummary);
+        const discoveredSkills = discoveryDir ? discoverSkills(discoveryDir) : [];
+        const mcpServerCount = (() => {
+          if (!discoveryDir) return 0;
+          try {
+            const m = readPluginManifest(discoveryDir);
+            return m.capabilities?.mcpServers?.length ?? 0;
+          } catch { return 0; }
+        })();
 
         return {
           pluginId: p.id,
@@ -451,8 +460,8 @@ export function registerPluginHandlers(): void {
           status: 'enabled' as const,
           trustLevel: p.trustLevel,
           capabilities: {
-            skills: p.grantedPermissions?.filter((x) => x.name.startsWith('skills.')).length ?? 0,
-            mcpServers: p.grantedPermissions?.filter((x) => x.name.startsWith('mcp.')).length ?? 0,
+            skills: discoveredSkills.length,
+            mcpServers: mcpServerCount,
             cli: p.grantedPermissions?.filter((x) => x.name.startsWith('cli.')).length ?? 0,
             ui: p.grantedPermissions?.filter((x) => x.name.startsWith('ui.')).length ?? 0,
             hooks: p.grantedPermissions?.filter((x) => x.name.startsWith('hooks.')).length ?? 0,

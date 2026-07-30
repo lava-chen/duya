@@ -21,7 +21,7 @@ import fs from 'fs';
 import path from 'path';
 import writeFileAtomic from 'write-file-atomic';
 import { getLogger, LogComponent } from '../../logging/logger';
-import type { TokenSet } from './types';
+import type { ProviderId, TokenSet } from './types';
 
 const COMPONENT = 'AppConnectionVault' as LogComponent;
 
@@ -37,6 +37,19 @@ interface VaultShape {
   /** connectionId → encrypted-blob-per-entry is unnecessary: the whole map is
    * safeStorage-encrypted as one blob (mirrors ConfigManager). */
   tokens: Record<string, TokenSet>;
+  /** Per-install OAuth application credentials. Never cross IPC. */
+  oauthClients: Partial<Record<ProviderId, { clientId: string; clientSecret?: string }>>;
+  /**
+   * OAuth client-registration and PKCE state for Remote MCP connections.
+   * The provider response can contain a public-client secret, so this state is
+   * stored in the same encrypted vault as access tokens.
+   */
+  mcpOAuth: Record<string, {
+    clientInformation?: Record<string, unknown>;
+    codeVerifier?: string;
+    discovery?: Record<string, unknown>;
+    redirectUri?: string;
+  }>;
 }
 
 function vaultPath(): string {
@@ -44,7 +57,7 @@ function vaultPath(): string {
 }
 
 export class TokenVault {
-  private cache: VaultShape = { tokens: {} };
+  private cache: VaultShape = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
   private loaded = false;
   private readonly logger = getLogger();
 
@@ -54,7 +67,7 @@ export class TokenVault {
     const file = vaultPath();
     try {
       if (!fs.existsSync(file)) {
-        this.cache = { tokens: {} };
+        this.cache = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
         this.loaded = true;
         return this.cache;
       }
@@ -68,7 +81,7 @@ export class TokenVault {
           undefined,
           COMPONENT,
         );
-        this.cache = { tokens: {} };
+        this.cache = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
         this.loaded = true;
         return this.cache;
       }
@@ -78,6 +91,14 @@ export class TokenVault {
         tokens:
           parsed && typeof parsed === 'object' && parsed.tokens && typeof parsed.tokens === 'object'
             ? parsed.tokens
+            : {},
+        oauthClients:
+          parsed && typeof parsed === 'object' && parsed.oauthClients && typeof parsed.oauthClients === 'object'
+            ? parsed.oauthClients
+            : {},
+        mcpOAuth:
+          parsed && typeof parsed === 'object' && parsed.mcpOAuth && typeof parsed.mcpOAuth === 'object'
+            ? parsed.mcpOAuth
             : {},
       };
       this.loaded = true;
@@ -90,7 +111,7 @@ export class TokenVault {
         err instanceof Error ? err : new Error(String(err)),
         COMPONENT,
       );
-      this.cache = { tokens: {} };
+      this.cache = { tokens: {}, oauthClients: {}, mcpOAuth: {} };
       this.loaded = true;
       return this.cache;
     }
@@ -140,10 +161,62 @@ export class TokenVault {
     }
   }
 
+  /** Store a user-owned OAuth application configuration in the encrypted vault. */
+  setOAuthClient(provider: ProviderId, credentials: { clientId: string; clientSecret?: string }): void {
+    this.load();
+    this.cache.oauthClients[provider] = {
+      clientId: credentials.clientId,
+      ...(credentials.clientSecret ? { clientSecret: credentials.clientSecret } : {}),
+    };
+    this.flush();
+  }
+
+  /** Main-process-only OAuth application configuration. */
+  getOAuthClient(provider: ProviderId): { clientId: string; clientSecret?: string } | undefined {
+    this.load();
+    const entry = this.cache.oauthClients[provider];
+    return entry ? { ...entry } : undefined;
+  }
+
+  getMcpOAuth(connectionId: string): {
+    clientInformation?: Record<string, unknown>;
+    codeVerifier?: string;
+    discovery?: Record<string, unknown>;
+    redirectUri?: string;
+  } | undefined {
+    this.load();
+    const entry = this.cache.mcpOAuth[connectionId];
+    return entry ? { ...entry } : undefined;
+  }
+
+  setMcpOAuth(
+    connectionId: string,
+    state: {
+      clientInformation?: Record<string, unknown>;
+      codeVerifier?: string;
+      discovery?: Record<string, unknown>;
+      redirectUri?: string;
+    },
+  ): void {
+    this.load();
+    this.cache.mcpOAuth[connectionId] = { ...state };
+    this.flush();
+  }
+
+  removeMcpOAuth(connectionId: string): void {
+    this.load();
+    if (connectionId in this.cache.mcpOAuth) {
+      delete this.cache.mcpOAuth[connectionId];
+      this.flush();
+    }
+  }
+
   /** Empty the vault. Used by tests and full reset flows. */
   clear(): void {
     this.load();
     this.cache.tokens = {};
+    this.cache.oauthClients = {};
+    this.cache.mcpOAuth = {};
     this.flush();
   }
 

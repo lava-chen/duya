@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
@@ -9,6 +9,13 @@ import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import type { PluginCatalogEntry, PluginRegistryEntry } from "@/lib/plugin-types";
 import type { AppConnectionStatusDTO, ProviderId } from "@/lib/app-connection-ipc";
+import { ExtensionCard } from "./ExtensionCard";
+import {
+  PlugIcon,
+  ListChecksIcon,
+  SquaresFourIcon,
+  XIcon,
+} from "@/components/icons";
 
 import { OFFICIAL_CONNECTORS } from "./MarketplaceConnectors";
 
@@ -25,6 +32,12 @@ interface MarketplaceModalProps {
   onDisconnectConnection: (connectionId: string) => void;
   busyProvider: ProviderId | null;
 }
+
+const CATEGORY_META: Record<MarketCategory, { labelKey: string; icon: ReactNode }> = {
+  plugins: { labelKey: "marketplace.categories.plugins", icon: <PlugIcon size={18} /> },
+  skills: { labelKey: "marketplace.categories.skills", icon: <ListChecksIcon size={18} /> },
+  connectors: { labelKey: "marketplace.categories.connectors", icon: <SquaresFourIcon size={18} /> },
+};
 
 export function MarketplaceModal({
   open,
@@ -92,7 +105,7 @@ export function MarketplaceModal({
     () =>
       filteredCatalog.filter(
         (c) =>
-          c.source === 'bundled' ||
+          c.source === "bundled" ||
           c.developer?.toLowerCase().includes("duya") ||
           c.author?.name?.toLowerCase().includes("duya")
       ),
@@ -103,15 +116,20 @@ export function MarketplaceModal({
     [filteredCatalog, officialPlugins]
   );
 
+  const skillCatalog = useMemo(
+    () => filteredCatalog.filter((c) => c.kind === "skill"),
+    [filteredCatalog]
+  );
+
   if (!open) return null;
 
-  const categories: { id: MarketCategory; labelKey: string }[] = [
-    { id: "plugins", labelKey: "marketplace.categories.plugins" },
-    { id: "skills", labelKey: "marketplace.categories.skills" },
-    { id: "connectors", labelKey: "marketplace.categories.connectors" },
-  ];
+  const categories = Object.entries(CATEGORY_META).map(([id, meta]) => ({
+    id: id as MarketCategory,
+    ...meta,
+  }));
 
   const pluginsToShow = source === "official" ? officialPlugins : otherPlugins;
+  const currentLabelKey = CATEGORY_META[category].labelKey;
 
   return (
     <div
@@ -123,9 +141,9 @@ export function MarketplaceModal({
     >
       <div className="relative z-10 flex w-full max-w-4xl max-h-[85vh] bg-[var(--main-bg)] border border-border/50 rounded-xl shadow-xl overflow-hidden">
         {/* Left nav */}
-        <nav className="w-48 shrink-0 border-r border-border/40 bg-[var(--surface)]/40 p-3 space-y-1">
+        <nav className="w-52 shrink-0 border-r border-border/40 bg-[var(--surface)]/40 p-3 space-y-1">
           <h3 className="px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-            {t("marketplace.title" as never)}
+            {t("marketplace.directory")}
           </h3>
           {categories.map((cat) => (
             <button
@@ -133,12 +151,15 @@ export function MarketplaceModal({
               type="button"
               onClick={() => setCategory(cat.id)}
               className={cn(
-                "w-full text-left px-3 py-2 rounded-lg text-sm transition-colors",
+                "w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-lg text-sm transition-colors",
                 category === cat.id
                   ? "bg-accent/10 text-accent font-medium"
                   : "text-foreground hover:bg-muted/40"
               )}
             >
+              <span className={cn("shrink-0", category === cat.id ? "text-accent" : "text-muted-foreground")}>
+                {cat.icon}
+              </span>
               {t(cat.labelKey as never)}
             </button>
           ))}
@@ -149,13 +170,13 @@ export function MarketplaceModal({
           {/* Header */}
           <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/40">
             <h2 className="text-lg font-semibold text-foreground">
-              {t(categories.find((c) => c.id === category)!.labelKey as never)}
+              {t(currentLabelKey as never)}
             </h2>
             <div className="flex items-center gap-2">
               <div className="w-56">
                 <Input
                   type="search"
-                  placeholder={t("marketplace.search" as never)}
+                  placeholder={t("marketplace.search")}
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   size="sm"
@@ -164,10 +185,12 @@ export function MarketplaceModal({
               <IconButton
                 variant="ghost"
                 size="sm"
-                aria-label="Close"
+                shape="square"
+                aria-label={t("marketplace.close")}
+                title={t("marketplace.close")}
                 onClick={onClose}
               >
-                ✕
+                <XIcon size={18} />
               </IconButton>
             </div>
           </div>
@@ -187,9 +210,9 @@ export function MarketplaceModal({
                 )}
               >
                 {t(
-                  (src === "official"
+                  src === "official"
                     ? "marketplace.tabs.official"
-                    : "marketplace.tabs.others") as never
+                    : "marketplace.tabs.others"
                 )}
               </button>
             ))}
@@ -198,55 +221,47 @@ export function MarketplaceModal({
           {/* Body */}
           <div className="flex-1 overflow-y-auto p-5">
             {category === "plugins" && (
-              <div className="space-y-2">
+              <div className="space-y-4">
                 {pluginsToShow.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    {t("marketplace.empty" as never)}
-                  </p>
+                  <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      {t("marketplace.empty")}
+                    </p>
+                  </div>
                 ) : (
-                  pluginsToShow.map((plugin) => {
-                    const isInstalled = installedIds.has(plugin.id);
-                    return (
-                      <div
-                        key={plugin.id}
-                        className="flex items-start gap-3 rounded-lg border border-border/30 px-4 py-3 hover:border-border/50 transition-colors"
-                      >
-                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-sm font-semibold text-accent">
-                          {plugin.icon ? (
-                            <img src={plugin.icon} alt={plugin.name} className="h-6 w-6 rounded" />
-                          ) : (
-                            plugin.name.trim().charAt(0).toUpperCase()
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-sm font-semibold text-foreground truncate">
-                              {plugin.name}
-                            </h4>
-                            <span className="text-xs text-muted-foreground">v{plugin.version}</span>
-                          </div>
-                          <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                            {plugin.shortDescription || plugin.description}
-                          </p>
-                        </div>
-                        <div className="shrink-0">
-                          {isInstalled ? (
-                            <span className="flex items-center gap-1 text-xs text-emerald-600">
-                              ✓ {t("marketplace.connectors.connected" as never)}
-                            </span>
-                          ) : (
-                            <Button
-                              variant="primary"
-                              size="sm"
-                              onClick={() => onInstallPlugin(plugin)}
-                            >
-                              Install
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {pluginsToShow.map((plugin) => {
+                      const installed = installedIds.has(plugin.id);
+                      const publisher = plugin.author?.name || plugin.developer || t("marketplace.unknownPublisher");
+                      return (
+                        <ExtensionCard
+                          key={plugin.id}
+                          icon={
+                            plugin.icon ? (
+                              <img
+                                src={plugin.icon}
+                                alt={plugin.name}
+                                className="h-6 w-6 rounded"
+                              />
+                            ) : undefined
+                          }
+                          monogram={plugin.icon ? undefined : plugin.name.trim().charAt(0).toUpperCase()}
+                          title={plugin.name}
+                          subtitle={
+                            <>
+                              <span className="truncate">{publisher}</span>
+                              <span className="text-muted-foreground/60">•</span>
+                              <span>v{plugin.version}</span>
+                            </>
+                          }
+                          description={plugin.shortDescription || plugin.description}
+                          onAdd={() => onInstallPlugin(plugin)}
+                          added={installed}
+                          addLabel={t("marketplace.install")}
+                        />
+                      );
+                    })}
+                  </div>
                 )}
               </div>
             )}
@@ -263,10 +278,38 @@ export function MarketplaceModal({
             )}
 
             {category === "skills" && (
-              <div className="text-center py-12">
-                <p className="text-sm text-muted-foreground">
-                  {t("marketplace.empty" as never)}
-                </p>
+              <div className="space-y-4">
+                {source === "others" || skillCatalog.length === 0 ? (
+                  <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
+                    <p className="text-sm text-muted-foreground">
+                      {t("marketplace.empty")}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {skillCatalog.map((skill) => {
+                      const installed = installedIds.has(skill.id);
+                      return (
+                        <ExtensionCard
+                          key={skill.id}
+                          monogram={skill.name.trim().charAt(0).toUpperCase()}
+                          title={skill.name}
+                          subtitle={
+                            <>
+                              <span className="truncate">DUYA Team</span>
+                              <span className="text-muted-foreground/60">•</span>
+                              <span>v{skill.version}</span>
+                            </>
+                          }
+                          description={skill.description}
+                          onAdd={() => onInstallPlugin(skill)}
+                          added={installed}
+                          addLabel={t("marketplace.install")}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -295,44 +338,43 @@ function ConnectorsPanel({
 
   if (source === "others") {
     return (
-      <div className="text-center py-12">
+      <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
         <p className="text-sm text-muted-foreground">
-          {t("marketplace.empty" as never)}
+          {t("marketplace.empty")}
         </p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {OFFICIAL_CONNECTORS.map((preset) => {
         const isConnected = connectedProviders.has(preset.provider);
         const connection = connections.find(
           (c) => c.provider === preset.provider && c.status === "connected"
         );
         return (
-          <div
+          <ExtensionCard
             key={preset.provider}
-            className="flex items-start gap-3 rounded-lg border border-border/30 px-4 py-3"
-          >
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-sm font-semibold text-accent">
-              {preset.monogram}
-            </div>
-            <div className="min-w-0 flex-1">
-              <h4 className="text-sm font-semibold text-foreground">{preset.name}</h4>
-              <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-                {preset.description}
-              </p>
-            </div>
-            <div className="shrink-0">
-              {isConnected && connection ? (
+            monogram={preset.monogram}
+            title={preset.name}
+            subtitle={
+              isConnected ? (
+                <span className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600">
+                  {t("marketplace.connectors.connected")}
+                </span>
+              ) : null
+            }
+            description={preset.description}
+            actions={
+              isConnected && connection ? (
                 <Button
                   variant="secondary"
                   size="sm"
                   disabled={busyProvider === preset.provider}
                   onClick={() => onDisconnect(connection.id)}
                 >
-                  {t("marketplace.connectors.disconnect" as never)}
+                  {t("marketplace.connectors.disconnect")}
                 </Button>
               ) : (
                 <Button
@@ -341,11 +383,11 @@ function ConnectorsPanel({
                   disabled={busyProvider === preset.provider}
                   onClick={() => onConnect(preset.provider)}
                 >
-                  {t("marketplace.connectors.connect" as never)}
+                  {t("marketplace.connectors.connect")}
                 </Button>
-              )}
-            </div>
-          </div>
+              )
+            }
+          />
         );
       })}
     </div>

@@ -131,9 +131,24 @@ export const PluginSkillCapabilitySchema = z.object({
 
 export const PluginMcpServerSchema = z.object({
   name: z.string().min(1),
-  command: z.string().min(1),
+  transport: z.enum(['stdio', 'streamable-http']).optional(),
+  command: z.string().min(1).optional(),
   args: z.array(z.string()).default([]),
   env: z.record(z.string(), z.string()).optional(),
+  url: z.string().url().optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+}).superRefine((server, ctx) => {
+  const transport = server.transport ?? 'stdio';
+  if (transport === 'stdio' && !server.command) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'stdio MCP servers require command', path: ['command'] });
+  }
+  if (transport === 'streamable-http') {
+    if (!server.url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'streamable-http MCP servers require url', path: ['url'] });
+    } else if (!server.url.startsWith('https://')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'streamable-http MCP URLs must use https', path: ['url'] });
+    }
+  }
 });
 
 export const PluginCliSchema = z.object({
@@ -429,6 +444,20 @@ export interface PluginCatalogEntry {
   source: PluginSource;
   category: PluginCategory;
   trustLevel?: PluginTrustLevel;
+  /**
+   * Distinguishes a standalone skill marketplace entry (`'skill'`) from a
+   * regular plugin entry (`'plugin'`, the default). Skill entries are
+   * sourced from `packages/agent/skills/` and install only a single
+   * skill directory; plugin entries follow the normal plugin install
+   * path. Absent values are treated as `'plugin'` for backward compat.
+   */
+  kind?: 'plugin' | 'skill';
+  /**
+   * For `kind === 'skill'` entries: absolute path to the bundled skill
+   * source directory. Used by the installer to copy skill files. Not
+   * serialized for the renderer — the renderer only needs `kind`.
+   */
+  skillSourceDir?: string;
   status?: 'enabled' | 'disabled' | 'needs_attention';
   installed?: boolean;
   enabled?: boolean;

@@ -7,7 +7,16 @@
  */
 
 /** Provider identifiers supported by the first release. */
-export type ProviderId = 'google' | 'slack' | 'microsoft365';
+export type ProviderId =
+  | 'google'
+  | 'slack'
+  | 'microsoft365'
+  | 'figma'
+  | 'supabase'
+  | 'sentry'
+  | 'vercel'
+  | 'notion'
+  | 'linear';
 
 /**
  * Connection lifecycle states.
@@ -62,6 +71,15 @@ export interface AppConnectionStatusDTO {
   updatedAt: number;
 }
 
+/** Renderer-safe OAuth provider state for the preset connection catalog. */
+export interface AppConnectionProviderDTO {
+  id: ProviderId;
+  label: string;
+  configured: boolean;
+  /** Non-secret reason shown when a build has no registered OAuth client. */
+  configurationHint?: string;
+}
+
 /** Whitelist mapper: never leaks token fields by accident. */
 export function toStatusDTO(conn: AppConnection): AppConnectionStatusDTO {
   return {
@@ -103,7 +121,8 @@ export type AppConnectionErrorCode =
   | 'network_error'
   | 'unknown_action'
   | 'internal'
-  | 'provider_blocked';
+  | 'provider_blocked'
+  | 'provider_not_configured';
 
 /** Structured connector error returned to the agent executor. */
 export interface AppConnectionError {

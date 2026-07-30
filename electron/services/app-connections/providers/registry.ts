@@ -31,6 +31,13 @@ export interface ProviderClientConfig {
   requiresClientSecret: boolean;
   /** Public client_id (no secret). May be overridden by env or user setup. */
   clientId: string;
+  /** Official hosted MCP endpoint. These use RFC 9728 discovery + OAuth DCR. */
+  remoteMcpUrl?: string;
+}
+
+export interface ProviderReadiness {
+  configured: boolean;
+  reason?: string;
 }
 
 /**
@@ -56,7 +63,7 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     ],
     userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
     requiresClientSecret: false,
-    clientId: process.env.DUYA_APP_CONNECTION_GOOGLE_CLIENT_ID ?? 'duya-oob-client',
+    clientId: process.env.DUYA_APP_CONNECTION_GOOGLE_CLIENT_ID ?? '',
   },
   slack: {
     id: 'slack',
@@ -79,16 +86,72 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     defaultScopes: ['Mail.Read', 'Calendars.Read', 'Files.Read.All', 'User.Read'],
     userinfoUrl: 'https://graph.microsoft.com/v1.0/me',
     requiresClientSecret: false,
-    clientId: process.env.DUYA_APP_CONNECTION_MICROSOFT365_CLIENT_ID ?? 'duya-oob-client',
+    clientId: process.env.DUYA_APP_CONNECTION_MICROSOFT365_CLIENT_ID ?? '',
   },
+  figma: remoteMcpProvider('figma', 'Figma', 'https://mcp.figma.com/mcp'),
+  supabase: remoteMcpProvider('supabase', 'Supabase', 'https://mcp.supabase.com/mcp'),
+  sentry: remoteMcpProvider('sentry', 'Sentry', 'https://mcp.sentry.dev'),
+  vercel: remoteMcpProvider('vercel', 'Vercel', 'https://mcp.vercel.com'),
+  notion: remoteMcpProvider('notion', 'Notion', 'https://mcp.notion.com/mcp'),
+  linear: remoteMcpProvider('linear', 'Linear', 'https://mcp.linear.app/mcp'),
 };
+
+function remoteMcpProvider(
+  id: ProviderId,
+  label: string,
+  remoteMcpUrl: string,
+): ProviderClientConfig {
+  return {
+    id,
+    label,
+    // The MCP SDK discovers the authorization server from the protected
+    // resource. These fields are deliberately unused for remote MCP OAuth.
+    authUrl: '',
+    tokenUrl: '',
+    redirectPath: `/callback/mcp/${id}`,
+    defaultScopes: [],
+    requiresClientSecret: false,
+    clientId: '',
+    remoteMcpUrl,
+  };
+}
 
 export function getProviderConfig(provider: ProviderId): ProviderClientConfig {
   return REGISTRY[provider];
 }
 
+/**
+ * A connector must fail closed when the build has no OAuth client. Placeholder
+ * ids made the UI appear connectable but sent users into an authorization flow
+ * that every provider rejected. Client ids are public; client secrets remain
+ * main-process-only and never appear in this result.
+ */
+export function getProviderReadiness(provider: ProviderId): ProviderReadiness {
+  const config = getProviderConfig(provider);
+  if (config.remoteMcpUrl) {
+    return { configured: true };
+  }
+  if (!config.clientId.trim()) {
+    return {
+      configured: false,
+      reason: `OAuth client ID for ${provider} is not configured in this build`,
+    };
+  }
+  if (config.requiresClientSecret && !getClientSecret(provider)) {
+    return {
+      configured: false,
+      reason: `OAuth client secret for ${provider} is not configured`,
+    };
+  }
+  return { configured: true };
+}
+
 export function listProviders(): ProviderClientConfig[] {
   return Object.values(REGISTRY);
+}
+
+export function isKnownProvider(provider: string): provider is ProviderId {
+  return Object.prototype.hasOwnProperty.call(REGISTRY, provider);
 }
 
 /**
@@ -110,6 +173,10 @@ const clientSecrets = new Map<ProviderId, string>();
 export function setClientSecret(provider: ProviderId, secret: string): void {
   clientSecrets.set(provider, secret);
 }
+
+export function clearClientSecret(provider: ProviderId): void {
+  clientSecrets.delete(provider);
+}
 export function getClientSecret(provider: ProviderId): string | undefined {
-  return clientSecrets.get(provider);
+  return clientSecrets.get(provider) ?? process.env[`DUYA_APP_CONNECTION_${provider.toUpperCase()}_CLIENT_SECRET`];
 }

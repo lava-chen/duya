@@ -84,5 +84,8 @@ export function getPluginAPI() {
         error?: string;
       }>;
     },
+    mcpTools: async (serverId: string): Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }> => {
+      return api.mcpInventory.tools(serverId) as Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }>;
+    },
   };
 }

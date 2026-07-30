@@ -64,7 +64,7 @@ function buildDisplayCapabilities(plugin: PluginCatalogEntry): PluginCapabilityD
         id: `mcp-${m.name}`,
         name: m.name,
         type: "mcp" as const,
-        description: m.command,
+        description: m.command ?? m.name,
         required: true,
         enabled: true,
       });

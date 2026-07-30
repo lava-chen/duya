@@ -18,6 +18,8 @@ import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } 
 import { createGoogleConnector } from './connectors/google.js';
 import { createSlackConnector } from './connectors/slack.js';
 import { createMicrosoft365Connector } from './connectors/microsoft365.js';
+import { RemoteMcpConnector } from './connectors/remote-mcp.js';
+import { getProviderConfig } from './providers/registry.js';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,
@@ -44,9 +46,11 @@ export class ConnectorService {
   private readonly logger = getLogger();
   private readonly service: AppConnectionService;
   private readonly connectors: Map<ProviderId, ConnectorModule>;
+  private readonly remoteMcp: RemoteMcpConnector;
 
   constructor(deps: ConnectorServiceDeps = {}) {
     this.service = deps.service ?? getAppConnectionService();
+    this.remoteMcp = new RemoteMcpConnector(this.service.vault);
     const fetchImpl = deps.fetchImpl ?? fetch;
     this.connectors = new Map<ProviderId, ConnectorModule>([
       ['google', createGoogleConnector(fetchImpl)],
@@ -60,10 +64,25 @@ export class ConnectorService {
    * Called by the init/reload payload builder so the agent process can
    * register discoverable tools. Descriptors contain NO tokens.
    */
-  listDescriptorsForConnected(): ConnectorToolDescriptor[] {
+  async listDescriptorsForConnected(): Promise<ConnectorToolDescriptor[]> {
     const out: ConnectorToolDescriptor[] = [];
     for (const dto of this.service.list()) {
       if (dto.status !== 'connected') continue;
+      if (getProviderConfig(dto.provider).remoteMcpUrl) {
+        const token = await this.service.getValidToken(dto.id);
+        if (!token.success) continue;
+        try {
+          out.push(...await this.remoteMcp.listDescriptors(dto.id, dto.provider, token.data));
+        } catch (error) {
+          this.logger.warn(
+            'Remote MCP descriptor discovery failed',
+            error instanceof Error ? error : new Error(String(error)),
+            { connectionId: dto.id, provider: dto.provider },
+            COMPONENT,
+          );
+        }
+        continue;
+      }
       const connector = this.connectors.get(dto.provider);
       if (!connector) continue;
       out.push(...connector.listDescriptors(dto.id));
@@ -87,8 +106,9 @@ export class ConnectorService {
       return failure('connection_not_found', `connection ${connectionId} not found`, false);
     }
 
+    const remoteMcp = getProviderConfig(conn.provider).remoteMcpUrl ? this.remoteMcp : null;
     const connector = this.connectors.get(conn.provider);
-    if (!connector) {
+    if (!connector && !remoteMcp) {
       return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
     }
 
@@ -110,7 +130,9 @@ export class ConnectorService {
     const startedAt = Date.now();
     let result: ConnectorInvokeResult;
     try {
-      result = await connector.invoke(action, args, tokenResult.data.accessToken);
+      result = remoteMcp
+        ? await remoteMcp.invoke(connectionId, conn.provider, action, args, tokenResult.data)
+        : await connector!.invoke(action, args, tokenResult.data.accessToken);
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
       this.logger.warn(

@@ -23,9 +23,18 @@ import { ConnectionStore } from './connection-store.js';
 import { TokenVault } from './token-vault.js';
 import { TokenService } from './token-service.js';
 import { startAuthorization, FlowError } from './oauth/flow.js';
-import { getProviderConfig } from './providers/registry.js';
+import { startRemoteMcpAuthorization } from './oauth/remote-mcp-flow.js';
+import {
+  clearClientSecret,
+  getProviderConfig,
+  getProviderReadiness,
+  listProviders,
+  overrideClientId,
+  setClientSecret,
+} from './providers/registry.js';
 import type {
   AppConnectionStatusDTO,
+  AppConnectionProviderDTO,
   AppConnectionResult,
   ProviderId,
 } from './types.js';
@@ -80,6 +89,7 @@ export class AppConnectionService {
       deps.tokenService ??
       new TokenService({ store: this.store, vault: this.vault, fetchImpl: this.fetchImpl });
     this.providerBlockCheck = deps.isProviderBlocked;
+    this.hydrateProviderClients();
   }
 
   /** Install the post-mutation reload hook (called by IPC layer). */
@@ -95,6 +105,54 @@ export class AppConnectionService {
   /** List connections for a single provider (renderer-safe DTOs). */
   listByProvider(provider: ProviderId): AppConnectionStatusDTO[] {
     return this.store.listByProvider(provider).map(toStatusDTO);
+  }
+
+  /** List built-in providers without exposing OAuth client secrets. */
+  listProviders(): AppConnectionProviderDTO[] {
+    this.hydrateProviderClients();
+    return listProviders().map((provider) => {
+      const readiness = getProviderReadiness(provider.id);
+      return {
+        id: provider.id,
+        label: provider.label,
+        configured: readiness.configured,
+        configurationHint: readiness.reason,
+      };
+    });
+  }
+
+  /**
+   * Persist a user-owned OAuth client in the encrypted vault. This is the
+   * escape hatch for self-hosted/development builds; official builds provide
+   * their reviewed client configuration at packaging time.
+   */
+  configureProvider(
+    provider: ProviderId,
+    credentials: { clientId: string; clientSecret?: string },
+  ): AppConnectionProviderDTO {
+    const providerConfig = getProviderConfig(provider);
+    if (providerConfig.remoteMcpUrl) {
+      throw new FlowError(
+        'provider_not_configured',
+        `${providerConfig.label} uses automatic Remote MCP OAuth and does not accept a manual client ID`,
+      );
+    }
+    const clientId = credentials.clientId.trim();
+    if (!clientId) {
+      throw new FlowError('provider_not_configured', 'OAuth client ID is required');
+    }
+    this.vault.setOAuthClient(provider, {
+      clientId,
+      ...(credentials.clientSecret?.trim() ? { clientSecret: credentials.clientSecret.trim() } : {}),
+    });
+    this.hydrateProviderClients();
+    const readiness = getProviderReadiness(provider);
+    return {
+      id: provider,
+      label: getProviderConfig(provider).label,
+      configured: readiness.configured,
+      configurationHint: readiness.reason,
+    };
   }
 
   /** Get a single connection's status DTO. */
@@ -115,6 +173,7 @@ export class AppConnectionService {
     provider: ProviderId,
     scopes?: string[],
   ): Promise<AppConnectionStatusDTO> {
+    this.hydrateProviderClients();
     // Plan 312 Phase 4: enterprise policy gate.
     if (this.providerBlockCheck) {
       const result = this.providerBlockCheck(provider);
@@ -132,13 +191,19 @@ export class AppConnectionService {
     }
 
     try {
-      const dto = await startAuthorization(provider, {
-        upsertConnection: (conn) => this.store.upsert(conn),
-        storeTokens: (id, tokens) => this.vault.set(id, tokens),
-      }, {
-        scopes,
-        fetchImpl: this.fetchImpl,
-      });
+      const config = getProviderConfig(provider);
+      const dto = config.remoteMcpUrl
+        ? await startRemoteMcpAuthorization(provider, {
+            store: this.store,
+            vault: this.vault,
+          })
+        : await startAuthorization(provider, {
+            upsertConnection: (conn) => this.store.upsert(conn),
+            storeTokens: (id, tokens) => this.vault.set(id, tokens),
+          }, {
+            scopes,
+            fetchImpl: this.fetchImpl,
+          });
       await this.fireReload();
       return dto;
     } catch (err) {
@@ -180,6 +245,7 @@ export class AppConnectionService {
 
     // 2) Clear vault entry.
     this.vault.remove(connectionId);
+    this.vault.removeMcpOAuth(connectionId);
 
     // 3) Mark disconnected in DB.
     this.store.updateStatus(connectionId, 'disconnected', {
@@ -262,6 +328,24 @@ export class AppConnectionService {
         undefined,
         COMPONENT,
       );
+    }
+  }
+
+  private hydrateProviderClients(): void {
+    for (const provider of listProviders()) {
+      // Remote MCP providers dynamically register a public client during the
+      // OAuth flow. They never consume a user-supplied OAuth client config.
+      if (provider.remoteMcpUrl) continue;
+      // A few focused service tests inject a minimal vault double that only
+      // implements token operations. Treat it as an empty OAuth-client vault.
+      const credentials = this.vault.getOAuthClient?.(provider.id);
+      if (!credentials) continue;
+      overrideClientId(provider.id, credentials.clientId);
+      if (credentials.clientSecret) {
+        setClientSecret(provider.id, credentials.clientSecret);
+      } else {
+        clearClientSecret(provider.id);
+      }
     }
   }
 }

@@ -12,6 +12,7 @@ export default defineConfig({
       'electron/**/*.test.ts',
       'packages/*/tests/**/*.test.ts',
       'packages/*/tests/**/*.spec.ts',
+      'packages/ai/test/**/*.test.ts',
       'packages/gateway/src/**/*.test.ts',
       'packages/agent/src/**/*.test.ts',
       'packages/cli/src/**/*.test.ts',

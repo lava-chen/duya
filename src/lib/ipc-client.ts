@@ -9,6 +9,7 @@
 
 import type { FileAttachment } from '@/types/message'
 import type { ContentBlock } from '@/types/message'
+import type { MemoryEntry } from '@/types'
 
 // Types matching the store's expected format (camelCase)
 export interface Thread {
@@ -992,4 +993,8 @@ export async function listGatewaySessionsIPC(): Promise<GatewaySession[]> {
 
 export async function getGatewaySessionIPC(id: string): Promise<GatewaySession | null> {
   return window.electronAPI!.gateway.getSession(id) as Promise<GatewaySession | null>
+}
+
+export async function listMemoryIPC(): Promise<{ entries: MemoryEntry[]; enabled: boolean }> {
+  return window.electronAPI!.memory.list()
 }

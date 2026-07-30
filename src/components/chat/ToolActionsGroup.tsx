@@ -186,7 +186,7 @@ function ToolActionsGroupImpl({
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors border-b border-border/50"
+        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
       >
         <span className="text-muted-foreground/60 truncate">
           {collapsedSummary}

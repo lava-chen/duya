@@ -69,6 +69,9 @@ function asString(value: unknown, field: string, warnings: string[]): string | n
 }
 
 function asStringArray(value: unknown, field: string, warnings: string[]): string[] {
+  if (value === undefined) {
+    return [];
+  }
   if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) {
     warnings.push(`field "${field}" must be a string array; defaulting to []`);
     return [];

@@ -58,6 +58,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
+    // Default thinking effort for new chat sessions
+    defaultThinkingEffort: undefined,
+    // Memory system toggle
+    memoryEnabled: false,
   };
 
   try {
@@ -165,6 +169,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       gatewayPermissionMode: (raw.gatewayPermissionMode as AppSettings["gatewayPermissionMode"]) ?? defaults.gatewayPermissionMode,
       // Default workspace directory for creating new projects
       workspaceDir: raw.workspaceDir || undefined,
+      // Default thinking effort for new chat sessions
+      defaultThinkingEffort: raw.defaultThinkingEffort || undefined,
+      // Memory system toggle
+      memoryEnabled: raw.memoryEnabled === "true",
     };
   } catch {
     return defaults;
@@ -236,6 +244,10 @@ export function useSettings(): {
     gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
+    // Default thinking effort for new chat sessions
+    defaultThinkingEffort: undefined,
+    // Memory system toggle
+    memoryEnabled: false,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

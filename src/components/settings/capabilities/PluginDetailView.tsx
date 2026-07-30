@@ -1,13 +1,15 @@
 "use client";
 
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon, ArrowRightIcon } from "@/components/icons";
+import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon, ArrowRightIcon, ExternalLinkIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
+import { fetchMCPInventorySnapshot } from "@/lib/mcp-inventory-ipc";
 import { dispatchPrefillChatInput } from "@/lib/prefill-chat-input-event";
 import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay, CapabilityIndexItem } from "@/lib/plugin-types";
+import type { MCPEffectiveServerDTO } from "@/lib/mcp-inventory-types";
 import type { WorkflowTemplate, WorkflowTemplateSummary } from "@duya/plugin-core";
 import { instantiateWorkflow, extractVariables, WorkflowInstantiateError, getTemplatePrompt } from "@duya/plugin-core";
 import { tierRequiresConfirmation, tierRequiresExplicitConfirmation, bumpPermissionTier } from "@duya/plugin-core";
@@ -15,8 +17,6 @@ import { RuntimeStatusBadge } from "./RuntimeStatusBadge";
 import {
   buildIncludes,
   getUsageExamples,
-  getKindIconClass,
-  getKindFirstLetter,
   getWorkflows,
   getPermissionTierDisplay,
 } from "./capability-adapter";
@@ -72,7 +72,7 @@ function buildCapabilities(
         id: `mcp-${m.name}`,
         name: m.name,
         type: "mcp",
-        description: m.command,
+        description: m.command ?? m.name,
         required: true,
         enabled: true,
       });
@@ -182,6 +182,63 @@ export function PluginDetailView({
   const [launchLoading, setLaunchLoading] = useState(false);
 
   const pluginApi = useMemo(() => getPluginAPI(), []);
+
+  // MCP tool discovery for plugin-declared servers.
+  const [serverTools, setServerTools] = useState<Array<{
+    server: MCPEffectiveServerDTO;
+    tools: Array<{ name: string; description?: string }> | null;
+    loading: boolean;
+    error?: string;
+  }>>([]);
+
+  useEffect(() => {
+    if (!pluginApi) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const snapshot = await fetchMCPInventorySnapshot();
+        if (cancelled || !snapshot) return;
+
+        const pluginServers = snapshot.effectiveServers.filter(
+          (server) => server.sourceId === installed.id,
+        );
+
+        setServerTools(
+          pluginServers.map((server) => ({
+            server,
+            tools: null,
+            loading: true,
+          })),
+        );
+
+        await Promise.all(
+          pluginServers.map(async (server) => {
+            const res = await pluginApi.mcpTools(server.id);
+            if (cancelled) return;
+            setServerTools((prev) =>
+              prev.map((entry) =>
+                entry.server.id === server.id
+                  ? {
+                      ...entry,
+                      tools: res.success && res.data ? res.data : null,
+                      loading: false,
+                      error: res.success ? undefined : (res.error ?? "Unable to load tools"),
+                    }
+                  : entry,
+              ),
+            );
+          }),
+        );
+      } catch {
+        // Silent — the Connectors section shows loading/error states.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginApi, installed.id]);
   const workflows = useMemo(() => getWorkflows(indexItem), [indexItem]);
   const launchVariables = useMemo(
     () => (fullTemplate ? extractVariables(fullTemplate) : []),
@@ -278,438 +335,248 @@ export function PluginDetailView({
     () => getUsageExamples(catalog as PluginCatalogEntry | PluginRegistryEntry | null),
     [catalog]
   );
-  const capabilityCount = capabilities.length || includes.length;
+
+  const skills = useMemo(() => {
+    const fromCaps = capabilities.filter((c) => c.type === "skill");
+    if (fromCaps.length > 0) return fromCaps;
+    return includes.filter((i) => i.kind === "skill");
+  }, [capabilities, includes]);
+
+  const connectors = useMemo(() => {
+    const fromCaps = capabilities.filter((c) => c.type === "mcp" || c.type === "connector");
+    if (fromCaps.length > 0) return fromCaps;
+    return includes.filter((i) => i.kind === "mcp");
+  }, [capabilities, includes]);
+
   const grantedPermissionCount = permissions.filter((perm) => perm.enabled).length;
   const permissionCount = permissions.length;
   const authorName = catalog?.developer || entry.author?.name || "Unknown";
-  const lastUpdated = catalog?.updatedAt || installed.updatedAt || installed.installedAt;
-  const capabilitySummary = useMemo(() => {
-    if (capabilities.length > 0) {
-      return capabilities.slice(0, 3).map((cap) => cap.name).join(", ");
+
+  const externalUrl = catalog?.website || catalog?.documentationUrl || entry.author?.url;
+  const externalDomain = useMemo(() => {
+    if (!externalUrl) return null;
+    try {
+      return new URL(externalUrl).hostname.replace(/^www\./, "");
+    } catch {
+      return externalUrl;
     }
-    return includes.slice(0, 3).map((item) => item.name).join(", ");
-  }, [capabilities, includes]);
+  }, [externalUrl]);
 
   const hasIssues =
     installed.runtimeStatus === "needs_setup" ||
     installed.runtimeStatus === "failed_to_load" ||
     (installed.permissionDenied?.length ?? 0) > 0;
 
-  const monogram = entry.name.trim().charAt(0).toUpperCase();
-
   return (
-    <div className="space-y-6">
-      {/* Back button + breadcrumb */}
-      <div className="flex items-center gap-3">
+    <div className="space-y-8">
+      {/* Back button */}
+      <div className="flex items-center gap-2">
         <Button variant="ghost" size="sm" onClick={onBack}>
           <ArrowLeftIcon size={16} />
-          Plugins
+          Back
         </Button>
-        <span className="text-muted-foreground text-sm">/</span>
-        <span className="text-sm text-foreground font-medium">{entry.name}</span>
       </div>
 
       {/* Header */}
-      <div className="flex flex-col gap-5 rounded-2xl border border-border/50 bg-surface/50 p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-accent/10 text-lg font-semibold text-accent">
-              {entry.icon ? (
-                <img src={entry.icon} alt={entry.name} className="h-9 w-9 rounded-lg" />
-              ) : (
-                monogram
-              )}
-            </div>
-            <div className="space-y-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-2xl font-semibold text-foreground">{entry.name}</h2>
-                <span className="text-xs text-muted-foreground">v{entry.version}</span>
-                <RuntimeStatusBadge status={installed.runtimeStatus} />
-              </div>
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                {catalog?.shortDescription || entry.description}
-              </p>
-              <div className="flex items-center gap-3 flex-wrap text-sm">
-                <span className={cn(
-                  "font-medium",
-                  installed.enabled ? "text-emerald-600" : "text-muted-foreground"
-                )}>
-                  {installed.enabled ? "Enabled" : "Disabled"}
-                </span>
-                <span className="text-muted-foreground">by {authorName}</span>
-                <span className="text-muted-foreground capitalize">{entry.source}</span>
-                {hasIssues && (
-                  <span className="inline-flex items-center gap-1 text-amber-500">
-                    <WarningIcon size={14} />
-                    Needs attention
-                  </span>
-                )}
-              </div>
-            </div>
+      <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-3xl font-semibold text-foreground">{entry.name}</h1>
+            <RuntimeStatusBadge status={installed.runtimeStatus} />
           </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant={installed.enabled ? "secondary" : "primary"}
-              disabled={busy}
-              onClick={installed.enabled ? onDisable : onEnable}
+          <p className="text-sm text-muted-foreground">by {authorName}</p>
+          {externalUrl && externalDomain && (
+            <a
+              href={externalUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-sm text-foreground hover:underline"
             >
-              {installed.enabled ? "Disable" : "Enable"}
-            </Button>
-            <Button
-              variant="danger"
-              disabled={busy}
-              onClick={onRemove}
-            >
-              Remove
-            </Button>
-          </div>
+              View on {externalDomain}
+              <ExternalLinkIcon size={14} />
+            </a>
+          )}
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-xl border border-border/40 bg-background/40 px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              Agent Ready
-            </p>
-            <p className="mt-2 text-lg font-semibold text-foreground">
-              {installed.enabled && !hasIssues ? "Ready to use" : hasIssues ? "Needs review" : "Disabled"}
-            </p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {installed.enabled
-                ? "The plugin can be exposed to chat once setup and permissions are healthy."
-                : "Enable the plugin to expose its capabilities to the agent."}
-            </p>
-          </div>
-          <div className="rounded-xl border border-border/40 bg-background/40 px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              Includes
-            </p>
-            <p className="mt-2 text-lg font-semibold text-foreground">
-              {capabilityCount} capability{capabilityCount === 1 ? "" : "ies"}
-            </p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {capabilitySummary || "No declared capabilities yet."}
-            </p>
-          </div>
-          <div className="rounded-xl border border-border/40 bg-background/40 px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              Permissions
-            </p>
-            <p className="mt-2 text-lg font-semibold text-foreground">
-              {grantedPermissionCount}/{permissionCount}
-            </p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              {permissionCount > 0
-                ? "Granted access scopes required by this plugin."
-                : "This plugin does not request extra access."}
-            </p>
-          </div>
-          <div className="rounded-xl border border-border/40 bg-background/40 px-4 py-3">
-            <p className="text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              Last Updated
-            </p>
-            <p className="mt-2 text-lg font-semibold text-foreground">{lastUpdated}</p>
-            <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Source: <span className="capitalize">{entry.source}</span>
-            </p>
-          </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {externalUrl && (
+            <IconButton
+              variant="default"
+              size="sm"
+              aria-label="Open external link"
+              onClick={() => window.open(externalUrl, "_blank", "noopener,noreferrer")}
+            >
+              <ExternalLinkIcon size={16} />
+            </IconButton>
+          )}
+          <Button variant="secondary" size="sm" disabled={busy} onClick={onRemove}>
+            Uninstall
+          </Button>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={busy}
+            onClick={installed.enabled ? onDisable : onEnable}
+          >
+            {installed.enabled ? "Disable" : "Enable"}
+          </Button>
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="space-y-6">
-          <section className="space-y-3">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Overview</h3>
-              <p className="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">
-                {catalog?.longDescription || entry.description}
-              </p>
-            </div>
-            {capabilityCount > 0 && (
+      {/* Description */}
+      <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+        {catalog?.longDescription || entry.description}
+      </p>
+
+      {/* Try asking... */}
+      {usageExamples.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-base font-semibold text-foreground">Try asking...</h3>
+          <div className="space-y-2">
+            {usageExamples.map((example, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => dispatchPrefillChatInput(example.prompt)}
+                className="flex w-full items-center justify-between gap-3 rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
+              >
+                <span className="text-sm text-foreground">{example.prompt}</span>
+                <ArrowRightIcon size={16} className="shrink-0 text-muted-foreground" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Plan 311 — Workflow Templates section */}
+      {workflows.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Workflows</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Pre-built task templates. Launch one to pre-fill the chat input — you can review
+              and edit before sending.
+            </p>
+          </div>
+          <div className="space-y-2">
+            {workflows.map((wf) => (
+              <WorkflowLaunchCard
+                key={wf.id}
+                workflow={wf}
+                isLaunching={launchingWorkflowId === wf.id}
+                fullTemplate={launchingWorkflowId === wf.id ? fullTemplate : null}
+                launchVariables={launchingWorkflowId === wf.id ? launchVariables : []}
+                variableValues={launchingWorkflowId === wf.id ? variableValues : {}}
+                onVariableChange={(name, value) =>
+                  setVariableValues((prev) => ({ ...prev, [name]: value }))
+                }
+                dangerConfirmed={dangerConfirmed}
+                onDangerConfirmChange={setDangerConfirmed}
+                launchError={launchingWorkflowId === wf.id ? launchError : null}
+                launchLoading={launchingWorkflowId === wf.id ? launchLoading : false}
+                onLaunch={() => void handleLaunchClick(wf.id)}
+                onConfirm={handleLaunchConfirm}
+                onCancel={handleLaunchCancel}
+                canConfirm={
+                  !!onLaunchWorkflow &&
+                  (launchingWorkflowId !== wf.id ||
+                    !tierRequiresExplicitConfirmation(
+                      bumpPermissionTier(fullTemplate?.permissionTier ?? wf.permissionTier),
+                    ) ||
+                    dangerConfirmed)
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Skills */}
+      {skills.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-base font-semibold text-foreground">
+            Skills
+            <span className="ml-2 inline-flex items-center rounded-full bg-[var(--chip)] px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {skills.length}
+            </span>
+          </h3>
+          <div className="flex flex-wrap gap-2">
+            {skills.map((skill) => (
+              <span
+                key={skill.id}
+                className="rounded-full border border-border/50 bg-[var(--chip)] px-3 py-1 text-sm text-foreground"
+              >
+                {skill.name}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Connectors */}
+      {(connectors.length > 0 || serverTools.length > 0) && (
+        <section className="space-y-3">
+          <h3 className="text-base font-semibold text-foreground">
+            Connectors
+            <span className="ml-2 inline-flex items-center rounded-full bg-[var(--chip)] px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              {serverTools.length || connectors.length}
+            </span>
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            External services and tools connected via the Model Context Protocol (MCP).
+          </p>
+          <div className="space-y-4">
+            {serverTools.length > 0 ? (
+              serverTools.map(({ server, tools, loading, error }) => (
+                <div key={server.id} className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-foreground">{server.name}</span>
+                    {loading && (
+                      <span className="text-xs text-muted-foreground">Loading tools…</span>
+                    )}
+                    {error && !loading && (
+                      <span className="text-xs text-error">Unable to load tools</span>
+                    )}
+                  </div>
+                  {tools && tools.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {tools.map((tool) => (
+                        <span
+                          key={tool.name}
+                          title={tool.description ?? undefined}
+                          className="rounded-full border border-border/50 bg-[var(--chip)] px-3 py-1 text-sm text-foreground"
+                        >
+                          {tool.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))
+            ) : (
               <div className="flex flex-wrap gap-2">
-                {(capabilities.length > 0 ? capabilities : includes).map((item) => {
-                  const label =
-                    "type" in item
-                      ? getCapabilityKindLabel(item.type)
-                      : item.kindLabel;
-                  return (
-                    <span
-                      key={item.id}
-                      className="rounded-full border border-border/50 bg-background/60 px-3 py-1 text-xs font-medium text-foreground"
-                    >
-                      {label}
-                    </span>
-                  );
-                })}
+                {connectors.map((conn) => (
+                  <span
+                    key={conn.id}
+                    className="rounded-full border border-border/50 bg-[var(--chip)] px-3 py-1 text-sm text-foreground"
+                  >
+                    {conn.name}
+                  </span>
+                ))}
               </div>
             )}
-          </section>
-
-          {usageExamples.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">Try In Chat</h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  These are the clearest prompts to verify the plugin is working.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {usageExamples.slice(0, 3).map((example, idx) => (
-                  <div
-                    key={idx}
-                    className="rounded-xl border border-border/40 bg-surface/35 px-4 py-3"
-                  >
-                    <p className="text-sm italic leading-6 text-foreground/80">
-                      &ldquo;{example.prompt}&rdquo;
-                    </p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Plan 311 — Workflow Templates section */}
-          {workflows.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">Workflows</h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Pre-built task templates. Launch one to pre-fill the chat input — you can review
-                  and edit before sending.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {workflows.map((wf) => (
-                  <WorkflowLaunchCard
-                    key={wf.id}
-                    workflow={wf}
-                    isLaunching={launchingWorkflowId === wf.id}
-                    fullTemplate={launchingWorkflowId === wf.id ? fullTemplate : null}
-                    launchVariables={launchingWorkflowId === wf.id ? launchVariables : []}
-                    variableValues={launchingWorkflowId === wf.id ? variableValues : {}}
-                    onVariableChange={(name, value) =>
-                      setVariableValues((prev) => ({ ...prev, [name]: value }))
-                    }
-                    dangerConfirmed={dangerConfirmed}
-                    onDangerConfirmChange={setDangerConfirmed}
-                    launchError={launchingWorkflowId === wf.id ? launchError : null}
-                    launchLoading={launchingWorkflowId === wf.id ? launchLoading : false}
-                    onLaunch={() => void handleLaunchClick(wf.id)}
-                    onConfirm={handleLaunchConfirm}
-                    onCancel={handleLaunchCancel}
-                    canConfirm={
-                      !!onLaunchWorkflow &&
-                      (launchingWorkflowId !== wf.id ||
-                        !tierRequiresExplicitConfirmation(
-                          bumpPermissionTier(fullTemplate?.permissionTier ?? wf.permissionTier),
-                        ) ||
-                        dangerConfirmed)
-                    }
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {capabilities.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">What This Adds</h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  A concise view of the capabilities this plugin registers.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {capabilities.map((cap) => {
-                  const normalizedKind = normalizeCapabilityKind(cap.type);
-                  return (
-                    <div
-                      key={cap.id}
-                      className="flex items-start gap-3 rounded-xl border border-border/40 bg-surface/35 px-4 py-3"
-                    >
-                      <span className={cn(
-                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
-                        getKindIconClass(normalizedKind)
-                      )}>
-                        {getKindFirstLetter(normalizedKind)}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-foreground">{cap.name}</span>
-                          <span className={cn(
-                            "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase",
-                            getKindIconClass(normalizedKind)
-                          )}>
-                            {getCapabilityKindLabel(cap.type)}
-                          </span>
-                          {cap.required && (
-                            <span className="text-[10px] text-muted-foreground">Required</span>
-                          )}
-                        </div>
-                        <p className="mt-1 text-sm leading-6 text-muted-foreground">{cap.description}</p>
-                      </div>
-                      <span className={cn(
-                        "shrink-0 text-xs font-medium",
-                        cap.enabled ? "text-emerald-600" : "text-muted-foreground"
-                      )}>
-                        {cap.enabled ? "Active" : "Inactive"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {capabilities.length === 0 && includes.length > 0 && (
-            <section className="space-y-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">What This Adds</h3>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  A concise view of the capability groups exposed by this plugin.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {includes.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex items-start gap-3 rounded-xl border border-border/40 bg-surface/35 px-4 py-3"
-                  >
-                    <div
-                      className={cn(
-                        "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
-                        getKindIconClass(item.kind)
-                      )}
-                    >
-                      {getKindFirstLetter(item.kind)}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-foreground">
-                          {item.name}
-                        </span>
-                        <span className={cn(
-                          "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase",
-                          getKindIconClass(item.kind)
-                        )}>
-                          {item.kindLabel}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                        {item.description}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-        </div>
-
-        <aside className="space-y-4 xl:sticky xl:top-4 xl:self-start">
-          <div className="rounded-2xl border border-border/50 bg-surface/40 p-4">
-            <h4 className="text-sm font-semibold text-foreground">Runtime</h4>
-            <div className="mt-3 space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Status</span>
-                <RuntimeStatusBadge status={installed.runtimeStatus} />
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Enabled</span>
-                <span className={cn(
-                  "text-sm font-medium",
-                  installed.enabled ? "text-emerald-600" : "text-muted-foreground"
-                )}>
-                  {installed.enabled ? "Yes" : "No"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm text-muted-foreground">Setup</span>
-                <span className="text-sm text-foreground">
-                  {installed.setupRequired ? "Required" : "Complete"}
-                </span>
-              </div>
-              {(installed.permissionDenied?.length ?? 0) > 0 && (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-600 dark:text-amber-400">
-                  {installed.permissionDenied?.length} permission request{installed.permissionDenied?.length === 1 ? "" : "s"} denied.
-                </div>
-              )}
-            </div>
           </div>
-
-          {permissions.length > 0 && (
-            <div className="rounded-2xl border border-border/50 bg-surface/40 p-4">
-              <h4 className="text-sm font-semibold text-foreground">Permissions</h4>
-              <div className="mt-3 space-y-2">
-                {permissions.map((perm) => (
-                  <div
-                    key={perm.id}
-                    className="rounded-xl border border-border/35 bg-background/35 px-3 py-3"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-medium text-foreground">{perm.title}</span>
-                          <span className={cn(
-                            "text-[10px] font-medium uppercase",
-                            perm.riskLevel === "high" ? "text-red-500" :
-                            perm.riskLevel === "medium" ? "text-amber-500" :
-                            "text-muted-foreground"
-                          )}>
-                            {perm.riskLevel}
-                          </span>
-                        </div>
-                        <p className="mt-1 text-xs leading-5 text-muted-foreground">{perm.description}</p>
-                      </div>
-                      <span className={cn(
-                        "shrink-0 text-xs font-medium",
-                        perm.enabled ? "text-emerald-600" : "text-muted-foreground"
-                      )}>
-                        {perm.enabled ? "Granted" : "Not granted"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-2xl border border-border/50 bg-surface/40 p-4">
-            <h4 className="text-sm font-semibold text-foreground">Information</h4>
-            <dl className="mt-3 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <dt className="text-sm text-muted-foreground">Developer</dt>
-                <dd className="text-sm text-foreground">{authorName}</dd>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <dt className="text-sm text-muted-foreground">Version</dt>
-                <dd className="text-sm text-foreground">v{entry.version}</dd>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <dt className="text-sm text-muted-foreground">Source</dt>
-                <dd className="text-sm text-foreground capitalize">{entry.source}</dd>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <dt className="text-sm text-muted-foreground">Category</dt>
-                <dd className="text-sm text-foreground capitalize">{catalog?.category || "N/A"}</dd>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <dt className="text-sm text-muted-foreground">Plugin ID</dt>
-                <dd className="max-w-[180px] break-all text-right text-xs font-mono text-foreground">{entry.id}</dd>
-              </div>
-            </dl>
-          </div>
-        </aside>
-      </div>
+        </section>
+      )}
 
       {/* Technical details (collapsible) */}
       <div>
         <Button
           variant="ghost"
-          className="flex w-full items-center justify-between rounded-lg border border-border/40 bg-surface/40 px-4 py-3 text-left transition-colors hover:bg-surface/60"
+          className="flex w-full items-center justify-between rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
           onClick={() => setTechExpanded(!techExpanded)}
         >
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Technical Details
           </span>
           {techExpanded ? (
@@ -720,77 +587,137 @@ export function PluginDetailView({
         </Button>
 
         {techExpanded && (
-          <div className="mt-2 space-y-3 rounded-lg border border-border/40 bg-surface/40 px-4 py-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Status</span>
-              <span className="text-sm font-medium text-foreground">
-                {installed.enabled ? "Enabled" : "Disabled"}
-              </span>
-              <RuntimeStatusBadge status={installed.runtimeStatus} />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Source</span>
-              <span className="text-sm text-foreground capitalize">{entry.source}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Developer</span>
-              <span className="text-sm text-foreground">{authorName}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-24 shrink-0">Version</span>
-              <span className="text-sm text-foreground">v{entry.version}</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-xs text-muted-foreground w-24 shrink-0 pt-0.5">Permissions</span>
-              <div className="flex-1">
-                {(installed.permissionsGranted?.length ?? 0) === 0 && (installed.permissionDenied?.length ?? 0) === 0 ? (
-                  <span className="text-sm text-emerald-600">None required</span>
-                ) : (
-                  <div className="space-y-1">
-                    {(installed.permissionDenied?.length ?? 0) > 0 && (
-                      <span className="text-sm text-red-500">
-                        {installed.permissionDenied?.length} denied
-                      </span>
-                    )}
-                    {(installed.permissionsGranted?.length ?? 0) > 0 && (
-                      <div className="text-xs text-muted-foreground">
-                        {installed.permissionsGranted?.join(", ")}
-                      </div>
-                    )}
+          <div className="mt-2 space-y-6 rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-4">
+            {/* Runtime */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-foreground">Runtime</h4>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Status</span>
+                  <RuntimeStatusBadge status={installed.runtimeStatus} />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Enabled</span>
+                  <span className={cn(
+                    "text-sm font-medium",
+                    installed.enabled ? "text-emerald-600" : "text-muted-foreground"
+                  )}>
+                    {installed.enabled ? "Yes" : "No"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">Setup</span>
+                  <span className="text-sm text-foreground">
+                    {installed.setupRequired ? "Required" : "Complete"}
+                  </span>
+                </div>
+                {hasIssues && (
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-600 dark:text-amber-400">
+                    <span className="inline-flex items-center gap-1">
+                      <WarningIcon size={14} />
+                      This plugin needs attention before it can be used.
+                    </span>
                   </div>
                 )}
               </div>
             </div>
-            {installed.installPath && (
-              <div className="flex items-start gap-2">
-                <span className="text-xs text-muted-foreground w-24 shrink-0 pt-0.5">Install path</span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <code className="block truncate rounded bg-muted/30 px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
-                      {installed.installPath}
-                    </code>
-                    <IconButton
-                      variant="ghost"
-                      size="sm"
-                      aria-label="Copy path"
-                      className="shrink-0"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(installed.installPath);
-                          setPathCopied(true);
-                          setTimeout(() => setPathCopied(false), 2000);
-                        } catch {
-                          void 0;
-                        }
-                      }}
+
+            {/* Permissions */}
+            {permissions.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-foreground">
+                  Permissions ({grantedPermissionCount}/{permissionCount})
+                </h4>
+                <div className="space-y-2">
+                  {permissions.map((perm) => (
+                    <div
+                      key={perm.id}
+                      className="rounded-xl border border-border/35 bg-background/35 px-3 py-3"
                     >
-                      {pathCopied ? (
-                        <CheckIcon size={14} className="text-emerald-500" />
-                      ) : (
-                        <CopyIcon size={14} />
-                      )}
-                    </IconButton>
-                  </div>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-medium text-foreground">{perm.title}</span>
+                            <span className={cn(
+                              "text-[10px] font-medium uppercase",
+                              perm.riskLevel === "high" ? "text-red-500" :
+                              perm.riskLevel === "medium" ? "text-amber-500" :
+                              "text-muted-foreground"
+                            )}>
+                              {perm.riskLevel}
+                            </span>
+                          </div>
+                          <p className="mt-1 text-xs leading-5 text-muted-foreground">{perm.description}</p>
+                        </div>
+                        <span className={cn(
+                          "shrink-0 text-xs font-medium",
+                          perm.enabled ? "text-emerald-600" : "text-muted-foreground"
+                        )}>
+                          {perm.enabled ? "Granted" : "Not granted"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Information */}
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-foreground">Information</h4>
+              <dl className="space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <dt className="text-sm text-muted-foreground">Developer</dt>
+                  <dd className="text-sm text-foreground">{authorName}</dd>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <dt className="text-sm text-muted-foreground">Version</dt>
+                  <dd className="text-sm text-foreground">v{entry.version}</dd>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <dt className="text-sm text-muted-foreground">Source</dt>
+                  <dd className="text-sm text-foreground capitalize">{entry.source}</dd>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <dt className="text-sm text-muted-foreground">Category</dt>
+                  <dd className="text-sm text-foreground capitalize">{catalog?.category || "N/A"}</dd>
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <dt className="text-sm text-muted-foreground">Plugin ID</dt>
+                  <dd className="max-w-[180px] break-all text-right text-xs font-mono text-foreground">{entry.id}</dd>
+                </div>
+              </dl>
+            </div>
+
+            {/* Install path */}
+            {installed.installPath && (
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-foreground">Install path</h4>
+                <div className="flex items-center gap-2">
+                  <code className="block truncate rounded bg-[var(--chip)] px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
+                    {installed.installPath}
+                  </code>
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Copy path"
+                    className="shrink-0"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(installed.installPath);
+                        setPathCopied(true);
+                        setTimeout(() => setPathCopied(false), 2000);
+                      } catch {
+                        void 0;
+                      }
+                    }}
+                  >
+                    {pathCopied ? (
+                      <CheckIcon size={14} className="text-emerald-500" />
+                    ) : (
+                      <CopyIcon size={14} />
+                    )}
+                  </IconButton>
                 </div>
               </div>
             )}
