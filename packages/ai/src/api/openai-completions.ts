@@ -23,6 +23,27 @@ import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
+import { withIdleTimeout } from '../utils/idle-timeout.js';
+
+// =============================================================================
+// Tool call ID synthesis
+// =============================================================================
+
+const VALID_ID_REGEX = /[^a-zA-Z0-9_-]/g;
+
+/**
+ * Synthesize a valid runtime tool call ID when the provider returns an
+ * empty or invalid one (MiniMax-M3 on OpenAI-compatible endpoints does
+ * this in multi-turn conversations). An empty id would be written to the
+ * DB as a NULL tool_call_id, breaking tool_use/tool_result pairing after
+ * a hot restart.
+ */
+export function synthesizeRuntimeToolId(rawId: string | undefined | null): string {
+  const cleaned = (rawId || '').replace(VALID_ID_REGEX, '_');
+  if (cleaned) return cleaned;
+  const rand = globalThis.crypto.randomUUID().replace(/-/g, '_');
+  return `toolu_synth_${rand}`;
+}
 
 // =============================================================================
 // Types
@@ -58,7 +79,8 @@ type ToolUseWithRaw = ToolUseContent & { _rawInput?: string };
  * user-requested effort level.
  *
  * - Non-reasoning models → undefined.
- * - effort 'off' / undefined → undefined.
+ * - effort 'off' → undefined.
+ * - effort undefined (auto) → treated as 'medium' for reasoning models.
  * - model.compat?.openAIThinkingFormat selects the wire shape:
  *   - openai-standard:   reasoning_effort parameter (OpenAI o1/o3).
  *   - reasoning-content: no param; reasoning arrives in reasoning_content.
@@ -71,7 +93,9 @@ export function resolveOpenAIThinking(
   effort?: string,
 ): Record<string, unknown> | undefined {
   if (!model.reasoning) return undefined;
-  if (!effort || effort === 'off') return undefined;
+  if (effort === 'off') return undefined;
+
+  const effectiveEffort = effort ?? 'medium';
 
   const format = model.compat?.openAIThinkingFormat;
   if (!format) return undefined;
@@ -86,7 +110,7 @@ export function resolveOpenAIThinking(
     max: 'high',
   };
 
-  const mappedEffort = EFFORT_MAP[effort];
+  const mappedEffort = EFFORT_MAP[effectiveEffort];
   if (!mappedEffort) return undefined;
 
   switch (format) {
@@ -98,10 +122,10 @@ export function resolveOpenAIThinking(
       return undefined;
     case 'qwen-style':
       // Qwen: enable_thinking parameter
-      return { enable_thinking: true, thinking_budget: getBudgetForEffort(effort) };
+      return { enable_thinking: true, thinking_budget: getBudgetForEffort(effectiveEffort) };
     case 'glm-style':
       // GLM: thinking parameter
-      return { thinking: { type: 'enabled', budget_tokens: getBudgetForEffort(effort) } };
+      return { thinking: { type: 'enabled', budget_tokens: getBudgetForEffort(effectiveEffort) } };
     case 'think-tag-fallback':
       // No special parameter, thinking comes in <think> tags in content
       return undefined;
@@ -212,9 +236,33 @@ function toOpenAIMessages(
         result.push(assistantMsg);
       }
     } else if (msg.role === 'tool') {
-      const content = typeof msg.content === 'string'
-        ? msg.content
-        : JSON.stringify(msg.content);
+      // OpenAI Chat Completions tool messages only accept a string `content`.
+      // When a tool returned inline images (MessageContent[] array, e.g.
+      // ReadTool on a pure image file), extract the text blocks and append a
+      // fallback hint for image blocks so the model knows an image was present
+      // but cannot be delivered through this API surface. Vision-capable
+      // OpenAI models can still see user-message image_url blocks, but tool
+      // message content has no image carrier in the spec.
+      let content: string;
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        const parts: string[] = [];
+        let hasImage = false;
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            parts.push(block.text);
+          } else if (block.type === 'image') {
+            hasImage = true;
+          }
+        }
+        if (hasImage) {
+          parts.push('(image omitted: OpenAI tool messages cannot carry images. Use the vision tool to analyze the image.)');
+        }
+        content = parts.join('\n').trim();
+      } else {
+        content = JSON.stringify(msg.content);
+      }
       result.push({
         role: 'tool',
         tool_call_id: msg.tool_call_id || '',
@@ -288,10 +336,20 @@ function appendToolCall(
   const existingContentIdx = indexMap.get(toolCallIdx);
 
   if (existingContentIdx === undefined) {
-    // New tool call — push a new tool_use block.
+    // New tool call — push a new tool_use block. Synthesize a valid id
+    // when the provider sends an empty/invalid one; subsequent deltas for
+    // the same tool_call match via indexMap and never re-assign the id.
+    const rawId = delta.id;
+    const synthId = synthesizeRuntimeToolId(rawId);
+    if (synthId !== rawId) {
+      console.warn('[duya-ai] Synthesized empty tool_call id', {
+        name: delta.function?.name,
+        synthId,
+      });
+    }
     const newBlock: ToolUseContent = {
       type: 'tool_use',
-      id: delta.id ?? '',
+      id: synthId,
       name: delta.function?.name ?? '',
       input: {},
     };
@@ -479,8 +537,10 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       // chunks; captured across the whole stream and folded into usage below.
       let upstreamProvider: string | undefined;
 
-      // 9. Drain chunks.
-      for await (const chunk of stream) {
+      // 9. Drain chunks. withIdleTimeout guards against stalled streams
+      //    from OpenAI-compatible endpoints hanging the agent forever;
+      //    the TimeoutError propagates to DuyaAgent's retry logic.
+      for await (const chunk of withIdleTimeout(stream)) {
         // 9.0. Capture upstream provider metadata (OpenRouter et al.).
         const chunkProvider = (chunk as unknown as OpenRouterProviderMeta).provider?.name;
         if (chunkProvider) {
@@ -591,6 +651,12 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         }
         yield { type: 'result', data: assistantMsg.usage };
       }
+
+      // 13. Yield `done` event so DuyaAgent's turn-finalization logic
+      // (which depends on the `done` SSE event) is triggered. Without
+      // this, the agent loop never pushes the assistant message, never
+      // executes tools, and hangs indefinitely.
+      yield { type: 'done', reason: assistantMsg.stopReason || 'completed' };
 
       return assistantMsg;
     },

@@ -66,8 +66,10 @@ describe('MiniMax M3 dual-protocol presets', () => {
       expect(resolveAnthropicThinking(minimaxAnthropic, 'off')).toBeUndefined();
     });
 
-    it('returns undefined for undefined effort', () => {
-      expect(resolveAnthropicThinking(minimaxAnthropic, undefined)).toBeUndefined();
+    it('returns { type: "adaptive" } for undefined effort (auto defaults to adaptive)', () => {
+      expect(resolveAnthropicThinking(minimaxAnthropic, undefined)).toEqual({
+        type: 'adaptive',
+      });
     });
 
     for (const effort of efforts) {
