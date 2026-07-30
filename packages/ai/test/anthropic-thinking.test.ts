@@ -3,10 +3,12 @@
  *
  * Verifies the Anthropic `thinking` parameter resolution from model
  * capabilities and user-requested effort level. Covers four branches:
- *  1. undefined / 'off' effort → undefined (provider default).
- *  2. forceAdaptiveThinking models → { type: 'adaptive' } (MiniMax M3).
- *  3. Standard reasoning models → { type: 'enabled', budget_tokens } with
- *     the budget clamped to maxTokens - 1.
+ *  1. 'off' effort → undefined (thinking disabled).
+ *  2. forceAdaptiveThinking models → { type: 'adaptive' } (MiniMax M3),
+ *     including when effort is undefined (auto defaults to adaptive/medium).
+ *  3. Standard reasoning models → { type: 'enabled', budget_tokens } on auto
+ *     (defaults to 'medium') and explicit levels, with the budget clamped to
+ *     maxTokens - 1.
  *  4. Non-reasoning models → undefined regardless of effort.
  */
 import { describe, it, expect } from 'vitest';
@@ -19,11 +21,7 @@ describe('resolveAnthropicThinking', () => {
   const claude35 = anthropicModels[1]; // reasoning: false
   const minimaxM3 = minimaxAnthropicModels[0]; // forceAdaptiveThinking: true
 
-  describe('effort undefined or "off" → undefined', () => {
-    it('returns undefined when effort is undefined', () => {
-      expect(resolveAnthropicThinking(claudeSonnet4, undefined)).toBeUndefined();
-    });
-
+  describe('effort "off" → undefined', () => {
     it('returns undefined when effort is "off"', () => {
       expect(resolveAnthropicThinking(claudeSonnet4, 'off')).toBeUndefined();
     });
@@ -31,9 +29,11 @@ describe('resolveAnthropicThinking', () => {
     it('returns undefined for "off" even on forceAdaptiveThinking models', () => {
       expect(resolveAnthropicThinking(minimaxM3, 'off')).toBeUndefined();
     });
+  });
 
-    it('returns undefined for undefined effort on forceAdaptiveThinking models', () => {
-      expect(resolveAnthropicThinking(minimaxM3, undefined)).toBeUndefined();
+  describe('forceAdaptiveThinking on auto → { type: "adaptive" }', () => {
+    it('returns { type: "adaptive" } for undefined effort on forceAdaptiveThinking models', () => {
+      expect(resolveAnthropicThinking(minimaxM3, undefined)).toEqual({ type: 'adaptive' });
     });
   });
 
@@ -89,6 +89,13 @@ describe('resolveAnthropicThinking', () => {
       expect(resolveAnthropicThinking(claudeSonnet4, 'low')).toEqual({
         type: 'enabled',
         budget_tokens: 1024,
+      });
+    });
+
+    it('defaults auto (undefined) to "medium" budget_tokens', () => {
+      expect(resolveAnthropicThinking(claudeSonnet4, undefined)).toEqual({
+        type: 'enabled',
+        budget_tokens: 4096,
       });
     });
 

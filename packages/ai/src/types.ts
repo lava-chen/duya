@@ -112,6 +112,21 @@ export interface ToolResult {
    * this promise and yields a synthetic second tool_result.
    */
   pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
+  /**
+   * Inline image attachments for multimodal main models. When present,
+   * StreamingToolExecutor builds the tool_result content as a
+   * `MessageContent[]` array ([text, ...ImageContent]) instead of a plain
+   * string, so vision-capable models can see the image directly.
+   *
+   * Downstream consumers handle non-vision models:
+   *   - transformMessages downgrades image blocks to placeholder text when
+   *     `model.input` lacks 'image'.
+   *   - OpenAI tool messages cannot carry images at all; the OpenAI adapter
+   *     strips them with a fallback hint.
+   *
+   * Mirrors the FileAttachment.imageChunks shape ({ base64, mediaType }).
+   */
+  images?: Array<{ data: string; mediaType: string }>;
 }
 
 // ─── Token usage ───

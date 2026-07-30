@@ -19,44 +19,44 @@ describe('emitSSE', () => {
     expect(emitSSE(event)).toBeNull();
   });
 
-  it('maps text_delta to SSEEvent.text_delta', () => {
+  it('maps text_delta to SSEEvent.text (incremental content)', () => {
     const event: AssistantMessageEvent = {
       type: 'text_delta',
       contentIndex: 0,
       delta: 'hello',
       partial: baseMsg,
     };
-    expect(emitSSE(event)).toEqual({ type: 'text_delta', data: 'hello' });
+    expect(emitSSE(event)).toEqual({ type: 'text', data: 'hello' });
   });
 
-  it('maps text_end to SSEEvent.text', () => {
+  it('suppresses text_end (content already streamed via text_delta)', () => {
     const event: AssistantMessageEvent = {
       type: 'text_end',
       contentIndex: 0,
       content: 'hello world',
       partial: baseMsg,
     };
-    expect(emitSSE(event)).toEqual({ type: 'text', data: 'hello world' });
+    expect(emitSSE(event)).toBeNull();
   });
 
-  it('maps thinking_delta to SSEEvent.thinking_delta', () => {
+  it('maps thinking_delta to SSEEvent.thinking (incremental content)', () => {
     const event: AssistantMessageEvent = {
       type: 'thinking_delta',
       contentIndex: 0,
       delta: 'thinking...',
       partial: baseMsg,
     };
-    expect(emitSSE(event)).toEqual({ type: 'thinking_delta', data: 'thinking...' });
+    expect(emitSSE(event)).toEqual({ type: 'thinking', data: 'thinking...' });
   });
 
-  it('maps thinking_end to SSEEvent.thinking', () => {
+  it('suppresses thinking_end (content already streamed via thinking_delta)', () => {
     const event: AssistantMessageEvent = {
       type: 'thinking_end',
       contentIndex: 0,
       content: 'full thought',
       partial: baseMsg,
     };
-    expect(emitSSE(event)).toEqual({ type: 'thinking', data: 'full thought' });
+    expect(emitSSE(event)).toBeNull();
   });
 
   it('maps toolcall_end to SSEEvent.tool_use', () => {

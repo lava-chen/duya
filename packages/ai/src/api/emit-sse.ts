@@ -13,14 +13,21 @@ import type { AssistantMessageEvent, SSEEvent } from '../types.js';
 
 export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
   switch (internalEvent.type) {
+    // text_delta / thinking_delta carry incremental content and are
+    // mapped to the legacy `text` / `thinking` SSE types so that
+    // DuyaAgent and convertSSEToAgentMessage (which only handle `text`
+    // and `thinking`) receive streaming increments without any changes.
+    // text_end / thinking_end carry the full block content and are
+    // suppressed (null) to avoid duplicating content that was already
+    // streamed incrementally.
     case 'text_delta':
-      return { type: 'text_delta', data: internalEvent.delta };
+      return { type: 'text', data: internalEvent.delta };
     case 'text_end':
-      return { type: 'text', data: internalEvent.content };
+      return null;
     case 'thinking_delta':
-      return { type: 'thinking_delta', data: internalEvent.delta };
+      return { type: 'thinking', data: internalEvent.delta };
     case 'thinking_end':
-      return { type: 'thinking', data: internalEvent.content };
+      return null;
     case 'toolcall_start': {
       const block = internalEvent.partial.content[internalEvent.contentIndex];
       if (block && block.type === 'tool_use') {

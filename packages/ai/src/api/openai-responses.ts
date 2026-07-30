@@ -90,9 +90,31 @@ function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputIt
     if (msg.role === 'system') continue;
 
     if (msg.role === 'tool') {
-      const output = typeof msg.content === 'string'
-        ? msg.content
-        : JSON.stringify(msg.content);
+      // OpenAI Responses function_call_output only accepts a string `output`.
+      // When a tool returned inline images (MessageContent[] array, e.g.
+      // ReadTool on a pure image file), extract text blocks and append a
+      // fallback hint for image blocks. The Responses API has no image
+      // carrier for tool outputs (only user-message input_image blocks).
+      let output: string;
+      if (typeof msg.content === 'string') {
+        output = msg.content;
+      } else if (Array.isArray(msg.content)) {
+        const parts: string[] = [];
+        let hasImage = false;
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            parts.push(block.text);
+          } else if (block.type === 'image') {
+            hasImage = true;
+          }
+        }
+        if (hasImage) {
+          parts.push('(image omitted: OpenAI tool outputs cannot carry images. Use the vision tool to analyze the image.)');
+        }
+        output = parts.join('\n').trim();
+      } else {
+        output = JSON.stringify(msg.content);
+      }
       result.push({
         type: 'function_call_output',
         call_id: msg.tool_call_id || '',
@@ -648,6 +670,10 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
       if (assistantMsg.usage) {
         yield { type: 'result', data: assistantMsg.usage };
       }
+
+      // 14. Yield `done` event so DuyaAgent's turn-finalization logic
+      // is triggered. See openai-completions.ts for full rationale.
+      yield { type: 'done', reason: assistantMsg.stopReason || 'completed' };
 
       return assistantMsg;
     },
