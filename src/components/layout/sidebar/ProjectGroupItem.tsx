@@ -192,7 +192,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="project-group-expand-all"
+                className="project-group-expand-all justify-start"
                 onClick={() => setShowAllThreads(true)}
               >
                 <CaretRightIcon size={10} />
@@ -204,7 +204,7 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="project-group-expand-all"
+                className="project-group-expand-all justify-start"
                 onClick={() => setShowAllThreads(false)}
               >
                 <CaretDownIcon size={10} />

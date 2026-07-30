@@ -80,7 +80,9 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        {isStreaming && summary === placeholder ? (
+        {expanded ? (
+          t('streaming.toolAction.thinking.title')
+        ) : isStreaming && summary === placeholder ? (
           <Shimmer duration={1.5}>{summary}</Shimmer>
         ) : (
           summary
@@ -96,9 +98,6 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
             style={{ overflow: 'hidden' }}
           >
             <div className="mx-1 my-1 rounded-lg tool-card p-3 max-h-40 overflow-auto">
-              <div className="text-[11px] tool-card-muted font-medium mb-1.5">
-                {t('streaming.toolAction.thinking.title')}
-              </div>
               <div className="text-xs text-foreground/80 whitespace-pre-wrap break-words leading-relaxed">
                 {displayedContent}
               </div>
