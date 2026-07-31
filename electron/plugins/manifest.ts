@@ -330,11 +330,24 @@ export function readPluginManifestLenient(pluginRoot: string): ManifestReadResul
 
 export function listCapabilityKinds(manifest: PluginManifest): PluginCapabilityKind[] {
   const kinds: PluginCapabilityKind[] = [];
-  if (manifest.capabilities.skills?.length) kinds.push('skills');
-  if (manifest.capabilities.mcpServers?.length) kinds.push('mcp');
-  if (manifest.capabilities.cli?.length) kinds.push('cli');
-  if (manifest.capabilities.ui?.length) kinds.push('ui');
-  if (manifest.capabilities.hooks?.length) kinds.push('hooks');
+  // v2 manifests declare capabilities under `components` (string[] lists);
+  // v1 manifests declare them under `capabilities` (typed objects). Inline
+  // v2 catalog entries (e.g. bundled skill entries in catalog.ts) omit
+  // `capabilities` entirely, so reading `manifest.capabilities.*` without
+  // a v2 branch would crash with "Cannot read properties of undefined".
+  if (manifest.schemaVersion === 'duya.plugin.v2') {
+    const components = manifest.components;
+    if (components?.skills?.length) kinds.push('skills');
+    if (components?.mcpServers?.length) kinds.push('mcp');
+    // v2 `components` has no cli/ui/hooks — those kinds are v1-only.
+    return kinds;
+  }
+  const caps = manifest.capabilities;
+  if (caps?.skills?.length) kinds.push('skills');
+  if (caps?.mcpServers?.length) kinds.push('mcp');
+  if (caps?.cli?.length) kinds.push('cli');
+  if (caps?.ui?.length) kinds.push('ui');
+  if (caps?.hooks?.length) kinds.push('hooks');
   return kinds;
 }
 

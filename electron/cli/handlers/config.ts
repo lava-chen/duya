@@ -300,32 +300,6 @@ export async function handleRemoveConfigProvider(req: IncomingMessage, res: Serv
 }
 
 // ---------------------------------------------------------------------------
-// POST /v1/config/providers/:id/activate
-// ---------------------------------------------------------------------------
-
-/**
- * @deprecated Use `set-default` instead. The single-active concept is gone;
- * we now track a soft `defaultProviderId`. This handler delegates to
- * `setDefaultProvider` so the legacy CLI command keeps working.
- */
-export async function handleActivateConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
-  try {
-    const cm = getConfigManager();
-    const ok = cm.activateProvider(id);
-    if (!ok) {
-      sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
-      return;
-    }
-    const ctx = readAuditContext(req);
-    await audit(ctx, 'config.provider.activate', id);
-    sendJson(res, 200, { ok: true, active: id });
-  } catch (err) {
-    const c = classify(err);
-    sendError(res, c.status, c.code, c.message);
-  }
-}
-
-// ---------------------------------------------------------------------------
 // PUT /v1/config/providers/:id/default
 // ---------------------------------------------------------------------------
 

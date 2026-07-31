@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# Memory v2 e2e manual run script (Plan 305 Phase D/E).
+# Memory e2e manual run script (Plan 305 Phase D/E).
 #
 # Usage:
-#   scripts/memory-v2-e2e.sh
+#   scripts/memory-e2e.sh
 #
 # Prerequisites:
-#   - duya built with DUYA_MEMORY_V2_ENABLED=1
+#   - duya built with DUYA_MEMORY_ENABLED=1
 #   - sqlite3 on PATH
 #
-# This script runs only manually, not in CI. It wipes memory v2 state,
+# This script runs only manually, not in CI. It wipes memory state,
 # starts duya, waits for at least one worker tick, then asserts files
 # and DB state.
 set -euo pipefail
 
-export DUYA_MEMORY_V2_ENABLED=1
+export DUYA_MEMORY_ENABLED=1
 export DUYA_MEMORY_TEST_FAST=1   # skip the 6h idle wait
 
 # Memory DB sits next to duya-main.db, resolved via boot.json with the
 # same helper the app uses (electron/config/boot-config.ts#getDatabasePath).
-# NEVER hard-code the abandoned v2-draft path ~/.duya/memory/memory-state.db.
+# NEVER hard-code the abandoned draft path ~/.duya/memory/memory-state.db.
 MEM_DB="$(node -e "
   const path = require('path');
   const { getDatabasePath } = require('./electron/config/boot-config');
@@ -28,14 +28,14 @@ MEM_DB="$(node -e "
 echo "Memory DB path: $MEM_DB"
 
 # 1. Wipe state
-echo "Wiping memory v2 state..."
+echo "Wiping memory state..."
 rm -f "$MEM_DB"
 rm -rf ~/.duya/memory/global ~/.duya/memory/projects \
        ~/.duya/memory/rollout_summaries ~/.duya/memory/raw_memories.md
 
 # 2. Start duya, run a 30-min session in E:\Projects\duya
 echo ""
-echo "=== Starting duya with Memory v2 enabled ==="
+echo "=== Starting duya with Memory enabled ==="
 echo "Run a real session for >= 30 minutes, then end the session."
 echo "The worker will pick up the rollout after the idle period (or"
 echo "immediately if DUYA_MEMORY_TEST_FAST=1 is respected)."

@@ -18,7 +18,7 @@
 
 import * as http from 'http';
 
-import { getAgentServerUrl } from '../ipc/plugin-handlers';
+import { getAgentServerUrl } from './agent-server-url';
 
 export async function notifyMcpConfigChanged(): Promise<void> {
   const url = await getAgentServerUrl();

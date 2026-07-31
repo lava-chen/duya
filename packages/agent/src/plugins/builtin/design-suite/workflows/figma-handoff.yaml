@@ -1,0 +1,10 @@
+id: figma-handoff
+name: Generate developer handoff
+description: Convert approved Figma context into implementation-ready handoff.
+prompt: |
+  Create a developer handoff for {{target}} using the design-handoff skill.
+  If Figma is connected, use its context; otherwise request the minimum missing
+  specification. Include components, states, responsive behavior, and checks.
+requiredCapabilities:
+  - connector:figma
+permissionTier: read

@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 
 /**
- * Migration 0005: Phase 2 memory entities (Memory v2 Phase 2).
+ * Migration 0005: Phase 2 memory entities (Memory Phase 2).
  *
  * Creates:
  *   - memory_entries       (canonical memory rows, scoped + versioned)

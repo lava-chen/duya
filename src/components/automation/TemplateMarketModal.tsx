@@ -82,24 +82,10 @@ export function TemplateMarketModal({
                 <button
                   key={template.id}
                   type="button"
-                  className="flex flex-col items-start gap-2 p-4 rounded-xl text-left transition-all duration-200"
-                  style={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                  }}
+                  className="flex flex-col items-start gap-2 p-4 rounded-xl text-left transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md bg-[var(--surface)] border border-border hover:border-accent"
                   onClick={() => {
                     onSelectTemplate(template);
                     onClose();
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--accent)';
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--border)';
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = 'none';
                   }}
                 >
                   <h4

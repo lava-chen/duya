@@ -332,9 +332,9 @@ export interface CompactErrorEvent {
 }
 
 /**
- * Memory v2 wakeup (Plan 305 Phase B). Sent by the agent subprocess
+ * Memory wakeup (Plan 305 Phase B). Sent by the agent subprocess
  * fire-and-forget after `ready` to nudge the memory worker into an
- * immediate sweep. Gated by `DUYA_MEMORY_V2_ENABLED` on the agent side.
+ * immediate sweep. Gated by `DUYA_MEMORY_ENABLED` on the agent side.
  *
  * The Electron main-process router intercepts this event (it is NOT
  * forwarded to the renderer as SSE) and calls

@@ -62,8 +62,6 @@ import { isMaskedKey } from '../../../src/lib/providers/secret';
 export interface ProviderStoreReader {
   readAll(): Record<string, ApiProvider>;
   readOne(id: string): ApiProvider | undefined;
-  /** @deprecated Use readDefault. The single-active concept is gone. */
-  readActive(): ApiProvider | undefined;
   /** Soft default — the implicit fallback for chat/vision/etc. */
   readDefault(): ApiProvider | undefined;
   /**
@@ -306,14 +304,6 @@ export class ProviderStore {
     if (this.defaultId === id) this.defaultId = undefined;
     this.persist();
     return true;
-  }
-
-  /**
-   * @deprecated Use setDefaultLlmProvider. Retained for one release so
-   * existing callers keep compiling.
-   */
-  setActiveLlmProvider(id: string): boolean {
-    return this.setDefaultLlmProvider(id);
   }
 
   /**

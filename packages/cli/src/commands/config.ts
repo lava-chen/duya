@@ -270,11 +270,6 @@ export async function runConfigProviderRemove(ctx: CliSubcommandContext): Promis
   }
 }
 
-export async function runConfigProviderActivate(ctx: CliSubcommandContext): Promise<ExitCode> {
-  process.stderr.write('[DEPRECATED] `duya config provider activate` is deprecated; use `duya config provider set-default` instead.\n');
-  return runConfigProviderSetDefault(ctx);
-}
-
 export async function runConfigProviderSetDefault(ctx: CliSubcommandContext): Promise<ExitCode> {
   const id = ctx.args[0];
   if (!id) {

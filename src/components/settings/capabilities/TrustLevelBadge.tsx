@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PluginTrustLevel } from '../../../lib/plugin-security-types';
+import type { PluginTrustLevel } from '@duya/plugin-core';
 
 interface TrustLevelBadgeProps {
   level: PluginTrustLevel;

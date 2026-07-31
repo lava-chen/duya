@@ -58,7 +58,6 @@ import {
   runConfigPairingCheck,
   runConfigPairingList,
   runConfigPairingRevoke,
-  runConfigProviderActivate,
   runConfigProviderAdd,
   runConfigProviderInfo,
   runConfigProviderList,
@@ -714,14 +713,6 @@ const subConfigProviderRemove: CliSubcommand = {
   run: (ctx) => runConfigProviderRemove(ctx),
 };
 
-const subConfigProviderActivate: CliSubcommand = {
-  description: 'DEPRECATED. Use `provider set-default`. Kept for one release as a thin wrapper.',
-  write: true,
-  args: [{ name: 'id', required: true, description: 'Provider id' }],
-  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
-  run: (ctx) => runConfigProviderActivate(ctx),
-};
-
 const subConfigProviderSetDefault: CliSubcommand = {
   description:
     'Set the soft default provider. The default is the implicit fallback when a thread has no explicit provider, and for vision, gateway, title generation, embedding, and scheduled automation. Pass --clear to unset the default.',
@@ -1065,7 +1056,6 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       'provider-info': subConfigProviderInfo,
       'provider-add': subConfigProviderAdd,
       'provider-remove': subConfigProviderRemove,
-      'provider-activate': subConfigProviderActivate,
       'provider-set-default': subConfigProviderSetDefault,
       'settings-show': subConfigSettingsShow,
       'settings-set': subConfigSettingsSet,

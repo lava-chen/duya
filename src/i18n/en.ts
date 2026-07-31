@@ -1,4 +1,4 @@
-﻿const en = {
+const en = {
   'nav.newChat': 'New Chat',
   'nav.settings': 'Settings',
   'nav.skills': 'Skills',
@@ -2093,6 +2093,16 @@
   'extensions.mcp.table.source': 'Source',
   'extensions.mcp.table.command': 'Command',
   'extensions.mcp.table.manual': 'Manual',
+
+  'extensions.mcp.settings.title': 'Edit MCP Server: {name}',
+  'extensions.mcp.settings.close': 'Close',
+  'extensions.mcp.settings.hint': 'Edit the server JSON configuration. Required fields: name, command.',
+  'extensions.mcp.settings.cancel': 'Cancel',
+  'extensions.mcp.settings.save': 'Save',
+  'extensions.mcp.settings.invalidObject': 'Configuration must be a JSON object.',
+  'extensions.mcp.settings.nameRequired': 'Field name is required and must be a non-empty string.',
+  'extensions.mcp.settings.commandRequired': 'Field command is required and must be a non-empty string.',
+  'extensions.mcp.settings.invalidJson': 'Invalid JSON format, please check syntax.',
 
   'extensions.connections.clickToConnect': 'Click to connect and authorize Agent access.',
   'extensions.connections.requiresElectron': 'App connections require the Electron environment.',

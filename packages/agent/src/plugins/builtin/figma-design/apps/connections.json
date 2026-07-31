@@ -1,0 +1,3 @@
+[
+  { "id": "figma", "provider": "figma", "scopes": [], "toolsets": ["design"], "required": true }
+]

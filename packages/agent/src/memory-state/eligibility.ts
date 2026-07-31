@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3';
 
 /**
- * Memory v2 eligibility query (Plan 302 Phase B, design v3 Scheduler 决策).
+ * Memory eligibility query (Plan 302 Phase B, design v3 Scheduler 决策).
  *
  * Picks rollouts that are due for Stage 1 extraction. The SQL below is
  * the design doc's authoritative query verbatim:

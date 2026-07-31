@@ -78,6 +78,12 @@ export interface AppConnectionProviderDTO {
   configured: boolean;
   /** Non-secret reason shown when a build has no registered OAuth client. */
   configurationHint?: string;
+  /** Single-letter icon for UI rendering (e.g. 'G' for Google). */
+  monogram: string;
+  /** One-line summary shown in the marketplace / connection list. */
+  description: string;
+  /** Default scopes; used by the marketplace to preview access. */
+  scopes?: string[];
 }
 
 /** Whitelist mapper: never leaks token fields by accident. */

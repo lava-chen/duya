@@ -4,7 +4,7 @@ import { platform as getPlatform, tmpdir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemoryWakeupHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase } from './db/connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
@@ -280,12 +280,13 @@ if (gotTheLock) {
     }
 
     // ============================================================
-    // Memory v2 worker (Plan 305, shadow mode)
+    // Memory worker (Plan 305, shadow mode)
     // ============================================================
-    // Gated by DUYA_MEMORY_V2_ENABLED. When enabled, bootstraps the
-    // memory-state DB (next to duya-main.db), constructs an LLM client
-    // from the active provider, and starts the long-lived worker that
-    // runs Stage 1 extraction + outbox sweeper + reconcile.
+    // Gated by DUYA_MEMORY_ENABLED (legacy DUYA_MEMORY_V2_ENABLED still
+    // honored). When enabled, bootstraps the memory-state DB (next to
+    // duya-main.db), constructs an LLM client from the active provider,
+    // and starts the long-lived worker that runs Stage 1 extraction +
+    // outbox sweeper + reconcile.
     //
     // Shadow mode: writes only to memory-state.db and ~/.duya/memory
     // projection files. Never touches packages/agent/src/memory/.
@@ -293,11 +294,13 @@ if (gotTheLock) {
     // Dev default-on: in development, the worker starts automatically
     // to accumulate shadow data for the 4-week validation window
     // required by Plan 305 before promoting to default-on in prod.
-    // Explicit opt-out via DUYA_MEMORY_V2_ENABLED=0 still honored.
-    const memoryV2ExplicitOff = process.env.DUYA_MEMORY_V2_ENABLED === '0' || process.env.DUYA_MEMORY_V2_ENABLED === 'false';
-    const memoryV2ExplicitOn = process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
-    const memoryV2Enabled = memoryV2ExplicitOn || (isDev && !memoryV2ExplicitOff);
-    if (memoryV2Enabled) {
+    // Explicit opt-out via DUYA_MEMORY_ENABLED=0 still honored.
+    const memoryExplicitOff = process.env.DUYA_MEMORY_ENABLED === '0' || process.env.DUYA_MEMORY_ENABLED === 'false'
+      || process.env.DUYA_MEMORY_V2_ENABLED === '0' || process.env.DUYA_MEMORY_V2_ENABLED === 'false';
+    const memoryExplicitOn = process.env.DUYA_MEMORY_ENABLED === '1' || process.env.DUYA_MEMORY_ENABLED === 'true'
+      || process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
+    const memoryEnabled = memoryExplicitOn || (isDev && !memoryExplicitOff);
+    if (memoryEnabled) {
       try {
         const { bootstrap } = await import('./memory-state');
         const { startMemoryWorker } = await import('./memory/memory-worker');
@@ -359,12 +362,12 @@ if (gotTheLock) {
             { memoryDb, mainDb, llmClient },
             { instancesPerMinute: 60, concurrency: 2 },
           );
-          logger.info('Memory v2 worker started (shadow mode)', undefined, LogComponent.DB);
+          logger.info('Memory worker started (shadow mode)', undefined, LogComponent.DB);
         } else {
-          logger.warn('Memory v2 worker: no LLM client; worker not started (DB bootstrapped for manual inspection)', undefined, LogComponent.DB);
+          logger.warn('Memory worker: no LLM client; worker not started (DB bootstrapped for manual inspection)', undefined, LogComponent.DB);
         }
       } catch (error) {
-        logger.error('Failed to start memory v2 worker', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
+        logger.error('Failed to start memory worker', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
       }
     }
 
@@ -644,6 +647,8 @@ registerImportHandlers();
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
 registerGitHandlers();
+registerMemoryListHandlers();
+registerMemoryWakeupHandlers();
 
 // =============================================================================
 // Step 4.6: Start CLI API server (Phase 0 — read-only control plane)

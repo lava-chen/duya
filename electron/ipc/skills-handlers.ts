@@ -18,6 +18,7 @@ import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser'
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
 import { getDatabase, getJsonSetting, setJsonSetting } from '../db/index';
 import { getPluginManager } from '../plugins/PluginManager';
+import { getAgentServerUrl } from '../services/agent-server-url';
 import * as crypto from 'crypto';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
@@ -25,22 +26,6 @@ type SkillEnabledOverrides = Record<string, boolean>;
 
 const PROVENANCE_MARKER_FILENAME = '.duya-origin.json';
 const MANIFEST_FILENAME = '.bundled_manifest.json';
-
-let cachedAgentServerUrl: string | null = null;
-
-async function getAgentServerUrl(): Promise<string | null> {
-  if (cachedAgentServerUrl) return cachedAgentServerUrl;
-  try {
-    const { getAgentServerPort } = await import('../agents/agent-server-lifecycle');
-    const port = getAgentServerPort();
-    if (port) {
-      cachedAgentServerUrl = `http://127.0.0.1:${port}`;
-    }
-    return cachedAgentServerUrl;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Read the provenance marker for a skill directory. Returns the parsed

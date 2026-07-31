@@ -1,0 +1,7 @@
+[
+  { "id": "figma", "connectorId": "figma", "scopes": [], "toolsets": ["design-context", "handoff"], "required": false },
+  { "id": "slack", "connectorId": "slack", "scopes": [], "toolsets": ["feedback"], "required": false },
+  { "id": "linear", "connectorId": "linear", "scopes": [], "toolsets": ["issue-handoff"], "required": false },
+  { "id": "notion", "connectorId": "notion", "scopes": [], "toolsets": ["research"], "required": false },
+  { "id": "google-calendar", "connectorId": "google", "scopes": [], "toolsets": ["research-interviews"], "required": false }
+]

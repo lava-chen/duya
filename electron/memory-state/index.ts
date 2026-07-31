@@ -1,5 +1,5 @@
 /**
- * Memory v2 state control-plane — public API.
+ * Memory state control-plane — public API.
  *
  * Plan 305 wires the memory-worker in the Electron main process,
  * which imports `bootstrap` / `getDb` / `closeDb` from here along

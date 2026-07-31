@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import type { PluginError } from './plugin-error-types';
-import type { PluginTrustLevel } from './plugin-security-types';
 import type {
+  PluginError,
+  PluginTrustLevel,
   WorkflowTemplateSummary,
   PermissionTier,
 } from '@duya/plugin-core';
@@ -376,36 +376,6 @@ export interface DependencyVerificationResult {
   satisfied: boolean;
   missing: PluginDependency[];
   downgraded: string[];
-}
-
-export interface AutoUpdatePolicy {
-  enabled: boolean;
-  interval: 'daily' | 'weekly' | 'manual';
-  scope: PluginScope[];
-  prerelease: boolean;
-}
-
-export interface PluginUpdateInfo {
-  name: string;
-  current: string;
-  latest: string;
-  marketplace: string;
-}
-
-export interface InstalledPluginInfoV2 {
-  marketplace: string;
-  version: string;
-  scope: PluginScope;
-  installPath: string;
-  capabilities: string[];
-  autoUpdate: boolean;
-  installedAt?: number;
-  source?: string;
-}
-
-export interface InstalledPluginsFileV2 {
-  version: 2;
-  plugins: Record<string, InstalledPluginInfoV2>;
 }
 
 export interface PluginPermissionDisplay {

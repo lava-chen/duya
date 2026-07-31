@@ -1,7 +1,7 @@
 import type {
   PluginError,
   PluginErrorSeverity,
-} from './plugin-error-types';
+} from '@duya/plugin-core';
 
 export function getPluginErrorMessage(err: PluginError): string {
   switch (err.type) {

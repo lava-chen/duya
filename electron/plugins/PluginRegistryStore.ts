@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
-import type { PluginLockfile, PluginRegistryEntry, PluginRegistryFile } from './types';
+import type { PluginRegistryEntry, PluginRegistryFile } from './types';
 
 function ensureDir(dirPath: string): void {
   if (!fs.existsSync(dirPath)) {
@@ -21,7 +21,6 @@ export class PluginRegistryStore {
   private readonly dataDir: string;
   private readonly stagingDir: string;
   private readonly registryPath: string;
-  private readonly lockfilePath: string;
 
   constructor() {
     const userData = app.getPath('userData');
@@ -30,7 +29,6 @@ export class PluginRegistryStore {
     this.dataDir = path.join(userData, 'plugins-data');
     this.stagingDir = path.join(this.rootDir, 'staging');
     this.registryPath = path.join(this.rootDir, 'registry.json');
-    this.lockfilePath = path.join(this.rootDir, 'lockfile.json');
     ensureDir(this.rootDir);
     ensureDir(this.installedDir);
     ensureDir(this.dataDir);
@@ -42,14 +40,12 @@ export class PluginRegistryStore {
     dataDir: string;
     stagingDir: string;
     registryPath: string;
-    lockfilePath: string;
   } {
     return {
       installedDir: this.installedDir,
       dataDir: this.dataDir,
       stagingDir: this.stagingDir,
       registryPath: this.registryPath,
-      lockfilePath: this.lockfilePath,
     };
   }
 
@@ -66,21 +62,6 @@ export class PluginRegistryStore {
 
   writeRegistry(file: PluginRegistryFile): void {
     atomicWriteJson(this.registryPath, file);
-  }
-
-  readLockfile(): PluginLockfile {
-    if (!fs.existsSync(this.lockfilePath)) {
-      return { lockfileVersion: 1, plugins: {} };
-    }
-    const parsed = JSON.parse(fs.readFileSync(this.lockfilePath, 'utf8')) as PluginLockfile;
-    if (parsed.lockfileVersion !== 1 || typeof parsed.plugins !== 'object' || parsed.plugins === null) {
-      return { lockfileVersion: 1, plugins: {} };
-    }
-    return parsed;
-  }
-
-  writeLockfile(lockfile: PluginLockfile): void {
-    atomicWriteJson(this.lockfilePath, lockfile);
   }
 
   listPlugins(): PluginRegistryEntry[] {

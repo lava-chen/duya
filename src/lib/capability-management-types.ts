@@ -20,7 +20,8 @@
  *   4. mcp.connectionStatus / mcp.lastIssue；blockedReason 不派生自 connection
  */
 
-export type PluginTrustLevel = 'official' | 'verified' | 'local' | 'untrusted';
+import type { PluginTrustLevel } from '@duya/plugin-core';
+
 export type PluginHealth = 'ready' | 'disabled' | 'needs_setup' | 'failed' | 'unknown';
 export type PluginOrigin =
   | 'bundled'

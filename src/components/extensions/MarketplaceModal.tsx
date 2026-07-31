@@ -8,7 +8,11 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import type { PluginCatalogEntry, PluginRegistryEntry } from "@/lib/plugin-types";
-import type { AppConnectionStatusDTO, ProviderId } from "@/lib/app-connection-ipc";
+import type {
+  AppConnectionProviderDTO,
+  AppConnectionStatusDTO,
+  ProviderId,
+} from "@/lib/app-connection-ipc";
 import { ExtensionCard } from "./ExtensionCard";
 import {
   PlugIcon,
@@ -17,7 +21,6 @@ import {
   XIcon,
 } from "@/components/icons";
 
-import { OFFICIAL_CONNECTORS } from "./MarketplaceConnectors";
 
 type MarketCategory = "plugins" | "skills" | "connectors";
 type MarketSource = "official" | "others";
@@ -27,6 +30,7 @@ interface MarketplaceModalProps {
   onClose: () => void;
   installedPlugins: PluginRegistryEntry[];
   connections: AppConnectionStatusDTO[];
+  providers: AppConnectionProviderDTO[];
   onInstallPlugin: (plugin: PluginCatalogEntry) => void;
   onConnectProvider: (provider: ProviderId) => void;
   onDisconnectConnection: (connectionId: string) => void;
@@ -44,6 +48,7 @@ export function MarketplaceModal({
   onClose,
   installedPlugins,
   connections,
+  providers,
   onInstallPlugin,
   onConnectProvider,
   onDisconnectConnection,
@@ -270,6 +275,7 @@ export function MarketplaceModal({
               <ConnectorsPanel
                 source={source}
                 connections={connections}
+                providers={providers}
                 connectedProviders={connectedProviders}
                 busyProvider={busyProvider}
                 onConnect={onConnectProvider}
@@ -322,6 +328,7 @@ export function MarketplaceModal({
 function ConnectorsPanel({
   source,
   connections,
+  providers,
   connectedProviders,
   busyProvider,
   onConnect,
@@ -329,6 +336,7 @@ function ConnectorsPanel({
 }: {
   source: MarketSource;
   connections: AppConnectionStatusDTO[];
+  providers: AppConnectionProviderDTO[];
   connectedProviders: Set<ProviderId>;
   busyProvider: ProviderId | null;
   onConnect: (provider: ProviderId) => void;
@@ -348,16 +356,16 @@ function ConnectorsPanel({
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {OFFICIAL_CONNECTORS.map((preset) => {
-        const isConnected = connectedProviders.has(preset.provider);
+      {providers.map((provider) => {
+        const isConnected = connectedProviders.has(provider.id);
         const connection = connections.find(
-          (c) => c.provider === preset.provider && c.status === "connected"
+          (c) => c.provider === provider.id && c.status === "connected"
         );
         return (
           <ExtensionCard
-            key={preset.provider}
-            monogram={preset.monogram}
-            title={preset.name}
+            key={provider.id}
+            monogram={provider.monogram}
+            title={provider.label}
             subtitle={
               isConnected ? (
                 <span className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-emerald-500/10 text-emerald-600">
@@ -365,13 +373,13 @@ function ConnectorsPanel({
                 </span>
               ) : null
             }
-            description={preset.description}
+            description={provider.description}
             actions={
               isConnected && connection ? (
                 <Button
                   variant="secondary"
                   size="sm"
-                  disabled={busyProvider === preset.provider}
+                  disabled={busyProvider === provider.id}
                   onClick={() => onDisconnect(connection.id)}
                 >
                   {t("marketplace.connectors.disconnect")}
@@ -380,8 +388,8 @@ function ConnectorsPanel({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={busyProvider === preset.provider}
-                  onClick={() => onConnect(preset.provider)}
+                  disabled={busyProvider === provider.id}
+                  onClick={() => onConnect(provider.id)}
                 >
                   {t("marketplace.connectors.connect")}
                 </Button>

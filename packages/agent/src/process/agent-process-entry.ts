@@ -2864,11 +2864,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             void reloadAppConnectionTools();
           }
 
-          // Plan 305 Phase B: fire-and-forget memory v2 wakeup. The
+          // Plan 305 Phase B: fire-and-forget memory wakeup. The
           // main-process router intercepts the `memory:wakeup` worker
           // event and triggers `MemoryWorker.forceSweep()` so Stage 1
           // extraction runs immediately after init (no 60s wait).
-          // Gated by DUYA_MEMORY_V2_ENABLED; failures are swallowed.
+          // Gated by DUYA_MEMORY_ENABLED; failures are swallowed.
           if (!initError) {
             sendMemoryWakeup(
               (event) => sendToMain(event as unknown as Record<string, unknown>),

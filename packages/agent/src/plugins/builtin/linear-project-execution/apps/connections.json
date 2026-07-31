@@ -1,0 +1,3 @@
+[
+  { "id": "linear", "provider": "linear", "scopes": [], "toolsets": ["project-management"], "required": true }
+]

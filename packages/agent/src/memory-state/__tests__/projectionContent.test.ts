@@ -22,7 +22,7 @@ function entry(overrides: Partial<MemoryEntryRow> = {}): MemoryEntryRow {
   };
 }
 
-describe('Memory v2 unified projections', () => {
+describe('Memory unified projections', () => {
   it('renders all active entries under global sections', () => {
     const entries = [
       entry(),

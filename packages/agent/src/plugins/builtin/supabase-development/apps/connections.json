@@ -1,0 +1,3 @@
+[
+  { "id": "supabase", "provider": "supabase", "scopes": [], "toolsets": ["development"], "required": true }
+]

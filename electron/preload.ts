@@ -159,7 +159,6 @@ export interface ProviderAPI {
   getLlm: (id: string) => Promise<unknown | null>
   upsertLlm: (data: Record<string, unknown>) => Promise<{ ok: boolean; provider?: unknown; code?: string; message?: string }>
   deleteLlm: (id: string) => Promise<boolean>
-  setActiveLlm: (id: string) => Promise<boolean>
   /** New soft-default channel. The default is the implicit fallback
    *  used by chat/vision/etc when no per-thread provider is set. */
   setDefaultLlm: (payload: { id: string | null }) => Promise<boolean>
@@ -834,24 +833,6 @@ export interface PluginHealthReport {
   lastCheckedAt: string
 }
 
-export interface PluginUpdateInfo {
-  name: string
-  current: string
-  latest: string
-  marketplace: string
-}
-
-export interface InstalledPluginInfoV2 {
-  marketplace: string
-  version: string
-  scope: string
-  installPath: string
-  capabilities: string[]
-  autoUpdate: boolean
-  installedAt?: number
-  source?: string
-}
-
 export interface PluginAPI {
   catalog: {
     list: (filters?: {
@@ -884,11 +865,6 @@ export interface PluginAPI {
     // Prompt body is fetched on demand via `workflowGet`.
     workflows?: Array<{ id: string; name: string; description: string; permissionTier: string }>;
   }>; error?: string }>
-  checkUpdate: () => Promise<{ success: boolean; data: PluginUpdateInfo[]; error?: string }>
-  update: (payload: { pluginId: string; targetVersion: string }) => Promise<{ success: boolean; data?: { success: boolean; previousVersion: string; newVersion: string }; error?: string }>
-  installedV2: () => Promise<{ success: boolean; data: InstalledPluginInfoV2[]; error?: string }>
-  mcpList: () => Promise<{ success: boolean; data: Array<{ pluginId: string; pluginName: string; name: string; command: string; args?: string[]; env?: Record<string, string> }>; error?: string }>
-  checkoutVersion: (payload: { pluginId: string; version: string }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   cacheStats: () => Promise<{ success: boolean; data?: { totalPlugins: number; totalVersions: number; totalSizeBytes: number }; error?: string }>
   cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => Promise<{ success: boolean; data?: { removed: string[] }; error?: string }>
   // Plan 311 — fetch the full workflow template (including prompt body)
@@ -920,6 +896,9 @@ export interface AppConnectionAPI {
       label: string
       configured: boolean
       configurationHint?: string
+      monogram: string
+      description: string
+      scopes?: string[]
     }>
     error?: string
   }>
@@ -941,7 +920,7 @@ export interface AppConnectionAPI {
     clientSecret?: string
   }) => Promise<{
     success: boolean
-    data?: { id: string; label: string; configured: boolean; configurationHint?: string }
+    data?: { id: string; label: string; configured: boolean; configurationHint?: string; monogram: string; description: string; scopes?: string[] }
     error?: string
     errorCode?: string
   }>
@@ -1676,7 +1655,6 @@ const electronAPI: ElectronAPI = {
     getLlm: (id: string) => ipcRenderer.invoke('provider:getLlm', id),
     upsertLlm: (data: Record<string, unknown>) => ipcRenderer.invoke('provider:upsertLlm', data),
     deleteLlm: (id: string) => ipcRenderer.invoke('provider:deleteLlm', id),
-    setActiveLlm: (id: string) => ipcRenderer.invoke('provider:setActiveLlm', id),
     setDefaultLlm: (payload: { id: string | null }) =>
       ipcRenderer.invoke('provider:setDefaultLlm', payload),
     getDefault: () => ipcRenderer.invoke('provider:getDefault'),
@@ -1994,11 +1972,6 @@ const electronAPI: ElectronAPI = {
     remove: (payload: { pluginId: string; deleteData?: boolean }) => ipcRenderer.invoke('plugin:remove', payload),
     doctor: (pluginId?: string) => ipcRenderer.invoke('plugin:doctor', pluginId),
     capabilityIndex: () => ipcRenderer.invoke('plugin:capability-index'),
-    checkUpdate: () => ipcRenderer.invoke('plugin:check-update'),
-    update: (payload: { pluginId: string; targetVersion: string }) => ipcRenderer.invoke('plugin:update', payload),
-    installedV2: () => ipcRenderer.invoke('plugin:installed:v2'),
-    mcpList: () => ipcRenderer.invoke('plugin:mcp:list'),
-    checkoutVersion: (payload: { pluginId: string; version: string }) => ipcRenderer.invoke('plugin:checkout-version', payload),
     cacheStats: () => ipcRenderer.invoke('plugin:cache:stats'),
     cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => ipcRenderer.invoke('plugin:cache:cleanup', payload),
     workflowGet: (payload: { pluginId: string; workflowId: string }) => ipcRenderer.invoke('plugin:workflow:get', payload),

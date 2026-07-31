@@ -6,7 +6,7 @@ import { resolveMemoryDbPath } from './path';
 import { runMigrations } from './migrations';
 
 /**
- * Memory v2 state DB lifecycle.
+ * Memory state DB lifecycle.
  *
  * Singleton per process. `bootstrap()` is idempotent within a process
  * (returns the cached instance). `closeDb()` tears down for graceful

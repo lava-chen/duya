@@ -2,8 +2,6 @@
  * src/lib/providers/presets/index.ts
  *
  * Aggregates all preset modules into a single exported list.
- * Preserves backward-compatible named exports from the legacy
- * `src/lib/provider-presets.tsx` module via `legacy-shim.ts`.
  */
 
 import type { ProviderPreset } from '../types';

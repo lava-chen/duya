@@ -1,5 +1,5 @@
 import React from 'react';
-import type { PermissionRequest } from '../../../lib/plugin-security-types';
+import type { PermissionRequest } from '@duya/plugin-core';
 import { Button } from '@/components/ui/Button';
 
 interface PermissionReviewDialogProps {

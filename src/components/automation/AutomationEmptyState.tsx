@@ -33,22 +33,8 @@ export function AutomationEmptyState({
         <Button
           variant="primary"
           size="md"
-          className="whitespace-nowrap transition-all duration-200"
-          style={{
-            background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
-            color: '#ffffff',
-          }}
+          className="whitespace-nowrap"
           onClick={onManualCreate}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.opacity = '0.9';
-            e.currentTarget.style.transform = 'translateY(-1px)';
-            e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.opacity = '1';
-            e.currentTarget.style.transform = 'translateY(0)';
-            e.currentTarget.style.boxShadow = 'none';
-          }}
         >
           <PlusIcon size={16} />
           {t('automation.newAutomation')}

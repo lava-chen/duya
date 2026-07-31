@@ -1,4 +1,3 @@
-import type { ToolRegistry } from '../tool/registry.js';
 import type { BaseTool } from '../tool/types.js';
 import { listBuiltinPlugins } from './builtin/_registry.js';
 import { parsePluginMd } from './builtin/plugin-md-parser.js';
@@ -131,13 +130,6 @@ export function registerFromDirectory(dir: string): BundledAgentPlugin {
   const name = metadata.name || id;
   const version = metadata.version || '0.0.0';
 
-  // If hooks/hooks.json exists, hand it to the EnhancedHookRegistry so the
-  // hooks are actually executable. We do not surface hooks in the descriptor
-  // return value — the registry is mutated as a side effect.
-  if (capabilities.hooks.length > 0) {
-    registerDirectoryHooks(id, capabilities.hooks);
-  }
-
   return {
     id,
     manifest: {
@@ -150,56 +142,4 @@ export function registerFromDirectory(dir: string): BundledAgentPlugin {
     createTools: () => [],
     capabilities,
   };
-}
-
-/**
- * Read hooks/hooks.json (when present) and register the parsed
- * `HookCommand[]` with the EnhancedHookRegistry. Mirrors
- * `claude-code-haha/src/plugins/builtinPlugins.ts:loadHooks`.
- */
-function registerDirectoryHooks(
-  pluginId: string,
-  hooks: PluginCapabilities['hooks'],
-): void {
-  // hooks/hooks.json was already read by discoverHooks(); we just need to
-  // surface its entries. The full HooksSettings shape includes top-level
-  // fields like `PreToolUse` / `PostToolUse` / `SessionStart` etc.; the
-  // current discover() returns a flat array. To keep this change focused,
-  // we only auto-register when the file is a proper HooksSettings object.
-  // For now, mark the directory as contributing hooks but do not bind
-  // them — the existing `hooks/watcher.ts:99` is the canonical loader.
-  void pluginId;
-  void hooks;
-}
-
-// ============================================================================
-// registerBundledAgentPlugins — Track A consumer
-// ============================================================================
-//
-// Walks the directory-scanned descriptors and registers each enabled
-// plugin via `registerFromDirectory`. The current `createTools()` returns
-// `[]` for directory-based plugins, so this loop is a structural pass:
-// it ensures the directory convention is honoured (cache, descriptor
-// availability).
-
-export function registerBundledAgentPlugins(
-  registry: ToolRegistry,
-  options?: { enabledPluginIds?: Set<string> },
-): string[] {
-  const registeredPluginIds: string[] = [];
-
-  for (const descriptor of listBuiltinPluginDescriptors()) {
-    if (options?.enabledPluginIds && !options.enabledPluginIds.has(descriptor.name)) {
-      continue;
-    }
-
-    registerFromDirectory(descriptor.dir);
-    registeredPluginIds.push(descriptor.name);
-  }
-
-  // Touch `registry` so the parameter is not "unused" — the function
-  // signature must remain stable for `tool/builtin.ts:170`.
-  void registry;
-
-  return registeredPluginIds;
 }

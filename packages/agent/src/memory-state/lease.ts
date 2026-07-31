@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import type { Database } from 'better-sqlite3';
 
 /**
- * Memory v2 lease lifecycle (Plan 302 Phase B, design v3 D4).
+ * Memory lease lifecycle (Plan 302 Phase B, design v3 D4).
  *
  * Acquire / heartbeat / CAS-complete / fail-with-backoff / retire for
  * Stage 1 rollout extraction. Every public function takes the DB

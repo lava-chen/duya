@@ -1186,7 +1186,7 @@ OAuth token brokering remains the responsibility of the app-connection layer
 (Plan 312), so a remote preset must retain its stdio fallback until it has an
 authorized connection.
 
-## Memory v2: bounded projection and rg retrieval
+## Memory: bounded projection and rg retrieval
 
 SQLite is the authoritative memory state. `projects` and
 `project_path_aliases` identify scope across moved or renamed roots; they do not

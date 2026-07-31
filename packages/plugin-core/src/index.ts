@@ -40,6 +40,7 @@ export type {
   PluginRuntimeError,
   PluginMarketplaceError,
   PluginCompatError,
+  PluginErrorSeverity,
 } from './types';
 
 // MCP — types and pure functions added in Phase 0 of plan 97.

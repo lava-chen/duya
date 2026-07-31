@@ -1,4 +1,4 @@
-﻿import type { TranslationKey } from './en';
+import type { TranslationKey } from './en';
 
 const zh: Record<TranslationKey, string> = {
   'nav.newChat': '新对话',
@@ -2081,6 +2081,16 @@ const zh: Record<TranslationKey, string> = {
   'extensions.mcp.table.source': '来源',
   'extensions.mcp.table.command': '命令',
   'extensions.mcp.table.manual': '手动',
+
+  'extensions.mcp.settings.title': '编辑 MCP 服务器：{name}',
+  'extensions.mcp.settings.close': '关闭',
+  'extensions.mcp.settings.hint': '编辑服务器的 JSON 配置。必填字段：name、command。',
+  'extensions.mcp.settings.cancel': '取消',
+  'extensions.mcp.settings.save': '保存',
+  'extensions.mcp.settings.invalidObject': '配置必须是一个 JSON 对象。',
+  'extensions.mcp.settings.nameRequired': '字段 name 为必填项且必须是非空字符串。',
+  'extensions.mcp.settings.commandRequired': '字段 command 为必填项且必须是非空字符串。',
+  'extensions.mcp.settings.invalidJson': 'JSON 格式无效，请检查语法。',
 
   'extensions.connections.clickToConnect': '点击连接此应用以授权 Agent 访问。',
   'extensions.connections.requiresElectron': '应用连接需要在 Electron 环境中使用。',

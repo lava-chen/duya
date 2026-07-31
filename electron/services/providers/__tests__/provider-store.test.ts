@@ -24,10 +24,6 @@ class FakeReader implements ProviderStoreReader {
   readOne(id: string) {
     return this.data[id];
   }
-  /** @deprecated Use readDefault. */
-  readActive() {
-    return this.readDefault();
-  }
   readDefault() {
     return this.defaultId ? this.data[this.defaultId] : undefined;
   }
@@ -152,16 +148,6 @@ describe('ProviderStore — write path', () => {
     // → providerType 'openai' (per the legacy mapper)
     expect(legacy.providerType).toBe('openai');
     expect(legacy.extraEnv).toEqual({ API_TIMEOUT_MS: '3000000' });
-  });
-
-  it('setActiveLlmProvider switches active and updates tags', () => {
-    expect(store.setActiveLlmProvider('a')).toBe(true);
-    expect(store.getActiveLlmProvider()?.id).toBe('a');
-    expect(reader.data['a'].isActive).toBe(true);
-  });
-
-  it('setActiveLlmProvider rejects missing id', () => {
-    expect(store.setActiveLlmProvider('nope')).toBe(false);
   });
 
   it('deleteLlmProvider removes the record and clears active', () => {

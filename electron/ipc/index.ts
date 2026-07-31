@@ -41,26 +41,3 @@ export {
   registerMemoryWakeupHandlers,
   registerMemoryListHandlers,
 };
-
-/**
- * Register all IPC handlers
- */
-export function registerAllIpcHandlers(): void {
-  registerSystemHandlers();
-  registerSettingsHandlers();
-  registerSkillsHandlers();
-  registerFilesHandlers();
-  registerLoggerHandlers();
-  registerUpdaterHandlers();
-  registerDbHandlers();
-  registerConductorHandlers();
-  registerMailboxHandlers();
-  registerAgentHandlers();
-  registerNetHandlers();
-  registerAgentServerHandlers();
-  registerPluginHandlers();
-  registerProjectDatabaseHandlers();
-  registerGitHandlers();
-  registerMemoryWakeupHandlers();
-  registerMemoryListHandlers();
-}

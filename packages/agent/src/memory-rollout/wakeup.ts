@@ -1,5 +1,5 @@
 /**
- * Memory v2 wakeup helper (Plan 305 Phase B).
+ * Memory wakeup helper (Plan 305 Phase B).
  *
  * Fire-and-forget nudge sent from the agent subprocess to the Electron
  * main process right after `ready`. The main-process router intercepts
@@ -8,7 +8,8 @@
  * session triggers Stage 1 extraction without waiting for the worker's
  * 60s interval.
  *
- * Shadow mode: gated by `DUYA_MEMORY_V2_ENABLED`. Failures are swallowed
+ * Shadow mode: gated by `DUYA_MEMORY_ENABLED` (legacy
+ * `DUYA_MEMORY_V2_ENABLED` still honored). Failures are swallowed
  * (best-effort) so the agent's startup path never breaks on a memory
  * pipeline error.
  */
@@ -27,7 +28,7 @@ export interface SendMemoryWakeupOptions {
   sessionId?: string;
   /**
    * Explicit enable override. When omitted, the helper reads
-   * `DUYA_MEMORY_V2_ENABLED` from the environment.
+   * `DUYA_MEMORY_ENABLED` from the environment.
    */
   enabled?: boolean;
 }
@@ -49,7 +50,7 @@ export function sendMemoryWakeup(
   send: SendWakeupFn,
   opts: SendMemoryWakeupOptions = {},
 ): number {
-  const enabled = opts.enabled ?? isMemoryV2Enabled();
+  const enabled = opts.enabled ?? isMemoryEnabled();
   if (!enabled) {
     return 0;
   }
@@ -75,16 +76,17 @@ export function sendMemoryWakeup(
 }
 
 /**
- * Read the `DUYA_MEMORY_V2_ENABLED` env var. Exported for test
- * overrides via `vi.mock`.
+ * Read the `DUYA_MEMORY_ENABLED` env var (legacy
+ * `DUYA_MEMORY_V2_ENABLED` still honored as an alias). Exported for
+ * test overrides via `vi.mock`.
  *
  * Dev default-on: when `DUYA_DEV=1` is set (agent subprocess spawned
  * from a dev Electron), the wakeup is sent automatically to accumulate
  * shadow data for the 4-week validation window required by Plan 305.
- * Explicit opt-out via `DUYA_MEMORY_V2_ENABLED=0` is still honored.
+ * Explicit opt-out via `DUYA_MEMORY_ENABLED=0` is still honored.
  */
-export function isMemoryV2Enabled(): boolean {
-  const v = process.env.DUYA_MEMORY_V2_ENABLED;
+export function isMemoryEnabled(): boolean {
+  const v = process.env.DUYA_MEMORY_ENABLED ?? process.env.DUYA_MEMORY_V2_ENABLED;
   if (v === '0' || v === 'false') return false;
   if (v === '1' || v === 'true') return true;
   return process.env.DUYA_DEV === '1';

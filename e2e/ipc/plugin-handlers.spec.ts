@@ -13,7 +13,6 @@
  *   plugin:registry:list
  *   plugin:health:list
  *   plugin:capability-index
- *   plugin:installed:v2
  */
 import { test, expect } from '@playwright/test';
 import { launchDuya, closeDuya, invokeApi, type DuyaApp } from '../helpers';
@@ -67,17 +66,5 @@ test.describe('plugin IPC (read-only)', () => {
     );
     expect(result.success).toBe(true);
     expect(Array.isArray(result.data)).toBe(true);
-  });
-
-  test('installedV2 returns a success envelope with data object', async () => {
-    dua = await launchDuya({ namespace: 'ipc-plugin-installed' });
-
-    const result = await invokeApi<{ success: boolean; data: Record<string, unknown> }>(
-      dua.page,
-      'plugin.installedV2',
-    );
-    expect(result.success).toBe(true);
-    expect(typeof result.data).toBe('object');
-    expect(result.data).not.toBeNull();
   });
 });

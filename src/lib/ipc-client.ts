@@ -607,14 +607,6 @@ export async function deleteLlmProviderIPC(id: string): Promise<boolean> {
   return (await window.electronAPI!.provider!.deleteLlm(id)) as boolean
 }
 
-/**
- * @deprecated Use setDefaultLlmProviderIPC. The single-active concept is
- * gone; setting the default does NOT lock the other providers.
- */
-export async function setActiveLlmProviderIPC(id: string): Promise<boolean> {
-  return setDefaultLlmProviderIPC(id)
-}
-
 export async function setDefaultLlmProviderIPC(id: string | null): Promise<boolean> {
   return (await window.electronAPI!.provider!.setDefaultLlm({ id })) as boolean
 }
