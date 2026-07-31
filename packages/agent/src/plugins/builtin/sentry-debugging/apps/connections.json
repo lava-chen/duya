@@ -1,0 +1,3 @@
+[
+  { "id": "sentry", "provider": "sentry", "scopes": [], "toolsets": ["debugging"], "required": true }
+]

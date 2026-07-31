@@ -1,0 +1,3 @@
+[
+  { "id": "notion", "provider": "notion", "scopes": [], "toolsets": ["knowledge"], "required": true }
+]

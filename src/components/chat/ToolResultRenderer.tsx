@@ -583,25 +583,11 @@ const browserRenderer: ToolResultRenderer = {
   },
 };
 
-/**
- * WebSearch result renderer (disabled - tool removed)
- * Kept as placeholder for future redesign
- */
-// const webSearchRenderer: ToolResultRenderer = {
-//   canRender: (name, content) => {
-//     const lowerName = name.toLowerCase();
-//     return (lowerName === 'web_search' || lowerName === 'websearch') && 
-//            (content.includes('"results"') || content.includes('"title"') && content.includes('"url"'));
-//   },
-//   render: (name, content) => { ... }
-// };
-
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
 const renderers: ToolResultRenderer[] = [
-  // webSearchRenderer, // Disabled - tool removed
   agentRenderer,
   browserRenderer,
   editRenderer,

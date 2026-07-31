@@ -717,6 +717,7 @@ export function ExtensionsPage() {
           onClose={() => setMarketplaceOpen(false)}
           installedPlugins={installed}
           connections={connections}
+          providers={connectionProviders}
           onInstallPlugin={(plugin) => setPendingInstall(plugin)}
           onConnectProvider={handleConnect}
           onDisconnectConnection={handleDisconnect}

@@ -9,7 +9,6 @@
  *   - provider:getLlm
  *   - provider:upsertLlm
  *   - provider:deleteLlm
- *   - provider:setActiveLlm        (deprecated: use setDefaultLlm)
  *   - provider:setDefaultLlm
  *   - provider:getDefault          (renderer-mask; returns the default's masked DTO)
  *   - provider:setMemory           (set the memory worker provider)
@@ -22,7 +21,7 @@
  *   - provider:upsertModelCapability
  *
  * Secret rules:
- *   - listLlm / getLlm / upsertLlm / deleteLlm / setActiveLlm / setDefaultLlm
+ *   - listLlm / getLlm / upsertLlm / deleteLlm / setDefaultLlm
  *     / getDefault / test / syncModels return MASKED provider shapes
  *     (no apiKey / accessToken).
  *   - getActiveRuntimeConfig / getRuntimeConfig are agent-only and return
@@ -102,16 +101,6 @@ export function registerProviderIpcHandlers(opts?: {
   // --- delete ---
   ipcMain.handle('provider:deleteLlm', (_event, id: string) => {
     return store.deleteLlmProvider(id);
-  });
-
-  // --- set active (deprecated: use setDefault) ---
-  ipcMain.handle('provider:setActiveLlm', (_event, id: string) => {
-    logger.warn(
-      'provider:setActiveLlm is deprecated; use provider:setDefaultLlm',
-      { id },
-      LogComponent.AgentCommunicator,
-    );
-    return store.setDefaultLlmProvider(id);
   });
 
   // --- set default ---

@@ -1,6 +1,6 @@
 /**
  * Chronological, token-budgeted compaction of session messages for the
- * Memory v2 Stage 1 extractor LLM input (Plan 304 Phase A, design v3 D9).
+ * Memory Stage 1 extractor LLM input (Plan 304 Phase A, design v3 D9).
  *
  * Pure function: no I/O, no clock, no randomness. The same input always
  * produces the same CompactedView, so Stage 1 re-extractions are

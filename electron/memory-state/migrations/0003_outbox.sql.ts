@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 
 /**
  * Migration 0003: Projection outbox + write-time content fingerprint
- * (Memory v2 Phase 1A.3, design D12).
+ * (Memory Phase 1A.3, design D12).
  *
  * Creates:
  *   - projection_outbox  (DB ↔ file atomicity queue)

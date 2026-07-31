@@ -1727,6 +1727,10 @@ class StreamSessionManager {
       messageCount: event.messageCount ?? 0,
       timestamp: Date.now(),
     };
+    // `done` follows this acknowledgement. Notify snapshot subscribers now so
+    // the terminal handoff can make one authoritative persisted-vs-transient
+    // decision instead of guessing from event timing.
+    this.notifyListeners(sessionId);
     console.log(`[stream-session-manager] handleDbPersistedEvent notify listeners: ${s.dbPersistedListeners.size}`);
 
     // Notify listeners for db_persisted subscription

@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import type {
   AutomationCron,
   AutomationCronRun,
   AutomationTemplate,
   ConcurrencyPolicy,
   CreateAutomationCronInput,
-  CronScheduleKind,
 } from '@/types/automation';
 import {
   createAutomationCronIPC,
@@ -22,17 +21,14 @@ import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-c
 import {
   PlusIcon,
   PlayIcon,
-  PencilSimpleIcon,
   TrashIcon,
   ClockIcon,
-  SlidersHorizontalIcon,
   WarningCircleIcon,
   XCircleIcon,
   SpinnerGapIcon,
-  RobotIcon,
   SquaresFourIcon,
-  ArrowRightIcon,
   DotsThreeIcon,
+  XIcon,
 } from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
@@ -42,6 +38,13 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { CronScheduleCard } from './CronScheduleCard';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { Input } from '@/components/ui/Input';
+import { Switch } from '@/components/ui/Switch';
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsRow,
+} from '@/components/settings/ui';
 import {
   createDefaultScheduleDraft,
   describeScheduleDraft,
@@ -82,11 +85,6 @@ type EditorState = {
   id?: string;
   name: string;
   description: string;
-  scheduleKind: CronScheduleKind;
-  at: string;
-  everyMs: string;
-  cronExpr: string;
-  cronTz: string;
   prompt: string;
   inputParams: string;
   concurrencyPolicy: ConcurrencyPolicy;
@@ -164,23 +162,18 @@ function getFriendlySchedule(cron: AutomationCron): string {
 function getStatusIcon(status: string) {
   switch (status) {
     case 'enabled':
-      return <span className="h-4 w-4 rounded-full border-2 border-[var(--muted)]" aria-label="已启用" />;
+      return <span className="h-4 w-4 rounded-full border-2 border-muted-foreground" aria-label="已启用" />;
     case 'error':
-      return <WarningCircleIcon size={14} className="text-[var(--error)]" />;
+      return <WarningCircleIcon size={14} className="text-destructive" />;
     case 'disabled':
     default:
-      return <XCircleIcon size={14} className="text-[var(--muted)]" />;
+      return <XCircleIcon size={14} className="text-muted-foreground" />;
   }
 }
 
 const DEFAULT_EDITOR: EditorState = {
   name: '',
   description: '',
-  scheduleKind: 'every',
-  at: '',
-  everyMs: '60000',
-  cronExpr: '*/5 * * * *',
-  cronTz: '',
   prompt: '',
   inputParams: '{}',
   concurrencyPolicy: 'skip',
@@ -196,11 +189,6 @@ function editorStateFromCron(cron: AutomationCron): EditorState {
     id: cron.id,
     name: cron.name,
     description: cron.description ?? '',
-    scheduleKind: cron.schedule_kind,
-    at: cron.schedule_at ?? '',
-    everyMs: String(cron.schedule_every_ms ?? 3_600_000),
-    cronExpr: cron.schedule_cron_expr ?? '0 9 * * *',
-    cronTz: cron.schedule_cron_tz ?? '',
     prompt: cron.prompt,
     inputParams: cron.input_params || '{}',
     concurrencyPolicy: cron.concurrency_policy,
@@ -212,41 +200,6 @@ function editorStateFromCron(cron: AutomationCron): EditorState {
   };
 }
 
-// Mock capabilities based on prompt content
-function inferCapabilities(prompt: string): { key: 'automation.capGit' | 'automation.capPRReview' | 'automation.capBrowser' | 'automation.capSearch'; available: boolean }[] {
-  const p = prompt.toLowerCase();
-  return [
-    { key: 'automation.capGit', available: p.includes('git') || p.includes('commit') || p.includes('pr') || p.includes('branch') },
-    { key: 'automation.capPRReview', available: p.includes('pr') || p.includes('pull request') || p.includes('review') },
-    { key: 'automation.capBrowser', available: p.includes('browser') || p.includes('web') || p.includes('url') || p.includes('site') },
-    { key: 'automation.capSearch', available: p.includes('search') || p.includes('find') || p.includes('lookup') },
-  ];
-}
-
-// Mock execution graph based on prompt
-function buildExecutionGraph(prompt: string): { key: 'automation.graphTrigger' | 'automation.graphGitCommit' | 'automation.capPRReview' | 'automation.graphSummarize' | 'automation.graphTodo' | 'automation.graphOutput'; status: 'success' | 'failed' | 'pending' | 'running' }[] {
-  const p = prompt.toLowerCase();
-  const graph: { key: 'automation.graphTrigger' | 'automation.graphGitCommit' | 'automation.capPRReview' | 'automation.graphSummarize' | 'automation.graphTodo' | 'automation.graphOutput'; status: 'success' | 'failed' | 'pending' | 'running' }[] = [
-    { key: 'automation.graphTrigger', status: 'success' },
-  ];
-
-  if (p.includes('git') || p.includes('commit')) {
-    graph.push({ key: 'automation.graphGitCommit', status: 'success' });
-  }
-  if (p.includes('pr') || p.includes('pull request')) {
-    graph.push({ key: 'automation.capPRReview', status: Math.random() > 0.5 ? 'success' : 'failed' });
-  }
-  if (p.includes('summarize') || p.includes('summary')) {
-    graph.push({ key: 'automation.graphSummarize', status: 'success' });
-  }
-  if (p.includes('todo') || p.includes('task')) {
-    graph.push({ key: 'automation.graphTodo', status: 'pending' });
-  }
-  graph.push({ key: 'automation.graphOutput', status: 'pending' });
-
-  return graph;
-}
-
 export function AutomationView() {
   const { t } = useTranslation();
   const hasElectronApi = typeof window !== 'undefined' && !!window.electronAPI?.automation;
@@ -256,7 +209,10 @@ export function AutomationView() {
   const [crons, setCrons] = useState<AutomationCron[]>([]);
   const [selectedCronId, setSelectedCronId] = useState<string | null>(null);
   const [runs, setRuns] = useState<AutomationCronRun[]>([]);
-  const [isCreating, setIsCreating] = useState(false);
+
+  // Edit modal state (create & edit)
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editingCron, setEditingCron] = useState<AutomationCron | null>(null);
 
   // NL & Template state
   const [quickChatModalOpen, setQuickChatModalOpen] = useState(false);
@@ -427,8 +383,18 @@ export function AutomationView() {
 
   function handleCreateNew(): void {
     setSelectedTemplate(null);
-    setSelectedCronId(null);
-    setIsCreating(true);
+    setEditingCron(null);
+    setEditModalOpen(true);
+  }
+
+  function handleEditCron(cron: AutomationCron): void {
+    setEditingCron(cron);
+    setEditModalOpen(true);
+  }
+
+  function handleCloseEditModal(): void {
+    setEditModalOpen(false);
+    setEditingCron(null);
   }
 
   function handleChatCreate(): void {
@@ -484,7 +450,6 @@ export function AutomationView() {
   }
 
   function handleSelectCron(cron: AutomationCron): void {
-    setIsCreating(false);
     setSelectedCronId(cron.id);
   }
 
@@ -515,71 +480,65 @@ export function AutomationView() {
     }
   }
 
-  // Calculate success rate
-  const successRate = useMemo(() => {
-    if (runs.length === 0) return null;
-    const success = runs.filter(r => r.run_status === 'success').length;
-    return Math.round((success / runs.length) * 100);
-  }, [runs]);
-
-  const showEmptyState = !loading && crons.length === 0 && !isCreating;
-
-  // Last 7 days status
-  const last7Days = useMemo(() => {
-    const days: { date: string; status: 'success' | 'failed' | 'none' }[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
-      const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-      const dayEnd = dayStart + 86400000;
-      const dayRuns = runs.filter(r => r.started_at && r.started_at >= dayStart && r.started_at < dayEnd);
-      if (dayRuns.length === 0) {
-        days.push({ date: dateStr, status: 'none' });
+  async function handleSaveCron(
+    cronId: string | undefined,
+    data: CreateAutomationCronInput,
+  ): Promise<void> {
+    if (!hasElectronApi) return;
+    try {
+      setSaving(true);
+      setError(null);
+      if (cronId) {
+        const { enabled, ...patch } = data;
+        await updateAutomationCronIPC(cronId, {
+          ...patch,
+          status: enabled === false ? 'disabled' : 'enabled',
+        });
+        await reloadCrons(cronId);
       } else {
-        const hasFailed = dayRuns.some(r => r.run_status === 'failed');
-        days.push({ date: dateStr, status: hasFailed ? 'failed' : 'success' });
+        const created = await createAutomationCronIPC(data);
+        await reloadCrons(created.id);
       }
+      handleCloseEditModal();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setSaving(false);
     }
-    return days;
-  }, [runs]);
+  }
+
+  const showEmptyState = !loading && crons.length === 0;
 
   return (
-    <div className="automation-scheduled-view h-full flex flex-col overflow-hidden">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-8 pt-8 pb-5">
         <div>
-          <h2 className="automation-title-copernicus text-3xl" style={{ color: 'var(--text)' }}>已计划</h2>
-          <p className="mt-2 text-sm" style={{ color: 'var(--muted)' }}>让 Duya 帮你安排任务、设置提醒，或定期跟进更新。</p>
+          <h2 className="text-3xl font-bold tracking-tight text-foreground" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>已计划</h2>
+          <p className="mt-2 text-sm text-muted-foreground">让 Duya 帮你安排任务、设置提醒，或定期跟进更新。</p>
         </div>
         {!showEmptyState && (
-        <div className="flex items-center gap-2">
-          <Button
-            className="flex items-center gap-2 px-4 py-2 rounded-full font-medium text-sm whitespace-nowrap transition-all duration-200"
-            style={{
-              background: 'var(--surface)',
-              color: 'var(--text)',
-              border: '1px solid var(--border)',
-            }}
-            onClick={handleViewTemplates}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-            type="button"
-            variant="secondary"
-            size="md"
-          >
-            <SquaresFourIcon size={16} />
-            {t('automation.templates')}
-          </Button>
-        </div>
+          <div className="flex items-center gap-2">
+            <Button
+              className="whitespace-nowrap rounded-full"
+              onClick={handleViewTemplates}
+              type="button"
+              variant="secondary"
+              size="md"
+            >
+              <SquaresFourIcon size={16} />
+              {t('automation.templates')}
+            </Button>
+          </div>
         )}
       </div>
 
       {/* Error Banner */}
       {error && (
-        <div className="mx-6 mb-4 px-4 py-3 rounded-lg flex items-center gap-2" style={{ background: 'var(--error-soft)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-          <WarningCircleIcon size={16} className="text-[var(--error)]" />
-          <span className="text-sm" style={{ color: 'var(--error)' }}>{error}</span>
+        <div className="mx-8 mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex items-center gap-2">
+          <WarningCircleIcon size={16} className="text-destructive" />
+          <span className="text-sm text-destructive">{error}</span>
         </div>
       )}
 
@@ -595,126 +554,88 @@ export function AutomationView() {
       ) : (
         <div className="flex-1 overflow-hidden px-8 pb-8 min-h-0">
           <div className="h-full min-h-0 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.75fr)_minmax(440px,1.25fr)]">
-          {/* Cron Jobs List - Left Side */}
-          <section className="flex flex-col h-full min-h-0">
-            <Button
-              type="button"
-              variant="ghost"
-              size="md"
-              onClick={handleCreateNew}
-              className="mb-7 flex items-center gap-3 rounded-full px-5 py-4 text-left transition-colors"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--muted)' }}
-            >
-              <PlusIcon size={20} style={{ color: 'var(--text)' }} />
-              <span className="text-base">安排任务</span>
-            </Button>
-            <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {loading ? (
-                <div className="flex items-center justify-center h-32" style={{ color: 'var(--muted)' }}>
-                  <SpinnerGapIcon size={20} className="animate-spin mr-2" />
-                  {t('automation.loading')}
-                </div>
-              ) : crons.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 text-center p-4">
-                  <ClockIcon size={32} className="mb-2 opacity-30" style={{ color: 'var(--muted)' }} />
-                  <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.noAutomations')}</p>
-                </div>
-              ) : (
-                <div className="space-y-0">
-                  {crons.map((cron) => (
-                    <div
-                      key={cron.id}
-                      className="px-5 py-4 cursor-pointer transition-all duration-200 rounded-2xl border-b"
-                      style={{
-                        background: selectedCronId === cron.id && !isCreating ? 'var(--surface)' : 'transparent',
-                        borderColor: selectedCronId === cron.id && !isCreating ? 'var(--text)' : 'var(--border)',
-                      }}
-                      onClick={() => handleSelectCron(cron)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          handleSelectCron(cron);
-                        }
-                      }}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-3 min-w-0">
-                          {selectedCronId === cron.id && !isCreating ? (
-                            <span className="h-3 w-3 rounded-full bg-[var(--accent)]" />
-                          ) : (
-                            getStatusIcon(cron.status)
-                          )}
-                          <span className="font-medium text-sm truncate" style={{ color: 'var(--text)' }}>{cron.name}</span>
+            {/* Cron Jobs List - Left Side */}
+            <section className="flex flex-col h-full min-h-0">
+              <Button
+                type="button"
+                variant="secondary"
+                size="md"
+                onClick={handleCreateNew}
+                className="mb-7 flex items-center gap-3 rounded-full px-5 py-4 text-left"
+              >
+                <PlusIcon size={20} />
+                <span className="text-base">安排任务</span>
+              </Button>
+              <div className="flex-1 overflow-y-auto scrollbar-thin">
+                {loading ? (
+                  <div className="flex items-center justify-center h-32 text-muted-foreground">
+                    <SpinnerGapIcon size={20} className="animate-spin mr-2" />
+                    {t('automation.loading')}
+                  </div>
+                ) : crons.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-32 text-center p-4">
+                    <ClockIcon size={32} className="mb-2 opacity-30 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">{t('automation.noAutomations')}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-0">
+                    {crons.map((cron) => {
+                      const isSelected = selectedCronId === cron.id;
+                      return (
+                        <div
+                          key={cron.id}
+                          className={`px-5 py-4 cursor-pointer transition-all duration-200 rounded-2xl border-b hover:bg-[var(--surface-hover)] ${
+                            isSelected
+                              ? 'bg-[var(--surface)] border-foreground'
+                              : 'bg-transparent border-border/50'
+                          }`}
+                          onClick={() => handleSelectCron(cron)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              handleSelectCron(cron);
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div className="flex items-center justify-between mb-1.5">
+                            <div className="flex items-center gap-3 min-w-0">
+                              {isSelected ? (
+                                <span className="h-3 w-3 rounded-full bg-accent" />
+                              ) : (
+                                getStatusIcon(cron.status)
+                              )}
+                              <span className="font-medium text-sm truncate text-foreground">{cron.name}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-xs ml-7 text-muted-foreground">
+                            <span>{getFriendlySchedule(cron)}</span>
+                            <span>·</span>
+                            <span>下次运行 {formatRelativeTime(cron.next_run_at, t)}</span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-xs ml-7" style={{ color: 'var(--muted)' }}>
-                        <span>{getFriendlySchedule(cron)}</span>
-                        <span>·</span>
-                        <span>下次运行 {formatRelativeTime(cron.next_run_at, t)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </section>
 
           {/* Detail/Editor Panel - Right Side */}
-          <section className="flex flex-col h-full min-h-0 overflow-hidden border-l" style={{ borderColor: 'var(--border)' }}>
-            {isCreating ? (
-              <CronEditor
-                availableModels={availableModels}
-                modelsLoading={modelsLoading}
-                onSave={async (data) => {
-                  if (!hasElectronApi) return;
-                  try {
-                    setSaving(true);
-                    setError(null);
-                    const created = await createAutomationCronIPC(data);
-                    await reloadCrons(created.id);
-                    setIsCreating(false);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : String(err));
-                    throw err;
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-                onCancel={() => setIsCreating(false)}
-                saving={saving}
-              />
-            ) : selectedCron ? (
+          <section className="flex flex-col h-full min-h-0 overflow-hidden border-l border-border/50">
+            {selectedCron ? (
               <CronDetail
                 cron={selectedCron}
                 runs={runs}
-                availableModels={availableModels}
-                modelsLoading={modelsLoading}
                 onRun={() => void runNow(selectedCron)}
                 onDelete={() => void removeCron(selectedCron)}
-                onUpdate={async (id, data) => {
-                  if (!hasElectronApi) return;
-                  try {
-                    setSaving(true);
-                    setError(null);
-                    await updateAutomationCronIPC(id, data);
-                    await reloadCrons(id);
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : String(err));
-                    throw err;
-                  } finally {
-                    setSaving(false);
-                  }
-                }}
-                saving={saving}
+                onEdit={() => handleEditCron(selectedCron)}
                 onViewSession={handleOpenChat}
-                successRate={successRate}
-                last7Days={last7Days}
               />
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <p className="text-base font-medium mb-1" style={{ color: 'var(--text)' }}>{t('automation.selectAutomation')}</p>
-                <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.selectAutomationDesc')}</p>
+                <p className="text-base font-medium mb-1 text-foreground">{t('automation.selectAutomation')}</p>
+                <p className="text-sm text-muted-foreground">{t('automation.selectAutomationDesc')}</p>
               </div>
             )}
           </section>
@@ -752,25 +673,60 @@ export function AutomationView() {
           onClose={handleCloseChat}
         />
       )}
+
+      {/* Create / Edit Cron Modal */}
+      <CronEditModal
+        cron={editingCron}
+        isOpen={editModalOpen}
+        onClose={handleCloseEditModal}
+        onSave={handleSaveCron}
+        availableModels={availableModels}
+        modelsLoading={modelsLoading}
+        saving={saving}
+      />
     </div>
   );
 }
 
-// Cron Editor Component
-interface CronEditorProps {
-  onSave: (data: CreateAutomationCronInput) => Promise<void>;
-  onCancel: () => void;
-  saving: boolean;
-  initialData?: EditorState;
+function CronEditModal({
+  cron,
+  isOpen,
+  onClose,
+  onSave,
+  availableModels,
+  modelsLoading,
+  saving,
+}: {
+  cron: AutomationCron | null;
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (cronId: string | undefined, data: CreateAutomationCronInput) => Promise<void>;
   availableModels: ModelOption[];
   modelsLoading: boolean;
-}
-
-function CronEditor({ onSave, onCancel, saving, initialData, availableModels, modelsLoading }: CronEditorProps) {
+  saving: boolean;
+}) {
   const { t } = useTranslation();
-  const [editor, setEditor] = useState<EditorState>(initialData || DEFAULT_EDITOR);
+  const initial = cron ? editorStateFromCron(cron) : DEFAULT_EDITOR;
+  const [editor, setEditor] = useState<EditorState>(initial);
   const [modelError, setModelError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setEditor(initial);
+      setModelError(null);
+      setFormError(null);
+    }
+  }, [isOpen, cron]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleSubmit = async () => {
     setModelError(null);
@@ -784,7 +740,6 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
       setFormError('请输入每次运行时要执行的提示词。');
       return;
     }
-
     if (!editor.model || !editor.model.trim()) {
       setModelError(t('automation.modelRequired'));
       return;
@@ -801,7 +756,7 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
       if (schedule.kind === 'at' && !schedule.at) throw new Error('请选择运行时间。');
       if (editor.scheduleDraft.endRepeat === 'on' && !editor.scheduleDraft.endAt) throw new Error('请选择结束重复时间。');
 
-      await onSave({
+      await onSave(cron?.id, {
         name: editor.name.trim(),
         description: editor.description.trim() || null,
         schedule,
@@ -813,392 +768,174 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
         maxRetries,
         enabled: editor.enabled,
       });
+      onClose();
     } catch (error) {
       setFormError(error instanceof Error ? error.message : String(error));
     }
   };
 
+  if (!isOpen) return null;
+
   return (
-    <>
-      <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between" style={{ background: 'var(--surface)' }}>
-        <h3 className="font-medium text-sm" style={{ color: 'var(--text)' }}>
-          {initialData?.id ? t('automation.editAutomation') : t('automation.newAutomation')}
-        </h3>
-        <IconButton
-          className="p-1.5 rounded-md transition-all duration-150"
-          style={{ color: 'var(--muted)' }}
-          onClick={onCancel}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; e.currentTarget.style.color = 'var(--text)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--muted)'; }}
-          variant="default"
-          shape="square"
-          size="sm"
-          aria-label="Close"
-        >
-          <XCircleIcon size={18} />
-        </IconButton>
-      </div>
-      <div className="flex-1 overflow-y-auto p-5 pb-24 scrollbar-thin">
-        <div className="space-y-4">
-          {/* Name and prompt are the primary decisions, so they lead the form. */}
-          <div className="overflow-hidden rounded-xl divide-y divide-[var(--border)]" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <div className="px-4 py-3.5">
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>任务名称</label>
-              <input
-                className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
-                style={{
-                  background: 'rgba(0, 0, 0, 0.3)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text)',
-                }}
-                placeholder={t('automation.namePlaceholder')}
-                value={editor.name}
-                onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
-                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-              />
-            </div>
-            <div className="px-4 py-3.5">
-              <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>提示词</label>
-              <textarea
-                className="w-full px-3 py-3 rounded-md text-sm transition-all duration-150 outline-none resize-y bg-black/30"
-                style={{ border: '1px solid var(--border)', color: 'var(--text)', minHeight: '148px' }}
-                placeholder={t('automation.promptPlaceholder')}
-                value={editor.prompt}
-                onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
-                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-              />
-            </div>
-          </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border/50 bg-[var(--sidebar-bg)] shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-border/50 px-5 py-4">
+          <h3 className="text-lg font-semibold text-foreground">
+            {cron ? t('automation.editAutomation') : t('automation.newAutomation')}
+          </h3>
+          <IconButton variant="ghost" size="sm" aria-label="关闭" onClick={onClose}>
+            <XIcon size={18} />
+          </IconButton>
+        </div>
 
-          <div className="overflow-hidden rounded-2xl" style={{ background: 'var(--command-menu-bg)', border: '1px solid var(--command-menu-border)' }}>
-            <div className="px-5 py-4">
-              <label className="mb-2 block text-xs font-medium" style={{ color: 'var(--command-menu-muted)' }}>工作目录</label>
-              <input
-                className="w-full rounded-lg bg-transparent px-3 py-2 text-sm outline-none"
-                style={{ border: '1px solid var(--command-menu-border)', color: 'var(--text)' }}
-                placeholder="~/.duya/workspace（默认）"
-                value={editor.workingDirectory}
-                onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
-              />
-              <p className="mt-2 text-xs" style={{ color: 'var(--command-menu-muted)' }}>留空时任务在 ~/.duya/workspace 中运行。</p>
-            </div>
-          </div>
-
-          {/* Model Selection */}
-          <div className="rounded-xl px-4 py-3.5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-2 mb-3">
-              <RobotIcon size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.model')}</span>
-              <span className="text-xs" style={{ color: 'var(--error)' }}>*</span>
-            </div>
-            <ModelSelector
-              models={availableModels}
-              selectedModelId={editor.model}
-              onSelect={(modelId) => setEditor((prev) => ({ ...prev, model: modelId }))}
-              loading={modelsLoading}
-              variant="full"
-            />
-            {modelError && (
-              <div className="text-xs mt-2" style={{ color: 'var(--error)' }}>
-                {modelError}
-              </div>
-            )}
-            {availableModels.length === 0 && !modelsLoading && (
-              <div className="text-xs mt-2" style={{ color: 'var(--warning)' }}>
-                {t('automation.noModelsAvailable')}
-              </div>
-            )}
-          </div>
-
-          <section>
-            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--command-menu-muted)' }}>频率</p>
-            <CronScheduleCard
-              value={editor.scheduleDraft}
-              onChange={(scheduleDraft) => setEditor((prev) => ({ ...prev, scheduleDraft }))}
-            />
-          </section>
-
-          {/* Legacy schedule controls are kept out of the render path while old editor fields remain wire-compatible. */}
-          <div className="hidden overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-[var(--border)]">
-              <ClockIcon size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.schedule')}</span>
-            </div>
-            <div className="flex gap-2 px-4 py-3.5 border-b border-[var(--border)]">
-              {(['every', 'at', 'cron'] as CronScheduleKind[]).map((kind) => (
-                <Button
-                  key={kind}
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all duration-150 capitalize"
-                  style={{
-                    background: editor.scheduleKind === kind ? 'var(--accent-soft)' : 'var(--surface)',
-                    color: editor.scheduleKind === kind ? 'var(--accent)' : 'var(--muted)',
-                    border: `1px solid ${editor.scheduleKind === kind ? 'var(--accent-soft)' : 'var(--border)'}`,
-                  }}
-                  onClick={() => setEditor((prev) => ({ ...prev, scheduleKind: kind }))}
-                  onMouseEnter={(e) => {
-                    if (editor.scheduleKind !== kind) {
-                      e.currentTarget.style.background = 'var(--surface-hover)';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (editor.scheduleKind !== kind) {
-                      e.currentTarget.style.background = 'var(--surface)';
-                    }
-                  }}
-                >
-                  {kind === 'every' ? '重复' : kind === 'at' ? '一次' : '自定义'}
-                </Button>
-              ))}
-            </div>
-
-            {editor.scheduleKind === 'every' && (
-              <div className="px-4 pb-3.5">
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>每隔多久运行</label>
-                <div className="flex items-center gap-3">
-                <input
-                  className="min-w-0 flex-1 px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
-                  style={{
-                    background: 'rgba(0, 0, 0, 0.3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text)',
-                  }}
-                  type="number"
-                  min="1"
-                  placeholder="60"
-                  value={editor.everyMs ? String(Number(editor.everyMs) / 60_000) : ''}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, everyMs: String(Number(event.target.value || '0') * 60_000) }))}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-                />
-                <span className="text-sm whitespace-nowrap" style={{ color: 'var(--muted)' }}>分钟</span>
-                </div>
-                <p className="text-xs mt-1.5" style={{ color: 'var(--muted)', opacity: 0.7 }}>
-                  例如：60 表示每小时运行一次。
-                </p>
-              </div>
-            )}
-            {editor.scheduleKind === 'at' && (
-              <div className="px-4 pb-3.5">
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.dateTime')}</label>
-                <input
-                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
-                  style={{
-                    background: 'rgba(0, 0, 0, 0.3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text)',
-                  }}
-                  type="datetime-local"
-                  value={editor.at ? editor.at.slice(0, 16) : ''}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, at: event.target.value }))}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-                />
-              </div>
-            )}
-            {editor.scheduleKind === 'cron' && (
-              <div className="space-y-3 px-4 pb-3.5">
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.cronExpression')}</label>
-                  <input
-                    className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none font-mono bg-black/30"
-                    style={{
-                      background: 'rgba(0, 0, 0, 0.3)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text)',
-                    }}
-                    placeholder="*/5 * * * *"
-                    value={editor.cronExpr}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, cronExpr: event.target.value }))}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+        <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
+          <div className="space-y-4 pb-4">
+            <SettingsSection title="任务">
+              <SettingsCard>
+                <SettingsRow label="任务名称">
+                  <Input
+                    type="text"
+                    size="sm"
+                    placeholder={t('automation.namePlaceholder')}
+                    value={editor.name}
+                    onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
+                    className="min-w-40"
                   />
-                  <p className="text-xs mt-1.5" style={{ color: 'var(--muted)', opacity: 0.7 }}>
-                    {t('automation.cronFormatHint')}
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.timezone')}</label>
-                  <input
-                    className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
-                    style={{
-                      background: 'rgba(0, 0, 0, 0.3)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text)',
-                    }}
-                    placeholder={t('automation.timezonePlaceholder')}
-                    value={editor.cronTz}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, cronTz: event.target.value }))}
-                    onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                    onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
+                </SettingsRow>
+                <SettingsRow label="提示词" className="flex-col items-stretch gap-2">
+                  <textarea
+                    className="w-full min-h-[120px] rounded-md border border-border/50 bg-chip px-3 py-2 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-y"
+                    placeholder={t('automation.promptPlaceholder')}
+                    value={editor.prompt}
+                    onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
                   />
-                </div>
-              </div>
-            )}
-          </div>
+                </SettingsRow>
+              </SettingsCard>
+            </SettingsSection>
 
-          {/* Input Params */}
-          <div className="rounded-xl px-4 py-3.5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.inputParams')}</label>
-            <textarea
-              className="w-full px-3 py-2 rounded-md text-sm transition-all duration-150 outline-none resize-none font-mono bg-black/30"
-              style={{
-                background: 'rgba(0, 0, 0, 0.3)',
-                border: '1px solid var(--border)',
-                color: 'var(--text)',
-                minHeight: '50px',
-              }}
-              placeholder='{"key": "value"}'
-              value={editor.inputParams}
-              onChange={(event) => setEditor((prev) => ({ ...prev, inputParams: event.target.value }))}
-              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-            />
-          </div>
+            <SettingsSection title="频率">
+              <CronScheduleCard
+                value={editor.scheduleDraft}
+                onChange={(scheduleDraft) => setEditor((prev) => ({ ...prev, scheduleDraft }))}
+              />
+            </SettingsSection>
 
-          {/* Advanced Settings */}
-          <div className="overflow-hidden rounded-xl" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-            <div className="flex items-center gap-2 px-4 py-3.5 border-b border-[var(--border)]">
-              <SlidersHorizontalIcon size={14} style={{ color: 'var(--accent)' }} />
-              <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{t('automation.advancedSettings')}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3 px-4 py-3.5">
-              <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.concurrencyPolicy')}</label>
-                <select
-                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none cursor-pointer bg-black/30"
-                  style={{
-                    background: 'rgba(0, 0, 0, 0.3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text)',
-                  }}
-                  value={editor.concurrencyPolicy}
-                  onChange={(event) =>
-                    setEditor((prev) => ({ ...prev, concurrencyPolicy: event.target.value as ConcurrencyPolicy }))
+            <SettingsSection title="设置">
+              <SettingsCard>
+                <SettingsRow label="模型" description={modelError || undefined}>
+                  <ModelSelector
+                    models={availableModels}
+                    selectedModelId={editor.model}
+                    onSelect={(modelId) => {
+                      setEditor((prev) => ({ ...prev, model: modelId }));
+                      setModelError(null);
+                    }}
+                    loading={modelsLoading}
+                    variant="full"
+                  />
+                </SettingsRow>
+                <SettingsRow label="工作目录" description="留空时使用默认目录">
+                  <Input
+                    type="text"
+                    size="sm"
+                    placeholder="~/.duya/workspace"
+                    value={editor.workingDirectory}
+                    onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
+                    className="min-w-40"
+                  />
+                </SettingsRow>
+                <SettingsRow label="输入参数" description='JSON 对象，运行时会传入提示词'>
+                  <textarea
+                    className="w-full min-w-40 min-h-[60px] rounded-md border border-border/50 bg-chip px-3 py-2 text-sm font-mono text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-none"
+                    placeholder='{"key": "value"}'
+                    value={editor.inputParams}
+                    onChange={(event) => setEditor((prev) => ({ ...prev, inputParams: event.target.value }))}
+                  />
+                </SettingsRow>
+              </SettingsCard>
+            </SettingsSection>
+
+            <SettingsSection title="高级">
+              <SettingsCard>
+                <SettingsRow label="并发策略">
+                  <select
+                    className="rounded-md border border-border/50 bg-chip px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 cursor-pointer"
+                    value={editor.concurrencyPolicy}
+                    onChange={(event) =>
+                      setEditor((prev) => ({ ...prev, concurrencyPolicy: event.target.value as ConcurrencyPolicy }))
+                    }
+                  >
+                    <option value="skip">{t('automation.concurrencySkip')}</option>
+                    <option value="parallel">{t('automation.concurrencyParallel')}</option>
+                    <option value="queue">{t('automation.concurrencyQueue')}</option>
+                    <option value="replace">{t('automation.concurrencyReplace')}</option>
+                  </select>
+                </SettingsRow>
+                <SettingsRow label="最大重试次数">
+                  <Input
+                    type="number"
+                    size="sm"
+                    min="0"
+                    max="10"
+                    value={editor.maxRetries}
+                    onChange={(event) => setEditor((prev) => ({ ...prev, maxRetries: event.target.value }))}
+                    className="w-20"
+                  />
+                </SettingsRow>
+                <SettingsRow
+                  label="启用"
+                  description={editor.enabled ? '任务将按计划运行' : '任务已暂停'}
+                  action={
+                    <Switch
+                      checked={editor.enabled}
+                      onCheckedChange={(checked) => setEditor((prev) => ({ ...prev, enabled: checked }))}
+                      ariaLabel={t('automation.enabled')}
+                    />
                   }
-                  onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
-                >
-                  <option value="skip">{t('automation.concurrencySkip')}</option>
-                  <option value="parallel">{t('automation.concurrencyParallel')}</option>
-                  <option value="queue">{t('automation.concurrencyQueue')}</option>
-                  <option value="replace">{t('automation.concurrencyReplace')}</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs mb-1.5" style={{ color: 'var(--muted)' }}>{t('automation.maxRetries')}</label>
-                <input
-                  className="w-full px-3 py-1.5 rounded-md text-sm transition-all duration-150 outline-none bg-black/30"
-                  style={{
-                    background: 'rgba(0, 0, 0, 0.3)',
-                    border: '1px solid var(--border)',
-                    color: 'var(--text)',
-                  }}
-                  type="number"
-                  min="0"
-                  max="10"
-                  value={editor.maxRetries}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, maxRetries: event.target.value }))}
-                  onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--accent)'; }}
-                  onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border)'; }}
                 />
-              </div>
-            </div>
-            <label className="flex items-center gap-2 px-4 py-3.5 border-t border-[var(--border)] text-sm cursor-pointer" style={{ color: 'var(--text)' }}>
-              <div className="relative inline-flex items-center">
-                <input
-                  type="checkbox"
-                  className="sr-only peer"
-                  checked={editor.enabled}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, enabled: event.target.checked }))}
-                />
-                <div
-                  className="w-10 h-5 rounded-full transition-all duration-200"
-                  style={{
-                    background: editor.enabled ? 'var(--accent)' : 'rgba(255, 255, 255, 0.1)',
-                  }}
-                >
-                  <div
-                    className="w-4 h-4 bg-white rounded-full transition-transform duration-200"
-                    style={{
-                      transform: editor.enabled ? 'translateX(20px)' : 'translateX(2px)',
-                      marginTop: '2px',
-                    }}
-                  />
-                </div>
-              </div>
-              <span className="text-xs">{t('automation.enabled')}</span>
-            </label>
-          </div>
+              </SettingsCard>
+            </SettingsSection>
 
-          {/* Action Buttons */}
-          {formError && (
-            <div className="rounded-xl px-4 py-3 text-sm" role="alert" style={{ background: 'var(--error-soft)', color: 'var(--error)' }}>
-              {formError}
-            </div>
-          )}
-          <div
-            className="-mx-5 flex gap-3 border-t px-5 pb-5 pt-4"
-            style={{ background: 'var(--command-menu-bg)', borderColor: 'var(--command-menu-border)' }}
-          >
-            <Button
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200"
-              style={{
-                background: 'linear-gradient(140deg, #5f71ff, #7286ff)',
-                color: '#ffffff',
-                opacity: saving ? 0.6 : 1,
-              }}
-              type="button"
-              variant="primary"
-              size="md"
-              disabled={saving}
-              onClick={() => { void handleSubmit(); }}
-              onMouseEnter={(e) => {
-                if (!saving) {
-                  e.currentTarget.style.opacity = '0.9';
-                  e.currentTarget.style.transform = 'translateY(-1px)';
-                  e.currentTarget.style.boxShadow = '0 4px 12px var(--accent-shadow)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.opacity = saving ? '0.6' : '1';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
-            >
-              {saving ? (
-                <>
-                  <SpinnerGapIcon size={16} className="animate-spin" />
-                  {t('automation.saving')}
-                </>
-              ) : (
-                <>{initialData?.id ? t('automation.saveChanges') : t('automation.createAutomation')}</>
-              )}
-            </Button>
-            <Button
-              className="px-4 py-2.5 rounded-lg font-medium text-sm transition-all duration-200"
-              style={{
-                background: 'var(--surface)',
-                color: 'var(--text)',
-                border: '1px solid var(--border)',
-              }}
-              type="button"
-              variant="secondary"
-              size="md"
-              onClick={onCancel}
-              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-            >
-              {t('automation.cancel')}
-            </Button>
+            {formError && (
+              <div
+                className="rounded-xl border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                role="alert"
+              >
+                {formError}
+              </div>
+            )}
           </div>
         </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border/50 px-5 py-4">
+          <Button type="button" variant="ghost" size="md" onClick={onClose}>
+            {t('automation.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            disabled={saving}
+            onClick={() => { void handleSubmit(); }}
+          >
+            {saving ? (
+              <>
+                <SpinnerGapIcon size={16} className="animate-spin" />
+                {t('automation.saving')}
+              </>
+            ) : (
+              <>{cron ? t('automation.saveChanges') : t('automation.createAutomation')}</>
+            )}
+          </Button>
+        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -1206,607 +943,199 @@ function CronEditor({ onSave, onCancel, saving, initialData, availableModels, mo
 interface CronDetailProps {
   cron: AutomationCron;
   runs: AutomationCronRun[];
-  availableModels: ModelOption[];
-  modelsLoading: boolean;
   onRun: () => void;
   onDelete: () => void;
-  onUpdate: (id: string, data: Parameters<typeof updateAutomationCronIPC>[1]) => Promise<void>;
-  saving: boolean;
+  onEdit: () => void;
   onViewSession?: (run: AutomationCronRun) => void;
-  successRate: number | null;
-  last7Days: { date: string; status: 'success' | 'failed' | 'none' }[];
 }
 
-function CronDetail({ cron, runs, availableModels, modelsLoading, onRun, onDelete, onUpdate, saving, onViewSession, successRate, last7Days }: CronDetailProps) {
+function CronDetail({ cron, runs, onRun, onDelete, onEdit, onViewSession }: CronDetailProps) {
   const { t } = useTranslation();
-  const [isEditing, setIsEditing] = useState(false);
-  const [showAllRuns, setShowAllRuns] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
 
-  const displayedRuns = showAllRuns ? runs : runs.slice(0, 5);
-  const capabilities = inferCapabilities(cron.prompt);
-  const executionGraph = buildExecutionGraph(cron.prompt);
-  // Last result
-  const lastRun = runs[0];
-  const lastResult = lastRun ? {
-    status: lastRun.run_status,
-    error: lastRun.error_message,
-    duration: lastRun.started_at && lastRun.ended_at
-      ? `${Math.round((lastRun.ended_at - lastRun.started_at) / 1000)}s`
-      : null,
-  } : null;
-  const [draftPrompt, setDraftPrompt] = useState(cron.prompt);
-  const [draftScheduleKind, setDraftScheduleKind] = useState<CronScheduleKind>(cron.schedule_kind);
-  const [draftEveryMs, setDraftEveryMs] = useState(String(cron.schedule_every_ms ?? 60_000));
-  const [draftAt, setDraftAt] = useState(cron.schedule_at ?? '');
-  const [draftCronExpr, setDraftCronExpr] = useState(cron.schedule_cron_expr ?? '*/5 * * * *');
-  const [draftCronTz, setDraftCronTz] = useState(cron.schedule_cron_tz ?? '');
   const detailScheduleDraft = useMemo(() => scheduleToDraft(cron), [cron]);
 
-  const beginEditing = () => {
-    setDraftPrompt(cron.prompt);
-    setDraftScheduleKind(cron.schedule_kind);
-    setDraftEveryMs(String(cron.schedule_every_ms ?? 60_000));
-    setDraftAt(cron.schedule_at ?? '');
-    setDraftCronExpr(cron.schedule_cron_expr ?? '*/5 * * * *');
-    setDraftCronTz(cron.schedule_cron_tz ?? '');
-    setIsEditing(true);
+  useEffect(() => {
+    if (!showMoreMenu) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!moreMenuRef.current?.contains(event.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [showMoreMenu]);
+
+  const concurrencyLabels: Record<ConcurrencyPolicy, string> = {
+    skip: t('automation.concurrencySkip'),
+    parallel: t('automation.concurrencyParallel'),
+    queue: t('automation.concurrencyQueue'),
+    replace: t('automation.concurrencyReplace'),
   };
-
-  const cancelEditing = () => {
-    setIsEditing(false);
-  };
-
-  const saveInlineChanges = async () => {
-    const schedule = draftScheduleKind === 'at'
-      ? { kind: 'at' as const, at: draftAt }
-      : draftScheduleKind === 'every'
-        ? { kind: 'every' as const, everyMs: Number(draftEveryMs) }
-        : { kind: 'cron' as const, cronExpr: draftCronExpr, cronTz: draftCronTz || null };
-
-    await onUpdate(cron.id, {
-      schedule,
-      prompt: draftPrompt,
-    });
-    setIsEditing(false);
-  };
-
-  if (isEditing) {
-    return (
-      <CronEditor
-        initialData={editorStateFromCron(cron)}
-        availableModels={availableModels}
-        modelsLoading={modelsLoading}
-        saving={saving}
-        onCancel={cancelEditing}
-        onSave={async (data) => {
-          const { enabled, ...patch } = data;
-          await onUpdate(cron.id, {
-            ...patch,
-            status: enabled === false ? 'disabled' : 'enabled',
-          });
-          setIsEditing(false);
-        }}
-      />
-    );
-  }
 
   return (
     <>
       {/* Header */}
-      <div className="px-8 pt-7 pb-5 flex items-start justify-between" style={{ background: 'var(--main-bg)' }}>
+      <div className="flex items-start justify-between border-b border-border/50 px-8 pt-7 pb-5">
         <div className="min-w-0">
-          <p className="mb-1 text-xs" style={{ color: 'var(--accent)' }}>{getFriendlySchedule(cron)}</p>
-          <h3 className="font-medium text-lg truncate" style={{ color: 'var(--text)' }}>{cron.name}</h3>
+          <p className="mb-1 text-xs text-accent">{getFriendlySchedule(cron)}</p>
+          <h3 className="truncate text-lg font-semibold text-foreground">{cron.name}</h3>
         </div>
-        <div className="relative">
-          <IconButton
-            type="button"
-            aria-label="更多操作"
-            aria-expanded={showMoreMenu}
-            className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
-            style={{ color: 'var(--text)' }}
-            onClick={() => setShowMoreMenu((visible) => !visible)}
-            onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
-            onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
-            variant="default"
-            shape="round"
-            size="md"
-          >
-            <DotsThreeIcon size={22} />
-          </IconButton>
-          {showMoreMenu && (
-            <div
-              className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-xl py-1 shadow-lg"
-              style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="primary" size="sm" onClick={onRun}>
+            <PlayIcon size={16} />
+            立即运行
+          </Button>
+          <div className="relative" ref={moreMenuRef}>
+            <IconButton
+              type="button"
+              aria-label="更多操作"
+              aria-expanded={showMoreMenu}
+              variant="default"
+              shape="round"
+              size="md"
+              onClick={() => setShowMoreMenu((visible) => !visible)}
             >
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full px-3 py-2 text-left text-sm transition-colors"
-                style={{ color: 'var(--text)' }}
-                onClick={() => { setShowMoreMenu(false); beginEditing(); }}
-                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
-                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
-              >
-                编辑计划
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="w-full px-3 py-2 text-left text-sm transition-colors"
-                style={{ color: 'var(--success)' }}
-                onClick={() => { setShowMoreMenu(false); onRun(); }}
-                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--success-soft)'; }}
-                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
-              >
-                立即运行
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                size="sm"
-                className="w-full px-3 py-2 text-left text-sm transition-colors"
-                style={{ color: 'var(--error)' }}
-                onClick={() => { setShowMoreMenu(false); onDelete(); }}
-                onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--error-soft)'; }}
-                onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
-              >
-                删除计划
-              </Button>
-            </div>
-          )}
-        </div>
-        <div className="hidden items-center gap-2">
-          <button
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
-            style={{ background: 'var(--success-soft)', color: 'var(--success)' }}
-            onClick={onRun}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
-          >
-            <PlayIcon size={12} />
-            {t('automation.runNow')}
-          </button>
-          <button
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
-            style={{ background: 'var(--surface)', color: 'var(--text)' }}
-            onClick={() => setIsEditing(true)}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-hover)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
-          >
-            <PencilSimpleIcon size={12} />
-            编辑
-          </button>
-          {lastRun?.session_id && onViewSession && (
-            <button
-              className="px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
-              style={{ background: 'var(--text)', color: 'var(--main-bg)' }}
-              onClick={() => onViewSession(lastRun)}
-            >
-              打开聊天
-            </button>
-          )}
-          <button
-            className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150"
-            style={{ background: 'var(--error-soft)', color: 'var(--error)' }}
-            onClick={onDelete}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
-          >
-            <TrashIcon size={12} />
-          </button>
+              <DotsThreeIcon size={22} />
+            </IconButton>
+            {showMoreMenu && (
+              <div className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-xl border border-border/50 bg-[var(--surface)] py-1 shadow-lg">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start px-3 py-2 text-left text-sm"
+                  onClick={() => { setShowMoreMenu(false); onEdit(); }}
+                >
+                  编辑计划
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start px-3 py-2 text-left text-sm"
+                  onClick={() => { setShowMoreMenu(false); onRun(); }}
+                >
+                  立即运行
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  size="sm"
+                  className="w-full justify-start px-3 py-2 text-left text-sm"
+                  onClick={() => { setShowMoreMenu(false); onDelete(); }}
+                >
+                  删除计划
+                </Button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin">
-        <div className="px-8 pb-8 pt-4">
-          <section>
-            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--muted)' }}>提示词</p>
-            <textarea
-              readOnly={!isEditing}
-              value={isEditing ? draftPrompt : cron.prompt}
-              aria-label="提示词"
-              className="min-h-52 w-full resize-none rounded-2xl px-5 py-4 text-[15px] leading-7 outline-none"
-              style={{ background: 'var(--main-bg)', border: '1px solid var(--border)', color: 'var(--text)' }}
-              onChange={(event) => setDraftPrompt(event.target.value)}
+      <div className="flex-1 overflow-y-auto px-8 pb-8 pt-5 scrollbar-thin">
+        <SettingsSection title="任务" description="名称和每次运行执行的提示词">
+          <SettingsCard>
+            <SettingsRow label="名称" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.name}</span>} />
+            <SettingsRow
+              label="提示词"
+              description={cron.prompt}
+              onClick={onEdit}
+              action={<span className="text-sm text-muted-foreground">›</span>}
             />
-          </section>
+          </SettingsCard>
+        </SettingsSection>
 
-          <section className="mt-8">
-            <p className="mb-3 text-xs font-medium" style={{ color: 'var(--muted)' }}>频率</p>
-            <div className="w-full overflow-hidden rounded-2xl" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              {isEditing ? (
-                <>
-                  <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm">
-                    <span style={{ color: 'var(--text)' }}>重复</span>
-                    <select
-                      value={draftScheduleKind}
-                      className="min-w-28 rounded-lg px-2 py-1.5 text-right outline-none"
-                      style={{ background: 'var(--surface)', color: 'var(--text)' }}
-                      onChange={(event) => setDraftScheduleKind(event.target.value as CronScheduleKind)}
-                    >
-                      <option value="every">重复</option>
-                      <option value="at">一次</option>
-                      <option value="cron">自定义</option>
-                    </select>
-                  </div>
-                  {draftScheduleKind === 'every' && (
-                    <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
-                      <span style={{ color: 'var(--text)' }}>间隔</span>
-                      <div className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
-                        <input
-                          type="number"
-                          min="1"
-                          value={Number(draftEveryMs) / 60_000}
-                          className="w-20 rounded-lg px-2 py-1.5 text-right outline-none"
-                          style={{ background: 'var(--surface)', color: 'var(--text)' }}
-                          onChange={(event) => setDraftEveryMs(String(Number(event.target.value || '0') * 60_000))}
-                        />
-                        分钟
-                      </div>
-                    </div>
-                  )}
-                  {draftScheduleKind === 'at' && (
-                    <div className="flex items-center justify-between gap-4 px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
-                      <span style={{ color: 'var(--text)' }}>时间</span>
-                      <input
-                        type="datetime-local"
-                        value={draftAt ? draftAt.slice(0, 16) : ''}
-                        className="rounded-lg px-2 py-1.5 outline-none"
-                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
-                        onChange={(event) => setDraftAt(event.target.value)}
-                      />
-                    </div>
-                  )}
-                  {draftScheduleKind === 'cron' && (
-                    <div className="space-y-3 px-5 py-4" style={{ borderTop: '1px solid var(--border)' }}>
-                      <input
-                        value={draftCronExpr}
-                        className="w-full rounded-lg px-3 py-2 font-mono text-sm outline-none"
-                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
-                        onChange={(event) => setDraftCronExpr(event.target.value)}
-                      />
-                      <input
-                        value={draftCronTz}
-                        placeholder="本地时间"
-                        className="w-full rounded-lg px-3 py-2 text-sm outline-none"
-                        style={{ background: 'var(--surface)', color: 'var(--text)' }}
-                        onChange={(event) => setDraftCronTz(event.target.value)}
-                      />
-                    </div>
-                  )}
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="w-full text-left transition-colors"
-                  onClick={beginEditing}
-                  onMouseEnter={(event) => { event.currentTarget.style.background = 'var(--surface-hover)'; }}
-                  onMouseLeave={(event) => { event.currentTarget.style.background = 'transparent'; }}
-                >
-                  <div className="flex items-center justify-between px-5 py-4 text-sm">
-                    <span style={{ color: 'var(--text)' }}>重复</span>
-                    <span className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
-                      {cron.schedule_kind === 'at' ? '一次' : '重复'} <span aria-hidden="true">›</span>
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between px-5 py-4 text-sm" style={{ borderTop: '1px solid var(--border)' }}>
-                    <span style={{ color: 'var(--text)' }}>频率</span>
-                    <span className="flex items-center gap-2" style={{ color: 'var(--muted)' }}>
-                      {describeScheduleDraft(detailScheduleDraft)} <span aria-hidden="true">›</span>
-                    </span>
-                  </div>
-                </button>
-              )}
-            </div>
-          </section>
+        <SettingsSection title="计划" description="运行频率和下次执行时间">
+          <SettingsCard>
+            <SettingsRow label="频率" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{describeScheduleDraft(detailScheduleDraft)}</span>} />
+            <SettingsRow label="下次运行" action={<span className="text-sm text-muted-foreground">{formatDateShort(cron.next_run_at)}</span>} />
+          </SettingsCard>
+        </SettingsSection>
 
-          <section className="mt-6">
-            <div className="flex items-center justify-between rounded-2xl px-5 py-4 text-sm" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span style={{ color: 'var(--text)' }}>下次运行</span>
-              <span className="text-right" style={{ color: 'var(--muted)' }}>
-                {formatDateShort(cron.next_run_at)}
-              </span>
-            </div>
-          </section>
+        <SettingsSection title="设置" description="模型、工作目录和运行参数">
+          <SettingsCard>
+            <SettingsRow label="模型" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.model}</span>} />
+            <SettingsRow label="工作目录" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.working_directory || '默认'}</span>} />
+            <SettingsRow
+              label="输入参数"
+              description={cron.input_params || '{ }'}
+              onClick={onEdit}
+              action={<span className="text-sm text-muted-foreground">›</span>}
+            />
+          </SettingsCard>
+        </SettingsSection>
 
-          <section className="mt-4">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-5 rounded-2xl px-5 py-4 text-left text-sm transition-colors"
-              style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}
-              onClick={beginEditing}
-            >
-              <span style={{ color: 'var(--text)' }}>工作目录</span>
-              <span className="truncate" style={{ color: 'var(--muted)' }}>{cron.working_directory || '~/.duya/workspace'}</span>
-            </button>
-          </section>
-        </div>
+        <SettingsSection title="高级" description="并发策略、重试和开关">
+          <SettingsCard>
+            <SettingsRow label="并发策略" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{concurrencyLabels[cron.concurrency_policy]}</span>} />
+            <SettingsRow label="最大重试次数" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{cron.max_retries}</span>} />
+            <SettingsRow
+              label="状态"
+              description={cron.status === 'enabled' ? '按计划运行' : '已暂停'}
+              onClick={onEdit}
+              action={
+                <span
+                  className={`inline-flex h-2.5 w-2.5 rounded-full ${
+                    cron.status === 'enabled' ? 'bg-[var(--success)]' : 'bg-muted'
+                  }`}
+                />
+              }
+            />
+          </SettingsCard>
+        </SettingsSection>
 
-        <div className="hidden">
-        {/* Daily Brief Section */}
-        <div className="p-6 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold tracking-wider" style={{ color: 'var(--muted)' }}>计划</span>
-
-          <div className="mt-3 overflow-hidden rounded-xl divide-y divide-[var(--border)]" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderColor: 'var(--border)' }}>
-            {/* Status Card */}
-            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
-              <span className="text-sm" style={{ color: 'var(--text)' }}>重复</span>
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>
-                {getFriendlySchedule(cron)}
-              </p>
-            </div>
-
-            {/* Next Run Card */}
-            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
-              <span className="text-sm" style={{ color: 'var(--text)' }}>下次运行</span>
-              <div className="text-right">
-                <p className="text-sm" style={{ color: 'var(--text)' }}>{formatRelativeTime(cron.next_run_at, t)}</p>
-                <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{formatDateShort(cron.next_run_at)}</p>
-              </div>
-            </div>
-
-            {/* Last Result Card */}
-            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
-              <span className="text-sm" style={{ color: 'var(--text)' }}>上次运行</span>
-              <div className="text-right">
-                <p className="text-sm" style={{ color: 'var(--text)' }}>
-                  {lastRun?.started_at ? formatDateShort(lastRun.started_at) : '尚未运行'}
-                </p>
-                {lastResult && (
-                  <p className="text-xs mt-0.5" style={{ color: lastResult.status === 'success' ? 'var(--success)' : 'var(--error)' }}>
-                    {lastResult.status === 'success' ? '已完成' : '未完成'}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between px-4 py-3.5" style={{ background: 'transparent' }}>
-              <span className="text-sm" style={{ color: 'var(--text)' }}>状态</span>
-              <p className="text-sm" style={{ color: cron.status === 'error' ? 'var(--error)' : cron.status === 'disabled' ? 'var(--muted)' : 'var(--success)' }}>
-                {cron.status === 'error' ? '需要处理' : cron.status === 'disabled' ? '已暂停' : '已启用'}
-              </p>
-            </div>
-
-            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.nextRun')}</span>
-              <p className="text-sm font-medium mt-1" style={{ color: 'var(--text)' }}>
-                {formatDateShort(cron.next_run_at)}
-              </p>
-              <p className="text-xs" style={{ color: 'var(--muted)' }}>
-                {formatRelativeTime(cron.next_run_at, t)}
-              </p>
-            </div>
-
-            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.lastResult')}</span>
-              {lastResult ? (
-                <>
-                  <p className="text-sm font-medium capitalize mt-1" style={{
-                    color: lastResult.status === 'success' ? 'var(--success)' : lastResult.status === 'failed' ? 'var(--error)' : 'var(--text)'
-                  }}>
-                    {lastResult.status === 'success' ? t('automation.statusSuccess') : lastResult.status === 'failed' ? t('automation.statusFailed', { error: lastResult.error || t('automation.statusUnknown') }) : lastResult.status}
-                  </p>
-                  {lastResult.duration && (
-                    <p className="text-xs" style={{ color: 'var(--muted)' }}>{t('automation.duration', { duration: lastResult.duration })}</p>
-                  )}
-                </>
-              ) : (
-                <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>{t('automation.statusNoRuns')}</p>
-              )}
-            </div>
-
-            {/* Capabilities Card */}
-            <div className="hidden rounded-lg p-3" style={{ background: 'var(--main-bg)', border: '1px solid var(--border)' }}>
-              <span className="text-xs font-medium" style={{ color: 'var(--muted)' }}>{t('automation.capabilities')}</span>
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {capabilities.map((cap) => (
-                  <span
-                    key={cap.key}
-                    className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium"
-                    style={{
-                      background: cap.available ? 'var(--success-soft)' : 'var(--chip)',
-                      color: cap.available ? 'var(--success)' : 'var(--muted)',
-                    }}
-                  >
-                    {t(cap.key)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Task Spec Section */}
-        <div className="p-6 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold tracking-wider" style={{ color: 'var(--muted)' }}>提示词</span>
-          <div className="rounded-xl p-4 mt-3 max-h-72 overflow-y-auto whitespace-pre-wrap text-sm leading-6 bg-black/30" style={{ border: '1px solid var(--border)', color: 'var(--text)' }}>
-            {cron.prompt}
-          </div>
-        </div>
-
-        {/* Execution Graph Section */}
-        <div className="hidden p-4 border-b border-[var(--border)]">
-          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.executionGraph')}</span>
-          <div className="flex items-center gap-1 overflow-x-auto pb-2 mt-3">
-            {executionGraph.map((node, i) => (
-              <div key={i} className="flex items-center gap-1 flex-shrink-0">
-                <div
-                  className="flex items-center px-2.5 py-1.5 rounded-lg text-xs font-medium"
-                  style={{
-                    background: node.status === 'failed' ? 'var(--error-soft)' : node.status === 'success' ? 'var(--success-soft)' : 'var(--surface)',
-                    color: node.status === 'failed' ? 'var(--error)' : node.status === 'success' ? 'var(--success)' : 'var(--muted)',
-                    border: `1px solid ${node.status === 'failed' ? 'rgba(239, 68, 68, 0.3)' : node.status === 'success' ? 'rgba(34, 197, 94, 0.3)' : 'var(--border)'}`,
-                  }}
-                >
-                  {t(node.key)}
-                </div>
-                {i < executionGraph.length - 1 && (
-                  <ArrowRightIcon size={12} style={{ color: 'var(--muted)' }} />
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Runs Timeline Section */}
-        <div className="hidden p-4">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--muted)' }}>{t('automation.recentRuns')}</span>
-            {successRate !== null && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs" style={{ color: 'var(--muted)' }}>{t('automation.successRate')}</span>
-                <div className="flex items-center gap-1">
-                  <div className="w-16 h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-                    <div
-                      className="h-full rounded-full transition-all duration-300"
-                      style={{
-                        width: `${successRate}%`,
-                        background: successRate >= 80 ? 'var(--success)' : successRate >= 50 ? 'var(--warning)' : 'var(--error)',
-                      }}
-                    />
-                  </div>
-                  <span className="text-xs font-medium" style={{ color: 'var(--text)' }}>{successRate}%</span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Last 7 days */}
-          {last7Days.length > 0 && (
-            <div className="flex items-center gap-2 mb-3 px-1">
-              <span className="text-[10px]" style={{ color: 'var(--muted)' }}>{t('automation.last7Days')}</span>
-              <div className="flex items-center gap-1">
-                {last7Days.map((day, i) => (
-                  <div key={i} className="flex flex-col items-center gap-0.5">
-                    <div
-                      className="w-4 h-4 rounded flex items-center justify-center text-[8px] font-bold"
-                      style={{
-                        background: day.status === 'success' ? 'var(--success-soft)' : day.status === 'failed' ? 'var(--error-soft)' : 'var(--chip)',
-                        color: day.status === 'success' ? 'var(--success)' : day.status === 'failed' ? 'var(--error)' : 'var(--muted)',
-                      }}
-                    >
-                      {day.status === 'success' ? '✓' : day.status === 'failed' ? '✗' : '·'}
-                    </div>
-                    <span className="text-[8px]" style={{ color: 'var(--muted)' }}>{day.date}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
+        <SettingsSection title="运行历史">
           {runs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-sm" style={{ color: 'var(--muted)' }}>{t('automation.statusNoRuns')}</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--muted)', opacity: 0.7 }}>{t('automation.clickRunNowHint')}</p>
-            </div>
+            <SettingsCard divided={false} className="py-8 text-center text-sm text-muted-foreground">
+              {t('automation.statusNoRuns')}
+            </SettingsCard>
           ) : (
-            <div className="space-y-0">
-              {displayedRuns.map((run, index) => (
-                <div
-                  key={run.id}
-                  className="flex items-start gap-3 py-3 relative"
-                  style={{
-                    borderLeft: '2px solid var(--border)',
-                    paddingLeft: '12px',
-                    marginLeft: '6px',
-                  }}
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium capitalize" style={{ color: 'var(--text)' }}>
-                          {run.run_status}
-                        </span>
-                        {run.error_message && (
-                          <span className="text-xs truncate max-w-[200px]" style={{ color: 'var(--error)' }}>
-                            {run.error_message}
-                          </span>
-                        )}
+            <SettingsCard>
+              {runs.slice(0, 5).map((run, index) => {
+                const hasSession = !!run.session_id && !!onViewSession;
+                return (
+                  <SettingsRow
+                    key={run.id}
+                    label={
+                      <div className="flex items-center gap-3">
+                        <RunStatusIndicator status={run.run_status} />
+                        <span>{formatDateShort(run.started_at)}</span>
                       </div>
-                      <span className="text-xs flex-shrink-0" style={{ color: 'var(--muted)' }}>
-                        {formatDateShort(run.started_at)}
-                      </span>
-                    </div>
-
-                    {run.output && (
-                      <p className="text-xs truncate" style={{ color: 'var(--muted)' }}>
-                        {run.output}
-                      </p>
-                    )}
-
-                    <div className="flex items-center gap-2 mt-1.5">
-                      {run.session_id && onViewSession && (
-                        <button
-                          onClick={() => onViewSession(run)}
-                          className="px-2 py-0.5 rounded text-[10px] font-medium transition-all duration-150"
-                          style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
-                        >
+                    }
+                    description={run.error_message || undefined}
+                    className={index > 0 ? 'border-t border-border/20' : undefined}
+                    action={
+                      hasSession ? (
+                        <Button type="button" variant="ghost" size="sm" onClick={() => onViewSession!(run)}>
                           {t('automation.viewLogs')}
-                        </button>
-                      )}
-                      {run.error_message && (
-                        <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: 'var(--error-soft)', color: 'var(--error)' }}>
-                          {run.error_message}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-
-              {runs.length > 5 && (
-                <button
-                  onClick={() => setShowAllRuns(!showAllRuns)}
-                  className="w-full text-center py-2 text-xs font-medium transition-colors"
-                  style={{ color: 'var(--accent)' }}
-                >
-                  {showAllRuns ? t('automation.showLess') : t('automation.showMore', { count: runs.length - 5 })}
-                </button>
-              )}
-            </div>
+                        </Button>
+                      ) : (
+                        <span className="text-sm text-muted-foreground capitalize">{run.run_status}</span>
+                      )
+                    }
+                  />
+                );
+              })}
+            </SettingsCard>
           )}
-        </div>
-        </div>
+        </SettingsSection>
       </div>
-      {isEditing ? (
-        <div className="flex gap-3 px-8 pb-6 pt-3" style={{ background: 'var(--main-bg)', borderTop: '1px solid var(--border)' }}>
-          <button
-            type="button"
-            disabled={saving}
-            className="flex-1 rounded-full px-4 py-3 text-sm font-medium transition-opacity"
-            style={{ background: 'var(--text)', color: 'var(--main-bg)', opacity: saving ? 0.6 : 1 }}
-            onClick={() => { void saveInlineChanges(); }}
-          >
-            {saving ? '保存中…' : '保存更改'}
-          </button>
-          <button
-            type="button"
-            className="rounded-full px-5 py-3 text-sm font-medium transition-colors"
-            style={{ color: 'var(--text)', border: '1px solid var(--border)' }}
-            onClick={cancelEditing}
-          >
-            取消
-          </button>
-        </div>
-      ) : lastRun?.session_id && onViewSession && (
-        <div className="px-8 pb-6 pt-3" style={{ background: 'var(--main-bg)', borderTop: '1px solid var(--border)' }}>
-          <button
-            type="button"
-            className="w-full rounded-full px-4 py-3 text-sm font-medium transition-opacity"
-            style={{ background: 'var(--text)', color: 'var(--main-bg)' }}
-            onClick={() => onViewSession(lastRun)}
-            onMouseEnter={(event) => { event.currentTarget.style.opacity = '0.82'; }}
-            onMouseLeave={(event) => { event.currentTarget.style.opacity = '1'; }}
-          >
-            打开聊天
-          </button>
-        </div>
-      )}
     </>
   );
+}
+
+function RunStatusIndicator({ status }: { status: string }) {
+  switch (status) {
+    case 'success':
+      return <span className="h-3 w-3 flex-shrink-0 rounded-full bg-[var(--success)]" aria-label="成功" />;
+    case 'failed':
+      return <XCircleIcon size={14} className="flex-shrink-0 text-destructive" />;
+    case 'running':
+      return <SpinnerGapIcon size={14} className="flex-shrink-0 animate-spin text-accent" />;
+    default:
+      return <ClockIcon size={14} className="flex-shrink-0 text-muted-foreground" />;
+  }
 }

@@ -49,6 +49,10 @@ export type PluginError =
   | PluginCompatError
   | { type: 'generic-error'; plugin?: string; message: string; stack?: string };
 
+// ==== Error Severity ====
+
+export type PluginErrorSeverity = 'critical' | 'warning' | 'info';
+
 export function isPluginError(err: unknown): err is PluginError {
   if (typeof err !== 'object' || err === null) return false;
   if (!('type' in err)) return false;

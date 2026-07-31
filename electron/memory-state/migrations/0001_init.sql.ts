@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 
 /**
- * Migration 0001: Initialize the Memory v2 control-plane schema.
+ * Migration 0001: Initialize the Memory control-plane schema.
  *
  * Creates:
  *   - projects             (stable UUID project identity)

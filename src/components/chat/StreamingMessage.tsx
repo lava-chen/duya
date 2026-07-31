@@ -40,6 +40,8 @@ import { Button } from '@/components/ui/Button';
 interface StreamingMessageProps {
   sessionId: string;
   onForceStop?: () => void;
+  /** Keep the final streamed content visible while the durable DB reload completes. */
+  isFinalizing?: boolean;
 }
 
 function resolveI18nStatusText(
@@ -277,6 +279,7 @@ const StreamingStatus = React.memo(function StreamingStatus({
 export const StreamingMessage = React.memo(function StreamingMessage({
   sessionId,
   onForceStop,
+  isFinalizing = false,
 }: StreamingMessageProps) {
   const phase       = useStreamPhase(sessionId);
   const isStreaming = phase === 'starting' || phase === 'streaming'
@@ -292,6 +295,12 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const startedAt          = useStreamStartedAt(sessionId);
   const agentProgressEvents = useStreamingAgentProgress(sessionId);
 
+  // The App owns the terminal handoff. During finalization, retain this one
+  // transient view until the durable assistant message is in the store; do
+  // not emit a completed-action summary that would look like a second reply.
+  const isVisible = isStreaming || isFinalizing;
+  if (!isVisible) return null;
+
   const hasWidgetActions = actions.some(a => a.kind === 'widget');
  
   return (
@@ -304,7 +313,7 @@ export const StreamingMessage = React.memo(function StreamingMessage({
       <div className={hasWidgetActions ? 'max-w-[95%]' : 'w-full'}>
         <StreamingTools
           actions={actions}
-          isStreaming={isStreaming}
+          isStreaming={isVisible}
           streamingToolOutput={toolOutput}
           agentProgressEvents={agentProgressEvents}
           liveStartedAt={startedAt}

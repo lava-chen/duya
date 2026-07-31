@@ -15,7 +15,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { I18nProvider } from "@/components/layout/I18nProvider";
 import { FontProvider } from "@/contexts/FontContext";
 import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLanding";
-import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, subscribeToDbPersisted, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages, resumeBackgroundTask } from "@/lib/stream-session-manager";
+import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages, resumeBackgroundTask } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
@@ -103,6 +103,12 @@ function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
   return messages;
 }
 
+interface PendingPersistedHandoff {
+  sessionId: string;
+  startedAt: number;
+  sequence: number;
+}
+
 function mergeOptimisticMessagesForCompletedStream(
   currentMessages: Message[],
   optimisticMessages: Message[],
@@ -185,8 +191,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
+  const [pendingPersistedHandoff, setPendingPersistedHandoff] = useState<PendingPersistedHandoff | null>(null);
   const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
+  const persistedHandoffSequenceRef = useRef(0);
 
   useEffect(() => initMailboxEventListener(), []);
 
@@ -257,7 +265,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     return () => window.clearTimeout(t);
   }, [bootPhase, isHydrated, activeSessionLoaded]);
 
-  // Subscribe to stream snapshot updates with optimistic message injection
+  // The terminal handoff has one owner. A successful worker persist is followed
+  // by `done`; only then reload the durable rows, while keeping the existing
+  // stream view visible until that reload has reached the conversation store.
   useEffect(() => {
     if (!activeThreadId) return;
 
@@ -273,14 +283,23 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       const wasActive = isActiveLike(prevPhaseRef.current);
       const isActive = isActiveLike(snapshot.phase);
 
-      // Phase transition: active → non-active (stream ended)
-      // Inject optimistic messages to avoid blank gap before DB load completes.
-      // Do NOT call loadThreadMessages here — db_persisted event is the authoritative
-      // signal that messages have been persisted and will trigger the DB reload.
+      // Phase transition: active → non-active (stream ended).
       if (wasActive && !isActive) {
-        // An interrupt can race a successful persistence acknowledgement that
-        // only contains completed tool history, not the last streamed text.
-        if (snapshot.phase === 'aborted' || !snapshot.dbPersisted?.success) {
+        if (snapshot.dbPersisted?.success) {
+          const sequence = ++persistedHandoffSequenceRef.current;
+          setPendingPersistedHandoff({
+            sessionId: activeThreadId,
+            startedAt: snapshot.startedAt,
+            sequence,
+          });
+          void loadThreadMessages(activeThreadId, { force: true }).finally(() => {
+            setPendingPersistedHandoff((current) => (
+              current?.sequence === sequence ? null : current
+            ));
+          });
+        } else {
+          // Interrupted and failed streams have no durable final row to hand
+          // off to, so keep their partial response as a local terminal record.
           const optimistic = buildOptimisticMessages(snapshot);
           if (optimistic.length > 0) {
             const store = useConversationStore.getState();
@@ -297,29 +316,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
             });
           }
         }
-        // DB reload is triggered by db_persisted event below — do not call loadThreadMessages here
       }
 
       prevPhaseRef.current = snapshot.phase;
       setIsStreaming(isActive);
       setStreamingSnapshot(snapshot);
-    });
-
-    return unsubscribe;
-  }, [activeThreadId, loadThreadMessages]);
-
-  // Subscribe to db_persisted events: reload messages from DB
-  useEffect(() => {
-    if (!activeThreadId) return;
-
-    ensureSession(activeThreadId);
-    const unsubscribe = subscribeToDbPersisted(activeThreadId, (event) => {
-      const startTime = performance.now();
-      console.log(`[App] db_persisted received: ${activeThreadId.slice(0, 8)}, success=${event.success}, elapsedSinceEvent=${event.timestamp ? (Date.now() - event.timestamp) : 'unknown'}ms`);
-      if (event.success) {
-        console.log(`[App] calling loadThreadMessages: ${activeThreadId.slice(0, 8)}`);
-        loadThreadMessages(activeThreadId, { force: true });
-      }
     });
 
     return unsubscribe;
@@ -546,6 +547,14 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   }, [activeThreadId, isStreaming, messages, markMessageInterrupted, streamingSnapshot]);
 
   const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
+  const isPendingHandoffForActiveThread = pendingPersistedHandoff?.sessionId === activeThreadId;
+  const hasDurableHandoffMessage = isPendingHandoffForActiveThread
+    && threadMessages.some((message) => (
+      message.role === 'assistant' && message.timestamp >= (pendingPersistedHandoff?.startedAt ?? Infinity)
+    ));
+  // This derived guard makes the store update and transient-view removal one
+  // render decision, even if Zustand publishes before the reload promise settles.
+  const isFinalizing = isPendingHandoffForActiveThread && !hasDurableHandoffMessage;
   const chatEverMountedRef = useRef(false);
   if (activeThreadId) {
     chatEverMountedRef.current = true;
@@ -566,7 +575,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               messages={threadMessages}
               onSendMessage={handleSendMessage}
               onInterrupt={handleInterrupt}
-              isStreaming={isStreaming}
+              isStreaming={isStreaming || isFinalizing}
+              isFinalizing={isFinalizing}
               hasQueuedMessages={hasQueuedMessages(activeThreadId)}
             />
           )}

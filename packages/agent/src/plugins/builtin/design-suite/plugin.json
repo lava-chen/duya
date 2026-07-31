@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "duya.plugin.v2",
+  "id": "com.duya.design-suite",
+  "name": "Design Suite",
+  "version": "1.0.0",
+  "publisher": { "name": "Duya", "verified": true },
+  "categories": ["development", "productivity"],
+  "components": {
+    "mcpServers": ["design-audit"],
+    "appConnections": ["figma", "slack", "linear", "notion", "google"],
+    "skills": ["design-critique", "design-system", "design-handoff", "ux-copy", "accessibility-review", "user-research", "research-synthesis"],
+    "workflows": ["critique-a-screen", "figma-handoff", "wcag-audit", "write-ux-copy", "synthesize-research"]
+  },
+  "permissionPolicy": {
+    "defaultMode": "read",
+    "writeActionsRequireApproval": true,
+    "destructiveActionsRequireApproval": true
+  },
+  "platforms": ["windows", "macos", "linux"],
+  "scope": ["user", "project", "workspace"]
+}

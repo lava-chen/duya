@@ -33,6 +33,10 @@ export interface ProviderClientConfig {
   clientId: string;
   /** Official hosted MCP endpoint. These use RFC 9728 discovery + OAuth DCR. */
   remoteMcpUrl?: string;
+  /** Single-letter icon for UI rendering (e.g. 'G' for Google). */
+  monogram: string;
+  /** One-line summary shown in the marketplace / connection list. */
+  description: string;
 }
 
 export interface ProviderReadiness {
@@ -64,6 +68,8 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
     requiresClientSecret: false,
     clientId: process.env.DUYA_APP_CONNECTION_GOOGLE_CLIENT_ID ?? '',
+    monogram: 'G',
+    description: 'Google Workspace (Gmail, Calendar, Drive, Docs)',
   },
   slack: {
     id: 'slack',
@@ -76,6 +82,8 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     userinfoUrl: 'https://slack.com/api/auth.test',
     requiresClientSecret: true,
     clientId: process.env.DUYA_APP_CONNECTION_SLACK_CLIENT_ID ?? '',
+    monogram: 'S',
+    description: 'Slack workspace messaging and channels',
   },
   microsoft365: {
     id: 'microsoft365',
@@ -87,19 +95,23 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     userinfoUrl: 'https://graph.microsoft.com/v1.0/me',
     requiresClientSecret: false,
     clientId: process.env.DUYA_APP_CONNECTION_MICROSOFT365_CLIENT_ID ?? '',
+    monogram: 'M',
+    description: 'Microsoft 365 (Outlook, OneDrive, Teams)',
   },
-  figma: remoteMcpProvider('figma', 'Figma', 'https://mcp.figma.com/mcp'),
-  supabase: remoteMcpProvider('supabase', 'Supabase', 'https://mcp.supabase.com/mcp'),
-  sentry: remoteMcpProvider('sentry', 'Sentry', 'https://mcp.sentry.dev'),
-  vercel: remoteMcpProvider('vercel', 'Vercel', 'https://mcp.vercel.com'),
-  notion: remoteMcpProvider('notion', 'Notion', 'https://mcp.notion.com/mcp'),
-  linear: remoteMcpProvider('linear', 'Linear', 'https://mcp.linear.app/mcp'),
+  figma: remoteMcpProvider('figma', 'Figma', 'https://mcp.figma.com/mcp', 'F', 'Figma design files and prototypes'),
+  supabase: remoteMcpProvider('supabase', 'Supabase', 'https://mcp.supabase.com/mcp', 'U', 'Supabase backend and database'),
+  sentry: remoteMcpProvider('sentry', 'Sentry', 'https://mcp.sentry.dev', 'Y', 'Sentry error monitoring and tracing'),
+  vercel: remoteMcpProvider('vercel', 'Vercel', 'https://mcp.vercel.com', 'V', 'Vercel deployments and projects'),
+  notion: remoteMcpProvider('notion', 'Notion', 'https://mcp.notion.com/mcp', 'N', 'Notion pages and databases'),
+  linear: remoteMcpProvider('linear', 'Linear', 'https://mcp.linear.app/mcp', 'L', 'Linear issues and projects'),
 };
 
 function remoteMcpProvider(
   id: ProviderId,
   label: string,
   remoteMcpUrl: string,
+  monogram: string,
+  description: string,
 ): ProviderClientConfig {
   return {
     id,
@@ -113,6 +125,8 @@ function remoteMcpProvider(
     requiresClientSecret: false,
     clientId: '',
     remoteMcpUrl,
+    monogram,
+    description,
   };
 }
 

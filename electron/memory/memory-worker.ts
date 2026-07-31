@@ -1,5 +1,5 @@
 /**
- * Memory v2 long-lived worker (Plan 305 Phase A + Plan 306 Phase B).
+ * Memory long-lived worker (Plan 305 Phase A + Plan 306 Phase B).
  *
  * Runs in the Electron main process. Owns a `setInterval` loop that
  * periodically:
@@ -21,7 +21,7 @@
  * path) — the agent read path still goes through MemoryManager until
  * Plan 306 Phase E flips the switch.
  *
- * Gated by `DUYA_MEMORY_V2_ENABLED` at the call site (electron/main.ts);
+ * Gated by `DUYA_MEMORY_ENABLED` at the call site (electron/main.ts);
  * this module itself is import-safe and does nothing until
  * `startMemoryWorker` is called.
  */

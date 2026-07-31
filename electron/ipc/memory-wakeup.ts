@@ -1,12 +1,12 @@
 /**
- * Memory v2 wakeup IPC handler (Plan 305 Phase B).
+ * Memory wakeup IPC handler (Plan 305 Phase B).
  *
  * Renderer-callable IPC channel `memory:wakeup` that triggers an
  * immediate `forceSweep()` on the memory worker. Mirrors the worker
  * event path: agent subprocess → router → forceSweep, but this channel
  * is for renderer-initiated wakeups (e.g. on session restore).
  *
- * Shadow mode: when the worker is not running (DUYA_MEMORY_V2_ENABLED
+ * Shadow mode: when the worker is not running (DUYA_MEMORY_ENABLED
  * unset), the handler returns `{ accepted: false, reason: 'disabled' }`
  * so the renderer can silently no-op.
  */
@@ -37,7 +37,7 @@ export function registerMemoryWakeupHandlers(): void {
   ipcMain.handle('memory:wakeup', async (_event, payload: MemoryWakeupPayload): Promise<MemoryWakeupResponse> => {
     const handle = getMemoryWorkerHandle();
     if (!handle) {
-      // Worker not started — either DUYA_MEMORY_V2_ENABLED is unset or
+      // Worker not started — either DUYA_MEMORY_ENABLED is unset or
       // the worker failed to start. Either way, shadow mode tolerates
       // this as a no-op.
       return { accepted: false, reason: 'disabled' };

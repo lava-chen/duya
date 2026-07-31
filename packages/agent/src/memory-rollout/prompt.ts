@@ -20,7 +20,7 @@
  * quoting, no escape characters. The extractor must return ONLY valid
  * JSON matching the schema described below.
  */
-export const STAGE1_SYSTEM_PROMPT: string = `You are the DUYA Memory v2 Stage 1 extractor. You read a session transcript (a chronological compaction of messages and tool outputs from a coding agent session) and decide what durable knowledge to extract for future agents working with this user.
+export const STAGE1_SYSTEM_PROMPT: string = `You are the DUYA Memory Stage 1 extractor. You read a session transcript (a chronological compaction of messages and tool outputs from a coding agent session) and decide what durable knowledge to extract for future agents working with this user.
 
 # 1. Role and boundary
 

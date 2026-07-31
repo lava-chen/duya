@@ -37,7 +37,7 @@ export function registerMemoryListHandlers(): void {
       return { entries: rows, enabled: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      // The memory-state DB is only bootstrapped when memory v2 is enabled.
+      // The memory-state DB is only bootstrapped when memory is enabled.
       // Return an empty list instead of throwing so the UI can render a
       // disabled/empty state.
       logger.debug('memory:list returned empty: memory-state DB not available', { error: message }, LogComponent.DB);

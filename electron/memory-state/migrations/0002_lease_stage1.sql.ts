@@ -1,7 +1,7 @@
 import * as crypto from 'crypto';
 
 /**
- * Migration 0002: Lease + Stage 1 output tables (Memory v2 Phase 1A.2).
+ * Migration 0002: Lease + Stage 1 output tables (Memory Phase 1A.2).
  *
  * Creates:
  *   - rollout_leases   (token + heartbeat + CAS lease lifecycle, D4)

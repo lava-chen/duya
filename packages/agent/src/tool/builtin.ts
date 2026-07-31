@@ -34,7 +34,6 @@ import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
-import { registerBundledAgentPlugins } from '../plugins/BundledPluginRegistry.js';
 import { ResearchMemory } from '../research-memory/index.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
 import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
@@ -167,9 +166,6 @@ export function createBuiltinRegistry(
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides
   registry.register(moduleTool.toTool(), moduleTool, { exposeMode: 'discoverable' });
-
-  // Bundled plugins - register plugin-owned tools via a single pluggable entrypoint
-  registerBundledAgentPlugins(registry, options);
 
   // Research memory tools are a profile subsystem (not plugin-owned assets).
   // All seven are research-only — default to discoverable so the LLM

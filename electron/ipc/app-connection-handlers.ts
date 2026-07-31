@@ -19,6 +19,7 @@ import {
 } from '../services/app-connections/app-connection-service';
 import { FlowError } from '../services/app-connections/oauth/flow';
 import { isKnownProvider } from '../services/app-connections/providers/registry';
+import { getAgentServerUrl } from '../services/agent-server-url';
 import type {
   AppConnectionStatusDTO,
   AppConnectionProviderDTO,
@@ -26,22 +27,6 @@ import type {
 } from '../services/app-connections/types';
 
 const COMPONENT = 'AppConnectionHandlers' as LogComponent;
-
-let cachedAgentServerUrl: string | null = null;
-
-async function getAgentServerUrl(): Promise<string | null> {
-  if (cachedAgentServerUrl) return cachedAgentServerUrl;
-  try {
-    const { getAgentServerPort } = await import('../agents/agent-server-lifecycle');
-    const port = getAgentServerPort();
-    if (port) {
-      cachedAgentServerUrl = `http://127.0.0.1:${port}`;
-    }
-    return cachedAgentServerUrl;
-  } catch {
-    return null;
-  }
-}
 
 /** Notify the agent server that tools should be re-collected. */
 async function notifyAgentServerAppConnectionReload(): Promise<void> {

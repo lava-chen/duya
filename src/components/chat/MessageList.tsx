@@ -15,6 +15,7 @@ export interface MessageListRef {
 interface MessageListProps {
   messages: Message[];
   isStreaming?: boolean;
+  isFinalizing?: boolean;
   onForceStop?: () => void;
   hasMore?: boolean;
   onLoadMore?: () => void;
@@ -481,6 +482,7 @@ function ChatMessageNavigator({
 export const MessageList = forwardRef<MessageListRef, MessageListProps>(function MessageList({
   messages,
   isStreaming = false,
+  isFinalizing = false,
   onForceStop,
   hasMore = false,
   onLoadMore,
@@ -928,6 +930,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           <StreamingMessage
             sessionId={sessionId}
             onForceStop={onForceStop}
+            isFinalizing={isFinalizing}
           />
         )}
 

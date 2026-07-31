@@ -1,6 +1,5 @@
 import React from 'react';
-import type { PluginError } from '../../../lib/plugin-error-types';
-import type { PluginErrorSeverity } from '../../../lib/plugin-error-types';
+import type { PluginError, PluginErrorSeverity } from '@duya/plugin-core';
 import { Button } from '@/components/ui/Button';
 
 interface PluginErrorBannerProps {

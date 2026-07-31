@@ -1,5 +1,5 @@
 /**
- * TypeScript interfaces for the Memory v2 control-plane schema.
+ * TypeScript interfaces for the Memory control-plane schema.
  *
  * Row interfaces mirror the SQLite columns 1:1. Input interfaces
  * separate required-from-caller fields from DB-managed defaults so

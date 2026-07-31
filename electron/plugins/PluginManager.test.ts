@@ -9,7 +9,6 @@ const state = vi.hoisted(() => ({
   cacheDir: '',
   storeEntries: [] as Array<Record<string, unknown>>,
   storeUpsertPlugin: vi.fn(),
-  installedUpsertPlugin: vi.fn(),
 }));
 
 vi.mock('../logging/logger', () => ({
@@ -72,7 +71,6 @@ vi.mock('./PluginRegistryStore', () => ({
         dataDir: path.join(state.tempRoot, 'data'),
         stagingDir: path.join(state.tempRoot, 'staging'),
         registryPath: path.join(state.tempRoot, 'registry.json'),
-        lockfilePath: path.join(state.tempRoot, 'lockfile.json'),
       };
     }
 
@@ -85,12 +83,6 @@ vi.mock('./PluginRegistryStore', () => ({
       state.storeEntries = [entry];
     }
   },
-}));
-
-vi.mock('./installed/installed-plugins-manager', () => ({
-  getInstalledPluginsManager: () => ({
-    upsertPlugin: state.installedUpsertPlugin,
-  }),
 }));
 
 vi.mock('./cache/layout', () => ({
@@ -108,10 +100,6 @@ vi.mock('./cache/layout', () => ({
 
 vi.mock('./cache/version-resolver', () => ({
   resolvePluginVersion: vi.fn(() => '0.1.0'),
-}));
-
-vi.mock('./updater/auto-updater', () => ({
-  getPluginAutoUpdater: vi.fn(),
 }));
 
 vi.mock('../../packages/plugin-core/src', () => ({
@@ -149,7 +137,6 @@ describe('PluginManager.installFromCatalog', () => {
     state.cacheDir = path.join(state.tempRoot, 'cache', 'com.duya.literature', '0.1.0');
     state.storeEntries = [];
     state.storeUpsertPlugin.mockReset();
-    state.installedUpsertPlugin.mockReset();
 
     fs.mkdirSync(path.join(state.tempRoot, 'installed'), { recursive: true });
     fs.mkdirSync(path.join(state.tempRoot, 'data'), { recursive: true });
@@ -174,9 +161,7 @@ describe('PluginManager.installFromCatalog', () => {
     });
 
     expect(state.storeUpsertPlugin).toHaveBeenCalledTimes(1);
-    expect(state.installedUpsertPlugin).toHaveBeenCalledTimes(1);
-    expect(state.installedUpsertPlugin).toHaveBeenCalledWith(
-      'com.duya.literature',
+    expect(state.storeUpsertPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'com.duya.literature',
         version: '0.1.0',

@@ -45,7 +45,7 @@ const COMPONENT = 'AppConnectionService' as LogComponent;
 /**
  * Hook fired after a connect/disconnect completes. The IPC layer
  * installs the agent-reload broadcaster here (mirrors
- * `notifyAgentServerPluginReload` from plugin-handlers.ts).
+ * `notifyMcpConfigChanged` from mcp-write-reload.ts).
  */
 export type ReloadBroadcastHook = () => Promise<void>;
 
@@ -117,6 +117,9 @@ export class AppConnectionService {
         label: provider.label,
         configured: readiness.configured,
         configurationHint: readiness.reason,
+        monogram: provider.monogram,
+        description: provider.description,
+        scopes: provider.defaultScopes,
       };
     });
   }
@@ -147,11 +150,15 @@ export class AppConnectionService {
     });
     this.hydrateProviderClients();
     const readiness = getProviderReadiness(provider);
+    const config = getProviderConfig(provider);
     return {
       id: provider,
-      label: getProviderConfig(provider).label,
+      label: config.label,
       configured: readiness.configured,
       configurationHint: readiness.reason,
+      monogram: config.monogram,
+      description: config.description,
+      scopes: config.defaultScopes,
     };
   }
 

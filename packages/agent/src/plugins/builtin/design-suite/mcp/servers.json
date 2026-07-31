@@ -1,0 +1,10 @@
+{
+  "servers": [
+    {
+      "name": "design-audit",
+      "command": "node",
+      "args": ["./mcp/design-audit-server.cjs"],
+      "envPassthrough": "none"
+    }
+  ]
+}

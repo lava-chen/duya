@@ -6,7 +6,6 @@ import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
 import { PluginRegistryStore } from './PluginRegistryStore';
-import { getInstalledPluginsManager } from './installed/installed-plugins-manager';
 import {
   ensurePluginCacheDir,
   createInstalledSymlink,
@@ -17,7 +16,6 @@ import {
   resolveInstalledSymlink,
 } from './cache/layout';
 import { resolvePluginVersion } from './cache/version-resolver';
-import { getPluginAutoUpdater } from './updater/auto-updater';
 import {
   TrustEngine,
   PermissionService,
@@ -37,7 +35,6 @@ import type {
   PluginRegistryEntry,
   PluginViewItem,
   PluginScope,
-  InstalledPluginInfoV2,
 } from './types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 
@@ -73,11 +70,43 @@ function copyDirectoryRecursive(src: string, dest: string): void {
 export class PluginManager {
   private readonly logger = getLogger();
   private readonly store = new PluginRegistryStore();
-  private readonly installedMgr = getInstalledPluginsManager();
   private readonly pathValidator = new PathSafetyValidator();
   private readonly trustEngine = new TrustEngine();
   private readonly permissionService = new PermissionService();
   private readonly policyEngine = new PolicyEngine();
+
+  constructor() {
+    this.migrateLegacyInstalledFile();
+  }
+
+  /**
+   * P2 migration: the legacy `installed_plugins.json` has been merged
+   * into `registry.json` (single source of truth). If the legacy file
+   * still exists, rename it to `.bak` so it is preserved for debugging
+   * but never read again. registry.json is authoritative.
+   */
+  private migrateLegacyInstalledFile(): void {
+    try {
+      const { registryPath } = this.store.getPaths();
+      const pluginsDir = path.dirname(registryPath);
+      const legacyPath = path.join(pluginsDir, 'installed_plugins.json');
+      if (fs.existsSync(legacyPath)) {
+        const backupPath = path.join(pluginsDir, 'installed_plugins.json.bak');
+        fs.renameSync(legacyPath, backupPath);
+        this.logger.info(
+          'Migrated legacy installed_plugins.json to .bak (registry.json is source of truth)',
+          { legacyPath, backupPath },
+          LogComponent.Main,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        'Failed to migrate legacy installed_plugins.json (non-fatal)',
+        { error: String(err) },
+        LogComponent.Main,
+      );
+    }
+  }
 
   listCatalog(): PluginCatalogEntry[] {
     return getPluginCatalog();
@@ -227,16 +256,6 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
-      this.installedMgr.upsertPlugin(pluginId, {
-        id: pluginId,
-        version,
-        scope,
-        marketplace,
-        installPath: cacheDir,
-        autoUpdate,
-        source: catalogEntry.source,
-        installedAt: Date.now(),
-      });
 
       this.logger.info('Plugin installed from catalog', { pluginId, version, scope }, LogComponent.Main);
       return entry;
@@ -317,16 +336,6 @@ export class PluginManager {
       };
 
       this.store.upsertPlugin(entry);
-      this.installedMgr.upsertPlugin(pluginId, {
-        id: pluginId,
-        version,
-        scope,
-        marketplace,
-        installPath: cacheDir,
-        autoUpdate,
-        source: 'local',
-        installedAt: Date.now(),
-      });
 
       this.logger.info('Plugin installed from path', { pluginId, version, path: resolvedPath }, LogComponent.Main);
       return entry;
@@ -393,7 +402,6 @@ export class PluginManager {
       }
 
       this.permissionService.revokeAllPermissions(pluginId);
-      this.installedMgr.removePlugin(pluginId);
 
       this.logger.info('Plugin removed', { pluginId, deleteData }, LogComponent.Main);
       return { removed: true };
@@ -426,10 +434,6 @@ export class PluginManager {
 
   getPermissionService(): PermissionService {
     return this.permissionService;
-  }
-
-  getInstalledV2(): Record<string, InstalledPluginInfoV2> {
-    return this.installedMgr.getAllPlugins();
   }
 }
 

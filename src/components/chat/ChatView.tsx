@@ -57,6 +57,8 @@ interface ChatViewProps {
   onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean, queuedMailboxId?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
+  /** The final persisted reply is loading; keep the existing stream view until it arrives. */
+  isFinalizing?: boolean;
   hasQueuedMessages?: boolean;
 }
 
@@ -120,6 +122,7 @@ export function ChatView({
   onSendMessage,
   onInterrupt,
   isStreaming = false,
+  isFinalizing = false,
   hasQueuedMessages = false,
 }: ChatViewProps) {
   const { t } = useTranslation();
@@ -1182,6 +1185,7 @@ export function ChatView({
               ref={messageListRef}
               messages={renderedMessages}
               isStreaming={isStreaming}
+              isFinalizing={isFinalizing}
               onForceStop={handleStop}
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
