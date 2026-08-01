@@ -2,11 +2,12 @@
  * Loopback HTTP server for OAuth redirect capture.
  *
  * Plan 312 Phase 1. RFC 8252 §7.3: native apps use loopback redirect
- * (`http://127.0.0.1:<port>/<path>`). We bind only 127.0.0.1, accept a
- * single callback, validate `state`, then close the server.
+ * (`http://127.0.0.1:<port>/<path>` or `http://localhost:<port>/<path>`).
+ * We bind only the loopback interface, accept a single callback, validate
+ * `state`, then close the server.
  *
  * Security:
- * - Bind to `127.0.0.1` only (no 0.0.0.0 / external interface)
+ * - Bind to the loopback interface only (no 0.0.0.0 / external interface)
  * - Single-shot: only the first request with matching state is accepted
  * - Hard timeout (default 3 min) cancels the authorization attempt
  * - Port conflicts fall through to the OS-assigned ephemeral port
@@ -29,6 +30,13 @@ export interface LoopbackStartOptions {
   timeoutMs?: number;
   /** Preferred port; 0 = OS-assigned ephemeral. */
   preferredPort?: number;
+  /**
+   * Hostname advertised in the redirect URI. The server always binds to the
+   * loopback interface (127.0.0.1) for security; this only changes what the
+   * browser and OAuth consent screen display. Defaults to `localhost` so users
+   * see a friendly hostname instead of a raw IP.
+   */
+  host?: string;
 }
 
 export interface LoopbackResult {
@@ -55,6 +63,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
   const expectedState = options.expectedState;
   const timeoutMs = options.timeoutMs ?? 3 * 60 * 1000;
   const preferredPort = options.preferredPort ?? 0;
+  const host = options.host ?? 'localhost';
 
   let server: http.Server | null = null;
   let timer: NodeJS.Timeout | null = null;
@@ -118,11 +127,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
       // Provider pushed an error (e.g. user denied consent). We still
       // show the user a friendly page; the query is NOT logged.
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(
-        '<html><body><h2>Authorization denied</h2>' +
-          `<p>${escapeHtml(errorDescription ?? error)}</p>` +
-          '<p>You can close this tab and return to Duya.</p></body></html>',
-      );
+      res.end(buildResultPage({ success: false, message: errorDescription ?? error }));
       rejectFn?.(new LoopbackServerError(`provider error: ${error}`));
       close();
       return;
@@ -147,10 +152,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
 
     settled = true;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(
-      '<html><body><h2>Authorized</h2>' +
-        '<p>You can close this tab and return to Duya.</p></body></html>',
-    );
+    res.end(buildResultPage({ success: true }));
     resolveFn?.({ code, state });
     close();
   });
@@ -176,7 +178,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
       reject(new LoopbackServerError('server not initialized'));
       return;
     }
-    server.listen(preferredPort, '127.0.0.1', () => {
+    server.listen(preferredPort, host, () => {
       const addr = server?.address() as AddressInfo | null;
       if (!addr || typeof addr.port !== 'number') {
         reject(new LoopbackServerError('failed to bind loopback server'));
@@ -186,7 +188,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
       const port = addr.port;
       resolve({
         port,
-        redirectUri: `http://127.0.0.1:${port}${path}`,
+        redirectUri: `http://${host}:${port}${path}`,
         waitForCode: () => promise,
         close,
       });
@@ -201,4 +203,165 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+interface ResultPageOptions {
+  success: boolean;
+  message?: string;
+}
+
+function buildResultPage(options: ResultPageOptions): string {
+  const title = options.success ? 'Authorization Successful' : 'Authorization Denied';
+  const headline = options.success ? 'Connected to Duya' : 'Authorization denied';
+  const body = options.success
+    ? 'You can close this tab and return to Duya.'
+    : escapeHtml(options.message ?? 'The authorization request was denied.');
+  const checkColor = options.success ? '#22c55e' : '#ef4444';
+  const countdownScript = options.success
+    ? `<script>
+        let remaining = 5;
+        const counter = document.getElementById('countdown');
+        const tick = () => {
+          if (counter) counter.textContent = String(remaining);
+          if (remaining <= 0) {
+            window.close();
+            if (typeof timer !== 'undefined') clearInterval(timer);
+          }
+          remaining -= 1;
+        };
+        tick();
+        const timer = setInterval(tick, 1000);
+        document.getElementById('close-btn').addEventListener('click', () => window.close());
+      </script>`
+    : `<script>
+        document.getElementById('close-btn').addEventListener('click', () => window.close());
+      </script>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #1a1a1a;
+      --muted: #6b6b6b;
+      --surface: #f7f7f7;
+      --accent: #7c3aed;
+      --border: rgba(0, 0, 0, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #1e1e1e;
+        --fg: #ffffff;
+        --muted: #8a8a8a;
+        --surface: #2c2c2c;
+        --accent: #a78bfa;
+        --border: rgba(255, 255, 255, 0.08);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 24px;
+    }
+    .card {
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      padding: 40px 32px;
+      border-radius: 20px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+    }
+    .icon {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: ${options.success ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)'};
+    }
+    .icon svg {
+      width: 32px;
+      height: 32px;
+      stroke: ${checkColor};
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    p {
+      margin: 0 0 20px;
+      font-size: 15px;
+      line-height: 1.55;
+      color: var(--muted);
+    }
+    .actions {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .close-btn {
+      appearance: none;
+      border: none;
+      border-radius: 10px;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      color: #ffffff;
+      background: var(--accent);
+      transition: opacity 0.15s ease;
+    }
+    .close-btn:hover { opacity: 0.92; }
+    .close-btn:active { opacity: 0.86; }
+    .countdown {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .brand {
+      margin-top: 28px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: 0.02em;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        ${options.success
+          ? '<polyline points="20 6 9 17 4 12"></polyline>'
+          : '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>'}
+      </svg>
+    </div>
+    <h1>${headline}</h1>
+    <p>${body}</p>
+    <div class="actions">
+      <button id="close-btn" class="close-btn">Close window</button>
+      ${options.success ? '<div class="countdown">This tab will close in <span id="countdown">5</span> seconds</div>' : ''}
+    </div>
+    <div class="brand">Duya Desktop</div>
+  </div>
+  ${countdownScript}
+</body>
+</html>`;
 }

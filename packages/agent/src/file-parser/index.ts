@@ -132,6 +132,17 @@ export class NodeFileParser {
     this.cache?.clearBySession(this.sessionId);
   }
 
+  /**
+   * Number of parse tasks currently running or queued. Callers that
+   * cache parser instances (e.g. ReadTool's per-session LRU) use this
+   * to avoid disposing a parser that still has in-flight work —
+   * disposing mid-flight causes subsequent parseFile calls on the same
+   * session to throw "WorkerPool is disposed".
+   */
+  get pendingCount(): number {
+    return this.pool.activeCount + this.pool.queueLength;
+  }
+
   dispose(): void {
     this.pool.dispose();
   }

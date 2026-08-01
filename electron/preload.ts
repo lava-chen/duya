@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { MCPInventorySnapshotDTO } from '../src/lib/mcp-inventory-types'
 import type {
   ProjectDatabaseChangeEvent,
   ProjectDatabaseRequest,
@@ -833,6 +832,22 @@ export interface PluginHealthReport {
   lastCheckedAt: string
 }
 
+// Plugin setup field definitions — mirrors the renderer-side
+// PluginSetupFieldDef / PluginSetupLoadResult in src/lib/plugin-types.ts.
+// Declared inline here so preload.ts stays self-contained (it does not
+// import from src/lib/plugin-types.ts).
+export interface PluginSetupFieldDef {
+  id: string
+  label: string
+  type: 'text' | 'secret' | 'path' | 'url'
+  required: boolean
+}
+
+export interface PluginSetupLoadResult {
+  fields: PluginSetupFieldDef[]
+  values: Record<string, string>
+}
+
 export interface PluginAPI {
   catalog: {
     list: (filters?: {
@@ -870,6 +885,11 @@ export interface PluginAPI {
   // Plan 311 — fetch the full workflow template (including prompt body)
   // for a given plugin + workflow id. Returns null when not found.
   workflowGet: (payload: { pluginId: string; workflowId: string }) => Promise<{ success: boolean; data?: unknown; error?: string }>
+  // Plugin setup — load field defs + stored values (secrets masked to ''),
+  // and save user-supplied values. The renderer sends only changed fields;
+  // the main process merges them on top of existing stored values.
+  setupLoad: (pluginId: string) => Promise<{ success: boolean; data?: PluginSetupLoadResult | null; error?: string }>
+  setupSave: (payload: { pluginId: string; values: Record<string, string> }) => Promise<{ success: boolean; data?: { ok: boolean }; error?: string }>
 }
 
 export interface MarketplaceEntry {
@@ -1038,10 +1058,6 @@ export interface ElectronAPI {
     getAutoStartStatus: () => Promise<{ enabled: boolean; canChange: boolean; supported: boolean; platform: string; error?: string }>
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
     setMcpServers: (servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>) => Promise<{ success: boolean; error?: string }>
-  }
-  mcpInventory: {
-    snapshot: () => Promise<{ success: boolean; data?: MCPInventorySnapshotDTO; error?: string }>
-    tools: (serverId: string) => Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -1527,10 +1543,6 @@ const electronAPI: ElectronAPI = {
       }
     },
   },
-  mcpInventory: {
-    snapshot: () => ipcRenderer.invoke('mcp:inventory:snapshot'),
-    tools: (serverId: string) => ipcRenderer.invoke('mcp:inventory:tools', { serverId }),
-  },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
   getConductorPort: getConductorPortAPI,
@@ -1975,6 +1987,8 @@ const electronAPI: ElectronAPI = {
     cacheStats: () => ipcRenderer.invoke('plugin:cache:stats'),
     cacheCleanup: (payload: { marketplace: string; pluginId: string; keepLatest?: number }) => ipcRenderer.invoke('plugin:cache:cleanup', payload),
     workflowGet: (payload: { pluginId: string; workflowId: string }) => ipcRenderer.invoke('plugin:workflow:get', payload),
+    setupLoad: (pluginId: string) => ipcRenderer.invoke('plugin:setup:load', pluginId),
+    setupSave: (payload: { pluginId: string; values: Record<string, string> }) => ipcRenderer.invoke('plugin:setup:save', payload),
   },
   // App Connection — Plan 312. Only status DTOs cross IPC; tokens stay
   // in the main process.

@@ -6,6 +6,8 @@ import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
 import { PluginRegistryStore } from './PluginRegistryStore';
+import { PluginSetupStore } from './PluginSetupStore';
+import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import {
   ensurePluginCacheDir,
   createInstalledSymlink,
@@ -32,9 +34,11 @@ import {
 } from '../../src/lib/plugin-error-messages';
 import type {
   PluginCatalogEntry,
+  PluginManifest,
   PluginRegistryEntry,
   PluginViewItem,
   PluginScope,
+  PluginSetupState,
 } from './types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 
@@ -70,6 +74,7 @@ function copyDirectoryRecursive(src: string, dest: string): void {
 export class PluginManager {
   private readonly logger = getLogger();
   private readonly store = new PluginRegistryStore();
+  private readonly setupStore = new PluginSetupStore();
   private readonly pathValidator = new PathSafetyValidator();
   private readonly trustEngine = new TrustEngine();
   private readonly permissionService = new PermissionService();
@@ -127,6 +132,103 @@ export class PluginManager {
     const entry = this.store.listPlugins().find((p) => p.id === pluginId) ?? null;
     const catalog = getPluginCatalogEntry(pluginId) ?? null;
     return { entry, catalog };
+  }
+
+  /**
+   * Compute the dynamic setup state for a plugin by checking the manifest's
+   * required setup fields against the values actually stored in
+   * `PluginSetupStore`. `app-connection` fields are skipped — their
+   * satisfaction comes from the OAuth connection status, not this store.
+   *
+   * Returns `'complete'` when the plugin has no required setup fields, or
+   * when every required text/secret/path/url field has a non-empty stored
+   * value. Otherwise returns `'needs_setup'`.
+   */
+  private computeSetupState(pluginId: string, manifest: PluginManifest): PluginSetupState {
+    const setupFields = manifest.setup ?? [];
+    if (setupFields.length === 0) return 'complete';
+    const requiredFields = setupFields.filter(
+      (f) => f.required && f.type !== 'app-connection',
+    );
+    if (requiredFields.length === 0) return 'complete';
+
+    let stored: Record<string, string>;
+    try {
+      stored = this.setupStore.getAll(pluginId);
+    } catch {
+      // DB unavailable (safe mode) — fall back to needs_setup so the user
+      // is prompted to fill values once the DB comes back online.
+      return 'needs_setup';
+    }
+    const allSatisfied = requiredFields.every((f) => {
+      const v = stored[f.id];
+      return v !== undefined && v !== '';
+    });
+    return allSatisfied ? 'complete' : 'needs_setup';
+  }
+
+  /**
+   * Read all stored setup values for a plugin. Returns a shallow copy so
+   * callers can mutate freely. Secrets are returned as-is here; masking
+   * for IPC transport is the responsibility of the handler layer.
+   */
+  getSetupValues(pluginId: string): Record<string, string> {
+    try {
+      return this.setupStore.getAll(pluginId);
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Persist user-supplied setup values and refresh the plugin's setupState.
+   *
+   * Merge semantics: the incoming `values` are merged on top of the
+   * existing stored values. This lets the UI omit unchanged secret fields
+   * (which it cannot know) without wiping them — only keys present in
+   * `values` are overwritten. After persisting, the setupState is
+   * recomputed against the manifest's required fields, the registry entry
+   * is updated, and the agent server is notified so workers reload MCP
+   * with the new `${setup.X}` substitutions.
+   */
+  saveSetupValues(pluginId: string, values: Record<string, string>): void {
+    const existing = this.getSetupValues(pluginId);
+    const merged: Record<string, string> = { ...existing, ...values };
+    this.setupStore.setAll(pluginId, merged);
+
+    const catalog = getPluginCatalogEntry(pluginId);
+    const manifest = catalog?.manifest;
+    const setupState = manifest ? this.computeSetupState(pluginId, manifest) : 'complete';
+
+    const entry = this.store.listPlugins().find((p) => p.id === pluginId);
+    if (entry) {
+      const now = new Date().toISOString();
+      const healthStatus = entry.enabled
+        ? (setupState === 'complete' ? 'ready' : 'needs_setup')
+        : 'disabled';
+      const updated: PluginRegistryEntry = {
+        ...entry,
+        setupState,
+        updatedAt: now,
+        health: {
+          ...entry.health,
+          status: healthStatus,
+          checkedAt: now,
+        },
+      };
+      this.store.upsertPlugin(updated);
+    }
+
+    this.logger.info(
+      'Plugin setup values saved',
+      { pluginId, fieldCount: Object.keys(values).length, setupState },
+      LogComponent.Main,
+    );
+
+    // Best-effort: ask the agent server to broadcast reload:mcp so workers
+    // pick up the new `${setup.X}` substitutions. Swallowed if the server
+    // is not running.
+    void notifyMcpConfigChanged();
   }
 
   async installFromCatalog(
@@ -232,6 +334,7 @@ export class PluginManager {
       }
 
       const now = new Date().toISOString();
+      const setupState = this.computeSetupState(catalogEntry.id, catalogEntry.manifest);
       const entry: PluginRegistryEntry = {
         id: catalogEntry.id,
         name: catalogEntry.name,
@@ -247,9 +350,9 @@ export class PluginManager {
         installedAt: now,
         updatedAt: now,
         grantedPermissions: catalogEntry.manifest.permissions,
-        setupState: catalogEntry.manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'complete',
+        setupState,
         health: {
-          status: catalogEntry.manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'ready',
+          status: setupState === 'needs_setup' ? 'needs_setup' : 'ready',
           reasons: [],
           checkedAt: now,
         },
@@ -312,6 +415,7 @@ export class PluginManager {
       }
 
       const now = new Date().toISOString();
+      const setupState = this.computeSetupState(pluginId, manifest);
       const entry: PluginRegistryEntry = {
         id: pluginId,
         name: pluginName,
@@ -327,9 +431,9 @@ export class PluginManager {
         installedAt: now,
         updatedAt: now,
         grantedPermissions: manifest.permissions,
-        setupState: manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'complete',
+        setupState,
         health: {
-          status: manifest.setup?.some((f) => f.required) ? 'needs_setup' : 'ready',
+          status: setupState === 'needs_setup' ? 'needs_setup' : 'ready',
           reasons: [],
           checkedAt: now,
         },
@@ -399,6 +503,17 @@ export class PluginManager {
       removeInstalledSymlink(pluginId);
       if (deleteData) {
         removeDirSafe(removed.dataPath);
+        // Also purge stored setup values so a reinstall does not resurrect
+        // stale secrets from a previous install of the same plugin id.
+        try {
+          this.setupStore.clear(pluginId);
+        } catch (err) {
+          this.logger.warn(
+            'Failed to clear plugin setup values on remove (non-fatal)',
+            { pluginId, error: String(err) },
+            LogComponent.Main,
+          );
+        }
       }
 
       this.permissionService.revokeAllPermissions(pluginId);

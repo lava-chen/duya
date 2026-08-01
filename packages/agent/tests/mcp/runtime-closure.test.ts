@@ -30,7 +30,10 @@ import type {
 } from '@duya/plugin-core';
 
 vi.mock('../../src/mcp/collect-worker.js', async () => {
-  return { collectWorkerMCPCandidates: vi.fn() };
+  return {
+    collectWorkerMCPCandidates: vi.fn(),
+    fetchPluginSetupValuesForMcp: vi.fn(async () => ({})),
+  };
 });
 
 vi.mock('../../src/mcp/index.js', async () => {

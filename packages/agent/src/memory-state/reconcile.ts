@@ -64,6 +64,15 @@ interface PlannedAction {
   content: string | null;
 }
 
+/**
+ * True when the row has a non-empty summary body worth projecting to disk.
+ * `succeeded_no_output` rows have `rollout_summary = NULL` and produce
+ * empty files — skip them so the folder only contains real evidence.
+ */
+function hasSummaryContent(row: Stage1OutputRow): boolean {
+  return row.rollout_summary !== null && row.rollout_summary.trim().length > 0;
+}
+
 /** D11 shape: `<YYYY-MM-DD>T<HH-MM-SS>-<shortid>-<slug>.md`. */
 const D11_FILENAME_RE =
   /^(?<iso>\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})-(?<shortid>[0-9a-f]{4,16})-(?<slug>[a-z0-9-]{3,80})\.md$/;
@@ -84,8 +93,14 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
   const mismatched: string[] = [];
   const planned: PlannedAction[] = [];
 
-  // 1-2. Every DB row must have an on-disk file with matching content.
+  // 1-2. Every DB row WITH content must have an on-disk file with matching
+  //       content. Rows with no summary (succeeded_no_output) have nothing
+  //       to project — skip them so we don't litter the folder with empty
+  //       files. Existing files mapping to such rows are cleaned up in step 3.
   for (const row of rows) {
+    if (!hasSummaryContent(row)) {
+      continue;
+    }
     const expectedPath = path.join(summariesDir, deriveRolloutSummaryFilename(row));
     let needsWrite = false;
     if (!fs.existsSync(expectedPath)) {
@@ -129,7 +144,9 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
         // means the file cannot be attributed and is an orphan.
         matched = candidates.find((c) => deriveRolloutSummaryFilename(c) === entry);
       }
-      if (!matched) {
+      // No match OR match is a no-content row (succeeded_no_output) that
+      // should not have a file — either way the file is an orphan.
+      if (!matched || !hasSummaryContent(matched)) {
         const targetPath = path.join(summariesDir, entry);
         planned.push({ targetPath, operation: 'delete', content: null });
         removed.push(targetPath);

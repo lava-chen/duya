@@ -9,6 +9,7 @@ import type {
   PluginIpcListResponse,
   PluginIpcDetailResponse,
   CapabilityIndexItem,
+  PluginSetupLoadResult,
 } from './plugin-types';
 import type { WorkflowTemplate } from '@duya/plugin-core';
 
@@ -81,8 +82,24 @@ export function getPluginAPI() {
         error?: string;
       }>;
     },
-    mcpTools: async (serverId: string): Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }> => {
-      return api.mcpInventory.tools(serverId) as Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }>;
+    mcpTools: async (_serverId: string): Promise<{ success: boolean; data?: Array<{ name: string; description?: string }>; error?: string }> => {
+      // The old `mcp:inventory:tools` IPC was removed with the MCP
+      // inventory service. Per-server tool listing now lives on the
+      // worker side (the connected MCP client); surfacing it through
+      // a new worker command is tracked separately. Until then return
+      // an empty tool list so the Connectors section renders the
+      // server name without error chips.
+      return { success: true, data: [] };
+    },
+    // Plugin setup — load returns field defs + stored values (secrets masked
+    // to empty string). Save accepts only the changed fields; the main
+    // process merges them on top of existing stored values so unchanged
+    // secrets are preserved.
+    setupLoad: async (pluginId: string): Promise<{ success: boolean; data?: PluginSetupLoadResult | null; error?: string }> => {
+      return api.plugin.setupLoad(pluginId) as Promise<{ success: boolean; data?: PluginSetupLoadResult | null; error?: string }>;
+    },
+    setupSave: async (payload: { pluginId: string; values: Record<string, string> }): Promise<{ success: boolean; data?: { ok: boolean }; error?: string }> => {
+      return api.plugin.setupSave(payload) as Promise<{ success: boolean; data?: { ok: boolean }; error?: string }>;
     },
   };
 }

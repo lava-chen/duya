@@ -131,6 +131,7 @@ export async function startAuthorization(
     path: config.redirectPath,
     expectedState: pkce.state,
     timeoutMs,
+    host: '127.0.0.1',
   });
 
   // 3) Build the authorization URL and open it in the system browser.

@@ -586,6 +586,108 @@ html[data-font="system"] .message-content li {
   color: #bfdbfe;
 }
 
+/* Memory citation popover — matches the reference screenshot: a dense, dark,
+ * rounded bubble anchored to the memory-chip button in the message action
+ * bar. Hovering the button (or the popover itself while the cursor is
+ * crossing the gap) keeps it open. Clicking the button opens the cited
+ * file in the side preview panel. */
+.memory-popover {
+  position: absolute;
+  z-index: 60;
+  left: 0;
+  bottom: calc(100% + 10px);
+  min-width: 280px;
+  max-width: min(480px, 60vw);
+  padding: 12px 14px;
+  border-radius: 12px;
+  color: #e6e6e6;
+  background: rgba(40, 40, 42, 0.985);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 16px 40px -12px rgba(0, 0, 0, 0.6),
+    0 4px 10px -4px rgba(0, 0, 0, 0.35),
+    0 0 0 0.5px rgba(255, 255, 255, 0.02) inset;
+  -webkit-backdrop-filter: saturate(180%) blur(22px);
+  backdrop-filter: saturate(180%) blur(22px);
+  pointer-events: auto;
+  transform-origin: left bottom;
+  animation: memory-popover-in 120ms ease-out;
+}
+
+@keyframes memory-popover-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+.memory-popover__title {
+  margin: 0 0 8px 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  color: #f2f2f2;
+  opacity: 0.95;
+}
+
+.memory-popover__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.memory-popover__item {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #d9d9d9;
+  padding-left: 14px;
+  position: relative;
+  word-break: break-word;
+}
+
+.memory-popover__item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #a78bfa;
+  opacity: 0.85;
+}
+
+.memory-popover__item-empty-note {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: #c4b5fd;
+}
+
+/* Arrow caret pointing down at the trigger button */
+.memory-popover::after {
+  content: '';
+  position: absolute;
+  left: 20px;
+  bottom: -5.5px;
+  width: 10px;
+  height: 10px;
+  transform: rotate(45deg);
+  background: inherit;
+  border-right: 1px solid rgba(255, 255, 255, 0.09);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 2px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+.memory-popover__hint {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11.5px;
+  color: #a8a8a8;
+}
+
 /* Keep dark theme inline code background as before */
 [data-theme="dark"] .prose code,
 [data-theme="dark"] .prose-sm code,
@@ -10024,48 +10126,14 @@ html[data-message-font-size="large"] .prose h3 {
   right: 54px;
 }
 
-.panel-task-toggle-badge {
-  position: absolute;
-  top: -5px;
-  right: -5px;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 7px;
-  background: var(--accent);
-  color: var(--accent-foreground, white);
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  pointer-events: none;
-}
-
 .panel-task-toggle.active,
 .workspace-task-toggle.active {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
 
-/* Pulse badge when background bash commands are running — draws the
-   user's attention to detached work even when the drawer is closed. */
-.panel-task-toggle-badge.pulse {
-  background: var(--accent);
-  animation: panel-task-toggle-pulse 1.6s ease-in-out infinite;
-}
-
 .workspace-task-toggle.has-background-tasks {
   color: var(--accent);
-}
-
-@keyframes panel-task-toggle-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 70%, transparent);
-  }
-  50% {
-    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
-  }
 }
 
 /* Monospace title variant for command-line previews inside the drawer. */
@@ -10715,9 +10783,13 @@ html[data-message-font-size="large"] .prose h3 {
   background: var(--main-bg);
 }
 
-/* VSCode/Codex-style editor chrome. The title bar shows a breadcrumb
- * path on the left and a compact "Open" dropdown on the right so the
- * preview reads as a focused code editor rather than a generic card. */
+/* Right padding deliberately raised to 20px (was 8px) so the
+ * accented bordered "Open" button on the far right never brushes
+ * the padding edge. Every ancestor from .panel-file-detail up to
+ * .panel-zone clips overflow, so even a 1px overshoot visually
+ * appears as a half-clipped button. 20px absorbs: sub-pixel flex
+ * rounding, the button's 8px border-radius + 1px border, and the
+ * narrow-detail case when PanelFileTreeSplit shows a file tree. */
 .file-preview-toolbar {
   display: flex;
   min-height: 40px;
@@ -10725,9 +10797,10 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 8px 0 14px;
+  padding: 0 20px 0 14px;
   border-bottom: 1px solid #e5e5e5;
   background: #f3f3f3;
+  box-sizing: border-box;
 }
 
 [data-theme="dark"] .file-preview-toolbar {
@@ -10816,6 +10889,10 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
+  /* Safety margin so the rightmost "Open" button never brushes
+   * against the padding edge of the toolbar. */
+  padding-right: 2px;
+  box-sizing: border-box;
 }
 
 .file-preview-actions > button {
@@ -10847,36 +10924,18 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--text);
 }
 
-/* "Open" dropdown in the preview toolbar. */
+/* "Open" dropdown in the preview toolbar. The trigger button now uses
+ * the unified <Button variant="accent" size="sm" /> from Button.tsx,
+ * so only dropdown/menu layout rules remain here. Icon rotation
+ * (180deg flip for the open-state caret) is applied to the SVG
+ * directly via className since Button renders children inline. */
 .file-preview-open-dropdown {
   position: relative;
   flex: 0 0 auto;
   width: max-content;
 }
 
-.file-preview-open-button {
-  display: inline-flex;
-  height: 30px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  transition: all 0.15s ease;
-}
-
-.file-preview-open-button:hover {
-  background: var(--accent);
-  color: #ffffff;
-}
-
-.file-preview-open-button svg.rotate-180 {
+.file-preview-open-dropdown svg.rotate-180 {
   transform: rotate(180deg);
 }
 
@@ -13232,7 +13291,14 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-file-detail {
   display: flex;
-  min-width: 0;
+  /* Minimum detail width so the preview toolbar's accented "Open"
+   * dropdown (≈80px) plus two icon buttons (2×28px) plus gaps and
+   * toolbar side paddings always fit horizontally without clipping.
+   * Without this floor, .panel-file-tree (min-width:220px) would take
+   * priority inside .panel-file-split and collapse the preview area
+   * below the width of its own toolbar → overflow:hidden then clips
+   * the right-half of every button on the actions strip. */
+  min-width: 280px;
   min-height: 0;
   flex: 1 1 auto;
   overflow: hidden;

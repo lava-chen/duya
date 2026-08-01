@@ -1,15 +1,18 @@
 /**
  * packages/cli/src/commands/extra.ts
  *
- * Phase 4.3: message / mcp / skill / channel extras for `duya`.
+ * Phase 4.3: message / skill / channel extras for `duya`.
  *
  *   message send <sessionId> <content>     — append a user message
- *   mcp test <name>                        — smoke-spawn the MCP server
  *   skill install <id> --from-path <dir>   — install a local skill
  *   skill uninstall <id>                   — remove an installed skill
  *   skill sync                             — re-sync bundled skills
  *   channel test <channelId>               — verify channel id shape
  *   channel send-test <channelId>          — record a test-send (Phase 4.3)
+ *
+ * The `mcp test` smoke-spawn subcommand was removed with the old
+ * MCP inventory framework; the worker's `mcp:status:snapshot` SSE
+ * event now reports MCP load status.
  */
 
 import { CliApiClient } from '../api/client.js';
@@ -56,36 +59,6 @@ export async function runMessageSend(ctx: CliSubcommandContext): Promise<ExitCod
     );
     output(ctx.format, body, `Sent message ${body.id} to session ${body.sessionId}.\n`);
     return 0;
-  } catch (err) {
-    return reportError(err);
-  }
-}
-
-// mcp test
-export async function runMCPTest(ctx: CliSubcommandContext): Promise<ExitCode> {
-  const name = ctx.args[0];
-  if (!name) {
-    process.stderr.write('usage: duya mcp test <name>\n');
-    return 64;
-  }
-  try {
-    const client = await CliApiClient.connect();
-    const body = await client.post<{
-      ok: boolean;
-      reason: string;
-      pid?: number;
-      exitCode?: number | null;
-      stdout: string;
-      stderr: string;
-    }>(`/v1/mcps/${encodeURIComponent(name)}/test`, {});
-    if (ctx.format === 'json') {
-      process.stdout.write(renderJson(body) + '\n');
-    } else {
-      process.stdout.write(`${body.ok ? 'OK' : 'FAIL'} ${name} (${body.reason})\n`);
-      if (body.stdout) process.stdout.write(`  stdout: ${body.stdout}\n`);
-      if (body.stderr) process.stdout.write(`  stderr: ${body.stderr}\n`);
-    }
-    return body.ok ? 0 : 1;
   } catch (err) {
     return reportError(err);
   }

@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
@@ -295,6 +295,15 @@ export function ExtensionsPage() {
         const res = await appConnectionApi.connect({ provider, scopes });
         if (!res.success) {
           setConnectionsError(res.error ?? t("extensions.connections.connectFailed"));
+          return;
+        }
+        if (res.data) {
+          // Optimistically surface the new connection so the UI flips to
+          // "connected" immediately when the user returns to Duya.
+          setConnections((prev) => [
+            res.data!,
+            ...prev.filter((c) => c.provider !== res.data!.provider),
+          ]);
         }
       } catch (err) {
         setConnectionsError(err instanceof Error ? err.message : String(err));
@@ -427,7 +436,7 @@ export function ExtensionsPage() {
   // ── Counts ──
   const counts: Record<ExtensionTab, number> = {
     plugins: installed.length,
-    connections: connectionProviders.length,
+    connections: connections.filter((c) => c.status === "connected").length,
     mcp: mcpServers.length + pluginMCPs.length,
     skills: skills.length,
   };
@@ -720,6 +729,11 @@ export function ExtensionsPage() {
           providers={connectionProviders}
           onInstallPlugin={(plugin) => setPendingInstall(plugin)}
           onConnectProvider={handleConnect}
+          onConfigureProvider={(provider) => {
+            setConnectionSetupError(null);
+            setConnectionSetupProvider(provider);
+            setMarketplaceOpen(false);
+          }}
           onDisconnectConnection={handleDisconnect}
           busyProvider={busyProvider}
         />

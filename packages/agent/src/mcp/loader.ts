@@ -22,8 +22,9 @@ import type {
   ResolvedMCPServerConfig,
 } from '@duya/plugin-core';
 import type { MCPServerConfig } from '../types.js';
-import { collectWorkerMCPCandidates } from './collect-worker.js';
+import { collectWorkerMCPCandidates, fetchPluginSetupValuesForMcp } from './collect-worker.js';
 import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
+import { logger } from '../utils/logger.js';
 
 // ============================================================================
 // Public types
@@ -118,15 +119,38 @@ export async function loadAndResolveMCPServers(opts: {
 } = {}): Promise<MCPLoadResult> {
   const collection = await collectWorkerMCPCandidates();
 
+  // Fetch per-plugin setup values so `${setup.X}` references in plugin
+  // manifests resolve. `setup.X` and `user_config.X` share the same
+  // resolution path (see substituteUserConfigVariables). On failure,
+  // `fetchPluginSetupValuesForMcp` returns `{}` and `${setup.X}`
+  // references degrade to `missingKeys` issues.
+  const userConfigByPlugin = await fetchPluginSetupValuesForMcp();
+
   const resolution = await resolveMCPDiscovery(collection.candidates, {
     environment: filterDefinedEnv(process.env),
-    userConfigByPlugin: {},
+    userConfigByPlugin,
   });
 
   const filtered = filterResolvedMCPServersForAgent(
     resolution.resolvedConfigs,
     opts.agentProfileId,
   );
+
+  // Plan: MCP diagnostic logging. Surface allowedAgentIds filtering
+  // so users can see why a server did not show up for a given profile.
+  logger.info(
+    `[MCP] Resolved ${filtered.length}/${resolution.resolvedConfigs.length} servers for agentProfileId=${opts.agentProfileId ?? '(none)'}`,
+  );
+  if (filtered.length < resolution.resolvedConfigs.length) {
+    for (const cfg of resolution.resolvedConfigs) {
+      if (!filtered.includes(cfg)) {
+        const allowed = cfg.allowedAgentIds?.length ? cfg.allowedAgentIds.join(', ') : '(empty)';
+        logger.warn(
+          `[MCP] Server "${cfg.scopedServerName}" filtered out by allowedAgentIds (allowed: [${allowed}], current: "${opts.agentProfileId ?? '(none)'}")`,
+        );
+      }
+    }
+  }
 
   const legacyConfigs = filtered.map(resolvedToLegacyConfig);
 

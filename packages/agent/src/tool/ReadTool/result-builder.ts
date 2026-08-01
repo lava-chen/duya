@@ -1,14 +1,10 @@
 /**
  * result-builder - shape the result string the model sees
  *
- * Three concerns:
+ * Two concerns:
  *   1. Truncation: respect max_tokens, but stop at paragraph /
  *      sentence boundaries instead of mid-word.
- *   2. Malware hint: append a system-reminder that asks the model
- *      to consider whether the file might be malware before acting
- *      on it. Skipped for claude-opus-4-6 (model's safety is in
- *      its system prompt).
- *   3. Image reminder: when document content includes images,
+ *   2. Image reminder: when document content includes images,
  *      tell the model to use the vision tool rather than try to
  *      "read" the base64 from the text result.
  *
@@ -22,12 +18,6 @@ import type { ParseResult, ImageChunk, TextChunk } from '../../file-parser/index
 
 const APPROX_CHARS_PER_TOKEN = 4;
 const DEFAULT_MAX_TOKENS = 25_000;
-
-/**
- * Models where the malware reminder is unnecessary because their
- * system prompt already covers the concern. Keep this list short —
- * every model in the wild should be paranoid about untrusted code.
- */
 
 /**
  * Truncate a chunk at the nearest paragraph break within the budget.
@@ -189,10 +179,3 @@ export function serializeParseResult(
 
   return { result, metadata, images: inlineImages };
 }
-
-/**
- * System reminder injected after a successful file read to ask the
- * model to consider whether the file is malware. The reference
- * implementation's exact wording — kept verbatim because model
- * behavior is sensitive to phrasing.
- */

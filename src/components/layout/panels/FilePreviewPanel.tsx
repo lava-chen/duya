@@ -237,7 +237,6 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<SelectionContext | null>(null);
   const [openMenuOpen, setOpenMenuOpen] = useState(false);
-  const [openMenuStyle, setOpenMenuStyle] = useState<{ top: number; left: number } | null>(null);
   const openMenuRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const { theme } = useTheme();
@@ -661,34 +660,26 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
             <CameraIcon size={16} />
           </IconButton>
           <div className="file-preview-open-dropdown">
-            <button
+            <Button
               ref={openButtonRef}
               type="button"
-              className="file-preview-open-button"
-              onClick={() => {
-                const rect = openButtonRef.current?.getBoundingClientRect();
-                if (rect) {
-                  setOpenMenuStyle({ top: rect.bottom + 6, left: rect.left });
-                }
-                setOpenMenuOpen((prev) => !prev);
-              }}
+              variant="accent"
+              size="sm"
+              onClick={() => setOpenMenuOpen((prev) => !prev)}
               aria-haspopup="menu"
               aria-expanded={openMenuOpen}
+              aria-label={t('filePreview.open')}
+              title={t('filePreview.open')}
             >
               <ArrowSquareOutIcon size={14} />
               <span>{t('filePreview.open')}</span>
               <CaretDownIcon size={12} className={openMenuOpen ? "rotate-180" : ""} />
-            </button>
-            {openMenuOpen && openMenuStyle && (
+            </Button>
+            {openMenuOpen && (
               <div
                 ref={openMenuRef}
                 className="file-preview-open-menu"
                 role="menu"
-                style={{
-                  position: "fixed",
-                  top: openMenuStyle.top,
-                  left: openMenuStyle.left,
-                }}
               >
                 <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleOpenWithDefault}>
                   <ArrowSquareOutIcon size={14} />

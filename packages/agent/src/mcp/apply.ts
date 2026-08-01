@@ -303,6 +303,11 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       // runtime connect failure too. The engine is the
       // authoritative place for discovery issues; connection
       // issues are appended here for the active snapshot.
+      logger.warn(
+        `[MCP] Server "${cfg.name}" failed to connect: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
       const issue: MCPIssue = {
         phase: 'connection',
         source: {

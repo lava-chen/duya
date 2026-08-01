@@ -756,6 +756,14 @@ export const researchMemoryDb = {
 
 export const pluginDb = {
   registryList: () => sendDbRequest('plugin:registry:list', {}),
+
+  /**
+   * Fetch all plugin setup values as a `{ [pluginId]: { [setupKey]: value } }`
+   * map. Used by the MCP loader to expand `${setup.X}` references in
+   * plugin manifests. Returns an empty object when the setup table is
+   * absent (e.g. before the setup-storage migration has run).
+   */
+  setupListAll: () => sendDbRequest('plugin:setup:list-all', {}),
 }
 
 // ==================== Model Capability Operations ====================

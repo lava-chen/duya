@@ -1,10 +1,8 @@
 "use client";
 
-import { CheckSquareIcon } from "@/components/icons";
+import { InfoIcon } from "@/components/icons";
 import { useEffect } from "react";
 import { usePanel } from "@/hooks/usePanel";
-import { useTaskCount } from "@/hooks/useTaskCount";
-import { useSubAgentProgress } from "@/hooks/useSubAgentProgress";
 import { useBashTasks } from "@/hooks/useBashTasks";
 import { useConversationStore } from "@/stores/conversation-store";
 import { setTaskDrawerOpen, useTaskDrawerOpen } from "./task-drawer-store";
@@ -16,11 +14,7 @@ export function TaskDrawerToggle() {
   const activeThreadId = useConversationStore((state) => state.activeThreadId);
   const currentView = useConversationStore((state) => state.currentView);
   const taskDrawerOpen = useTaskDrawerOpen();
-  const { pending, active } = useTaskCount();
-  const agents = useSubAgentProgress(activeThreadId ?? "");
-  const runningAgents = agents.filter((agent) => agent.status === "running" || agent.status === "waiting").length;
   const { runningCount: runningBashCount } = useBashTasks(activeThreadId ?? "");
-  const taskBadgeCount = pending + active + runningAgents + runningBashCount;
 
   useEffect(() => {
     if (workspaceExpanded && taskDrawerOpen) {
@@ -51,12 +45,7 @@ export function TaskDrawerToggle() {
       aria-pressed={taskDrawerOpen}
       data-testid="task-card-trigger"
     >
-      <CheckSquareIcon size={16} />
-      {taskBadgeCount > 0 && (
-        <span className={`panel-task-toggle-badge${runningBashCount > 0 ? " pulse" : ""}`}>
-          {taskBadgeCount > 99 ? "99+" : taskBadgeCount}
-        </span>
-      )}
+      <InfoIcon size={16} />
     </button>
   );
 }

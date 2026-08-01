@@ -1016,6 +1016,8 @@ const zh: Record<TranslationKey, string> = {
   'filePreview.askDuya': '询问 DUYA',
   'filePreview.screenshot': '截图到输入框',
 
+  'memoryCitation.title': '参考自记忆',
+
   'office.askDuya': '问问 DUYA',
 
   'terminal.addToChat': '添加到对话',
@@ -2041,7 +2043,7 @@ const zh: Record<TranslationKey, string> = {
   'extensions.connections.table.status': '状态',
   'extensions.connections.table.account': '账号',
   'extensions.empty.plugins': '还没有安装插件。打开市场浏览可用插件。',
-  'extensions.empty.connections': '还没有应用连接。打开市场连接 Google、Slack 或 Microsoft 365。',
+  'extensions.empty.connections': '还没有已连接的应用。去市场连接 Google、Slack 或 Microsoft 365。',
   'extensions.empty.mcp': '还没有配置 MCP 服务器。',
   'extensions.empty.skills': '没有可用的技能。',
   'extensions.error': '加载失败',
@@ -2076,7 +2078,7 @@ const zh: Record<TranslationKey, string> = {
   'extensions.mcp.pluginBadge': '插件',
   'extensions.mcp.effective': '生效中',
   'extensions.mcp.overridden': '被覆盖',
-  'extensions.mcp.fromPluginsTitle': '来自插件的 MCP 服务器',
+  'extensions.mcp.fromPluginsTitle': '来自插件',
   'extensions.mcp.table.name': '服务器',
   'extensions.mcp.table.source': '来源',
   'extensions.mcp.table.command': '命令',
