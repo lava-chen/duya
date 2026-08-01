@@ -15,6 +15,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
+import { getPluginCatalogEntry } from '../plugins/catalog';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import {
@@ -27,6 +28,8 @@ import type {
   PluginHealthReport,
   PluginIpcListResponse,
   PluginIpcDetailResponse,
+  PluginSetupFieldDef,
+  PluginSetupLoadResult,
 } from '../../src/lib/plugin-types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 import { getKnownMarketplacesManager } from '../plugins/marketplace/known-marketplaces-manager';
@@ -328,6 +331,75 @@ export function registerPluginHandlers(): void {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:setup:load ---
+  // Returns the setup field definitions (excluding app-connection, which
+  // renders via OAuth) plus the currently stored values. Secret values are
+  // masked to an empty string — the real secret never crosses IPC. The
+  // renderer uses the field defs to build the form instead of reaching
+  // into the manifest (the zod manifest schema has no `setup` block).
+  ipcMain.handle('plugin:setup:load', async (_event, pluginId: string): Promise<{ success: boolean; data: PluginSetupLoadResult | null; error?: string }> => {
+    try {
+      if (!pluginId) {
+        return { success: false, data: null, error: 'pluginId is required' };
+      }
+      const catalog = getPluginCatalogEntry(pluginId);
+      const manifestSetup = catalog?.manifest.setup ?? [];
+      // Filter out app-connection fields — those are handled by the OAuth
+      // connection UI, not this store.
+      const fields: PluginSetupFieldDef[] = manifestSetup
+        .filter((f) => f.type !== 'app-connection')
+        .map((f) => ({
+          id: f.id,
+          label: f.label,
+          type: f.type,
+          required: !!f.required,
+        }));
+      const secretIds = new Set(
+        manifestSetup.filter((f) => f.type === 'secret').map((f) => f.id),
+      );
+      const stored = manager.getSetupValues(pluginId);
+      const values: Record<string, string> = {};
+      for (const [key, value] of Object.entries(stored)) {
+        // Never echo secrets back to the renderer.
+        values[key] = secretIds.has(key) ? '' : value;
+      }
+      // Ensure every declared field has an entry so the renderer can render
+      // inputs uniformly (missing keys are treated as empty by the form).
+      for (const field of fields) {
+        if (values[field.id] === undefined) {
+          values[field.id] = '';
+        }
+      }
+      logger.debug('plugin:setup:load', { pluginId, fieldCount: fields.length }, COMPONENT);
+      return { success: true, data: { fields, values } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:setup:load failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: null, error: message };
+    }
+  });
+
+  // --- plugin:setup:save ---
+  // Persists user-supplied setup values. The renderer sends only the
+  // fields the user actually edited; PluginManager.saveSetupValues merges
+  // them on top of existing stored values (so unchanged secrets are
+  // preserved) and then recomputes setupState + notifies the agent server.
+  ipcMain.handle('plugin:setup:save', async (_event, payload: { pluginId: string; values: Record<string, string> }): Promise<{ success: boolean; data: { ok: boolean } | null; error?: string }> => {
+    try {
+      if (!payload?.pluginId) {
+        return { success: false, data: null, error: 'pluginId is required' };
+      }
+      const values = payload.values && typeof payload.values === 'object' ? payload.values : {};
+      manager.saveSetupValues(payload.pluginId, values);
+      logger.debug('plugin:setup:save', { pluginId, fieldCount: Object.keys(values).length }, COMPONENT);
+      return { success: true, data: { ok: true } };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:setup:save failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: null, error: message };
     }
   });
 

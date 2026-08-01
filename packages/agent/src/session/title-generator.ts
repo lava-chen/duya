@@ -35,7 +35,7 @@ const titleStateBySession = new Map<string, TitleState>();
 /**
  * Check if the session title should be regenerated due to topic drift.
  */
-function shouldRegenerateTitle(
+export function shouldRegenerateTitle(
   sessionId: string,
   currentMessages: readonly Message[],
   previousTitle: string | null | undefined
@@ -235,9 +235,10 @@ const TITLE_GENERATION_PROMPT = `You are a conversation title generation assista
 2. The title language must match the conversation language. English conversations get English titles; Chinese conversations get Chinese titles.
 3. The title should be human-like and natural, not a simple label. Use proper words to summarize the conversation clearly.
 4. Length should be adaptive:
-   - If the conversation is short or simple, keep the title concise (3-8 words).
-   - If the conversation is long and detailed, include important aspects such as the system, method, problem, or design solution discussed (up to ~12 words).
+   - Chinese: 4-15 characters, use concise phrases (not full sentences).
+   - English: 3-12 words, use title case or natural phrasing.
    - If the conversation is extremely short, generate a concise but meaningful title reflecting the user's question or statement.
+5. Do NOT use generic words like "对话", "聊天", "问题", "帮助", "Conversation", "Question", "Help" as the title.
 
 Always return output strictly in JSON format:
    {"title": "your title here"}
@@ -253,6 +254,16 @@ Example 2:
 Conversation: Troubleshooting Electron app deployment issues on Windows, covering blank windows, server startup failures, and automatic update workflow problems.
 JSON Output:
 {"title": "Electron Deployment and Update Workflow Issue Analysis"}
+
+Example 3:
+Conversation: 用户询问 Electron 打包时 better-sqlite3 原生模块在 Windows 平台加载失败的排查方法，涉及 node-gyp 编译和 prebuilt 二进制分发。
+JSON Output:
+{"title": "Electron打包原生模块加载失败排查"}
+
+Example 4:
+Conversation: 用户想让 automation 页面的样式匹配 duya 通用组件，需要检查交互组件逻辑，删除死代码并恢复运行历史交互链。
+JSON Output:
+{"title": "Automation页面样式与交互修复"}
 
 Now, generate a title for the following conversation:
 Conversation:
@@ -472,7 +483,7 @@ export async function generateSessionTitle(
           { role: 'user', content: `${TITLE_GENERATION_PROMPT}${input}`, timestamp: Date.now() },
         ],
         {
-          maxTokens: 500,
+          maxTokens: 120,
           temperature: 0.1,
         },
       );
@@ -506,16 +517,27 @@ export async function generateSessionTitle(
       let cleanedTitle: string | null = null;
       for (const source of [title, thinkingContent]) {
         if (cleanedTitle) break;
+        if (!source) continue;
         try {
-          const jsonMatch = source.match(/\{[^}]*\}/s);
-          console.log(`[TitleGenerator] JSON match attempt: source=${source === title ? 'text' : 'thinking'}, matched=${!!jsonMatch}`);
-          if (jsonMatch) {
-            const parsed = JSON.parse(jsonMatch[0]!);
-            if (parsed.title && typeof parsed.title === 'string') {
-              cleanedTitle = validateTitle(parsed.title);
-              console.log(`[TitleGenerator] JSON parsed from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
-            } else {
-              console.log(`[TitleGenerator] JSON matched but no valid title field: keys=${Object.keys(parsed)}`);
+          // Strategy 1: field-level extraction (robust against extra text / nested braces)
+          const fieldMatch = source.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+          console.log(`[TitleGenerator] Field match attempt: source=${source === title ? 'text' : 'thinking'}, matched=${!!fieldMatch}`);
+          if (fieldMatch) {
+            const extracted = fieldMatch[1]!.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+            cleanedTitle = validateTitle(extracted);
+            console.log(`[TitleGenerator] Field extracted from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
+          }
+          // Strategy 2: fallback to full JSON parse
+          if (!cleanedTitle) {
+            const jsonMatch = source.match(/\{[^}]*\}/s);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]!);
+              if (parsed.title && typeof parsed.title === 'string') {
+                cleanedTitle = validateTitle(parsed.title);
+                console.log(`[TitleGenerator] JSON parsed from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
+              } else {
+                console.log(`[TitleGenerator] JSON matched but no valid title field: keys=${Object.keys(parsed)}`);
+              }
             }
           }
         } catch (e) {
@@ -524,8 +546,52 @@ export async function generateSessionTitle(
       }
 
       if (!cleanedTitle) {
-        console.log('[TitleGenerator] Title validation failed, using heuristic fallback');
-        return { title: fallback };
+        console.log('[TitleGenerator] JSON parse failed, trying raw text extraction');
+
+        // Strategy 3: If LLM returned plain text (not JSON), use it directly as title.
+        // This handles reasoning models that output natural language instead of JSON.
+        const rawText = title.trim();
+        if (rawText) {
+          // Strip common preamble patterns from raw text
+          let candidate = rawText;
+          // Remove leading "Title:" or "标题:" prefixes
+          candidate = candidate.replace(/^(?:title|标题)\s*[:：]\s*/i, '');
+          // Remove surrounding quotes
+          candidate = candidate.replace(/^["「『（(]+|["」』）)]+$/g, '');
+          // Take first line only (avoid multi-paragraph reasoning)
+          candidate = candidate.split(/[\n\r]/)[0]!.trim();
+          if (candidate.length >= 4 && candidate.length <= 60) {
+            cleanedTitle = validateTitle(candidate);
+            console.log(`[TitleGenerator] Raw text extracted as title: "${cleanedTitle}"`);
+          }
+        }
+
+        // Strategy 4: If text is empty but thinking has content, try last meaningful line
+        if (!cleanedTitle && thinkingContent.trim()) {
+          const lines = thinkingContent.trim().split(/[\n\r]/);
+          // Find the last non-empty, non-reasoning line
+          for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i]!.trim();
+            // Skip reasoning markers and very short lines
+            if (!line || line.length < 4) continue;
+            // Skip lines that look like reasoning ("让我...", "我需要...", "这个...", etc.)
+            if (/^(让我|我需要|我应该|这个|这是|用户|根据|结合|首先|然后|最后)/.test(line)) continue;
+            // Skip lines with reasoning punctuation
+            if (line.endsWith('，') || line.endsWith('。') || line.endsWith('的')) continue;
+            if (line.length >= 4 && line.length <= 60) {
+              cleanedTitle = validateTitle(line);
+              if (cleanedTitle) {
+                console.log(`[TitleGenerator] Extracted from thinking line ${i}: "${cleanedTitle}"`);
+                break;
+              }
+            }
+          }
+        }
+
+        if (!cleanedTitle) {
+          console.log('[TitleGenerator] All extraction strategies failed, using heuristic fallback');
+          return { title: fallback };
+        }
       }
       title = cleanedTitle;
 

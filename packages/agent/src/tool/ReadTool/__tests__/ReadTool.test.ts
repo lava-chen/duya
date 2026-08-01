@@ -142,13 +142,6 @@ describe('ReadTool text mode (legacy)', () => {
     expect(result.error).toBe(true);
     expect(result.result).toMatch(/Did you mean.*config\.json/);
   });
-
-  it('attaches the malware reminder to text reads', async () => {
-    const f = join(tmpDir, 'code.py');
-    writeFileSync(f, 'print("hello")\n');
-    const result = await tool.execute({ file_path: f });
-    expect(result.result).toContain('malware');
-  });
 });
 
 describe('ReadTool document mode (NodeFileParser)', () => {
@@ -189,22 +182,27 @@ describe('ReadTool document mode (NodeFileParser)', () => {
     expect(result.result).toContain('# heading');
   });
 
-  it('applies max_tokens truncation to document content', async () => {
-    // Long text file goes through document mode? No — line_range absent
-    // routes to text mode (readFileContent) which doesn't honor max_tokens.
-    // Document mode with no line_range would route to parser; but .txt
-    // also goes through parser since line_range is undefined. Verify:
+  it('ignores max_tokens in text mode (only document mode truncates)', async () => {
+    // .txt is in TEXT_EXTENSIONS so isDocMode returns false → text mode.
+    // Text mode (readFileContent) does NOT honor max_tokens — it returns
+    // the full file. max_tokens only applies to document mode
+    // (PDF/DOCX/etc.) via serializeParseResult. This test pins that
+    // behavior so a future change doesn't silently start truncating
+    // text reads (which would break line_range-less reads of large code).
     const f = join(tmpDir, 'long.txt');
     const content = 'x'.repeat(200_000);
     writeFileSync(f, content);
     const result = await tool.execute({
       file_path: f,
-      max_tokens: 100, // ~400 chars
+      max_tokens: 100, // ~400 chars — would truncate in document mode
     });
     expect(result.error).toBeFalsy();
-    // If document mode kicked in, max_tokens truncates; if text mode, full content
-    // Either way, result should exist.
-    expect(result.result.length).toBeGreaterThan(0);
+    // Text mode returns the full content; max_tokens is ignored.
+    expect(result.result).toContain('File:');
+    expect(result.result).toContain('Lines:');
+    // The full 200_000-char body is present (no truncation marker).
+    expect(result.result.length).toBeGreaterThan(200_000);
+    expect(result.result).not.toMatch(/truncated/i);
   });
 
   it('routes through text path when line_range is provided', async () => {

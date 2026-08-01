@@ -541,3 +541,36 @@ export async function collectWorkerMCPCandidates(): Promise<MCPCollectionResult>
   const built = buildWorkerMCPCandidates(input);
   return { candidates: built.candidates, issues: [...issues, ...built.issues] };
 }
+
+// ============================================================================
+// Plugin setup values — feeds `${setup.X}` expansion in MCP manifests
+// ============================================================================
+
+/**
+ * Fetch all plugin setup values via IPC, shaped as the
+ * `userConfigByPlugin` map the resolution engine expects.
+ *
+ * Returns `{ [pluginId]: { [setupKey]: value } }`. On any error (IPC
+ * failure, table missing, etc.) returns an empty object — the
+ * resolution engine will then report `${setup.X}` references as
+ * `missingKeys` issues, which is the correct degradation.
+ *
+ * This is the single bridge between the setup-storage layer (owned by
+ * the main process / another work stream) and the MCP resolution
+ * engine. It MUST stay here in the worker collector so the pure
+ * resolution engine in @duya/plugin-core never reads the DB.
+ */
+export async function fetchPluginSetupValuesForMcp(): Promise<
+  Record<string, Record<string, string>>
+> {
+  try {
+    const raw = await pluginDb.setupListAll();
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+      return raw as Record<string, Record<string, string>>;
+    }
+    return {};
+  } catch (err) {
+    console.warn('[fetchPluginSetupValuesForMcp] pluginDb.setupListAll failed:', err);
+    return {};
+  }
+}

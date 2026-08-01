@@ -49,11 +49,14 @@ export function expandEnvVarsInString(
         break;
       }
       const inner = value.slice(i + 2, close);
-      // `${user_config.X}` is handled by `substituteUserConfigVariables`,
-      // not by env expansion. Pass it through verbatim and do not track
-      // it as a missing env var. (Bare `$user_config.X` form is a no-op
-      // here; that pattern is not part of the user_config contract.)
-      if (inner.startsWith('user_config.')) {
+      // `${user_config.X}` and `${setup.X}` are handled by
+      // `substituteUserConfigVariables`, not by env expansion. Pass them
+      // through verbatim and do not track as missing env vars. `setup.X`
+      // is semantically equivalent to `user_config.X` — both are
+      // per-plugin user-supplied values — so they share the same
+      // substitution path. (Bare `$user_config.X` / `$setup.X` forms are
+      // no-ops here; those patterns are not part of the contract.)
+      if (inner.startsWith('user_config.') || inner.startsWith('setup.')) {
         out += value.slice(i, close + 1);
         i = close + 1;
         continue;
@@ -97,9 +100,10 @@ export function expandEnvVarsInString(
     let j = i + 1;
     while (j < value.length && /[A-Za-z0-9_]/.test(value[j])) j++;
     const varName = value.slice(i + 1, j);
-    if (varName === 'user_config' || varName.startsWith('user_config_')) {
-      // Bare-form `user_config` references are not a recognized syntax;
-      // emit verbatim and do not track as a missing var.
+    if (varName === 'user_config' || varName.startsWith('user_config_')
+        || varName === 'setup' || varName.startsWith('setup_')) {
+      // Bare-form `user_config` / `setup` references are not a recognized
+      // syntax; emit verbatim and do not track as a missing var.
       out += value.slice(i, j);
       i = j;
       continue;
@@ -138,20 +142,24 @@ export function substitutePluginVariables(
 }
 
 /**
- * Substitute ${user_config.KEY} in `value` against the userConfig map.
+ * Substitute ${user_config.KEY} and ${setup.KEY} in `value` against the
+ * userConfig map.
  *
- * `userConfig` is the per-plugin user-supplied key/value map. Missing
- * keys are tracked in `missingKeys` (not `missingVars` — they are a
- * distinct class of miss).
+ * Both syntaxes are semantically equivalent — they reference per-plugin
+ * user-supplied key/value pairs — so they share the same `userConfig`
+ * map and the same lookup path. `setup.KEY` is the manifest-facing
+ * spelling (plugin.json `setup[].id`); `user_config.KEY` is the
+ * resolution-engine spelling. Missing keys are tracked in `missingKeys`
+ * (not `missingVars` — they are a distinct class of miss).
  */
 export function substituteUserConfigVariables(
   value: string,
   userConfig: Record<string, string>,
 ): { expanded: string; missingKeys: string[] } {
   const missingKeys: string[] = [];
-  // Inline minimal ${user_config.X} handling: find every occurrence, look
-  // up, replace or report missing.
-  const pattern = /\$\{user_config\.([A-Za-z0-9_]+)\}/g;
+  // Match both ${user_config.X} and ${setup.X}. Both resolve against
+  // the same userConfig map.
+  const pattern = /\$\{(?:user_config|setup)\.([A-Za-z0-9_]+)\}/g;
   let out = '';
   let lastIndex = 0;
   let match: RegExpExecArray | null;

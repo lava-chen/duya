@@ -19,7 +19,7 @@
 
 import { runDoctorCommand } from '../commands/doctor.js';
 import { runInstallCliCommand, runUninstallCliCommand } from '../commands/install.js';
-import { runMCPAddCommand, runMCPAssignCommand, runMCPInfoCommand, runMCPListCommand, runMCPRemoveCommand } from '../commands/mcp.js';
+import { runMCPAddCommand, runMCPAssignCommand, runMCPRemoveCommand } from '../commands/mcp.js';
 import { runPluginCommand } from '../commands/plugin.js';
 import { runProviderInfoCommand, runProviderListCommand } from '../commands/provider.js';
 import { runSessionCommand } from '../commands/session.js';
@@ -35,7 +35,6 @@ import { runBackupPlan, runBackupCreate, runBackupVerify, runBackupRestore } fro
 import { runSecurityAudit, runSecurityFix } from '../commands/security.js';
 import {
   runMessageSend,
-  runMCPTest,
   runSkillInstall,
   runSkillUninstall,
   runSkillSync,
@@ -324,17 +323,6 @@ const subSkillSync: CliSubcommand = {
   run: (ctx) => runSkillSync(ctx),
 };
 
-const subMCPList: CliSubcommand = {
-  description: 'List available MCP servers (id / name / source / enabled / connected)',
-  run: (ctx) => adaptLegacy(runMCPListCommand as LegacyFn, [])(ctx),
-};
-
-const subMCPInfo: CliSubcommand = {
-  description: 'Show details for one available MCP server (adds command / args)',
-  args: [{ name: 'id', required: true, description: 'MCP id (e.g. bundled:literature)' }],
-  run: (ctx) => adaptIdFirst(runMCPInfoCommand as LegacyFn, [0])(ctx),
-};
-
 // Plan 102 / Plan 99 §3.3 Phase 7 — mcp write ops. The `mcp add`
 // subcommand accepts repeatable `--arg`, `--env KEY=VAL`, and
 // `--agent` flags via Commander's collect() pattern. The run
@@ -371,12 +359,6 @@ const subMCPAssign: CliSubcommand = {
     { flags: '--yes', description: 'Skip confirmation prompt' },
   ],
   run: (ctx) => runMCPAssignCommand(ctx),
-};
-
-const subMCPTest: CliSubcommand = {
-  description: 'Smoke-spawn an MCP server to verify it starts. Plan 200 P4.3.',
-  args: [{ name: 'name', required: true, description: 'MCP server name' }],
-  run: (ctx) => runMCPTest(ctx),
 };
 
 const subProviderList: CliSubcommand = {
@@ -939,14 +921,11 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'mcp',
-    description: 'Inspect and manage MCP servers (Plan 102: add/remove/assign + Plan 200 P4.3: test)',
+    description: 'Manage MCP servers (Plan 102: add/remove/assign). Read/test subcommands removed with the old MCP inventory framework.',
     subcommands: {
-      list: subMCPList,
-      info: subMCPInfo,
       add: subMCPAdd,
       remove: subMCPRemove,
       assign: subMCPAssign,
-      test: subMCPTest,
     },
   },
   {

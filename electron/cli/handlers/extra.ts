@@ -1,10 +1,9 @@
 /**
  * electron/cli/handlers/extra.ts
  *
- * Phase 4.3: small write/test endpoints for message / mcp / skill / channel.
+ * Phase 4.3: small write/test endpoints for message / skill / channel.
  *
  *   POST /v1/messages/send           — append a user message to a session
- *   POST /v1/mcps/:name/test         — spawn the MCP server briefly to check it starts
  *   POST /v1/skills/install          — install a skill from a local directory
  *   POST /v1/skills/uninstall        — remove a user-installed skill
  *   POST /v1/skills/sync             — re-sync bundled skills
@@ -12,41 +11,20 @@
  *   POST /v1/channels/send-test      — log a test-send record (no live wire send)
  *
  * All write ops go through the unified `control-plane-audit.log.jsonl`.
- * The MCP test is a smoke test only — it does NOT touch the live
- * MCP connection state.
+ *
+ * The `POST /v1/mcps/:name/test` smoke-spawn endpoint was removed
+ * with the old MCP inventory framework — the worker now owns MCP
+ * load status and surfaces it via `mcp:status:snapshot`.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { app } from 'electron';
 import { addMessage } from '../../db/queries/messages';
-import { getConfigManager } from '../../config/manager';
 import { syncBundledSkills } from '../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
-
-// ---------------------------------------------------------------------------
-// Local MCP config reader (mirrors handlers/mcps.ts; both write/read paths
-// use the same agentSettings.mcpServers slice in ConfigManager).
-// ---------------------------------------------------------------------------
-
-interface MCPServerEntry {
-  name: string;
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  enabled?: boolean;
-  allowedAgentIds?: string[];
-}
-
-function getMCPServers(cm: ReturnType<typeof getConfigManager>): MCPServerEntry[] {
-  const settings = cm.getAgentSettings() as unknown as Record<string, unknown>;
-  return Array.isArray(settings.mcpServers)
-    ? (settings.mcpServers as MCPServerEntry[])
-    : [];
-}
 
 // ---------------------------------------------------------------------------
 // Common helpers
@@ -180,83 +158,6 @@ export async function handleSendMessage(
   } catch (err) {
     sendJson(res, 500, { error: { code: 'insert_failed', message: err instanceof Error ? err.message : String(err) } });
   }
-}
-
-// ---------------------------------------------------------------------------
-// mcp test (smoke spawn)
-// ---------------------------------------------------------------------------
-
-async function findMCPServer(name: string): Promise<MCPServerEntry | null> {
-  const cm = getConfigManager();
-  const all = getMCPServers(cm);
-  return all.find((s) => s.name === name) ?? null;
-}
-
-export async function handleMCPTest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  name: string,
-  correlationId?: string,
-): Promise<void> {
-  const server = await findMCPServer(name);
-  if (!server) {
-    sendJson(res, 404, { error: { code: 'mcp_not_found', message: name } });
-    return;
-  }
-  // Spawn the server; if it's still running after 2s, kill it. We
-  // treat "exited before 2s with non-zero" as a startup failure and
-  // "still running" as a success.
-  const env = { ...process.env, ...(server.env ?? {}) };
-  const child = spawn(server.command, server.args ?? [], {
-    env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stderr = '';
-  child.stderr.on('data', (b) => {
-    stderr += b.toString('utf-8').slice(0, 4096);
-  });
-  let stdout = '';
-  child.stdout.on('data', (b) => {
-    stdout += b.toString('utf-8').slice(0, 4096);
-  });
-  const TIMEOUT_MS = 2000;
-  const result = await new Promise<{ ok: boolean; reason: string; pid: number | undefined; exitCode: number | null }>(
-    (resolveP) => {
-      const timer = setTimeout(() => {
-        // Still alive after 2s — that's a pass. Kill it.
-        try {
-          child.kill();
-        } catch {
-          // ignore
-        }
-        resolveP({ ok: true, reason: 'still_running_after_2s', pid: child.pid, exitCode: null });
-      }, TIMEOUT_MS);
-      child.on('exit', (code) => {
-        clearTimeout(timer);
-        resolveP({ ok: false, reason: 'exited_early', pid: child.pid, exitCode: code });
-      });
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        resolveP({ ok: false, reason: `spawn_error: ${err.message}`, pid: child.pid, exitCode: null });
-      });
-    },
-  );
-  await recordAudit(
-    req,
-    correlationId,
-    'channel.test_send', // reuse — closest semantic match
-    `mcp:${name}`,
-    result.ok ? 'ok' : `fail: ${result.reason}`,
-  );
-  sendJson(res, 200, {
-    name,
-    ok: result.ok,
-    reason: result.reason,
-    pid: result.pid,
-    exitCode: result.exitCode,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
-  });
 }
 
 // ---------------------------------------------------------------------------

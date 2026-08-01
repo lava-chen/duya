@@ -169,6 +169,35 @@ export function createStoredRemoteMcpOAuthProvider(
   );
 }
 
+/**
+ * Verify that a freshly authorized Remote MCP connection can be established.
+ *
+ * The MCP SDK's StreamableHTTPClientTransport can only be started once; after
+ * the initial OAuth redirect flow finishes we construct a brand-new transport
+ * and client so the validation handshake starts from a clean state.
+ */
+async function verifyRemoteMcpConnection(
+  remoteMcpUrl: string,
+  vault: TokenVault,
+  connectionId: string,
+): Promise<void> {
+  const authProvider = createStoredRemoteMcpOAuthProvider(vault, connectionId);
+  const transport = new StreamableHTTPClientTransport(new URL(remoteMcpUrl), { authProvider });
+  const client = new Client({ name: 'duya-desktop', version: '0.1.0' }, { capabilities: {} });
+  try {
+    await client.connect(transport);
+  } finally {
+    await client.close().catch(() => undefined);
+    await transport.close().catch(() => undefined);
+  }
+}
+
+/** Build a human-readable account label from the OAuth scopes when no userinfo is available. */
+function buildAccountLabel(providerLabel: string, scopes: string[]): string {
+  if (scopes.length === 0) return providerLabel;
+  return `${providerLabel} · ${scopes.length} scope${scopes.length === 1 ? '' : 's'}`;
+}
+
 /** Run the interactive RFC 9728 + OAuth 2.1 flow for an official Remote MCP. */
 export async function startRemoteMcpAuthorization(
   provider: ProviderId,
@@ -187,6 +216,7 @@ export async function startRemoteMcpAuthorization(
     path: config.redirectPath,
     expectedState: csrfState,
     timeoutMs: deps.timeoutMs,
+    host: 'localhost',
   });
   const authProvider = new VaultOAuthProvider(
     deps.vault,
@@ -207,10 +237,22 @@ export async function startRemoteMcpAuthorization(
       await client.connect(transport);
     } catch (error) {
       if (!(error instanceof UnauthorizedError)) throw error;
+      logger.info('Remote MCP OAuth: waiting for loopback callback', { provider, connectionId }, COMPONENT);
       const callback = await loopback.waitForCode();
+      logger.info('Remote MCP OAuth: callback received, exchanging code', { provider, connectionId }, COMPONENT);
       await transport.finishAuth(callback.code);
-      await client.connect(transport);
+
+      const tokensAfterExchange = deps.vault.get(connectionId);
+      if (!tokensAfterExchange) {
+        throw new FlowError('token_exchange_failed', 'Remote MCP OAuth token exchange did not persist a token');
+      }
     }
+
+    // Validate the authenticated session with a fresh transport/client pair.
+    // Reusing the initial transport would fail because it has already been
+    // started by the first connect() attempt.
+    logger.info('Remote MCP OAuth: verifying authenticated session', { provider, connectionId }, COMPONENT);
+    await verifyRemoteMcpConnection(config.remoteMcpUrl, deps.vault, connectionId);
 
     const tokens = deps.vault.get(connectionId);
     if (!tokens) {
@@ -220,7 +262,7 @@ export async function startRemoteMcpAuthorization(
     const connection: AppConnection = {
       id: connectionId,
       provider,
-      accountLabel: config.label,
+      accountLabel: buildAccountLabel(config.label, tokens.scopes),
       accountId: '',
       scopes: tokens.scopes,
       status: 'connected',
@@ -229,12 +271,14 @@ export async function startRemoteMcpAuthorization(
       createdAt: now,
       updatedAt: now,
     };
-    return toStatusDTO(deps.store.upsert(connection));
+    const persisted = deps.store.upsert(connection);
+    logger.info('Remote MCP OAuth: connection established', { provider, connectionId }, COMPONENT);
+    return toStatusDTO(persisted);
   } catch (error) {
     logger.warn(
       'Remote MCP authorization failed',
       error instanceof Error ? error : new Error(String(error)),
-      { provider },
+      { provider, connectionId },
       COMPONENT,
     );
     if (error instanceof VaultUnavailableError) {

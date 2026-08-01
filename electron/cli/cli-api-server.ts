@@ -32,7 +32,7 @@ import {
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
-import { handleListMCPs, handleGetMCP, handleAddMCP, handleRemoveMCP, handleAssignMCP } from './handlers/mcps.js';
+import { handleAddMCP, handleRemoveMCP, handleAssignMCP } from './handlers/mcps.js';
 import { handleListProviders, handleGetProvider, handleGetActiveProvider } from './handlers/providers.js';
 import { handleEnableSkill, handleDisableSkill } from './handlers/skillWrite.js';
 import { handleInstallCli, handleUninstallCli } from './handlers/install.js';
@@ -99,7 +99,6 @@ import {
 import { handleSecurityAudit, handleSecurityFix } from './handlers/security.js';
 import {
   handleSendMessage,
-  handleMCPTest,
   handleSkillInstall,
   handleSkillUninstall,
   handleSkillSync,
@@ -266,18 +265,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'skills' && parts[3] === 'disable') {
     const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
     handleDisableSkill(req, res, decodeURIComponent(parts[2]), correlationId);
-    return;
-  }
-
-  // /v1/mcps
-  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'mcps') {
-    handleListMCPs(req, res);
-    return;
-  }
-
-  // /v1/mcps/:id
-  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'mcps') {
-    handleGetMCP(req, res, decodeURIComponent(parts[2]));
     return;
   }
 
@@ -538,13 +525,6 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/messages/send
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'messages' && parts[2] === 'send') {
     void handleSendMessage(req, res);
-    return;
-  }
-
-  // POST /v1/mcps/:name/test
-  if (req.method === 'POST' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'mcps' && parts[3] === 'test') {
-    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
-    void handleMCPTest(req, res, decodeURIComponent(parts[2]), correlationId);
     return;
   }
 

@@ -2268,6 +2268,32 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       });
     }
 
+    case 'plugin:setup:list-all': {
+      // Return all plugin setup values as `{ [pluginId]: { [key]: value } }`.
+      // The MCP loader uses this map to expand `${setup.X}` references in
+      // plugin manifests. Defensive: if the `plugin_setup_values` table does not
+      // exist yet (setup-storage migration not applied), return an empty
+      // object so `${setup.X}` references degrade to `missingKeys` issues
+      // instead of crashing the MCP load.
+      try {
+        const tableExists = db.prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='plugin_setup_values'",
+        ).get() as { '1': number } | undefined;
+        if (!tableExists) return {};
+        const rows = db.prepare(
+          'SELECT plugin_id, key, value FROM plugin_setup_values',
+        ).all() as Array<{ plugin_id: string; key: string; value: string }>;
+        const out: Record<string, Record<string, string>> = {};
+        for (const row of rows) {
+          if (!out[row.plugin_id]) out[row.plugin_id] = {};
+          out[row.plugin_id][row.key] = row.value;
+        }
+        return out;
+      } catch {
+        return {};
+      }
+    }
+
     case 'modelCapability:get': {
       const modelName = (p.modelName as string).trim().toLowerCase();
       return db.prepare('SELECT * FROM model_capabilities WHERE id = ?').get(modelName);

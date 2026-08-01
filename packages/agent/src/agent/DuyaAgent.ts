@@ -1819,6 +1819,10 @@ export class duyaAgent {
     // tools/list_changed).
     const snapshot = registry.snapshot(this.providerNameToInternalKey);
     const allTools = snapshot.tools;
+    const mcpToolCount = allTools.filter((t) => registry.getOwner(t.name) === 'mcp').length;
+    logger.debug(
+      `[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`,
+    );
     const tools: Tool[] = allTools.filter((t) =>
       isToolVisible(t.name, snapshot.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
     );

@@ -145,13 +145,28 @@ function getParserForSession(sessionId: string | undefined): NodeFileParser {
     cacheTtlMs: config.cacheTtlMs,
     maxConcurrent: config.maxConcurrent,
   });
-  // Bounded LRU: evict the oldest insertion when at capacity.
+  // Bounded LRU: evict the oldest idle parser when at capacity.
+  // We MUST NOT dispose a parser with in-flight work — doing so
+  // leaves the pool in a "disposed" state where subsequent parseFile
+  // calls on the same session throw "WorkerPool is disposed". If
+  // every cached parser is busy, we let the cache grow past MAX_PARSERS
+  // rather than abort a running parse; the next idle insertion will
+  // reclaim the slot. Worst case (all 32+ parsers permanently busy)
+  // is bounded by the number of concurrent sub-agent sessions, which
+  // is itself bounded elsewhere.
   if (parserBySession.size >= MAX_PARSERS) {
-    const oldestKey = parserBySession.keys().next().value;
-    if (oldestKey !== undefined) {
-      const oldest = parserBySession.get(oldestKey);
-      oldest?.dispose();
-      parserBySession.delete(oldestKey);
+    let evictKey: string | undefined;
+    for (const k of parserBySession.keys()) {
+      const p = parserBySession.get(k);
+      if (p && p.pendingCount === 0) {
+        evictKey = k;
+        break;
+      }
+    }
+    if (evictKey !== undefined) {
+      const evict = parserBySession.get(evictKey);
+      evict?.dispose();
+      parserBySession.delete(evictKey);
     }
   }
   parserBySession.set(key, parser);
@@ -532,10 +547,16 @@ export async function readFileContent(
     const requestedOffset = line_range?.start ?? 1;
     const requestedLimit = line_range?.end;
     const isPartialView = line_range !== undefined && line_range.end !== -1;
+    // Fingerprint captured BEFORE any await. Used both for the dedup
+    // check and (after the read) for TOCTOU detection: if the file
+    // changed during `await readFile`, we must not write the stale
+    // content under the new fingerprint — that would poison the cache
+    // and cause a later read to return a "File unchanged" stub for
+    // content that no longer matches the file.
+    const fpBeforeRead = getFileFingerprint(resolvedPath);
     if (!isPartialView) {
       const existing = getReadStateStore().get(resolvedPath);
-      const fp = getFileFingerprint(resolvedPath);
-      if (existing && fp && existing.timestamp === fp.mtimeMs && existing.size === fp.size) {
+      if (existing && fpBeforeRead && existing.timestamp === fpBeforeRead.mtimeMs && existing.size === fpBeforeRead.size) {
         return {
           id, name: 'read', result: FILE_UNCHANGED_STUB,
           metadata: { filePath: normalizePath(resolvedPath), unchanged: true, charCount: existing.content.length },
@@ -595,20 +616,35 @@ export async function readFileContent(
       endLine = lines.length;
     }
 
-    // Cache for next time (mtime + size + content). Use setReadState
-    // instead of raw store.set so the LRU bound in file-state.ts is
-    // enforced — otherwise long-running sessions would accumulate
-    // entries without limit.
-    const fp = getFileFingerprint(resolvedPath);
-    if (fp) {
-      const state: ReadState = {
-        content: output,
-        timestamp: fp.mtimeMs,
-        size: fp.size,
-        offset: requestedOffset,
-        limit: requestedLimit,
-      };
-      setReadState(resolvedPath, state);
+    // Cache for next time (mtime + size + content). Two guards:
+    //   1. isPartialView: a slice (line_range with end !== -1) must
+    //      NOT write the cache. The dedup check skips partial views,
+    //      but if we wrote here anyway, a later full-file read would
+    //      match the same mtime+size and return a "File unchanged"
+    //      stub pointing back at the slice — hiding the rest of the
+    //      file from the model.
+    //   2. TOCTOU: if the file's mtime+size changed between the
+    //      start of this read (fpBeforeRead) and now, the content we
+    //      just read may be stale. Skip the cache write so a later
+    //      read re-reads the file instead of trusting a cached entry
+    //      whose content doesn't match its fingerprint.
+    // Use setReadState instead of raw store.set so the LRU bound in
+    // file-state.ts is enforced — otherwise long-running sessions
+    // would accumulate entries without limit.
+    if (!isPartialView && fpBeforeRead) {
+      const fpAfterRead = getFileFingerprint(resolvedPath);
+      if (fpAfterRead
+        && fpAfterRead.mtimeMs === fpBeforeRead.mtimeMs
+        && fpAfterRead.size === fpBeforeRead.size) {
+        const state: ReadState = {
+          content: output,
+          timestamp: fpAfterRead.mtimeMs,
+          size: fpAfterRead.size,
+          offset: requestedOffset,
+          limit: requestedLimit,
+        };
+        setReadState(resolvedPath, state);
+      }
     }
 
     return {

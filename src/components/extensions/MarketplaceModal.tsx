@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
@@ -14,6 +14,7 @@ import type {
   ProviderId,
 } from "@/lib/app-connection-ipc";
 import { ExtensionCard } from "./ExtensionCard";
+import { ConnectorIcon } from "./connector-icons";
 import {
   PlugIcon,
   ListChecksIcon,
@@ -33,6 +34,7 @@ interface MarketplaceModalProps {
   providers: AppConnectionProviderDTO[];
   onInstallPlugin: (plugin: PluginCatalogEntry) => void;
   onConnectProvider: (provider: ProviderId) => void;
+  onConfigureProvider: (provider: AppConnectionProviderDTO) => void;
   onDisconnectConnection: (connectionId: string) => void;
   busyProvider: ProviderId | null;
 }
@@ -51,6 +53,7 @@ export function MarketplaceModal({
   providers,
   onInstallPlugin,
   onConnectProvider,
+  onConfigureProvider,
   onDisconnectConnection,
   busyProvider,
 }: MarketplaceModalProps) {
@@ -279,6 +282,7 @@ export function MarketplaceModal({
                 connectedProviders={connectedProviders}
                 busyProvider={busyProvider}
                 onConnect={onConnectProvider}
+                onConfigure={onConfigureProvider}
                 onDisconnect={onDisconnectConnection}
               />
             )}
@@ -332,6 +336,7 @@ function ConnectorsPanel({
   connectedProviders,
   busyProvider,
   onConnect,
+  onConfigure,
   onDisconnect,
 }: {
   source: MarketSource;
@@ -340,6 +345,7 @@ function ConnectorsPanel({
   connectedProviders: Set<ProviderId>;
   busyProvider: ProviderId | null;
   onConnect: (provider: ProviderId) => void;
+  onConfigure: (provider: AppConnectionProviderDTO) => void;
   onDisconnect: (connectionId: string) => void;
 }) {
   const { t } = useTranslation();
@@ -364,7 +370,7 @@ function ConnectorsPanel({
         return (
           <ExtensionCard
             key={provider.id}
-            monogram={provider.monogram}
+            icon={<ConnectorIcon provider={provider.id} size={24} />}
             title={provider.label}
             subtitle={
               isConnected ? (
@@ -375,7 +381,16 @@ function ConnectorsPanel({
             }
             description={provider.description}
             actions={
-              isConnected && connection ? (
+              !provider.configured ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={busyProvider === provider.id}
+                  onClick={() => onConfigure(provider)}
+                >
+                  {t("marketplace.connectors.configure")}
+                </Button>
+              ) : isConnected && connection ? (
                 <Button
                   variant="secondary"
                   size="sm"

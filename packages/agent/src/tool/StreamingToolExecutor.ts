@@ -1282,6 +1282,15 @@ export class StreamingToolExecutor {
       const executionContext: ToolUseContext = {
         ...this.toolUseContext,
         toolUseId: tool.id,
+        // Override the session-level abortController with the per-tool
+        // one created above. Without this override, ReadTool.readAsDocument
+        // receives the session AbortController and per-tool aborts (timeout,
+        // sibling-tool failure) cannot reach parser.parseFile — the parse
+        // keeps running for up to 30s after the tool result has been
+        // raced away, leaking CPU/memory. The per-tool controller is a
+        // child of siblingAbortController, so session-level aborts still
+        // propagate to every tool.
+        abortController: toolAbortController,
       }
 
       // For SubagentTool, create a context with progress callback to stream sub-agent events

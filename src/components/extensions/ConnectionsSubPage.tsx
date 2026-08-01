@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
+import { ConnectorIcon } from "./connector-icons";
 import type {
   AppConnectionProviderDTO,
   AppConnectionStatusDTO,
@@ -61,12 +62,13 @@ export function ConnectionsSubPage({
   }, [connections]);
 
   const filtered = useMemo(() => {
-    if (!searchQuery.trim()) return providers;
+    const configured = providers.filter((p) => p.configured);
+    if (!searchQuery.trim()) return configured;
     const q = searchQuery.toLowerCase();
-    return providers.filter((p) => p.label.toLowerCase().includes(q));
+    return configured.filter((p) => p.label.toLowerCase().includes(q));
   }, [providers, searchQuery]);
 
-  if (providers.length === 0) {
+  if (filtered.length === 0) {
     return (
       <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
         <p className="text-sm text-muted-foreground">
@@ -93,7 +95,6 @@ export function ConnectionsSubPage({
       {filtered.map((provider) => {
         const conn = connectionByProvider.get(provider.id);
         const isConnected = conn?.status === "connected";
-        const monogram = provider.label.charAt(0).toUpperCase();
 
         let statusKey = "disconnected";
         if (!provider.configured) statusKey = "notConfigured";
@@ -109,8 +110,8 @@ export function ConnectionsSubPage({
             style={{ gridTemplateColumns: "1.5fr 120px 1fr 120px" }}
           >
             <div className="flex items-center gap-2 min-w-0">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-solid)] text-xs font-semibold text-foreground">
-                {monogram}
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-solid)]">
+                <ConnectorIcon provider={provider.id} size={18} />
               </span>
               <span className="font-medium text-foreground truncate">{provider.label}</span>
             </div>

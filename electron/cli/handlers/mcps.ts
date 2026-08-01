@@ -3,17 +3,17 @@
  *
  * CLI API handlers for MCP server control plane.
  *
- * Read surface (frozen in Plan 96 / Plan 99):
- *   GET    /v1/mcps             → { mcps: MCPListItemDTO[] }
- *   GET    /v1/mcps/:id         → { mcp: MCPInfoItemDTO }
- *
  * Write surface (Plan 99 §3.3 Phase 7 + Plan 102):
  *   POST   /v1/mcps             → add MCP server (body: { name, command, args?, env?, allowedAgentIds? })
  *   DELETE /v1/mcps/:name       → remove MCP server
  *   PATCH  /v1/mcps/:name       → assign allowed agent profiles
  *
- * The read path uses `collectMainMCPCandidates` so the GUI and CLI
- * server produce identical winner classifications.
+ * The read surface (`GET /v1/mcps`, `GET /v1/mcps/:id`) and the
+ * `POST /v1/mcps/:name/test` smoke-spawn endpoint were removed with
+ * the old `MCPInventoryService` framework. The worker's
+ * `mcp:status:snapshot` SSE event + capability-management snapshot
+ * are now the single source of truth for the effective MCP set; the
+ * CLI no longer exposes a parallel read path.
  *
  * The write path reads from / writes to `agentSettings.mcpServers`
  * in ConfigManager (matches the legacy `duya_config mcp_server_*`
@@ -24,13 +24,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getConfigManager } from '../../config/manager';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { notifyMcpConfigChanged } from '../../services/mcp-write-reload';
-import { getMCPInventoryService } from '../../services/mcp-inventory-service';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { MCPInfoItem, MCPListItem } from '../../../packages/agent/src/mcp/mcpService.js';
 
 // ---------------------------------------------------------------------------
-// Read surface (existing)
+// Common helpers
 // ---------------------------------------------------------------------------
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -44,64 +42,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function sendError(res: ServerResponse, status: number, code: string, message: string): void {
   sendJson(res, status, { error: { code, message } });
-}
-
-export async function handleListMCPs(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  try {
-    const snapshot = await getMCPInventoryService().buildSnapshot();
-    const mcps: MCPListItem[] = snapshot.effectiveServers.map((server) => ({
-      id: server.id,
-      name: server.name,
-      source: server.source,
-      ...(server.source === 'plugin' && server.sourceId ? { sourceId: server.sourceId } : {}),
-      enabled: server.effectiveEnabled,
-      connected: server.connected,
-    }));
-    sendJson(res, 200, { mcps });
-  } catch (err) {
-    sendJson(res, 500, {
-      error: {
-        code: 'internal_error',
-        message: err instanceof Error ? err.message : String(err),
-      },
-    });
-  }
-}
-
-export async function handleGetMCP(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
-  try {
-    const snapshot = await getMCPInventoryService().buildSnapshot();
-    const found = snapshot.effectiveServers.find((server) => server.id === id);
-    const info: MCPInfoItem | null = found
-      ? {
-          id: found.id,
-          name: found.name,
-          source: found.source,
-          ...(found.source === 'plugin' && found.sourceId ? { sourceId: found.sourceId } : {}),
-          enabled: found.effectiveEnabled,
-          connected: found.connected,
-          command: found.command,
-          args: found.args,
-        }
-      : null;
-    if (!info) {
-      sendJson(res, 404, {
-        error: {
-          code: 'mcp_not_found',
-          message: `MCP '${id}' not found`,
-        },
-      });
-      return;
-    }
-    sendJson(res, 200, { mcp: info });
-  } catch (err) {
-    sendJson(res, 500, {
-      error: {
-        code: 'internal_error',
-        message: err instanceof Error ? err.message : String(err),
-      },
-    });
-  }
 }
 
 // ---------------------------------------------------------------------------

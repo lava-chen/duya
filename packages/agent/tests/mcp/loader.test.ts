@@ -21,9 +21,12 @@ import { join } from 'path';
 vi.mock('../../src/mcp/collect-worker.js', async () => {
   // The real collectWorkerMCPCandidates reads from ipc/db-client.
   // We replace it with a stateful stub that returns whatever the
-  // test sets via setNextCandidates().
+  // test sets via setNextCandidates(). fetchPluginSetupValuesForMcp
+  // returns an empty map so `${setup.X}` references degrade to
+  // missingKeys issues without crashing the loader.
   return {
     collectWorkerMCPCandidates: vi.fn(),
+    fetchPluginSetupValuesForMcp: vi.fn(async () => ({})),
   };
 });
 

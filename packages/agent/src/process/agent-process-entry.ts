@@ -50,7 +50,7 @@ import {
   subscribeToCommandQueue,
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
-import { generateSessionTitle } from '../session/title-generator.js';
+import { generateSessionTitle, shouldRegenerateTitle } from '../session/title-generator.js';
 import { classifyError, APIErrorType } from '../llm/errors.js';
 import type { PromptProfile } from '../prompts/modes/types.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
@@ -2359,13 +2359,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     // Background title generation: generate if never generated before (no message limit)
     const hasGeneratedTitle = titleGeneratedBySession.has(msg.sessionId);
+    const previousTitle = titleGeneratedBySession.get(msg.sessionId) ?? null;
     // Count user messages to determine conversation rounds (not total messages)
     const userMessageCount = agentMessages.filter((m: Message) => m.role === 'user').length;
     const assistantMessageCount = agentMessages.filter((m: Message) => m.role === 'assistant').length;
     // Only generate if: (1) never generated before, AND (2) at least 1 complete round (1 user + 1 assistant)
-    const shouldGenerate = !hasGeneratedTitle && userMessageCount >= 1 && assistantMessageCount >= 1;
+    const isFirstGeneration = !hasGeneratedTitle && userMessageCount >= 1 && assistantMessageCount >= 1;
+    // Topic drift: regenerate if the conversation has shifted away from the original title
+    const shouldRegenerate = hasGeneratedTitle
+      && userMessageCount >= 3
+      && shouldRegenerateTitle(msg.sessionId, agentMessages, previousTitle);
+    const shouldGenerate = isFirstGeneration || shouldRegenerate;
 
-    log(`[Agent-Process] Title generation check: hasGenerated=${hasGeneratedTitle}, userMsg=${userMessageCount}, assistantMsg=${assistantMessageCount}, shouldGenerate=${shouldGenerate}`);
+    log(`[Agent-Process] Title generation check: hasGenerated=${hasGeneratedTitle}, userMsg=${userMessageCount}, assistantMsg=${assistantMessageCount}, isFirstGeneration=${isFirstGeneration}, shouldRegenerate=${shouldRegenerate}, shouldGenerate=${shouldGenerate}`);
     log(`[Agent-Process] Title generation config: ${titleGenerationModelConfig ? JSON.stringify({provider: titleGenerationModelConfig.provider, model: titleGenerationModelConfig.model}) : 'null'}`);
     log(`[Agent-Process] Agent LLM client available: ${!!agent.llmClient}`);
     if (agent.llmClient) {
@@ -2448,6 +2454,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
           if (result.title) {
             titleGeneratedBySession.set(msg.sessionId, result.title);
+            // Persist to DB immediately so the title survives renderer crashes
+            try {
+              await sessionDb.update(msg.sessionId, { title: result.title });
+            } catch (dbErr) {
+              warn('[Agent-Process] Failed to persist title to DB:', dbErr instanceof Error ? dbErr.message : String(dbErr));
+            }
             sendToMain({ type: 'chat:title_generated', sessionId: msg.sessionId, title: result.title });
             log(`[Agent-Process] Title generated and sent: "${result.title}"`);
           } else {
@@ -2686,6 +2698,12 @@ async function reloadMCP(): Promise<void> {
       `${result.action.toolsAdded} tools added, ${result.action.toolsRemoved} removed ` +
       `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`,
     );
+    for (const issue of result.loadResult.issues) {
+      log(
+        `[Agent-Process] MCP issue [${issue.phase}] ${issue.serverName ?? '(unknown)'}: ${issue.humanMessage}` +
+        (issue.suggestedAction ? ` (action: ${issue.suggestedAction})` : ''),
+      );
+    }
     // Phase 2A diagnostic chain: emit a richer `mcp:reloaded`
     // event so main / settings UI can surface the active server
     // keys + tool keys + issue counts without polling. The full
@@ -2887,6 +2905,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             if (!agent) return;
             try {
               agent.setActiveAgentProfileId(undefined);
+              log('[Agent-Process] Initializing MCP servers (applyMCPConfiguration)...');
               const result = await applyMCPConfiguration({
                 agent,
                 reason: 'initialization',
@@ -2896,6 +2915,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 `${result.action.toolsAdded} tools, ${result.action.toolsRemoved} removed ` +
                 `(${result.loadResult.inventory.length} inventory rows, ${result.loadResult.issues.length} issues)`,
               );
+              for (const issue of result.loadResult.issues) {
+                log(
+                  `[Agent-Process] MCP issue [${issue.phase}] ${issue.serverName ?? '(unknown)'}: ${issue.humanMessage}` +
+                  (issue.suggestedAction ? ` (action: ${issue.suggestedAction})` : ''),
+                );
+              }
             } catch (mcpErr) {
               warn('[Agent-Process] Failed to initialize MCP servers after ready:', mcpErr);
             } finally {

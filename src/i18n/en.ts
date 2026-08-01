@@ -1028,6 +1028,8 @@ const en = {
   'filePreview.askDuya': 'Ask DUYA',
   'filePreview.screenshot': 'Screenshot to Input',
 
+  'memoryCitation.title': 'Sourced from memory',
+
   'office.askDuya': 'Ask DUYA',
 
   'terminal.addToChat': 'Add to Chat',
@@ -2053,7 +2055,7 @@ const en = {
   'extensions.connections.table.status': 'Status',
   'extensions.connections.table.account': 'Account',
   'extensions.empty.plugins': 'No plugins installed yet. Open the marketplace to browse.',
-  'extensions.empty.connections': 'No app connections yet. Open the marketplace to connect Google, Slack, or Microsoft 365.',
+  'extensions.empty.connections': 'No connected apps yet. Open the marketplace to connect Google, Slack, or Microsoft 365.',
   'extensions.empty.mcp': 'No MCP servers configured.',
   'extensions.empty.skills': 'No skills available.',
   'extensions.error': 'Failed to load',
@@ -2088,7 +2090,7 @@ const en = {
   'extensions.mcp.pluginBadge': 'Plugin',
   'extensions.mcp.effective': 'Active',
   'extensions.mcp.overridden': 'Overridden',
-  'extensions.mcp.fromPluginsTitle': 'MCP servers from plugins',
+  'extensions.mcp.fromPluginsTitle': 'From plugins',
   'extensions.mcp.table.name': 'Server',
   'extensions.mcp.table.source': 'Source',
   'extensions.mcp.table.command': 'Command',

@@ -106,6 +106,7 @@ const settingsNavGroups: {
     items: [
       { id: 'providers', labelKey: 'settings.providers', icon: KeyIcon },
       { id: 'agents', labelKey: 'settings.agents', icon: RobotIcon },
+      { id: 'memory', labelKey: 'settings.memory', icon: BrainIcon },
       { id: 'browser', labelKey: 'settings.browser', icon: ChromeIcon },
       { id: 'channels', labelKey: 'settings.channels', icon: ChannelIcon },
     ],
@@ -123,13 +124,6 @@ const settingsNavGroups: {
     items: [
       { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
       { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
-    ],
-  },
-  {
-    id: 'customize',
-    labelKey: 'settings.group.customize',
-    items: [
-      { id: 'memory', labelKey: 'settings.memory', icon: BrainIcon },
     ],
   },
 ];

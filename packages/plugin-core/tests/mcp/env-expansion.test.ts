@@ -61,6 +61,24 @@ describe('expandEnvVarsInString', () => {
     expect(expanded).toBe('cost: $1.50');
     expect(missingVars).toEqual([]);
   });
+
+  it('passes ${setup.X} through verbatim (handled by substituteUserConfigVariables)', () => {
+    const { expanded, missingVars } = expandEnvVarsInString('token=${setup.githubToken}', {});
+    expect(expanded).toBe('token=${setup.githubToken}');
+    expect(missingVars).toEqual([]);
+  });
+
+  it('passes ${setup.X:-default} through verbatim (no default syntax for setup)', () => {
+    const { expanded, missingVars } = expandEnvVarsInString('${setup.foo:-fallback}', {});
+    expect(expanded).toBe('${setup.foo:-fallback}');
+    expect(missingVars).toEqual([]);
+  });
+
+  it('does not treat bare $setup as an env var', () => {
+    const { expanded, missingVars } = expandEnvVarsInString('hi $setup', {});
+    expect(expanded).toBe('hi $setup');
+    expect(missingVars).toEqual([]);
+  });
 });
 
 describe('substitutePluginVariables', () => {
@@ -108,6 +126,50 @@ describe('substituteUserConfigVariables', () => {
       {},
     );
     expect(missingKeys.sort()).toEqual(['X', 'Y']);
+  });
+
+  it('substitutes ${setup.KEY} from the same userConfig map', () => {
+    const { expanded, missingKeys } = substituteUserConfigVariables(
+      'token=${setup.githubToken}',
+      { githubToken: 'ghp_abc' },
+    );
+    expect(expanded).toBe('token=ghp_abc');
+    expect(missingKeys).toEqual([]);
+  });
+
+  it('reports missing ${setup.KEY} in missingKeys', () => {
+    const { expanded, missingKeys } = substituteUserConfigVariables(
+      'token=${setup.githubToken}',
+      {},
+    );
+    expect(expanded).toBe('token=${setup.githubToken}');
+    expect(missingKeys).toEqual(['githubToken']);
+  });
+
+  it('mixes ${setup.X} and ${user_config.X} in the same string, reading the same map', () => {
+    const { expanded, missingKeys } = substituteUserConfigVariables(
+      'a=${setup.foo} b=${user_config.foo} c=${setup.bar} d=${user_config.baz}',
+      { foo: 'FOO', baz: 'BAZ' },
+    );
+    expect(expanded).toBe('a=FOO b=FOO c=${setup.bar} d=BAZ');
+    expect(missingKeys).toEqual(['bar']);
+  });
+
+  it('deduplicates missing ${setup.KEY} reports', () => {
+    const { missingKeys } = substituteUserConfigVariables(
+      '${setup.X} ${setup.X} ${setup.Y}',
+      {},
+    );
+    expect(missingKeys.sort()).toEqual(['X', 'Y']);
+  });
+
+  it('leaves ${setup.X:-default} as a literal (setup has no default syntax)', () => {
+    const { expanded, missingKeys } = substituteUserConfigVariables(
+      '${setup.foo:-fallback}',
+      {},
+    );
+    expect(expanded).toBe('${setup.foo:-fallback}');
+    expect(missingKeys).toEqual([]);
   });
 });
 
@@ -182,5 +244,54 @@ describe('expandMcpServerConfig', () => {
     expect(expanded.url).toBe('https://mcp.example.com/mcp');
     expect(expanded.headers).toEqual({ Authorization: 'Bearer token' });
     expect(missingVars).toEqual([]);
+  });
+
+  it('expands ${setup.X} from userConfig (same path as ${user_config.X})', () => {
+    const { expanded, missingVars, missingKeys } = expandMcpServerConfig(
+      {
+        command: 'github-mcp-server',
+        args: ['stdio'],
+        env: { GITHUB_PERSONAL_ACCESS_TOKEN: '${setup.githubToken}' },
+      },
+      {
+        environment: {},
+        userConfig: { githubToken: 'ghp_secret' },
+      },
+    );
+    expect(expanded.env).toEqual({ GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_secret' });
+    expect(missingVars).toEqual([]);
+    expect(missingKeys).toEqual([]);
+  });
+
+  it('reports ${setup.X} as missingKeys when userConfig lacks the key', () => {
+    const { expanded, missingVars, missingKeys } = expandMcpServerConfig(
+      {
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-postgres'],
+        env: { DATABASE_URL: '${setup.connectionString}' },
+      },
+      { environment: {}, userConfig: {} },
+    );
+    expect(expanded.env).toEqual({ DATABASE_URL: '${setup.connectionString}' });
+    expect(missingVars).toEqual([]);
+    expect(missingKeys).toEqual(['connectionString']);
+  });
+
+  it('mixes ${setup.X} and ${user_config.X} across fields from the same map', () => {
+    const { expanded, missingKeys } = expandMcpServerConfig(
+      {
+        command: '${setup.cmd}',
+        args: ['${user_config.arg}'],
+        env: { A: '${setup.foo}', B: '${user_config.bar}' },
+      },
+      {
+        environment: {},
+        userConfig: { cmd: 'node', foo: 'F', bar: 'B' },
+      },
+    );
+    expect(expanded.command).toBe('node');
+    expect(expanded.args).toEqual(['${user_config.arg}']);
+    expect(expanded.env).toEqual({ A: 'F', B: 'B' });
+    expect(missingKeys).toEqual(['arg']);
   });
 });

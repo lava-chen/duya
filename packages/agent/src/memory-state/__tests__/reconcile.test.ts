@@ -246,6 +246,50 @@ describe('reconcileProjections (D12)', () => {
     expect(del!.operation).toBe('delete');
   });
 
+  it('succeeded_no_output row enqueues NO write (no empty files)', () => {
+    const id = insertStage1Output(db, {
+      rollout_id: ID_A,
+      generated_at: T0,
+      rollout_slug: 'no-durable-knowledge',
+    });
+    // Fixture uses `??` so passing null falls back to defaults; UPDATE directly.
+    db.prepare(
+      `UPDATE stage1_outputs SET job_status = 'succeeded_no_output', content_outcome = NULL, rollout_summary = NULL WHERE rollout_id = ?`
+    ).run(id);
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.removed).toHaveLength(0);
+    expect(outboxRows(db)).toHaveLength(0);
+  });
+
+  it('existing empty file mapping to a succeeded_no_output row is deleted', () => {
+    const id = insertStage1Output(db, {
+      rollout_id: ID_A,
+      generated_at: T0,
+      rollout_slug: 'no-durable-knowledge',
+    });
+    db.prepare(
+      `UPDATE stage1_outputs SET job_status = 'succeeded_no_output', content_outcome = NULL, rollout_summary = NULL WHERE rollout_id = ?`
+    ).run(id);
+    // Simulate a previously-written empty file (the bug we are fixing).
+    const row = getStage1Row(db, id);
+    const emptyPath = writeSummaryFile(
+      fixture.memoryRoot,
+      deriveRolloutSummaryFilename(row),
+      renderRolloutSummaryFile(row) // frontmatter + empty body
+    );
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.removed).toContain(emptyPath);
+    const del = outboxRows(db).find((r) => r.target_path === emptyPath);
+    expect(del).toBeDefined();
+    expect(del!.operation).toBe('delete');
+  });
+
   it('filename derivation follows the D11 shape and sanitizes slugs', () => {
     const name = deriveRolloutSummaryFilename({
       rollout_id: ID_A,

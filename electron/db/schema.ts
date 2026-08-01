@@ -477,6 +477,22 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_app_connections_provider ON app_connections(provider)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_app_connections_status ON app_connections(status)`);
 
+  // Plugin setup values — text/secret/path/url setup fields declared in a
+  // plugin manifest's `setup` block. One row per (plugin_id, key). Tokens
+  // for `app-connection` setup fields do NOT live here — those go through
+  // the OAuth path and the safeStorage-encrypted vault. See
+  // `electron/plugins/PluginSetupStore.ts` for the access layer.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS plugin_setup_values (
+      plugin_id TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (plugin_id, key)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_plugin_setup_values_plugin ON plugin_setup_values(plugin_id)`);
+
   initializeFts5(db);
 
   const insertSetting = db.prepare(`

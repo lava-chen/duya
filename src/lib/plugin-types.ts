@@ -551,3 +551,38 @@ export interface PluginIpcDetailResponse<T> {
   data: T | null;
   error?: string;
 }
+
+// ============================================================================
+// Plugin Setup Field Definitions (Plan: plugin setup storage chain)
+// ============================================================================
+//
+// The renderer-side `PluginManifest` zod schema intentionally does NOT model
+// the `setup` block (see comment in electron/plugins/types.ts). To render the
+// setup form without relying on the leaky manifest shape, the
+// `plugin:setup:load` IPC returns these field definitions alongside the
+// stored values so the renderer has a self-contained, type-safe payload.
+
+/**
+ * A single setup field definition, mirroring the relevant subset of the
+ * main-process `PluginManifest.setup` entry. `app-connection` fields are
+ * excluded — they render via the OAuth connection UI, not this form.
+ */
+export interface PluginSetupFieldDef {
+  /** The manifest field id; also the storage key. */
+  id: string;
+  label: string;
+  type: 'text' | 'secret' | 'path' | 'url';
+  required: boolean;
+}
+
+/**
+ * Payload returned by `plugin:setup:load`. `values` maps field id → stored
+ * value. For `secret` fields the value is always an empty string on load —
+ * the real secret never crosses IPC. The UI sends only changed fields back
+ * via `plugin:setup:save`; omitted fields (including unchanged secrets) are
+ * preserved by the merge logic in `PluginManager.saveSetupValues`.
+ */
+export interface PluginSetupLoadResult {
+  fields: PluginSetupFieldDef[];
+  values: Record<string, string>;
+}

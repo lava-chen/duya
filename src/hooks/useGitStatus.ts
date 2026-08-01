@@ -1,7 +1,6 @@
 // src/hooks/useGitStatus.ts
 // Polls `git:status` every 1.5s against the active session's working
-// directory and exposes the result to the TaskDrawer. Polling cadence
-// matches useTaskCount so the rail's update rhythm is uniform.
+// directory and exposes the result to the TaskDrawer.
 //
 // Returns `{ isGitRepo: false }` (EMPTY) when:
 //   - polling is disabled (drawer closed or no cwd)

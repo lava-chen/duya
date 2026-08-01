@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import type { Message, ToolUseInfo, ToolResultInfo } from '@/types';
 import { ToolActionsGroup, pairTools, type ActionItem, type ToolAction } from './ToolActionsGroup';
-import { MarkdownRenderer } from './MarkdownRenderer';
+import { MarkdownRenderer, extractMemoryCitation, type MemoryCitation, type MemoryCitationEntry } from './MarkdownRenderer';
 import {
   CopyIcon,
   CheckIcon,
@@ -12,12 +12,14 @@ import {
   XIcon,
   ExternalLinkIcon,
   CaretDownIcon,
+  BookOpenIcon,
 } from '@/components/icons';
 import { FileAttachmentCard } from './FileAttachmentCard';
 import { AttachmentBar } from './AttachmentBar';
 import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
+import { HoverPopover } from '@/components/ui/HoverPopover';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
 import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
@@ -31,6 +33,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import {
   openLocalArtifactTarget,
   openLocalFileTarget,
+  type FocusLineRange,
 } from '@/lib/chat-file-links';
 import {
   browserReferenceDisplaySummary,
@@ -221,6 +224,142 @@ function extractMarkdownFromBlocks(content: string | unknown[]): string {
     }
   }
   return parts.join('');
+}
+
+// Resolve ~/.duya once per session via electronAPI so renderer-side clicks
+// on memory citations can open the correct file regardless of platform.
+let cachedDuyaRoot: string | null = null;
+let duyaRootPromise: Promise<string> | null = null;
+async function getDuyaHomeDir(): Promise<string> {
+  if (cachedDuyaRoot) return cachedDuyaRoot;
+  if (!duyaRootPromise) {
+    duyaRootPromise = (async () => {
+      try {
+        if (typeof window !== 'undefined' && (window as any).electronAPI?.app?.getDefaultWorkspace) {
+          const p = await (window as any).electronAPI.app.getDefaultWorkspace();
+          cachedDuyaRoot = p;
+          return p;
+        }
+      } catch {
+        /* fall through to best-effort guess */
+      }
+      // Browser-only / non-electron fallback: memory is not available but we
+      // shouldn't crash the renderer. Derive a plausible root from $HOME so
+      // dev-server preview builds still show the chip.
+      const fallback =
+        (typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || ''))
+          ? 'C:\\Users\\default\\.duya'
+          : '/home/default/.duya';
+      cachedDuyaRoot = fallback;
+      return fallback;
+    })();
+  }
+  return duyaRootPromise;
+}
+
+function parseLineRange(value: string | null): FocusLineRange | null {
+  if (!value) return null;
+  const [a, b] = value.split('-');
+  const start = Number(a);
+  if (!Number.isFinite(start) || start <= 0) return null;
+  const end = b !== undefined ? Number(b) : NaN;
+  return {
+    start,
+    end: Number.isFinite(end) && end >= start ? end : undefined,
+  };
+}
+
+/**
+ * Hover-triggered memory citation popover anchored to the chip button in
+ * the assistant message action bar. Mirrors the reference screenshot:
+ *   · hover shows "Memories cited" with the bullet list of notes/files
+ *   · clicking the chip opens the top memory file in the side preview panel
+ * The citation XML itself has already been stripped from the prose body by
+ * `extractMemoryCitation` inside MarkdownRenderer; this component only
+ * re-parses the full assembled text in order to surface the same data.
+ */
+function MemoryChip({ citation, text }: { citation: MemoryCitation; text: string }) {
+  const { t, locale } = useTranslation();
+
+  const openEntry = useCallback(async (entry: MemoryCitationEntry) => {
+    const duyaHome = await getDuyaHomeDir();
+    const separator = /\\/.test(duyaHome) ? '\\' : '/';
+    const normalizedFile = entry.file.replace(/\//g, separator).replace(/\\/g, separator);
+    const memoryRoot = `${duyaHome.replace(/[\\/]+$/, '')}${separator}memory`;
+    const absPath = `${memoryRoot}${separator}${normalizedFile.replace(/^[\\/]+/, '')}`;
+    openLocalArtifactTarget(absPath, memoryRoot, parseLineRange(entry.lineRange) ?? undefined);
+  }, []);
+
+  // Hover list: prefer entry.note (human readable), otherwise fall back to
+  // the file path + line range, the same signal users see in a diff gutter.
+  const topEntry = citation.entries[0] ?? null;
+
+  const openTopOrFirst = useCallback(() => {
+    if (topEntry) void openEntry(topEntry);
+  }, [topEntry, openEntry]);
+
+  const popoverContent = (
+    <>
+      <div className="memory-popover__title">{t('memoryCitation.title')}</div>
+      <ul className="memory-popover__list">
+        {citation.entries.map((entry, i) => {
+          const label = entry.note || entry.file;
+          const hasNote = !!entry.note;
+          return (
+            <li
+              key={i}
+              className={`memory-popover__item ${!hasNote ? 'memory-popover__item-empty-note' : ''}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => openEntry(entry)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openEntry(entry);
+                }
+              }}
+              style={{ cursor: 'pointer' }}
+              title={
+                entry.file +
+                (entry.lineRange ? ':' + entry.lineRange : '') +
+                (entry.note ? ` — ${entry.note}` : '')
+              }
+            >
+              {label}
+            </li>
+          );
+        })}
+      </ul>
+      {topEntry && (
+        <div className="memory-popover__hint">
+          {locale === 'zh' ? '点击条目或按钮在侧栏打开文件' : 'Click a bullet (or the button) to open the file'}
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <HoverPopover
+      content={popoverContent}
+      popoverClassName="memory-popover"
+      placement="above-start"
+      closeDelayMs={120}
+      openDelayMs={60}
+      ariaLabel={t('memoryCitation.title')}
+    >
+      <IconButton
+        variant="ghost"
+        size="md"
+        shape="square"
+        aria-label={t('memoryCitation.title')}
+        title={t('memoryCitation.title')}
+        className="hover:bg-muted/50 text-muted-foreground/60 hover:text-foreground"
+        onClick={openTopOrFirst}
+      >
+        <BookOpenIcon size={15} />
+      </IconButton>
+    </HoverPopover>
+  );
 }
 
 function AssistantContent({
@@ -996,6 +1135,20 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           <span className="text-[11px] text-muted-foreground/60 tabular-nums">
             {formatMessageTime(message.timestamp, t, locale)}
           </span>
+          {/* Memory citations (if any) — re-extract from the same combined
+              text that MarkdownRenderer already stripped the XML from, so the
+              chip only shows when the block was well-formed & present. */}
+          {(() => {
+            const texts: string[] = [];
+            for (const a of actions) {
+              if (a.kind === 'text' && a.content) texts.push(a.content);
+            }
+            if (finalText) texts.push(finalText);
+            const combined = texts.join('\n');
+            const { citation } = extractMemoryCitation(combined);
+            if (!citation || citation.entries.length === 0) return null;
+            return <MemoryChip citation={citation} text={combined} />;
+          })()}
           <IconButton
             variant="ghost"
             size="md"

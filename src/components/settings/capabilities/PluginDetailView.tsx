@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import { fetchMCPInventorySnapshot } from "@/lib/mcp-inventory-ipc";
 import { dispatchPrefillChatInput } from "@/lib/prefill-chat-input-event";
-import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay, CapabilityIndexItem } from "@/lib/plugin-types";
+import type { PluginCatalogEntry, PluginRegistryEntry, PluginCapabilityDisplay, PluginPermissionDisplay, CapabilityIndexItem, PluginSetupFieldDef } from "@/lib/plugin-types";
 import type { MCPEffectiveServerDTO } from "@/lib/mcp-inventory-types";
 import type { WorkflowTemplate, WorkflowTemplateSummary } from "@duya/plugin-core";
 import { instantiateWorkflow, extractVariables, WorkflowInstantiateError, getTemplatePrompt } from "@duya/plugin-core";
@@ -181,6 +181,19 @@ export function PluginDetailView({
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchLoading, setLaunchLoading] = useState(false);
 
+  // Plugin setup form — loaded from the main process via plugin:setup:load.
+  // `setupBaseline` holds the values as loaded (secrets masked to ""), used
+  // for dirty-checking on save so unchanged fields are not sent. The main
+  // process merges on top of existing stored values, so omitted fields
+  // (notably unchanged secrets) are preserved.
+  const [setupFields, setSetupFields] = useState<PluginSetupFieldDef[]>([]);
+  const [setupFormValues, setSetupFormValues] = useState<Record<string, string>>({});
+  const [setupBaseline, setSetupBaseline] = useState<Record<string, string>>({});
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupSaving, setSetupSaving] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupSavedFlash, setSetupSavedFlash] = useState(false);
+
   const pluginApi = useMemo(() => getPluginAPI(), []);
 
   // MCP tool discovery for plugin-declared servers.
@@ -267,6 +280,84 @@ export function PluginDetailView({
       cancelled = true;
     };
   }, [pluginApi, installed.id]);
+
+  // Load setup field definitions + stored values once per plugin. Secrets
+  // arrive as empty string (masked by the main process); the baseline is
+  // captured so the save handler can compute the dirty diff and only send
+  // fields the user actually changed.
+  useEffect(() => {
+    if (!pluginApi) return;
+    let cancelled = false;
+    setSetupLoading(true);
+    setSetupError(null);
+    void (async () => {
+      try {
+        const res = await pluginApi.setupLoad(installed.id);
+        if (cancelled) return;
+        if (res.success && res.data) {
+          setSetupFields(res.data.fields);
+          setSetupFormValues({ ...res.data.values });
+          setSetupBaseline({ ...res.data.values });
+        } else if (!res.success) {
+          setSetupError(res.error ?? "Failed to load setup fields");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSetupError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!cancelled) setSetupLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginApi, installed.id]);
+
+  const handleSetupSave = useCallback(async () => {
+    if (!pluginApi) return;
+    // Compute the dirty diff against the loaded baseline. Only changed
+    // fields are sent; the main process merges them on top of existing
+    // stored values. For secrets the baseline is "" (masked), so an
+    // untouched secret stays "" === baseline and is omitted — preserving
+    // the stored value. Clearing a text/path/url field sends "" which
+    // overwrites the stored value.
+    const changed: Record<string, string> = {};
+    for (const field of setupFields) {
+      const current = setupFormValues[field.id] ?? "";
+      const baseline = setupBaseline[field.id] ?? "";
+      if (current !== baseline) {
+        changed[field.id] = current;
+      }
+    }
+    if (Object.keys(changed).length === 0) {
+      return;
+    }
+    setSetupSaving(true);
+    setSetupError(null);
+    setSetupSavedFlash(false);
+    try {
+      const res = await pluginApi.setupSave({ pluginId: installed.id, values: changed });
+      if (res.success) {
+        // Refresh the baseline so subsequent saves only send new changes.
+        // Reload from the main process to pick up the canonical masked
+        // state (secrets stay "").
+        const loadRes = await pluginApi.setupLoad(installed.id);
+        if (loadRes.success && loadRes.data) {
+          setSetupFormValues({ ...loadRes.data.values });
+          setSetupBaseline({ ...loadRes.data.values });
+        }
+        setSetupSavedFlash(true);
+        setTimeout(() => setSetupSavedFlash(false), 2000);
+      } else {
+        setSetupError(res.error ?? "Failed to save setup values");
+      }
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSetupSaving(false);
+    }
+  }, [pluginApi, installed.id, setupFields, setupFormValues, setupBaseline]);
 
   const handleLaunchClick = useCallback(
     async (workflowId: string) => {
@@ -427,6 +518,98 @@ export function PluginDetailView({
       <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
         {catalog?.longDescription || entry.description}
       </p>
+
+      {/* Setup configuration — only renders when the plugin manifest declares
+          setup fields (text/secret/path/url). app-connection fields are
+          filtered out by the main process and rendered via the OAuth UI. */}
+      {setupFields.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Setup</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Configure the values this plugin needs before its MCP servers and
+              tools become available. Saved values are substituted into{" "}
+              <code className="rounded bg-[var(--chip)] px-1 py-0.5 text-xs font-mono">{'${setup.X}'}</code>{" "}
+              references in the plugin manifest.
+            </p>
+          </div>
+          {setupLoading ? (
+            <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-3 text-sm text-muted-foreground">
+              Loading setup fields…
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {setupFields.map((field) => {
+                const value = setupFormValues[field.id] ?? "";
+                const inputType =
+                  field.type === "secret" ? "password" :
+                  field.type === "url" ? "url" :
+                  "text";
+                const placeholder =
+                  field.type === "secret"
+                    ? "Enter a new value to replace the stored secret"
+                    : field.type === "url"
+                      ? "https://example.com"
+                      : field.type === "path"
+                        ? "/path/to/resource"
+                        : "";
+                return (
+                  <div key={field.id} className="space-y-1">
+                    <label
+                      htmlFor={`setup-${field.id}`}
+                      className="flex items-center gap-1 text-sm text-foreground"
+                    >
+                      <span>{field.label}</span>
+                      {field.required && (
+                        <span className="text-xs text-muted-foreground">*</span>
+                      )}
+                      <span className="ml-1 rounded bg-[var(--chip)] px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                        {field.type}
+                      </span>
+                    </label>
+                    <input
+                      id={`setup-${field.id}`}
+                      type={inputType}
+                      value={value}
+                      onChange={(e) =>
+                        setSetupFormValues((prev) => ({
+                          ...prev,
+                          [field.id]: e.target.value,
+                        }))
+                      }
+                      placeholder={placeholder}
+                      autoComplete="off"
+                      spellCheck={false}
+                      className="w-full rounded-lg border border-border/50 bg-background/60 px-3 py-2 text-sm text-foreground outline-none focus:border-accent/50"
+                    />
+                  </div>
+                );
+              })}
+              {setupError && (
+                <div className="rounded-lg border border-red-500/20 bg-red-500/[0.05] px-3 py-2 text-xs leading-5 text-red-500">
+                  {setupError}
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={setupSaving}
+                  onClick={() => void handleSetupSave()}
+                >
+                  {setupSaving ? "Saving…" : "Save setup"}
+                </Button>
+                {setupSavedFlash && (
+                  <span className="inline-flex items-center gap-1 text-xs text-emerald-600">
+                    <CheckIcon size={14} />
+                    Saved
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* Try asking... */}
       {usageExamples.length > 0 && (

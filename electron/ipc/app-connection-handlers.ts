@@ -175,7 +175,7 @@ export function registerAppConnectionHandlers(): void {
     async (
       _event,
       payload: { provider: ProviderId; scopes?: string[] },
-    ): Promise<AppConnectionProviderResponse> => {
+    ): Promise<AppConnectionSingleResponse> => {
       if (!payload || typeof payload.provider !== 'string') {
         return { success: false, error: 'provider is required' };
       }

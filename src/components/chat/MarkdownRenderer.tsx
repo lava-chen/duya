@@ -125,6 +125,98 @@ function FrontmatterCard({ meta }: { meta: Record<string, string> }) {
   );
 }
 
+// ─── Memory citation extraction & rendering ─────────────────────────────────
+
+export interface MemoryCitationEntry {
+  /** Relative file path under the memory base dir, e.g. `MEMORY.md`, `rollout_summaries/xxx.md` */
+  file: string;
+  /** Line range in the form "start-end" or single line; null if absent. */
+  lineRange: string | null;
+  /** Optional free-text note explaining how the memory was used. */
+  note: string | null;
+}
+
+export interface MemoryCitation {
+  entries: MemoryCitationEntry[];
+  rolloutIds: string[];
+}
+
+const MEM_CITATION_RE = /<duya-mem-citation>\s*([\s\S]*?)<\/duya-mem-citation>\s*$/;
+const CITATION_ENTRIES_RE = /<citation_entries>\s*([\s\S]*?)\s*<\/citation_entries>/;
+const ROLLOUT_IDS_RE = /<rollout_ids>\s*([\s\S]*?)\s*<\/rollout_ids>/;
+
+/**
+ * Strip and parse a trailing `<duya-mem-citation>` block from markdown text.
+ * The block is emitted by the agent per memorySection.ts and must never
+ * surface as raw XML in the UI. Returns `{ cleanedText, citation }` where
+ * `citation` is null if no valid, well-formed block was found.
+ */
+export function extractMemoryCitation(text: string): { cleanedText: string; citation: MemoryCitation | null } {
+  const blockMatch = MEM_CITATION_RE.exec(text);
+  if (!blockMatch) return { cleanedText: text, citation: null };
+
+  const rawBlock = blockMatch[1];
+  const cleanedText = text.slice(0, blockMatch.index).trimEnd();
+
+  const entries: MemoryCitationEntry[] = [];
+  const entriesMatch = CITATION_ENTRIES_RE.exec(rawBlock);
+  if (entriesMatch) {
+    for (const rawLine of entriesMatch[1].split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      // Format: <file>:<line_start>-<line_end>|note=[<note>]
+      // note portion is optional, line range portion too in degenerate cases
+      const sep = line.indexOf('|');
+      const left = sep === -1 ? line : line.slice(0, sep);
+      const right = sep === -1 ? null : line.slice(sep + 1);
+
+      let file = left;
+      let lineRange: string | null = null;
+      // Match last colon followed by digits-digits (line range suffix)
+      // We anchor at the end because Windows paths like `C:\foo` have colons too,
+      // but memory paths are relative (per the contract), so `:` only appears
+      // as the file / line-range separator.
+      const lineRangeMatch = /:(\d+(?:-\d+)?)$/.exec(left);
+      if (lineRangeMatch) {
+        file = left.slice(0, lineRangeMatch.index);
+        lineRange = lineRangeMatch[1];
+      }
+
+      let note: string | null = null;
+      if (right) {
+        const noteMatch = /^note=\[([\s\S]*)\]$/.exec(right.trim());
+        if (noteMatch) note = noteMatch[1].trim();
+      }
+      if (!file) continue;
+      entries.push({ file, lineRange, note });
+    }
+  }
+
+  const rolloutIds: string[] = [];
+  const rolloutMatch = ROLLOUT_IDS_RE.exec(rawBlock);
+  if (rolloutMatch) {
+    for (const rawLine of rolloutMatch[1].split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line) rolloutIds.push(line);
+    }
+  }
+
+  if (entries.length === 0 && rolloutIds.length === 0) {
+    return { cleanedText, citation: null };
+  }
+
+  return { cleanedText, citation: { entries, rolloutIds } };
+}
+
+function MemoryCitationCard() {
+  // Rendering was moved to the message action bar (bottom of the assistant
+  // bubble) as a hover-triggered popover next to the copy button, matching
+  // the reference design. This component is intentionally empty — we still
+  // strip the XML block above so ReactMarkdown never sees it, but the
+  // citation UI lives in MessageItem instead of inside the prose body.
+  return null;
+}
+
 interface MarkdownRendererProps {
   children: string;
   className?: string;
@@ -136,7 +228,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   className,
   showFrontmatterCard = false,
 }) => {
-  const processed = preprocessBareImageLinks(preprocessMarkdownBold(children));
+  // 1) Strip the internal <duya-mem-citation> block before any markdown
+  //    processing. The citation data is surfaced to the UI via a separate
+  //    hover popover in the message action bar (see MessageItem.tsx).
+  const { cleanedText } = extractMemoryCitation(children);
+
+  const processed = preprocessBareImageLinks(preprocessMarkdownBold(cleanedText));
   const { meta, content } = parseFrontmatter(processed);
 
   return (
