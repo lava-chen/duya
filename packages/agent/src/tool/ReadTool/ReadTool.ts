@@ -28,6 +28,7 @@ import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathReadPermission } from '../../permissions/pathPermission.js';
 import { expandPath } from '../../utils/path.js';
+import { isPathWithinRoots } from '../allowedRoots.js';
 import { getFileParserConfig } from '../../file-parser/config.js';
 import {
   NodeFileParser,
@@ -210,8 +211,13 @@ export class ReadTool extends BaseTool {
     required: ['file_path'],
   };
 
-  constructor(private parser?: NodeFileParser) {
+  readonly parser: NodeFileParser | undefined;
+  private readonly allowedRoots?: readonly string[];
+
+  constructor(opts: { parser?: NodeFileParser; allowedRoots?: string[] } = {}) {
     super();
+    this.parser = opts.parser;
+    this.allowedRoots = opts.allowedRoots;
   }
 
   /**
@@ -251,6 +257,17 @@ export class ReadTool extends BaseTool {
     const validation = validateReadInput(input);
     if (!validation.valid) {
       return { id, name: 'read', result: `Input validation failed: ${validation.error}`, error: true };
+    }
+    if (this.allowedRoots && this.allowedRoots.length > 0) {
+      const resolved = expandPath(validation.data.file_path, workingDirectory);
+      if (!isPathWithinRoots(resolved, [...this.allowedRoots])) {
+        return {
+          id,
+          name: 'read',
+          error: true,
+          result: `Path '${validation.data.file_path}' is outside the allowed roots for this tool.`,
+        };
+      }
     }
     return this.dispatch(validation.data, id, workingDirectory, context);
   }

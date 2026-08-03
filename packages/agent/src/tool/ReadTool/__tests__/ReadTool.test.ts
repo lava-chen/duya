@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -317,5 +317,69 @@ describe('ReadTool.generateUserFacingDescription', () => {
         pages: '1-5',
       }),
     ).toBe('read: /a.pdf (pdf, pages 1-5)');
+  });
+});
+
+describe('ReadTool allowedRoots sandbox', () => {
+  let root: string;
+  let outside: string;
+
+  beforeEach(() => {
+    _resetFileParserConfig();
+    _resetSharedParser();
+    root = mkdtempSync(join(tmpdir(), 'duya-read-roots-'));
+    outside = mkdtempSync(join(tmpdir(), 'duya-read-out-'));
+    mkdirSync(join(root, 'memory'), { recursive: true });
+    writeFileSync(join(root, 'memory', 'inside.md'), 'inside content');
+    writeFileSync(join(outside, 'outside.md'), 'outside content');
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('rejects a read outside allowedRoots', async () => {
+    const tool = new ReadTool({ allowedRoots: [join(root, 'memory')] });
+    const result = await tool.execute({ file_path: join(outside, 'outside.md') });
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('outside the allowed roots');
+  });
+
+  it('allows a read inside allowedRoots', async () => {
+    const tool = new ReadTool({ allowedRoots: [join(root, 'memory')] });
+    const result = await tool.execute({ file_path: join(root, 'memory', 'inside.md') });
+    expect(result.error).toBeFalsy();
+    expect(result.result).toContain('inside content');
+  });
+
+  it('accepts multiple roots and rejects a path outside all of them', async () => {
+    const otherRoot = mkdtempSync(join(tmpdir(), 'duya-read-other-'));
+    try {
+      mkdirSync(join(otherRoot, 'cfg'), { recursive: true });
+      writeFileSync(join(otherRoot, 'cfg', 'p.md'), 'cfg');
+      const tool = new ReadTool({
+        allowedRoots: [join(root, 'memory'), join(otherRoot, 'cfg')],
+      });
+      const ok = await tool.execute({ file_path: join(otherRoot, 'cfg', 'p.md') });
+      expect(ok.error).toBeFalsy();
+      const bad = await tool.execute({ file_path: join(outside, 'outside.md') });
+      expect(bad.error).toBe(true);
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('behaves unchanged when allowedRoots is not set', async () => {
+    const tool = new ReadTool();
+    const result = await tool.execute({ file_path: join(outside, 'outside.md') });
+    expect(result.error).toBeFalsy();
+    expect(result.result).toContain('outside content');
+  });
+
+  it('still accepts the parser option alongside allowedRoots', async () => {
+    const tool = new ReadTool({ allowedRoots: [join(root, 'memory')] });
+    const result = await tool.execute({ file_path: join(root, 'memory', 'inside.md') });
+    expect(result.error).toBeFalsy();
   });
 });
