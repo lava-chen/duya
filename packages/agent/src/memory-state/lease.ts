@@ -342,6 +342,8 @@ export function complete(
     rolloutSlug: string;
     extractedThroughSeq?: number | null; // Plan 304: high-water mark of extracted source seq
     contentHashAtWrite?: string | null; // Plan 304: sha256 of the projection file at write time
+    stage1PolicyVersion?: number | null; // Plan 405: Stage 1 policy version
+    stage1PolicyHash?: string | null;     // Plan 405: sha256 of stage1_policy.md content
     schemaVersion?: number; // default 2
     now?: number;
   }
@@ -392,8 +394,9 @@ export function complete(
          job_status, content_outcome, rollout_summary, raw_memory,
          rollout_slug, generated_at, source_updated_at, source_content_hash,
          extracted_through_seq, output_updated_at, schema_version,
-         content_hash_at_write
-       ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         content_hash_at_write,
+         stage1_policy_version, stage1_policy_hash
+       ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(rollout_id) DO UPDATE SET
          job_status = excluded.job_status,
          content_outcome = excluded.content_outcome,
@@ -405,7 +408,9 @@ export function complete(
          source_content_hash = excluded.source_content_hash,
          extracted_through_seq = excluded.extracted_through_seq,
          output_updated_at = excluded.output_updated_at,
-         content_hash_at_write = excluded.content_hash_at_write`
+         content_hash_at_write = excluded.content_hash_at_write,
+         stage1_policy_version = excluded.stage1_policy_version,
+         stage1_policy_hash = excluded.stage1_policy_hash`
     ).run(
       rolloutId,
       rolloutId, // thread_id
@@ -422,7 +427,9 @@ export function complete(
       input.extractedThroughSeq ?? null,
       now, // output_updated_at
       input.schemaVersion ?? 2,
-      input.contentHashAtWrite ?? null
+      input.contentHashAtWrite ?? null,
+      input.stage1PolicyVersion ?? null,
+      input.stage1PolicyHash ?? null
     );
 
     db.prepare('DELETE FROM rollout_leases WHERE rollout_id = ? AND token = ?').run(rolloutId, token);
