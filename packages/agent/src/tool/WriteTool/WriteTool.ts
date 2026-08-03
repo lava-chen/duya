@@ -4,7 +4,7 @@
  * Adds input validation, enhanced security checks, and atomic writes
  */
 
-import { writeFile, mkdir, access } from 'node:fs/promises';
+import { writeFile, mkdir, access, constants } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ToolResult } from '../../types.js';
@@ -171,7 +171,7 @@ export class WriteTool extends BaseTool {
 
       if (existsSync(absolutePath)) {
         try {
-          await access(absolutePath, 0o200);
+          await access(absolutePath, constants.W_OK);
         } catch {
           return {
             id,
