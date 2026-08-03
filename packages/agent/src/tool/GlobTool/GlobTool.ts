@@ -16,6 +16,7 @@ import type {
 } from '../types.js';
 import { expandPath } from '../../utils/path.js';
 import { sanitizeWorkingDirectory } from '../GrepTool/sanitize.js';
+import { isPathWithinRoots } from '../allowedRoots.js';
 
 // ============================================================
 // Tool Definition
@@ -42,6 +43,13 @@ export class GlobTool extends BaseTool {
     },
     required: ['pattern'],
   };
+
+  private readonly allowedRoots?: readonly string[];
+
+  constructor(opts: { allowedRoots?: string[] } = {}) {
+    super();
+    this.allowedRoots = opts.allowedRoots;
+  }
 
   get interruptBehavior(): ToolInterruptBehavior {
     return 'block';
@@ -80,6 +88,20 @@ export class GlobTool extends BaseTool {
         }),
         error: true,
       };
+    }
+
+    if (this.allowedRoots && this.allowedRoots.length > 0) {
+      if (!isPathWithinRoots(safeCwd, [...this.allowedRoots])) {
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          error: true,
+          result: JSON.stringify({
+            success: false,
+            error: `Search path '${safeCwd}' is outside the allowed roots for this tool.`,
+          }),
+        };
+      }
     }
 
     return executeGlob(pattern, safeCwd, { maxResults });
