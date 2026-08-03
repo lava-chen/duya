@@ -383,7 +383,13 @@ export class GrepTool extends BaseTool {
     // up running ripgrep inside the install bundle.
     const baseDir = sanitizeWorkingDirectory(workingDirectory) ?? this.workingDirectory;
 
-    if (!baseDir) {
+    const searchPath = path
+      ? isAbsolute(path)
+        ? path
+        : join(baseDir, path)
+      : baseDir;
+
+    if (!searchPath) {
       return {
         id,
         name: this.name,
@@ -394,12 +400,6 @@ export class GrepTool extends BaseTool {
         error: true,
       };
     }
-
-    const searchPath = path
-      ? isAbsolute(path)
-        ? path
-        : join(baseDir, path)
-      : baseDir;
 
     if (this.allowedRoots && this.allowedRoots.length > 0) {
       if (!isPathWithinRoots(searchPath, [...this.allowedRoots])) {
