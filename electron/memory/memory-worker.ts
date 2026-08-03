@@ -28,6 +28,8 @@
 
 import type { Database } from 'better-sqlite3';
 import * as crypto from 'crypto';
+import * as path from 'path';
+import * as os from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 import type { LLMClient } from '../../packages/agent/src/llm/index.js';
 import { Stage1Extractor } from '../../packages/agent/src/memory-rollout/extractor.js';
@@ -42,7 +44,12 @@ import {
   runConsolidator,
   type ConsolidatorResult,
 } from '../../packages/agent/src/memory-state/consolidator.js';
+import { queryEligibleInputs } from '../../packages/agent/src/memory-state/curation_ledger.js';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
+import { runCurationCycle, recoverAllPublications } from './curation_publish_orchestrator';
+import { scanAdHocChanges } from './ad_hoc_watcher';
+import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import type { ProviderConfig } from './curation_publish_orchestrator';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -57,6 +64,32 @@ export interface MemoryWorkerDeps {
   llmClient: LLMClient;
   /** Projection root; default `~/.duya/memory`. */
   rootDir?: string;
+  /**
+   * Optional Phase 2 curation cycle wiring (Plan 406). When present, the
+   * worker runs `runCurationCycle` via the Hybrid scheduler instead of the
+   * legacy consolidator. When absent, the legacy consolidator path is used.
+   */
+  curation?: CurationWorkerDeps;
+}
+
+/**
+ * Curation-cycle dependencies needed to drive `runCurationCycle` from the
+ * memory worker (design §9.1 Hybrid scheduler). These are the same roots the
+ * orchestration tests construct, but resolved at worker startup.
+ */
+export interface CurationWorkerDeps {
+  /** Root that holds `stage1_policy.md` + `memory_layout.json` (memory-config). */
+  configRoot: string;
+  /** Root for `staging/<run_id>/` workspaces. */
+  stagingRoot: string;
+  /** Root for pre-publish snapshots. */
+  snapshotRoot: string;
+  /** LLM provider config forwarded to the curator agent process. */
+  providerConfig: ProviderConfig;
+  /** System location used as the agent's `init.workingDirectory`. */
+  systemLocation: string;
+  /** Agent process pool (shared with cron). */
+  pool: AgentProcessPool;
 }
 
 export interface MemoryWorkerConfig {
@@ -120,6 +153,8 @@ export interface ForceSweepResult {
   reconciled: { written: number; removed: number; mismatched: number } | null;
   /** Phase 2 consolidator result; null when the consolidator was not run. */
   consolidated: ConsolidatorResult | null;
+  /** Phase 2 curation cycle result; null when the curation cycle was not run. */
+  curated: CurationTickResult | null;
   /** Catalog sync result; null when sync was not run this tick. */
   catalogSynced: { inserted: number; updated: number; tombstoned: number; errors: number } | null;
   durationMs: number;
@@ -131,6 +166,8 @@ export interface MemoryWorkerHandle {
   isPaused(): boolean;
   shutdown(): Promise<void>;
   forceSweep(): Promise<ForceSweepResult>;
+  /** Test-only: run a non-forced curation tick (Hybrid patience path). */
+  curationTickForTest(): Promise<CurationTickResult>;
   /** Worker instance identifier (for `claimedBy` lease field). */
   readonly workerId: string;
 }
@@ -154,6 +191,64 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   minMessageCount: 6, // filter thin sessions
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
 };
+
+// ---------------------------------------------------------------------------
+// Phase 2 curation switch + Hybrid scheduler (Plan 406, design §9.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the Phase 2 curation cycle is active. Evaluated at call time so
+ * tests can toggle `DUYA_MEMORY_PHASE2_ENABLED` between worker construction
+ * and ticks. During the Phase C transition the flag is opt-in; after Phase D
+ * (Task 11) it becomes default-on.
+ */
+function isPhase2Enabled(): boolean {
+  return (
+    process.env.DUYA_MEMORY_PHASE2_ENABLED === '1' ||
+    process.env.DUYA_MEMORY_PHASE2_ENABLED === 'true'
+  );
+}
+
+/** Fire the curation cycle when ≥ this many eligible inputs accumulate. */
+const HYBRID_MIN_INPUTS = 3;
+/** Or when the oldest eligible input has sat this long (30 min). */
+const HYBRID_MAX_AGE_MS = 30 * 60_000;
+/** Eligibility scan window for the Hybrid trigger (reuse the ledger query). */
+const HYBRID_QUORUM_MAX_INPUTS = 100;
+const HYBRID_QUORUM_MAX_BYTES = 512 * 1024;
+
+export interface CurationTickResult {
+  ran: boolean;
+  runId: string | null;
+  status: string;
+  durationMs: number;
+}
+
+/**
+ * Compute the Hybrid scheduler quorum from the two input axes (design §9.1):
+ *   - rollout inputs: `queryEligibleInputs` (stage1_outputs not yet consumed)
+ *   - ad-hoc inputs: `scanAdHocChanges` (files under extensions/ad_hoc/)
+ *
+ * Returns the total eligible count and the age (ms) of the oldest eligible
+ * input. When nothing is eligible, oldestAgeMs is 0 so the T=30min trigger
+ * cannot fire on an empty queue.
+ */
+async function curationQuorum(
+  db: Database,
+  memoryRoot: string,
+): Promise<{ eligibleCount: number; oldestAgeMs: number }> {
+  const now = Date.now();
+  const rollout = queryEligibleInputs(db, {
+    maxInputs: HYBRID_QUORUM_MAX_INPUTS,
+    maxInputBytes: HYBRID_QUORUM_MAX_BYTES,
+    now,
+  });
+  const adHoc = await scanAdHocChanges(db, path.join(memoryRoot, 'extensions', 'ad_hoc'));
+  const all = [...rollout, ...adHoc];
+  if (all.length === 0) return { eligibleCount: 0, oldestAgeMs: 0 };
+  const oldest = Math.min(...all.map((i) => i.outputUpdatedAt));
+  return { eligibleCount: all.length, oldestAgeMs: now - oldest };
+}
 
 // ---------------------------------------------------------------------------
 // Singleton handle
@@ -225,6 +320,7 @@ interface WorkerState {
   forceSweepInFlight: boolean;
   consolidatorInFlight: boolean;
   reconciledThisInstance: boolean;
+  curationRecoveredThisInstance: boolean;
   inFlightExtracts: Set<Promise<unknown>>;
   shutdownSignal: boolean;
   lastCatalogSyncAt: number;
@@ -254,6 +350,7 @@ function createWorker(
     forceSweepInFlight: false,
     consolidatorInFlight: false,
     reconciledThisInstance: false,
+    curationRecoveredThisInstance: false,
     inFlightExtracts: new Set(),
     shutdownSignal: false,
     lastCatalogSyncAt: 0,
@@ -305,6 +402,76 @@ function createWorker(
     }
   };
 
+  // Phase 2 curation cycle — single-flight Hybrid scheduler (design §9.1).
+  // Mirrors the shape of `consolidatorTick` so the worker can swap between
+  // them via the DUYA_MEMORY_PHASE2_ENABLED switch. Applies the Hybrid
+  // trigger: force always fires; otherwise N ≥ HYBRID_MIN_INPUTS eligible
+  // inputs OR the oldest eligible input age ≥ HYBRID_MAX_AGE_MS.
+  const curationTick = async (options: {
+    force: boolean;
+  }): Promise<CurationTickResult> => {
+    if (state.consolidatorInFlight) {
+      return { ran: false, runId: null, status: 'skipped_in_flight', durationMs: 0 };
+    }
+    state.consolidatorInFlight = true;
+    const start = Date.now();
+    try {
+      const memoryRoot = deps.rootDir ?? path.join(os.homedir(), '.duya', 'memory');
+      const quorum = await curationQuorum(deps.memoryDb, memoryRoot);
+      const shouldFire =
+        options.force ||
+        quorum.eligibleCount >= HYBRID_MIN_INPUTS ||
+        quorum.oldestAgeMs >= HYBRID_MAX_AGE_MS;
+      if (!shouldFire) {
+        return { ran: false, runId: null, status: 'skipped_no_quorum', durationMs: Date.now() - start };
+      }
+
+      const curation = deps.curation;
+      if (!curation) {
+        return { ran: false, runId: null, status: 'skipped_no_curation_deps', durationMs: Date.now() - start };
+      }
+
+      const result = await runCurationCycle(deps.memoryDb, {
+        memoryRoot,
+        configRoot: curation.configRoot,
+        stagingRoot: curation.stagingRoot,
+        snapshotRoot: curation.snapshotRoot,
+        providerConfig: curation.providerConfig,
+        systemLocation: curation.systemLocation,
+        workerId: state.workerId,
+        pool: curation.pool,
+        sessionId: `curation-${state.workerId}`,
+      });
+      logger.warn(
+        'MemoryWorkerCurationCycle',
+        {
+          runId: result.runId ?? null,
+          skipped: result.skipped,
+          success: result.success,
+          error: result.error ?? null,
+          durationMs: Date.now() - start,
+          forced: options.force,
+        },
+        LogComponent.DB,
+      );
+      return {
+        ran: !result.skipped,
+        runId: result.runId ?? null,
+        status: result.success ? 'succeeded' : result.skipped ? 'skipped' : 'failed',
+        durationMs: Date.now() - start,
+      };
+    } catch (err) {
+      logger.warn(
+        'MemoryWorkerCurationCycle failed',
+        { error: err instanceof Error ? err.message : String(err), forced: options.force },
+        LogComponent.DB,
+      );
+      return { ran: false, runId: null, status: 'failed', durationMs: Date.now() - start };
+    } finally {
+      state.consolidatorInFlight = false;
+    }
+  };
+
   // The loop body. Shared between the interval tick and forceSweep.
   const runTick = async (options: {
     force: boolean;
@@ -332,6 +499,38 @@ function createWorker(
       } catch (err) {
         logger.warn(
           'MemoryWorkerReconcile failed',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.DB,
+        );
+      }
+    }
+
+    // Phase 2 curation publication recovery (design §8.5). Runs once per
+    // worker instance on the first non-paused tick (or any forceSweep).
+    // Idempotent — `recoverAllPublications` is a no-op when no unfinished
+    // journals exist. A recovery failure must not block the normal tick.
+    if (
+      isPhase2Enabled() &&
+      deps.curation &&
+      !state.curationRecoveredThisInstance &&
+      (options.force || !state.paused)
+    ) {
+      state.curationRecoveredThisInstance = true;
+      try {
+        const recoverResult = await recoverAllPublications({
+          stagingRoot: deps.curation.stagingRoot,
+          liveMemoryRoot: deps.rootDir ?? path.join(os.homedir(), '.duya', 'memory'),
+        });
+        if (recoverResult.length > 0) {
+          logger.warn(
+            'MemoryWorkerCurationRecover',
+            { recovered: recoverResult.length, actions: recoverResult.map((r) => r.action) },
+            LogComponent.DB,
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          'MemoryWorkerCurationRecover failed',
           { error: err instanceof Error ? err.message : String(err) },
           LogComponent.DB,
         );
@@ -461,18 +660,23 @@ function createWorker(
       );
     }
 
-    // Phase 2 consolidator: run eagerly when this tick produced new
-    // Stage 1 outputs (so fresh extractions are promoted without
-    // waiting for the interval), or when forceSweep requests it.
-    // The consolidator's own global lock + CAS-skip make this cheap
-    // when there is nothing to do.
+    // Phase 2 curation / legacy consolidator: run eagerly when this tick
+    // produced new Stage 1 outputs (so fresh extractions are promoted
+    // without waiting for the interval), or when forceSweep requests it.
+    // Dispatch on the Phase 2 switch (Plan 406): the curation cycle uses
+    // the Hybrid scheduler, the legacy consolidator keeps its CAS-skip.
     let consolidated: ConsolidatorResult | null = null;
+    let curated: CurationTickResult | null = null;
     if (extracted > 0 || (options.force && cfg.consolidatorOnForceSweep)) {
-      consolidated = consolidatorTick({ force: options.force });
-      // Drain again so the consolidator's projection writes are flushed
-      // within the same forceSweep window (useful for tests + IPC
-      // callers that expect files on disk after forceSweep returns).
-      if (consolidated && !consolidated.skipped) {
+      if (isPhase2Enabled() && deps.curation) {
+        curated = await curationTick({ force: options.force });
+      } else {
+        consolidated = consolidatorTick({ force: options.force });
+      }
+      // Drain again so the projection writes are flushed within the same
+      // forceSweep window (useful for tests + IPC callers that expect files
+      // on disk after forceSweep returns).
+      if (consolidated ? !consolidated.skipped : curated?.ran) {
         try {
           const allowedRoots = deps.rootDir ? [deps.rootDir] : undefined;
           drainOutbox(memoryDb, { batchSize: 32, allowedRoots });
@@ -488,6 +692,7 @@ function createWorker(
       skippedNoop,
       outboxDrained,
       consolidated: consolidated ? !consolidated.skipped : false,
+      curated: curated?.ran ?? false,
       catalogSynced: catalogSynced ? (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) : 0,
       forced: options.force,
       durationMs: Date.now() - start,
@@ -496,6 +701,7 @@ function createWorker(
     // Log every tick at INFO for debugging; escalate to WARN when
     // something actually happened so operators can see activity.
     const hasActivity = extracted > 0 || outboxDrained > 0 || (consolidated && !consolidated.skipped)
+      || (curated?.ran ?? false)
       || (catalogSynced && (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) > 0);
     if (hasActivity) {
       logger.warn('MemoryWorkerTick', tickSummary, LogComponent.DB);
@@ -510,6 +716,7 @@ function createWorker(
       outboxDrained,
       reconciled,
       consolidated,
+      curated,
       catalogSynced,
       durationMs: Date.now() - start,
     };
@@ -559,13 +766,20 @@ function createWorker(
     }
   };
 
-  // Consolidator sweeper — independent interval so ad-hoc `.md` files
-  // dropped into `extensions/ad_hoc/` are digested even when no Stage 1
-  // extractions are happening. The consolidator's own CAS-skip makes
-  // this cheap when the input set is unchanged.
+  // Consolidator/curation sweeper — independent interval so ad-hoc `.md`
+  // files dropped into `extensions/ad_hoc/` are digested even when no
+  // Stage 1 extractions are happening. In Phase 2 the curation cycle's
+  // Hybrid trigger (N / T) fires here; the legacy consolidator's CAS-skip
+  // makes this cheap when the input set is unchanged.
   const sweepConsolidator = (): void => {
     if (state.shutdownSignal || state.paused) return;
-    consolidatorTick({ force: false });
+    if (isPhase2Enabled() && deps.curation) {
+      curationTick({ force: false }).catch(() => {
+        // Already logged inside curationTick.
+      });
+    } else {
+      consolidatorTick({ force: false });
+    }
   };
 
   state.tickTimer = setInterval(tick, tickIntervalMs);
@@ -645,6 +859,7 @@ function createWorker(
           outboxDrained: 0,
           reconciled: null,
           consolidated: null,
+          curated: null,
           catalogSynced: null,
           durationMs: 0,
         };
@@ -656,6 +871,14 @@ function createWorker(
       } finally {
         state.forceSweepInFlight = false;
       }
+    },
+    /**
+     * Test-only: run a non-forced curation tick so the Hybrid patience
+     * trigger (N / T thresholds) can be verified without a forceSweep,
+     * which always forces the cycle. Production code MUST NOT call this.
+     */
+    async curationTickForTest(): Promise<CurationTickResult> {
+      return curationTick({ force: false });
     },
   };
 
