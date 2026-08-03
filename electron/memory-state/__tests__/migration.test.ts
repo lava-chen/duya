@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(7);
+    expect(rows).toHaveLength(8);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -76,6 +76,8 @@ describe('memory-state migration runner', () => {
     expect(rows[5].version).toBe(7);
     expect(rows[6].version).toBe(8);
     expect(rows[6].name).toBe('curation_runs');
+    expect(rows[7].version).toBe(9);
+    expect(rows[7].name).toBe('drop_legacy_phase2');
 
     // Schema tables exist.
     const tables = db
@@ -99,13 +101,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(7);
+    expect(rowsBefore.n).toBe(8);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(7);
+    expect(rowsAfter.n).toBe(8);
 
     db.close();
   });
@@ -122,7 +124,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(7);
+    expect(rows.n).toBe(8);
 
     dbA.close();
     dbB.close();
@@ -176,7 +178,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(7);
+    expect(rows.n).toBe(8);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -270,24 +272,15 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('8. migration 0005 applies without re-applying 0001/0002/0003; all four Phase 2 tables exist; checksum is registered', () => {
+  it('8. migration 0005 creates all four Phase 2 tables', () => {
     const db = openRawDb(dbPath);
-    runMigrations(db);
+    // Apply 0001/0002/0003 then 0005 in isolation so 0009 (which drops the
+    // legacy tables) does not mask 0005's own effect.
+    for (const sql of [migration0001.sql, migration0002.sql, migration0003.sql, migration0005.sql]) {
+      db.exec(sql);
+    }
 
-    // memory_schema has 7 rows: versions 1, 2, 3, 5, 6, 7, 8.
-    // 0001/0002/0003 are not re-applied; 0005 is registered with a
-    // valid sha256 (64-char hex).
-    const rows = db
-      .prepare('SELECT version, name, sha256 FROM memory_schema ORDER BY version')
-      .all() as Array<{ version: number; name: string; sha256: string }>;
-    expect(rows).toHaveLength(7);
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 5, 6, 7, 8]);
-
-    const phase2Row = rows.find((r) => r.version === 5);
-    expect(phase2Row).toBeDefined();
-    expect(phase2Row!.sha256).toMatch(/^[0-9a-f]{64}$/);
-
-    // All four Phase 2 tables exist.
+    // All four Phase 2 tables exist after 0005 alone.
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all() as Array<{ name: string }>;
@@ -309,8 +302,8 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007 and 0008 in order', () => {
-    expect(MIGRATIONS).toHaveLength(7);
+  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007, 0008 and 0009 in order', () => {
+    expect(MIGRATIONS).toHaveLength(8);
     expect(MIGRATIONS[0].version).toBe(1);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
@@ -327,6 +320,8 @@ describe('memory-state migration runner', () => {
     expect(MIGRATIONS[5].version).toBe(7);
     expect(MIGRATIONS[6].version).toBe(8);
     expect(MIGRATIONS[6].name).toBe('curation_runs');
+    expect(MIGRATIONS[7].version).toBe(9);
+    expect(MIGRATIONS[7].name).toBe('drop_legacy_phase2');
   });
 
   it('migration sha256 values are stable (deterministic from SQL body)', () => {
@@ -360,8 +355,8 @@ describe('memory-state migration runner', () => {
     expect(tableNames).toContain('curation_run_inputs');
     expect(tableNames).toContain('curation_publications');
 
-    // Old phase2_runs table still exists (NOT dropped).
-    expect(tableNames).toContain('phase2_runs');
+    // Old phase2_runs table is dropped by migration 0009 (Plan 406 Phase D).
+    expect(tableNames).not.toContain('phase2_runs');
 
     // stage1_outputs gained stage1_policy_version + stage1_policy_hash.
     const stage1Cols = db.prepare('PRAGMA table_info(stage1_outputs)').all() as Array<{ name: string }>;
@@ -437,5 +432,28 @@ describe('memory-state migration runner', () => {
     const idx7 = versions.indexOf(7);
     const idx8 = versions.indexOf(8);
     expect(idx8).toBeGreaterThan(idx7);
+  });
+
+  it('12. migration 0009 is registered after 0008 and drops legacy phase2 tables', () => {
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(versions).toContain(9);
+    const idx8 = versions.indexOf(8);
+    const idx9 = versions.indexOf(9);
+    expect(idx9).toBeGreaterThan(idx8);
+
+    const db = openRawDb(dbPath);
+    runMigrations(db);
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all() as Array<{ name: string }>;
+    const tableNames = tables.map((t) => t.name);
+    expect(tableNames).not.toContain('memory_entries');
+    expect(tableNames).not.toContain('memory_evidence');
+    expect(tableNames).not.toContain('phase2_runs');
+    // memory_usage_events is kept for telemetry.
+    expect(tableNames).toContain('memory_usage_events');
+
+    db.close();
   });
 });
