@@ -13,7 +13,6 @@ import {
 import type {
   MCPInventorySnapshotDTO,
   MCPPluginDeclaredServerDTO,
-  MCPConfiguredServerDTO,
 } from "@/lib/mcp-inventory-types";
 import type {
   PluginCatalogEntry,
@@ -31,13 +30,350 @@ import { ExtensionsTabs, type ExtensionTab } from "./ExtensionsTabs";
 import { PluginsSubPage } from "./PluginsSubPage";
 import { ConnectionsSubPage } from "./ConnectionsSubPage";
 import { OAuthClientSetupDialog } from "./OAuthClientSetupDialog";
+import { ManagedOAuthConnectDialog } from "./ManagedOAuthConnectDialog";
 import { MCPSubPage } from "./MCPSubPage";
 import { SkillsSubPage, type SkillSummary } from "./SkillsSubPage";
 import { MarketplaceModal } from "./MarketplaceModal";
 import { PluginDetailView } from "@/components/settings/capabilities/PluginDetailView";
-import { PluginInstallModal } from "@/components/settings/capabilities/PluginInstallModal";
 import { PlugIcon, PlusIcon, ChatCircleIcon, FileIcon } from "@/components/icons";
+import {
+  ArrowLeftIcon,
+  EyeIcon,
+  CodeIcon,
+  InfoIcon,
+  DotsThreeIcon,
+  CaretDownIcon,
+  ShieldIcon,
+  WarningIcon,
+  ProhibitIcon,
+  SpinnerGapIcon,
+} from "@/components/icons";
+import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { SkillUploadDialog } from "./SkillUploadDialog";
+
+interface SkillFileNode {
+  name: string;
+  path: string;
+  type: "directory" | "file";
+  extension?: string;
+  children?: SkillFileNode[];
+}
+
+interface SkillDetailData extends SkillSummary {
+  content: string;
+  skillRoot?: string;
+  frontmatter?: Record<string, unknown>;
+  security?: {
+    verdict: "safe" | "caution" | "dangerous";
+    findings: Array<{ severity: string; category: string; description: string; match?: string }>;
+    scanned: boolean;
+  };
+}
+
+function SkillDetailPanel({
+  skill,
+  onBack,
+  onToggleEnabled,
+}: {
+  skill: SkillDetailData;
+  onBack: () => void;
+  onToggleEnabled: (skillName: string, enabled: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const [activeFile, setActiveFile] = useState<string>("SKILL.md");
+  const [fileTree, setFileTree] = useState<SkillFileNode[]>([]);
+  const [fileContent, setFileContent] = useState<string>(skill.content);
+  const [viewMode, setViewMode] = useState<"preview" | "code">("preview");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [loadingFile, setLoadingFile] = useState(false);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    const skillRoot = skill.skillRoot;
+    if (!skillRoot) return;
+
+    const loadFiles = async () => {
+      const win = window as unknown as {
+        electronAPI?: { files?: { browse: (dir: string) => Promise<{ success: boolean; tree: SkillFileNode[] }> } };
+      };
+      if (!win.electronAPI?.files?.browse) return;
+      const result = await win.electronAPI.files.browse(skillRoot);
+      if (result.success) {
+        setFileTree(result.tree);
+      }
+    };
+
+    setActiveFile("SKILL.md");
+    setViewMode("preview");
+    setFileContent(skill.content);
+    void loadFiles();
+  }, [skill.skillRoot, skill.name, skill.content]);
+
+  useEffect(() => {
+    const skillRoot = skill.skillRoot;
+    if (!skillRoot) return;
+
+    if (activeFile === "SKILL.md") {
+      setFileContent(skill.content);
+      return;
+    }
+
+    const loadContent = async () => {
+      setLoadingFile(true);
+      const win = window as unknown as {
+        electronAPI?: {
+          files?: {
+            preview: (
+              targetPath: string,
+              rootPath: string,
+            ) => Promise<{ success: boolean; content?: string; kind?: string; error?: string }>;
+          };
+        };
+      };
+      if (!win.electronAPI?.files?.preview) {
+        setLoadingFile(false);
+        return;
+      }
+      const targetPath = `${skillRoot}/${activeFile}`;
+      const result = await win.electronAPI.files.preview(targetPath, skillRoot);
+      if (result.success && typeof result.content === "string") {
+        setFileContent(result.content);
+      } else {
+        setFileContent(result.error || "Failed to load file");
+      }
+      setLoadingFile(false);
+    };
+
+    void loadContent();
+  }, [activeFile, skill.skillRoot, skill.content]);
+
+  const allFiles = useMemo(() => {
+    const files: { name: string; path: string }[] = [];
+    const walk = (nodes: SkillFileNode[]) => {
+      for (const node of nodes) {
+        if (node.type === "file") files.push({ name: node.name, path: node.path });
+        if (node.children) walk(node.children);
+      }
+    };
+    walk(fileTree);
+    return files;
+  }, [fileTree]);
+
+  const fileCount = useMemo(() => allFiles.length, [allFiles]);
+
+  const isEnabled = skill.enabled !== false;
+  const author = (skill.frontmatter?.author as string | undefined) || undefined;
+
+  const description = skill.description || "";
+  const DESCRIPTION_TRUNCATE_AT = 180;
+  const shouldTruncate = description.length > DESCRIPTION_TRUNCATE_AT;
+  const displayedDescription = descriptionExpanded
+    ? description
+    : `${description.slice(0, DESCRIPTION_TRUNCATE_AT)}${shouldTruncate ? "..." : ""}`;
+
+  const securityStatus = useMemo(() => {
+    if (!skill.security?.scanned) return null;
+    if (skill.source === "bundled" || skill.source === "builtin-directory") {
+      return { label: t("skills.trustedBuiltin"), variant: "safe" as const };
+    }
+    if (skill.security.verdict === "dangerous") {
+      return { label: t("skills.blocked"), variant: "dangerous" as const };
+    }
+    if (skill.security.verdict === "caution") {
+      return { label: t("skills.caution"), variant: "caution" as const };
+    }
+    return { label: t("skills.safe"), variant: "safe" as const };
+  }, [skill.security, skill.source, t]);
+
+  const activeFileName = allFiles.find((f) => f.path === activeFile)?.name || activeFile;
+
+  return (
+    <div className="space-y-5">
+      {/* Back link */}
+      <button
+        type="button"
+        onClick={onBack}
+        className="flex items-center gap-2 text-sm font-medium text-[var(--text)] hover:text-[var(--accent)] transition-colors"
+      >
+        <ArrowLeftIcon size={18} />
+        <span>{t("extensions.tabs.skills")}</span>
+      </button>
+
+      {/* Title row */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-xl font-semibold text-foreground">{skill.name}</h2>
+            <InfoIcon size={18} className="text-muted-foreground shrink-0" />
+          </div>
+          {author && <p className="text-sm text-muted-foreground">by {author}</p>}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={isEnabled}
+            onClick={() => onToggleEnabled(skill.name, !isEnabled)}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--main-bg)] ${
+              isEnabled ? "bg-[var(--success)]" : "bg-[var(--muted)]"
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                isEnabled ? "translate-x-6" : "translate-x-1"
+              }`}
+            />
+          </button>
+          <button
+            type="button"
+            className="p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
+            aria-label="More options"
+          >
+            <DotsThreeIcon size={20} />
+          </button>
+        </div>
+      </div>
+
+      {/* Description */}
+      <div>
+        <p className="text-sm text-muted-foreground leading-relaxed inline">{displayedDescription}</p>
+        {shouldTruncate && (
+          <button
+            type="button"
+            onClick={() => setDescriptionExpanded((v) => !v)}
+            className="text-sm text-[var(--accent)] hover:underline ml-1"
+          >
+            {descriptionExpanded ? "See less" : "See more"}
+          </button>
+        )}
+      </div>
+
+      {/* Security status */}
+      {securityStatus && (
+        <div className="flex items-center gap-2">
+          {securityStatus.variant === "safe" ? (
+            <ShieldIcon size={16} className="text-emerald-500" />
+          ) : securityStatus.variant === "dangerous" ? (
+            <ProhibitIcon size={16} className="text-red-500" />
+          ) : (
+            <WarningIcon size={16} className="text-amber-500" />
+          )}
+          <span
+            className={`text-xs font-medium ${
+              securityStatus.variant === "safe"
+                ? "text-emerald-500"
+                : securityStatus.variant === "dangerous"
+                ? "text-red-500"
+                : "text-amber-500"
+            }`}
+          >
+            {securityStatus.label}
+          </span>
+          {skill.security && skill.security.findings.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              ({skill.security.findings.length} {t("skills.securityFindings", { count: skill.security.findings.length })})
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* File viewer panel */}
+      <div className="rounded-xl border border-border/50 bg-muted/20 overflow-hidden">
+        {/* Panel header */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-muted/30">
+          <div className="flex items-center gap-3">
+            <div className="relative" ref={dropdownRef}>
+              <button
+                type="button"
+                onClick={() => setDropdownOpen((v) => !v)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface border border-border/50 text-sm text-foreground hover:bg-muted/40 transition-colors"
+              >
+                <span className="truncate max-w-[160px]">{activeFileName}</span>
+                <CaretDownIcon
+                  size={14}
+                  className={`text-muted-foreground transition-transform shrink-0 ${dropdownOpen ? "rotate-180" : ""}`}
+                />
+              </button>
+              {dropdownOpen && (
+                <div className="absolute top-full left-0 mt-1 min-w-[180px] max-h-60 overflow-y-auto rounded-lg border border-border/50 bg-[var(--main-bg)] shadow-lg z-20">
+                  {allFiles.map((file) => (
+                    <button
+                      key={file.path}
+                      type="button"
+                      onClick={() => {
+                        setActiveFile(file.path);
+                        setDropdownOpen(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-muted/40 transition-colors ${
+                        file.path === activeFile ? "bg-muted/50 text-foreground" : "text-muted-foreground"
+                      }`}
+                    >
+                      {file.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <span className="text-xs text-muted-foreground">{fileCount} files</span>
+          </div>
+          <div className="flex items-center rounded-lg border border-border/50 bg-surface p-0.5">
+            <button
+              type="button"
+              onClick={() => setViewMode("preview")}
+              className={`p-1.5 rounded-md transition-colors ${
+                viewMode === "preview"
+                  ? "bg-muted/60 text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              aria-label="Preview"
+            >
+              <EyeIcon size={16} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("code")}
+              className={`p-1.5 rounded-md transition-colors ${
+                viewMode === "code"
+                  ? "bg-muted/60 text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              aria-label="Code"
+            >
+              <CodeIcon size={16} />
+            </button>
+          </div>
+        </div>
+
+        {/* Panel content */}
+        <div className="p-4 min-h-[300px] max-h-[60vh] overflow-y-auto">
+          {loadingFile ? (
+            <div className="flex items-center justify-center py-12">
+              <SpinnerGapIcon size={20} className="animate-spin text-muted-foreground" />
+            </div>
+          ) : viewMode === "code" ? (
+            <pre className="text-xs font-mono text-foreground whitespace-pre-wrap break-all">{fileContent}</pre>
+          ) : (
+            <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none">
+              {fileContent}
+            </MarkdownRenderer>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function ExtensionsPage() {
   const { t } = useTranslation();
@@ -50,8 +386,8 @@ export function ExtensionsPage() {
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [detailPluginId, setDetailPluginId] = useState<string | null>(null);
   const [
-    pendingInstall,
-    setPendingInstall,
+    marketplaceDetailPlugin,
+    setMarketplaceDetailPlugin,
   ] = useState<PluginCatalogEntry | null>(null);
 
   // ── Data state ──
@@ -68,6 +404,7 @@ export function ExtensionsPage() {
   const [busyProvider, setBusyProvider] = useState<ProviderId | null>(null);
   const [connectionSetupProvider, setConnectionSetupProvider] = useState<AppConnectionProviderDTO | null>(null);
   const [connectionSetupError, setConnectionSetupError] = useState<string | null>(null);
+  const [managedConnectionProvider, setManagedConnectionProvider] = useState<AppConnectionProviderDTO | null>(null);
 
   const [
     mcpInventory,
@@ -75,10 +412,10 @@ export function ExtensionsPage() {
   ] = useState<MCPInventorySnapshotDTO | null>(null);
   const [mcpLoading, setMcpLoading] = useState(true);
 
-  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skills, setSkills] = useState<SkillDetailData[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [skillsError, setSkillsError] = useState<string | null>(null);
-  const [selectedSkill, setSelectedSkill] = useState<SkillSummary | null>(null);
+  const [selectedSkill, setSelectedSkill] = useState<SkillDetailData | null>(null);
 
   // ── Skill add menu / upload dialog ──
   const [skillMenuOpen, setSkillMenuOpen] = useState(false);
@@ -176,7 +513,7 @@ export function ExtensionsPage() {
         skills?: {
           list: () => Promise<{
             success: boolean;
-            skills: SkillSummary[];
+            skills: SkillDetailData[];
             error?: string;
           }>;
         };
@@ -262,15 +599,6 @@ export function ExtensionsPage() {
     [reloadPlugins, t]
   );
 
-  const handleInstallConfirm = useCallback(async () => {
-    if (!pendingInstall || !pluginApi) return;
-    const target = pendingInstall;
-    setPendingInstall(null);
-    await runPluginAction(target.id, () =>
-      pluginApi.registry.install({ pluginId: target.id })
-    );
-  }, [pendingInstall, pluginApi, runPluginAction]);
-
   const handleCreatePlugin = useCallback(async () => {
     try {
       const thread = await createThread();
@@ -313,6 +641,17 @@ export function ExtensionsPage() {
       }
     },
     [appConnectionApi, reloadConnections, t]
+  );
+
+  const requestConnection = useCallback(
+    (provider: AppConnectionProviderDTO) => {
+      if (provider.supportsManualConfiguration) {
+        void handleConnect(provider.id);
+        return;
+      }
+      setManagedConnectionProvider(provider);
+    },
+    [handleConnect],
   );
 
   const handleDisconnect = useCallback(
@@ -365,15 +704,10 @@ export function ExtensionsPage() {
 
   // ── MCP mutations ──
   const mcpServers: MCPServerConfig[] = useMemo(() => {
-    const fromInventory: MCPConfiguredServerDTO[] =
-      mcpInventory?.configuredServers ?? [];
     const fromSettings = settings.mcpServers ?? [];
-    // Prefer inventory when available; fall back to settings.
-    const source =
-      fromInventory.length > 0 || mcpInventory
-        ? fromInventory
-        : fromSettings;
-    return source.map((s) => ({
+    // The inventory intentionally redacts spawn details. Keep the TOML-backed
+    // settings list as the editable source so a save cannot destroy it.
+    return fromSettings.map((s) => ({
       name: s.name,
       command: s.command,
       args: s.args ?? [],
@@ -485,32 +819,36 @@ export function ExtensionsPage() {
     );
   }
 
-  // ── Skill detail — delegate to a simple back button for now ──
+  // ── Marketplace plugin detail inline view ──
+  if (marketplaceDetailPlugin) {
+    return (
+      <div className="settings-page-content">
+        <div className="settings-content">
+          <PluginDetailView
+            catalog={marketplaceDetailPlugin}
+            onBack={() => setMarketplaceDetailPlugin(null)}
+            onInstall={() =>
+              void runPluginAction(marketplaceDetailPlugin.id, () =>
+                pluginApi!.registry.install({ pluginId: marketplaceDetailPlugin.id })
+              )
+            }
+            busy={busyPluginId === marketplaceDetailPlugin.id}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Skill detail view ──
   if (selectedSkill) {
     return (
       <div className="settings-page-content">
         <div className="settings-content">
-          <div className="rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-3">
-            <h3 className="text-sm font-semibold text-foreground">
-              {selectedSkill.name}
-            </h3>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {selectedSkill.description}
-            </p>
-            {selectedSkill.category && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {t("extensions.skill.category", { category: selectedSkill.category })}
-              </p>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-4"
-            onClick={() => setSelectedSkill(null)}
-          >
-            {t("extensions.skill.back", { tab: t("extensions.tabs.skills") })}
-          </Button>
+          <SkillDetailPanel
+            skill={selectedSkill}
+            onBack={() => setSelectedSkill(null)}
+            onToggleEnabled={handleToggleSkill}
+          />
         </div>
       </div>
     );
@@ -685,7 +1023,7 @@ export function ExtensionsPage() {
             providers={connectionProviders}
             busyProvider={busyProvider}
             searchQuery={searchByTab.connections}
-            onConnect={handleConnect}
+            onConnect={requestConnection}
             onConfigure={(provider) => {
               setConnectionSetupError(null);
               setConnectionSetupProvider(provider);
@@ -715,7 +1053,10 @@ export function ExtensionsPage() {
           <SkillsSubPage
             skills={skills}
             searchQuery={searchByTab.skills}
-            onSkillClick={(skill) => setSelectedSkill(skill)}
+            onSkillClick={(skill) => {
+              const full = skills.find((s) => s.name === skill.name);
+              if (full) setSelectedSkill(full);
+            }}
             onToggleEnabled={handleToggleSkill}
           />
         )}
@@ -727,8 +1068,9 @@ export function ExtensionsPage() {
           installedPlugins={installed}
           connections={connections}
           providers={connectionProviders}
-          onInstallPlugin={(plugin) => setPendingInstall(plugin)}
-          onConnectProvider={handleConnect}
+          onInstallPlugin={(plugin) => setMarketplaceDetailPlugin(plugin)}
+          onPluginClick={(plugin) => setMarketplaceDetailPlugin(plugin)}
+          onConnectProvider={requestConnection}
           onConfigureProvider={(provider) => {
             setConnectionSetupError(null);
             setConnectionSetupProvider(provider);
@@ -746,16 +1088,19 @@ export function ExtensionsPage() {
           }}
           onSave={(values) => void handleConfigureProvider(values)}
         />
-
-        {/* Plugin install modal */}
-        {pendingInstall && (
-          <PluginInstallModal
-            plugin={pendingInstall}
-            onInstall={handleInstallConfirm}
-            onCancel={() => setPendingInstall(null)}
-            busy={busyPluginId === pendingInstall.id}
-          />
-        )}
+        <ManagedOAuthConnectDialog
+          provider={managedConnectionProvider}
+          busy={busyProvider === managedConnectionProvider?.id}
+          onClose={() => {
+            if (!busyProvider) setManagedConnectionProvider(null);
+          }}
+          onConfirm={() => {
+            const provider = managedConnectionProvider;
+            if (!provider) return;
+            setManagedConnectionProvider(null);
+            void handleConnect(provider.id);
+          }}
+        />
 
         <SkillUploadDialog
           isOpen={skillUploadOpen}

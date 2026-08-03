@@ -78,6 +78,8 @@ export interface AppConnectionProviderDTO {
   configured: boolean;
   /** Non-secret reason shown when a build has no registered OAuth client. */
   configurationHint?: string;
+  /** Whether this provider intentionally supports a self-hosted OAuth client. */
+  supportsManualConfiguration: boolean;
   /** Single-letter icon for UI rendering (e.g. 'G' for Google). */
   monogram: string;
   /** One-line summary shown in the marketplace / connection list. */

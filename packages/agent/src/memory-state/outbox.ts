@@ -221,6 +221,27 @@ export function drainOutbox(db: Database, opts: DrainOptions = {}): number {
   }
 }
 
+/**
+ * Atomically replace `target` with `tmp` on all platforms.
+ *
+ * On Windows, `fs.renameSync` can fail with EPERM when the target is
+ * locked (AV, search indexer, or a stale handle). We try rename first
+ * (fast, atomic on the same filesystem), then fall back to copy+delete
+ * which is more robust against transient locks.
+ */
+function atomicRename(tmpPath: string, targetPath: string): void {
+  try {
+    fs.renameSync(tmpPath, targetPath);
+  } catch (renameErr) {
+    // Only fall back for permission / busy errors; re-throw fatal ones.
+    const code = (renameErr as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EBUSY') throw renameErr;
+    // Fallback: copy content then delete temp.
+    fs.copyFileSync(tmpPath, targetPath);
+    fs.rmSync(tmpPath, { force: true });
+  }
+}
+
 function processOutboxRow(
   db: Database,
   row: OutboxRow,
@@ -247,7 +268,7 @@ function processOutboxRow(
       hooks?.beforeWrite?.(row);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(tmpPath, row.content ?? '', 'utf8');
-      fs.renameSync(tmpPath, row.target_path);
+      atomicRename(tmpPath, row.target_path);
     } catch (err) {
       try {
         fs.rmSync(tmpPath, { force: true });
@@ -302,6 +323,14 @@ function recordFailure(
 ): void {
   const attempts = row.attempt_count + 1;
   const message = err instanceof Error ? err.message : String(err);
+  const code = (err as NodeJS.ErrnoException)?.code;
+
+  // Surface outbox failures via stderr so they appear in the app log
+  // even when the structured logger is not available (agent process).
+  process.stderr.write(
+    `[WARN] outbox: write failed target=${row.target_path} attempt=${attempts}/${maxAttempts} code=${code ?? 'none'} error=${message}\n`,
+  );
+
   if (attempts > maxAttempts) {
     // Retire: stop queuing this row, keep the failure visible.
     db.prepare(

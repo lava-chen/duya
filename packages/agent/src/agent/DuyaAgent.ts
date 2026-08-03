@@ -64,6 +64,7 @@ import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/
 import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
+import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
 import path from 'node:path';
 
@@ -692,12 +693,6 @@ export class duyaAgent {
     console.error(`[Agent-Process] streamChat tools (${tools.length}): conductorMode=${options?.conductorMode}, agentProfileId=${options?.agentProfileId}, mode=${options?.mode}, hasCanvasCreate=${tools.some(t => t.name === 'canvas_create_element')}`);
     // eslint-disable-next-line no-console
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
-    // Ensure AGENTS.md snapshot is loaded before building prompts or injecting
-    // it as a user message. The manager is a singleton; refreshForTask is a
-    // no-op when already loaded for this path.
-    const projectPath = this.workingDirectory || process.cwd();
-    await getAgentsMdManager().refreshForTask(projectPath);
-
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
     let messages = this._resolveInitialMessages(prompt, options);
@@ -1053,6 +1048,7 @@ export class duyaAgent {
       let needsFollowUp = false;
       let thinkingContent = '';  // Accumulate thinking content for this turn
       let hasThinkingContent = false;  // Track if we have any thinking content
+      let thinkingSignature: string | undefined = undefined;  // Anthropic extended-thinking signature for this turn
       // Guard against providers that emit more than one `done` event per
       // stream (a protocol-layer bug duplicated every assistant message).
       // One LLM stream produces exactly one assistant message push.
@@ -1261,6 +1257,7 @@ export class duyaAgent {
               finalAssistantContent.push({
                 type: 'thinking',
                 thinking: thinkingContent,
+                ...(thinkingSignature ? { thinkingSignature } : {}),
               });
             }
 
@@ -1441,7 +1438,16 @@ export class duyaAgent {
             // Accumulate thinking content and pass through
             // Ensure event.data is a string to avoid [object Object] issues
             const thinkingData = typeof event.data === 'string' ? event.data : JSON.stringify(event.data);
-            thinkingContent += thinkingData;
+            if (thinkingData) {
+              thinkingContent += thinkingData;
+            }
+            // Capture the signature emitted at content_block_stop (empty data).
+            // This is required by Anthropic to continue the thinking chain
+            // across turns — without it the next request 400s with
+            // "The content[].thinking in the thinking mode must be passed back to the API."
+            if (event.signature) {
+              thinkingSignature = event.signature;
+            }
             hasThinkingContent = true;
             yield event;
 
@@ -1923,6 +1929,23 @@ export class duyaAgent {
       systemPromptContent = [...systemPromptResult].join('\n\n');
     }
 
+    // MCP tool schemas are deliberately discoverable rather than placed in
+    // every provider request. Keep the model aware of connected capability
+    // families with a bounded directory, so a broad request such as "what MCP
+    // tools do I have?" does not depend on arbitrary search-result ordering.
+    if (!options?.disableSystemPrompt) {
+      const mcpCatalog = buildMCPCapabilityCatalog(
+        this.activeMCPRegistry.getAllTools().filter(
+          (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
+        ),
+      );
+      if (mcpCatalog) {
+        systemPromptContent = systemPromptContent
+          ? `${systemPromptContent}\n\n${mcpCatalog}`
+          : mcpCatalog;
+      }
+    }
+
     // Prepend optional prefix
     if (options?.systemPromptPrefix) {
       systemPromptContent = options.systemPromptPrefix + '\n\n' + systemPromptContent;
@@ -2341,6 +2364,7 @@ export class duyaAgent {
       key: string;
       definition: Tool;
       executor: ToolExecutor;
+      meta?: import('../tool/registry.js').ToolMetaInput;
     }>;
     snapshot: import('../mcp/apply.js').ActiveMCPRuntimeSnapshot;
   }): Promise<{ removedKeys: string[]; addedKeys: string[]; keptKeys: string[] }> {

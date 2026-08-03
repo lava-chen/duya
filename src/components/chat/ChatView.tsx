@@ -158,6 +158,10 @@ export function ChatView({
   const [compactionStatus, setCompactionStatus] = useState<'idle' | 'compacting' | 'done' | 'error'>('idle');
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [gitBaseline, setGitBaseline] = useState<UseGitStatusResult | null>(null);
+  // Tracks whether a baseline has been captured for the current round.
+  // Reset when a new user message is sent or the session changes, so the
+  // effect below captures a fresh snapshot when streaming begins.
+  const baselineCapturedRef = useRef(false);
   const messageListRef = useRef<MessageListRef>(null);
   const taskDrawerOpen = useTaskDrawerOpen();
   const { tasks: floatingTasks, setTasks: setFloatingTasks, fetchTasks: fetchFloatingTasks } = useTaskList(sessionId);
@@ -354,37 +358,54 @@ export function ChatView({
 
   // Capture a git baseline when the agent starts working so the floating
   // file-change pill only shows changes produced by the current turn.
-  // The baseline is cleared when streaming ends, keeping the indicator
-  // hidden during normal idle state.
+  // The baseline persists after streaming ends so the user can still
+  // inspect the round's changes. It is cleared when a new user message
+  // is sent (next round) or the session changes.
   useEffect(() => {
     if (!isStreaming || !activeThread?.workingDirectory) {
-      setGitBaseline(null);
       return;
     }
+    if (baselineCapturedRef.current) return;
+
     let cancelled = false;
     void getGitStatus(activeThread.workingDirectory).then((status) => {
       if (cancelled) return;
+      baselineCapturedRef.current = true;
       setGitBaseline({
         isGitRepo: status.isGitRepo,
         fileChanges: status.fileChanges ?? [],
         totals: status.totals ?? { additions: 0, removals: 0, fileCount: 0 },
       });
     }).catch(() => {
-      if (!cancelled) setGitBaseline(null);
+      if (!cancelled) {
+        baselineCapturedRef.current = false;
+        setGitBaseline(null);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, [isStreaming, activeThread?.workingDirectory]);
 
+  // Clear baseline when the session changes so the pill from a previous
+  // session does not bleed into the new one.
+  useEffect(() => {
+    setGitBaseline(null);
+    baselineCapturedRef.current = false;
+  }, [sessionId]);
+
+  // Derive a stable fingerprint from the file-change list so the pill
+  // appears even when aggregate totals net out (e.g. +10 in one file
+  // and -10 in another).
   const showFileChanges = useMemo(() => {
-    if (!isStreaming || !gitBaseline?.isGitRepo || !gitStatus.isGitRepo) return false;
-    return (
-      gitStatus.totals.fileCount !== gitBaseline.totals.fileCount ||
-      gitStatus.totals.additions !== gitBaseline.totals.additions ||
-      gitStatus.totals.removals !== gitBaseline.totals.removals
-    );
-  }, [isStreaming, gitBaseline, gitStatus]);
+    if (!gitBaseline?.isGitRepo || !gitStatus.isGitRepo) return false;
+    const fp = (list: typeof gitStatus.fileChanges) =>
+      (list ?? [])
+        .map((f) => `${f.path}:+${f.additions}/-${f.removals}`)
+        .sort()
+        .join('|');
+    return fp(gitStatus.fileChanges) !== fp(gitBaseline.fileChanges);
+  }, [gitBaseline, gitStatus]);
 
   const handleSelectProject = useCallback((project: { workingDirectory: string; projectName: string }) => {
     setThreadWorkingDirectory(sessionId, project.workingDirectory, project.projectName);
@@ -737,6 +758,10 @@ export function ChatView({
         }
         return;
       }
+      // New round: reset the git baseline so the floating pill captures
+      // a fresh snapshot when streaming begins.
+      setGitBaseline(null);
+      baselineCapturedRef.current = false;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);

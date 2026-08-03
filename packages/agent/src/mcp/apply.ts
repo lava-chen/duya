@@ -39,7 +39,7 @@ import type {
   ResolvedMCPServerConfig,
 } from '@duya/plugin-core';
 import type { MCPServerConfig, Tool } from '../types.js';
-import type { ToolExecutor } from '../tool/registry.js';
+import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
 import { MCPManager } from './index.js';
 import { ToolRegistry, MCPRegistryReplaceError } from '../tool/registry.js';
 import {
@@ -116,6 +116,7 @@ interface DuyaAgentLike {
       key: string;
       definition: Tool;
       executor: ToolExecutor;
+      meta?: ToolMetaInput;
     }>;
     snapshot: ActiveMCPRuntimeSnapshot;
   }): Promise<{ removedKeys: string[]; addedKeys: string[]; keptKeys: string[] }>;
@@ -274,29 +275,44 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
   const allocateProviderName = buildProviderNameAllocator(initialUsedNames);
 
   const nextManager = new MCPManager();
-  for (const resolved of next.resolvedConfigs) {
-    const cfg: MCPServerConfig = {
-      name: resolved.scopedServerName,
-      transport: resolved.rawConfig.transport,
-      command: resolved.rawConfig.command,
-      args: resolved.rawConfig.args,
-      env: resolved.rawConfig.env,
-      url: resolved.rawConfig.url,
-      headers: resolved.rawConfig.headers,
-      allowedAgentIds: resolved.allowedAgentIds,
-      // Stamp the source bucket for the runtime permission gate.
-      // The engine resolves every `ResolvedMCPServerConfig.source`
-      // to one of the three MCPSource literals; we only need to
-      // exclude the gate's 'local' (manually-installed-from-path,
-      // not emitted by the current engine) and fall back to
-      // 'unknown' for any unexpected value.
-      source: resolved.source === 'bundled' || resolved.source === 'plugin' || resolved.source === 'settings'
-        ? resolved.source
-        : 'unknown',
-    };
-    try {
-      await nextManager.addServer(cfg);
-    } catch (err) {
+  // Build all server configs first (synchronous, no inter-config
+  // dependencies), then connect in parallel. Each addServer call
+  // spawns an independent child process + handshake + listTools
+  // RPC, so parallelization cuts startup from N*~1-2s to ~1-2s.
+  const nextConfigs: MCPServerConfig[] = next.resolvedConfigs.map((resolved) => ({
+    name: resolved.scopedServerName,
+    transport: resolved.rawConfig.transport,
+    command: resolved.rawConfig.command,
+    args: resolved.rawConfig.args,
+    env: resolved.rawConfig.env,
+    url: resolved.rawConfig.url,
+    headers: resolved.rawConfig.headers,
+    allowedAgentIds: resolved.allowedAgentIds,
+    // Stamp the source bucket for the runtime permission gate.
+    // The engine resolves every `ResolvedMCPServerConfig.source`
+    // to one of the three MCPSource literals; we only need to
+    // exclude the gate's 'local' (manually-installed-from-path,
+    // not emitted by the current engine) and fall back to
+    // 'unknown' for any unexpected value.
+    source: resolved.source === 'bundled' || resolved.source === 'plugin' || resolved.source === 'settings'
+      ? resolved.source
+      : 'unknown',
+  }));
+
+  // Parallel connect: MCPManager.addServer creates an independent
+  // MCPClient (own child process + state) per call; clients.set is
+  // synchronous, so there is no shared-state race across await
+  // points. A single server failure does not block the others.
+  const settleResults = await Promise.allSettled(
+    nextConfigs.map((cfg) => nextManager.addServer(cfg)),
+  );
+
+  // Walk results in config order so issue ordering matches the
+  // serial implementation (deterministic for tests/snapshots).
+  nextConfigs.forEach((cfg, i) => {
+    const result = settleResults[i];
+    if (result.status === 'rejected') {
+      const err = result.reason;
       // Per-server failure: record issue, continue. The full
       // loadResult.issues list was already populated by the
       // collector and engine; we just need to surface this
@@ -332,7 +348,7 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       };
       next.issues.push(issue);
     }
-  }
+  });
 
   // Pull the tool list from successfully-connected clients, sort
   // stably, then build the planned registry entries and the
@@ -345,6 +361,7 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     key: string;
     definition: Tool;
     executor: ToolExecutor;
+    meta: ToolMetaInput;
   }> = [];
   const providerNameToInternalKey = new Map<string, string>();
   const activeServerKeys: string[] = [];
@@ -420,6 +437,10 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       key: t.internalKey,
       definition: t,
       executor,
+      meta: {
+        exposeMode: 'discoverable',
+        inputSchemaSummary: 'Full MCP input schema loads after discovery.',
+      },
     });
     providerNameToInternalKey.set(t.providerName, t.internalKey);
     if (!activeServerKeys.includes(t.mcpInfo.serverName)) {

@@ -19,9 +19,14 @@ describe('isAutobackgroundingAllowed', () => {
     expect(isAutobackgroundingAllowed('sleep 0.5')).toBe(false);
   });
 
-  it('allows sleep inside a pipeline or subshell', () => {
-    expect(isAutobackgroundingAllowed('foo | sleep 5')).toBe(true);
-    expect(isAutobackgroundingAllowed('(sleep 5; echo done)')).toBe(true);
+  it('rejects sleep anywhere in the command, including pipelines and subshells', () => {
+    // The DISALLOWED_AUTO_BACKGROUND_PATTERN uses \bsleep\b which matches
+    // anywhere in the command, not just the first word. A buried
+    // `sleep 60` still signals the caller wants to wait, so the
+    // previous first-word-only behavior was intentionally tightened.
+    expect(isAutobackgroundingAllowed('foo | sleep 5')).toBe(false);
+    expect(isAutobackgroundingAllowed('(sleep 5; echo done)')).toBe(false);
+    expect(isAutobackgroundingAllowed('echo hi && sleep 120')).toBe(false);
   });
 
   it('returns true for empty command', () => {

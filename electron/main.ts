@@ -24,6 +24,7 @@ import { initLogger, getLogger, LogComponent } from './logging/index';
 import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdaterState, cleanupUpdater } from './services/updater';
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
 import { initDocumentParser, getDocumentParser } from './services/document-parser/index';
+import { resolveMemoryModel } from './services/providers/memory-model-resolution';
 
 // IPC handlers (extracted from main.ts)
 import { registerSystemHandlers } from './ipc/system-handlers';
@@ -61,6 +62,7 @@ import { setupApplicationMenu } from './core/menu-manager';
 import { getIsShuttingDown, performGracefulShutdown } from './core/graceful-shutdown';
 import { parseSkillFrontmatter, parseAllowedTools } from './utils/skill-parser';
 import { wasLaunchedAsHidden, setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from './services/auto-start';
+import { getUserMcpTomlPath, migrateLegacyMcpServers, startUserMcpTomlWatcher } from './services/mcp-toml-config';
 
 // =============================================================================
 // App Lifecycle: lock -> boot -> db -> config -> daemon/UI
@@ -175,6 +177,41 @@ if (gotTheLock) {
     // One-shot boot migrations. Each migration is idempotent (guarded by
     // a marker in `AppConfig.migrations`), so it's safe to call on every boot.
     migrateMultiProviderV1(configManager);
+
+    // One-time migration of user-managed MCPs. Runtime collection reads only
+    // mcp.toml afterwards; plugin and bundled declarations remain separate.
+    try {
+      const db = getDatabase();
+      const legacySettings = db
+        ?.prepare("SELECT value FROM settings WHERE key = 'mcpServers'")
+        .get() as { value?: string } | undefined;
+      let settingsKv: unknown[] = [];
+      let legacyFile: unknown[] = [];
+      try {
+        const parsed = legacySettings?.value ? JSON.parse(legacySettings.value) : [];
+        settingsKv = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        settingsKv = [];
+      }
+      try {
+        const legacyPath = path.join(path.dirname(getUserMcpTomlPath()), 'settings.json');
+        const parsed = JSON.parse(fs.readFileSync(legacyPath, 'utf8')) as { mcpServers?: unknown };
+        legacyFile = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
+      } catch {
+        legacyFile = [];
+      }
+      const agentSettings = configManager.getAgentSettings() as unknown as { mcpServers?: unknown[] };
+      await migrateLegacyMcpServers([
+        Array.isArray(agentSettings.mcpServers) ? agentSettings.mcpServers as never[] : [],
+        settingsKv as never[],
+        legacyFile as never[],
+      ]);
+      startUserMcpTomlWatcher();
+    } catch (error) {
+      logger.warn('MCP TOML migration or watcher startup failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }, LogComponent.AgentProcess);
+    }
 
     // Migrate provider data from database to ConfigManager (one-time migration)
     try {
@@ -299,6 +336,8 @@ if (gotTheLock) {
     const memoryExplicitOn = process.env.DUYA_MEMORY_ENABLED === '1' || process.env.DUYA_MEMORY_ENABLED === 'true'
       || process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
     const memoryEnabled = memoryExplicitOn || (isDev && !memoryExplicitOff);
+    // DEBUG: log memory gate decision
+    logger.warn('Memory worker gate', { isDev, memoryExplicitOn, memoryExplicitOff, memoryEnabled, DUYA_MEMORY_ENABLED: process.env.DUYA_MEMORY_ENABLED, DUYA_MEMORY_V2_ENABLED: process.env.DUYA_MEMORY_V2_ENABLED }, LogComponent.DB);
     if (memoryEnabled) {
       try {
         const { bootstrap } = await import('./memory-state');
@@ -312,7 +351,6 @@ if (gotTheLock) {
         if (!mainDb) {
           throw new Error('Main DB not available for memory worker');
         }
-
         const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
 
         // Construct LLM client from the memory worker provider. When
@@ -326,15 +364,14 @@ if (gotTheLock) {
           const provider = cm.getMemoryProvider();
           if (provider) {
             const llmProvider = toLLMProvider(provider.providerType, provider.baseUrl);
-            // Pick a sensible default model per provider type when the
-            // provider config doesn't specify one. Using an OpenAI model
-            // name against an Anthropic endpoint (or vice versa) would
-            // 404 immediately.
-            const defaultModel =
-              llmProvider === 'anthropic' ? 'claude-3-5-sonnet-20241022'
-              : llmProvider === 'openai' ? 'gpt-4o-mini'
-              : 'llama3.2'; // ollama
-            const model = provider.model || defaultModel;
+            const model = resolveMemoryModel(
+              provider,
+              cm.getMemoryModel(),
+              llmProvider === 'anthropic' || llmProvider === 'openai' || llmProvider === 'ollama'
+                ? llmProvider
+                : 'ollama',
+            );
+            logger.warn('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: cm.getMemoryModel() }, LogComponent.DB);
             // Build a ProviderRuntimeConfig from the legacy ApiProvider so
             // domestic providers (MiniMax, DeepSeek, Qwen, GLM, Kimi) get
             // the correct apiFormat + modelCompat flags. Without these,
@@ -361,12 +398,12 @@ if (gotTheLock) {
             { memoryDb, mainDb, llmClient },
             { instancesPerMinute: 60, concurrency: 2 },
           );
-          logger.info('Memory worker started (shadow mode)', undefined, LogComponent.DB);
+          logger.warn('Memory worker started (shadow mode)', undefined, LogComponent.DB);
         } else {
-          logger.warn('Memory worker: no LLM client; worker not started (DB bootstrapped for manual inspection)', undefined, LogComponent.DB);
+          logger.warn('Memory worker: no LLM client; worker not started', undefined, LogComponent.DB);
         }
       } catch (error) {
-        logger.error('Failed to start memory worker', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
+        logger.warn('Failed to start memory worker', { error: error instanceof Error ? error.message : String(error) }, LogComponent.DB);
       }
     }
 

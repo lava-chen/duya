@@ -31,9 +31,8 @@ import { join } from 'path';
 
 import { getLogger } from '../../logging/logger.js';
 import { getPluginManager } from '../../plugins/PluginManager.js';
-import { getConfigManager } from '../../config/manager.js';
-import { getDatabase } from '../../db/connection.js';
 import { readPluginManifest } from '../../plugins/manifest.js';
+import { readUserMcpToml } from '../../services/mcp-toml-config.js';
 import {
   getMCPErrorMessage,
   getMCPErrorSeverity,
@@ -56,9 +55,12 @@ export interface MainCollectorManifestSlice {
   capabilities?: {
     mcpServers?: Array<{
       name: string;
-      command: string;
+      transport?: 'stdio' | 'streamable-http';
+      command?: string;
       args?: string[];
       env?: Record<string, string>;
+      url?: string;
+      headers?: Record<string, string>;
     }>;
   };
 }
@@ -74,15 +76,20 @@ export interface MainCollectorPluginEntry {
 
 export interface MainCollectorSettingsItem {
   name: string;
-  command: string;
+  transport?: 'stdio' | 'streamable-http';
+  command?: string;
   args?: string[];
   env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
   enabled?: boolean;
   allowedAgentIds?: string[];
 }
 
 export interface MainCollectorInput {
   installedPlugins: MainCollectorPluginEntry[];
+  /** The only user-managed source, DUYA userData/mcp.toml. */
+  userTomlItems?: MainCollectorSettingsItem[];
   legacyFileItems: MainCollectorSettingsItem[];
   agentSettingsMcpServers: MainCollectorSettingsItem[];
   settingsKvMcpServers: MainCollectorSettingsItem[];
@@ -379,7 +386,7 @@ export function buildMainCandidatesFromPluginEntry(
   const mcpServers = entry.manifest?.capabilities?.mcpServers ?? [];
   const out: MCPCandidate[] = [];
   for (const server of mcpServers) {
-    if (!server.name || !server.command) continue;
+    if (!server.name || (!server.command && !server.url)) continue;
     out.push({
       source: 'plugin',
       pluginId: entry.id,
@@ -387,10 +394,13 @@ export function buildMainCandidatesFromPluginEntry(
       pluginRoot: entry.installPath,
       pluginDataPath: entry.dataPath,
       rawConfig: {
+        transport: server.transport,
         name: server.name,
         command: server.command,
         args: server.args,
         env: server.env,
+        url: server.url,
+        headers: server.headers,
       },
     });
   }
@@ -398,21 +408,24 @@ export function buildMainCandidatesFromPluginEntry(
 }
 
 export function buildMainCandidatesFromSettingsEntries(
-  sourceSubOrigin: 'legacyFile' | 'settingsKv' | 'agentSettings',
+  sourceSubOrigin: 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile',
   entries: MainCollectorSettingsItem[],
 ): MCPCandidate[] {
   const out: MCPCandidate[] = [];
   for (const item of entries) {
     if (item.enabled === false) continue;
-    if (!item.name || !item.command) continue;
+    if (!item.name || (!item.command && !item.url)) continue;
     out.push({
       source: 'settings',
       sourceSubOrigin,
       rawConfig: {
+        transport: item.transport,
         name: item.name,
         command: item.command,
         args: item.args,
         env: item.env,
+        url: item.url,
+        headers: item.headers,
         allowedAgentIds: item.allowedAgentIds,
       },
     });
@@ -447,19 +460,9 @@ export function buildMainMCPCandidates(
     candidates.push(...buildMainCandidatesFromPluginEntry(plugin));
   }
 
-  if (input.legacyFileItems) {
+  if (input.userTomlItems) {
     candidates.push(
-      ...buildMainCandidatesFromSettingsEntries('legacyFile', input.legacyFileItems),
-    );
-  }
-  if (input.agentSettingsMcpServers) {
-    candidates.push(
-      ...buildMainCandidatesFromSettingsEntries('agentSettings', input.agentSettingsMcpServers),
-    );
-  }
-  if (input.settingsKvMcpServers) {
-    candidates.push(
-      ...buildMainCandidatesFromSettingsEntries('settingsKv', input.settingsKvMcpServers),
+      ...buildMainCandidatesFromSettingsEntries('tomlFile', input.userTomlItems),
     );
   }
 
@@ -508,6 +511,7 @@ export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
     legacyFileItems: [],
     agentSettingsMcpServers: [],
     settingsKvMcpServers: [],
+    userTomlItems: [],
     environment: { ...process.env } as Record<string, string>,
     cwd: process.cwd(),
   };
@@ -544,39 +548,15 @@ export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
     );
   }
 
-  // 2. agentSettings
+  // User-controlled MCPs are collected only from mcp.toml. Legacy JSON and
+  // SQLite settings are migration inputs, never live runtime sources.
   try {
-    const cm = getConfigManager();
-    const settings = cm.getAgentSettings() as unknown as
-      | { mcpServers?: MainCollectorSettingsItem[] }
-      | undefined;
-    if (settings && Array.isArray(settings.mcpServers)) {
-      input.agentSettingsMcpServers = settings.mcpServers;
-    }
+    input.userTomlItems = await readUserMcpToml();
   } catch (err) {
-    logger.warn(
-      'collectMainMCPCandidates: getConfigManager().getAgentSettings() failed',
-      { error: err instanceof Error ? err.message : String(err) },
-    );
-  }
-
-  // 3. settingsKv
-  input.settingsKvMcpServers = readSettingsKvMcpServers(logger);
-
-  // 4. Legacy on-disk settings.json. Read + parse; collect typed
-  //    issues for malformed JSON / structure. Per-entry validation
-  //    errors are reported as typed issues; valid entries still pass.
-  try {
-    const legacy = await readMainLegacyFileMcpServers(
-      getMainLegacySettingsPath(process.env.DUYA_APP_DATA_PATH),
-    );
-    input.legacyFileItems = legacy.items;
-    issues.push(...legacy.issues);
-  } catch (err) {
-    logger.warn(
-      'collectMainMCPCandidates: legacyFile read failed',
-      { error: err instanceof Error ? err.message : String(err) },
-    );
+    issues.push(settingsInvalidIssue(
+      { source: 'settings', sourceSubOrigin: 'tomlFile' },
+      `mcp.toml is invalid: ${messageOf(err)}`,
+    ));
   }
 
   const built = buildMainMCPCandidates(input);

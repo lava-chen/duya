@@ -11,6 +11,13 @@
 
 import type { ProviderId } from '../types';
 
+/**
+ * Google installs can use this public Desktop OAuth client directly. OAuth
+ * desktop clients are public by design and use PKCE instead of a client secret.
+ */
+const DUYA_GOOGLE_DESKTOP_CLIENT_ID =
+  '926801753318-8jipblhe5ju1v18stf08u4ltuq1ppn15.apps.googleusercontent.com';
+
 export interface ProviderClientConfig {
   id: ProviderId;
   /** Display label for UI. */
@@ -29,6 +36,8 @@ export interface ProviderClientConfig {
   userinfoUrl?: string;
   /** Whether the provider requires a client_secret at the token endpoint. */
   requiresClientSecret: boolean;
+  /** Whether a person may supply their own OAuth client for this provider. */
+  supportsManualConfiguration: boolean;
   /** Public client_id (no secret). May be overridden by env or user setup. */
   clientId: string;
   /** Official hosted MCP endpoint. These use RFC 9728 discovery + OAuth DCR. */
@@ -52,24 +61,27 @@ export interface ProviderReadiness {
 const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
   google: {
     id: 'google',
-    label: 'Google Workspace',
+    label: 'Google Drive',
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
     revokeUrl: 'https://oauth2.googleapis.com/revoke',
     redirectPath: '/callback/google',
     defaultScopes: [
-      'https://www.googleapis.com/auth/drive.metadata.readonly',
-      'https://www.googleapis.com/auth/gmail.metadata',
-      'https://www.googleapis.com/auth/calendar.events.readonly',
+      // Google Drive content is read only after the Agent selects a file.
+      // Gmail and Calendar need separate, explicit connector consent flows.
+      'https://www.googleapis.com/auth/drive.readonly',
       'openid',
       'email',
       'profile',
     ],
     userinfoUrl: 'https://www.googleapis.com/oauth2/v3/userinfo',
     requiresClientSecret: false,
-    clientId: process.env.DUYA_APP_CONNECTION_GOOGLE_CLIENT_ID ?? '',
+    // Google Drive is a Duya-managed connection. End users should only ever
+    // approve access in Google's browser consent page, not create OAuth apps.
+    supportsManualConfiguration: false,
+    clientId: process.env.DUYA_APP_CONNECTION_GOOGLE_CLIENT_ID ?? DUYA_GOOGLE_DESKTOP_CLIENT_ID,
     monogram: 'G',
-    description: 'Google Workspace (Gmail, Calendar, Drive, Docs)',
+    description: 'Search and read files from Google Drive with source links.',
   },
   slack: {
     id: 'slack',
@@ -81,6 +93,7 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     defaultScopes: ['search:read', 'channels:read', 'users:read'],
     userinfoUrl: 'https://slack.com/api/auth.test',
     requiresClientSecret: true,
+    supportsManualConfiguration: true,
     clientId: process.env.DUYA_APP_CONNECTION_SLACK_CLIENT_ID ?? '',
     monogram: 'S',
     description: 'Slack workspace messaging and channels',
@@ -94,6 +107,7 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     defaultScopes: ['Mail.Read', 'Calendars.Read', 'Files.Read.All', 'User.Read'],
     userinfoUrl: 'https://graph.microsoft.com/v1.0/me',
     requiresClientSecret: false,
+    supportsManualConfiguration: false,
     clientId: process.env.DUYA_APP_CONNECTION_MICROSOFT365_CLIENT_ID ?? '',
     monogram: 'M',
     description: 'Microsoft 365 (Outlook, OneDrive, Teams)',
@@ -123,6 +137,7 @@ function remoteMcpProvider(
     redirectPath: `/callback/mcp/${id}`,
     defaultScopes: [],
     requiresClientSecret: false,
+    supportsManualConfiguration: false,
     clientId: '',
     remoteMcpUrl,
     monogram,

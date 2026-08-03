@@ -17,6 +17,7 @@ import type {
 import { findBuiltinFallbackReplacement } from './discovery';
 
 const SETTINGS_SUBORIGIN_PRIORITY: Record<MCPSettingsSubOrigin, number> = {
+  tomlFile: 4,
   agentSettings: 3,
   settingsKv: 2,
   legacyFile: 1,

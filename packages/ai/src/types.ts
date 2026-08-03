@@ -188,7 +188,7 @@ export type SSEEvent =
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
   | { type: 'tool_timeout'; data: { toolName: string; elapsedSeconds: number } }
-  | { type: 'thinking'; data: string }
+  | { type: 'thinking'; data: string; signature?: string }
   | { type: 'done'; reason?: StopReason }
   | { type: 'error'; data: string; code?: string; metadata?: { errorType?: string; statusCode?: number; isRetryable?: boolean } }
   | { type: 'result'; data: TokenUsage }

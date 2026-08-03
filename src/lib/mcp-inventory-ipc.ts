@@ -73,7 +73,7 @@ function toMCPSource(origin: CapabilityDTO['origin']): MCPInventorySource {
  * Build the legacy snapshot DTO from the capability-management
  * snapshot. Returns null when the input is null.
  */
-function adaptSnapshot(cap: CapabilityManagementSnapshot | null): MCPInventorySnapshotDTO | null {
+export function adaptMCPInventorySnapshot(cap: CapabilityManagementSnapshot | null): MCPInventorySnapshotDTO | null {
   if (!cap) return null;
 
   const pluginNameById = new Map(cap.plugins.map((p) => [p.id, p.name]));
@@ -81,6 +81,8 @@ function adaptSnapshot(cap: CapabilityManagementSnapshot | null): MCPInventorySn
 
   const pluginDeclaredServers: MCPPluginDeclaredServerDTO[] = [];
   const effectiveServers: MCPEffectiveServerDTO[] = [];
+  const seenEffectiveServers = new Set<string>();
+  const seenPluginServers = new Set<string>();
 
   for (const capItem of mcpCaps) {
     const source = toMCPSource(capItem.origin);
@@ -89,28 +91,32 @@ function adaptSnapshot(cap: CapabilityManagementSnapshot | null): MCPInventorySn
     const connectionStatus = capItem.mcp?.connectionStatus ?? 'unknown';
     const lastIssue = capItem.mcp?.lastIssue;
     const id = capItem.displayKey;
+    const serverKey = `${source}:${providerPluginId ?? ''}:${capItem.name}`;
 
     // Every MCP capability contributes to the effective list. The
     // capability aggregator already filters out shadowed / blocked
     // entries (effectiveEnabled === null means "fully shadowed" and
     // is treated as not effective below).
-    effectiveServers.push({
-      id,
-      name: capItem.name,
-      source,
-      ...(providerPluginId ? { sourceId: providerPluginId } : {}),
-      command: '',
-      args: [],
-      env: {},
-      writable: source === 'settings',
-      connected: connectionStatus === 'connected',
-      effectiveEnabled,
-      shadowedCandidateCount: 0,
-      connectionStatus,
-      ...(lastIssue ? { lastIssue } : {}),
-    });
+    if (!seenEffectiveServers.has(serverKey)) {
+      effectiveServers.push({
+        id,
+        name: capItem.name,
+        source,
+        ...(providerPluginId ? { sourceId: providerPluginId } : {}),
+        command: '',
+        args: [],
+        env: {},
+        writable: source === 'settings',
+        connected: connectionStatus === 'connected',
+        effectiveEnabled,
+        shadowedCandidateCount: 0,
+        connectionStatus,
+        ...(lastIssue ? { lastIssue } : {}),
+      });
+      seenEffectiveServers.add(serverKey);
+    }
 
-    if (source === 'plugin' && providerPluginId) {
+    if (source === 'plugin' && providerPluginId && !seenPluginServers.has(serverKey)) {
       pluginDeclaredServers.push({
         id,
         pluginId: providerPluginId,
@@ -123,6 +129,7 @@ function adaptSnapshot(cap: CapabilityManagementSnapshot | null): MCPInventorySn
         effective: effectiveEnabled && capItem.providerEnabled,
         shadowed: !effectiveEnabled,
       });
+      seenPluginServers.add(serverKey);
     }
   }
 
@@ -167,7 +174,7 @@ export async function fetchMCPInventorySnapshot(): Promise<MCPInventorySnapshotD
   if (!hasCapabilityManagementAPI()) return null;
   try {
     const cap = await fetchCapabilityManagementSnapshot();
-    return adaptSnapshot(cap);
+    return adaptMCPInventorySnapshot(cap);
   } catch {
     return null;
   }

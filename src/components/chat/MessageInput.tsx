@@ -303,7 +303,13 @@ export function MessageInput({
 
   // Attachment menu state
   const [skills, setSkills] = useState<Array<{ name: string; description?: string; source?: string }>>([]);
-  const [mcpServers, setMcpServers] = useState<Array<{ name: string; description?: string; enabled?: boolean }>>([]);
+  const [mcpServers, setMcpServers] = useState<Array<{
+    name: string;
+    description?: string;
+    enabled?: boolean;
+    writable?: boolean;
+    source?: 'settings' | 'plugin' | 'bundled';
+  }>>([]);
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
   // Plan 224 Phase 5: unified activeModes set. Holds all active popover
@@ -918,11 +924,13 @@ export function MessageInput({
         const snapshot = await fetchMCPInventorySnapshot();
         if (snapshot) {
           const servers = snapshot.effectiveServers
-            .filter((s) => s.name && s.effectiveEnabled)
+            .filter((s) => s.name)
             .map((s) => ({
               name: s.name,
-              description: s.command,
+              description: s.command || s.url,
               enabled: s.effectiveEnabled,
+              writable: s.writable,
+              source: s.source,
             }));
           setMcpServers(servers);
         } else if (window.electronAPI?.settings?.getMcpServers) {
@@ -1410,9 +1418,27 @@ export function MessageInput({
           onSelectStyle={(styleId) => setSelectedStyleId(styleId)}
           mcpServers={mcpServers}
           onToggleMcpServer={(serverName, enabled) => {
-            setMcpServers((prev) =>
-              prev.map((s) => (s.name === serverName ? { ...s, enabled } : s))
-            );
+            const target = mcpServers.find((server) => server.name === serverName);
+            if (!target?.writable || !window.electronAPI?.settings?.getMcpServers || !window.electronAPI.settings.setMcpServers) return;
+            void (async () => {
+              const current = await window.electronAPI.settings.getMcpServers();
+              if (!current.success || !Array.isArray(current.data)) return;
+              const updated = current.data.map((server: {
+                name: string;
+                command: string;
+                args?: string[];
+                env?: Record<string, string>;
+                enabled?: boolean;
+              }) =>
+                server.name === serverName ? { ...server, enabled } : server,
+              );
+              const result = await window.electronAPI.settings.setMcpServers(updated);
+              if (result.success) {
+                setMcpServers((prev) => prev.map((server) =>
+                  server.name === serverName ? { ...server, enabled } : server,
+                ));
+              }
+            })();
           }}
           onAddFiles={() => fileInputRef.current?.click()}
           onCompact={onCompact}

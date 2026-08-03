@@ -809,7 +809,30 @@ function reorderCompleteToolRounds(messages: Message[]): Message[] {
     }
 
     if (unresolvedIds.size > 0 || resultEndIndex === -1) {
-      reordered.push(...assistantRound);
+      // Filter out unmatched tool_use blocks to avoid API 400 error
+      // (tool_use blocks without corresponding tool_result blocks)
+      const filteredAssistantRound = assistantRound
+        .map((msg) => {
+          if (msg.msg_type === 'tool_use' && msg.tool_call_id && unresolvedIds.has(msg.tool_call_id)) {
+            return null;
+          }
+          if (Array.isArray(msg.content)) {
+            const filteredContent = msg.content.filter((block) => {
+              if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string' && unresolvedIds.has(block.id)) {
+                return false;
+              }
+              return true;
+            });
+            if (filteredContent.length === 0) return null;
+            if (filteredContent.length === msg.content.length) return msg;
+            return { ...msg, content: filteredContent };
+          }
+          return msg;
+        })
+        .filter((msg): msg is Message => msg !== null);
+      if (filteredAssistantRound.length > 0) {
+        reordered.push(...filteredAssistantRound);
+      }
       index = firstNonAssistantIndex - 1;
       continue;
     }
@@ -1464,9 +1487,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   // Plan 314: wait for the long-lived ToolCatalog to have MCP tools
   // registered before resolving tools for this turn. The gate is
   // released once after applyMCPConfiguration completes (init), or
-  // after an 8s timeout — whichever is first. Subsequent turns
+  // after a 3s timeout — whichever is first. Subsequent turns
   // resolve immediately since the promise stays settled.
-  await agent.waitForMcpReady(8000);
+  await agent.waitForMcpReady(3000);
 
   let rolloutLogger: ReturnType<typeof getRolloutLogger> = null;
   let rolloutTurn: RolloutTurn | null = null;
@@ -2796,18 +2819,14 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               initMsg.permissionRules,
             );
 
-            // Plan 314: register builtin tools into the long-lived
-            // ToolCatalog once, before any streamChat. MCP tools are
-            // added later by applyMCPConfiguration.
-            if (agent) {
-              await agent.initToolCatalog();
-            }
-
             try {
-              // Parallel: skills loading (disk I/O) + DB message loading (IPC)
-              // Skills errors are handled inside loadAgentSkills; DB errors caught below
+              // Parallel: initToolCatalog (only depends on agent instance),
+              // skills loading (disk I/O), and DB message loading (IPC).
+              // Skills errors are handled inside loadAgentSkills; DB errors caught below.
               currentSecurityScanEnabled = initMsg.securityScanEnabled !== false;
-              const [_, loadedData] = await Promise.all([
+              const [_, __, loadedData] = await Promise.all([
+                // Plan 314: initToolCatalog only depends on the agent instance, no dependency on skills/messages, run in parallel
+                agent ? agent.initToolCatalog() : Promise.resolve(),
                 loadAgentSkills(initMsg.workingDirectory, initMsg.skillPaths, initMsg.securityScanEnabled),
                 messageDb.loadMessages(sessionId!) as Promise<{ messages: MessageRow[]; parsedDocuments: ParsedDocumentAttachment[] }>,
               ]);

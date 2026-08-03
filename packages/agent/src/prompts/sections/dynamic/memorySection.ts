@@ -70,7 +70,7 @@ Quick memory pass (when applicable):
 
 1. Skim the MEMORY_SUMMARY below and extract task-relevant keywords.
 2. Search \`${memoryPath}\` using those keywords (use Grep or \`rg\`). For workspace context, also search the current root or basename: \`${ctx.workingDirectory}\`.
-3. Only if MEMORY.md directly points to rollout summaries or people/area files, open the 1-2 most relevant files under \`${rolloutSummariesDir}/\` or \`${path.join(memoryRoot, 'global')}/\`.
+3. Only if MEMORY.md directly points to rollout summaries or people/area files, use Glob to list the directory and Read to open the 1-2 most relevant files under \`${rolloutSummariesDir}/\` or \`${path.join(memoryRoot, 'global')}/\`. Prefer Glob/Read over Bash for memory directory exploration on Windows.
 4. If above are not clear and you need exact commands, error text, or precise evidence, search over \`rollout_id\` or rollout-summaries filenames for more evidence.
 5. If there are no relevant hits, stop memory lookup and continue normally.
 

@@ -6,7 +6,7 @@
 
 import { writeFile, mkdir, access } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { resolve, isAbsolute, dirname, relative } from 'node:path';
+import { dirname } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
 import type {
@@ -18,28 +18,7 @@ import type {
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
 import { expandPath } from '../../utils/path.js';
-
-// ============================================================
-// Constants
-// ============================================================
-
-const BLOCKED_PATHS_UNIX = [
-  '/etc', '/system', '/boot', '/dev', '/proc', '/sys',
-  '/var', '/root', '/.ssh', '/.gnupg', '/.aws', '/run',
-  // macOS symlinks: /etc -> /private/etc, /var -> /private/var.
-  // resolve() follows symlinks, so resolvedPath for "/etc/passwd" becomes
-  // "/private/etc/passwd" and would escape the "/etc" entry above. Without
-  // these entries the blocklist is a no-op on macOS.
-  '/private/etc', '/private/var', '/private/tmp', '/private/cores',
-];
-
-const BLOCKED_PATHS_WINDOWS = [
-  'C:\\Windows', 'C:\\Windows\\System32', 'C:\\Windows\\SysWOW64',
-  'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData',
-  'C:\\Users\\All Users', 'C:\\Users\\Default', 'C:\\System32', 'C:\\SysWOW64',
-];
 
 // ============================================================
 // Input Validation
@@ -96,99 +75,6 @@ export function validateWriteInput(input: unknown): { valid: true; data: WriteTo
 }
 
 // ============================================================
-// Security Checks
-// ============================================================
-
-/**
- * Check if path is blocked for security reasons
- */
-export function isBlockedPath(filePath: string): boolean {
-  const resolvedPath = resolve(filePath);
-
-  for (const blocked of BLOCKED_PATHS_UNIX) {
-    if (resolvedPath.startsWith(blocked + '/') || resolvedPath === blocked) {
-      return true;
-    }
-  }
-
-  const normalizedResolved = resolvedPath.replace(/\\/g, '\\').toLowerCase();
-  const normalizedWithSlash = normalizedResolved.replace(/\//g, '\\');
-  for (const blocked of BLOCKED_PATHS_WINDOWS) {
-    const normalizedBlocked = blocked.toLowerCase();
-    if (normalizedResolved.startsWith(normalizedBlocked + '\\') ||
-        normalizedWithSlash.startsWith(normalizedBlocked + '\\') ||
-        normalizedResolved === normalizedBlocked) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Check for path traversal attempts
- */
-export function checkPathTraversal(filePath: string, workingDirectory?: string): { safe: boolean; reason?: string } {
-  if (!workingDirectory) {
-    return { safe: false, reason: 'Working directory not provided' };
-  }
-
-  const resolvedPath = resolve(workingDirectory, filePath);
-  const resolvedWorkingDir = resolve(workingDirectory);
-
-  // Normalize paths for comparison (handle both Windows and Unix separators)
-  let normalizedPath = resolvedPath.replace(/\\/g, '/');
-  let normalizedWorkingDir = resolvedWorkingDir.replace(/\\/g, '/');
-  // On Windows, paths are case-insensitive; on Unix, they are case-sensitive
-  if (process.platform === 'win32') {
-    normalizedPath = normalizedPath.toLowerCase();
-    normalizedWorkingDir = normalizedWorkingDir.toLowerCase();
-  }
-  // Ensure working directory ends with a slash before the prefix check so
-  // "/app" does not falsely match "/application" as a safe prefix.
-  const workingDirPrefix = normalizedWorkingDir.endsWith('/') ? normalizedWorkingDir : normalizedWorkingDir + '/';
-  if (!normalizedPath.startsWith(workingDirPrefix) && normalizedPath !== normalizedWorkingDir) {
-    return { safe: false, reason: 'Path traversal outside working directory' };
-  }
-
-  // Secondary guard: path.relative() returns a string starting with ".."
-  // only when the target escapes the base, and an absolute-ish string on
-  // different roots. This is the authoritative escape check — the previous
-  // ".." depth scan ran on the already-resolved path, where resolve() had
-  // collapsed all ".." segments, making it dead code that never fired.
-  const rel = relative(resolvedWorkingDir, resolvedPath);
-  if (rel.startsWith('..') || isAbsolute(rel)) {
-    return { safe: false, reason: 'Path traversal outside working directory' };
-  }
-
-  return { safe: true };
-}
-
-/**
- * Check if path is a UNC path.
- * UNC paths start with \\\\server\\share or //server/share.
- * Regular Unix absolute paths like /root/... or /c/... are NOT UNC paths.
- */
-export function isUNCPath(filePath: string): boolean {
-  return /^\\\\|^unc\\|^smb:/i.test(filePath);
-}
-
-/**
- * Comprehensive security check
- */
-export function checkWriteSecurity(filePath: string): { safe: boolean; reason?: string } {
-  if (isUNCPath(filePath)) {
-    return { safe: false, reason: 'UNC paths are not allowed' };
-  }
-
-  if (isBlockedPath(filePath)) {
-    return { safe: false, reason: 'Writing to system critical directories is not allowed' };
-  }
-
-  return { safe: true };
-}
-
-// ============================================================
 // Tool Definition
 // ============================================================
 
@@ -230,32 +116,10 @@ export class WriteTool extends BaseTool {
     }
 
     const { file_path } = validation.data;
-
     const appState = context.getAppState();
     const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
 
-    const pathResult = checkPathWritePermission(
-      file_path,
-      context.workingDirectory,
-      permissionContext,
-    );
-    if (!pathResult.allowed) return pathResult;
-
-    if (isBlockedPath(expandPath(file_path, context.workingDirectory))) {
-      return { allowed: false, reason: 'Writing to system critical directories is not allowed' };
-    }
-
-    // In bypass mode, skip the user confirmation step entirely so the
-    // streaming executor never opens a permission dialog for write operations.
-    if (isBypassMode(permissionContext?.mode)) {
-      return { allowed: true };
-    }
-
-    return {
-      allowed: true,
-      requiresUserConfirmation: true,
-      reason: 'File write operation',
-    };
+    return checkPathWritePermission(file_path, context.workingDirectory, permissionContext);
   }
 
   /**
@@ -275,16 +139,6 @@ export class WriteTool extends BaseTool {
     }
 
     const { file_path, content, encoding = 'utf-8' } = validation.data;
-
-    const securityCheck = checkWriteSecurity(file_path);
-    if (!securityCheck.safe) {
-      return {
-        id,
-        name: this.name,
-        result: `Security check failed: ${securityCheck.reason}`,
-        error: true,
-      };
-    }
 
     try {
       // Use expandPath for cross-platform compatibility

@@ -141,16 +141,15 @@ function MemoryProviderCard({ providers }: { providers: Provider[] }) {
 }
 
 /**
- * Compact model selection card for different tasks (vision, gateway, title).
- * Kept here because it's a per-task model assignment UI, not a
- * provider-listing concern. Plan 205 may move it into
- * ProviderManagement as a sub-card.
+ * Compact model selection card for different tasks (vision, gateway, title,
+ * memory). Kept here because it's a per-task model assignment UI, not a
+ * provider-listing concern.
  */
 function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   const { t } = useTranslation();
   const { settings, save } = useSettings();
 
-  // Get all models from all providers
+  // Get all models from all providers, formatted as providerId:modelId.
   const allModels = useMemo(() => {
     const models: { value: string; label: string; providerId: string }[] = [];
     for (const provider of providers) {
@@ -180,6 +179,8 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   const [visionModel, setVisionModel] = useState("");
   const [gatewayModel, setGatewayModel] = useState("");
   const [titleModel, setTitleModel] = useState("");
+  const [memoryModel, setMemoryModel] = useState("");
+  const [memoryProviderId, setMemoryProviderId] = useState<string>("");
 
   // Sync vision model from settings when settings or providers change
   useEffect(() => {
@@ -200,6 +201,26 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
   useEffect(() => {
     setTitleModel(settings?.titleGenerationModel || "");
   }, [settings?.titleGenerationModel]);
+
+  // Sync memory model from IPC-backed provider store. memoryModelId is
+  // stored as a qualified "providerId:modelId" value so it can be matched
+  // directly against the global model dropdown options.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const p = await getMemoryLlmProviderIPC();
+        if (!cancelled) {
+          setMemoryProviderId(p?.id ?? "");
+          const modelId = (p as { memoryModelId?: string | null } | null)?.memoryModelId;
+          setMemoryModel(modelId ?? "");
+        }
+      } catch {
+        // IPC not available — leave empty
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Parse "providerId:model" format
   const parseModelValue = (value: string): { providerId: string; model: string } => {
@@ -258,6 +279,21 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
     }
   };
 
+  const handleMemoryChange = (value: string) => {
+    const trimmedValue = value.trim();
+    setMemoryModel(trimmedValue);
+    if (trimmedValue) {
+      const parsed = parseModelValue(trimmedValue);
+      // Selecting a concrete model also pins the memory provider to that
+      // model's provider so the two settings stay in sync.
+      setMemoryProviderId(parsed.providerId);
+      void setMemoryLlmProviderIPC(parsed.providerId || null, trimmedValue);
+    } else {
+      // "Auto" clears only the model override; leave the provider as-is.
+      void setMemoryLlmProviderIPC(memoryProviderId || null, null);
+    }
+  };
+
   if (allModels.length === 0) {
     return null;
   }
@@ -288,6 +324,16 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
           value={titleModel}
           onValueChange={handleTitleChange}
           options={allModels}
+        />
+        <SettingsSelectRow
+          label={t("settings.providers.memoryModel") || "Memory Model"}
+          description={t("settings.providers.memoryModelHint") || "Model for memory extraction"}
+          value={memoryModel}
+          onValueChange={handleMemoryChange}
+          options={[
+            { value: "", label: t("settings.providers.memoryModelAuto") || "Auto (provider default)" },
+            ...allModels,
+          ]}
         />
       </SettingsCard>
     </SettingsSection>

@@ -90,6 +90,7 @@
   },
   "dependencies": {
     "@ant-design/icons": "^6.1.1",
+    "@iarna/toml": "^2.2.5",
     "@larksuiteoapi/node-sdk": "^1.60.0",
     "@lobehub/icons": "^5.4.0",
     "@lobehub/ui": "^5.7.0",

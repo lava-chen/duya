@@ -93,7 +93,7 @@ export function bootstrap(opts: BootstrapOptions): Database {
   db.pragma('busy_timeout = 5000');
   db.pragma('temp_store = MEMORY');
 
-  logger.info(
+  logger.warn(
     'memory-state: DB opened',
     { dbPath, journalMode: db.pragma('journal_mode', { simple: true }) },
     LogComponent.DB
@@ -123,7 +123,7 @@ export function closeDb(): void {
     const logger = getLogger();
     try {
       db.close();
-      logger.info('memory-state: DB closed', undefined, LogComponent.DB);
+      logger.warn('memory-state: DB closed', undefined, LogComponent.DB);
     } catch (err) {
       logger.warn(
         'memory-state: error closing DB',

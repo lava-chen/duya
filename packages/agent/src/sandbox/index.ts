@@ -44,6 +44,9 @@ export type {
   SandboxProvider,
 } from './types.js';
 
+export { PathMapper } from './path-mapper.js';
+export type { PathMapperOptions } from './path-mapper.js';
+
 export type {
   SandboxExecuteResult,
   ISandboxManager,

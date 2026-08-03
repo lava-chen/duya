@@ -1071,9 +1071,9 @@ Electron/`@duya/conductor` 路径负责。
 
 Phase 1 改动要点:`ToolMeta` 扩两个 optional 字段(`inputSchemaSummary`、`exposeMode`,均独立导出 `ExposeMode` 类型),`ToolSearchTool.execute` 返回带稳定 marker 和工具标题的 Markdown 结果,`DuyaAgent.streamChat` 通过 `toolSearchTool.setSearchFn(searchToolsFromRegistry)` 注入关键词搜索实现。
 
-Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`,向后兼容 MCP / plugin 路径);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research 工具按需发现。Plan 242 删除了未完成的 Team/Swarm、独立 MCP resource 和禁用 WebSearch/WebFetch 占位工具;MCP server 动态工具不受影响。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
+Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research 工具按需发现。MCP runtime 注册条目也固定为 `discoverable`，不会把整套外部 schema 塞进首轮请求。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
 
-Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取带稳定 marker 的 `## Tool: \`name\`` 标题。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后)。
+Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取带稳定 marker 的 `## Tool: \`name\`` 标题。MCP 用 internal key 存储而搜索返回 provider-visible name，registry accessor 会双向解析这两种名称，确保搜到的 MCP 工具的 metadata、schema 与 executor 都能进入下一轮。首轮 system prompt 另加一个有上限的 MCP capability directory（server、来源、工具数量和少量示例），让 Agent 先知道每个已连接 server 的能力边界，再针对性调用 `tool_search`。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后)。
 
 27 个单测覆盖 Phase 1/2/3 全链路([packages/agent/tests/unit/ToolSearchTool.test.ts](./packages/agent/tests/unit/ToolSearchTool.test.ts) 17 条 + [packages/agent/tests/unit/tool-search-discovery.test.ts](./packages/agent/tests/unit/tool-search-discovery.test.ts) 10 条),全绿。
 
@@ -1156,15 +1156,18 @@ breaking skills or workflows — only `mcp/servers.json` changes.
 
 ### PostgreSQL read-only defense-in-depth
 
-`postgres-readonly` enforces read-only access through three independent
+`postgres-readonly` enforces read-only access through two independent
 layers:
 
-1. MCP server flag: `--read-only` passed to
-   `@modelcontextprotocol/server-postgres`.
-2. Permission policy: every write-capable tool call is pinned to the
+1. Permission policy: every write-capable tool call is pinned to the
    `dangerous` tier in `permissions/policy.json`.
-3. Recommended role: the setup label instructs the user to connect with
+2. Recommended role: the setup label instructs the user to connect with
    a Postgres role whose grants are read-only (e.g. `duya_reader`).
+
+Note: `@modelcontextprotocol/server-postgres` does not support a
+`--read-only` flag (its entrypoint parses `process.argv[2]` as the
+connection string directly), so read-only posture relies on the database
+role plus the DUYA permission policy.
 
 ### References
 

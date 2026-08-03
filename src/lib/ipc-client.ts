@@ -83,6 +83,8 @@ export interface Provider {
   updatedAt: number
   /** Provider default model from options */
   defaultModel?: string
+  /** Memory worker model override (null = auto-resolve from provider). */
+  memoryModelId?: string | null
 }
 
 /**
@@ -616,16 +618,19 @@ export async function getDefaultLlmProviderIPC(): Promise<Provider | null> {
 }
 
 /**
- * Set the memory worker provider. When set to null, the memory worker
- * (Stage 1 extractor + Phase 2 consolidator) falls back to the default
- * provider. Lets users pick a cheaper model for background memory
- * extraction without affecting chat.
+ * Set the memory worker provider and optional model override.
+ * When provider id is null, the memory worker falls back to the default
+ * provider. When modelId is null/empty, the model is auto-resolved from
+ * the provider's configured model list.
  */
-export async function setMemoryLlmProviderIPC(id: string | null): Promise<boolean> {
-  return (await window.electronAPI!.provider!.setMemory({ id })) as boolean
+export async function setMemoryLlmProviderIPC(
+  id: string | null,
+  modelId?: string | null,
+): Promise<boolean> {
+  return (await window.electronAPI!.provider!.setMemory({ id, modelId: modelId ?? null })) as boolean
 }
 
-/** Get the memory worker provider (masked DTO). */
+/** Get the memory worker provider (masked DTO) + model override. */
 export async function getMemoryLlmProviderIPC(): Promise<Provider | null> {
   return (await window.electronAPI!.provider!.getMemory()) as Provider | null
 }
@@ -722,8 +727,25 @@ export async function deleteOutputStyleIPC(id: string): Promise<boolean> {
 }
 
 // Project operations
+
+/**
+ * Canonical path of the shared no-project workspace (`~/.duya/workspace`).
+ * Returns empty string when the IPC is unavailable (e.g. browser dev mode).
+ */
+export async function getNoProjectWorkspaceIPC(): Promise<string> {
+  if (!window.electronAPI?.app?.getNoProjectWorkspace) return '';
+  return window.electronAPI.app.getNoProjectWorkspace();
+}
+
 export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
-  const dbProjects = await window.electronAPI!.project.getGroups() as DbProjectGroup[]
+  const [dbProjectsRaw, noProjectWorkspace] = await Promise.all([
+    window.electronAPI!.project.getGroups() as Promise<DbProjectGroup[]>,
+    getNoProjectWorkspaceIPC(),
+  ]);
+  // No-project sessions share ~/.duya/workspace; they must not show up as a
+  // regular project group — they are rendered in the flat "无项目" list.
+  const isNoProject = (wd: string) => !wd || (noProjectWorkspace !== '' && wd === noProjectWorkspace);
+  const dbProjects = dbProjectsRaw.filter((p) => !isNoProject(p.working_directory));
   const projects = dbProjects.map(backendProjectToProject)
 
   if (!window.electronAPI?.projects?.getRecentFolders) {
@@ -731,7 +753,8 @@ export async function getProjectGroupsIPC(): Promise<ProjectGroup[]> {
   }
 
   const existingPaths = new Set(projects.map((project) => project.workingDirectory))
-  const recentFolders = await window.electronAPI.projects.getRecentFolders()
+  const recentFolders = (await window.electronAPI.projects.getRecentFolders())
+    .filter((wd) => !isNoProject(wd))
   const recentProjects = recentFolders
     .filter((workingDirectory) => workingDirectory && !existingPaths.has(workingDirectory))
     .map((workingDirectory, index) => ({

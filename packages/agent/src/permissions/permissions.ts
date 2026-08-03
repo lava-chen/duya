@@ -30,7 +30,7 @@ import { isAutoModeAllowlistedTool } from './classifierDecision.js'
 import { riskTierToBehavior } from './riskTierPermissions.js'
 import type { LLMClient } from '../llm/base.js'
 import type { Message } from '../types.js'
-import { checkSecurity, isReadOnlyCommand } from '../tool/BashTool/BashTool.js'
+import { analyzeCommandSafety, isReadOnlyCommand, isCatastrophicToolCall } from './securityPolicy.js'
 import {
   checkPowerShellSecurity,
   isReadOnlyPowerShellCommand,
@@ -352,6 +352,26 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       // write/modify in bypass mode). The normal flow handles it.
     }
 
+    // 4.7 Catastrophic safety check — NEVER bypassed, even in bypassPermissions
+    // mode. This runs BEFORE the mode bypass short-circuit so catastrophic
+    // operations are caught even when the executor skips checkPermissions
+    // (which happens when canUseTool returns behavior='allow' in bypass mode).
+    // Without this, a user in bypass mode could write to C:\Windows\System32
+    // or run `rm -rf /` because checkPermissions would be skipped.
+    const toolWorkingDir = (typeof input.cwd === 'string' ? input.cwd : undefined)
+      ?? appState.toolPermissionContext.defaultWorkspaceDirectory;
+    if (isCatastrophicToolCall(toolName, input, toolWorkingDir)) {
+      return {
+        behavior: 'deny',
+        message: `Operation denied: catastrophic safety boundary reached. This operation could cause unrecoverable system damage and is blocked even in bypass mode.`,
+        decisionReason: {
+          type: 'safetyCheck',
+          reason: `${toolName} matched a catastrophic safety pattern that is never bypassed, even in bypassPermissions mode.`,
+          classifierApprovable: false,
+        },
+      }
+    }
+
     // 5. Check mode-based permissions
     const shouldBypassPermissions =
       appState.toolPermissionContext.mode === 'bypassPermissions' ||
@@ -527,7 +547,7 @@ function isLocallySafeAutoModeAction(
   }
 
   if (toolName === 'Bash' || toolName === 'bash') {
-    const securityResult = checkSecurity(input.command);
+    const securityResult = analyzeCommandSafety(input.command);
     return (
       securityResult.safe &&
       !securityResult.requiresApproval &&

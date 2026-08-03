@@ -117,6 +117,7 @@ export class AppConnectionService {
         label: provider.label,
         configured: readiness.configured,
         configurationHint: readiness.reason,
+        supportsManualConfiguration: provider.supportsManualConfiguration,
         monogram: provider.monogram,
         description: provider.description,
         scopes: provider.defaultScopes,
@@ -134,10 +135,10 @@ export class AppConnectionService {
     credentials: { clientId: string; clientSecret?: string },
   ): AppConnectionProviderDTO {
     const providerConfig = getProviderConfig(provider);
-    if (providerConfig.remoteMcpUrl) {
+    if (!providerConfig.supportsManualConfiguration) {
       throw new FlowError(
         'provider_not_configured',
-        `${providerConfig.label} uses automatic Remote MCP OAuth and does not accept a manual client ID`,
+        `${providerConfig.label} uses Duya-managed OAuth and does not accept a manual client ID`,
       );
     }
     const clientId = credentials.clientId.trim();
@@ -156,6 +157,7 @@ export class AppConnectionService {
       label: config.label,
       configured: readiness.configured,
       configurationHint: readiness.reason,
+      supportsManualConfiguration: config.supportsManualConfiguration,
       monogram: config.monogram,
       description: config.description,
       scopes: config.defaultScopes,

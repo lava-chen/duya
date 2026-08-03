@@ -8,7 +8,8 @@
  *
  * NOTE: better-sqlite3 may be ABI-broken in some environments; these
  * tests are structured so `npx tsc --noEmit` passes even when
- * vitest cannot run. The fixture applies migrations 0001-0005.
+ * vitest cannot run. The fixture applies migrations 0001-0003 and
+ * 0005-0007.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -20,13 +21,13 @@ import {
   insertStage1Output,
   type MemoryStateFixture,
 } from './fixture.js';
-import { migration0005 } from '../../../../../electron/memory-state/migrations/0005_phase2.sql.js';
 import { runConsolidator } from '../consolidator.js';
 import { drainOutbox } from '../outbox.js';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
 // ---------------------------------------------------------------------------
-// Fixture extension: apply migration 0005 on top of 0001-0003.
+// Fixture extension: migrations 0005-0007 are applied by the base fixture;
+// this adds the ad-hoc directories on top.
 // ---------------------------------------------------------------------------
 
 interface Phase2Fixture extends MemoryStateFixture {
@@ -36,7 +37,6 @@ interface Phase2Fixture extends MemoryStateFixture {
 
 function createPhase2Fixture(): Phase2Fixture {
   const base = createMemoryStateFixture();
-  base.db.exec(migration0005.sql);
   const adHocDir = path.join(base.memoryRoot, 'extensions', 'ad_hoc');
   const digestedDir = path.join(adHocDir, '.digested');
   fs.mkdirSync(adHocDir, { recursive: true });
@@ -50,13 +50,22 @@ function createPhase2Fixture(): Phase2Fixture {
 interface RawMemoryItemInput {
   claim: string;
   claim_type: string;
-  canonical_key: string;
-  scope?: 'global' | 'project';
+  scope?: string;
+  scope_id?: string | null;
   evidence: Array<{
     source_type: string;
     source_id: string;
     verification?: string;
   }>;
+  canonical_key: string;
+  confidence?: string;
+  status?: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  relation_to_existing?: string | null;
+  supersedes?: string[];
+  why_future_agent_needs_this?: string;
+  retrieval_cues?: string[];
 }
 
 function makeRawMemory(items: RawMemoryItemInput[]): string {

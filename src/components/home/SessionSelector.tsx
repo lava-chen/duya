@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
-import { ChevronDownIcon, FileIcon, FolderOpenIcon } from "@/components/icons";
+import { ChevronDownIcon, FileIcon, FolderOpenIcon, NotePencilIcon } from "@/components/icons";
 import {
   OptionPanel,
   type OptionPanelItem,
@@ -17,6 +17,8 @@ interface SessionSelectorProps {
   onSelectProject: (project: { workingDirectory: string; projectName: string }) => void;
   onNewBlankProject: () => void;
   onUseExistingFolder: () => void;
+  /** Optional: create a no-project session (shared ~/.duya/workspace). */
+  onNewNoProjectSession?: () => void;
   onSelectThread: (threadId: string) => void;
   showRecentThreads?: boolean;
   maxRecentThreads?: number;
@@ -28,6 +30,7 @@ export function SessionSelector({
   onSelectProject,
   onNewBlankProject,
   onUseExistingFolder,
+  onNewNoProjectSession,
   onSelectThread,
   showRecentThreads = true,
   maxRecentThreads = 8,
@@ -64,6 +67,11 @@ export function SessionSelector({
   const handleUseExistingFolder = () => {
     setIsProjectDropdownOpen(false);
     onUseExistingFolder();
+  };
+
+  const handleNewNoProjectSession = () => {
+    setIsProjectDropdownOpen(false);
+    onNewNoProjectSession?.();
   };
 
   const recentThreads = threads.slice(0, maxRecentThreads);
@@ -137,6 +145,17 @@ export function SessionSelector({
                     <FolderOpenIcon size={14} className="text-[var(--muted)]" />
                     <span>{t('project.useExistingFolder')}</span>
                   </Button>
+                  {onNewNoProjectSession && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full justify-start px-2 text-left"
+                      onClick={handleNewNoProjectSession}
+                    >
+                      <NotePencilIcon size={14} className="text-[var(--muted)]" />
+                      <span>{t('project.newNoProjectSession')}</span>
+                    </Button>
+                  )}
                 </div>
               }
             />

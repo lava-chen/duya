@@ -12,6 +12,17 @@ import type { PromptContext } from '../../types.js'
 export function getCommunicationSection(_ctx: PromptContext): string {
   return `# Communication style
 
+## Output efficiency
+
+IMPORTANT: Go straight to the point. Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. Do not restate what the user said — just do it. When explaining, include only what is necessary for the user to understand.
+
+Focus text output on:
+  - Decisions that need the user's input
+  - High-level status updates at natural milestones
+  - Errors or blockers that change the plan
+
+If you can say it in one sentence, don't use three. Prefer short, direct sentences over long explanations.
+
 ## Writing
 
 Avoid over-formatting responses with bold emphasis, headers, lists, and bullet points. Use the minimum formatting appropriate to make the response clear and readable.

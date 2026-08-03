@@ -240,6 +240,7 @@ export class ToolRegistry {
       key: string;
       definition: Tool;
       executor: ToolExecutor;
+      meta?: ToolMetaInput;
     }>,
   ): {
     removedKeys: string[];
@@ -307,6 +308,7 @@ export class ToolRegistry {
           definition: e.definition,
           executor: e.executor,
           owner: 'mcp',
+          meta: e.meta ? { ...e.meta } : undefined,
         });
       }
     } catch (err) {
@@ -324,7 +326,7 @@ export class ToolRegistry {
    * 获取工具定义
    */
   getTool(name: string): Tool | undefined {
-    return this.tools.get(name)?.definition;
+    return this.findEntry(name)?.definition;
   }
 
   /**
@@ -383,7 +385,7 @@ export class ToolRegistry {
    * 获取工具执行器实例
    */
   getExecutor(name: string): ToolExecutor | undefined {
-    return this.tools.get(name)?.executor;
+    return this.findEntry(name)?.executor;
   }
 
   /**
@@ -392,7 +394,7 @@ export class ToolRegistry {
    * `undefined` for tools registered without explicit metadata.
    */
   getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/riskTierPermissions.js').RiskTier } | undefined {
-    return this.tools.get(name)?.meta;
+    return this.findEntry(name)?.meta;
   }
 
   /**
@@ -403,7 +405,20 @@ export class ToolRegistry {
    * itself).
    */
   getExposeMode(name: string): ExposeMode {
-    return this.tools.get(name)?.meta?.exposeMode ?? 'always';
+    return this.findEntry(name)?.meta?.exposeMode ?? 'always';
+  }
+
+  /**
+   * Resolve either the storage key or the model-visible tool name. MCP tools
+   * are stored under their internal key while tool_search returns the latter.
+   */
+  private findEntry(name: string): RegisteredTool | undefined {
+    const direct = this.tools.get(name);
+    if (direct) return direct;
+    for (const entry of this.tools.values()) {
+      if (entry.definition.name === name) return entry;
+    }
+    return undefined;
   }
 
   /**

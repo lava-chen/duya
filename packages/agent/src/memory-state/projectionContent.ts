@@ -132,21 +132,30 @@ export function renderRolloutSummaryFile(row: Stage1OutputRow): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Authoritative `memory_entries` row shape, mirroring migration 0005.
- * The memory system is global-only; project_id remains nullable in the
- * DB for backward compatibility but is always NULL for new entries.
+ * Authoritative `memory_entries` row shape, mirroring migration 0005
+ * (base table) and migration 0007 (v2 lifecycle fields, all nullable
+ * for rows written before that migration).
  */
 export interface MemoryEntryRow {
   memory_id: string;
-  scope: 'global';
+  scope: string; // was 'global', now any of: personal, project, repository, app, relationship, shared, global
   project_id: string | null;
-  kind: 'preference' | 'fact' | 'reference' | 'procedure' | 'person' | 'area';
+  kind: string; // was limited enum, now any of: preference, fact, decision, invariant, procedure, goal, commitment, reference, person, relationship, area, capability
   canonical_key: string;
   content: string;
   version: number;
-  status: 'active' | 'superseded' | 'retired';
+  status: string; // was 'active' | 'superseded' | 'retired', now also 'draft'
   created_at: number;
   updated_at: number;
+  // New lifecycle fields (nullable, added by migration 0007):
+  confidence: string | null;
+  valid_from: string | null;
+  valid_until: string | null;
+  relation_to_existing: string | null;
+  supersedes: string | null; // JSON array string
+  why_future_agent_needs_this: string | null;
+  retrieval_cues: string | null; // JSON array string
+  scope_id: string | null;
 }
 
 /**
@@ -165,7 +174,7 @@ export interface Phase2DiffEntry {
   canonical_key: string;
   content: string;
   kind: string;
-  scope: 'global';
+  scope: string;
   project_id: string | null;
 }
 
@@ -186,8 +195,12 @@ const MEMORY_SUMMARY_CLAIM_MAX_CHARS = 220;
 /** Codex MEMORY.md section titles in deterministic document order. */
 const MEMORY_FILE_SECTIONS = [
   'User preferences',
+  'Decisions and invariants',
+  'Goals and commitments',
   'Reusable knowledge',
-  'Failures and how to do differently',
+  'People and relationships',
+  'Areas',
+  'Capabilities',
 ] as const;
 
 function kindToMemorySection(
@@ -196,10 +209,23 @@ function kindToMemorySection(
   switch (kind) {
     case 'preference':
       return 'User preferences';
+    case 'decision':
+    case 'invariant':
+      return 'Decisions and invariants';
+    case 'goal':
+    case 'commitment':
+      return 'Goals and commitments';
     case 'fact':
     case 'procedure':
     case 'reference':
       return 'Reusable knowledge';
+    case 'person':
+    case 'relationship':
+      return 'People and relationships';
+    case 'area':
+      return 'Areas';
+    case 'capability':
+      return 'Capabilities';
     default:
       return null;
   }
@@ -229,7 +255,7 @@ function renderCodexMemorySections(entries: MemoryEntryRow[], headingLevel = 2):
     } else {
       for (const entry of sectionEntries) {
         lines.push('');
-        lines.push(`- **${entry.canonical_key}** (v${entry.version}): ${entry.content}`);
+        lines.push(`- **${entry.canonical_key}**: ${entry.content}`);
       }
     }
   }
@@ -259,12 +285,24 @@ function summaryPriority(entry: MemoryEntryRow): number {
   switch (entry.kind) {
     case 'preference':
       return 500;
+    case 'decision':
+    case 'invariant':
+      return 450;
+    case 'goal':
+    case 'commitment':
+      return 420;
     case 'procedure':
       return 400;
     case 'fact':
       return 300;
+    case 'capability':
+      return 280;
     case 'reference':
       return 200;
+    case 'person':
+    case 'relationship':
+    case 'area':
+      return 150;
     default:
       return 0;
   }

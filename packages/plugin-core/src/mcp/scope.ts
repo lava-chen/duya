@@ -109,7 +109,7 @@ export function isPluginScopedName(name: string): boolean {
  */
 export function buildInventoryId(args: {
   source: 'bundled' | 'plugin' | 'settings';
-  sourceSubOrigin?: 'legacyFile' | 'settingsKv' | 'agentSettings';
+  sourceSubOrigin?: 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile';
   pluginId?: string;
   serverName: string;
 }): string {
@@ -118,7 +118,7 @@ export function buildInventoryId(args: {
     return `${args.source}:${pid}:${args.serverName}`;
   }
   if (args.source === 'settings') {
-    const sub = args.sourceSubOrigin ?? 'agentSettings';
+    const sub = args.sourceSubOrigin ?? 'tomlFile';
     return `${args.source}:${sub}:${args.serverName}`;
   }
   return `${args.source}:${args.serverName}`;

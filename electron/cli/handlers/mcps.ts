@@ -21,9 +21,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { getConfigManager } from '../../config/manager';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
-import { notifyMcpConfigChanged } from '../../services/mcp-write-reload';
+import { readUserMcpToml, writeUserMcpToml } from '../../services/mcp-toml-config';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -113,13 +112,6 @@ async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> 
   });
 }
 
-function getMCPServers(cm: ReturnType<typeof getConfigManager>): MCPServerEntry[] {
-  const settings = cm.getAgentSettings() as unknown as Record<string, unknown>;
-  return Array.isArray(settings.mcpServers)
-    ? (settings.mcpServers as MCPServerEntry[])
-    : [];
-}
-
 async function audit(
   req: IncomingMessage,
   kind: 'mcp.add' | 'mcp.remove' | 'mcp.assign',
@@ -153,8 +145,7 @@ export async function handleAddMCP(req: IncomingMessage, res: ServerResponse): P
     return;
   }
   try {
-    const cm = getConfigManager();
-    const current = getMCPServers(cm);
+    const current = await readUserMcpToml();
     if (current.some((s) => s.name === name)) {
       sendError(
         res,
@@ -186,9 +177,8 @@ export async function handleAddMCP(req: IncomingMessage, res: ServerResponse): P
       ...(allowedAgentIds && allowedAgentIds.length > 0 ? { allowedAgentIds } : {}),
     };
     const updated = [...current, newServer];
-    cm.setConfig('agentSettings', { ...(cm.getAgentSettings() as unknown as Record<string, unknown>), mcpServers: updated }, 'agent');
+    await writeUserMcpToml(updated);
     await audit(req, 'mcp.add', name, command);
-    void notifyMcpConfigChanged();
     sendJson(res, 200, { ok: true, server: newServer });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
@@ -197,20 +187,14 @@ export async function handleAddMCP(req: IncomingMessage, res: ServerResponse): P
 
 export async function handleRemoveMCP(req: IncomingMessage, res: ServerResponse, name: string): Promise<void> {
   try {
-    const cm = getConfigManager();
-    const current = getMCPServers(cm);
+    const current = await readUserMcpToml();
     const filtered = current.filter((s) => s.name !== name);
     if (filtered.length === current.length) {
       sendError(res, 404, 'mcp_not_found', `MCP server "${name}" not found`);
       return;
     }
-    cm.setConfig(
-      'agentSettings',
-      { ...(cm.getAgentSettings() as unknown as Record<string, unknown>), mcpServers: filtered },
-      'agent',
-    );
+    await writeUserMcpToml(filtered);
     await audit(req, 'mcp.remove', name);
-    void notifyMcpConfigChanged();
     sendJson(res, 200, { ok: true, removed: name });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
@@ -226,8 +210,7 @@ export async function handleAssignMCP(req: IncomingMessage, res: ServerResponse,
     return;
   }
   try {
-    const cm = getConfigManager();
-    const current = getMCPServers(cm);
+    const current = await readUserMcpToml();
     const idx = current.findIndex((s) => s.name === name);
     if (idx === -1) {
       sendError(res, 404, 'mcp_not_found', `MCP server "${name}" not found`);
@@ -244,13 +227,8 @@ export async function handleAssignMCP(req: IncomingMessage, res: ServerResponse,
     }
     const updatedServers = [...current];
     updatedServers[idx] = updatedServer;
-    cm.setConfig(
-      'agentSettings',
-      { ...(cm.getAgentSettings() as unknown as Record<string, unknown>), mcpServers: updatedServers },
-      'agent',
-    );
+    await writeUserMcpToml(updatedServers);
     await audit(req, 'mcp.assign', name, allowedAgentIds.join(','));
-    void notifyMcpConfigChanged();
     sendJson(res, 200, {
       ok: true,
       server: name,

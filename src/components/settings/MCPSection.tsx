@@ -143,7 +143,9 @@ export function MCPSection() {
     }).catch(() => setInventory(null));
   }, [settings.mcpServers]);
 
-  const servers = (inventory?.configuredServers ?? settings.mcpServers ?? []).map((server) => ({
+  // mcp.toml is the writable source. Inventory deliberately omits spawn
+  // details, so using it here would erase command/env data on the next save.
+  const servers = (settings.mcpServers ?? []).map((server) => ({
     ...server,
     enabled: server.enabled !== false,
   })) as MCPServerConfig[];

@@ -16,7 +16,7 @@ interface ConnectionsSubPageProps {
   providers: AppConnectionProviderDTO[];
   busyProvider: ProviderId | null;
   searchQuery: string;
-  onConnect: (provider: ProviderId) => void;
+  onConnect: (provider: AppConnectionProviderDTO) => void;
   onDisconnect: (connectionId: string) => void;
   onConfigure: (provider: AppConnectionProviderDTO) => void;
 }
@@ -62,10 +62,9 @@ export function ConnectionsSubPage({
   }, [connections]);
 
   const filtered = useMemo(() => {
-    const configured = providers.filter((p) => p.configured);
-    if (!searchQuery.trim()) return configured;
+    if (!searchQuery.trim()) return providers;
     const q = searchQuery.toLowerCase();
-    return configured.filter((p) => p.label.toLowerCase().includes(q));
+    return providers.filter((p) => p.label.toLowerCase().includes(q));
   }, [providers, searchQuery]);
 
   if (filtered.length === 0) {
@@ -122,7 +121,7 @@ export function ConnectionsSubPage({
               {conn?.accountLabel || conn?.accountId || "—"}
             </div>
             <div className="flex justify-end">
-              {!provider.configured ? (
+              {!provider.configured && provider.supportsManualConfiguration ? (
                 <Button
                   variant="primary"
                   size="sm"
@@ -144,8 +143,9 @@ export function ConnectionsSubPage({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={busyProvider === provider.id}
-                  onClick={() => onConnect(provider.id)}
+                  disabled={!provider.configured || busyProvider === provider.id}
+                  title={provider.configurationHint}
+                  onClick={() => onConnect(provider)}
                 >
                   {t("marketplace.connectors.connect")}
                 </Button>

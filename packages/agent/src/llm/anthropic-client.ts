@@ -5,7 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { DEFAULT_MAX_OUTPUT_TOKENS } from '../types.js';
-import type { SSEEvent, Tool, Message, MessageContent, TextContent, ImageContent, ToolUseContent, ToolResultContent, TokenUsage } from '../types.js';
+import type { SSEEvent, Tool, Message, MessageContent, TextContent, ImageContent, ToolUseContent, ToolResultContent, ThinkingContent, TokenUsage } from '../types.js';
 import type { LLMClient, LLMClientOptions } from './base.js';
 import { logger } from '../utils/logger.js';
 import { checkCacheEligibility, applyCacheControl, type CacheRetention } from './prompt-caching.js';
@@ -699,7 +699,26 @@ function normalizeToolResultOrdering(
         index = roundEndIndex;
         continue;
       }
-      normalized.push(...assistantRound);
+      // Filter out unmatched tool_use blocks to avoid API 400 error
+      const filteredAssistantRound = assistantRound
+        .map((msg) => {
+          if (!Array.isArray(msg.content)) return msg;
+          const filteredContent = msg.content.filter((block) => {
+            if (typeof block !== 'object' || block === null) return true;
+            if ((block as { type?: string }).type === 'tool_use') {
+              const id = (block as { id?: string }).id;
+              if (id && unresolvedIds.has(id)) return false;
+            }
+            return true;
+          });
+          if (filteredContent.length === 0) return null;
+          if (filteredContent.length === (msg.content as Array<unknown>).length) return msg;
+          return { ...msg, content: filteredContent };
+        })
+        .filter((msg): msg is MessageParam => msg !== null);
+      if (filteredAssistantRound.length > 0) {
+        normalized.push(...filteredAssistantRound);
+      }
       index = firstNonAssistantIndex - 1;
       continue;
     }
@@ -1242,9 +1261,21 @@ function convertContentBlock(block: MessageContent): ContentBlockParam | null {
       },
     } as ContentBlockParam;
   }
-  // Filter out thinking blocks - they should not be sent to the LLM
+  // Convert duya ThinkingContent to Anthropic ThinkingBlockParam format.
+  // Anthropic requires the last assistant's thinking blocks (with signature)
+  // to be passed back in the next request for multi-turn thinking continuity.
+  // The decision of whether to keep, downgrade, or strip is delegated to
+  // handleThinkingBlocks, which runs later in the toAnthropicMessages pipeline.
   if (block.type === 'thinking') {
-    return null;
+    const thinkBlock = block as ThinkingContent;
+    return {
+      type: 'thinking',
+      thinking: thinkBlock.thinking,
+      // signature is required by ThinkingBlockParam type; an empty string
+      // signals "unsigned" to handleThinkingBlocks, which downgrades it to
+      // a text block so the content is not lost.
+      signature: thinkBlock.thinkingSignature ?? '',
+    } as ContentBlockParam;
   }
   return { type: 'text', text: String(block) } as ContentBlockParam;
 }
@@ -1467,6 +1498,11 @@ export class AnthropicClient implements LLMClient {
     let hasExtractedThinkContent = false;
     let hasYieldedPreToolThinking = false;
     let hasReceivedExtendedThinking = false;
+    // Anthropic extended-thinking signature captured at content_block_start
+    // and emitted once at content_block_stop so the consumer can persist it
+    // alongside the thinking text. Required for multi-turn thinking continuity.
+    let currentThinkingSignature: string | undefined = undefined;
+    let isCurrentBlockThinking = false;
 
     let eventCount = 0;
     try {
@@ -1527,6 +1563,11 @@ export class AnthropicClient implements LLMClient {
           hasExtractedThinkContent = false;
         } else if (event.content_block.type === 'thinking') {
           hasReceivedExtendedThinking = true;
+          isCurrentBlockThinking = true;
+          // Capture the signature emitted by Anthropic at content_block_start.
+          // It must be passed back in the next request to keep the thinking
+          // chain valid across turns.
+          currentThinkingSignature = (event.content_block as { signature?: string }).signature;
         }
       } else if (event.type === 'content_block_delta') {
         if (event.delta.type === 'text_delta') {
@@ -1665,6 +1706,19 @@ export class AnthropicClient implements LLMClient {
           currentToolUse = null;
           toolResultContent = '';
           lastToolPreviewSignature = '';
+        } else if (isCurrentBlockThinking) {
+          // Thinking block finished — emit the signature once so the
+          // consumer can persist it. data is empty because the thinking
+          // text was already streamed incrementally via thinking_delta.
+          if (currentThinkingSignature) {
+            yield {
+              type: 'thinking',
+              data: '',
+              signature: currentThinkingSignature,
+            };
+          }
+          currentThinkingSignature = undefined;
+          isCurrentBlockThinking = false;
         }
       } else if (event.type === 'message_start') {
         // Capture input/cache token counts from message_start (sent once

@@ -6,6 +6,12 @@
  * the LLM call. Validation enforces the D8 promotion constraints BEFORE
  * any stage1_outputs row is written.
  *
+ * The LLM returns a Markdown `rollout_summary` string plus the expanded
+ * memory-item taxonomies (claim-type/scope/scope_id, lifecycle fields,
+ * D8 constraints). The summary is persisted as-is (after credential
+ * redaction) into the rollout_summaries projection file; no structural
+ * validation is performed on the Markdown content itself.
+ *
  * Shadow mode: no production caller until Plan 305 wires the worker.
  */
 
@@ -22,11 +28,21 @@ import {
 } from '../memory-state/lease.js';
 import { compactMessages, type MessageEvent } from './compactMessages.js';
 import { STAGE1_SYSTEM_PROMPT, STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
+import { writeRolloutProjection, redactCredentials } from './writer.js';
 import {
-  writeRolloutProjection,
-  redactCredentials,
-  MAX_SUMMARY_CHARS,
-} from './writer.js';
+  TASK_OUTCOMES,
+  CONFIDENCE_LEVELS,
+  MEMORY_STATUSES,
+  CLAIM_TYPES,
+  SCOPES,
+  SOURCE_TYPES,
+  VERIFICATION_LEVELS,
+  type ClaimType,
+  type Scope,
+  type MemoryItem,
+  type Evidence,
+  type ParsedExtraction as ParsedExtractionV2,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -66,45 +82,69 @@ export interface ExtractResult {
 // ---------------------------------------------------------------------------
 
 const VALID_JOB_STATUS = new Set(['succeeded', 'succeeded_no_output']);
-const VALID_CONTENT_OUTCOME = new Set(['success', 'partial', 'fail', 'uncertain']);
-const VALID_CLAIM_TYPE = new Set(['preference', 'fact', 'reference', 'procedure', 'person', 'area']);
-const VALID_SOURCE_TYPE = new Set([
-  'user_message',
-  'local_tool_output',
-  'browser_page',
-  'mcp_response',
-  'subagent_report',
-  'assistant_only',
-]);
-const VALID_VERIFICATION = new Set(['none', 'inferred', 'observed', 'verified_code', 'verified_user']);
+const VALID_CONTENT_OUTCOME: ReadonlySet<string> = new Set(TASK_OUTCOMES);
+const VALID_CLAIM_TYPE: ReadonlySet<string> = new Set(CLAIM_TYPES);
+const VALID_SOURCE_TYPE: ReadonlySet<string> = new Set(SOURCE_TYPES);
+const VALID_VERIFICATION: ReadonlySet<string> = new Set(VERIFICATION_LEVELS);
+const VALID_SCOPE: ReadonlySet<string> = new Set(SCOPES);
+const VALID_CONFIDENCE: ReadonlySet<string> = new Set(CONFIDENCE_LEVELS);
+const VALID_MEMORY_STATUS: ReadonlySet<string> = new Set(MEMORY_STATUSES);
 const EXTERNAL_SOURCE_TYPES = new Set(['browser_page', 'mcp_response']);
 
-export interface ParsedExtraction {
-  job_status: 'succeeded' | 'succeeded_no_output';
-  content_outcome: 'success' | 'partial' | 'fail' | 'uncertain' | null;
-  rollout_summary: string;
-  rollout_slug: string;
-  raw_memory: {
-    items: Array<{
-      claim: string;
-      claim_type: string;
-      scope: 'global';
-      evidence: Array<{
-        source_type: string;
-        source_id: string;
-        verification?: string;
-      }>;
-      canonical_key: string;
-    }>;
-  };
-}
+/** Stage 1 LLM output contract, defined in types.ts. */
+export type { ParsedExtraction } from './types.js';
 
-export type ValidationResult = { valid: true; result: ParsedExtraction } | { valid: false; error: string };
+export type ValidationResult = { valid: true; result: ParsedExtractionV2 } | { valid: false; error: string };
 
 function validateSlug(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   if (!/^[a-z0-9-]{3,80}$/.test(value)) return null;
   return value;
+}
+
+/**
+ * Validate a string-array field. Returns the typed array, or null when the
+ * value is not an array of strings.
+ */
+function validateStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  for (const entry of value) {
+    if (typeof entry !== 'string') return null;
+  }
+  return value as string[];
+}
+
+/**
+ * Validate an evidence array against the provenance contract (source_type +
+ * source_id + optional verification). Empty arrays are accepted here; the
+ * memory-item path additionally requires at least one entry.
+ */
+function validateEvidence(value: unknown): Evidence[] | null {
+  if (!Array.isArray(value)) return null;
+  const validated: Evidence[] = [];
+  for (const ev of value) {
+    if (typeof ev !== 'object' || ev === null) return null;
+    const evObj = ev as Record<string, unknown>;
+    const sourceType = evObj.source_type;
+    if (typeof sourceType !== 'string' || !VALID_SOURCE_TYPE.has(sourceType)) return null;
+    const sourceId = evObj.source_id;
+    if (typeof sourceId !== 'string' || sourceId.length === 0) return null;
+    const verification = evObj.verification;
+    if (
+      verification !== undefined &&
+      (typeof verification !== 'string' || !VALID_VERIFICATION.has(verification))
+    ) {
+      return null;
+    }
+    validated.push({
+      source_type: sourceType as Evidence['source_type'],
+      source_id: sourceId,
+      ...(verification !== undefined
+        ? { verification: verification as NonNullable<Evidence['verification']> }
+        : {}),
+    });
+  }
+  return validated;
 }
 
 /**
@@ -114,6 +154,10 @@ function validateSlug(value: unknown): string | null {
  *   - bad job_status → 'bad-job-status'
  *   - external source item with claim_type preference/procedure → 'invalid-promotion'
  *   - missing/duplicate required fields → 'schema-violation'
+ *
+ * For job_status='succeeded', the `rollout_summary` must be a non-empty
+ * Markdown string. No structural validation is performed on the Markdown
+ * content itself.
  */
 export function parseAndValidate(response: string): ValidationResult {
   // Strip markdown fences if present.
@@ -146,21 +190,21 @@ export function parseAndValidate(response: string): ValidationResult {
       result: {
         job_status: 'succeeded_no_output',
         content_outcome: null,
-        rollout_summary: '',
+        rollout_summary: null,
         rollout_slug: validateSlug(obj.rollout_slug) ?? 'no-output',
         raw_memory: { items: [] },
       },
     };
   }
 
-  // succeeded: validate full structure.
+  // succeeded: validate the Markdown rollout_summary + memory items.
   const contentOutcome = obj.content_outcome;
   if (typeof contentOutcome !== 'string' || !VALID_CONTENT_OUTCOME.has(contentOutcome)) {
     return { valid: false, error: 'schema-violation' };
   }
 
   const rolloutSummary = obj.rollout_summary;
-  if (typeof rolloutSummary !== 'string') {
+  if (typeof rolloutSummary !== 'string' || rolloutSummary.trim().length === 0) {
     return { valid: false, error: 'schema-violation' };
   }
 
@@ -180,7 +224,7 @@ export function parseAndValidate(response: string): ValidationResult {
   }
 
   const seenKeys = new Set<string>();
-  const validatedItems: ParsedExtraction['raw_memory']['items'] = [];
+  const validatedItems: MemoryItem[] = [];
 
   if (items.length > 5) {
     return { valid: false, error: 'schema-violation' };
@@ -203,7 +247,21 @@ export function parseAndValidate(response: string): ValidationResult {
     }
 
     const scope = itemObj.scope;
-    if (scope !== 'global') {
+    if (typeof scope !== 'string' || !VALID_SCOPE.has(scope)) {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    // scope_id identifies the scope target. It must be null for personal
+    // and global scopes, and non-null for every other scope.
+    const scopeId = itemObj.scope_id;
+    if (scopeId !== null && typeof scopeId !== 'string') {
+      return { valid: false, error: 'schema-violation' };
+    }
+    if (scope === 'personal' || scope === 'global') {
+      if (scopeId !== null) {
+        return { valid: false, error: 'schema-violation' };
+      }
+    } else if (scopeId === null) {
       return { valid: false, error: 'schema-violation' };
     }
 
@@ -228,41 +286,17 @@ export function parseAndValidate(response: string): ValidationResult {
       return { valid: false, error: 'invalid-promotion' };
     }
 
-    const evidence = itemObj.evidence;
-    if (!Array.isArray(evidence) || evidence.length === 0) {
+    const evidence = validateEvidence(itemObj.evidence);
+    if (!evidence || evidence.length === 0) {
       return { valid: false, error: 'schema-violation' };
     }
 
-    let externalSourceCount = 0;
-    let unverifiedAssistantCount = 0;
-
-    for (const ev of evidence) {
-      if (typeof ev !== 'object' || ev === null) {
-        return { valid: false, error: 'schema-violation' };
-      }
-      const evObj = ev as Record<string, unknown>;
-      const sourceType = evObj.source_type;
-      if (typeof sourceType !== 'string' || !VALID_SOURCE_TYPE.has(sourceType)) {
-        return { valid: false, error: 'schema-violation' };
-      }
-      const sourceId = evObj.source_id;
-      if (typeof sourceId !== 'string' || sourceId.length === 0) {
-        return { valid: false, error: 'schema-violation' };
-      }
-      const verification = evObj.verification;
-      if (
-        verification !== undefined &&
-        (typeof verification !== 'string' || !VALID_VERIFICATION.has(verification))
-      ) {
-        return { valid: false, error: 'schema-violation' };
-      }
-      if (EXTERNAL_SOURCE_TYPES.has(sourceType)) {
-        externalSourceCount += 1;
-      }
-      if (sourceType === 'assistant_only' && (verification === 'none' || verification === undefined)) {
-        unverifiedAssistantCount += 1;
-      }
-    }
+    const externalSourceCount = evidence.filter((ev) => EXTERNAL_SOURCE_TYPES.has(ev.source_type)).length;
+    const unverifiedAssistantCount = evidence.filter(
+      (ev) =>
+        ev.source_type === 'assistant_only' &&
+        (ev.verification === 'none' || ev.verification === undefined),
+    ).length;
 
     // D8: external-only evidence cannot become preference or procedure.
     if (
@@ -277,12 +311,61 @@ export function parseAndValidate(response: string): ValidationResult {
       return { valid: false, error: 'invalid-promotion' };
     }
 
+    const confidence = itemObj.confidence;
+    if (typeof confidence !== 'string' || !VALID_CONFIDENCE.has(confidence)) {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    const status = itemObj.status;
+    if (typeof status !== 'string' || !VALID_MEMORY_STATUS.has(status)) {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    // Validity window: type-checked only, no date-format enforcement.
+    const validFrom = itemObj.valid_from;
+    if (validFrom !== null && typeof validFrom !== 'string') {
+      return { valid: false, error: 'schema-violation' };
+    }
+    const validUntil = itemObj.valid_until;
+    if (validUntil !== null && typeof validUntil !== 'string') {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    const relationToExisting = itemObj.relation_to_existing;
+    if (relationToExisting !== null && typeof relationToExisting !== 'string') {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    const supersedes = validateStringArray(itemObj.supersedes);
+    if (!supersedes) {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    const whyFutureAgentNeedsThis = itemObj.why_future_agent_needs_this;
+    if (typeof whyFutureAgentNeedsThis !== 'string') {
+      return { valid: false, error: 'schema-violation' };
+    }
+
+    const retrievalCues = validateStringArray(itemObj.retrieval_cues);
+    if (!retrievalCues) {
+      return { valid: false, error: 'schema-violation' };
+    }
+
     validatedItems.push({
       claim,
-      claim_type: claimType,
-      scope,
-      evidence: evidence as ParsedExtraction['raw_memory']['items'][0]['evidence'],
+      claim_type: claimType as ClaimType,
+      scope: scope as Scope,
+      scope_id: scopeId,
+      evidence,
       canonical_key: canonicalKey,
+      confidence: confidence as MemoryItem['confidence'],
+      status: status as MemoryItem['status'],
+      valid_from: validFrom,
+      valid_until: validUntil,
+      relation_to_existing: relationToExisting,
+      supersedes,
+      why_future_agent_needs_this: whyFutureAgentNeedsThis,
+      retrieval_cues: retrievalCues,
     });
   }
 
@@ -290,7 +373,7 @@ export function parseAndValidate(response: string): ValidationResult {
     valid: true,
     result: {
       job_status: 'succeeded',
-      content_outcome: contentOutcome as ParsedExtraction['content_outcome'],
+      content_outcome: contentOutcome as ParsedExtractionV2['content_outcome'],
       rollout_summary: rolloutSummary,
       rollout_slug: rolloutSlug,
       raw_memory: { items: validatedItems },
@@ -517,17 +600,15 @@ export class Stage1Extractor {
       return { status: 'succeeded_no_output', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed() };
     }
 
-    // 8. succeeded path — process summary (truncate + redact) so DB and
-    //    file projection stay byte-identical.
-    const rawSummary = data.rollout_summary;
-    const truncated =
-      rawSummary.length > MAX_SUMMARY_CHARS
-        ? rawSummary.slice(0, MAX_SUMMARY_CHARS) + '\n... [truncated]'
-        : rawSummary;
-    const processedSummary = redactCredentials(truncated);
+    // 8. succeeded path — the rollout_summary is a Markdown string produced
+    //    directly by the LLM. The DB rollout_summary column receives the
+    //    string as-is; the writer redacts credentials and caps the length
+    //    before persisting the projection file. raw_memory is redacted
+    //    separately before persistence.
     const rawMemoryJson = redactCredentials(JSON.stringify(data.raw_memory));
 
-    // Write projection (enqueues outbox).
+    // Write projection (enqueues outbox). The writer receives the summary
+    // Markdown string and renders the projection file from it.
     const writeResult = writeRolloutProjection(this.memoryDb, {
       rolloutId,
       cwd: catalog.working_directory ?? '',
@@ -535,7 +616,7 @@ export class Stage1Extractor {
       gitBranch: null,
       outcome: 'succeeded',
       contentOutcome: data.content_outcome!,
-      summaryMarkdown: processedSummary,
+      summaryMarkdown: data.rollout_summary!,
       rawMemoryJson,
       rolloutSlug: data.rollout_slug,
       generatedAt: Date.now(),
@@ -552,7 +633,7 @@ export class Stage1Extractor {
       sourceContentHash: source_content_hash,
       outcome: 'succeeded',
       contentOutcome: data.content_outcome!,
-      rolloutSummary: processedSummary,
+      rolloutSummary: data.rollout_summary,
       rawMemoryJson,
       rolloutSlug: data.rollout_slug,
       extractedThroughSeq: compacted.extractedThroughSeq,

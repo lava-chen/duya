@@ -106,7 +106,7 @@ export function MCPSubPage({
   return (
     <div className="space-y-8">
       <ServerList
-        title={t("extensions.mcp.table.name")}
+        title={t("extensions.mcp.userConfigTitle")}
         emptyText={t("extensions.empty.mcp")}
         action={
           <Button variant="primary" size="sm" onClick={onAdd}>

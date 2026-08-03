@@ -277,7 +277,7 @@ function createWorker(
         rootDir: deps.rootDir,
       });
       if (!result.skipped) {
-        logger.info(
+        logger.warn(
           'MemoryWorkerConsolidator',
           {
             runId: result.runId,
@@ -324,7 +324,7 @@ function createWorker(
       try {
         const r = reconcileProjections(memoryDb, { rootDir, dryRun: false, now });
         reconciled = { written: r.written.length, removed: r.removed.length, mismatched: r.mismatched.length };
-        logger.info(
+        logger.warn(
           'MemoryWorkerReconcile',
           { written: reconciled.written, removed: reconciled.removed, mismatched: reconciled.mismatched, durationMs: r.durationMs },
           LogComponent.DB,
@@ -355,7 +355,7 @@ function createWorker(
           errors: syncResult.errors,
         };
         if (syncResult.inserted > 0 || syncResult.updated > 0 || syncResult.tombstoned > 0) {
-          logger.info(
+          logger.warn(
             'MemoryWorkerCatalogSync',
             { inserted: syncResult.inserted, updated: syncResult.updated, tombstoned: syncResult.tombstoned, errors: syncResult.errors, durationMs: syncResult.durationMs, forced: options.force },
             LogComponent.DB,
@@ -482,20 +482,26 @@ function createWorker(
       }
     }
 
-    logger.info(
-      'MemoryWorkerTick',
-      {
-        selected: eligible.length,
-        extracted,
-        skippedNoop,
-        outboxDrained,
-        consolidated: consolidated ? !consolidated.skipped : false,
-        catalogSynced: catalogSynced ? (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) : 0,
-        forced: options.force,
-        durationMs: Date.now() - start,
-      },
-      LogComponent.DB,
-    );
+    const tickSummary = {
+      selected: eligible.length,
+      extracted,
+      skippedNoop,
+      outboxDrained,
+      consolidated: consolidated ? !consolidated.skipped : false,
+      catalogSynced: catalogSynced ? (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) : 0,
+      forced: options.force,
+      durationMs: Date.now() - start,
+    };
+
+    // Log every tick at INFO for debugging; escalate to WARN when
+    // something actually happened so operators can see activity.
+    const hasActivity = extracted > 0 || outboxDrained > 0 || (consolidated && !consolidated.skipped)
+      || (catalogSynced && (catalogSynced.inserted + catalogSynced.updated + catalogSynced.tombstoned) > 0);
+    if (hasActivity) {
+      logger.warn('MemoryWorkerTick', tickSummary, LogComponent.DB);
+    } else {
+      logger.info('MemoryWorkerTick', tickSummary, LogComponent.DB);
+    }
 
     return {
       selected: eligible.length,
@@ -542,7 +548,7 @@ function createWorker(
       const allowedRoots = deps.rootDir ? [deps.rootDir] : undefined;
       const n = drainOutbox(deps.memoryDb, { batchSize: 32, allowedRoots });
       if (n > 0) {
-        logger.info('MemoryWorkerOutbox', { drained: n }, LogComponent.DB);
+        logger.warn('MemoryWorkerOutbox', { drained: n }, LogComponent.DB);
       }
     } catch (err) {
       logger.warn(
@@ -572,7 +578,7 @@ function createWorker(
   state.outboxTimer.unref?.();
   state.consolidatorTimer.unref?.();
 
-  logger.info(
+  logger.warn(
     'MemoryWorker started',
     {
       workerId,
@@ -590,12 +596,12 @@ function createWorker(
     pause(): void {
       if (state.paused) return;
       state.paused = true;
-      logger.info('MemoryWorker paused', { workerId }, LogComponent.DB);
+      logger.warn('MemoryWorker paused', { workerId }, LogComponent.DB);
     },
     resume(): void {
       if (!state.paused) return;
       state.paused = false;
-      logger.info('MemoryWorker resumed', { workerId }, LogComponent.DB);
+      logger.warn('MemoryWorker resumed', { workerId }, LogComponent.DB);
     },
     isPaused(): boolean {
       return state.paused;
@@ -619,14 +625,14 @@ function createWorker(
       // interval will be cleared by its own finally block). We do NOT abort
       // them — partial extraction progress is better than a dangling lease.
       if (state.inFlightExtracts.size > 0) {
-        logger.info(
+        logger.warn(
           'MemoryWorker shutdown awaiting in-flight extracts',
           { count: state.inFlightExtracts.size, workerId },
           LogComponent.DB,
         );
         await Promise.allSettled([...state.inFlightExtracts]);
       }
-      logger.info('MemoryWorker shutdown complete', { workerId }, LogComponent.DB);
+      logger.warn('MemoryWorker shutdown complete', { workerId }, LogComponent.DB);
     },
     async forceSweep(): Promise<ForceSweepResult> {
       if (state.forceSweepInFlight) {

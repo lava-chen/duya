@@ -136,25 +136,29 @@ describe('ConnectorService', () => {
     seedConnection(db, { id: 'c-disc', provider: 'google', status: 'disconnected' });
     const descriptors = await connectorService.listDescriptorsForConnected();
     // Only c-google should produce descriptors
-    expect(descriptors).toHaveLength(1);
-    expect(descriptors[0]!.connectionId).toBe('c-google');
-    expect(descriptors[0]!.name).toBe('google_drive_list_files');
+    expect(descriptors).toHaveLength(3);
+    expect(descriptors.every((descriptor) => descriptor.connectionId === 'c-google')).toBe(true);
+    expect(descriptors.map((descriptor) => descriptor.name)).toEqual([
+      'google_drive_search',
+      'google_drive_get',
+      'google_drive_read',
+    ]);
   });
 
   it('invoke happy path: calls connector with token and returns data', async () => {
     const { fakeFetch, calls } = makeFakeFetch({
-      driveResponse: { files: [{ id: 'f1', name: 'test.txt' }] },
+      driveResponse: { files: [{ id: 'file-1', name: 'test.txt' }] },
     });
     connectorService = new ConnectorService({ service, fetchImpl: fakeFetch as unknown as typeof fetch });
 
     const result = await connectorService.invoke({
       connectionId: 'c-google',
-      action: 'drive.list_files',
+      action: 'drive.search',
       args: { pageSize: 5 },
     });
 
     expect(result.success).toBe(true);
-    expect(Array.isArray(result.data)).toBe(true);
+    expect(result.data).toMatchObject({ files: [{ id: 'file-1', name: 'test.txt' }] });
     // Verify the fetch was called with the access token
     expect(calls.some((c) => c.url.includes('drive/v3/files'))).toBe(true);
   });
@@ -162,7 +166,7 @@ describe('ConnectorService', () => {
   it('invoke with missing connection returns connection_not_found', async () => {
     const result = await connectorService.invoke({
       connectionId: 'nonexistent',
-      action: 'drive.list_files',
+      action: 'drive.search',
       args: {},
     });
     expect(result.success).toBe(false);
@@ -189,7 +193,7 @@ describe('ConnectorService', () => {
 
     const result = await connectorService.invoke({
       connectionId: 'c-google',
-      action: 'drive.list_files',
+      action: 'drive.search',
       args: {},
     });
     expect(result.success).toBe(false);

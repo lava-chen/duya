@@ -1,6 +1,4 @@
-import type { SecurityCheckResult, SecurityWarning } from '../BashTool/BashTool.js';
-
-type Severity = SecurityWarning['severity'];
+import type { SecurityCheckResult, SecurityWarning, Severity } from '../../permissions/safetyConstants.js';
 
 interface PatternRule {
   pattern: RegExp;

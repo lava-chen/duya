@@ -22,12 +22,15 @@ import {
 } from "./capability-adapter";
 
 interface PluginDetailViewProps {
-  installed: PluginRegistryEntry;
+  /** Required when viewing an installed plugin; absent for catalog-only (marketplace) preview. */
+  installed?: PluginRegistryEntry;
   catalog: PluginCatalogEntry | null;
   onBack: () => void;
-  onEnable: () => void;
-  onDisable: () => void;
-  onRemove: () => void;
+  /** Called when user clicks Install in catalog-only mode. */
+  onInstall?: () => void;
+  onEnable?: () => void;
+  onDisable?: () => void;
+  onRemove?: () => void;
   busy: boolean;
   /**
    * Plan 311 — called after a workflow template is instantiated and
@@ -39,13 +42,13 @@ interface PluginDetailViewProps {
 
 function buildCapabilities(
   catalog: PluginCatalogEntry | null,
-  installed: PluginRegistryEntry
+  installed?: PluginRegistryEntry
 ): PluginCapabilityDisplay[] {
   if (catalog?.capabilities && catalog.capabilities.length > 0) {
     return catalog.capabilities;
   }
 
-  const manifest = catalog?.manifest || installed.manifest;
+  const manifest = catalog?.manifest || installed?.manifest;
   if (!manifest) return [];
 
   const items: PluginCapabilityDisplay[] = [];
@@ -95,13 +98,13 @@ function buildCapabilities(
 
 function buildPermissions(
   catalog: PluginCatalogEntry | null,
-  installed: PluginRegistryEntry
+  installed?: PluginRegistryEntry
 ): PluginPermissionDisplay[] {
   if (catalog?.permissions && catalog.permissions.length > 0) {
     return catalog.permissions;
   }
 
-  const manifest = catalog?.manifest || installed.manifest;
+  const manifest = catalog?.manifest || installed?.manifest;
   if (!manifest?.permissions) return [];
 
   const permissionLabels: Record<string, { title: string; description: string; riskLevel: 'low' | 'medium' | 'high' }> = {
@@ -115,7 +118,7 @@ function buildPermissions(
     'exec': { title: 'Execute Commands', description: 'Run system commands and scripts', riskLevel: 'high' },
   };
 
-  const grantedSet = new Set(installed.permissionsGranted);
+  const grantedSet = new Set(installed?.permissionsGranted ?? []);
 
   return manifest.permissions.map((p) => {
     const label = permissionLabels[p.name] || {
@@ -163,12 +166,14 @@ export function PluginDetailView({
   installed,
   catalog,
   onBack,
+  onInstall,
   onEnable,
   onDisable,
   onRemove,
   busy,
   onLaunchWorkflow,
 }: PluginDetailViewProps) {
+  const isInstalled = !!installed;
   const [techExpanded, setTechExpanded] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
 
@@ -205,7 +210,7 @@ export function PluginDetailView({
   }>>([]);
 
   useEffect(() => {
-    if (!pluginApi) return;
+    if (!pluginApi || !isInstalled) return;
     let cancelled = false;
 
     void (async () => {
@@ -214,7 +219,7 @@ export function PluginDetailView({
         if (cancelled || !snapshot) return;
 
         const pluginServers = snapshot.effectiveServers.filter(
-          (server) => server.sourceId === installed.id,
+          (server) => server.sourceId === installed!.id,
         );
 
         setServerTools(
@@ -251,7 +256,7 @@ export function PluginDetailView({
     return () => {
       cancelled = true;
     };
-  }, [pluginApi, installed.id]);
+  }, [pluginApi, installed?.id]);
   const workflows = useMemo(() => getWorkflows(indexItem), [indexItem]);
   const launchVariables = useMemo(
     () => (fullTemplate ? extractVariables(fullTemplate) : []),
@@ -262,14 +267,14 @@ export function PluginDetailView({
   // workflow summaries. The index is the only source of workflow
   // summaries in the renderer (Plan 241 progressive disclosure).
   useEffect(() => {
-    if (!pluginApi) return;
+    if (!pluginApi || !isInstalled) return;
     let cancelled = false;
     void (async () => {
       try {
         const res = await pluginApi.capabilityIndex();
         if (cancelled) return;
         if (res.success && res.data) {
-          const entry = res.data.find((item) => item.pluginId === installed.id) ?? null;
+          const entry = res.data.find((item) => item.pluginId === installed!.id) ?? null;
           setIndexItem(entry);
         }
       } catch {
@@ -279,20 +284,20 @@ export function PluginDetailView({
     return () => {
       cancelled = true;
     };
-  }, [pluginApi, installed.id]);
+  }, [pluginApi, installed?.id]);
 
   // Load setup field definitions + stored values once per plugin. Secrets
   // arrive as empty string (masked by the main process); the baseline is
   // captured so the save handler can compute the dirty diff and only send
   // fields the user actually changed.
   useEffect(() => {
-    if (!pluginApi) return;
+    if (!pluginApi || !isInstalled) return;
     let cancelled = false;
     setSetupLoading(true);
     setSetupError(null);
     void (async () => {
       try {
-        const res = await pluginApi.setupLoad(installed.id);
+        const res = await pluginApi.setupLoad(installed!.id);
         if (cancelled) return;
         if (res.success && res.data) {
           setSetupFields(res.data.fields);
@@ -312,7 +317,7 @@ export function PluginDetailView({
     return () => {
       cancelled = true;
     };
-  }, [pluginApi, installed.id]);
+  }, [pluginApi, installed?.id]);
 
   const handleSetupSave = useCallback(async () => {
     if (!pluginApi) return;
@@ -337,12 +342,12 @@ export function PluginDetailView({
     setSetupError(null);
     setSetupSavedFlash(false);
     try {
-      const res = await pluginApi.setupSave({ pluginId: installed.id, values: changed });
+      const res = await pluginApi.setupSave({ pluginId: installed!.id, values: changed });
       if (res.success) {
         // Refresh the baseline so subsequent saves only send new changes.
         // Reload from the main process to pick up the canonical masked
         // state (secrets stay "").
-        const loadRes = await pluginApi.setupLoad(installed.id);
+        const loadRes = await pluginApi.setupLoad(installed!.id);
         if (loadRes.success && loadRes.data) {
           setSetupFormValues({ ...loadRes.data.values });
           setSetupBaseline({ ...loadRes.data.values });
@@ -357,7 +362,7 @@ export function PluginDetailView({
     } finally {
       setSetupSaving(false);
     }
-  }, [pluginApi, installed.id, setupFields, setupFormValues, setupBaseline]);
+  }, [pluginApi, installed?.id, setupFields, setupFormValues, setupBaseline]);
 
   const handleLaunchClick = useCallback(
     async (workflowId: string) => {
@@ -366,7 +371,7 @@ export function PluginDetailView({
       setLaunchError(null);
       try {
         const res = await pluginApi.workflowGet({
-          pluginId: installed.id,
+          pluginId: installed!.id,
           workflowId,
         });
         if (!res.success || !res.data) {
@@ -383,7 +388,7 @@ export function PluginDetailView({
         setLaunchLoading(false);
       }
     },
-    [pluginApi, installed.id],
+    [pluginApi, installed?.id],
   );
 
   const handleLaunchConfirm = useCallback(() => {
@@ -415,7 +420,7 @@ export function PluginDetailView({
     setLaunchError(null);
   }, []);
 
-  const entry = catalog || installed;
+  const entry = (catalog ?? installed) as PluginCatalogEntry | PluginRegistryEntry;
   const capabilities = useMemo(() => buildCapabilities(catalog, installed), [catalog, installed]);
   const permissions = useMemo(() => buildPermissions(catalog, installed), [catalog, installed]);
   const includes = useMemo(
@@ -453,10 +458,11 @@ export function PluginDetailView({
     }
   }, [externalUrl]);
 
-  const hasIssues =
-    installed.runtimeStatus === "needs_setup" ||
-    installed.runtimeStatus === "failed_to_load" ||
-    (installed.permissionDenied?.length ?? 0) > 0;
+  const hasIssues = installed
+    ? installed.runtimeStatus === "needs_setup" ||
+      installed.runtimeStatus === "failed_to_load" ||
+      (installed.permissionDenied?.length ?? 0) > 0
+    : false;
 
   return (
     <div className="space-y-8">
@@ -473,7 +479,7 @@ export function PluginDetailView({
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-3xl font-semibold text-foreground">{entry.name}</h1>
-            <RuntimeStatusBadge status={installed.runtimeStatus} />
+            {isInstalled && <RuntimeStatusBadge status={installed!.runtimeStatus} />}
           </div>
           <p className="text-sm text-muted-foreground">by {authorName}</p>
           {externalUrl && externalDomain && (
@@ -500,17 +506,25 @@ export function PluginDetailView({
               <ExternalLinkIcon size={16} />
             </IconButton>
           )}
-          <Button variant="secondary" size="sm" disabled={busy} onClick={onRemove}>
-            Uninstall
-          </Button>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={busy}
-            onClick={installed.enabled ? onDisable : onEnable}
-          >
-            {installed.enabled ? "Disable" : "Enable"}
-          </Button>
+          {isInstalled ? (
+            <>
+              <Button variant="secondary" size="sm" disabled={busy} onClick={onRemove}>
+                Uninstall
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy}
+                onClick={installed!.enabled ? onDisable : onEnable}
+              >
+                {installed!.enabled ? "Disable" : "Enable"}
+              </Button>
+            </>
+          ) : (
+            <Button variant="primary" size="sm" disabled={busy} onClick={onInstall}>
+              Install
+            </Button>
+          )}
         </div>
       </div>
 
@@ -522,7 +536,7 @@ export function PluginDetailView({
       {/* Setup configuration — only renders when the plugin manifest declares
           setup fields (text/secret/path/url). app-connection fields are
           filtered out by the main process and rendered via the OAuth UI. */}
-      {setupFields.length > 0 && (
+      {isInstalled && setupFields.length > 0 && (
         <section className="space-y-3">
           <div>
             <h3 className="text-base font-semibold text-foreground">Setup</h3>
@@ -771,27 +785,28 @@ export function PluginDetailView({
 
         {techExpanded && (
           <div className="mt-2 space-y-6 rounded-lg border border-border/40 bg-[var(--surface)] px-4 py-4">
-            {/* Runtime */}
+            {/* Runtime — only for installed plugins */}
+            {isInstalled && (
             <div className="space-y-3">
               <h4 className="text-sm font-semibold text-foreground">Runtime</h4>
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-muted-foreground">Status</span>
-                  <RuntimeStatusBadge status={installed.runtimeStatus} />
+                  <RuntimeStatusBadge status={installed!.runtimeStatus} />
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-muted-foreground">Enabled</span>
                   <span className={cn(
                     "text-sm font-medium",
-                    installed.enabled ? "text-emerald-600" : "text-muted-foreground"
+                    installed!.enabled ? "text-emerald-600" : "text-muted-foreground"
                   )}>
-                    {installed.enabled ? "Yes" : "No"}
+                    {installed!.enabled ? "Yes" : "No"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-sm text-muted-foreground">Setup</span>
                   <span className="text-sm text-foreground">
-                    {installed.setupRequired ? "Required" : "Complete"}
+                    {installed!.setupRequired ? "Required" : "Complete"}
                   </span>
                 </div>
                 {hasIssues && (
@@ -804,6 +819,7 @@ export function PluginDetailView({
                 )}
               </div>
             </div>
+            )}
 
             {/* Permissions */}
             {permissions.length > 0 && (
@@ -873,12 +889,12 @@ export function PluginDetailView({
             </div>
 
             {/* Install path */}
-            {installed.installPath && (
+            {isInstalled && installed!.installPath && (
               <div className="space-y-3">
                 <h4 className="text-sm font-semibold text-foreground">Install path</h4>
                 <div className="flex items-center gap-2">
                   <code className="block truncate rounded bg-[var(--chip)] px-2 py-0.5 text-[11px] text-muted-foreground font-mono">
-                    {installed.installPath}
+                    {installed!.installPath}
                   </code>
                   <IconButton
                     variant="ghost"
@@ -887,7 +903,7 @@ export function PluginDetailView({
                     className="shrink-0"
                     onClick={async () => {
                       try {
-                        await navigator.clipboard.writeText(installed.installPath);
+                        await navigator.clipboard.writeText(installed!.installPath);
                         setPathCopied(true);
                         setTimeout(() => setPathCopied(false), 2000);
                       } catch {

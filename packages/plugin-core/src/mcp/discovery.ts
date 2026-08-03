@@ -17,7 +17,7 @@ export type MCPSource = 'bundled' | 'plugin' | 'settings';
  * `agentSettings` is the newest and wins over `settingsKv` and `legacyFile`
  * for the same unscoped server name (within-settings shadow rule).
  */
-export type MCPSettingsSubOrigin = 'legacyFile' | 'settingsKv' | 'agentSettings';
+export type MCPSettingsSubOrigin = 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile';
 
 /**
  * Provenance info attached to MCP issues, used by the UI to bucket issues

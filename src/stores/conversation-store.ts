@@ -9,6 +9,7 @@ import {
   createThreadIPC,
   deleteThreadIPC,
   getProjectGroupsIPC,
+  getNoProjectWorkspaceIPC,
   addRecentFolderIPC,
   addMessageIPC,
   getActiveProviderIPC,
@@ -109,6 +110,10 @@ interface ConversationState {
   parentSessionId: string | null; // Parent session ID when viewing a sub-agent
   projectSortBy: ProjectSortBy; // Sidebar project sort order
   projectGroupBy: ProjectGroupBy; // Sidebar project grouping mode
+  /** Canonical path of the shared no-project workspace (~/.duya/workspace).
+   *  Empty string until loaded from the backend. Sessions whose
+   *  workingDirectory equals this value are grouped under "无项目". */
+  noProjectWorkspace: string;
 
   // Actions
   setCurrentView: (view: ViewType) => void;
@@ -119,7 +124,7 @@ interface ConversationState {
   clearProviderEdit: () => void;
   enterSettings: () => void;
   exitSettings: () => void;
-  createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string }) => Promise<Thread | null>;
+  createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string; noProject?: boolean }) => Promise<Thread | null>;
   deleteThread: (id: string) => void;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
@@ -245,6 +250,7 @@ export const useConversationStore = create<ConversationState>()(
       parentSessionId: null,
       projectSortBy: 'lastActivity',
       projectGroupBy: 'byProject',
+      noProjectWorkspace: '',
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => set({ currentView: view }),
@@ -275,11 +281,17 @@ export const useConversationStore = create<ConversationState>()(
       },
 
       createThread: async (options) => {
-        const { threads, activeThreadId } = get();
+        const { threads, activeThreadId, noProjectWorkspace } = get();
 
         // Determine working directory: use provided, or fall back to active thread's
         let workingDirectory: string | null | undefined = options?.workingDirectory;
         let projectName: string | null | undefined = options?.projectName;
+
+        // No-project session: pin to the shared ~/.duya/workspace.
+        if (options?.noProject) {
+          workingDirectory = noProjectWorkspace || (await getNoProjectWorkspaceIPC());
+          projectName = null;
+        }
 
         if (!workingDirectory && activeThreadId) {
           const activeThread = threads.find(t => t.id === activeThreadId);
@@ -784,10 +796,15 @@ export const useConversationStore = create<ConversationState>()(
             isExpanded: true,
           }));
 
+          // Load the canonical no-project workspace path so the sidebar can
+          // route no-project sessions into the "无项目" group.
+          const noProjectWorkspace = await getNoProjectWorkspaceIPC();
+
           set({
             threads: mergedThreads,
             messages,
             projects,
+            noProjectWorkspace,
             lastSyncAt: now,
             isHydrated: true,
             ...(newChildParentIds.length > 0 ? {

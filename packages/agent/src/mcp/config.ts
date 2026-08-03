@@ -4,6 +4,8 @@
  */
 
 import { join } from 'path';
+import { readFile } from 'fs/promises';
+import { parseUserMcpToml, type UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
 
 /**
  * MCP configuration item (frontend settings format)
@@ -50,4 +52,21 @@ export function getSettingsPath(): string | null {
   }
 
   return null;
+}
+
+/** The sole user-managed MCP source. Plugin MCPs do not read this file. */
+export function getUserMcpTomlPath(): string | null {
+  const settingsPath = getSettingsPath();
+  return settingsPath ? join(settingsPath, '..', 'mcp.toml') : null;
+}
+
+export async function readUserMcpToml(): Promise<UserMcpTomlServer[]> {
+  const filePath = getUserMcpTomlPath();
+  if (!filePath) return [];
+  try {
+    return parseUserMcpToml(await readFile(filePath, 'utf8'));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
 }

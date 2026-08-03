@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
@@ -33,7 +33,8 @@ interface MarketplaceModalProps {
   connections: AppConnectionStatusDTO[];
   providers: AppConnectionProviderDTO[];
   onInstallPlugin: (plugin: PluginCatalogEntry) => void;
-  onConnectProvider: (provider: ProviderId) => void;
+  onPluginClick: (plugin: PluginCatalogEntry) => void;
+  onConnectProvider: (provider: AppConnectionProviderDTO) => void;
   onConfigureProvider: (provider: AppConnectionProviderDTO) => void;
   onDisconnectConnection: (connectionId: string) => void;
   busyProvider: ProviderId | null;
@@ -52,6 +53,7 @@ export function MarketplaceModal({
   connections,
   providers,
   onInstallPlugin,
+  onPluginClick,
   onConnectProvider,
   onConfigureProvider,
   onDisconnectConnection,
@@ -263,7 +265,8 @@ export function MarketplaceModal({
                             </>
                           }
                           description={plugin.shortDescription || plugin.description}
-                          onAdd={() => onInstallPlugin(plugin)}
+                          onClick={() => onPluginClick(plugin)}
+                          onAdd={() => onPluginClick(plugin)}
                           added={installed}
                           addLabel={t("marketplace.install")}
                         />
@@ -312,7 +315,8 @@ export function MarketplaceModal({
                             </>
                           }
                           description={skill.description}
-                          onAdd={() => onInstallPlugin(skill)}
+                          onClick={() => onPluginClick(skill)}
+                          onAdd={() => onPluginClick(skill)}
                           added={installed}
                           addLabel={t("marketplace.install")}
                         />
@@ -344,7 +348,7 @@ function ConnectorsPanel({
   providers: AppConnectionProviderDTO[];
   connectedProviders: Set<ProviderId>;
   busyProvider: ProviderId | null;
-  onConnect: (provider: ProviderId) => void;
+  onConnect: (provider: AppConnectionProviderDTO) => void;
   onConfigure: (provider: AppConnectionProviderDTO) => void;
   onDisconnect: (connectionId: string) => void;
 }) {
@@ -381,7 +385,7 @@ function ConnectorsPanel({
             }
             description={provider.description}
             actions={
-              !provider.configured ? (
+              !provider.configured && provider.supportsManualConfiguration ? (
                 <Button
                   variant="primary"
                   size="sm"
@@ -403,8 +407,9 @@ function ConnectorsPanel({
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={busyProvider === provider.id}
-                  onClick={() => onConnect(provider.id)}
+                  disabled={!provider.configured || busyProvider === provider.id}
+                  title={provider.configurationHint}
+                  onClick={() => onConnect(provider)}
                 >
                   {t("marketplace.connectors.connect")}
                 </Button>

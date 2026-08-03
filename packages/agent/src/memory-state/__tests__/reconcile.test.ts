@@ -6,6 +6,10 @@ import { computeContentHash } from '../outbox';
 import {
   deriveRolloutSummaryFilename,
   renderRolloutSummaryFile,
+  renderUnifiedMemoryFile,
+  renderMemorySummaryFile,
+  renderPeopleIndexFile,
+  renderAreasIndexFile,
   type Stage1OutputRow,
 } from '../projectionContent';
 import { reconcileProjections } from '../reconcile';
@@ -74,6 +78,25 @@ function writeSummaryFile(memoryRoot: string, name: string, content: string): st
   return filePath;
 }
 
+/**
+ * Pre-write the Phase 2 managed projections (migration 0005+) rendered
+ * from the empty memory_entries table so reconcile's Phase 2 branch
+ * plans nothing and the D12 scenarios stay focused on rollout_summaries.
+ */
+function writeConsistentPhase2Projections(memoryRoot: string): void {
+  const files: Array<[string[], string]> = [
+    [['MEMORY.md'], renderUnifiedMemoryFile([])],
+    [['summary.md'], renderMemorySummaryFile([])],
+    [['global', 'people', 'index.md'], renderPeopleIndexFile([])],
+    [['global', 'areas', 'index.md'], renderAreasIndexFile([])],
+  ];
+  for (const [segments, content] of files) {
+    const filePath = path.join(memoryRoot, ...segments);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+}
+
 describe('reconcileProjections (D12)', () => {
   let fixture: MemoryStateFixture;
   let db: Database;
@@ -81,6 +104,7 @@ describe('reconcileProjections (D12)', () => {
   beforeEach(() => {
     fixture = createMemoryStateFixture();
     db = fixture.db;
+    writeConsistentPhase2Projections(fixture.memoryRoot);
   });
 
   afterEach(() => {
