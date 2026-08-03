@@ -50,7 +50,7 @@ describe('memory-state migration runner', () => {
     temp.cleanup();
   });
 
-  it('1. first runMigrations on empty DB applies migrations 0001+0002+0003+0005 and inserts memory_schema rows', () => {
+  it('1. first runMigrations on empty DB applies all registered migrations and inserts memory_schema rows', () => {
     const db = openRawDb(dbPath);
     runMigrations(db);
 
@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(7);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -72,6 +72,10 @@ describe('memory-state migration runner', () => {
     expect(rows[3].version).toBe(5);
     expect(rows[3].name).toBe('phase2_entities');
     expect(rows[3].sha256).toBe(migration0005.sha256);
+    expect(rows[4].version).toBe(6);
+    expect(rows[5].version).toBe(7);
+    expect(rows[6].version).toBe(8);
+    expect(rows[6].name).toBe('curation_runs');
 
     // Schema tables exist.
     const tables = db
@@ -95,13 +99,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(4);
+    expect(rowsBefore.n).toBe(7);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(4);
+    expect(rowsAfter.n).toBe(7);
 
     db.close();
   });
@@ -118,7 +122,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(4);
+    expect(rows.n).toBe(7);
 
     dbA.close();
     dbB.close();
@@ -172,7 +176,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(4);
+    expect(rows.n).toBe(7);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -270,14 +274,14 @@ describe('memory-state migration runner', () => {
     const db = openRawDb(dbPath);
     runMigrations(db);
 
-    // memory_schema has exactly 4 rows: versions 1, 2, 3, 5.
+    // memory_schema has 7 rows: versions 1, 2, 3, 5, 6, 7, 8.
     // 0001/0002/0003 are not re-applied; 0005 is registered with a
     // valid sha256 (64-char hex).
     const rows = db
       .prepare('SELECT version, name, sha256 FROM memory_schema ORDER BY version')
       .all() as Array<{ version: number; name: string; sha256: string }>;
-    expect(rows).toHaveLength(4);
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 5]);
+    expect(rows).toHaveLength(7);
+    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 5, 6, 7, 8]);
 
     const phase2Row = rows.find((r) => r.version === 5);
     expect(phase2Row).toBeDefined();
@@ -305,8 +309,8 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001, 0002, 0003 and 0005 in order', () => {
-    expect(MIGRATIONS).toHaveLength(4);
+  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007 and 0008 in order', () => {
+    expect(MIGRATIONS).toHaveLength(7);
     expect(MIGRATIONS[0].version).toBe(1);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
@@ -319,6 +323,10 @@ describe('memory-state migration runner', () => {
     expect(MIGRATIONS[3].version).toBe(5);
     expect(MIGRATIONS[3].name).toBe('phase2_entities');
     expect(MIGRATIONS[3].sha256).toBe(migration0005.sha256);
+    expect(MIGRATIONS[4].version).toBe(6);
+    expect(MIGRATIONS[5].version).toBe(7);
+    expect(MIGRATIONS[6].version).toBe(8);
+    expect(MIGRATIONS[6].name).toBe('curation_runs');
   });
 
   it('migration sha256 values are stable (deterministic from SQL body)', () => {
@@ -329,5 +337,105 @@ describe('memory-state migration runner', () => {
       expect(migration.sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(migration.sha256).not.toBe('');
     }
+  });
+
+  it('9. migration 0008 creates curation_runs / curation_run_inputs / curation_publications and adds stage1 policy columns', () => {
+    const db = openRawDb(dbPath);
+    runMigrations(db);
+
+    // memory_schema has a row for version 8.
+    const row = db
+      .prepare('SELECT version, name, sha256 FROM memory_schema WHERE version = 8')
+      .get() as { version: number; name: string; sha256: string } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.name).toBe('curation_runs');
+    expect(row!.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+    // All three new tables exist.
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all() as Array<{ name: string }>;
+    const tableNames = tables.map((t) => t.name);
+    expect(tableNames).toContain('curation_runs');
+    expect(tableNames).toContain('curation_run_inputs');
+    expect(tableNames).toContain('curation_publications');
+
+    // Old phase2_runs table still exists (NOT dropped).
+    expect(tableNames).toContain('phase2_runs');
+
+    // stage1_outputs gained stage1_policy_version + stage1_policy_hash.
+    const stage1Cols = db.prepare('PRAGMA table_info(stage1_outputs)').all() as Array<{ name: string }>;
+    const colNames = stage1Cols.map((c) => c.name);
+    expect(colNames).toContain('stage1_policy_version');
+    expect(colNames).toContain('stage1_policy_hash');
+
+    db.close();
+  });
+
+  it('10. migration 0008 CHECK constraints reject invalid status / run_type / publication_status / cache_status / input_kind', () => {
+    const db = openRawDb(dbPath);
+    runMigrations(db);
+
+    // Insert a valid row first so FK has a parent.
+    db.prepare(
+      `INSERT INTO curation_runs (run_id, status, input_set_hash, base_manifest_hash,
+        lock_token, claimed_by, started_at, heartbeat_at, lease_expires_at)
+       VALUES ('run-1', 'running', 'h1', 'h2', 'tok', 'w1', 0, 0, 0)`
+    ).run();
+
+    // status CHECK rejects unknown value.
+    expect(() =>
+      db.prepare(
+        `INSERT INTO curation_runs (run_id, status, input_set_hash, base_manifest_hash,
+          lock_token, claimed_by, started_at, heartbeat_at, lease_expires_at)
+         VALUES ('run-bad-status', 'unknown', 'h', 'h', 't', 'w', 0, 0, 0)`
+      ).run()
+    ).toThrow(/CHECK/);
+
+    // run_type CHECK rejects unknown value.
+    expect(() =>
+      db.prepare(
+        `INSERT INTO curation_runs (run_id, run_type, input_set_hash, base_manifest_hash,
+          lock_token, claimed_by, started_at, heartbeat_at, lease_expires_at)
+         VALUES ('run-bad-type', 'invalid', 'h', 'h', 't', 'w', 0, 0, 0)`
+      ).run()
+    ).toThrow(/CHECK/);
+
+    // publication_status CHECK rejects unknown value.
+    expect(() =>
+      db.prepare(
+        `INSERT INTO curation_runs (run_id, publication_status, input_set_hash, base_manifest_hash,
+          lock_token, claimed_by, started_at, heartbeat_at, lease_expires_at)
+         VALUES ('run-bad-pub', 'invalid_pub', 'h', 'h', 't', 'w', 0, 0, 0)`
+      ).run()
+    ).toThrow(/CHECK/);
+
+    // cache_status CHECK rejects unknown value.
+    expect(() =>
+      db.prepare(
+        `INSERT INTO curation_runs (run_id, cache_status, input_set_hash, base_manifest_hash,
+          lock_token, claimed_by, started_at, heartbeat_at, lease_expires_at)
+         VALUES ('run-bad-cache', 'invalid_cache', 'h', 'h', 't', 'w', 0, 0, 0)`
+      ).run()
+    ).toThrow(/CHECK/);
+
+    // input_kind CHECK rejects unknown value.
+    expect(() =>
+      db.prepare(
+        `INSERT INTO curation_run_inputs (run_id, input_kind, input_key, content_hash, output_updated_at)
+         VALUES ('run-1', 'invalid_kind', 'key', 'hash', 0)`
+      ).run()
+    ).toThrow(/CHECK/);
+
+    db.close();
+  });
+
+  it('11. migration 0008 is registered in MIGRATIONS array after 0007', () => {
+    // The MIGRATIONS array must include version 8 after version 7.
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(versions).toContain(8);
+    const idx7 = versions.indexOf(7);
+    const idx8 = versions.indexOf(8);
+    expect(idx8).toBeGreaterThan(idx7);
   });
 });

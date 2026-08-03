@@ -15,6 +15,7 @@ import { migration0003 } from '../../../../../electron/memory-state/migrations/0
 import { migration0005 } from '../../../../../electron/memory-state/migrations/0005_phase2.sql';
 import { migration0006 } from '../../../../../electron/memory-state/migrations/0006_people_areas.sql';
 import { migration0007 } from '../../../../../electron/memory-state/migrations/0007_lifecycle_scope.sql';
+import { migration0008 } from '../../../../../electron/memory-state/migrations/0008_curation_runs.sql';
 
 /**
  * Shared test fixture for packages/agent memory-state modules
@@ -50,6 +51,7 @@ export function createMemoryStateFixture(): MemoryStateFixture {
   db.exec(migration0005.sql);
   db.exec(migration0006.sql);
   db.exec(migration0007.sql);
+  db.exec(migration0008.sql);
   return {
     db,
     dbDir,
