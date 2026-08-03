@@ -16,6 +16,7 @@
  */
 
 import type { Database } from 'better-sqlite3';
+import * as crypto from 'crypto';
 import type { LLMClient } from '../llm/index.js';
 import type { Message } from '../types.js';
 import {
@@ -27,7 +28,8 @@ import {
   DEFAULT_LEASE_TTL_MS,
 } from '../memory-state/lease.js';
 import { compactMessages, type MessageEvent } from './compactMessages.js';
-import { STAGE1_SYSTEM_PROMPT, STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
+import { STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
+import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import {
   TASK_OUTCOMES,
@@ -413,11 +415,13 @@ interface CatalogMappingRow {
 export class Stage1Extractor {
   private readonly streamChat: LLMClient['streamChat'];
 
+  private policyCache: { content: string; hash: string; version: number } | null = null;
+
   constructor(
     private readonly memoryDb: Database,
     private readonly mainDb: Database,
     private readonly llmClient: LLMClient,
-    private readonly opts?: { rootDir?: string },
+    private readonly opts?: { rootDir?: string; policyPath?: string },
   ) {
     if (typeof llmClient.streamChat !== 'function') {
       throw new Error('LLMClient.streamChat is required for Stage1Extractor');
@@ -426,6 +430,17 @@ export class Stage1Extractor {
     // calls `this.getClient()` internally — without binding, `this` would be
     // undefined when invoked via `this.streamChat(...)`.
     this.streamChat = llmClient.streamChat.bind(llmClient);
+  }
+
+  private async resolvePolicy(): Promise<{ content: string; hash: string; version: number }> {
+    if (this.policyCache) return this.policyCache;
+    const policyPath = this.opts?.policyPath;
+    this.policyCache = policyPath ? await loadPolicy(policyPath) : {
+      content: '',
+      hash: crypto.createHash('sha256').update('').digest('hex'),
+      version: 0,
+    };
+    return this.policyCache;
   }
 
   async extract(input: ExtractInput): Promise<ExtractResult> {
@@ -533,10 +548,13 @@ export class Stage1Extractor {
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
 
+    const policy = await this.resolvePolicy();
+    const systemPrompt = assembleStage1Prompt(policy.content);
+
     let llmResponse: string;
     try {
       const generator = this.streamChat([userMessage], {
-        systemPrompt: STAGE1_SYSTEM_PROMPT,
+        systemPrompt: systemPrompt,
         maxTokens: LLM_MAX_TOKENS,
         signal: abortController.signal,
       });
@@ -590,6 +608,8 @@ export class Stage1Extractor {
         rawMemoryJson: null,
         rolloutSlug: data.rollout_slug,
         extractedThroughSeq: compacted.extractedThroughSeq,
+        stage1PolicyVersion: policy.version,
+        stage1PolicyHash: policy.hash,
       });
 
       if (status !== 'committed') {
@@ -638,6 +658,8 @@ export class Stage1Extractor {
       rolloutSlug: data.rollout_slug,
       extractedThroughSeq: compacted.extractedThroughSeq,
       contentHashAtWrite: writeResult.contentHashAtWrite,
+      stage1PolicyVersion: policy.version,
+      stage1PolicyHash: policy.hash,
     });
 
     if (status !== 'committed') {
