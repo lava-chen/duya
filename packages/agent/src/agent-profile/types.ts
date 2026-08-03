@@ -301,4 +301,45 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     createdAt: 0,
     updatedAt: 0,
   },
+  {
+    id: 'memory-curator',
+    name: 'Memory Curator',
+    description:
+      'Phase 2 memory curation agent — root-bound file tools only, no shell/MCP/skills',
+    // Defense-in-depth whitelist: the curator process entry only registers
+    // these 5 tools, so the profile filter is a second layer in case the
+    // profile is ever reused in a process that registers more tools.
+    allowedTools: ['read', 'write', 'edit', 'grep', 'glob'],
+    disallowedTools: [
+      // No shell — the curator never executes commands.
+      'bash', 'powershell',
+      // No recursive subagent spawning.
+      'Agent',
+      // No interactive / UI / canvas surface — curator runs headless.
+      'canvas:*', 'show_widget', 'AskUserQuestion',
+      // No browser, no self-management, no module loader.
+      'browser', 'duya_cli', 'read_module', 'task', 'tool_search', 'skill',
+      // No mode-switching side effects.
+      'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
+      // No session-to-session messaging or vision.
+      'session_search', 'message_session', 'vision_analyze',
+    ],
+    promptProfile: {
+      // Memory content is the curator's INPUT data, not context about
+      // itself. Skills, AGENTS.md, project grounding, and the "ask the
+      // user" rules are all irrelevant or harmful in a headless curation
+      // run (design §7.3, §7.5).
+      disableSections: [
+        'memory', 'memoryContent', 'skills', 'sessionGuidance',
+        'agentsMd', 'projectGrounding', 'projectContinuity',
+        'visionGuidelines', 'rules',
+      ],
+    },
+    promptSystem: 'general',
+    userVisible: false,
+    isPreset: true,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  },
 ];
