@@ -16,6 +16,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { SandboxPolicy } from './types.js';
+import { PathMapper } from './path-mapper.js';
 
 const SANDBOX_IMAGE = 'duya-sandbox:latest';
 
@@ -230,6 +231,12 @@ interface ExecuteResult {
 export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteResult> {
   const { command, cwd, policy, signal } = options;
 
+  // Bidirectional path translation: the LLM emits host paths, but the
+  // container only knows /workspace. Translate before execution and
+  // translate the output back so the LLM never sees container paths.
+  const mapper = new PathMapper({ hostCwd: cwd });
+  const containerCommand = mapper.rewriteCommandToContainer(command);
+
   const binds: string[] = [
     `${cwd}:/workspace`,
   ];
@@ -245,7 +252,7 @@ export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteR
   // Create container
   const createPayload = {
     Image: SANDBOX_IMAGE,
-    Cmd: ['sh', '-c', command],
+    Cmd: ['sh', '-c', containerCommand],
     WorkingDir: '/workspace',
     HostConfig: {
       Binds: binds,
@@ -303,7 +310,13 @@ export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteR
 
     const { stdout, stderr } = demuxDockerLogs(logsRes.body);
 
-    return { stdout, stderr, exitCode };
+    // Translate container paths back to host paths so the LLM sees
+    // familiar paths in command output (e.g. grep results, error messages).
+    return {
+      stdout: mapper.rewriteOutputToHost(stdout),
+      stderr: mapper.rewriteOutputToHost(stderr),
+      exitCode,
+    };
   } finally {
     try {
       await dockerRequest('DELETE', `/v1.47/containers/${containerId}?force=true&v=true`);

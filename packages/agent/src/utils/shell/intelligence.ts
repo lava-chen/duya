@@ -69,6 +69,36 @@ export function detectShellCommandPreference(command: string): ShellCommandPrefe
   return bashScore > powerShellScore ? 'bash' : 'powershell';
 }
 
+/**
+ * Translates common Unix shell idioms into PowerShell equivalents.
+ * Used when a bash-looking command has to run under PowerShell because
+ * no Unix-compatible shell is available on Windows.
+ */
+function normalizeUnixCommandForPowerShell(command: string): string {
+  let result = command;
+
+  // /dev/null redirections
+  result = result.replace(/\s*>\s*\/dev\/null\s*2>&1\s*/g, ' *>$null ');
+  result = result.replace(/\s*2>\s*\/dev\/null\s*/g, ' 2>$null ');
+  result = result.replace(/\s*>\s*\/dev\/null\s*/g, ' >$null ');
+
+  // head / tail pipes
+  result = result.replace(/\|\s*head\s+-n\s+(\d+)\b/g, '| Select-Object -First $1');
+  result = result.replace(/\|\s*head\s+-(\d+)\b/g, '| Select-Object -First $1');
+  result = result.replace(/\|\s*head\b/g, '| Select-Object -First 10');
+  result = result.replace(/\|\s*tail\s+-n\s+(\d+)\b/g, '| Select-Object -Last $1');
+  result = result.replace(/\|\s*tail\s+-(\d+)\b/g, '| Select-Object -Last $1');
+  result = result.replace(/\|\s*tail\b/g, '| Select-Object -Last 10');
+
+  // ls flags
+  result = result.replace(/\bls\s+-la\b/g, 'Get-ChildItem -Force');
+  result = result.replace(/\bls\s+-al\b/g, 'Get-ChildItem -Force');
+  result = result.replace(/\bls\s+-l\b/g, 'Get-ChildItem');
+  result = result.replace(/\bls\s+-a\b/g, 'Get-ChildItem -Force');
+
+  return result.trim();
+}
+
 export function normalizeShellCommandForExecution(
   providerKind: ShellProviderKind,
   command: string,
@@ -77,7 +107,7 @@ export function normalizeShellCommandForExecution(
   if (providerKind === 'bash') {
     return normalized.replace(WINDOWS_NULL_REDIRECT_PATTERN, '$1/dev/null');
   }
-  return normalized;
+  return normalizeUnixCommandForPowerShell(normalized);
 }
 
 export function resolveShellExecutionPlan(

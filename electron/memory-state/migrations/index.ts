@@ -5,6 +5,7 @@ import { migration0002 } from './0002_lease_stage1.sql';
 import { migration0003 } from './0003_outbox.sql';
 import { migration0005 } from './0005_phase2.sql';
 import { migration0006 } from './0006_people_areas.sql';
+import { migration0007 } from './0007_lifecycle_scope.sql';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 export interface Migration {
@@ -22,8 +23,9 @@ export interface Migration {
  *   - 0003 (Plan 303)  — projection_outbox (+ ALTER stage1_outputs)
  *   - 0005 (Phase 2)   — memory_entries / memory_evidence / memory_usage_events / phase2_runs
  *   - 0006 (People/Areas) — extend memory_entries.kind with 'person' and 'area'
+ *   - 0007 (Lifecycle/Scope) — lifecycle columns + expanded kind/scope/status
  */
-export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006];
+export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007];
 
 function computeSha256(sql: string): string {
   return crypto.createHash('sha256').update(sql).digest('hex');

@@ -253,25 +253,46 @@ export class PromptSystem {
     staticSections: PromptSection[],
     dynamicSections: PromptSection[],
   ): Promise<{ staticContent: string[]; dynamicContent: string[] }> {
-    const staticContent: string[] = []
-    for (const section of staticSections) {
+    // Static: consult cache first (in order), collect misses, then compute misses in parallel.
+    const staticSlots: (string | null)[] = new Array(staticSections.length).fill(null)
+    const missIndices: number[] = []
+    const missSections: PromptSection[] = []
+    staticSections.forEach((section, i) => {
       const cached = this.cache.get(section.name)
       if (cached !== undefined) {
         if (cached !== null) {
-          staticContent.push(cached)
+          staticSlots[i] = cached
         }
       } else {
-        const content = await Promise.resolve(section.compute())
+        missIndices.push(i)
+        missSections.push(section)
+      }
+    })
+
+    if (missSections.length > 0) {
+      const missResults = await Promise.all(
+        missSections.map(section => Promise.resolve(section.compute())),
+      )
+      missResults.forEach((content, idx) => {
+        const section = missSections[idx]
+        const originalIdx = missIndices[idx]
         this.cache.set(section.name, content)
         if (content !== null) {
-          staticContent.push(content)
+          staticSlots[originalIdx] = content
         }
-      }
+      })
     }
 
+    const staticContent = staticSlots.filter(
+      (c): c is string => c !== null,
+    )
+
+    // Dynamic: always recompute, run in parallel, preserve original order.
+    const dynamicResults = await Promise.all(
+      dynamicSections.map(section => Promise.resolve(section.compute())),
+    )
     const dynamicContent: string[] = []
-    for (const section of dynamicSections) {
-      const content = await Promise.resolve(section.compute())
+    for (const content of dynamicResults) {
       if (content !== null) {
         dynamicContent.push(content)
       }

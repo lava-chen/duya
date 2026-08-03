@@ -22,6 +22,8 @@ interface McpServerInfo {
   name: string;
   description?: string;
   enabled?: boolean;
+  writable?: boolean;
+  source?: 'settings' | 'plugin' | 'bundled';
 }
 
 interface ResponseStyleInfo {
@@ -684,11 +686,12 @@ export function SlashCommandPopover({
             ) : (
               mcpServers.map((server) => {
                 const isEnabled = server.enabled ?? false;
+                const writable = server.writable !== false;
                 return (
                   <div
                     key={server.name}
-                    onClick={() => onToggleMcpServer(server.name, !isEnabled)}
-                    className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
+                    onClick={writable ? () => onToggleMcpServer(server.name, !isEnabled) : undefined}
+                    className={'command-menu-row flex items-center gap-2 px-2.5 select-none ' + (writable ? 'cursor-pointer' : 'cursor-default opacity-70')}
                     style={{
                       minHeight: 28,
                       paddingTop: 4,
@@ -705,6 +708,9 @@ export function SlashCommandPopover({
                         <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)', lineHeight: '14px' }}>
                           {server.description}
                         </span>
+                      )}
+                      {!writable && (
+                        <span style={{ fontSize: 10, color: 'var(--command-menu-muted)' }}>plugin</span>
                       )}
                     </div>
                     {/* Toggle switch */}

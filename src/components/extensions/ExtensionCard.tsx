@@ -44,6 +44,7 @@ export function ExtensionCard({
         onClick && "cursor-pointer",
         className
       )}
+      onClick={onClick}
     >
       <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-muted/30 text-accent">
         {icon ?? (

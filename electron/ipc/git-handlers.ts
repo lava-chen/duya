@@ -18,74 +18,21 @@ const GIT_BRANCH_ARGS = ['branch', '--show-current'];
 const GIT_PATCH_ARGS = ['diff', '--no-ext-diff', '--no-color', '--unified=20', 'HEAD', '--'];
 const GIT_UNTRACKED_PATCH_ARGS = ['diff', '--no-index', '--no-color', '--unified=20', '--'];
 
-export interface GitStatusFileChange {
-  path: string;
-  additions: number;
-  removals: number;
-}
-
-export interface GitStatusTotals {
-  additions: number;
-  removals: number;
-  fileCount: number;
-}
-
-export interface GitStatusResult {
-  isGitRepo: boolean;
-  fileChanges?: GitStatusFileChange[];
-  totals?: GitStatusTotals;
-}
-
-export type GitReviewFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
-
-export interface GitReviewFile extends GitStatusFileChange {
-  status: GitReviewFileStatus;
-  oldPath?: string;
-}
-
-export interface GitReviewResult {
-  isGitRepo: boolean;
-  branch?: string;
-  baseRef?: string;
-  files?: GitReviewFile[];
-  totals?: GitStatusTotals;
-}
-
-export interface GitReviewDiffResult {
-  isGitRepo: boolean;
-  path?: string;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitReviewFullDiffResult {
-  isGitRepo: boolean;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitTurnReview {
-  id: string;
-  sessionId: string;
-  turnId: string;
-  workingDirectory: string;
-  files: GitReviewFile[];
-  totals: GitStatusTotals;
-  patch: string;
-  binary: boolean;
-  truncated: boolean;
-  capturedAt: number;
-}
-
-export interface GitLatestTurnReviewResult {
-  isGitRepo: boolean;
-  review?: GitTurnReview;
-  error?: string;
-}
+import type {
+  GitStatusFileChange,
+  GitStatusTotals,
+  GitStatusResult,
+  GitReviewFileStatus,
+  GitReviewFile,
+  GitReviewResult,
+  GitReviewDiffResult,
+  GitReviewFullDiffResult,
+  GitTurnReview,
+  GitLatestTurnReviewResult,
+  ReviewScopeParams,
+  GitCommitInfo,
+  GitListCommitsResult,
+} from './git-types';
 
 function isGitRepoDir(cwd: string): boolean {
   try {
@@ -322,10 +269,6 @@ function buildFullPatch(cwd: string, files: GitReviewFile[]): { patch: string; t
 
   const emptyFile = process.platform === 'win32' ? 'NUL' : '/dev/null';
   for (const file of untracked) {
-    if (usedBytes >= MAX_DIFF_BYTES) {
-      truncated = true;
-      break;
-    }
     const absolutePath = path.resolve(cwd, file.path);
     if (!resolvesInsideWorkspace(cwd, absolutePath)) continue;
     const result = runGit(cwd, ['diff', '--no-index', '--no-color', '--unified=20', emptyFile, file.path]);
@@ -410,6 +353,97 @@ function readLatestTurnReview(sessionId: string, cwd: string): GitLatestTurnRevi
     return { isGitRepo: true, error: 'Stored review history is invalid.' };
   }
 }
+
+// ── Scoped review helpers (plan 227) ──────────────────────────────
+
+const COMMIT_HASH_RE = /^[0-9a-f]{7,40}$/i;
+
+function isValidCommitHash(value: string): boolean {
+  return COMMIT_HASH_RE.test(value);
+}
+
+/** Build `git diff` args for a scoped full patch (no --numstat). */
+function buildScopeDiffArgs(scope: ReviewScopeParams): string[] {
+  switch (scope.type) {
+    case 'uncommitted':
+      return ['diff', '--no-ext-diff', '--no-color', '--unified=20', 'HEAD'];
+    case 'unstaged':
+      return ['diff', '--no-ext-diff', '--no-color', '--unified=20'];
+    case 'staged':
+      return ['diff', '--no-ext-diff', '--no-color', '--unified=20', '--cached'];
+    case 'commit': {
+      const from = scope.commitFrom ?? 'HEAD~1';
+      const to = scope.commitTo ?? 'HEAD';
+      if (!isValidCommitHash(from) || !isValidCommitHash(to)) return [];
+      return ['diff', '--no-ext-diff', '--no-color', '--unified=20', from, to];
+    }
+    default:
+      return [];
+  }
+}
+
+/** Build `git diff --numstat` args for the file list. */
+function buildScopeNumstatArgs(scope: ReviewScopeParams): string[] {
+  switch (scope.type) {
+    case 'uncommitted':
+      return ['diff', '--numstat', 'HEAD'];
+    case 'unstaged':
+      return ['diff', '--numstat'];
+    case 'staged':
+      return ['diff', '--numstat', '--cached'];
+    case 'commit': {
+      const from = scope.commitFrom ?? 'HEAD~1';
+      const to = scope.commitTo ?? 'HEAD';
+      if (!isValidCommitHash(from) || !isValidCommitHash(to)) return [];
+      return ['diff', '--numstat', from, to];
+    }
+    default:
+      return [];
+  }
+}
+
+function readScopedReviewFiles(cwd: string, scope: ReviewScopeParams): GitReviewFile[] | null {
+  const numstatArgs = buildScopeNumstatArgs(scope);
+  if (numstatArgs.length === 0) return null;
+  const numstat = stdoutOf(runGit(cwd, numstatArgs));
+  if (numstat === null) return null;
+  const changes = parseNumstat(numstat);
+  if (changes.length === 0) return [];
+  return changes.map((change) => ({
+    ...change,
+    status: 'modified' as GitReviewFileStatus,
+  }));
+}
+
+function buildScopedFullPatch(cwd: string, scope: ReviewScopeParams): { patch: string; truncated: boolean } | null {
+  const diffArgs = buildScopeDiffArgs(scope);
+  if (diffArgs.length === 0) return null;
+  const result = runGit(cwd, diffArgs);
+  const patch = patchStdoutOf(result);
+  if (patch === null) return null;
+  return {
+    patch,
+    truncated: didExceedDiffBuffer(result),
+  };
+}
+
+function buildScopedSinglePatch(
+  cwd: string,
+  scope: ReviewScopeParams,
+  relativePath: string,
+): { patch: string; truncated: boolean } | null {
+  const baseArgs = buildScopeDiffArgs(scope);
+  if (baseArgs.length === 0) return null;
+  const result = runGit(cwd, [...baseArgs, '--', relativePath]);
+  const patch = patchStdoutOf(result);
+  if (patch === null) return null;
+  return {
+    patch,
+    truncated: didExceedDiffBuffer(result),
+  };
+}
+
+// ── Register ──────────────────────────────────────────────────────
 
 export function registerGitHandlers(): void {
   ipcMain.handle('git:status', async (_event, cwd: unknown): Promise<GitStatusResult> => {
@@ -531,4 +565,100 @@ export function registerGitHandlers(): void {
       return { isGitRepo: true, path: target.relativePath, error: 'Unable to load this diff.' };
     }
   });
+
+  // ── Scoped review handlers (plan 227) ───────────────────────────
+
+  ipcMain.handle('git:review-scoped', async (_event, cwd: unknown, scope: unknown): Promise<GitReviewResult> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { isGitRepo: false };
+    }
+    if (!scope || typeof scope !== 'object' || typeof (scope as Record<string, unknown>).type !== 'string') {
+      return { isGitRepo: false };
+    }
+    const params = scope as ReviewScopeParams;
+    if (!['uncommitted', 'unstaged', 'staged', 'commit'].includes(params.type)) {
+      return { isGitRepo: false };
+    }
+
+    try {
+      const files = readScopedReviewFiles(cwd, params);
+      if (!files) return { isGitRepo: false };
+      const fullPatch = buildScopedFullPatch(cwd, params);
+      return {
+        isGitRepo: true,
+        branch: params.type === 'commit'
+          ? `${params.commitFrom?.slice(0, 7) ?? '?'} → ${params.commitTo?.slice(0, 7) ?? '?'}`
+          : undefined,
+        baseRef: scopeLabel(params),
+        files,
+        totals: computeTotals(files, files.length),
+        patch: fullPatch?.patch,
+        truncated: fullPatch?.truncated,
+        binary: fullPatch ? isBinaryPatch(fullPatch.patch) : undefined,
+      };
+    } catch {
+      return { isGitRepo: false };
+    }
+  });
+
+  ipcMain.handle('git:review-scoped-diff', async (_event, cwd: unknown, scope: unknown, requestedPath: unknown): Promise<GitReviewDiffResult> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { isGitRepo: false };
+    }
+    if (!scope || typeof scope !== 'object' || typeof (scope as Record<string, unknown>).type !== 'string') {
+      return { isGitRepo: false };
+    }
+    const params = scope as ReviewScopeParams;
+    const target = resolveReviewPath(cwd, requestedPath);
+    if (!target) return { isGitRepo: true, error: 'Invalid review path.' };
+
+    try {
+      const singlePatch = buildScopedSinglePatch(cwd, params, target.relativePath);
+      if (!singlePatch) return { isGitRepo: true, path: target.relativePath, error: 'Unable to load this diff.' };
+      const bounded = boundedPatch(singlePatch.patch);
+      return {
+        isGitRepo: true,
+        path: target.relativePath,
+        ...bounded,
+        truncated: bounded.truncated || singlePatch.truncated || undefined,
+        binary: isBinaryPatch(singlePatch.patch),
+      };
+    } catch {
+      return { isGitRepo: true, path: target.relativePath, error: 'Unable to load this diff.' };
+    }
+  });
+
+  ipcMain.handle('git:list-commits', async (_event, cwd: unknown, count: unknown): Promise<GitListCommitsResult> => {
+    if (typeof cwd !== 'string' || cwd.length === 0 || !isGitRepoDir(cwd)) {
+      return { commits: [] };
+    }
+    const limit = typeof count === 'number' && count > 0 && count <= 200 ? count : 50;
+    try {
+      const output = stdoutOf(runGit(cwd, ['log', '--oneline', `-n${limit}`, '--format=%H %s'], 256 * 1024));
+      if (!output) return { commits: [] };
+      const commits: GitCommitInfo[] = [];
+      for (const line of output.trim().split('\n')) {
+        const spaceIndex = line.indexOf(' ');
+        if (spaceIndex < 7) continue;
+        commits.push({
+          hash: line.slice(0, spaceIndex),
+          subject: line.slice(spaceIndex + 1),
+        });
+      }
+      return { commits };
+    } catch {
+      return { commits: [] };
+    }
+  });
+}
+
+/** Human-readable label for the scope selector. */
+function scopeLabel(scope: ReviewScopeParams): string {
+  switch (scope.type) {
+    case 'uncommitted': return 'HEAD → 工作区';
+    case 'unstaged':   return '索引 → 工作区';
+    case 'staged':     return 'HEAD → 索引';
+    case 'commit':     return `${scope.commitFrom?.slice(0, 7) ?? '?'} → ${scope.commitTo?.slice(0, 7) ?? '?'}`;
+    default:           return '?';
+  }
 }

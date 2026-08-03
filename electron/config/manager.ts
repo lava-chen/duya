@@ -180,6 +180,12 @@ export interface AppConfig {
    * for background memory extraction without affecting chat.
    */
   memoryProviderId?: string | null;
+  /**
+   * Model override for the memory worker. When set, this takes
+   * precedence over the provider's defaultModel / enabled_models[0].
+   * Null means auto-resolve from the provider's model list.
+   */
+  memoryModelId?: string | null;
   agentSettings: AgentSettings;
   uiPreferences: UiPreferences;
   visionSettings: VisionSettings;
@@ -352,6 +358,7 @@ const DEFAULT_CONFIG: AppConfig = {
   apiProviders: {},
   defaultProviderId: null,
   memoryProviderId: null,
+  memoryModelId: null,
   agentSettings: {
     defaultModel: '',
     temperature: 0.7,
@@ -559,6 +566,7 @@ export class ConfigManager {
       apiProviders: { ...DEFAULT_CONFIG.apiProviders, ...config.apiProviders },
       defaultProviderId: config.defaultProviderId ?? null,
       memoryProviderId: config.memoryProviderId ?? null,
+      memoryModelId: config.memoryModelId ?? null,
       agentSettings: { ...DEFAULT_CONFIG.agentSettings, ...config.agentSettings },
       uiPreferences: { ...DEFAULT_CONFIG.uiPreferences, ...config.uiPreferences },
       visionSettings: mergedVisionSettings,
@@ -807,6 +815,16 @@ export class ConfigManager {
       return false;
     }
     return this.setConfig('memoryProviderId', id);
+  }
+
+  /** Returns the model override for the memory worker, or null. */
+  getMemoryModel(): string | null {
+    return this.config.memoryModelId ?? null;
+  }
+
+  /** Set (or clear) the memory worker model override. */
+  setMemoryModel(model: string | null): boolean {
+    return this.setConfig('memoryModelId', model);
   }
 
   upsertProvider(provider: ApiProvider): boolean {

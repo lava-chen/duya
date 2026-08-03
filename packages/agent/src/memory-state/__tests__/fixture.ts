@@ -12,15 +12,18 @@ import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 import { migration0001 } from '../../../../../electron/memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../../../../../electron/memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../../../../../electron/memory-state/migrations/0003_outbox.sql';
+import { migration0005 } from '../../../../../electron/memory-state/migrations/0005_phase2.sql';
+import { migration0006 } from '../../../../../electron/memory-state/migrations/0006_people_areas.sql';
+import { migration0007 } from '../../../../../electron/memory-state/migrations/0007_lifecycle_scope.sql';
 
 /**
  * Shared test fixture for packages/agent memory-state modules
  * (lease / eligibility / outbox / reconcile).
  *
  * Each fixture creates:
- *   - a file-based temp SQLite DB with migrations 0001-0003 applied
- *     (file-based, not `:memory:`, so WAL mode and cross-handle
- *     concurrency behave like production)
+ *   - a file-based temp SQLite DB with migrations 0001-0003 and
+ *     0005-0007 applied (file-based, not `:memory:`, so WAL mode and
+ *     cross-handle concurrency behave like production)
  *   - a temp directory standing in for `~/.duya/memory` so outbox /
  *     reconcile tests can exercise the path allowlist without touching
  *     the real home directory
@@ -44,6 +47,9 @@ export function createMemoryStateFixture(): MemoryStateFixture {
   db.exec(migration0001.sql);
   db.exec(migration0002.sql);
   db.exec(migration0003.sql);
+  db.exec(migration0005.sql);
+  db.exec(migration0006.sql);
+  db.exec(migration0007.sql);
   return {
     db,
     dbDir,

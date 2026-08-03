@@ -118,4 +118,28 @@ describe('ToolRegistry', () => {
       expect(allTools.map((t) => t.name)).toEqual(['a', 'b', 'c']);
     });
   });
+
+  describe('MCP visible-name lookup', () => {
+    it('resolves MCP metadata by the model-visible name after atomic replacement', () => {
+      const tool: Tool = {
+        name: 'mcp_github_search',
+        description: 'Search GitHub',
+        input_schema: { type: 'object' },
+      };
+      const executor: ToolExecutor = {
+        execute: async () => ({ id: '1', name: tool.name, result: 'ok' }),
+      };
+
+      registry.replaceByOwner('mcp', [{
+        key: 'mcp__plugin:github__search',
+        definition: tool,
+        executor,
+        meta: { exposeMode: 'discoverable' },
+      }]);
+
+      expect(registry.getTool('mcp_github_search')).toBe(tool);
+      expect(registry.getExecutor('mcp_github_search')).toBe(executor);
+      expect(registry.getExposeMode('mcp_github_search')).toBe('discoverable');
+    });
+  });
 });

@@ -54,7 +54,8 @@ const LITERATURE_MANIFEST = {
 // (`skills/<name>/SKILL.md`). The manifest inline shape stays v1 so the
 // existing `PluginManifest` type accepts it; the on-disk `plugin.json` is
 // v2 but the catalog loader does not read it yet. Phase 3 hardened the
-// read-only posture: the MCP `--read-only` flag is in args.
+// read-only posture: the connection string is passed as the first
+// positional arg; read-only is enforced by the DB role + permission policy.
 const POSTGRES_READONLY_MANIFEST = {
   schemaVersion: 'duya.plugin.v1' as const,
   id: 'com.duya.postgres-readonly',
@@ -65,14 +66,14 @@ const POSTGRES_READONLY_MANIFEST = {
   capabilities: {
     skills: ['schema-inspection', 'safe-query', 'data-analysis'],
     mcpServers: [
-      { name: 'postgres-readonly', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres', '--read-only'] },
+      { name: 'postgres-readonly', command: 'npx', args: ['-y', '@modelcontextprotocol/server-postgres', '${setup.connectionString}'] },
     ],
   },
   permissions: [
     { name: 'workspace.read' },
   ],
   setup: [
-    { id: 'connectionString', label: 'PostgreSQL connection string — use a read-only role (e.g. duya_reader); the MCP server also passes --read-only as defense-in-depth', type: 'secret' as const, required: true },
+    { id: 'connectionString', label: 'PostgreSQL connection string — use a read-only role (e.g. duya_reader); read-only access is enforced by the database role, not an MCP flag', type: 'secret' as const, required: true },
   ],
   engines: { duya: '>=0.1.0' },
 };
@@ -304,15 +305,18 @@ describe('Plan 313 Phase 1b — playwright-web-operator catalog entry', () => {
   });
 });
 
-// Plan 313 Phase 3 — postgres-readonly hardening. The MCP `--read-only`
-// flag must be in the catalog inline args (defense-in-depth alongside
-// the policy and the recommended role).
+// Plan 313 Phase 3 — postgres-readonly hardening. The connection string is
+// passed as the first positional arg (server-postgres parses argv[2] as the
+// URL directly; --read-only is not a supported flag). Read-only posture is
+// enforced by the DB role plus the permission policy.
 describe('Plan 313 Phase 3 — postgres-readonly read-only hardening', () => {
-  it('passes --read-only to the MCP server in the catalog inline args', async () => {
+  it('passes the connection string as the first positional MCP arg', async () => {
     const { BUNDLED_PLUGIN_CATALOG } = await import('./catalog.js');
     const entry = BUNDLED_PLUGIN_CATALOG.find((e) => e.id === 'com.duya.postgres-readonly');
     const server = entry?.manifest.capabilities.mcpServers?.[0];
-    expect(server?.args).toContain('--read-only');
+    // server-postgres expects the connection string at process.argv[2];
+    // ${setup.connectionString} is substituted by expandMcpServerConfig.
+    expect(server?.args).toEqual(['-y', '@modelcontextprotocol/server-postgres', '${setup.connectionString}']);
   });
 
   it('documents the read-only role requirement in the setup label', async () => {
@@ -322,7 +326,7 @@ describe('Plan 313 Phase 3 — postgres-readonly read-only hardening', () => {
     expect(setup?.id).toBe('connectionString');
     expect(setup?.type).toBe('secret');
     expect(setup?.label).toMatch(/read-only role/i);
-    expect(setup?.label).toMatch(/--read-only/i);
+    expect(setup?.label).toMatch(/database role/i);
   });
 });
 

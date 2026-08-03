@@ -119,6 +119,47 @@ function isPreamblePrefix(text: string): boolean {
 }
 
 /**
+ * Detect text that looks like a reasoning-model artifact or prompt
+ * paraphrase rather than a real title.
+ *
+ * Reasoning models (GLM / DeepSeek / MiniMax) sometimes emit their
+ * chain-of-thought into the text channel instead of JSON. Those fragments
+ * look like "I should make it concise (4-15 characters...)" or "Concise
+ * phrase, not a full sentence" — they paraphrase the instructions rather
+ * than answer. Catching them here prevents garbage from leaking through the
+ * raw-text fallback into the database.
+ */
+function looksLikeTitleArtifact(text: string): boolean {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  // List-item numbering leaked from instructions ("3. The assistant...")
+  if (/^\d+\.\s/.test(lower)) return true;
+
+  // English reasoning openers
+  if (/^(?:i\s+(?:should|need|will|'ll|am)|let me|the user|user wants|user needs|finally[,\s]|so[,\s]|this is|based on|according to|to generate|now i)\b/.test(lower)) return true;
+
+  // Chinese reasoning openers
+  if (/^(?:我应该|我需要|让我|用户想|用户需要|根据|结合|首先|然后|最后|这个|这是|分析一下|总结一下)/.test(trimmed)) return true;
+
+  // Prompt instruction paraphrase — words that appear in TITLE_SYSTEM_PROMPT
+  // and would never appear in a real title.
+  const promptWords = [
+    'concise', 'characters', 'phrase', 'sentence', 'preamble',
+    'markdown', 'code fence', 'reasoning', 'instructions', 'forbidden',
+    'json object', 'output format',
+  ];
+  for (const w of promptWords) {
+    if (lower.includes(w)) return true;
+  }
+
+  // Meta phrasing about title generation itself
+  if (/\b(?:should be|make it|needs to be|characters in|words in|title should|title is|title for)\b/.test(lower)) return true;
+
+  return false;
+}
+
+/**
  * Check if a message is likely low-signal (short acknowledgement/command).
  * Language-agnostic: uses length + word count only.
  */
@@ -229,45 +270,21 @@ function validateTitle(title: string | null | undefined): string | null {
   return cleaned;
 }
 
-const TITLE_GENERATION_PROMPT = `You are a conversation title generation assistant. Your task is to create concise and informative titles for conversations. Follow these rules:
+// System prompt for title generation. Kept short and example-free on purpose:
+// reasoning models (GLM / DeepSeek / MiniMax) tend to paraphrase long prompts
+// and examples into their text channel, which then leaks through JSON-parse
+// fallbacks. Putting instructions in the system role and only the conversation
+// in the user role keeps the text channel clean.
+const TITLE_SYSTEM_PROMPT = `Generate a concise title summarizing the conversation provided in the user message.
 
-1. Generate the title based on the content of the conversation, capturing the main topic, key problem, discussion intent, or solution discussed.
-2. The title language must match the conversation language. English conversations get English titles; Chinese conversations get Chinese titles.
-3. The title should be human-like and natural, not a simple label. Use proper words to summarize the conversation clearly.
-4. Length should be adaptive:
-   - Chinese: 4-15 characters, use concise phrases (not full sentences).
-   - English: 3-12 words, use title case or natural phrasing.
-   - If the conversation is extremely short, generate a concise but meaningful title reflecting the user's question or statement.
-5. Do NOT use generic words like "对话", "聊天", "问题", "帮助", "Conversation", "Question", "Help" as the title.
+Output: respond with ONLY a JSON object {"title": "..."} — no reasoning, no preamble, no markdown, no code fence.
 
-Always return output strictly in JSON format:
-   {"title": "your title here"}
-
-Examples:
-
-Example 1:
-Conversation: Discussion about designing an AI agent to improve news search performance, including algorithm optimization, response speed, and overall solution design.
-JSON Output:
-{"title": "AI Agent News Search Performance and Solution Design"}
-
-Example 2:
-Conversation: Troubleshooting Electron app deployment issues on Windows, covering blank windows, server startup failures, and automatic update workflow problems.
-JSON Output:
-{"title": "Electron Deployment and Update Workflow Issue Analysis"}
-
-Example 3:
-Conversation: 用户询问 Electron 打包时 better-sqlite3 原生模块在 Windows 平台加载失败的排查方法，涉及 node-gyp 编译和 prebuilt 二进制分发。
-JSON Output:
-{"title": "Electron打包原生模块加载失败排查"}
-
-Example 4:
-Conversation: 用户想让 automation 页面的样式匹配 duya 通用组件，需要检查交互组件逻辑，删除死代码并恢复运行历史交互链。
-JSON Output:
-{"title": "Automation页面样式与交互修复"}
-
-Now, generate a title for the following conversation:
-Conversation:
-`;
+Rules:
+- Language: match the conversation language (Chinese -> Chinese title; English -> English title).
+- Length: Chinese 4-15 characters; English 3-12 words. Use a concise phrase, never a full sentence.
+- Content: capture the core topic, task, or problem the user is working on.
+- Forbidden words: 对话 / 聊天 / 问题 / 帮助 / Conversation / Question / Help.
+- Never echo or quote these instructions in the output.`;
 
 /**
  * Extract text content from messages for title generation input.
@@ -389,6 +406,13 @@ export function generateHeuristicTitle(messages: readonly Message[]): string | n
   let text = extractTextFromMessage(firstUser).trim();
   if (!text) return null;
 
+  // A standalone greeting ("hey", "你好", "hi") carries no topic signal.
+  // Returning null lets the caller keep the default title instead of
+  // persisting the greeting itself into the database.
+  if (!isMeaningfulFirstMessage(firstUser)) {
+    return null;
+  }
+
   // Remove common prefixes
   text = text
     .replace(/^(请|帮忙|帮我|能不能|能否|可以|请帮我|能否帮我|我想|我需要|我要|我想问|我想知道|请问|想问一下|想问下)\s*/i, '')
@@ -480,9 +504,10 @@ export async function generateSessionTitle(
       console.log('[TitleGenerator] Creating stream with LLM client');
       const stream = llmClient.streamChat(
         [
-          { role: 'user', content: `${TITLE_GENERATION_PROMPT}${input}`, timestamp: Date.now() },
+          { role: 'user', content: input, timestamp: Date.now() },
         ],
         {
+          systemPrompt: TITLE_SYSTEM_PROMPT,
           maxTokens: 120,
           temperature: 0.1,
         },
@@ -550,6 +575,9 @@ export async function generateSessionTitle(
 
         // Strategy 3: If LLM returned plain text (not JSON), use it directly as title.
         // This handles reasoning models that output natural language instead of JSON.
+        // BUT: reasoning models also emit chain-of-thought into the text channel,
+        // so we must reject anything that looks like a reasoning artifact or
+        // instruction paraphrase (see looksLikeTitleArtifact).
         const rawText = title.trim();
         if (rawText) {
           // Strip common preamble patterns from raw text
@@ -561,8 +589,12 @@ export async function generateSessionTitle(
           // Take first line only (avoid multi-paragraph reasoning)
           candidate = candidate.split(/[\n\r]/)[0]!.trim();
           if (candidate.length >= 4 && candidate.length <= 60) {
-            cleanedTitle = validateTitle(candidate);
-            console.log(`[TitleGenerator] Raw text extracted as title: "${cleanedTitle}"`);
+            if (looksLikeTitleArtifact(candidate)) {
+              console.log(`[TitleGenerator] Raw text rejected as reasoning artifact: "${candidate}"`);
+            } else {
+              cleanedTitle = validateTitle(candidate);
+              console.log(`[TitleGenerator] Raw text extracted as title: "${cleanedTitle}"`);
+            }
           }
         }
 
@@ -574,11 +606,12 @@ export async function generateSessionTitle(
             const line = lines[i]!.trim();
             // Skip reasoning markers and very short lines
             if (!line || line.length < 4) continue;
-            // Skip lines that look like reasoning ("让我...", "我需要...", "这个...", etc.)
+            // Skip lines that look like reasoning (Chinese + English openers)
             if (/^(让我|我需要|我应该|这个|这是|用户|根据|结合|首先|然后|最后)/.test(line)) continue;
+            if (/^(?:i\s+(?:should|need|will|am)|let me|the user|user wants|finally|so|this is|based on|according to)\b/i.test(line)) continue;
             // Skip lines with reasoning punctuation
             if (line.endsWith('，') || line.endsWith('。') || line.endsWith('的')) continue;
-            if (line.length >= 4 && line.length <= 60) {
+            if (line.length >= 4 && line.length <= 60 && !looksLikeTitleArtifact(line)) {
               cleanedTitle = validateTitle(line);
               if (cleanedTitle) {
                 console.log(`[TitleGenerator] Extracted from thinking line ${i}: "${cleanedTitle}"`);

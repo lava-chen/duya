@@ -18,7 +18,6 @@ import type {
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
 
 // ============================================================
 // Types
@@ -76,40 +75,6 @@ export function validateEditInput(input: unknown): { valid: true; data: EditTool
 }
 
 // ============================================================
-// Security Checks
-// ============================================================
-
-/**
- * Check if file path is within allowed directory
- * Prevents path traversal attacks by resolving and comparing paths
- */
-export function isPathSafe(filePath: string, workingDirectory?: string): boolean {
-  if (!workingDirectory) {
-    // Without a working directory, we cannot verify safety
-    // Default to false for security
-    return false;
-  }
-
-  try {
-    const resolvedPath = resolve(filePath);
-    const resolvedDir = resolve(workingDirectory);
-    // Normalize paths for comparison (handle both Windows and Unix separators)
-    let normalizedPath = resolvedPath.replace(/\\/g, '/');
-    let normalizedDir = resolvedDir.replace(/\\/g, '/');
-    // On Windows, paths are case-insensitive; on Unix, they are case-sensitive
-    if (process.platform === 'win32') {
-      normalizedPath = normalizedPath.toLowerCase();
-      normalizedDir = normalizedDir.toLowerCase();
-    }
-    // Ensure directory ends with slash for proper prefix check
-    const dirPrefix = normalizedDir.endsWith('/') ? normalizedDir : normalizedDir + '/';
-    return normalizedPath.startsWith(dirPrefix) || normalizedPath === normalizedDir;
-  } catch {
-    return false;
-  }
-}
-
-// ============================================================
 // Tool Definition
 // ============================================================
 
@@ -150,28 +115,10 @@ export class EditTool extends BaseTool {
     }
 
     const { file_path } = validation.data;
-
     const appState = context.getAppState();
     const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
 
-    const pathResult = checkPathWritePermission(
-      file_path,
-      context.workingDirectory,
-      permissionContext,
-    );
-    if (!pathResult.allowed) return pathResult;
-
-    // In bypass mode, skip the user confirmation step entirely so the
-    // streaming executor never opens a permission dialog for edit operations.
-    if (isBypassMode(permissionContext?.mode)) {
-      return { allowed: true };
-    }
-
-    return {
-      allowed: true,
-      requiresUserConfirmation: true,
-      reason: 'File edit operation',
-    };
+    return checkPathWritePermission(file_path, context.workingDirectory, permissionContext);
   }
 
   async execute(input: Record<string, unknown>, workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {

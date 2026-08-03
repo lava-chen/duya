@@ -205,6 +205,36 @@ describe('selectEligible', () => {
     expect(eligibleIds(db)).not.toContain('retry-later');
   });
 
+  it('10b. never extracted + failed lease in backoff → excluded so it does not starve newer rollouts', () => {
+    insertCatalogRow(db, {
+      rollout_id: 'never-but-backoff',
+      last_message_at: BASE_LAST_MESSAGE_AT - HOUR, // older than the other rollout
+      source_fingerprint: 'fp10b',
+    });
+    insertFailedLease(db, 'never-but-backoff', T0 + HOUR);
+
+    insertCatalogRow(db, {
+      rollout_id: 'fresh-never',
+      last_message_at: BASE_LAST_MESSAGE_AT,
+      source_fingerprint: 'fp10b-fresh',
+    });
+
+    const ids = eligibleIds(db);
+    expect(ids).not.toContain('never-but-backoff');
+    expect(ids).toContain('fresh-never');
+  });
+
+  it('10c. never extracted + failed lease with elapsed backoff → eligible', () => {
+    insertCatalogRow(db, {
+      rollout_id: 'never-retry-now',
+      last_message_at: BASE_LAST_MESSAGE_AT,
+      source_fingerprint: 'fp10c',
+    });
+    insertFailedLease(db, 'never-retry-now', T0 - 1);
+
+    expect(eligibleIds(db)).toContain('never-retry-now');
+  });
+
   it('11. retired rollout is hard-excluded', () => {
     insertCatalogRow(db, { rollout_id: 'retired', last_message_at: BASE_LAST_MESSAGE_AT });
     db.prepare(

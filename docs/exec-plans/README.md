@@ -42,6 +42,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [241-on-demand-tool-discovery](./active/241-on-demand-tool-discovery.md) | `tool_search` 接入 + schema 摘要 + 内置工具分档 + dispatch 循环动态注入三阶段 (Phase 1/2/3 全部完成) | P1 | Phase 1/2/3 ✅ |
 | [242-agent-package-cleanup](./active/242-agent-package-cleanup.md) | Evidence-driven cleanup of dead Claude Code inheritance, stale build/public surface, and unused dependencies in `@duya/agent` | P1 | Phase 1 complete; legacy Conductor runtime removed; verification blockers recorded |
 | [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` mode — single persistent session per cron, DB-authoritative history across runs | P0 | Planning |
+| [314-no-project-session](./active/314-no-project-session.md) | No-project session — sessions with no concrete project folder share `~/.duya/workspace` and appear in the sidebar "无项目" group | P1 | In progress |
 
 ### Agent Feature Parity Plans
 

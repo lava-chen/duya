@@ -6,6 +6,7 @@
  * when the effective instruction set has not changed.
  */
 
+import * as fs from 'fs'
 import type { AgentsFileInfo, AgentsMdConfig } from './types.js'
 import { DEFAULT_AGENTS_MD_CONFIG } from './types.js'
 import { loadAgentsMdFiles, buildAgentsMdPrompt } from './loader.js'
@@ -28,6 +29,12 @@ export class AgentsMdManager {
 
   // Initialized flag
   private _initialized: boolean = false
+
+  // Fast-path mtime cache: skip loadAgentsMdFiles when the same path's
+  // tracked files have unchanged mtimes. Avoids repeated disk traversal
+  // (cwd → root) on every prompt-build boundary.
+  private _lastScanPath: string | undefined
+  private _lastFileMtimes: Map<string, number> = new Map()
 
   constructor(config?: Partial<AgentsMdConfig>) {
     this._config = {
@@ -56,6 +63,19 @@ export class AgentsMdManager {
    * Returns true only when the effective prompt changed.
    */
   async refreshForTask(projectPath: string): Promise<boolean> {
+    // Fast path: same path and no tracked file mtime changed since last scan
+    // → skip the full disk traversal (cwd → root) entirely.
+    if (
+      this._initialized &&
+      this._lastScanPath === projectPath &&
+      this._lastFileMtimes.size > 0
+    ) {
+      const mtimesUnchanged = await this._checkMtimesUnchanged()
+      if (mtimesUnchanged) {
+        return false
+      }
+    }
+
     const files = await loadAgentsMdFiles({
       cwd: projectPath,
       config: this._config,
@@ -73,6 +93,10 @@ export class AgentsMdManager {
 
     this._initialized = true
 
+    // Record mtimes for next fast-path check
+    this._lastScanPath = projectPath
+    this._lastFileMtimes = await this._collectFileMtimes(files)
+
     if (changed) {
       logger.info('Project instruction snapshot refreshed', {
         fileCount: files.length,
@@ -81,6 +105,45 @@ export class AgentsMdManager {
     }
 
     return changed
+  }
+
+  /**
+   * Check whether any tracked AGENTS.md file has changed mtime since last scan.
+   * Returns true if all mtimes are unchanged (fast path can skip reload).
+   */
+  private async _checkMtimesUnchanged(): Promise<boolean> {
+    for (const [filePath, lastMtime] of this._lastFileMtimes) {
+      try {
+        const stat = await fs.promises.stat(filePath)
+        if (stat.mtimeMs !== lastMtime) {
+          return false
+        }
+      } catch {
+        // File deleted or inaccessible → assume changed
+        return false
+      }
+    }
+    return true
+  }
+
+  /**
+   * Collect mtimeMs for all loaded AGENTS.md files for fast-path change detection.
+   */
+  private async _collectFileMtimes(
+    files: AgentsFileInfo[],
+  ): Promise<Map<string, number>> {
+    const mtimes = new Map<string, number>()
+    for (const f of files) {
+      if (f.path) {
+        try {
+          const stat = await fs.promises.stat(f.path)
+          mtimes.set(f.path, stat.mtimeMs)
+        } catch {
+          // Skip inaccessible files
+        }
+      }
+    }
+    return mtimes
   }
 
   /**
@@ -140,6 +203,8 @@ export class AgentsMdManager {
     this._snapshotPrompt = ''
     this._projectPath = ''
     this._initialized = false
+    this._lastScanPath = undefined
+    this._lastFileMtimes = new Map()
   }
 
   /**

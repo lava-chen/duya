@@ -1,4 +1,4 @@
-﻿/**
+/**
  * system-handlers.test.ts — Unit tests for security-critical system IPC.
  *
  * Channels under test (the high-leverage subset):
@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(() => '[]'),
     writeFileSync: vi.fn(),
+    realpathSync: Object.assign(vi.fn((p: string) => p), { native: vi.fn((p: string) => p) }),
   },
   captured: {
     handle: new Map<string, (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>>(),
@@ -319,6 +320,23 @@ describe('system-handlers', () => {
       mocks.fsState.existsSync.mockReturnValue(true);
       const result = await invokeHandler('app:create-project-folder', {}, 'my-project');
       expect(result).toMatchObject({ success: false, error: 'Project folder already exists' });
+    });
+  });
+
+  describe('app:get-no-project-workspace', () => {
+    it('returns the canonical ~/.duya/workspace path and creates it', async () => {
+      const result = await invokeHandler('app:get-no-project-workspace', {});
+      expect(typeof result).toBe('string');
+      // Path ends with .duya/workspace (platform-agnostic separator).
+      expect(result.replace(/\\/g, '/')).toMatch(/\.duya\/workspace$/);
+      // Directory is created with recursive: true.
+      expect(mocks.fsState.mkdirSync).toHaveBeenCalledWith(
+        expect.stringContaining('.duya'),
+        { recursive: true },
+      );
+      // Canonical path resolved via realpathSync.native so symlinks/case
+      // do not break frontend grouping.
+      expect(mocks.fsState.realpathSync.native).toHaveBeenCalled();
     });
   });
 

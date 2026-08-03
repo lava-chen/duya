@@ -1025,6 +1025,39 @@ a {
   font-weight: 500;
 }
 
+/* Split-button new-thread dropdown (Plan 314): primary "new chat" + caret menu */
+.new-thread-dropdown {
+  display: flex;
+  align-items: stretch;
+  margin: 0 0.5rem;
+  position: relative;
+}
+.new-thread-dropdown .new-thread-btn {
+  flex: 1;
+  margin: 0;
+  border-radius: 0.375rem 0 0 0.375rem;
+}
+.new-thread-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  flex-shrink: 0;
+  border-radius: 0 0.375rem 0.375rem 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+.new-thread-caret:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.new-thread-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+}
+
 .sidebar-divider {
   border-top: 1px solid var(--border);
   margin-top: 0.22rem;
@@ -12827,9 +12860,10 @@ html[data-message-font-size="large"] .prose h3 {
 .code-review-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 50px;
-  padding: 8px 12px;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 34px;
+  padding: 3px 6px;
   border-bottom: 1px solid var(--review-border);
   background: var(--review-surface);
 }
@@ -12844,9 +12878,9 @@ html[data-message-font-size="large"] .prose h3 {
 
 .code-review-scope {
   min-width: 0;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 620;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .code-review-scope-copy {
@@ -12891,6 +12925,55 @@ html[data-message-font-size="large"] .prose h3 {
   white-space: nowrap;
 }
 
+/* ── Scope selector dropdown ──────────────────────────────────── */
+
+.code-review-scope-select {
+  height: 28px;
+  max-width: 260px;
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--review-border);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.05);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 256 256'%3E%3Cpath fill='%238b8b8b' d='M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 28px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color 0.15s ease;
+}
+
+.code-review-scope-select:hover {
+  border-color: color-mix(in srgb, var(--border) 140%, transparent);
+}
+
+.code-review-scope-select:focus-visible {
+  border-color: var(--accent);
+}
+
+.code-review-scope-commit-pickers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.code-review-scope-commit-pickers .code-review-scope-select {
+  max-width: 140px;
+}
+
+.code-review-scope-arrow {
+  color: var(--review-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .code-review-scope-range {
   min-width: 0;
   overflow: hidden;
@@ -12906,57 +12989,34 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .code-review-totals {
-  gap: 7px;
+  gap: 6px;
   margin-left: auto;
-  padding: 3px 8px;
-  border-radius: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
   background: var(--surface-hover);
   font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
-  font-size: 12px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 .code-review-file-count {
-  margin-left: 4px;
+  margin-left: 3px;
   color: var(--review-muted);
   font-family: inherit;
   white-space: nowrap;
 }
 
 .code-review-toolbar-actions {
-  gap: 2px;
-  padding: 2px;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--surface) 60%, transparent);
-  border: 1px solid var(--review-border);
+  gap: 1px;
+  flex-shrink: 0;
 }
 
-.code-review-icon-button {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 7px;
-  color: var(--review-muted);
-  background: transparent;
-  transition: color 120ms ease, background-color 120ms ease;
-}
-
-.code-review-icon-button:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--surface-hover);
-}
-
-.code-review-icon-button.is-active {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.code-review-icon-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.42;
+/* Active-state accent for icon buttons in the review toolbar.
+   Sizing, rounding, and variant colors are handled by IconButton. */
+.code-review-toolbar-actions .is-active {
+  color: var(--accent) !important;
+  background: var(--accent-soft) !important;
 }
 
 .code-review-workspace {
@@ -13259,13 +13319,11 @@ html[data-message-font-size="large"] .prose h3 {
 
 @container (max-width: 720px) {
   .code-review-toolbar {
-    gap: 8px;
-    padding: 8px 10px;
+    gap: 4px;
+    padding: 3px 5px;
   }
 
-  .code-review-scope-range,
-  .code-review-file-count,
-  .code-review-totals {
+  .code-review-file-count {
     display: none;
   }
 

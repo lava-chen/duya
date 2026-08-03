@@ -26,6 +26,7 @@ import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
+import { readUserMcpToml, writeUserMcpToml } from '../services/mcp-toml-config';
 import {
   initDatabaseFromBoot,
   initDatabase,
@@ -810,6 +811,14 @@ export function registerDbHandlers(): void {
     } catch {
       return defaultValue;
     }
+  });
+
+  // User-managed MCP configuration has a dedicated TOML-backed contract.
+  // Do not route it through the generic SQLite settings table.
+  ipcMain.handle('mcp:config:list', async () => readUserMcpToml());
+  ipcMain.handle('mcp:config:replace', async (_event, servers: unknown) => {
+    if (!Array.isArray(servers)) throw new Error('MCP server list must be an array');
+    await writeUserMcpToml(servers as Awaited<ReturnType<typeof readUserMcpToml>>);
   });
 
   ipcMain.handle('db:setting:setJson', (_event, key: string, value: unknown) => {

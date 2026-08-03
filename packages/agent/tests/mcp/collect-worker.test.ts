@@ -329,7 +329,7 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
     expect(r.issues).toEqual([]);
   });
 
-  it('emits ALL 5 sources: bundled + plugin + legacyFile + agentSettings + settingsKv', () => {
+  it('emits bundled + plugin + one user TOML source', () => {
     const r = buildWorkerMCPCandidates({
       ...emptyWorkerInput,
       installedPlugins: [
@@ -338,9 +338,7 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
           manifest: { capabilities: { mcpServers: [{ name: 'plugin-mcp', command: 'node', args: [] }] } },
         },
       ],
-      legacyFileMcpServers: [{ name: 'legacy-mcp', command: 'node', args: [] }],
-      agentSettingsMcpServers: [{ name: 'agent-mcp', command: 'node', args: [] }],
-      settingsKvMcpServers: [{ name: 'kv-mcp', command: 'node', args: [] }],
+      userTomlMcpServers: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
     });
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('bundled')).toBe(true);
@@ -351,12 +349,10 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
         .filter((c) => c.source === 'settings')
         .map((c) => c.sourceSubOrigin),
     );
-    expect(settingsSubOrigins.has('legacyFile')).toBe(true);
-    expect(settingsSubOrigins.has('agentSettings')).toBe(true);
-    expect(settingsSubOrigins.has('settingsKv')).toBe(true);
+    expect(settingsSubOrigins).toEqual(new Set(['tomlFile']));
   });
 
-  it('keeps all three settings sub-origins distinct (no within-source dedup at collector level)', () => {
+  it('ignores legacy user stores even when a fixture provides them', () => {
     const items: MCPConfigItem[] = [
       { name: 'literature', command: 'node', args: [] },
     ];
@@ -365,12 +361,13 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
       agentSettingsMcpServers: items,
       settingsKvMcpServers: items,
       legacyFileMcpServers: items,
+      userTomlMcpServers: items,
     });
     const settingsSubOrigins = r.candidates
       .filter((c) => c.source === 'settings')
       .map((c) => c.sourceSubOrigin)
       .sort();
-    expect(settingsSubOrigins).toEqual(['agentSettings', 'legacyFile', 'settingsKv']);
+    expect(settingsSubOrigins).toEqual(['tomlFile']);
   });
 
   it('skips a disabled plugin but keeps its settings siblings', () => {
@@ -382,7 +379,7 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
           manifest: { capabilities: { mcpServers: [{ name: 's1', command: 'node', args: [] }] } },
         },
       ],
-      agentSettingsMcpServers: [{ name: 's2', command: 'node', args: [] }],
+      userTomlMcpServers: [{ name: 's2', command: 'node', args: [], enabled: true }],
     });
     const sources = r.candidates.map((c) => c.source).sort();
     expect(sources).toEqual(['bundled', 'settings']);
@@ -440,7 +437,7 @@ describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
     expect(r.issues).toEqual([]);
   });
 
-  it('produces plugin + settings + bundled candidates on a successful IPC round', async () => {
+  it('does not re-import user MCPs from deprecated IPC stores', async () => {
     vi.mocked(dbClient.pluginDb.registryList).mockResolvedValue([
       {
         id: 'p1', name: 'P1', enabled: true, installPath: '/p1', dataPath: '/d1',
@@ -456,13 +453,7 @@ describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
     const r = await collectWorkerMCPCandidates();
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('plugin')).toBe(true);
-    expect(sources.has('settings')).toBe(true);
+    expect(sources.has('settings')).toBe(false);
     expect(sources.has('bundled')).toBe(true);
-    const settingsSubOrigins = r.candidates
-      .filter((c) => c.source === 'settings')
-      .map((c) => c.sourceSubOrigin)
-      .sort();
-    expect(settingsSubOrigins).toContain('agentSettings');
-    expect(settingsSubOrigins).toContain('settingsKv');
   });
 });

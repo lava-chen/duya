@@ -24,6 +24,7 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getConfigManager } from '../config/manager';
 import { isHttpUrl } from './url-safety';
 export { isHttpUrl } from './url-safety';
+import { getNoProjectWorkspace } from '../automation/workspace';
 
 export function registerSystemHandlers(): void {
   // Public predicate — kept exported for unit tests.
@@ -259,6 +260,12 @@ export function registerSystemHandlers(): void {
       fs.mkdirSync(defaultWorkspace, { recursive: true });
     }
     return defaultWorkspace;
+  });
+
+  // Canonical path of the shared no-project workspace (~/.duya/workspace).
+  // Used by the renderer to route no-project sessions into the "无项目" group.
+  ipcMain.handle('app:get-no-project-workspace', () => {
+    return getNoProjectWorkspace();
   });
 
   ipcMain.handle('app:create-project-folder', async (_event, projectName: string) => {

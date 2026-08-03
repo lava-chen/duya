@@ -8,10 +8,11 @@
  *   - re-enforces the D8 guard (external-only evidence cannot form
  *     preference/procedure)
  *   - digests ad-hoc `.md` files from `extensions/ad_hoc/`
- *   - groups items by canonical_key, picks a winner per group
- *     (highest evidence.verification, tiebreak by generated_at DESC;
- *     ad-hoc entries always win)
- *   - UPSERTs memory_entries + inserts memory_evidence rows
+ *   - groups items by (canonical_key, scope, scope_id), picks a winner
+ *     per group (highest evidence.verification, tiebreak by
+ *     generated_at DESC; ad-hoc entries always win)
+ *   - UPSERTs memory_entries (including the v2 lifecycle columns from
+ *     migration 0007) + inserts memory_evidence rows
  *   - renders + enqueues 5 projection files via the outbox
  *   - releases the lock
  *
@@ -59,7 +60,7 @@ const PHASE2_RUNS_RETENTION_COUNT = 50;
 const ACTIVE_MEMORY_LIMIT_PER_SCOPE = 64;
 // Bump whenever normalization, scope, or retention semantics change so an
 // unchanged Stage 1 input set is re-consolidated exactly once.
-const CONSOLIDATOR_INPUT_VERSION = 3;
+const CONSOLIDATOR_INPUT_VERSION = 4;
 
 const AD_HOC_DIR_NAME = 'extensions/ad_hoc';
 const DIGESTED_SUBDIR = '.digested';
@@ -120,16 +121,28 @@ interface ParsedItem {
   itemIndex: number;
   claim: string;
   claimType: string;
-  scopeHint?: 'global';
+  scopeHint?: string; // was 'global', now any scope string
+  scopeId?: string | null;
   canonicalKey: string;
   evidence: ParsedEvidence[];
   generatedAt: number;
   isAdHoc: boolean;
   content: string;
+  // New lifecycle fields from v2:
+  confidence?: string;
+  status?: string;
+  validFrom?: string | null;
+  validUntil?: string | null;
+  relationToExisting?: string | null;
+  supersedesKeys?: string[];
+  whyFutureAgentNeedsThis?: string;
+  retrievalCues?: string[];
 }
 
 interface ItemGroup {
   canonicalKey: string;
+  scope: string;
+  scopeId: string | null;
   items: ParsedItem[];
 }
 
@@ -217,14 +230,20 @@ export function normalizeCanonicalKey(
   const prefixAliases: Record<string, string> = {
     pref: 'preference',
     preference: 'preference',
-    procedure: 'procedure',
+    decision: 'decision',
+    invariant: 'invariant',
     proc: 'procedure',
+    procedure: 'procedure',
     workflow: 'procedure',
+    goal: 'goal',
+    commitment: 'commitment',
     fact: 'fact',
     ref: 'reference',
     reference: 'reference',
     person: 'person',
+    relationship: 'relationship',
     area: 'area',
+    capability: 'capability',
   };
   const type = prefixAliases[claimType] ?? claimType;
   let topic = raw.includes(':') ? raw.slice(raw.indexOf(':') + 1) : raw;
@@ -240,10 +259,32 @@ export function normalizeCanonicalKey(
 function isExplicitlyGlobal(item: ParsedItem, normalizedKey: string): boolean {
   return (
     item.scopeHint === 'global' ||
+    item.scopeHint === 'personal' ||
     isPersonAreaKey(normalizedKey) ||
     normalizedKey === 'preference:response-language' ||
     normalizedKey === 'preference:visual-verification'
   );
+}
+
+/**
+ * Map a v2 scope onto the legacy `project_id` column for backward
+ * compatibility: project-like scopes carry their scope_id there, every
+ * other scope leaves it NULL. The authoritative scope target lives in
+ * the `scope_id` column added by migration 0007.
+ */
+function legacyProjectId(scope: string, scopeId: string | null): string | null {
+  if (scopeId === null) return null;
+  return scope === 'project' || scope === 'repository' ? scopeId : null;
+}
+
+function tableExists(db: Database, tableName: string): boolean {
+  const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(tableName);
+  return row !== undefined;
+}
+
+function columnExists(db: Database, tableName: string, columnName: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{ name: string }>;
+  return rows.some((r) => r.name === columnName);
 }
 
 /**
@@ -394,13 +435,22 @@ function prunePhase2Runs(db: Database): number {
 interface RawMemoryItem {
   claim?: string;
   claim_type?: string;
+  scope?: string;
+  scope_id?: string | null;
   evidence?: Array<{
     source_type?: string;
     source_id?: string;
     verification?: string;
   }>;
   canonical_key?: string;
-  scope?: 'global';
+  confidence?: string;
+  status?: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  relation_to_existing?: string | null;
+  supersedes?: string[];
+  why_future_agent_needs_this?: string;
+  retrieval_cues?: string[];
 }
 
 function parseStage1Items(db: Database): ParsedItem[] {
@@ -457,7 +507,8 @@ function parseStage1Items(db: Database): ParsedItem[] {
         itemIndex: i,
         claim: item.claim,
         claimType: item.claim_type,
-        scopeHint: item.scope,
+        scopeHint: typeof item.scope === 'string' ? item.scope : undefined,
+        scopeId: typeof item.scope_id === 'string' ? item.scope_id : null,
         // `ad-hoc:*` is a reserved historical namespace. Keeping it intact
         // lets an explicitly authored note remain authoritative when an old
         // Stage 1 row happens to reference the same key.
@@ -468,6 +519,22 @@ function parseStage1Items(db: Database): ParsedItem[] {
         generatedAt: row.generated_at,
         isAdHoc: false,
         content: item.claim,
+        confidence: typeof item.confidence === 'string' ? item.confidence : undefined,
+        status: typeof item.status === 'string' ? item.status : undefined,
+        validFrom: typeof item.valid_from === 'string' ? item.valid_from : null,
+        validUntil: typeof item.valid_until === 'string' ? item.valid_until : null,
+        relationToExisting:
+          typeof item.relation_to_existing === 'string' ? item.relation_to_existing : null,
+        supersedesKeys: Array.isArray(item.supersedes)
+          ? item.supersedes.filter((k): k is string => typeof k === 'string')
+          : undefined,
+        whyFutureAgentNeedsThis:
+          typeof item.why_future_agent_needs_this === 'string'
+            ? item.why_future_agent_needs_this
+            : undefined,
+        retrievalCues: Array.isArray(item.retrieval_cues)
+          ? item.retrieval_cues.filter((c): c is string => typeof c === 'string')
+          : undefined,
       });
     }
   }
@@ -525,13 +592,19 @@ function groupItems(items: ParsedItem[]): ItemGroup[] {
   const groups = new Map<string, ItemGroup>();
   for (const item of items) {
     if (!d8AllowsKind(item)) continue;
-    // The memory system is global-only; every surviving item joins a
-    // single canonical_key group.
-    const key = item.canonicalKey;
-    let group = groups.get(key);
+    // Explicitly-global items (personal scope, person/area keys, and a
+    // handful of well-known preference keys) always land in the global
+    // bucket; every other item keeps the v2 scope emitted by Stage 1, so
+    // the same canonical_key in different scopes forms separate entries.
+    const scope = isExplicitlyGlobal(item, item.canonicalKey)
+      ? 'global'
+      : item.scopeHint ?? 'global';
+    const scopeId = scope === 'global' ? null : item.scopeId ?? null;
+    const groupKey = `${item.canonicalKey}::${scope}::${scopeId ?? ''}`;
+    let group = groups.get(groupKey);
     if (!group) {
-      group = { canonicalKey: key, items: [] };
-      groups.set(key, group);
+      group = { canonicalKey: item.canonicalKey, scope, scopeId, items: [] };
+      groups.set(groupKey, group);
     }
     group.items.push(item);
   }
@@ -552,8 +625,12 @@ function retireCanonicalAliases(
   retiredDiff: Phase2DiffEntry[]
 ): number {
   const candidates = db
-    .prepare("SELECT * FROM memory_entries WHERE status = 'active' AND kind = ?")
-    .all(kind) as MemoryEntryRow[];
+    .prepare(
+      `SELECT * FROM memory_entries
+       WHERE status = 'active' AND kind = ? AND scope = ?
+         AND COALESCE(scope_id, '') = COALESCE(?, '')`
+    )
+    .all(kind, group.scope, group.scopeId) as MemoryEntryRow[];
   let retired = 0;
   for (const candidate of candidates) {
     if (candidate.memory_id === targetMemoryId) continue;
@@ -631,11 +708,12 @@ function retireUnsupportedGlobalEntries(
     .all() as MemoryEntryRow[];
   let retired = 0;
   for (const entry of active) {
+    const entryKey = `${entry.canonical_key}::${entry.scope}::${entry.scope_id ?? ''}`;
     if (
       entry.canonical_key.startsWith('ad-hoc:') ||
       entry.kind === 'person' ||
       entry.kind === 'area' ||
-      supportedKeys.has(entry.canonical_key)
+      supportedKeys.has(entryKey)
     ) {
       continue;
     }
@@ -658,8 +736,11 @@ function retireUnsupportedGlobalEntries(
 function summaryEntryRank(entry: MemoryEntryRow): number {
   switch (entry.kind) {
     case 'preference': return 5;
+    case 'decision': case 'invariant': return 4.5;
+    case 'goal': case 'commitment': return 4.2;
     case 'procedure': return 4;
     case 'fact': return 3;
+    case 'capability': return 2.8;
     case 'reference': return 2;
     default: return 1;
   }
@@ -779,30 +860,53 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
           ? mergePersonAreaContent(group.items)
           : winner.content;
 
-        // Query existing entry for this canonical_key.
+        // Query existing entry for this (canonical_key, scope, scope_id)
+        // bucket — the same key in a different scope is a different entry.
         const existing = input.db
-          .prepare('SELECT * FROM memory_entries WHERE canonical_key = ?')
-          .get(group.canonicalKey) as MemoryEntryRow | undefined;
+          .prepare(
+            `SELECT * FROM memory_entries
+             WHERE canonical_key = ? AND scope = ?
+               AND COALESCE(scope_id, '') = COALESCE(?, '')`
+          )
+          .get(group.canonicalKey, group.scope, group.scopeId) as MemoryEntryRow | undefined;
 
         let memoryId: string;
         if (!existing) {
-          // Step 7: INSERT new entry.
+          // Step 7: INSERT new entry, including the v2 lifecycle columns
+          // added by migration 0007.
           memoryId = crypto.randomUUID();
           input.db
             .prepare(
               `INSERT INTO memory_entries
                  (memory_id, scope, project_id, kind, canonical_key, content,
-                  version, status, created_at, updated_at)
-               VALUES (?, ?, NULL, ?, ?, ?, 1, 'active', ?, ?)`
+                  version, status, created_at, updated_at,
+                  confidence, valid_from, valid_until, relation_to_existing,
+                  supersedes, why_future_agent_needs_this, retrieval_cues,
+                  scope_id)
+               VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
             )
             .run(
               memoryId,
-              'global',
-              winner.claimType as MemoryEntryRow['kind'],
+              group.scope,
+              legacyProjectId(group.scope, group.scopeId),
+              winner.claimType,
               group.canonicalKey,
               groupContent,
+              winner.status ?? 'active',
               start,
-              start
+              start,
+              winner.confidence ?? null,
+              winner.validFrom ?? null,
+              winner.validUntil ?? null,
+              winner.relationToExisting ?? null,
+              winner.supersedesKeys && winner.supersedesKeys.length > 0
+                ? JSON.stringify(winner.supersedesKeys)
+                : null,
+              winner.whyFutureAgentNeedsThis ?? null,
+              winner.retrievalCues && winner.retrievalCues.length > 0
+                ? JSON.stringify(winner.retrievalCues)
+                : null,
+              group.scopeId
             );
           added++;
           diffAdded.push({
@@ -810,23 +914,41 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
             canonical_key: group.canonicalKey,
             content: groupContent,
             kind: winner.claimType,
-            scope: 'global',
-            project_id: null,
+            scope: group.scope,
+            project_id: legacyProjectId(group.scope, group.scopeId),
           });
         } else {
           memoryId = existing.memory_id;
           if (existing.content !== groupContent || existing.status !== 'active') {
-            // Merge: version bump + new content (winner preferred).
+            // Merge: version bump + new content (winner preferred), and
+            // refresh the v2 lifecycle fields from the winning item.
             input.db
               .prepare(
                 `UPDATE memory_entries
-                   SET content = ?, version = version + 1, updated_at = ?, kind = ?, status = 'active'
+                   SET content = ?, version = version + 1, updated_at = ?, kind = ?,
+                       status = ?, confidence = ?, valid_from = ?, valid_until = ?,
+                       relation_to_existing = ?, supersedes = ?,
+                       why_future_agent_needs_this = ?, retrieval_cues = ?,
+                       scope_id = ?
                  WHERE memory_id = ?`
               )
               .run(
                 groupContent,
                 start,
-                winner.claimType as MemoryEntryRow['kind'],
+                winner.claimType,
+                winner.status ?? 'active',
+                winner.confidence ?? null,
+                winner.validFrom ?? null,
+                winner.validUntil ?? null,
+                winner.relationToExisting ?? null,
+                winner.supersedesKeys && winner.supersedesKeys.length > 0
+                  ? JSON.stringify(winner.supersedesKeys)
+                  : null,
+                winner.whyFutureAgentNeedsThis ?? null,
+                winner.retrievalCues && winner.retrievalCues.length > 0
+                  ? JSON.stringify(winner.retrievalCues)
+                  : null,
+                group.scopeId,
                 memoryId
               );
             merged++;
@@ -835,8 +957,8 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
               canonical_key: group.canonicalKey,
               content: groupContent,
               kind: winner.claimType,
-              scope: 'global',
-              project_id: null,
+              scope: group.scope,
+              project_id: existing.project_id,
             });
           }
         }
@@ -858,13 +980,15 @@ export function runConsolidator(input: ConsolidatorInput): ConsolidatorResult {
           input.db,
           memoryId,
           group,
-          winner.claimType as MemoryEntryRow['kind'],
+          winner.claimType,
           start,
           diffRetired
         );
       }
 
-      const supportedKeys = new Set(groups.map((group) => group.canonicalKey));
+      const supportedKeys = new Set(
+        groups.map((group) => `${group.canonicalKey}::${group.scope}::${group.scopeId ?? ''}`)
+      );
       retired += retireUnsupportedGlobalEntries(
         input.db,
         supportedKeys,

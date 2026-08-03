@@ -277,71 +277,86 @@ async function handlePostChat(
         return;
       }
 
-      const child = workerManager.spawnWorker(sessionId);
-      const workerPid = child.pid;
-      // M7: Use structured logger
-      httpLogger.info('Worker spawned', { sessionId, pid: workerPid });
-
-      // Log ALL worker stdout for debugging - capture everything
-      child.stdout?.setEncoding('utf8');
+      // Reuse existing worker for this session if alive — avoids re-fork cost
+      // (200-800ms) on consecutive chats within the same session. spawnWorker
+      // is only called for the first chat or when the previous worker has exited.
+      // exitCode === null means the process is still running; killed indicates
+      // kill() was already invoked. Listeners (stdout/message/error/exit) are
+      // registered only on first spawn — reusing a worker keeps the persistent
+      // listeners from worker-manager.ts and the per-request listeners below
+      // attached to the original child, so they must not be re-registered.
+      let child: ChildProcess;
       const stdoutChunks: string[] = [];
-      child.stdout?.on('data', (data: string) => {
-        stdoutChunks.push(data.toString().substring(0, 200));
-        // M7: Route worker stdout to debug logger instead of console
-        httpLogger.debug('Worker stdout', { sessionId, preview: data.toString().substring(0, 300) });
-      });
+      const existingChild = workerManager.getWorker(sessionId);
+      if (existingChild && existingChild.exitCode === null && !existingChild.killed) {
+        httpLogger.info('Reusing existing worker for session', { sessionId, pid: existingChild.pid });
+        child = existingChild;
+      } else {
+        child = workerManager.spawnWorker(sessionId);
+        const workerPid = child.pid;
+        // M7: Use structured logger
+        httpLogger.info('Worker spawned', { sessionId, pid: workerPid });
 
-      child.on('message', (msg: Record<string, unknown>) => {
-        if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
-          workerDbRequests.set(msg.id, child);
-          process.send(msg);
-          return;
-        }
-        if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
-          workerDbRequests.set(`rpc:${msg.requestId}`, child);
-          process.send(msg);
-          return;
-        }
-        // Plan 312: forward appConnection:invoke to the main process
-        // (ConnectorService lives in the Electron main process).
-        if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
-          workerDbRequests.set(`rpc:${msg.requestId}`, child);
-          process.send(msg);
-          return;
-        }
-        // Plan 312: forward appConnection:listDescriptors to the main process.
-        if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
-          workerDbRequests.set(`rpc:${msg.requestId}`, child);
-          process.send(msg);
-        }
-      });
+        // Log ALL worker stdout for debugging - capture everything
+        child.stdout?.setEncoding('utf8');
+        child.stdout?.on('data', (data: string) => {
+          stdoutChunks.push(data.toString().substring(0, 200));
+          // M7: Route worker stdout to debug logger instead of console
+          httpLogger.debug('Worker stdout', { sessionId, preview: data.toString().substring(0, 300) });
+        });
 
-
-      child.on('error', (err) => {
-        logger.error('Worker spawn error', err, { sessionId });
-        if (!res.headersSent) {
-          // M4: Release the STREAMING lock before sending the error response.
-          // Once SSE takes over (headersSent), the SSE handler manages state.
-          revertStreamingLock();
-          sendJson(res, 500, { error: 'Failed to spawn worker' });
-        }
-      });
-
-      child.on('exit', (code, signal) => {
-        const session = sessionManager.getSession(sessionId);
-        if (session?.state === SessionState.COMPLETED) {
-          return;
-        }
-        if (code === 0) {
-          try {
-            sessionManager.transitionState(sessionId, SessionState.COMPLETED);
-          } catch {
-            // state transition may be invalid
+        child.on('message', (msg: Record<string, unknown>) => {
+          if (msg.type === 'db:request' && typeof msg.id === 'string' && process.send) {
+            workerDbRequests.set(msg.id, child);
+            process.send(msg);
+            return;
           }
-        } else {
-          sessionManager.setExitInfo(sessionId, code || 0, signal || undefined);
-        }
-      });
+          if (msg.type === 'conductor:executor:rpc' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+            return;
+          }
+          // Plan 312: forward appConnection:invoke to the main process
+          // (ConnectorService lives in the Electron main process).
+          if (msg.type === 'appConnection:invoke' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+            return;
+          }
+          // Plan 312: forward appConnection:listDescriptors to the main process.
+          if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+          }
+        });
+
+
+        child.on('error', (err) => {
+          logger.error('Worker spawn error', err, { sessionId });
+          if (!res.headersSent) {
+            // M4: Release the STREAMING lock before sending the error response.
+            // Once SSE takes over (headersSent), the SSE handler manages state.
+            revertStreamingLock();
+            sendJson(res, 500, { error: 'Failed to spawn worker' });
+          }
+        });
+
+        child.on('exit', (code, signal) => {
+          const session = sessionManager.getSession(sessionId);
+          if (session?.state === SessionState.COMPLETED) {
+            return;
+          }
+          if (code === 0) {
+            try {
+              sessionManager.transitionState(sessionId, SessionState.COMPLETED);
+            } catch {
+              // state transition may be invalid
+            }
+          } else {
+            sessionManager.setExitInfo(sessionId, code || 0, signal || undefined);
+          }
+        });
+      }
 
       // Helper to wait for ready signal from worker.
       // Subscribes to BOTH child.stdout line-scanning AND the IPC channel

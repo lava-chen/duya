@@ -11,7 +11,6 @@ import type {
   PluginRegistryEntry,
 } from "@/lib/plugin-types";
 import { PluginCard } from "./capabilities/PluginCard";
-import { PluginInstallModal } from "./capabilities/PluginInstallModal";
 import { PluginDetailView } from "./capabilities/PluginDetailView";
 import { PluginManagementView } from "./capabilities/PluginManagementView";
 import { CapabilityBanner } from "./capabilities/CapabilityBanner";
@@ -32,8 +31,6 @@ export function CapabilitiesSection() {
 
   const [view, setView] = useState<PageView>("discover");
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
-  const [pendingInstallPlugin, setPendingInstallPlugin] =
-    useState<PluginCatalogEntry | null>(null);
 
   const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
   const [installed, setInstalled] = useState<PluginRegistryEntry[]>([]);
@@ -154,32 +151,12 @@ export function CapabilitiesSection() {
     [installed]
   );
 
-  const handleInstallClick = useCallback(
-    (plugin: PluginCatalogEntry) => {
-      setPendingInstallPlugin(plugin);
-    },
-    []
-  );
-
-  const handleInstallConfirm = useCallback(async () => {
-    if (!pendingInstallPlugin || !pluginApi) return;
-    await runRegistryAction(pendingInstallPlugin.id, () =>
-      pluginApi.registry.install({ pluginId: pendingInstallPlugin.id })
-    );
-    setPendingInstallPlugin(null);
-  }, [pendingInstallPlugin, pluginApi, runRegistryAction]);
-
   const handlePluginClick = useCallback(
     (plugin: PluginCatalogEntry) => {
-      const inst = installedMap.get(plugin.id);
-      if (inst) {
-        setSelectedPluginId(plugin.id);
-        setView("detail");
-      } else {
-        setPendingInstallPlugin(plugin);
-      }
+      setSelectedPluginId(plugin.id);
+      setView("detail");
     },
-    [installedMap]
+    []
   );
 
   const handleCreatePlugin = useCallback(async () => {
@@ -284,19 +261,6 @@ export function CapabilitiesSection() {
   // ── Detail View ──
   if (view === "detail" && selectedPluginId) {
     const inst = installedMap.get(selectedPluginId);
-    if (!inst) {
-      return (
-        <SettingsSection
-          title={t("settings.plugins.title" as never)}
-          description={t("settings.plugins.description" as never)}
-        >
-          <SettingsCard divided={false} className="py-8 text-sm text-muted-foreground text-center">
-            Plugin not found
-          </SettingsCard>
-        </SettingsSection>
-      );
-    }
-
     const catEntry = catalog.find((c) => c.id === selectedPluginId) ?? null;
 
     return (
@@ -308,24 +272,29 @@ export function CapabilitiesSection() {
           installed={inst}
           catalog={catEntry}
           onBack={handleBackToDiscover}
-          onEnable={() =>
+          onInstall={inst ? undefined : () =>
+            void runRegistryAction(selectedPluginId, () =>
+              pluginApi.registry.install({ pluginId: selectedPluginId })
+            )
+          }
+          onEnable={inst ? () =>
             void runRegistryAction(selectedPluginId, () =>
               pluginApi.registry.enable(selectedPluginId)
             )
-          }
-          onDisable={() =>
+          : undefined}
+          onDisable={inst ? () =>
             void runRegistryAction(selectedPluginId, () =>
               pluginApi.registry.disable(selectedPluginId)
             )
-          }
-          onRemove={() =>
+          : undefined}
+          onRemove={inst ? () =>
             void runRegistryAction(selectedPluginId, () =>
               pluginApi.registry.remove({
                 pluginId: selectedPluginId,
                 deleteData: false,
               })
             )
-          }
+          : undefined}
           busy={busyPluginId === selectedPluginId}
           onLaunchWorkflow={(prompt) => void handleLaunchWorkflow(prompt)}
         />
@@ -407,7 +376,7 @@ export function CapabilitiesSection() {
                 isInstalled={isInstalled}
                 isEnabled={isEnabled}
                 hasIssues={hasIssues}
-                onInstallClick={handleInstallClick}
+                onInstallClick={handlePluginClick}
                 onClick={handlePluginClick}
               />
             );
@@ -415,15 +384,6 @@ export function CapabilitiesSection() {
         </div>
       )}
 
-      {/* Pre-install modal */}
-      {pendingInstallPlugin && (
-        <PluginInstallModal
-          plugin={pendingInstallPlugin}
-          onInstall={handleInstallConfirm}
-          onCancel={() => setPendingInstallPlugin(null)}
-          busy={busyPluginId === pendingInstallPlugin.id}
-        />
-      )}
     </SettingsSection>
   );
 }

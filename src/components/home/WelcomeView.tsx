@@ -124,6 +124,13 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     [selectedProject, createThread, onSelectThread, permissionMode, sessionModel, providerId, parseModelName]
   );
 
+  const handleNewNoProjectSession = useCallback(async () => {
+    const thread = await createThread({ noProject: true });
+    if (thread) {
+      onSelectThread(thread.id);
+    }
+  }, [createThread, onSelectThread]);
+
   const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);
     if (nextProviderId) {
@@ -143,6 +150,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           onSelectProject={handleSelectProject}
           onNewBlankProject={handleNewBlankProject}
           onUseExistingFolder={handleUseExistingFolder}
+          onNewNoProjectSession={handleNewNoProjectSession}
           onSelectThread={onSelectThread}
         >
           {/* Message Input rendered between selector and recent threads */}

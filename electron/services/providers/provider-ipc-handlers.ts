@@ -115,14 +115,18 @@ export function registerProviderIpcHandlers(opts?: {
   });
 
   // --- set memory worker provider ---
-  ipcMain.handle('provider:setMemory', (_event, payload: { id: string | null }) => {
-    return store.setMemoryLlmProvider(payload?.id ?? null);
+  ipcMain.handle('provider:setMemory', (_event, payload: { id: string | null; modelId?: string | null }) => {
+    const ok = store.setMemoryLlmProvider(payload?.id ?? null);
+    // Persist the model override alongside the provider id.
+    store.setMemoryModel(payload?.modelId ?? null);
+    return ok;
   });
 
   // --- get memory worker provider (masked) ---
   ipcMain.handle('provider:getMemory', () => {
     const p = store.getMemoryLlmProvider();
-    return p ? toMaskedDto(p) : null;
+    if (!p) return null;
+    return { ...toMaskedDto(p), memoryModelId: store.getMemoryModel() };
   });
 
   // --- get active runtime config (privileged) ---

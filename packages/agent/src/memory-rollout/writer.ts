@@ -13,6 +13,10 @@
  *     `enqueueProjectionOutbox` (D12). This module only reads the
  *     filesystem for filename collision detection (existsSync).
  *
+ * The persisted `rollout_summary` body is the caller-supplied summary
+ * Markdown string (after sanitization); the structured JSON itself
+ * travels in `raw_memory` for the consolidator.
+ *
  * The DB handle is the first parameter of the public entry point
  * (packages/agent must not import electron's DB singleton; Plan 305
  * wires a concrete handle).
@@ -179,10 +183,14 @@ export interface WriteProjectionResult {
  *
  * Body rules:
  *   - `outcome === 'succeeded_no_output'` → body is empty string.
- *   - Otherwise: if `summaryMarkdown` exceeds MAX_SUMMARY_CHARS, it is
- *     truncated to MAX_SUMMARY_CHARS with a `\n... [truncated]` suffix
- *     BEFORE credential redaction. The body is then
- *     `redactCredentials(truncated)`.
+ *   - Otherwise: body is the caller-supplied `summaryMarkdown`. If it
+ *     exceeds MAX_SUMMARY_CHARS, it is truncated to MAX_SUMMARY_CHARS
+ *     with a `\n... [truncated]` suffix BEFORE credential redaction.
+ *     The body is then `redactCredentials(truncated)`.
+ *
+ * The sanitized Markdown (not the structured JSON) is stored in the
+ * `rollout_summary` column so reconcile.ts keeps working unchanged;
+ * the structured JSON travels in `raw_memory` for the consolidator.
  *
  * The full file content is rendered through `renderRolloutSummaryFile`
  * so the write path stays byte-identical to what `reconcile.ts` expects.
@@ -191,7 +199,8 @@ export function writeRolloutProjection(
   db: Database,
   input: WriteProjectionInput
 ): WriteProjectionResult {
-  // 1. Body: truncate (BEFORE redaction) then redact.
+  // 1. Body: take summaryMarkdown, truncate (BEFORE redaction),
+  //    then redact.
   let body: string;
   if (input.outcome === 'succeeded_no_output') {
     body = '';

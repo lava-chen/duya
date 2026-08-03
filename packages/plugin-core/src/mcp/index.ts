@@ -72,6 +72,14 @@ export {
 export { applySourceShadowing } from './shadow';
 export type { ShadowApplicationResult } from './shadow';
 
+// parseUserMcpToml / stringifyUserMcpToml are NOT re-exported here —
+// './user-config' imports '@iarna/toml', which references the Node `global`
+// builtin and throws "global is not defined" in the browser. Re-exporting
+// them from this barrel would pull @iarna/toml into the renderer bundle via
+// Vite's dep optimizer. Import them directly in Node-side code:
+//   import { parseUserMcpToml } from '../user-config'
+export type { UserMcpTomlServer } from './user-config';
+
 // resolveMCPDiscovery is NOT re-exported here — './resolve' imports Node
 // builtins ('fs', 'path'). Import it directly in Node-side code:
 //   import { resolveMCPDiscovery } from '../resolve'

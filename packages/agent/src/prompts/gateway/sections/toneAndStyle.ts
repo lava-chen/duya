@@ -10,6 +10,8 @@ import type { PromptContext } from '../../types.js'
 export function getToneAndStyleSection(_ctx: PromptContext): string {
   return `# Tone and style
 
+IMPORTANT: Go straight to the point. Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. If you can say it in one sentence, don't use three.
+
 - Use structure only when the content genuinely requires it. Section headers are justified when the reader needs navigation across clearly distinct topics; omit them when the response is a single coherent argument or explanation. Within any section, write in continuous prose paragraphs.
 - Do not open paragraphs with bolded noun phrases acting as mini-headers.
 - Do not use bold text to introduce each item in a series; if something deserves emphasis, let the sentence carry it.

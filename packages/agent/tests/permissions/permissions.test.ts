@@ -89,8 +89,47 @@ describe('createHasPermissionsToUseTool', () => {
   })
 
   it('still asks for non-canvas tools in default mode', async () => {
-    const result = await hasPermissions('Bash', { command: 'rm -rf /' }, createContext('default'))
+    const result = await hasPermissions('Bash', { command: 'echo hello' }, createContext('default'))
     expect(result.behavior).toBe('ask')
+  })
+
+  it('denies catastrophic bash commands even in default mode', async () => {
+    // `rm -rf /` bricks the system — the catastrophic safety boundary
+    // fires before the mode short-circuit, so it is denied regardless
+    // of permission mode (including bypassPermissions).
+    const result = await hasPermissions('Bash', { command: 'rm -rf /' }, createContext('default'))
+    expect(result.behavior).toBe('deny')
+    expect(result.decisionReason).toMatchObject({ type: 'safetyCheck' })
+  })
+
+  it('denies catastrophic bash commands even in bypassPermissions mode', async () => {
+    const result = await hasPermissions(
+      'Bash',
+      { command: 'rm -rf /' },
+      createContext('bypassPermissions'),
+    )
+    expect(result.behavior).toBe('deny')
+    expect(result.decisionReason).toMatchObject({ type: 'safetyCheck' })
+  })
+
+  it('denies catastrophic write paths even in bypassPermissions mode', async () => {
+    const result = await hasPermissions(
+      'Write',
+      { file_path: 'C:\\Windows\\System32\\evil.dll' },
+      createContext('bypassPermissions'),
+    )
+    expect(result.behavior).toBe('deny')
+    expect(result.decisionReason).toMatchObject({ type: 'safetyCheck' })
+  })
+
+  it('allows non-catastrophic bash in bypassPermissions mode', async () => {
+    const result = await hasPermissions(
+      'Bash',
+      { command: 'echo hello' },
+      createContext('bypassPermissions'),
+    )
+    expect(result.behavior).toBe('allow')
+    expect(result.decisionReason).toMatchObject({ type: 'mode' })
   })
 
   it('respects explicit user deny rules for non-internal tools', async () => {

@@ -375,7 +375,7 @@ export function syncAllFromMainDb(opts: {
   }
 
   const durationMs = Date.now() - start;
-  logger.info(
+  logger.warn(
     'memory-state: catalog sync complete',
     { inserted, updated, tombstoned, errors, durationMs, totalSessions: sessions.length },
     LogComponent.DB

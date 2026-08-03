@@ -7,6 +7,19 @@ import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
 // Plan 312 — App Connection status DTO is the only shape returned to the
 // renderer. Token fields never appear here.
 import type { AppConnectionStatusDTO } from './services/app-connections/types'
+import type {
+  GitStatusFileChange,
+  GitStatusTotals,
+  GitStatusResult,
+  GitReviewFileStatus,
+  GitReviewFile,
+  GitReviewResult,
+  GitReviewDiffResult,
+  GitReviewFullDiffResult,
+  GitTurnReview,
+  GitLatestTurnReviewResult,
+  GitAPI,
+} from './ipc/git-types'
 
 // webUtils.getPathForFile is exposed from Electron 30+. On older versions
 // (e.g. Electron 28 in this project) `File.path` still works for dragged
@@ -163,8 +176,8 @@ export interface ProviderAPI {
   setDefaultLlm: (payload: { id: string | null }) => Promise<boolean>
   /** Get the current default provider (masked DTO). */
   getDefault: () => Promise<unknown | null>
-  /** Set the memory worker provider. When null, falls back to default. */
-  setMemory: (payload: { id: string | null }) => Promise<boolean>
+  /** Set the memory worker provider + optional model override. */
+  setMemory: (payload: { id: string | null; modelId?: string | null }) => Promise<boolean>
   /** Get the memory worker provider (masked DTO). */
   getMemory: () => Promise<unknown | null>
   test: (payload: { providerId: string; presetKey?: string }) => Promise<{
@@ -474,83 +487,6 @@ export interface ReferencesAPI {
   add: (workingDirectory: string, filePaths: string[]) => Promise<{ success: boolean; data?: string[]; error?: string }>
   delete: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
   open: (workingDirectory: string, relativePath: string) => Promise<{ success: boolean; error?: string }>
-}
-
-export interface GitStatusFileChange {
-  path: string;
-  additions: number;
-  removals: number;
-}
-
-export interface GitStatusTotals {
-  additions: number;
-  removals: number;
-  fileCount: number;
-}
-
-export interface GitStatusResult {
-  isGitRepo: boolean;
-  fileChanges?: GitStatusFileChange[];
-  totals?: GitStatusTotals;
-}
-
-export type GitReviewFileStatus = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
-
-export interface GitReviewFile extends GitStatusFileChange {
-  status: GitReviewFileStatus;
-  oldPath?: string;
-}
-
-export interface GitReviewResult {
-  isGitRepo: boolean;
-  branch?: string;
-  baseRef?: string;
-  files?: GitReviewFile[];
-  totals?: GitStatusTotals;
-}
-
-export interface GitReviewDiffResult {
-  isGitRepo: boolean;
-  path?: string;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitReviewFullDiffResult {
-  isGitRepo: boolean;
-  patch?: string;
-  binary?: boolean;
-  truncated?: boolean;
-  error?: string;
-}
-
-export interface GitTurnReview {
-  id: string;
-  sessionId: string;
-  turnId: string;
-  workingDirectory: string;
-  files: GitReviewFile[];
-  totals: GitStatusTotals;
-  patch: string;
-  binary: boolean;
-  truncated: boolean;
-  capturedAt: number;
-}
-
-export interface GitLatestTurnReviewResult {
-  isGitRepo: boolean;
-  review?: GitTurnReview;
-  error?: string;
-}
-
-export interface GitAPI {
-  status: (cwd: string) => Promise<GitStatusResult>;
-  review: (cwd: string) => Promise<GitReviewResult>;
-  reviewDiff: (cwd: string, filePath: string) => Promise<GitReviewDiffResult>;
-  reviewFullDiff: (cwd: string) => Promise<GitReviewFullDiffResult>;
-  reviewLatestTurn: (sessionId: string, cwd: string) => Promise<GitLatestTurnReviewResult>;
 }
 
 export interface PortStatusAPI {
@@ -1038,6 +974,7 @@ export interface ElectronAPI {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
     getDefaultWorkspace: () => Promise<string>
+    getNoProjectWorkspace: () => Promise<string>
     createProjectFolder: (projectName: string) => Promise<{ success: boolean; error: string; path: string }>
   }
   system: {
@@ -1488,6 +1425,7 @@ const electronAPI: ElectronAPI = {
     getVersion: () => ipcRenderer.invoke('app:get-version'),
     quit: () => ipcRenderer.invoke('app:quit'),
     getDefaultWorkspace: () => ipcRenderer.invoke('app:get-default-workspace'),
+    getNoProjectWorkspace: () => ipcRenderer.invoke('app:get-no-project-workspace'),
     createProjectFolder: (projectName: string) => ipcRenderer.invoke('app:create-project-folder', projectName),
   },
   system: {
@@ -1518,7 +1456,7 @@ const electronAPI: ElectronAPI = {
     getAutoStartStatus: () => ipcRenderer.invoke('settings:get-auto-start-status'),
     getMcpServers: async () => {
       try {
-        const data = await ipcRenderer.invoke('db:setting:getJson', 'mcpServers', []);
+        const data = await ipcRenderer.invoke('mcp:config:list');
         return {
           success: true,
           data: Array.isArray(data) ? data : [],
@@ -1533,7 +1471,7 @@ const electronAPI: ElectronAPI = {
     },
     setMcpServers: async (servers) => {
       try {
-        await ipcRenderer.invoke('db:setting:setJson', 'mcpServers', servers);
+        await ipcRenderer.invoke('mcp:config:replace', servers);
         return { success: true };
       } catch (error) {
         return {
@@ -1670,7 +1608,7 @@ const electronAPI: ElectronAPI = {
     setDefaultLlm: (payload: { id: string | null }) =>
       ipcRenderer.invoke('provider:setDefaultLlm', payload),
     getDefault: () => ipcRenderer.invoke('provider:getDefault'),
-    setMemory: (payload: { id: string | null }) =>
+    setMemory: (payload: { id: string | null; modelId?: string | null }) =>
       ipcRenderer.invoke('provider:setMemory', payload),
     getMemory: () => ipcRenderer.invoke('provider:getMemory'),
     test: (payload: { providerId: string; presetKey?: string }) =>
@@ -1781,6 +1719,9 @@ const electronAPI: ElectronAPI = {
     reviewDiff: (cwd: string, filePath: string) => ipcRenderer.invoke('git:review-diff', cwd, filePath),
     reviewFullDiff: (cwd: string) => ipcRenderer.invoke('git:review-full-diff', cwd),
     reviewLatestTurn: (sessionId: string, cwd: string) => ipcRenderer.invoke('git:review-latest-turn', sessionId, cwd),
+    reviewScoped: (cwd: string, scope: unknown) => ipcRenderer.invoke('git:review-scoped', cwd, scope),
+    reviewScopedDiff: (cwd: string, scope: unknown, filePath: string) => ipcRenderer.invoke('git:review-scoped-diff', cwd, scope, filePath),
+    listCommits: (cwd: string, count?: number) => ipcRenderer.invoke('git:list-commits', cwd, count),
   },
   references: {
     list: (workingDirectory: string) => ipcRenderer.invoke('references:list', workingDirectory),

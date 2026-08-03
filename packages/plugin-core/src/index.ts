@@ -74,6 +74,12 @@ export {
   getMCPErrorMessage,
   getMCPErrorSeverity,
   getMCPSuggestedAction,
+  // parseUserMcpToml / stringifyUserMcpToml are NOT re-exported here —
+  // './mcp/user-config' imports '@iarna/toml', which references the Node
+  // `global` builtin and throws "global is not defined" in the browser.
+  // Re-exporting them pulls @iarna/toml into the renderer bundle via Vite's
+  // dep optimizer. Node-side consumers import them directly:
+  //   import { parseUserMcpToml } from '@duya/plugin-core/src/mcp/user-config'
 } from './mcp';
 export type {
   MCPDiscoveryStatus,
@@ -98,6 +104,7 @@ export type {
   BuiltinFallbackReplacement,
   ShadowApplicationResult,
   ProviderToolNamePolicy,
+  UserMcpTomlServer,
 } from './mcp';
 
 export {

@@ -12,9 +12,7 @@ import {
   IconFilePlus,
   IconFileX,
   IconFold,
-  IconGitBranch,
   IconGitCompare,
-  IconHistory,
   IconLayoutSidebarRight,
   IconMessagePlus,
   IconRefresh,
@@ -24,12 +22,14 @@ import {
 } from "@/components/icons";
 import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import {
-  getGitReview,
-  getGitReviewFullDiff,
   getGitLatestTurnReview,
+  getGitReviewScoped,
+  getGitCommits,
   type GitReviewFile,
   type GitReviewResult,
   type GitTurnReview,
+  type ReviewScopeParams,
+  type GitCommitInfo,
 } from "@/lib/git-ipc";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import type { PageTab } from "./registry";
@@ -46,7 +46,16 @@ import {
 } from "./code-review-diff";
 
 type DiffLayout = "unified" | "split";
-type ReviewScope = "latest-turn" | "workspace";
+/** Scope selector values shown in the dropdown. */
+type ReviewScope = "latest-turn" | "uncommitted" | "unstaged" | "staged" | "commit";
+
+const SCOPE_LABELS: Record<ReviewScope, string> = {
+  "latest-turn": "上一轮",
+  uncommitted:  "未提交 (HEAD → 工作区)",
+  unstaged:    "未暂存 (索引 → 工作区)",
+  staged:      "已暂存 (HEAD → 索引)",
+  commit:      "提交对比",
+};
 
 const EMPTY_REVIEW: GitReviewResult = { isGitRepo: false, files: [] };
 
@@ -279,8 +288,11 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const panel = useOptionalPanel();
   const workspaceExpanded = panel?.workspaceExpanded ?? false;
   const [review, setReview] = useState<GitReviewResult>(EMPTY_REVIEW);
-  const [scope, setScope] = useState<ReviewScope>("latest-turn");
+  const [scope, setScope] = useState<ReviewScope>(() => sessionId ? "latest-turn" : "uncommitted");
   const [turnReview, setTurnReview] = useState<GitTurnReview | null>(null);
+  const [commitFrom, setCommitFrom] = useState("");
+  const [commitTo, setCommitTo] = useState("");
+  const [commits, setCommits] = useState<GitCommitInfo[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [patch, setPatch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -309,7 +321,8 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     try {
       if (scope === "latest-turn") {
         if (!sessionId) {
-          setScope("workspace");
+          setReview(EMPTY_REVIEW);
+          setError("当前会话没有项目目录。");
           return;
         }
         const next = await getGitLatestTurnReview(sessionId, workingDirectory);
@@ -325,21 +338,49 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         });
         return;
       }
+
+      // Scoped review: uncommitted / unstaged / staged / commit
       setTurnReview(null);
-      const next = await getGitReview(workingDirectory);
+      const params: ReviewScopeParams = { type: scope };
+      if (scope === "commit") {
+        if (!commitFrom || !commitTo) {
+          setReview(EMPTY_REVIEW);
+          setError("请选择两个提交进行对比。");
+          return;
+        }
+        params.commitFrom = commitFrom;
+        params.commitTo = commitTo;
+      }
+      const next = await getGitReviewScoped(workingDirectory, params);
       setReview(next);
       if (!next.isGitRepo) setError("此项目不是 Git 仓库，或 Git 当前不可用。");
     } catch {
       setReview(EMPTY_REVIEW);
-      setError("无法读取工作区变更。");
+      setError("无法读取变更。");
     } finally {
       setLoading(false);
     }
-  }, [scope, sessionId, workingDirectory]);
+  }, [scope, sessionId, workingDirectory, commitFrom, commitTo]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Fetch commit list when scope switches to 'commit'.
+  useEffect(() => {
+    if (scope !== "commit" || !workingDirectory) return;
+    let cancelled = false;
+    void getGitCommits(workingDirectory, 50).then((result) => {
+      if (cancelled) return;
+      setCommits(result.commits);
+      // Default to last commit if nothing selected yet.
+      if (result.commits.length >= 2 && !commitFrom && !commitTo) {
+        setCommitFrom(result.commits[1].hash);
+        setCommitTo(result.commits[0].hash);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [scope, workingDirectory]);
 
   const files = review.files ?? [];
   useEffect(() => {
@@ -359,32 +400,13 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       setDiffLoading(false);
       return;
     }
-    if (!workingDirectory || files.length === 0) {
-      setPatch("");
-      setDiffError("");
-      return;
-    }
-    let cancelled = false;
-    setDiffLoading(true);
-    void getGitReviewFullDiff(workingDirectory)
-      .then((result) => {
-        if (cancelled) return;
-        setPatch(result.patch ?? "");
-        if (result.error) setDiffError(result.error);
-        else if (result.binary) setDiffError("部分文件包含二进制差异，无法以内联文本显示。");
-        else if (result.truncated) setDiffError("差异内容过大，仅显示前 1 MB。");
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPatch("");
-          setDiffError("无法加载差异。");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setDiffLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, [scope, turnReview, workingDirectory, files.length]);
+    // Scoped reviews return the patch inline in the review result.
+    setPatch(review.patch ?? "");
+    if (review.binary) setDiffError("部分文件包含二进制差异，无法以内联文本显示。");
+    else if (review.truncated) setDiffError("差异内容过大，仅显示前 1 MB。");
+    else setDiffError("");
+    setDiffLoading(false);
+  }, [scope, turnReview, review.patch, review.binary, review.truncated]);
 
   const filePatches = useMemo(() => parseReviewPatch(patch), [patch]);
   const selectedFile = files.find((file) => file.path === selectedPath) ?? null;
@@ -433,15 +455,42 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     <div className={`code-review-panel${showFiles ? " has-file-tree" : ""}`}>
       <header className="code-review-toolbar">
         <div className="code-review-scope">
-          {scope === "latest-turn" ? <IconHistory size={18} aria-hidden="true" /> : <IconGitBranch size={18} aria-hidden="true" />}
-          <div className="code-review-scope-copy">
-            <span className="code-review-scope-label">{scope === "latest-turn" ? "上一轮审阅" : "工作区审阅"}</span>
-            <span className="code-review-scope-range">{scope === "latest-turn" ? "回合开始 → 结束" : "HEAD → 工作区"}</span>
-          </div>
-          <div className="code-review-scope-switch" role="group" aria-label="审阅范围">
-            <Button type="button" variant="ghost" size="sm" className={scope === "latest-turn" ? "is-active" : ""} onClick={() => setScope("latest-turn")}>上一轮</Button>
-            <Button type="button" variant="ghost" size="sm" className={scope === "workspace" ? "is-active" : ""} onClick={() => setScope("workspace")}>工作区</Button>
-          </div>
+          <IconGitCompare size={18} aria-hidden="true" />
+          <select
+            className="code-review-scope-select"
+            value={scope}
+            onChange={(e) => setScope(e.target.value as ReviewScope)}
+            aria-label="审阅范围"
+          >
+            {(Object.keys(SCOPE_LABELS) as ReviewScope[]).map((key) => (
+              <option key={key} value={key}>{SCOPE_LABELS[key]}</option>
+            ))}
+          </select>
+          {scope === "commit" && (
+            <div className="code-review-scope-commit-pickers">
+              <select
+                className="code-review-scope-select"
+                value={commitFrom}
+                onChange={(e) => setCommitFrom(e.target.value)}
+                aria-label="起始提交"
+              >
+                {commits.map((c) => (
+                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
+                ))}
+              </select>
+              <span className="code-review-scope-arrow">&rarr;</span>
+              <select
+                className="code-review-scope-select"
+                value={commitTo}
+                onChange={(e) => setCommitTo(e.target.value)}
+                aria-label="目标提交"
+              >
+                {commits.map((c) => (
+                  <option key={c.hash} value={c.hash}>{c.hash.slice(0, 7)} {c.subject}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         <div className="code-review-totals" aria-label={`${files.length} 个变更文件`}>
           <span className="is-add">+{totals?.additions ?? 0}</span>
@@ -449,20 +498,20 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           <span className="code-review-file-count">{files.length} 个文件</span>
         </div>
         <div className="code-review-toolbar-actions">
-          <IconButton type="button" variant="default" shape="square" className="code-review-icon-button" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
-            <IconRefresh size={17} className={loading ? "animate-spin" : ""} />
+          <IconButton type="button" variant="default" shape="square" size="sm" onClick={() => void refresh()} title="刷新变更" aria-label="刷新变更" disabled={loading}>
+            <IconRefresh size={15} className={loading ? "animate-spin" : ""} />
           </IconButton>
-          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${wrapped ? " is-active" : ""}`} onClick={() => setWrapped((value) => !value)} title="自动换行" aria-label="自动换行" aria-pressed={wrapped}>
-            <IconTextWrap size={17} />
+          <IconButton type="button" variant="default" shape="square" size="sm" className={wrapped ? "is-active" : ""} onClick={() => setWrapped((value) => !value)} title="自动换行" aria-label="自动换行" aria-pressed={wrapped}>
+            <IconTextWrap size={15} />
           </IconButton>
-          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${foldUnchanged ? " is-active" : ""}`} onClick={() => setFoldUnchanged((value) => !value)} title="折叠未修改内容" aria-label="折叠未修改内容" aria-pressed={foldUnchanged}>
-            <IconFold size={17} />
+          <IconButton type="button" variant="default" shape="square" size="sm" className={foldUnchanged ? "is-active" : ""} onClick={() => setFoldUnchanged((value) => !value)} title="折叠未修改内容" aria-label="折叠未修改内容" aria-pressed={foldUnchanged}>
+            <IconFold size={15} />
           </IconButton>
-          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${layout === "split" ? " is-active" : ""}`} onClick={() => setLayout((value) => value === "unified" ? "split" : "unified")} title={workspaceExpanded ? "切换统一/分栏差异" : "展开审阅页后可使用分栏差异"} aria-label="切换统一或分栏差异" aria-pressed={layout === "split"} disabled={!workspaceExpanded}>
-            <IconColumns2 size={17} />
+          <IconButton type="button" variant="default" shape="square" size="sm" className={layout === "split" ? "is-active" : ""} onClick={() => setLayout((value) => value === "unified" ? "split" : "unified")} title={workspaceExpanded ? "切换统一/分栏差异" : "展开审阅页后可使用分栏差异"} aria-label="切换统一或分栏差异" aria-pressed={layout === "split"} disabled={!workspaceExpanded}>
+            <IconColumns2 size={15} />
           </IconButton>
-          <IconButton type="button" variant="default" shape="square" className={`code-review-icon-button${showFiles ? " is-active" : ""}`} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
-            <IconLayoutSidebarRight size={17} />
+          <IconButton type="button" variant="default" shape="square" size="sm" className={showFiles ? "is-active" : ""} onClick={() => setShowFiles((value) => !value)} title={showFiles ? "隐藏文件" : "显示文件"} aria-label={showFiles ? "隐藏文件" : "显示文件"} aria-pressed={showFiles}>
+            <IconLayoutSidebarRight size={15} />
           </IconButton>
         </div>
       </header>

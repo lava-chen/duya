@@ -256,7 +256,11 @@ export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
           {
             name: 'postgres-readonly',
             command: 'npx',
-            args: ['-y', '@modelcontextprotocol/server-postgres', '--read-only'],
+            // server-postgres expects the connection string as the first
+            // positional argument (process.argv[2]); it does not parse
+            // --read-only as a flag. Read-only posture is enforced by the
+            // Postgres role (see setup label) plus the permission policy.
+            args: ['-y', '@modelcontextprotocol/server-postgres', '${setup.connectionString}'],
           },
         ],
       },
@@ -266,7 +270,7 @@ export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
       setup: [
         {
           id: 'connectionString',
-          label: 'PostgreSQL connection string — use a read-only role (e.g. duya_reader); the MCP server also passes --read-only as defense-in-depth',
+          label: 'PostgreSQL connection string — use a read-only role (e.g. duya_reader); read-only access is enforced by the database role, not an MCP flag',
           type: 'secret',
           required: true,
         },

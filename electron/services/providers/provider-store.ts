@@ -72,6 +72,10 @@ export interface ProviderStoreReader {
   readMemory?(): ApiProvider | undefined;
   /** Persist the memory provider id. Optional for the same reason. */
   writeMemory?(id: string | null): boolean;
+  /** Read the memory worker model override (null = auto-resolve). */
+  readMemoryModel?(): string | null;
+  /** Persist the memory worker model override. */
+  writeMemoryModel?(model: string | null): boolean;
   writeAll(map: Record<string, ApiProvider>): boolean;
   onChange(cb: () => void): () => void;
 }
@@ -361,6 +365,21 @@ export class ProviderStore {
       this.reader.writeMemory(this.memoryId ?? null);
     }
     return true;
+  }
+
+  /** Returns the memory worker model override, or null for auto-resolve. */
+  getMemoryModel(): string | null {
+    this.ensureInitialized();
+    return this.reader.readMemoryModel?.() ?? null;
+  }
+
+  /** Set (or clear) the memory worker model override. */
+  setMemoryModel(model: string | null): boolean {
+    this.ensureInitialized();
+    if (this.reader.writeMemoryModel) {
+      return this.reader.writeMemoryModel(model);
+    }
+    return false;
   }
 
   // ===========================================================================

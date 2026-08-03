@@ -25,8 +25,8 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
-import { pluginDb, configDb, settingDb } from '../ipc/db-client.js';
-import { getSettingsPath } from './config.js';
+import { pluginDb } from '../ipc/db-client.js';
+import { readUserMcpToml } from './config.js';
 import type { MCPConfigItem } from './config.js';
 import type {
   MCPCandidate,
@@ -85,6 +85,8 @@ export interface CollectorPluginEntry {
  */
 export interface WorkerCollectorInput {
   installedPlugins: CollectorPluginEntry[];
+  /** The only user-managed MCP source: DUYA userData/mcp.toml. */
+  userTomlMcpServers?: MCPConfigItem[];
   /** agentSettings.mcpServers, as stored in the agentSettings config. */
   agentSettingsMcpServers: MCPConfigItem[];
   /** Value of the `mcpServers` key in the settingsKv store. */
@@ -405,7 +407,7 @@ export function buildCandidatesFromPluginEntry(
 }
 
 export function buildCandidatesFromSettingsEntries(
-  sourceSubOrigin: 'legacyFile' | 'settingsKv' | 'agentSettings',
+  sourceSubOrigin: 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile',
   entries: MCPConfigItem[],
 ): MCPCandidate[] {
   const out: MCPCandidate[] = [];
@@ -458,19 +460,9 @@ export function buildWorkerMCPCandidates(
     candidates.push(...buildCandidatesFromPluginEntry(plugin));
   }
 
-  if (input.legacyFileMcpServers) {
+  if (input.userTomlMcpServers) {
     candidates.push(
-      ...buildCandidatesFromSettingsEntries('legacyFile', input.legacyFileMcpServers),
-    );
-  }
-  if (input.agentSettingsMcpServers) {
-    candidates.push(
-      ...buildCandidatesFromSettingsEntries('agentSettings', input.agentSettingsMcpServers),
-    );
-  }
-  if (input.settingsKvMcpServers) {
-    candidates.push(
-      ...buildCandidatesFromSettingsEntries('settingsKv', input.settingsKvMcpServers),
+      ...buildCandidatesFromSettingsEntries('tomlFile', input.userTomlMcpServers),
     );
   }
 
@@ -494,7 +486,7 @@ export async function collectWorkerMCPCandidates(): Promise<MCPCollectionResult>
     installedPlugins: [],
     agentSettingsMcpServers: [],
     settingsKvMcpServers: [],
-    legacyFileMcpServers: undefined,
+    userTomlMcpServers: [],
     environment: { ...process.env } as Record<string, string>,
     cwd: process.cwd(),
   };
@@ -509,33 +501,12 @@ export async function collectWorkerMCPCandidates(): Promise<MCPCollectionResult>
   }
 
   try {
-    const agentSettings = (await configDb.agentGetSettings()) as
-      | { mcpServers?: MCPConfigItem[] }
-      | undefined;
-    if (agentSettings && Array.isArray(agentSettings.mcpServers)) {
-      input.agentSettingsMcpServers = agentSettings.mcpServers;
-    }
+    input.userTomlMcpServers = await readUserMcpToml();
   } catch (err) {
-    console.warn('[collectWorkerMCPCandidates] configDb.agentGetSettings failed:', err);
-  }
-
-  try {
-    const raw = (await settingDb.getJson<MCPConfigItem[]>('mcpServers', [])) as unknown;
-    if (Array.isArray(raw)) {
-      input.settingsKvMcpServers = raw;
-    }
-  } catch (err) {
-    console.warn('[collectWorkerMCPCandidates] settingDb.getJson("mcpServers") failed:', err);
-  }
-
-  // 4. Legacy on-disk settings.json. Read + parse via the typed
-  //    helper. Items go into the input; issues merge into the result.
-  try {
-    const legacy = await readLegacyFileMcpServers(getSettingsPath());
-    input.legacyFileMcpServers = legacy.items;
-    issues.push(...legacy.issues);
-  } catch (err) {
-    console.warn('[collectWorkerMCPCandidates] legacyFile read failed:', err);
+    issues.push(settingsInvalidIssue(
+      { source: 'settings', sourceSubOrigin: 'tomlFile' },
+      `mcp.toml is invalid: ${messageOf(err)}`,
+    ));
   }
 
   const built = buildWorkerMCPCandidates(input);

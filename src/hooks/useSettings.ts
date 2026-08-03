@@ -326,9 +326,9 @@ export function useSettings(): {
             await window.electronAPI.vision?.set({ enabled: value as boolean });
           } else if (key === 'mcpServers') {
             const mcpServers = Array.isArray(value) ? value as MCPServerConfig[] : [];
-            await window.electronAPI.settingsDb.setJson('mcpServers', mcpServers);
             if (window.electronAPI.settings?.setMcpServers) {
-              await window.electronAPI.settings.setMcpServers(mcpServers);
+              const result = await window.electronAPI.settings.setMcpServers(mcpServers);
+              if (!result.success) throw new Error(result.error || 'Failed to write mcp.toml');
             }
         } else if (key === 'permissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));

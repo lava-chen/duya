@@ -37,6 +37,10 @@ export interface GitReviewResult {
   baseRef?: string;
   files?: GitReviewFile[];
   totals?: GitStatusTotals;
+  /** Preloaded full diff (scoped review returns it inline). */
+  patch?: string;
+  truncated?: boolean;
+  binary?: boolean;
 }
 
 export interface GitReviewDiffResult {
@@ -95,4 +99,35 @@ export async function getGitReviewFullDiff(cwd: string): Promise<GitReviewFullDi
 
 export async function getGitLatestTurnReview(sessionId: string, cwd: string): Promise<GitLatestTurnReviewResult> {
   return window.electronAPI?.git?.reviewLatestTurn(sessionId, cwd) ?? { isGitRepo: false };
+}
+
+// ── Scoped review (plan 227) ──────────────────────────────────────
+
+export type ReviewScopeType = 'uncommitted' | 'unstaged' | 'staged' | 'commit';
+
+export interface ReviewScopeParams {
+  type: ReviewScopeType;
+  commitFrom?: string;
+  commitTo?: string;
+}
+
+export interface GitCommitInfo {
+  hash: string;
+  subject: string;
+}
+
+export interface GitListCommitsResult {
+  commits: GitCommitInfo[];
+}
+
+export async function getGitReviewScoped(cwd: string, scope: ReviewScopeParams): Promise<GitReviewResult> {
+  return window.electronAPI?.git?.reviewScoped(cwd, scope) ?? { isGitRepo: false };
+}
+
+export async function getGitReviewScopedDiff(cwd: string, scope: ReviewScopeParams, filePath: string): Promise<GitReviewDiffResult> {
+  return window.electronAPI?.git?.reviewScopedDiff(cwd, scope, filePath) ?? { isGitRepo: false };
+}
+
+export async function getGitCommits(cwd: string, count?: number): Promise<GitListCommitsResult> {
+  return window.electronAPI?.git?.listCommits(cwd, count) ?? { commits: [] };
 }

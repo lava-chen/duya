@@ -147,6 +147,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       loadFromDatabase,
       isHydrated,
       createThread,
+      setActiveThread,
       currentView,
       setCurrentView,
       setSettingsTab,
@@ -159,6 +160,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setProjectSortBy,
       projectGroupBy,
       setProjectGroupBy,
+      noProjectWorkspace,
     } = useConversationStore();
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
@@ -281,6 +283,14 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       setIsNameProjectDialogOpen(true);
     };
 
+    const handleNewNoProjectThread = useCallback(async () => {
+      const thread = await createThread({ noProject: true });
+      if (thread) {
+        setCurrentView('chat');
+        setActiveThread(thread.id);
+      }
+    }, [createThread, setCurrentView, setActiveThread]);
+
     const handleCreateNamedProject = async (projectName: string) => {
       setIsNameProjectDialogOpen(false);
       if (!projectName.trim()) return;
@@ -322,7 +332,11 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         }
 
         mainThreads.push(thread);
-        const key = thread.workingDirectory || "__no_project__";
+        // Empty working_directory (legacy) OR the shared no-project workspace
+        // both route into the flat "无项目" list.
+        const key = (!thread.workingDirectory || thread.workingDirectory === noProjectWorkspace)
+          ? "__no_project__"
+          : thread.workingDirectory;
         if (!groups.has(key)) {
           groups.set(key, []);
         }
@@ -365,7 +379,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         flatThreads: sortThreads(mainThreads),
         threadChildren: childrenMap,
       };
-    }, [threads, projectSortBy, collapsedProjects]);
+    }, [threads, projectSortBy, collapsedProjects, noProjectWorkspace]);
 
     const allCollapsed = useMemo(
       () => projectGroups.length > 0 && projectGroups.every((p) => collapsedProjects.has(p.workingDirectory)),
@@ -541,6 +555,14 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
                 >
                   <FolderOpenIcon size={16} />
                   <span>{t('project.useExistingFolder')}</span>
+                </button>
+                <button
+                  type="button"
+                  className="empty-state-action"
+                  onClick={handleNewNoProjectThread}
+                >
+                  <NotePencilIcon size={16} />
+                  <span>{t('project.newNoProjectSession')}</span>
                 </button>
               </div>
             </div>

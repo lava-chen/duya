@@ -427,7 +427,7 @@ describe('buildMainMCPCandidates (pure) — 5 sources', () => {
     expect(r.issues).toEqual([]);
   });
 
-  it('emits ALL 5 sources: bundled + plugin + legacyFile + agentSettings + settingsKv', () => {
+  it('emits bundled + plugin + one user TOML source', () => {
     const r = buildMainMCPCandidates({
       ...emptyInput,
       installedPlugins: [
@@ -436,9 +436,7 @@ describe('buildMainMCPCandidates (pure) — 5 sources', () => {
           manifest: { capabilities: { mcpServers: [{ name: 'plugin-mcp', command: 'node', args: [] }] } },
         },
       ],
-      legacyFileItems: [{ name: 'legacy-mcp', command: 'node', args: [] }],
-      agentSettingsMcpServers: [{ name: 'agent-mcp', command: 'node', args: [] }],
-      settingsKvMcpServers: [{ name: 'kv-mcp', command: 'node', args: [] }],
+      userTomlItems: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
     });
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('bundled')).toBe(true);
@@ -447,9 +445,7 @@ describe('buildMainMCPCandidates (pure) — 5 sources', () => {
     const settingsSubOrigins = new Set(
       r.candidates.filter((c) => c.source === 'settings').map((c) => c.sourceSubOrigin),
     );
-    expect(settingsSubOrigins.has('legacyFile')).toBe(true);
-    expect(settingsSubOrigins.has('agentSettings')).toBe(true);
-    expect(settingsSubOrigins.has('settingsKv')).toBe(true);
+    expect(settingsSubOrigins).toEqual(new Set(['tomlFile']));
   });
 });
 
@@ -473,7 +469,7 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
     expect(r.issues).toEqual([]);
   });
 
-  it('collects plugin + agentSettings + settingsKv on a successful round', async () => {
+  it('does not re-import user MCPs from deprecated stores', async () => {
     mockedGetPluginManager.mockReturnValue({
       listInstalled: () => [
         {
@@ -493,27 +489,17 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
     const r = await collectMainMCPCandidates();
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('plugin')).toBe(true);
-    expect(sources.has('settings')).toBe(true);
+    expect(sources.has('settings')).toBe(false);
     expect(sources.has('bundled')).toBe(true);
-    const settingsSubOrigins = r.candidates
-      .filter((c) => c.source === 'settings')
-      .map((c) => c.sourceSubOrigin)
-      .sort();
-    expect(settingsSubOrigins).toContain('agentSettings');
-    expect(settingsSubOrigins).toContain('settingsKv');
   });
 
-  it('reads the legacy on-disk settings.json when DUYA_APP_DATA_PATH is set', async () => {
+  it('reads mcp.toml when DUYA_APP_DATA_PATH is set', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
     try {
-      const settingsPath = join(dir, 'settings.json');
+      const settingsPath = join(dir, 'mcp.toml');
       writeFileSync(
         settingsPath,
-        JSON.stringify({
-          mcpServers: [
-            { name: 'legacy-from-disk', command: 'node', args: [] },
-          ],
-        }),
+        '[mcp_servers.factory-from-disk]\ncommand = "node"\nenabled = true\n',
       );
       const prev = process.env.DUYA_APP_DATA_PATH;
       process.env.DUYA_APP_DATA_PATH = dir;
@@ -525,10 +511,10 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
         } as unknown as ReturnType<typeof getDatabase>);
         const r = await collectMainMCPCandidates();
         const legacy = r.candidates.find(
-          (c) => c.source === 'settings' && c.sourceSubOrigin === 'legacyFile',
+          (c) => c.source === 'settings' && c.sourceSubOrigin === 'tomlFile',
         );
         expect(legacy).toBeDefined();
-        expect(legacy!.rawConfig.name).toBe('legacy-from-disk');
+        expect(legacy!.rawConfig.name).toBe('factory-from-disk');
       } finally {
         if (prev === undefined) {
           delete process.env.DUYA_APP_DATA_PATH;
@@ -541,11 +527,11 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
     }
   });
 
-  it('emits a mcp-settings-invalid issue when the legacy file is malformed (no active session)', async () => {
+  it('emits a mcp-settings-invalid issue when mcp.toml is malformed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
     try {
-      const settingsPath = join(dir, 'settings.json');
-      writeFileSync(settingsPath, 'this is not json');
+      const settingsPath = join(dir, 'mcp.toml');
+      writeFileSync(settingsPath, 'this is not toml = [');
       const prev = process.env.DUYA_APP_DATA_PATH;
       process.env.DUYA_APP_DATA_PATH = dir;
       try {
