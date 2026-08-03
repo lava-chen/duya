@@ -18,6 +18,8 @@ import type {
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
+import { expandPath } from '../../utils/path.js';
+import { isPathWithinRoots } from '../allowedRoots.js';
 
 // ============================================================
 // Types
@@ -100,6 +102,13 @@ export class EditTool extends BaseTool {
     required: ['file_path', 'old_string', 'new_string'],
   };
 
+  private readonly allowedRoots?: readonly string[];
+
+  constructor(opts: { allowedRoots?: string[] } = {}) {
+    super();
+    this.allowedRoots = opts.allowedRoots;
+  }
+
   get interruptBehavior(): ToolInterruptBehavior {
     return 'cancel';
   }
@@ -130,6 +139,18 @@ export class EditTool extends BaseTool {
         result: `Input validation failed: ${validation.error}`,
         error: true,
       };
+    }
+
+    if (this.allowedRoots && this.allowedRoots.length > 0) {
+      const resolved = expandPath(validation.data.file_path, workingDirectory);
+      if (!isPathWithinRoots(resolved, [...this.allowedRoots])) {
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          error: true,
+          result: `Path '${validation.data.file_path}' is outside the allowed roots for this tool.`,
+        };
+      }
     }
 
     return executeEdit(crypto.randomUUID(), validation.data, workingDirectory);
