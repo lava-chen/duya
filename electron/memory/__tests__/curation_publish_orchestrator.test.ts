@@ -31,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   appendHealthReport: vi.fn(),
   // memory_entries_rebuild mock
   rebuildMemoryEntriesFromFiles: vi.fn(),
+  // ad_hoc_watcher mock
+  scanAdHocChanges: vi.fn(),
 }));
 
 vi.mock('../../../packages/agent/src/memory-state/curation_ledger', () => ({
@@ -43,6 +45,10 @@ vi.mock('../../../packages/agent/src/memory-state/curation_ledger', () => ({
 
 vi.mock('../../../packages/agent/src/memory-state/memory_entries_rebuild', () => ({
   rebuildMemoryEntriesFromFiles: mocks.rebuildMemoryEntriesFromFiles,
+}));
+
+vi.mock('../ad_hoc_watcher', () => ({
+  scanAdHocChanges: mocks.scanAdHocChanges,
 }));
 
 vi.mock('../curation_staging', () => ({
@@ -110,6 +116,7 @@ describe('runCurationCycle', () => {
     vi.clearAllMocks();
     mocks.computeInputSetHash.mockReturnValue('input-hash-1');
     mocks.rebuildMemoryEntriesFromFiles.mockResolvedValue({ processed: 0, skipped: 0, durationMs: 0 });
+    mocks.scanAdHocChanges.mockResolvedValue([]);
   });
 
   afterEach(() => { env.cleanup(); });
@@ -366,6 +373,115 @@ describe('runCurationCycle', () => {
       expect.anything(),
       'run-6',
       expect.objectContaining({ publicationStatus: 'succeeded', cacheStatus: 'cache_pending' }),
+    );
+  });
+
+  it('7. merges rollout and ad-hoc inputs into one batch, truncated to MAX_INPUTS', async () => {
+    // 5 rollout + 4 ad-hoc = 9 eligible; truncated to MAX_INPUTS (8).
+    mocks.queryEligibleInputs.mockReturnValue(
+      Array.from({ length: 5 }, (_, i) => ({
+        inputKind: 'rollout' as const,
+        inputKey: `r${i}`,
+        contentHash: `h${i}`,
+        outputUpdatedAt: T0 + i,
+        rolloutSlug: `s${i}`,
+        bytes: 100,
+      })),
+    );
+    mocks.scanAdHocChanges.mockResolvedValue(
+      Array.from({ length: 4 }, (_, i) => ({
+        inputKind: 'ad_hoc' as const,
+        inputKey: `extensions/ad_hoc/note-${i}.md`,
+        contentHash: `h-adhoc-${i}`,
+        sourcePath: path.join(env.memoryRoot, 'extensions', 'ad_hoc', `note-${i}.md`),
+        outputUpdatedAt: T0 + 10 + i,
+      })),
+    );
+    mocks.claimRun.mockReturnValue({ runId: 'run-7', lockToken: 'tok-7' });
+    mocks.createStaging.mockResolvedValue({ stagingDir: path.join(env.stagingRoot, 'run-7'), manifestHash: 'stg-hash' });
+    mocks.runCurationAgent.mockResolvedValue({
+      timedOut: false,
+      receipt: { inputs: [], health: { added: 0, merged: 0, retired: 0, no_change: 0, rejected: 0 } },
+    });
+    mocks.validateStaging.mockReturnValue({ valid: true, errors: [], warnings: [] });
+    mocks.createSnapshot.mockResolvedValue({ snapshotDir: path.join(env.snapshotRoot, 'snap-7'), manifestHash: 'snap-hash' });
+    mocks.preparePublication.mockResolvedValue({
+      run_id: 'run-7', generation: 2, old_manifest_hash: 'old', new_manifest_hash: 'new',
+      old_policy_version: null, new_policy_version: null, old_layout_version: null, new_layout_version: null,
+      backup_dir: path.join(env.stagingRoot, 'run-7', 'backup'), steps: [],
+    });
+
+    const result = await runCurationCycle(db, {
+      memoryRoot: env.memoryRoot,
+      configRoot: env.configRoot,
+      stagingRoot: env.stagingRoot,
+      snapshotRoot: env.snapshotRoot,
+      providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
+      systemLocation: 'global',
+      workerId: 'w1',
+      pool: {} as unknown as AgentProcessPool,
+      sessionId: 'session-1',
+      now: T0,
+    });
+
+    expect(result.success).toBe(true);
+    // 9 eligible, truncated to MAX_INPUTS (8).
+    expect(mocks.claimRun).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ inputs: expect.arrayContaining([expect.objectContaining({ inputKind: 'ad_hoc' })]) }),
+    );
+    const claimedInputs = (mocks.claimRun.mock.calls[0][1] as { inputs: unknown[] }).inputs;
+    expect(claimedInputs).toHaveLength(8);
+    // At least one ad-hoc input reaches staging with its real source path.
+    const stagingInputs = (mocks.createStaging.mock.calls[0][2] as { inputs: Array<{ inputKind: string; sourcePath: string }> }).inputs;
+    expect(stagingInputs.some((i) => i.inputKind === 'ad_hoc' && i.sourcePath.includes('extensions'))).toBe(true);
+  });
+
+  it('8. scans ad-hoc inputs from the extensions/ad_hoc directory', async () => {
+    mocks.queryEligibleInputs.mockReturnValue([
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
+    ]);
+    mocks.scanAdHocChanges.mockResolvedValue([
+      {
+        inputKind: 'ad_hoc' as const,
+        inputKey: 'extensions/ad_hoc/note.md',
+        contentHash: 'h-note',
+        sourcePath: path.join(env.memoryRoot, 'extensions', 'ad_hoc', 'note.md'),
+        outputUpdatedAt: T0,
+      },
+    ]);
+    mocks.claimRun.mockReturnValue({ runId: 'run-8', lockToken: 'tok-8' });
+    mocks.createStaging.mockResolvedValue({ stagingDir: path.join(env.stagingRoot, 'run-8'), manifestHash: 'stg-hash' });
+    mocks.runCurationAgent.mockResolvedValue({
+      timedOut: false,
+      receipt: { inputs: [], health: { added: 0, merged: 0, retired: 0, no_change: 0, rejected: 0 } },
+    });
+    mocks.validateStaging.mockReturnValue({ valid: true, errors: [], warnings: [] });
+    mocks.createSnapshot.mockResolvedValue({ snapshotDir: path.join(env.snapshotRoot, 'snap-8'), manifestHash: 'snap-hash' });
+    mocks.preparePublication.mockResolvedValue({
+      run_id: 'run-8', generation: 2, old_manifest_hash: 'old', new_manifest_hash: 'new',
+      old_policy_version: null, new_policy_version: null, old_layout_version: null, new_layout_version: null,
+      backup_dir: path.join(env.stagingRoot, 'run-8', 'backup'), steps: [],
+    });
+
+    await runCurationCycle(db, {
+      memoryRoot: env.memoryRoot,
+      configRoot: env.configRoot,
+      stagingRoot: env.stagingRoot,
+      snapshotRoot: env.snapshotRoot,
+      providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
+      systemLocation: 'global',
+      workerId: 'w1',
+      pool: {} as unknown as AgentProcessPool,
+      sessionId: 'session-1',
+      now: T0,
+    });
+
+    expect(mocks.scanAdHocChanges).toHaveBeenCalledWith(
+      expect.anything(),
+      path.join(env.memoryRoot, 'extensions', 'ad_hoc'),
     );
   });
 });
