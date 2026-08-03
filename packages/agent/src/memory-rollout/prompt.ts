@@ -23,6 +23,8 @@
  * produced by `compactMessages.ts`.
  */
 
+export { STAGE1_HARD_CONTRACT } from './stage1_prompt_loader.js';
+
 /**
  * Full system prompt for the Stage 1 extractor LLM call.
  *
