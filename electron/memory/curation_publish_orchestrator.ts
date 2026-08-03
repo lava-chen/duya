@@ -21,6 +21,7 @@ import { preparePublication, executePublication, recoverPublication, type Recove
 import { createSnapshot } from './curation_snapshot';
 import { appendHealthReport, type HealthReport } from '../../packages/agent/src/memory-state/curation_health';
 import { rebuildMemoryEntriesFromFiles } from '../../packages/agent/src/memory-state/memory_entries_rebuild';
+import { scanAdHocChanges, type AdHocInput } from './ad_hoc_watcher';
 import { getLogger, LogComponent } from '../logging/logger';
 
 /**
@@ -71,6 +72,19 @@ export interface CycleResult {
 }
 
 /**
+ * A single input claimed for a curation run, normalized across rollout
+ * and ad-hoc sources. `sourcePath` is the absolute path used to freeze
+ * the input's evidence into the staging workspace.
+ */
+interface ClaimedInput {
+  inputKind: 'rollout' | 'ad_hoc';
+  inputKey: string;
+  contentHash: string;
+  outputUpdatedAt: number;
+  sourcePath: string;
+}
+
+/**
  * Run a single curation cycle. Returns the result of the cycle.
  *
  * The cycle is single-flight: if no eligible inputs meet the minimum
@@ -84,22 +98,46 @@ export async function runCurationCycle(
   const startTime = Date.now();
   const now = opts.now ?? Date.now();
 
-  // 1. Query eligible inputs.
-  const eligible = queryEligibleInputs(db, {
+  // 1. Query eligible inputs (rollout + ad-hoc), merged and truncated.
+  const rolloutEligible = queryEligibleInputs(db, {
     maxInputs: MAX_INPUTS,
     maxInputBytes: MAX_INPUT_BYTES,
     now,
   });
+  const adHocEligible: AdHocInput[] = await scanAdHocChanges(
+    db,
+    path.join(opts.memoryRoot, 'extensions', 'ad_hoc'),
+  );
+
+  const rolloutClaimed: ClaimedInput[] = rolloutEligible.map((e) => ({
+    inputKind: e.inputKind,
+    inputKey: e.inputKey,
+    contentHash: e.contentHash,
+    outputUpdatedAt: e.outputUpdatedAt,
+    sourcePath: path.join(opts.memoryRoot, 'rollout_summaries', `${e.inputKey}.md`),
+  }));
+  const adHocClaimed: ClaimedInput[] = adHocEligible.map((e) => ({
+    inputKind: e.inputKind,
+    inputKey: e.inputKey,
+    contentHash: e.contentHash,
+    outputUpdatedAt: e.outputUpdatedAt,
+    sourcePath: e.sourcePath,
+  }));
+
+  // Merge both sources, oldest-first, then truncate to MAX_INPUTS.
+  const claimed = [...rolloutClaimed, ...adHocClaimed]
+    .sort((a, b) => a.outputUpdatedAt - b.outputUpdatedAt)
+    .slice(0, MAX_INPUTS);
 
   // 2. Skip if not enough inputs.
-  if (eligible.length < MIN_INPUTS_FOR_RUN) {
+  if (claimed.length < MIN_INPUTS_FOR_RUN) {
     return { skipped: true, success: false };
   }
 
   // 3. Claim the run.
-  const inputSetHash = computeInputSetHash(eligible);
+  const inputSetHash = computeInputSetHash(claimed);
   const baseManifestHash = computeLiveManifestHash(opts.memoryRoot);
-  const inputs: CurationInput[] = eligible.map((e) => ({
+  const inputs: CurationInput[] = claimed.map((e) => ({
     inputKind: e.inputKind,
     inputKey: e.inputKey,
     contentHash: e.contentHash,
@@ -133,11 +171,11 @@ export async function runCurationCycle(
     const stagingResult = await createStaging(opts.stagingRoot, runId, {
       memoryRoot: opts.memoryRoot,
       configRoot: opts.configRoot,
-      inputs: eligible.map((e) => ({
+      inputs: claimed.map((e) => ({
         inputKind: e.inputKind,
         inputKey: e.inputKey,
         contentHash: e.contentHash,
-        sourcePath: path.join(opts.memoryRoot, 'rollout_summaries', `${e.inputKey}.md`),
+        sourcePath: e.sourcePath,
       })),
     });
     stagingDir = stagingResult.stagingDir;
