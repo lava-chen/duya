@@ -22,4 +22,10 @@ export type {
   TaskStatus,
 } from './session/task-store.js';
 
+export {
+  CURATOR_SYSTEM_PROMPT,
+  buildCuratorInitialMessage,
+} from './memory-state/curation_prompt.js';
+export type { RunInput } from './memory-state/curation_prompt.js';
+
 export { duyaAgent, duyaAgent as default } from './agent/DuyaAgent.js';

@@ -246,6 +246,14 @@ export interface ChatOptions {
   agentProfileId?: string | null;
   /** Mode modifier ID for this chat turn (for example, 'research'). */
   mode?: string;
+  /**
+   * Mark this chat turn's session transcript as excluded from Stage 1
+   * memory extraction. Used by the Phase 2 curator agent (design §7.4)
+   * so the curator's own tool calls and reasoning do not get fed back
+   * into Stage 1 as new memory — a self-referential loop. The Stage 1
+   * extractor filters out sessions whose row carries this flag.
+   */
+  excludeFromStage1?: boolean;
   /** Output style configuration for this chat turn */
   outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
   /**

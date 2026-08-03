@@ -78,6 +78,17 @@ export interface ChatStartCommand {
      * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
      */
     allowedTools?: string[];
+    /**
+     * Mark this session transcript as excluded from Stage 1 memory
+     * extraction (design §7.4). Used by the curator agent runner so
+     * curator reasoning is not fed back into Stage 1.
+     */
+    excludeFromStage1?: boolean;
+    /**
+     * Internal agent mode for this chat turn (e.g. 'automation' for the
+     * headless curator). Mirrors ChatOptions.mode.
+     */
+    mode?: string;
   };
 }
 
