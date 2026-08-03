@@ -19,6 +19,7 @@ import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/pathPermission.js';
 import { expandPath } from '../../utils/path.js';
+import { isPathWithinRoots } from '../allowedRoots.js';
 
 // ============================================================
 // Input Validation
@@ -101,6 +102,13 @@ export class WriteTool extends BaseTool {
     required: ['file_path', 'content'],
   };
 
+  private readonly allowedRoots?: readonly string[];
+
+  constructor(opts: { allowedRoots?: string[] } = {}) {
+    super();
+    this.allowedRoots = opts.allowedRoots;
+  }
+
   get interruptBehavior(): ToolInterruptBehavior {
     return 'cancel';
   }
@@ -139,6 +147,18 @@ export class WriteTool extends BaseTool {
     }
 
     const { file_path, content, encoding = 'utf-8' } = validation.data;
+
+    if (this.allowedRoots && this.allowedRoots.length > 0) {
+      const resolved = expandPath(file_path, workingDirectory);
+      if (!isPathWithinRoots(resolved, [...this.allowedRoots])) {
+        return {
+          id,
+          name: this.name,
+          error: true,
+          result: `Path '${file_path}' is outside the allowed roots for this tool.`,
+        };
+      }
+    }
 
     try {
       // Use expandPath for cross-platform compatibility
