@@ -160,6 +160,19 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
 - `SessionSearch` / `MessageSession` are optional continuity tools, not a
   default substitute for handling the user's task with local tools.
 
+### Agent Message Domain (staged, not runtime-active)
+
+`packages/agent/src/message/message-framework.ts` is a standalone next-generation
+message domain. It separates append-only timeline entries, extensible Agent
+messages, provider `Message[]` projection, runtime context, UI visibility, and
+compaction checkpoints. Compaction appends a checkpoint; model context is
+projected from its summary plus the retained suffix without deleting raw history.
+
+The framework is not exported from `packages/agent/src/index.ts` and is not used
+by `DuyaAgent`, persistence, or the Renderer yet. The current runtime remains
+unchanged. Later migrations must move one call-site group at a time and retain
+the old-path regression coverage until each switch is verified.
+
 ### 消息持久化流程
 
 ```
