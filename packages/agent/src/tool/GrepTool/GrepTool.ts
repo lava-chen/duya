@@ -15,6 +15,7 @@ import type {
   ToolInterruptBehavior,
 } from '../types.js';
 import { sanitizeWorkingDirectory } from './sanitize.js';
+import { isPathWithinRoots } from '../allowedRoots.js';
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -41,6 +42,7 @@ export interface GrepMatch {
 
 export interface GrepToolOptions {
   workingDirectory?: string;
+  allowedRoots?: string[];
 }
 
 // ============================================================
@@ -143,6 +145,7 @@ export class GrepTool extends BaseTool {
   };
 
   private workingDirectory: string;
+  private readonly allowedRoots?: readonly string[];
   private defaultMaxResults = 50;
 
   constructor(options: GrepToolOptions = {}) {
@@ -156,6 +159,7 @@ export class GrepTool extends BaseTool {
     // sanitizer on every call and refuses to scan when the result is
     // undefined.
     this.workingDirectory = sanitizeWorkingDirectory(options.workingDirectory) ?? '';
+    this.allowedRoots = options.allowedRoots;
   }
 
   get interruptBehavior(): ToolInterruptBehavior {
@@ -237,29 +241,25 @@ export class GrepTool extends BaseTool {
     const matches: GrepMatch[] = [];
     const lines = output.split('\n');
 
+    // ripgrep emits `path:line:column:content`. On Windows the path contains
+    // a drive-letter colon (e.g. `C:\...`), so a naive `split(':')` on the
+    // first colon breaks. A greedy `.*` in the prefix captures the whole path
+    // (including the drive colon) while the trailing `:digits:digits:` anchors
+    // the line/column numbers.
+    const linePattern = /^(.*):(\d+):(\d+):(.*)$/;
+
     for (const line of lines) {
       if (!line.trim()) continue;
       if (maxResults && matches.length >= maxResults) break;
 
-      const colonIndex = line.indexOf(':');
-      if (colonIndex === -1) continue;
+      const match = line.match(linePattern);
+      if (!match) continue;
 
-      const file = line.slice(0, colonIndex);
-      const rest = line.slice(colonIndex + 1);
+      const lineNum = parseInt(match[2], 10);
+      const column = parseInt(match[3], 10);
+      if (isNaN(lineNum) || isNaN(column)) continue;
 
-      const secondColonIndex = rest.indexOf(':');
-      if (secondColonIndex === -1) continue;
-
-      const lineStr = rest.slice(0, secondColonIndex);
-      const columnStr = rest.slice(secondColonIndex + 1);
-
-      const lineNum = parseInt(lineStr, 10);
-      const column = parseInt(columnStr, 10);
-      const content = rest.slice(secondColonIndex + 1).trim();
-
-      if (!isNaN(lineNum) && !isNaN(column)) {
-        matches.push({ file, line: lineNum, column, content });
-      }
+      matches.push({ file: match[1], line: lineNum, column, content: match[4].trim() });
     }
 
     return matches;
@@ -400,6 +400,20 @@ export class GrepTool extends BaseTool {
         ? path
         : join(baseDir, path)
       : baseDir;
+
+    if (this.allowedRoots && this.allowedRoots.length > 0) {
+      if (!isPathWithinRoots(searchPath, [...this.allowedRoots])) {
+        return {
+          id,
+          name: this.name,
+          error: true,
+          result: JSON.stringify({
+            success: false,
+            error: `Search path '${searchPath}' is outside the allowed roots for this tool.`,
+          }),
+        };
+      }
+    }
 
     try {
       const hasRipgrep = await this.isRipgrepAvailable();
