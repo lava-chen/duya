@@ -43,7 +43,6 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [401-memory-curation-tool-foundation](./active/401-memory-curation-tool-foundation.md) | Memory curation tool foundation | P1 | Planning |
 | [402-memory-curation-ledger-staging](./active/402-memory-curation-ledger-staging.md) | Memory curation ledger staging | P1 | Planning |
 | [404-memory-curation-publisher-projection](./active/404-memory-curation-publisher-projection.md) | Memory curation publisher projection | P1 | Planning |
-| [405-memory-curation-prompt-canary-layout](./active/405-memory-curation-prompt-canary-layout.md) | Memory curation prompt canary layout | P1 | Planning |
 | [406-memory-curation-rebuild-adhoc-retire](./active/406-memory-curation-rebuild-adhoc-retire.md) | Memory curation rebuild / adhoc retirement | P1 | Planning |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 
@@ -161,6 +160,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | Memory Phase 1A.2 — lease lifecycle + CAS | 2026-07-25 |
 | [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory Phase 1A — schema + project registry + catalog sync | 2026-07-25 |
 | [403-memory-curation-validator-runner](./completed/403-memory-curation-validator-runner.md) | Memory curation validator runner — curator prompt + staging validator + agent runner | 2026-08-04 |
+| [405-memory-curation-prompt-canary-layout](./completed/405-memory-curation-prompt-canary-layout.md) | Memory curation prompt canary layout — two-layer prompt contract + canary + memory_layout.json | 2026-08-04 |
 
 ### Canvas / Conductor
 
