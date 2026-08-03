@@ -29,222 +29,196 @@ exec-plans/
 
 Plans in `active/` are being executed with clear phases and checkpoints.
 
-| [232-input-option-popover-alignment](./active/232-input-option-popover-alignment.md) | Shared searchable option-panel style for chat model and project/session pickers | P1 | In progress |
-| [233-conductor-multi-canvas-management](./active/233-conductor-multi-canvas-management.md) | Agent canvas identity, listing, creation, switching, naming, and durable sidebar/session sync | P0 | In progress |
-| [235-human-like-browser-backend](./active/235-human-like-browser-backend.md) | Codex-style computer-use: coordinate primitives (click_at/drag/key_combo…), Set-of-Mark visual loop, human-like input + extension backend, safety notes | P1 | Implementation complete; live Electron verification deferred |
-| [234-canvas-element-editing-and-scene-architecture](./active/234-canvas-element-editing-and-scene-architecture.md) | Capability-driven element editing/toolbars and Agent scene blueprints | P0 | Implementation complete; verification blockers recorded |
+### Agent Core & Message
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [315-agent-message-domain-framework](./active/315-agent-message-domain-framework.md) | Pi-inspired append-only AgentMessage timeline, custom message projection, durable compaction checkpoints | P0 | Phase 1 complete; runtime integration deferred |
+| [316-prompt-contributor-integration](./active/316-prompt-contributor-integration.md) | Prompt contributors wiring into the message/context framework | P1 | Planning |
+| [242-agent-package-cleanup](./active/242-agent-package-cleanup.md) | Evidence-driven cleanup of dead Claude Code inheritance, stale build/public surface, unused deps in `@duya/agent` | P1 | Phase 1 complete; verification blockers recorded |
+| [310-multi-model-reasoning-architecture](./active/310-multi-model-reasoning-architecture.md) | Multi-model reasoning architecture | P1 | Planning |
+| [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like runtime instruction injection (`agent_mailbox` + checkpoints + soft interrupt) | P0 | Planning |
+| [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive memory — RealTimeCapture hook + scoring + dual-path Recall + decay archival | P1 | Planning |
+| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory sustainable consolidation / retrieval, bounded `summary.md`, unified `MEMORY.md`, retirement of legacy projections | P0 | Implementation; live migration verification pending |
+| [401-memory-curation-tool-foundation](./active/401-memory-curation-tool-foundation.md) | Memory curation tool foundation | P1 | Planning |
+| [402-memory-curation-ledger-staging](./active/402-memory-curation-ledger-staging.md) | Memory curation ledger staging | P1 | Planning |
+| [404-memory-curation-publisher-projection](./active/404-memory-curation-publisher-projection.md) | Memory curation publisher projection | P1 | Planning |
+| [405-memory-curation-prompt-canary-layout](./active/405-memory-curation-prompt-canary-layout.md) | Memory curation prompt canary layout | P1 | Planning |
+| [406-memory-curation-rebuild-adhoc-retire](./active/406-memory-curation-rebuild-adhoc-retire.md) | Memory curation rebuild / adhoc retirement | P1 | Planning |
+| [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
+
+### Conductor / Canvas
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [233-conductor-multi-canvas-management](./active/233-conductor-multi-canvas-management.md) | Agent canvas identity, listing, creation, switching, naming, durable sidebar/session sync | P0 | In progress |
 | [235-conductor-finite-widget-layout](./active/235-conductor-finite-widget-layout.md) | Finite document-mode allowlist for document/table/link plus free-positioned text and media | P0 | Phase 1 complete |
-| [236-project-database-element](./active/236-project-database-element.md) | Project-local structured data source, saved table views, canvas database element, and Agent tools | P0 | MVP implemented; verification blockers recorded |
-| [231-cron-automation-ui-runtime-hardening](./active/231-cron-automation-ui-runtime-hardening.md) | Cron creation/editing UX, schedule presets, scheduler startup hardening, and default workspace | P0 | Implementation complete; verification blockers recorded |
-| [238-tool-history-integrity](./active/238-tool-history-integrity.md) | Strict provider-safe tool round ordering, durable message sequence, and legacy history repair | P0 | Implementation complete; live Electron verification pending |
-| [239-canvas-tool-find-empty-space-and-capture-region](./active/239-canvas-tool-find-empty-space-and-capture-region.md) | `canvas_find_empty_space` returns fully-empty rectangles (closest to canvas center) instead of bin-pack overlaps; `canvas_capture` `scope:'region'` documents and clips viewport-pixel coordinates with clear errors | P0 | Implementation complete; UI Electron verification pending |
-| [240-canvas-capture-splash-and-manage-broadcast](./active/240-canvas-capture-splash-and-manage-broadcast.md) | `canvas_capture` waits for first paint before screenshotting (no more splash-screen PNGs); renderer subscribes to `conductor:canvas:changed` so `canvas_manage create/switch/rename` actually update the visible canvas list | P0 | Implementation complete; live Electron verification pending |
-| [241-on-demand-tool-discovery](./active/241-on-demand-tool-discovery.md) | `tool_search` 接入 + schema 摘要 + 内置工具分档 + dispatch 循环动态注入三阶段 (Phase 1/2/3 全部完成) | P1 | Phase 1/2/3 ✅ |
-| [242-agent-package-cleanup](./active/242-agent-package-cleanup.md) | Evidence-driven cleanup of dead Claude Code inheritance, stale build/public surface, and unused dependencies in `@duya/agent` | P1 | Phase 1 complete; legacy Conductor runtime removed; verification blockers recorded |
-| [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` mode — single persistent session per cron, DB-authoritative history across runs | P0 | Planning |
-| [314-no-project-session](./active/314-no-project-session.md) | No-project session — sessions with no concrete project folder share `~/.duya/workspace` and appear in the sidebar "无项目" group | P1 | In progress |
-| [315-agent-message-domain-framework](./active/315-agent-message-domain-framework.md) | Pi-inspired append-only AgentMessage timeline, custom message projection, and durable compaction checkpoints | P0 | Phase 1 complete; runtime integration deferred |
+| [236-project-database-element](./active/236-project-database-element.md) | Project-local structured data source, saved table views, canvas database element, Agent tools | P0 | MVP implemented; verification blockers recorded |
+| [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Sticky/connector style extension + Group element + 4 group tools + property panel | P1 | Planning |
+| [70-conductor-canvas-v2-type-system](./active/70-conductor-canvas-v2-type-system.md) | Canvas V2 Phase 1: unified node model + type system + DB + IPC + Store | P0 | Planning |
+| [71-conductor-canvas-v2-native-rendering](./active/71-conductor-canvas-v2-native-rendering.md) | Canvas V2 Phase 2: Shape/Text/Sticky/Section native rendering | P0 | Planning |
+| [72-conductor-canvas-v2-connector](./active/72-conductor-canvas-v2-connector.md) | Canvas V2 Phase 3: Connector system (Bezier + endpoint binding) | P0 | Planning |
+| [73-conductor-canvas-v2-mindmap-frame-toolbar](./active/73-conductor-canvas-v2-mindmap-frame-toolbar.md) | Canvas V2 Phase 4-6: MindMap + Frame + toolbar + interaction | P0 | Planning |
+| [74-conductor-canvas-v2-agent-integration](./active/74-conductor-canvas-v2-agent-integration.md) | Canvas V2 Phase 7-8: Agent tools + Image + theme + light shell | P0 | Planning |
+| [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Mindmap follow-up: root move + subtree reorder + draft node flow | P0 | Planning |
+| [36-conductor-blueprint-implementation](./active/36-conductor-blueprint-implementation.md) | Conductor blueprint interaction loop implementation | P0 | In progress |
+| [32-conductor-foundation](./active/32-conductor-foundation.md) | Conductor data, communication, architecture guardrails | P0 | Phase 1 ✅ |
+| [33-conductor-canvas-ui](./active/33-conductor-canvas-ui.md) | Conductor canvas UI + built-in Widget V1 | P0 | Phase 1-4 ✅ |
+| [31-conductor-overview](./active/31-conductor-overview.md) | Conductor dynamic Agent workbench overview | P0 | 待开始 |
+| [35-conductor-widget-extensibility](./active/35-conductor-widget-extensibility.md) | Conductor Widget extensibility & dynamic security boundary | P1 | 待开始 |
+| [48-canvas-element-data-model](./active/48-canvas-element-data-model.md) | Canvas Elements type system | P0 | 设计阶段 |
+| [227-canvas-knowledge-workspace](./active/227-canvas-knowledge-workspace.md) | Canvas knowledge workspace | P1 | Planning |
+| [314-global-connector-registry-design-suite](./active/314-global-connector-registry-design-suite.md) | Global connector registry design suite | P1 | Planning |
+| [314-tool-catalog-snapshot](./active/314-tool-catalog-snapshot.md) | Tool catalog snapshot design | P1 | Planning |
 
-### Agent Feature Parity Plans
-
-| Plan | Description | Priority | Status |
-|------|-------------|----------|--------|
-| [25-skills-completion-plan](./active/25-skills-completion-plan.md) | 官方 Skill 补全计划 (hermes-agent 等) | P1 | 进行中 |
-| [30-mcp-loading-implementation](./active/30-mcp-loading-implementation.md) | MCP 服务器加载与连接实现 | P0 | Phase 1-3 ✅ |
-| [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP 市场与一键安装实现 | P1 | 待开始 |
-| [38-chat-generative-ui](./active/38-chat-generative-ui.md) | Chat Generative UI — Widget 系统 V2 升级 | P1 | Phase 1-4 ✅  Phase 5 🔴 |
-| [82-researcher-codex-ui-alignment](./active/82-researcher-codex-ui-alignment.md) | Researcher Codex UI Alignment — Codex 级 Agent UX + 科研助手定位 | P0 | Planning |
-| [83-plugin-codex-ui-alignment](./active/83-plugin-codex-ui-alignment.md) | Plugin Codex UI Alignment — capability marketplace and settings UX | P1 | Planning |
-| [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent Memory + Literature Plugin — 独立文献插件与研究记忆子系统 | P1 | Planning |
-| [203-provider-ui-interaction-architecture](./completed/203-provider-ui-interaction-architecture.md) | Provider UI 4 层架构（Query / Hook-per-concern / Orchestrator / Wiring）— Phase 1+2+3 之后的地基重构，**不改 UX 减 1900 行** | P1 | Phase 0–5 ✅ |
-| [204-provider-card-redesign](./completed/204-provider-card-redesign.md) | Provider Card UX 重做 — 在 Plan 203 4 层架构之上，对齐 cc-switch 卡片视觉（hover 操作区 + 右上角 Add + 测试/限额查询/删除 + 删诊断）— `ProvidersSection` 1066→246 LoC | P1 | Plan 204 done 2026-06-10 |
-| [205-provider-inline-edit-page](./active/205-provider-inline-edit-page.md) | Provider Inline Edit Page + Two-Step Add Flow — 用 settingsTab 子页面（picker → edit）替代 modal `ProviderConnectDialog`，store 驱动 | P1 | Phase A-F done, G in progress |
-
-### Plugin Product Definition (五元组能力包)
-
-> Design doc: [2026-07-29-plugin-product-definition.md](../design-docs/2026-07-29-plugin-product-definition.md) — Plugin = MCP/App Connection + Skills + Workflow Templates + Permissions + UI
+### Plugin / MCP / App Connection
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [311-plugin-workflow-templates](./active/311-plugin-workflow-templates.md) | Workflow Templates 一等公民 — manifest v2 `components.workflows` + 加载/摘要暴露 + 模板启动入口 + 五档权限联动 | P0 | Planning |
-| [312-app-connection-oauth](./active/312-app-connection-oauth.md) | App Connection 基础设施 — safeStorage token vault + loopback/PKCE OAuth + connector 工具暴露（Google/Slack/MS365） | P0 | Planning |
-| [313-first-party-plugin-catalog](./active/313-first-party-plugin-catalog.md) | 首发 12 个一方插件目录 — GitHub/Playwright P0 先行 + Remote MCP 批次（含 HTTP transport 前置）+ App Connection 批次 | P0 | Planning |
+| [311-plugin-workflow-templates](./active/311-plugin-workflow-templates.md) | Workflow Templates first-class — manifest v2 `components.workflows` + load + launch + permission | P0 | Planning |
+| [312-app-connection-oauth](./active/312-app-connection-oauth.md) | App Connection infra — safeStorage token vault + loopback/PKCE OAuth + connector tools | P0 | Planning |
+| [313-first-party-plugin-catalog](./active/313-first-party-plugin-catalog.md) | 12 first-party plugin catalog — GitHub/Playwright P0 + Remote MCP + App Connection batches | P0 | Planning |
+| [85-builtin-plugin-flexibilization](./active/85-builtin-plugin-flexibilization.md) | Built-in Plugin convention-over-configuration | P0 | Planning |
+| [86-schema-manifest-llm-friendly](./active/86-schema-manifest-llm-friendly.md) | Schema lenient — Agent-readable `plugin.md` layered design | P0 | Planning |
+| [87-hook-system-full-enhancement](./active/87-hook-system-full-enhancement.md) | Hook system full upgrade — 4 types + 29 events + Async + Matcher | P0 | Planning |
+| [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | Multi-source plugin discovery — GitHub/NPM/Git/URL/Local + priority merge | P1 | Planning |
+| [89-plugin-lifecycle-version](./active/89-plugin-lifecycle-version.md) | Plugin lifecycle & versioning — versioned cache + Scope + dependency validation + auto-update | P1 | Planning |
+| [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | Plugin marketplace — catalog + enterprise policy + spoof-protection + sync | P1 | Planning |
+| [91-structured-error-handling](./active/91-structured-error-handling.md) | Structured error handling — 28 Discriminated-Union PluginError types | P1 | Planning |
+| [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | Plugin security & enterprise policy — Trust Level + path guard + permission + Enterprise Policy | P0 | Planning |
+| [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP marketplace & one-click install | P1 | 待开始 |
+| [226-mcp-security-layer-hardening](./active/226-mcp-security-layer-hardening.md) | MCP security hardening — env allowlist + secret sanitization + prompt-injection scan + rate limiter | P1 | Phase 1-2 ✅, 2.5 deferred |
 
-### Plugin System Enhancement Plans (Claude Code Alignment)
-
-| Plan | Description | Priority | Status |
-|------|-------------|----------|--------|
-| [85-builtin-plugin-flexibilization](./active/85-builtin-plugin-flexibilization.md) | Built-in Plugin 约定优于配置 — 目录自描述 + Markdown 元信息 | P0 | Planning |
-| [86-schema-manifest-llm-friendly](./active/86-schema-manifest-llm-friendly.md) | Schema 宽松化 — Agent 可理解的 plugin.md 分层设计 | P0 | Planning |
-| [87-hook-system-full-enhancement](./active/87-hook-system-full-enhancement.md) | Hook 系统全面升级 — 4 类型 + 29 事件 + Async + Matcher | P0 | Planning |
-| [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | 插件多源发现 — GitHub / NPM / Git / URL / Local + 优先级合并 | P1 | Planning |
-| [89-plugin-lifecycle-version](./active/89-plugin-lifecycle-version.md) | 生命周期与版本管理 — 版本化缓存 + Scope + 依赖验证 + 自动更新 | P1 | Planning |
-| [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | 插件市场系统 — catalog + 企业策略 + 防冒名 + 同步管理 | P1 | Planning |
-| [91-structured-error-handling](./active/91-structured-error-handling.md) | 结构化错误处理 — 28 种可区分联合类型 PluginError | P1 | Planning |
-| [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | 安全与企业策略 — Trust Level + 路径防护 + 权限执行 + Enterprise Policy | P0 | Planning |
-| [96-duya-cli-tool](./active/96-duya-cli-tool.md) | DUYA CLI — 统一命令行工具 (plugin / session / doctor / skill / provider / mcp / install-cli / agent integration) | P0 | Phases 0–8 Complete |
-| [98-cli-channel-cron-message](./active/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message + Command-Registration Refactor — 3 new domains (channel/cron/message) + descriptor-driven registry | P0 | Phase A 🟡, B–F 📋 |
-| [99-cli-split-and-control-plane](./active/99-cli-split-and-control-plane.md) | CLI Split — `packages/cli` workspace, Electron routes (channels/crons/messages), cron HTTP PATCH/DELETE contract, agent tool structured dispatcher, audit `invokedBy` tagging | P0 | Phases 0–9 ✅, canUseTool deferred to Plan 97 |
-| [102-duya-config-into-cli](./active/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single agent config entry, `duya config {provider,settings,vision,style,pairing}` + `duya mcp add/remove/assign`, retire `DuyaConfigTool` | P1 | Planning |
-| [103-research-mode-persistence-hardening](./active/103-research-mode-persistence-hardening.md) | Research Mode Persistence Hardening — `persistResearchSSEEvent` 优雅降级 + 修复 mode dispatch 中伪同步 IPC DB 调用 + research mode sessionId 缺失时 fail-fast | P1 | Phase 1–3 ✅ |
-| [105-code-agent-profile-runtime-wiring](./completed/105-code-agent-profile-runtime-wiring.md) | Code Agent Profile Runtime Wiring & Tool Diagnostics — `promptProfile` 真正生效 (Code/General/Research/Conductor) + `PromptsRegistry` 缓存按 profile 实例化 + Tool filter diagnostic + code prompt 条件注入 | P0 | ✅ Complete |
-| [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive Memory 主动记忆增强 — RealTimeCapture hook + 3D 评分反思 + 双路径 Recall + 时序衰减归档（基于 claude-code-haha / hermes-agent / openclaw / duya 四方对比）| P1 | Planning |
-| [200-cli-surface-expansion](./active/200-cli-surface-expansion.md) | CLI Surface Expansion — `duya update / backup / security` (openclaw-comparison) + polish existing (status / plugin / config / session / message / mcp / skill / channel / cron / gateway) | P1 | All phases ✅ |
-| [201-cli-packaged-smoke-fixes](./active/201-cli-packaged-smoke-fixes.md) | CLI Packaged Smoke-Test Fixes — `adaptIdFirst` for `(id,format)` info commands, auto-inject `--format`, auto-dispatch `default` sub, add missing `channel_directory` table, drop `setup` from control plane | P0 | Phases 1–5 ✅, Phase 6 ⏳ (verify on next packaged build) |
-| [107-cron-cli-bugfix](./active/107-cron-cli-bugfix.md) | Cron CLI Bugfix — `info` / `message show` DTO wrap, `delete` 500 ReferenceError, schedule field-name UX, CI does not typecheck `electron/` | P0 | Phase 1 ✅, Phase 2 📋 |
-| [108-cli-channel-list-and-help](./active/108-cli-channel-list-and-help.md) | CLI Channel list / channel --help bugfix — merge `channel_bindings` into `duya channel list`; wire `--help` / `help` for every descriptor-driven top-level command | P0 | Planning |
-| [220-attachment-unification](./active/220-attachment-unification.md) | Chat input attachment unification — collapse 5 parallel state machines (paste/file/file-chip/terminal-ref/browser-ref) into 1 `pendingAttachments: FileAttachment[]` + 1 `<AttachmentBar>` + marker deletion with read-only legacy adapter | P1 | Phase 0–7 ✅ (decision log filled; not yet moved to completed) |
-| [221-conductor-main-agent-injection](./active/221-conductor-main-agent-injection.md) | Conductor 主 Agent 注入 — 取消画布独立 agent，改由主界面 agent 控制 (5 工具 + prompt overlay + 智能绑定 + UI toggle) | P0 | Implemented (9.3/9.4/9.5 deferred) |
-| [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin System Cleanup & Runtime Wiring — 死代码清理 (`runtimeFactories` / `plugins/literature` / `PermissionService` override) + 接入路径修正 + capabilityCounts 派生 | P1 | Complete |
-
-| [215-office-workspace](./active/215-office-workspace.md) | Office side-panel workspace for DOCX/PPTX/XLSX preview, selection context, and Agent-driven edits | P1 | Phase 1 complete; Phase 2 pending |
-| [216-file-preview-workspace](./active/216-file-preview-workspace.md) | Expanded read-only file preview workspace with tabs, project tree, and persistent composer | P1 | Implementation complete; visual smoke environment-blocked |
-
-### Infrastructure & Architecture Plans
+### CLI / Cron
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [15-bash-worker-implementation](./active/15-bash-worker-implementation.md) | Bash Worker 多进程实现 | P0 | 设计完成 |
-| [27-logging-and-auto-update](./active/27-logging-and-auto-update.md) | 日志系统与自动更新功能 | P1 | 代码完成，待 UI 集成 |
-| [28-multi-source-update-fallback](./active/28-multi-source-update-fallback.md) | 自动更新多源回退方案 | P1 | 待实现 |
-| [97-tool-path-permission-refactor](./active/97-tool-path-permission-refactor.md) | Read/Write/Edit 路径权限重构 — 委托到权限系统，修复 bypass 模式 | P0 | Planning |
-| [31-conductor-overview](./active/31-conductor-overview.md) | Conductor 动态 Agent 工作台总览 | P0 | 待开始 |
-| [32-conductor-foundation](./active/32-conductor-foundation.md) | Conductor 数据、通信与架构护栏 | P0 | Phase 1 ✅ |
-| [33-conductor-canvas-ui](./active/33-conductor-canvas-ui.md) | Conductor 画布 UI 与内置 Widget V1 | P0 | Phase 1-4 ✅ |
-| [35-conductor-widget-extensibility](./active/35-conductor-widget-extensibility.md) | Conductor Widget 扩展性与动态安全边界 | P1 | 待开始 |
-| [36-conductor-blueprint-implementation](./active/36-conductor-blueprint-implementation.md) | Conductor 蓝图交互闭环实施 | P0 | 进行中 |
-| [66-async-nonblocking-subagent](./active/66-async-nonblocking-subagent.md) | Async Non-Blocking SubAgent 执行 — 子Agent非阻塞启动，主Agent可并行工作 | P0 | Planning |
-| [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent 嵌套会话侧边栏展示 | P1 | Planning |
-| [39-beta-launch-preparation](./active/39-beta-launch-preparation.md) | Beta 发布准备 | P0 | 进行中 |
-| [48-canvas-element-data-model](./active/48-canvas-element-data-model.md) | Canvas Elements 类型系统 | P0 | 设计阶段 |
-| [54-electron-directory-restructure](./active/54-electron-directory-restructure.md) | Electron 目录架构重构 | P1 | Phase 1 ✅, Phase 2 🔴 |
-| [60-research-mode](./active/60-research-mode.md) | Research Mode — 迭代研究工作流 + Interactive Report | P1 | 规划中 |
-| [94-research-mode-loop-improvement](./active/94-research-mode-loop-improvement.md) | Research Mode Research Loop 核心改进 — 动态排序、StopDecision、SourceEvaluator、去重服务 | P1 | Milestone 1 ✅, M2.1-3 📋 |
-| [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC 架构重整 | P0 | 进行中 |
-| [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | 浏览器多 Tab 隔离与并行执行 | P0 | 进行中 |
-| [106-node-file-parser-and-read-integration](./active/106-node-file-parser-and-read-integration.md) | Node File Parser & Read 工具集成 — 把 Python sidecar 迁到 Node 内嵌解析,Read 工具升级多模态(PDF/DOCX/PPTX/图片) | P1 | ✅ Complete |
-| [65-recap-feature](./active/65-recap-feature.md) | Session Recap — 离开回来后自动显示会话摘要 | P1 | Planning |
-| [95-external-agent-import](./active/95-external-agent-import.md) | External Agent Workspace Import — 从 Claude Code / Codex 导入项目上下文、记忆、技能 | P1 | Phase 1 ✅ |
-| [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like 运行时追加指令 (`agent_mailbox` + 9 checkpoint + soft interrupt + claim/lease) — PR1 数据层 / PR2 接入 `before_model_turn` / PR3 final / PR4 permission / PR5 tool guard | P0 | Planning |
-| [212-subagent-task-notification](./active/212-subagent-task-notification.md) | SubAgent Task-Notification Channel (claude-code-haha alignment) — `<task-notification>` XML envelope + `messageQueueManager.mode='task-notification'` + `notified` idempotency, UI 隐藏系统消息 | P1 | Implementation complete |
-| [214-agent-core-audit](./active/214-agent-core-audit.md) | Agent Core Audit — full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging. Phased: Phase 1 audit done, Phase 2 gated by user. | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ awaiting confirmation |
-| [222-interagent-message-session](./active/222-interagent-message-session.md) | Inter-Agent Communication — MessageSession tool for cross-session agent Q&A with cycle detection and timeout | P1 | Phase 1-9 ✅ |
-| [226-mcp-security-layer-hardening](./active/226-mcp-security-layer-hardening.md) | MCP Security Layer Hardening — env allowlist + secret sanitization + prompt injection scan + sampling rate limiter (hermes-agent alignment) | P1 | Phase 1-2 ✅, 2.5 deferred |
+| [98-cli-channel-cron-message](./active/98-cli-channel-cron-message.md) | CLI Channel/Cron/Message + descriptor-driven command-registration refactor | P0 | Phase A 🟡, B–F 📋 |
+| [99-duya-cli-argv-and-deprecate-cron-tool](./active/99-duya-cli-argv-and-deprecate-cron-tool.md) | CLI argv handling + deprecate cron tool | P0 | Planning |
+| [100-plugin-cli-completion](./active/100-plugin-cli-completion.md) | Plugin CLI completion | P1 | Planning |
+| [108-cli-channel-list-and-help](./active/108-cli-channel-list-and-help.md) | `channel_bindings` into `duya channel list`; wire `--help` for every descriptor command | P0 | Planning |
+| [107-cron-cli-bugfix](./active/107-cron-cli-bugfix.md) | Cron CLI bugfix — DTO wrap, 500 ReferenceError, schedule field-name UX, CI typecheck | P0 | Phase 1 ✅, Phase 2 📋 |
+| [201-cli-packaged-smoke-fixes](./active/201-cli-packaged-smoke-fixes.md) | CLI packaged smoke-test fixes — `adaptIdFirst`, auto-inject `--format`, `channel_directory` table | P0 | Phases 1–5 ✅, Phase 6 ⏳ |
+| [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` — single persistent session per cron, DB-authoritative history | P0 | Planning |
+| [231-skill-learning-inbox](./active/231-skill-learning-inbox.md) | Skill learning inbox | P1 | Planning |
 
-### Memory Control Plane (Shadow Mode)
-
-> Design doc: [docs/design-docs/2026-07-24-memory-architecture-v2-design.md](../../design-docs/2026-07-24-memory-architecture-v2-design.md)
->
-> Parent design is the v2 revision (job_status 拆出 / source version / lease heartbeat+CAS / memory_entries 实体 / provenance 下沉 / extractor 保时序 / scheduler 长在 main / projection outbox). The 2026-07-29 correction keeps project identity in SQLite but replaces UUID project folders with a bounded root `summary.md` and one unified, semantic `MEMORY.md` search projection.
-
-| Plan | Description | Priority | Status |
-| ------ | ------------ | -------- | ------ |
-| [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory DB co-located with `duya-main.db` (via `boot.json`) + migration runner + **migration 0001** (`projects` / `project_path_aliases` / `rollout_catalog`) + `ProjectResolver` (override > working_directory > cwd fallback; git never changes identity; UUID project_id) + `catalogSync` (transactional sync from `chat_sessions` + `messages`) | P0 | ✅ Complete 2026-07-25 |
-| [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | **Migration 0002** (`rollout_leases` / `rollout_retired` / `stage1_outputs`) + `lease.ts`: acquire / heartbeat (TTL/6) / CAS complete (vs. token / heartbeat / source version) / fail + backoff / retire at ≥10 attempts + `selectEligible` eligibility query. Concurrency-correct, idempotency-token-aware. | P0 | ✅ Complete 2026-07-25 |
-| [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | **Migration 0003** (create `projection_outbox` + `ALTER stage1_outputs ADD content_hash_at_write`) + `outbox.ts` (DB ↔ file atomicity sweeper, allowlisted paths, symlink-safe) + `reconcile.ts` (startup DB→file rebuild). Phase 2 retires the former `raw_memories.md` projection. | P0 | ✅ Complete 2026-07-25 |
-| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Stage 1 extractor: chronological compaction + per-candidate provenance + D8 guard + bounded five-item durable-value gate + controlled canonical-key taxonomy + explicit scope; rollout summaries remain the evidence projection. | P0 | ✅ Complete 2026-07-26 |
-| [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Long-lived `memory-worker.ts` in Electron main process; `DuyaAgent.startup()` fire-and-forget wakeup IPC; reconcile + outbox sweeper wiring; shadow-mode e2e suite (MockLLM, 11 tests; DB path resolved via `boot.json`); env-gated by `DUYA_MEMORY_V2_ENABLED` (default **off** until promotion plan). Phase E manual 30-min validation deferred. | P0 | ✅ Complete 2026-07-26 |
-| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory sustainable consolidation/retrieval — controlled extraction, alias dedupe, per-scope active caps, bounded `summary.md`, unified semantic `MEMORY.md`, and retirement of `projects/<UUID>` / `raw_memories.md`; Agent retrieval uses progressive `rg`, not a recall tool. | P0 | Implementation; live migration verification pending |
-| [307-code-review-workspace](./completed/307-code-review-workspace.md) | Read-only sidebar Code Review workspace: working tree vs `HEAD`, change navigator, unified/split diff, context folding, and DUYA review handoff. | P1 | ✅ Complete 2026-07-27 |
-| [308-turn-review-history](./active/308-turn-review-history.md) | Persisted per-chat-turn Git deltas, with the latest completed turn as the Code Review default. | P1 | In progress |
-| [309-button-unification](./active/309-button-unification.md) | Button Unification — shared `Button` + `IconButton` components with variant/size hierarchy; migrate 372 fragmented `<button>` call sites in phases, starting with inline-style anti-patterns | P1 | Phase 1 in progress |
-
-### Canvas V2 Whimsical 风格重设计
-
-> Design doc: [docs/design-docs/conductor-canvas-v2-whimsical.md](../design-docs/conductor-canvas-v2-whimsical.md)
-
-| Plan | Description | Priority | Depends On |
-|------|-------------|----------|-----------|
-| [70-canvas-v2-type-system](./active/70-conductor-canvas-v2-type-system.md) | Phase 1: 统一节点模型 + 类型系统 + DB + IPC + Store | P0 | — |
-| [71-canvas-v2-native-rendering](./active/71-conductor-canvas-v2-native-rendering.md) | Phase 2: Shape + Text + Sticky + Section 原生渲染 | P0 | 70 |
-| [72-canvas-v2-connector](./active/72-conductor-canvas-v2-connector.md) | Phase 3: Connector 系统 (Bezier 曲线 + 端点绑定) | P0 | 70, 71 |
-| [73-canvas-v2-mindmap-frame](./active/73-conductor-canvas-v2-mindmap-frame-toolbar.md) | Phase 4-6: MindMap + Frame + 工具栏 + 交互 | P0 | 71, 72 |
-| [74-canvas-v2-agent-integration](./active/74-conductor-canvas-v2-agent-integration.md) | Phase 7-8: Agent 工具 + Image + 主题 + 轻量外壳 | P0 | 70, 71, 72, 73 |
-
-| [81-mindmap-interaction-correction](./active/81-mindmap-interaction-correction.md) | Follow-up: root move + subtree reorder + draft node flow | P0 | 73 |
-| [223-conductor-canvas-style-and-group](./active/223-conductor-canvas-style-and-group.md) | Post-mindmap: sticky/connector 样式扩展(shape/border/stroke) + Group 元素松散绑定 + 4 个 group tool + 属性面板 | P1 | 71, 72, 73 |
-| [225-canvas-smart-layout-and-hit-test](./active/225-canvas-smart-layout-and-hit-test.md) | Canvas 智能布局 + 命中测试 + 可读性与直接操控优化 | P0 | Phase 1-3 ✅ Electron UI verification deferred |
-
-### Compact System Fix Plans
+### Session / UI / UX
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [03-compact-critical-fix](./completed/03-compact-critical-fix.md) | Compact 系统关键修复（LLM摘要、Boundary、前端渲染） | P0 | ✅ Complete |
+| [314-no-project-session](./active/314-no-project-session.md) | No-project session — share `~/.duya/workspace`, sidebar "无项目" group | P1 | In progress |
+| [232-input-option-popover-alignment](./active/232-input-option-popover-alignment.md) | Shared searchable option-panel style for chat model and project/session pickers | P1 | In progress |
+| [308-turn-review-history](./active/308-turn-review-history.md) | Persisted per-chat-turn Git deltas, latest completed turn as Code Review default | P1 | In progress |
+| [309-button-unification](./active/309-button-unification.md) | Shared `Button`/`IconButton` components; migrate 372 fragmented `<button>` call sites | P1 | Phase 1 in progress |
+| [215-office-workspace](./active/215-office-workspace.md) | Office side-panel workspace — DOCX/PPTX/XLSX preview, selection context, Agent edits | P1 | Phase 1 complete; Phase 2 pending |
+| [38-chat-generative-ui](./active/38-chat-generative-ui.md) | Chat Generative UI — Widget system V2 upgrade | P1 | Phase 1-4 ✅ Phase 5 🔴 |
+| [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills sync fix | P0 | In Progress |
+| [25-skills-completion-plan](./active/25-skills-completion-plan.md) | Official Skill completion plan (hermes-agent 等) | P1 | 进行中 |
+| [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
+| [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |
+| [43-startup-landing](./active/43-startup-landing.md) | First-launch branded landing page | P1 | Phase 1 ✅ |
+| [39-beta-launch-preparation](./active/39-beta-launch-preparation.md) | Beta launch preparation | P0 | 进行中 |
+| [82-researcher-codex-ui-alignment](./active/82-researcher-codex-ui-alignment.md) | Researcher Codex UI alignment — Codex-level Agent UX + research assistant positioning | P0 | Planning |
+| [83-plugin-codex-ui-alignment](./active/83-plugin-codex-ui-alignment.md) | Plugin Codex UI alignment — capability marketplace + settings UX | P1 | Planning |
+| [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent memory + literature plugin | P1 | Planning |
+| [65-recap-feature](./active/65-recap-feature.md) | Session Recap — auto show session summary on return | P1 | Planning |
+| [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent nested-session sidebar display | P1 | Planning |
 
-### First Test Bug Fix Plans (Beta Launch Blockers)
-
-Source: [problems-analysis.md](./problems-analysis.md) — 10 个首次测试问题分析
+### Infrastructure & Research
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | 引导流程大修 | P0 | 待开始 |
-| [42-document-parser-service](./active/42-document-parser-service.md) | 文档解析服务 | P1 | Phase 1 待开始 |
-| [43-startup-landing](./active/43-startup-landing.md) | 首次启动品牌化 landing 页 — 覆盖 window 打开 → React mount → DB hydrate → session 渲染整个空白期，200ms 淡出，仅首次启动 | P1 | Phase 1 ✅ |
-| [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills 同步修复 | P0 | In Progress |
+| [214-agent-core-audit](./active/214-agent-core-audit.md) | Full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ |
+| [94-research-mode-loop-improvement](./active/94-research-mode-loop-improvement.md) | Research Mode loop — dynamic ranking, StopDecision, SourceEvaluator, dedupe | P1 | Milestone 1 ✅, M2.1-3 📋 |
+| [95-external-agent-import](./active/95-external-agent-import.md) | Import project context/memory/skills from Claude Code / Codex | P1 | Phase 1 ✅ |
+| [60-research-mode](./active/60-research-mode.md) | Research Mode — iterative research workflow + Interactive Report | P1 | 规划中 |
+| [97-tool-path-permission-refactor](./active/97-tool-path-permission-refactor.md) | Read/Write/Edit path permission refactor — delegate to permission system | P0 | Planning |
+| [66-async-nonblocking-subagent](./active/66-async-nonblocking-subagent.md) | Async non-blocking subagent — parallel work while main agent continues | P0 | Planning |
+| [54-electron-directory-restructure](./active/54-electron-directory-restructure.md) | Electron directory architecture restructure | P1 | Phase 1 ✅, Phase 2 🔴 |
+| [62-gateway-ipc-refactor](./active/62-gateway-ipc-refactor.md) | Gateway ↔ IPC architecture refactor | P0 | 进行中 |
+| [64-browser-parallel-isolation](./active/64-browser-parallel-isolation.md) | Browser multi-tab isolation & parallel execution | P0 | 进行中 |
+| [15-bash-worker-implementation](./active/15-bash-worker-implementation.md) | Bash Worker multi-process implementation | P0 | 设计完成 |
+| [27-logging-and-auto-update](./active/27-logging-and-auto-update.md) | Logging system & auto-update | P1 | 代码完成，待 UI 集成 |
+| [28-multi-source-update-fallback](./active/28-multi-source-update-fallback.md) | Auto-update multi-source fallback | P1 | 待实现 |
 
 ## Completed Plans
 
-Moved here when finished. Each includes:
-- Original goal and outcome
-- Key decisions made during execution
-- Lessons learned
+Moved here when finished. Each includes original goal, key decisions, and lessons learned.
+
+### Agent / Message / Memory
 
 | Plan | Description | Completed |
 |------|-------------|-----------|
-| [230-gateway-agent-capability-and-workspace](./completed/230-gateway-agent-capability-and-workspace.md) | Gateway Agent direct tools, isolated workspace propagation, and broken Team tool filtering | 2026-07-17 |
-| [226-agent-harness-project-grounding](./completed/226-agent-harness-project-grounding.md) | Agent Harness Project Grounding — scoped AGENTS.md、计划/规格恢复、调查门槛、跨 session/agent 连续性与提示词 profile 一致性 | 2026-07-15 |
-| [229-recent-session-directory](./completed/229-recent-session-directory.md) | Recent Session Directory — project-aware discovery, scoped SessionSearch, and guarded MessageSession follow-up | 2026-07-15 |
-| [02-context-compaction-system](./completed/02-context-compaction-system.md) | Context Compression 系统 | 2026-04-09 |
-| [skill-system](./completed/skill-system.md) | Skill System Phase 2 | 2026-04-09 |
-| [cli-tool-fix](./completed/cli-tool-fix.md) | CLI 工具调用问题修复 | 2026-04-09 |
-| [03-query-engine-separation](./completed/03-query-engine-separation.md) | QueryEngine 分离 | 2026-04-15 |
-| [10-openharness-comparison-and-improvement](./completed/10-openharness-comparison-and-improvement.md) | OpenHarness 对比与 CLI 增强 | 2026-04-15 |
-| [problems](./completed/problems.md) | 打包后遇到的问题修复 | 2026-04-15 |
-| [12-config-manager-implementation](./completed/12-config-manager-implementation.md) | ConfigManager 实现 | 2026-04-18 |
-| [13-message-port-lifecycle](./completed/13-message-port-lifecycle.md) | MessagePort 生命周期管理 | 2026-04-20 |
-| [14-tool-stream-buffer](./completed/14-tool-stream-buffer.md) | Tool Stream Buffer 实现 | 2026-04-20 |
-| [16-sse-to-messageport-unification](./completed/16-sse-to-messageport-unification.md) | SSE → MessagePort 统一通信 | 2026-04-22 |
-| [18-api-routes-to-ipc-migration](./completed/18-api-routes-to-ipc-migration.md) | API Routes → IPC 迁移 | 2026-04-22 |
-| [18-zero-router-architecture](./completed/18-zero-router-architecture.md) | Zero Router 架构实施 | 2026-04-22 |
-| [21-nextjs-to-vite-migration](./completed/21-nextjs-to-vite-migration.md) | Next.js → Vite 前端迁移 | 2026-04-22 |
-| [22-singleton-daemon-architecture](./completed/22-singleton-daemon-architecture.md) | 单例守护进程架构 | 2026-04-23 |
-| [23-data-persistence-fixes](./completed/23-data-persistence-fixes.md) | 数据持久化修复 | 2026-04-24 |
-| [24-self-improvement-system](./completed/24-self-improvement-system.md) | 自我提升 Skill 质量控制 | 2026-04-24 |
-| [11-messageport-architecture](./completed/11-messageport-architecture.md) | MessagePort 架构实施 | 2026-05-08 |
-| [14-database-architecture-refactor](./completed/14-database-architecture-refactor.md) | Golden Trident 数据架构重构 | 2026-05-08 |
-| [19-database-ownership-unification](./completed/19-database-ownership-unification.md) | 数据库所有权统一 | 2026-05-08 |
-| [21-automation-cronjob-workflow](./completed/21-automation-cronjob-workflow.md) | 自动化定时任务系统 | 2026-05-08 |
-| [25-platform-gateway](./completed/25-platform-gateway.md) | 平台网关 | 2026-05-08 |
-| [25-streaming-state-architecture-refactor](./completed/25-streaming-state-architecture-refactor.md) | 流式状态架构重构 | 2026-05-08 |
-| [26-prompt-mode-architecture](./completed/26-prompt-mode-architecture.md) | PromptMode 架构设计 | 2026-05-08 |
-| [28-telegram-enhancement](./completed/28-telegram-enhancement.md) | Telegram 功能增强 | 2026-05-08 |
-| [01-tool-interface-enhancement](./completed/01-tool-interface-enhancement.md) | Tool 接口增强 | 2026-05-08 |
-| [06-abort-controller-propagation](./completed/06-abort-controller-propagation.md) | AbortController 传播链 | 2026-05-08 |
-| [05-tool-orchestration-enhancement](./completed/05-tool-orchestration-enhancement.md) | Tool Orchestration 增强 | 2026-05-08 |
-| [29-multi-agent-profile-system](./completed/29-multi-agent-profile-system.md) | 多 Agent Profile 系统 | 2026-05-16 |
-| [34-conductor-agent-orchestration](./completed/34-conductor-agent-orchestration.md) | Conductor Agent 感知与编排 | 2026-05-16 |
-| [40-agent-self-management](./completed/40-agent-self-management.md) | Agent 自管理工具 | 2026-05-16 |
-| [42-extension-install-ux](./completed/42-extension-install-ux.md) | 扩展安装用户体验优化 | 2026-05-16 |
-| [43-chat-input-paste-fix](./completed/43-chat-input-paste-fix.md) | 粘贴内容删除修复 | 2026-05-16 |
-| [45-subagent-live-rendering-sidebar](./completed/45-subagent-live-rendering-sidebar.md) | 子 Agent 实时渲染 | 2026-05-16 |
-| [46-parallel-agent-orchestration](./completed/46-parallel-agent-orchestration.md) | 并行 Agent 编排恢复 | 2026-05-16 |
-| [49-canvas-agent-free-form-tools](./completed/49-canvas-agent-free-form-tools.md) | Canvas Agent 工具重构 | 2026-05-16 |
-| [52-deepseek-tui-feature-parity](./completed/52-deepseek-tui-feature-parity.md) | DeepSeek-TUI 功能对齐 | 2026-05-12 |
-| [53-agent-communication-architecture-v2](./completed/53-agent-communication-architecture-v2.md) | Agent 通信架构 V2 | 2026-05-16 |
-| [55-agent-directory-restructuring](./completed/55-agent-directory-restructuring.md) | Agent 目录结构重组 | 2026-05-16 |
-| [96-duya-cli-tool](./completed/96-duya-cli-tool.md) | DUYA CLI 工具 | 2026-06-04 |
-| [98-cli-channel-cron-message](./completed/98-cli-channel-cron-message.md) | CLI Channel / Cron / Message | 2026-06-04 |
-| [99-cli-split-and-control-plane](./completed/99-cli-split-and-control-plane.md) | CLI Split & Control Plane | 2026-06-04 |
-| [102-duya-config-into-cli](./completed/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` — single control-plane entry | 2026-06-04 |
-| [211-duya-agent-refactor](./completed/211-duya-agent-refactor.md) | `packages/agent/src/index.ts` Code Quality Refactor — `index.ts` 2326→226 纯 barrel,`agent/DuyaAgent.ts` 实现家,`streamChat` 拆 5 helpers + `_dispatchMode`,`_activeMode: any`→`BaseMode \| null`,`compressHistory` `@deprecated`,`console.log`→`logger` | 2026-06-16 |
-| [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | Mode Architecture Unification — 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode（工具/prompt/钩子声明式合并 + Registry.resolve + 三层正交 Profile/Mode/Permission + 前端 `activeModes: Set` 统一状态 + 互斥可视化） | 2026-07-07 |
-| [227-built-in-browser-fallback](./completed/227-built-in-browser-fallback.md) | Built-in Browser Fallback — Chrome 扩展未安装时 agent BrowserTool 降级驱动侧边栏 `<webview>`；内置/扩展/自动三种后端模式切换；Cookie 导入（DPAPI 解密）。 | 2026-07-10 |
-| [228-cookie-import-app-bound-fix](./completed/228-cookie-import-app-bound-fix.md) | Cookie Import App-Bound + Live Export Hardening — v20 自动走扩展导出；DB busy 扩展兜底；未连接扩展时给出可操作建议。 | 2026-07-13 |
-| [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory Phase 1A — Memory state foundation + project registry + main-DB catalog sync (shadow mode; no production callers) | 2026-07-25 |
-| [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | Memory Phase 1A.2 — migration 0002 + lease lifecycle (acquire / heartbeat / CAS complete / fail+backoff / retire) + `selectEligible` (shadow mode; no production callers) | 2026-07-25 |
-| [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | Memory Phase 1A.3 — migration 0003 + projection outbox (DB ↔ file atomicity sweeper) + startup reconciliation (shadow mode; no production callers) | 2026-07-25 |
-| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Memory Phase 1B — Stage 1 extractor (`compactMessages` + `prompt` + `writer` + `extractor` lifecycle; D8 promotion guard enforced before DB write). The former `rawMemoriesProjection` output was retired by the Phase 2 architecture correction. | 2026-07-26 |
-| [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Memory Phase 1C — long-lived `memory-worker.ts` in Electron main + wakeup IPC + reconcile/outbox sweeper wiring + 11 shadow-mode e2e tests (MockLLM); closes the 3xx subsystem (first production caller). Phase E manual 30-min validation deferred; env-gated off. | 2026-07-26 |
+| [241-on-demand-tool-discovery](./completed/241-on-demand-tool-discovery.md) | `tool_search` meta-entry + schema summary + builtin tiering + dynamic dispatch (3 phases) | — |
+| [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode | 2026-07-07 |
+| [222-interagent-message-session](./completed/222-interagent-message-session.md) | MessageSession tool for cross-session agent Q&A + cycle detection | — |
+| [212-subagent-task-notification](./completed/212-subagent-task-notification.md) | `<task-notification>` envelope + `messageQueueManager` task-notification mode | — |
+| [211-duya-agent-refactor](./completed/211-duya-agent-refactor.md) | `@duya/agent` index.ts 2326→226 pure barrel | 2026-06-16 |
+| [105-code-agent-profile-runtime-wiring](./completed/105-code-agent-profile-runtime-wiring.md) | Code Agent Profile runtime wiring + tool diagnostics | — |
+| [305-memory-v2-phase-1c-worker-main-process-e2e](./completed/305-memory-v2-phase-1c-worker-main-process-e2e.md) | Memory Phase 1C — long-lived worker + e2e (shadow mode) | 2026-07-26 |
+| [304-memory-v2-phase-1b-extractor](./completed/304-memory-v2-phase-1b-extractor.md) | Memory Phase 1B — stage-1 extractor + D8 guard | 2026-07-26 |
+| [303-memory-v2-phase-1a3-projection-outbox](./completed/303-memory-v2-phase-1a3-projection-outbox.md) | Memory Phase 1A.3 — projection outbox + reconciliation | 2026-07-25 |
+| [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | Memory Phase 1A.2 — lease lifecycle + CAS | 2026-07-25 |
+| [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory Phase 1A — schema + project registry + catalog sync | 2026-07-25 |
+| [403-memory-curation-validator-runner](./completed/403-memory-curation-validator-runner.md) | Memory curation validator runner — curator prompt + staging validator + agent runner | 2026-08-04 |
+
+### Canvas / Conductor
+
+| Plan | Description | Completed |
+|------|-------------|-----------|
+| [240-canvas-capture-splash-and-manage-broadcast](./completed/240-canvas-capture-splash-and-manage-broadcast.md) | `canvas_capture` waits for first paint; `conductor:canvas:changed` broadcast | — |
+| [239-canvas-tool-find-empty-space-and-capture-region](./completed/239-canvas-tool-find-empty-space-and-capture-region.md) | `canvas_find_empty_space` fully-empty rectangles; `canvas_capture` region clip | — |
+| [238-tool-history-integrity](./completed/238-tool-history-integrity.md) | Strict provider-safe tool-round ordering + durable message sequence | — |
+| [235-human-like-browser-backend](./completed/235-human-like-browser-backend.md) | Codex-style computer-use: coordinate primitives + Set-of-Mark loop | — |
+| [234-canvas-element-editing-and-scene-architecture](./completed/234-canvas-element-editing-and-scene-architecture.md) | Capability-driven element editing/toolbars + Agent scene blueprints | — |
+| [231-cron-automation-ui-runtime-hardening](./completed/231-cron-automation-ui-runtime-hardening.md) | Cron creation/editing UX + scheduler startup hardening | — |
+| [225-canvas-smart-layout-and-hit-test](./completed/225-canvas-smart-layout-and-hit-test.md) | Canvas smart layout + hit-test + direct manipulation | — |
+| [221-conductor-main-agent-injection](./completed/221-conductor-main-agent-injection.md) | Conductor main-agent injection — 5 tools + prompt overlay + UI toggle | — |
+| [220-attachment-unification](./completed/220-attachment-unification.md) | Collapse 5 parallel attachment state machines into 1 `AttachmentBar` | — |
+| [216-file-preview-workspace](./completed/216-file-preview-workspace.md) | Expanded read-only file preview workspace with tabs | — |
+| [49-canvas-agent-free-form-tools](./completed/49-canvas-agent-free-form-tools.md) | Canvas Agent tool refactor | 2026-05-16 |
+| [34-conductor-agent-orchestration](./completed/34-conductor-agent-orchestration.md) | Conductor Agent perception & orchestration | 2026-05-16 |
+
+### CLI / Provider / Electron
+
+| Plan | Description | Completed |
+|------|-------------|-----------|
+| [203-provider-ui-interaction-architecture](./completed/203-provider-ui-interaction-architecture.md) | Provider UI 4-layer architecture — 不改 UX 减 1900 行 | — |
+| [204-provider-card-redesign](./completed/204-provider-card-redesign.md) | Provider Card UX — `ProvidersSection` 1066→246 LoC | 2026-06-10 |
+| [205-provider-inline-edit-page](./completed/205-provider-inline-edit-page.md) | Provider inline edit page + two-step add flow | — |
+| [200-cli-surface-expansion](./completed/200-cli-surface-expansion.md) | CLI `update/backup/security` + polish existing commands | — |
+| [103-research-mode-persistence-hardening](./completed/103-research-mode-persistence-hardening.md) | Research mode persistence hardening + dispatch fixes | — |
+| [106-node-file-parser-and-read-integration](./completed/106-node-file-parser-and-read-integration.md) | Node file parser & Read tool multimodal integration | — |
+| [99-cli-split-and-control-plane](./completed/99-cli-split-and-control-plane.md) | CLI split into `packages/cli` + control plane | 2026-06-04 |
+| [96-duya-cli-tool](./completed/96-duya-cli-tool.md) | DUYA CLI unified command-line tool | 2026-06-04 |
+| [30-mcp-loading-implementation](./completed/30-mcp-loading-implementation.md) | MCP server loading & connection | — |
+| [102-duya-config-into-cli](./completed/102-duya-config-into-cli.md) | Merge `duya_config` into `duya_cli` | 2026-06-04 |
+| [101-plugin-system-cleanup](./completed/101-plugin-system-cleanup.md) | Plugin system cleanup & runtime wiring | — |
+| [21-nextjs-to-vite-migration](./completed/21-nextjs-to-vite-migration.md) | Next.js → Vite frontend migration | 2026-04-22 |
+| [18-zero-router-architecture](./completed/18-zero-router-architecture.md) | Zero Router architecture | 2026-04-22 |
+| [14-database-architecture-refactor](./completed/14-database-architecture-refactor.md) | Golden Trident data architecture refactor | 2026-05-08 |
+| [19-database-ownership-unification](./completed/19-database-ownership-unification.md) | Database ownership unification | 2026-05-08 |
+
+### Gateway / Browser / Misc
+
+| Plan | Description | Completed |
+|------|-------------|-----------|
+| [230-gateway-agent-capability-and-workspace](./completed/230-gateway-agent-capability-and-workspace.md) | Gateway Agent direct tools + isolated workspace | 2026-07-17 |
+| [229-recent-session-directory](./completed/229-recent-session-directory.md) | Project-aware recent session discovery | 2026-07-15 |
+| [228-cookie-import-app-bound-fix](./completed/228-cookie-import-app-bound-fix.md) | Cookie import app-bound + live export hardening | 2026-07-13 |
+| [227-built-in-browser-fallback](./completed/227-built-in-browser-fallback.md) | Built-in browser fallback when Chrome extension missing | 2026-07-10 |
+| [226-agent-harness-project-grounding](./completed/226-agent-harness-project-grounding.md) | Scoped AGENTS.md + bounded plan/spec recovery | 2026-07-15 |
+| [307-code-review-workspace](./completed/307-code-review-workspace.md) | Read-only sidebar Code Review workspace | 2026-07-27 |
+| [25-platform-gateway](./completed/25-platform-gateway.md) | Platform gateway | 2026-05-08 |
+| [25-streaming-state-architecture-refactor](./completed/25-streaming-state-architecture-refactor.md) | Streaming state architecture refactor | 2026-05-08 |
+| [21-automation-cronjob-workflow](./completed/21-automation-cronjob-workflow.md) | Automation cron job system | 2026-05-08 |
+| [22-singleton-daemon-architecture](./completed/22-singleton-daemon-architecture.md) | Singleton daemon architecture | 2026-04-23 |
+| [24-self-improvement-system](./completed/24-self-improvement-system.md) | Self-improvement skill quality control | 2026-04-24 |
+| [52-deepseek-tui-feature-parity](./completed/52-deepseek-tui-feature-parity.md) | DeepSeek-TUI feature parity | 2026-05-12 |
+| [53-agent-communication-architecture-v2](./completed/53-agent-communication-architecture-v2.md) | Agent communication architecture V2 | 2026-05-16 |
+| [55-agent-directory-restructuring](./completed/55-agent-directory-restructuring.md) | Agent directory restructure | 2026-05-16 |
+
+> 更早的归档计划（多 Agent Profile、Conductor 早期、DB 迁移、Skill 系统、MessagePort 等完整历史）见 `completed/` 目录各文件。
 
 ## Tech Debt
 
