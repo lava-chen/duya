@@ -17,6 +17,8 @@
 
 import type { Database } from 'better-sqlite3';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { LLMClient } from '../llm/index.js';
 import type { Message } from '../types.js';
 import {
@@ -31,6 +33,7 @@ import { compactMessages, type MessageEvent } from './compactMessages.js';
 import { STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
+import { parseCanonicalFile } from '../memory-state/memory_entries_rebuild.js';
 import {
   TASK_OUTCOMES,
   CONFIDENCE_LEVELS,
@@ -421,7 +424,7 @@ export class Stage1Extractor {
     private readonly memoryDb: Database,
     private readonly mainDb: Database,
     private readonly llmClient: LLMClient,
-    private readonly opts?: { rootDir?: string; policyPath?: string },
+    private readonly opts?: { rootDir?: string; policyPath?: string; memoryRoot?: string },
   ) {
     if (typeof llmClient.streamChat !== 'function') {
       throw new Error('LLMClient.streamChat is required for Stage1Extractor');
@@ -681,8 +684,16 @@ export class Stage1Extractor {
    * dedup. Returns an empty array when the table does not exist (e.g.
    * before migration 0005/0006). Guards against table-missing errors so
    * the extractor degrades gracefully on fresh installs.
+   *
+   * Phase D switch: when the extractor is constructed with a `memoryRoot`
+   * (the canonical memory file root), keys are read from the live file
+   * manifest instead of the DB. Falls back to the DB query during the
+   * Phase C shadow window when `memoryRoot` is unset.
    */
   private queryExistingKeys(): string[] {
+    if (this.opts?.memoryRoot) {
+      return collectActiveKeysFromFiles(this.opts.memoryRoot);
+    }
     try {
       const rows = this.memoryDb
         .prepare("SELECT DISTINCT canonical_key FROM memory_entries WHERE status = 'active' ORDER BY canonical_key ASC")
@@ -737,5 +748,59 @@ export class Stage1Extractor {
         status: row.status ?? undefined,
       };
     });
+  }
+}
+
+/**
+ * Read active canonical_keys from live memory files (Phase D switch).
+ *
+ * Walks `<memoryRoot>/items/**\/*.md` and `<memoryRoot>/entities/**\/*.md`,
+ * parses each file's frontmatter, and returns the `canonical_key` of every
+ * file with `status: active`. Returns an empty array when the root or any
+ * subdirectory is missing — Stage 1 dedup degrades gracefully.
+ *
+ * This is the Phase D replacement for the DB-backed `queryExistingKeys`.
+ * The private `queryExistingKeys` delegates here when the extractor is
+ * built with a `memoryRoot`.
+ */
+export async function queryExistingKeysFromFiles(memoryRoot: string): Promise<string[]> {
+  return collectActiveKeysFromFiles(memoryRoot);
+}
+
+function collectActiveKeysFromFiles(memoryRoot: string): string[] {
+  const keys: string[] = [];
+  if (!memoryRoot) return keys;
+  for (const sub of ['items', 'entities']) {
+    const subRoot = path.join(memoryRoot, sub);
+    if (!fs.existsSync(subRoot)) continue;
+    walkMdForKeys(subRoot, keys);
+  }
+  keys.sort();
+  return keys;
+}
+
+function walkMdForKeys(dir: string, out: string[]): void {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isDirectory()) {
+      walkMdForKeys(full, out);
+    } else if (stat.isFile() && entry.endsWith('.md')) {
+      const parsed = parseCanonicalFile(full);
+      if (parsed && parsed.status === 'active') {
+        out.push(parsed.canonical_key);
+      }
+    }
   }
 }
