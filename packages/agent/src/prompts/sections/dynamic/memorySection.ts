@@ -15,18 +15,32 @@ import type { PromptContext } from '../../types.js'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { parseLayout, renderLayoutForPrompt, DEFAULT_LAYOUT, type MemoryLayout } from '../../../memory-state/memory_layout.js'
 
 /** Safety cap in case summary.md ever exceeds its design budget. */
 const MAX_INLINE_SUMMARY_CHARS = 8_000
 
 export function getMemorySection(ctx: PromptContext): string {
-  const memoryRoot = path.join(os.homedir(), '.duya', 'memory')
+  const duyaRoot = path.join(os.homedir(), '.duya')
+  const memoryRoot = path.join(duyaRoot, 'memory')
+  const configRoot = path.join(duyaRoot, 'memory-config')
+  const layoutPath = path.join(configRoot, 'memory_layout.json')
   const summaryPath = path.join(memoryRoot, 'summary.md')
   const memoryPath = path.join(memoryRoot, 'MEMORY.md')
   const rolloutSummariesDir = path.join(memoryRoot, 'rollout_summaries')
-  const peopleDir = path.join(memoryRoot, 'global', 'people')
-  const areasDir = path.join(memoryRoot, 'global', 'areas')
   const adHocDir = path.join(memoryRoot, 'extensions', 'ad_hoc')
+
+  // Load memory_layout.json; fall back to DEFAULT_LAYOUT on missing/invalid file.
+  let layout: MemoryLayout = DEFAULT_LAYOUT
+  try {
+    const raw = fs.readFileSync(layoutPath, 'utf8')
+    layout = parseLayout(JSON.parse(raw))
+  } catch {
+    // File missing or invalid JSON — use default person + area layout.
+    layout = DEFAULT_LAYOUT
+  }
+
+  const layoutBlock = renderLayoutForPrompt(layout)
 
   let summaryBody: string
   try {
@@ -53,6 +67,10 @@ Decision boundary: should you use memory for a new user query?
   - the ask is a non-trivial and related to MEMORY_SUMMARY below.
 - If unsure, do a quick memory pass.
 
+Memory layout (entity files by claim type):
+
+${layoutBlock}
+
 Memory layout (general -> specific):
 
 - \`${summaryPath}\` (already provided below as MEMORY_SUMMARY; do NOT open again)
@@ -61,10 +79,6 @@ Memory layout (general -> specific):
   - The relevant entries can be found in \`${memoryPath}\` by \`rollout_id\` or filename suffix.
   - These files are Markdown with YAML frontmatter: \`rollout_id\` identifies the session, \`cwd\` marks the working directory, and the body contains task outcomes, key steps, preference signals, failures, reusable knowledge, and references.
   - For efficient lookup, prefer matching the filename suffix or \`rollout_id\`; avoid broad full-content scans unless needed.
-- \`${peopleDir}/<slug>.md\` — people the user has mentioned (colleagues, reviewers, contacts).
-- \`${peopleDir}/index.md\` — index of all tracked people.
-- \`${areasDir}/<slug>.md\` — topic areas the user works in.
-- \`${areasDir}/index.md\` — index of all tracked areas.
 
 Quick memory pass (when applicable):
 
