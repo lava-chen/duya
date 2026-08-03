@@ -43,6 +43,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [242-agent-package-cleanup](./active/242-agent-package-cleanup.md) | Evidence-driven cleanup of dead Claude Code inheritance, stale build/public surface, and unused dependencies in `@duya/agent` | P1 | Phase 1 complete; legacy Conductor runtime removed; verification blockers recorded |
 | [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` mode — single persistent session per cron, DB-authoritative history across runs | P0 | Planning |
 | [314-no-project-session](./active/314-no-project-session.md) | No-project session — sessions with no concrete project folder share `~/.duya/workspace` and appear in the sidebar "无项目" group | P1 | In progress |
+| [315-agent-message-domain-framework](./active/315-agent-message-domain-framework.md) | Pi-inspired append-only AgentMessage timeline, custom message projection, and durable compaction checkpoints | P0 | Phase 1 complete; runtime integration deferred |
 
 ### Agent Feature Parity Plans
 
