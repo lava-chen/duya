@@ -276,9 +276,82 @@ export class AgentProcessPool {
     const proc = this.running.get(sessionId);
     if (proc) {
       void killProcessTree(proc.child, { force: true });
-      this.running.delete(sessionId);
+    }
+    this.releaseSession(sessionId);
+  }
+
+  /**
+   * Release a session and wait for its agent process to fully exit.
+   *
+   * Used by the curation runner (design §9.2) as a hard boundary before
+   * deleting staging: it requests a graceful interrupt, waits up to
+   * `gracefulMs` for the process to exit, force-kills the process tree if
+   * it does not exit in time, then releases the pool slot.
+   *
+   * Resolves once the process has exited (or was already gone) and the
+   * slot is released. Never rejects.
+   */
+  async releaseAndWait(sessionId: string, opts?: { gracefulMs?: number }): Promise<void> {
+    const gracefulMs = opts?.gracefulMs ?? 10_000;
+    const proc = this.running.get(sessionId);
+
+    // Already released — nothing to do.
+    if (!proc) {
+      return;
     }
 
+    const child = proc.child;
+
+    // Process already exited — release the slot immediately.
+    if (child.exitCode !== null) {
+      this.releaseSession(sessionId);
+      return;
+    }
+
+    // Request a graceful shutdown.
+    this.interrupt(sessionId);
+
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+      };
+
+      const onExit = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        this.releaseSession(sessionId);
+        resolve();
+      };
+
+      child.once('exit', onExit);
+
+      timer = setTimeout(() => {
+        if (settled) return;
+        // Graceful exit timed out — force kill, then resolve on exit.
+        void killProcessTree(child, { force: true }).then(() => {
+          if (settled) return;
+          // The exit event may not fire synchronously; release the slot
+          // once the kill is confirmed.
+          settled = true;
+          cleanup();
+          this.releaseSession(sessionId);
+          resolve();
+        });
+      }, gracefulMs);
+    });
+  }
+
+  /**
+   * Release a pool slot: clear per-session state, reject queued work for
+   * the session, and drive the queue. Does NOT kill the process — callers
+   * are responsible for terminating the child first.
+   */
+  private releaseSession(sessionId: string): void {
+    this.running.delete(sessionId);
     this.busySessions.delete(sessionId);
     this.interruptedSessions.delete(sessionId);
     this.providerReinitLock.delete(sessionId);
@@ -465,6 +538,13 @@ export class AgentProcessPool {
         if (msgType === 'ready' || msgType === 'conductor:ready') {
           clearTimeout(timeout);
           this.removeMessageHandler(sessionId, readyHandler);
+          const status = (msg as { status?: string }).status;
+          if (status === 'error') {
+            const errorMsg = (msg as { error?: string }).error
+              ?? `Agent process ${sessionId} failed to initialize (status:error)`;
+            reject(new Error(errorMsg));
+            return;
+          }
           resolve();
         }
       };

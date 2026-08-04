@@ -449,8 +449,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     const result = await h.forceSweep();
 
     expect(result.reconciled).not.toBeNull();
-    // Reconcile writes the two root projections and the people/areas indexes.
-    expect(result.reconciled!.written).toBe(4);
+    expect(result.reconciled!.written).toBe(0);
     expect(result.reconciled!.removed).toBe(0);
     expect(result.reconciled!.mismatched).toBe(0);
 
@@ -473,19 +472,16 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
 
     const result = await h.forceSweep();
 
-    // Reconcile plans one rollout summary, two root projections, and the
-    // people/areas indexes.
     expect(result.reconciled).not.toBeNull();
-    expect(result.reconciled!.written).toBe(5);
+    expect(result.reconciled!.written).toBe(1);
     expect(result.reconciled!.removed).toBe(0);
     expect(result.reconciled!.mismatched).toBe(0);
 
     // The outbox has a 1-second ENQUEUE_DELAY_MS, so the drain inside
     // forceSweep did NOT write files yet. Force-drain with a future now.
-    // 5 reconcile + 5 consolidator projections (MEMORY, summary, diff,
-    // people index, areas index).
+    // 1 rollout summary projection.
     const drained = forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);
-    expect(drained).toBe(10);
+    expect(drained).toBe(1);
 
     // Verify the summary file exists with the D11 filename shape.
     const summariesDir = path.join(fixture.memoryRoot, 'rollout_summaries');
@@ -496,8 +492,6 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     expect(files[0]).toBe(expectedFilename);
 
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'MEMORY.md'))).toBe(true);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'summary.md'))).toBe(true);
   });
 
   it('3. first startup with orphan files — 0 written, M removed', async () => {
@@ -515,16 +509,14 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
 
     const result = await h.forceSweep();
 
-    // Reconcile plans four baseline projection writes plus the orphan removal.
     expect(result.reconciled).not.toBeNull();
-    expect(result.reconciled!.written).toBe(4);
+    expect(result.reconciled!.written).toBe(0);
     expect(result.reconciled!.removed).toBe(1);
     expect(result.reconciled!.mismatched).toBe(0);
 
-    // Force-drain to actually delete the orphan + write Phase 2 files.
-    // 5 reconcile (1 orphan delete + 4 writes) + 5 consolidator.
+    // Force-drain to actually delete the orphan.
     const drained = forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);
-    expect(drained).toBe(10);
+    expect(drained).toBe(1);
     expect(fs.existsSync(orphanPath)).toBe(false);
   });
 
@@ -540,9 +532,9 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
       reconcileOnStart: true,
     });
 
-    // First sweep: rollout summary + four baseline projections.
+    // First sweep: rollout summary.
     const first = await h.forceSweep();
-    expect(first.reconciled!.written).toBe(5);
+    expect(first.reconciled!.written).toBe(1);
 
     // Drain to write files to disk.
     forceDrainOutbox(fixture.memoryDb, fixture.memoryRoot);

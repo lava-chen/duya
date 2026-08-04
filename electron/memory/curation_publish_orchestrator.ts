@@ -12,7 +12,6 @@ import {
   computeInputSetHash,
   type CurationInput,
   type InputDisposition,
-  type CacheStatus,
 } from '../../packages/agent/src/memory-state/curation_ledger';
 import { createStaging, deleteStaging } from './curation_staging';
 import { runCurationAgent, type RunCurationAgentResult } from './curation_agent_runner';
@@ -20,9 +19,7 @@ import { validateStaging } from '../../packages/agent/src/memory-state/curation_
 import { preparePublication, executePublication, recoverPublication, type RecoveryAction } from './curation_publisher';
 import { createSnapshot } from './curation_snapshot';
 import { appendHealthReport, type HealthReport } from '../../packages/agent/src/memory-state/curation_health';
-import { rebuildMemoryEntriesFromFiles } from '../../packages/agent/src/memory-state/memory_entries_rebuild';
 import { scanAdHocChanges, type AdHocInput } from './ad_hoc_watcher';
-import { getLogger, LogComponent } from '../logging/logger';
 
 /**
  * End-to-end curation cycle orchestrator (design §8.4 + §9.1).
@@ -254,27 +251,6 @@ export async function runCurationCycle(
       liveConfigRoot: opts.configRoot,
     });
 
-    // 10b. Rebuild the memory_entries cache from live files (Phase C shadow).
-    // Design §3.7 step 1 + §8.4 step 9: a rebuild failure is NOT a filesystem
-    // rollback — live memory is already committed. Only the cache is stale, so
-    // the run still succeeds but is marked cache_pending.
-    let cacheStatus: CacheStatus = 'ok';
-    try {
-      const rebuildResult = await rebuildMemoryEntriesFromFiles(db, opts.memoryRoot);
-      getLogger().info(
-        'CurationPublish: memory_entries cache rebuilt',
-        { processed: rebuildResult.processed, skipped: rebuildResult.skipped, durationMs: rebuildResult.durationMs },
-        LogComponent.DB,
-      );
-    } catch (rebuildErr) {
-      cacheStatus = 'cache_pending';
-      getLogger().warn(
-        'CurationPublish: memory_entries rebuild failed — cache_pending',
-        { error: rebuildErr instanceof Error ? rebuildErr.message : String(rebuildErr) },
-        LogComponent.DB,
-      );
-    }
-
     // 11. Complete the run in the ledger.
     const dispositions: InputDisposition[] = agentResult.receipt?.inputs?.map((i) => ({
       inputKind: i.input_kind === 'ad_hoc' ? 'ad_hoc' : 'rollout',
@@ -287,7 +263,6 @@ export async function runCurationCycle(
     completeRun(db, runId, {
       dispositions,
       publicationStatus: 'succeeded',
-      cacheStatus,
       now: Date.now(),
     });
 

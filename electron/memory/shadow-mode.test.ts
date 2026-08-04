@@ -40,6 +40,7 @@ import { migration0001 } from '../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';
 import { migration0005 } from '../memory-state/migrations/0005_phase2.sql';
+import { migration0008 } from '../memory-state/migrations/0008_curation_runs.sql';
 
 // ---------------------------------------------------------------------------
 // LLM response templates
@@ -55,7 +56,8 @@ const LLM_RESPONSE_SUCCEEDED = JSON.stringify({
       {
         claim: 'User prefers tabs over spaces for indentation',
         claim_type: 'preference',
-        scope: 'project',
+        scope: 'global',
+        scope_id: null,
         evidence: [
           {
             source_type: 'user_message',
@@ -64,6 +66,15 @@ const LLM_RESPONSE_SUCCEEDED = JSON.stringify({
           },
         ],
         canonical_key: 'preference:indentation-style',
+        confidence: 'high',
+        status: 'active',
+        valid_from: null,
+        valid_until: null,
+        relation_to_existing: null,
+        supersedes: [],
+        why_future_agent_needs_this:
+          'A future agent would otherwise guess the indentation style.',
+        retrieval_cues: ['tabs', 'spaces', 'indentation'],
       },
     ],
   },
@@ -104,6 +115,7 @@ function createShadowFixture(
   memoryDb.exec(migration0002.sql);
   memoryDb.exec(migration0003.sql);
   memoryDb.exec(migration0005.sql);
+  memoryDb.exec(migration0008.sql);
 
   // Stub main DB with messages table (what the extractor reads) and
   // chat_sessions table (what catalog sync reads).
@@ -611,21 +623,9 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'rollout_summaries'))).toBe(true);
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
 
-    // Phase 2 projections (Plan 306 Phase B): consolidator writes
-    // root MEMORY.md, root summary.md, phase2_workspace_diff.md.
-    // The shadow-mode contract (D1 revised by Plan 306) is that the
-    // agent READ path still goes through MemoryManager — the worker
-    // itself is allowed to write these projection files.
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'MEMORY.md'))).toBe(true);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'summary.md'))).toBe(true);
-    expect(fs.existsSync(path.join(fixture.memoryRoot, 'phase2_workspace_diff.md'))).toBe(true);
-
-    // MEMORY.md is the single searchable projection.
-    const globalMemoryContent = fs.readFileSync(
-      path.join(fixture.memoryRoot, 'MEMORY.md'),
-      'utf8',
-    );
-    expect(globalMemoryContent).toContain('# Durable Memory');
+    // Phase 2 projections (root MEMORY.md, summary.md, phase2_workspace_diff.md)
+    // are no longer written by the worker — they are owned by the curation
+    // publisher (Plan 406 Phase D retired the in-worker consolidator).
   });
 
   it('11. Codex filename shape + unified MEMORY.md content', async () => {
@@ -660,9 +660,5 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(files[0]).toContain(expectedShortId);
 
     expect(fs.existsSync(path.join(fixture.memoryRoot, 'raw_memories.md'))).toBe(false);
-    const memoryContent = fs.readFileSync(path.join(fixture.memoryRoot, 'MEMORY.md'), 'utf8');
-    expect(memoryContent).toContain('# Durable Memory');
-    expect(memoryContent).toContain('**preference:indentation-style**');
-    expect(memoryContent).toContain('User prefers tabs over spaces');
   });
 });
