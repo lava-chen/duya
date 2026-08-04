@@ -199,13 +199,12 @@ describe('memory-worker curation path (Plan 406)', () => {
     expect(mocks.recoverAllPublications.mock.calls[0][0].stagingRoot).toBe(f.stagingRoot);
   });
 
-  it('does NOT call recoverAllPublications when Phase 2 is disabled', async () => {
+  it('Phase 2 is always-on by default — recoverAllPublications is called even when the env var is unset', async () => {
     delete process.env.DUYA_MEMORY_PHASE2_ENABLED;
     mocks.queryEligibleInputs.mockReturnValue([]);
     const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
     await h.forceSweep();
 
-    expect(mocks.recoverAllPublications).not.toHaveBeenCalled();
-    expect(mocks.runCurationCycle).not.toHaveBeenCalled();
+    expect(mocks.recoverAllPublications).toHaveBeenCalledTimes(1);
   });
 });

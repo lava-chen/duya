@@ -1232,6 +1232,46 @@ prunes empty parents only. The prompt tells the Agent to read `summary.md`,
 search only `MEMORY.md`, and consult rollout evidence on demand. No dedicated
 recall tool is registered.
 
+### Memory Phase 2 Curation Agent (Plans 401-406)
+
+The Phase 2 curation layer is an LLM-driven agent that performs cross-rollout
+semantic curation of memory. Files are the single source of truth; SQLite is
+the run control plane.
+
+**Architecture pivot (Plan 401-406, design doc
+`docs/design-docs/2026-08-03-memory-phase2-curation-agent-design.md`):**
+
+- Stage 1 LLM → `stage1_outputs` (material queue) + `rollout_summaries/*.md`
+- memory-worker Hybrid scheduler (N=3 new outputs OR T=30min timeout)
+- `curation_runs` ledger claims exact input versions (rollout_id + source_content_hash)
+- Staging workspace (copy of managed memory + frozen input snapshot)
+- Phase 2 Curator Agent (root-bound tools, sandboxed process)
+- Atomic publish: leaf entity files → MEMORY.md → summary.md → indexes
+- Publication journal + crash recovery (§8 of design doc)
+
+**File truth (Phase C/D):**
+
+- `memory/items/<claim_type>/<slug>.md` — non-entity claims (YAML frontmatter)
+- `memory/entities/<type>/<slug>.md` — entity claims (people, areas, custom)
+- `memory/MEMORY.md` — code-generated search projection (≤64KiB)
+- `memory/summary.md` — code-generated routing projection (top 12, ≤6000 chars)
+- `memory/entities/<type>/index.md` — code-generated entity index
+- `memory/extensions/ad_hoc/*.md` — user-authored notes (curation input, read-only)
+
+**Retired (Phase D, migration 0009):**
+
+- `memory_entries` table — replaced by file manifest (rebuild cache was interim)
+- `memory_evidence` table — dropped with `memory_entries`
+- `phase2_runs` table (migration 0005, pre-redesign) — replaced by `curation_runs`
+- `consolidator.ts` — replaced by `curation_publish_orchestrator.ts`
+- `projectionContent.ts` Phase 2 renderers — replaced by `curation_projection.ts`
+- `reconcile.ts` Phase 2 paths — downgraded to Stage 1 file-integrity check only
+
+**Consumers switched to file manifest:**
+
+- Stage 1 `queryExistingKeys` (`packages/agent/src/memory-rollout/extractor.ts`) — reads `canonical_key` from active files
+- Settings `memory:list` (`electron/ipc/memory-handlers.ts`) — reads entries from active files
+
 ## 相关文档
 
 - [AGENTS.md](./AGENTS.md) - 开发规则和流程

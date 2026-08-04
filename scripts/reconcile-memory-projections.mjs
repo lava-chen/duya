@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import Database from 'better-sqlite3';
-import { runConsolidator } from '../packages/agent/dist/memory-state/consolidator.js';
 import { drainOutbox } from '../packages/agent/dist/memory-state/outbox.js';
 import { reconcileProjections } from '../packages/agent/dist/memory-state/reconcile.js';
 
@@ -26,7 +25,6 @@ if (memoryRoot !== expectedRoot) {
 const db = new Database(databasePath);
 try {
   db.pragma('busy_timeout = 5000');
-  const consolidated = runConsolidator({ db, rootDir: memoryRoot });
   const reconciled = reconcileProjections(db, { rootDir: memoryRoot });
   // A manual repair must also clear rows waiting on historical backoff. The
   // normal worker still uses wall-clock scheduling; this fast-forward is
@@ -46,7 +44,7 @@ try {
     .prepare('SELECT COUNT(*) AS count FROM projection_outbox WHERE completed_at IS NULL')
     .get().count;
 
-  process.stdout.write(`${JSON.stringify({ consolidated, reconciled, drained, pending }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ reconciled, drained, pending }, null, 2)}\n`);
 } finally {
   db.close();
 }

@@ -39,11 +39,6 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [310-multi-model-reasoning-architecture](./active/310-multi-model-reasoning-architecture.md) | Multi-model reasoning architecture | P1 | Planning |
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like runtime instruction injection (`agent_mailbox` + checkpoints + soft interrupt) | P0 | Planning |
 | [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive memory — RealTimeCapture hook + scoring + dual-path Recall + decay archival | P1 | Planning |
-| [306-memory-v2-phase-2-consolidator-and-recall](./active/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory sustainable consolidation / retrieval, bounded `summary.md`, unified `MEMORY.md`, retirement of legacy projections | P0 | Implementation; live migration verification pending |
-| [401-memory-curation-tool-foundation](./active/401-memory-curation-tool-foundation.md) | Memory curation tool foundation | P1 | Planning |
-| [402-memory-curation-ledger-staging](./active/402-memory-curation-ledger-staging.md) | Memory curation ledger staging | P1 | Planning |
-| [404-memory-curation-publisher-projection](./active/404-memory-curation-publisher-projection.md) | Memory curation publisher projection | P1 | Planning |
-| [406-memory-curation-rebuild-adhoc-retire](./active/406-memory-curation-rebuild-adhoc-retire.md) | Memory curation rebuild / adhoc retirement | P1 | Planning |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 
 ### Conductor / Canvas
@@ -160,7 +155,11 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [302-memory-v2-phase-1a2-lease-heartbeat-cas](./completed/302-memory-v2-phase-1a2-lease-heartbeat-cas.md) | Memory Phase 1A.2 — lease lifecycle + CAS | 2026-07-25 |
 | [301-memory-v2-phase-1a-schema-projects-catalog](./completed/301-memory-v2-phase-1a-schema-projects-catalog.md) | Memory Phase 1A — schema + project registry + catalog sync | 2026-07-25 |
 | [403-memory-curation-validator-runner](./completed/403-memory-curation-validator-runner.md) | Memory curation validator runner — curator prompt + staging validator + agent runner | 2026-08-04 |
+| [401-memory-curation-tool-foundation](./completed/401-memory-curation-tool-foundation.md) | Memory curation tool foundation — `allowedRoots` sandbox on 5 file tools + memory-curator profile + root-bound entry | 2026-08-04 |
+| [404-memory-curation-publisher-projection](./completed/404-memory-curation-publisher-projection.md) | Memory curation publisher projection — crash-safe publish state machine + projection generators + snapshot + health | 2026-08-04 |
 | [405-memory-curation-prompt-canary-layout](./completed/405-memory-curation-prompt-canary-layout.md) | Memory curation prompt canary layout — two-layer prompt contract + canary + memory_layout.json | 2026-08-04 |
+| [306-memory-v2-phase-2-consolidator-and-recall](./completed/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory Phase 2 Consolidator (legacy) — superseded by Plan 401-406 curation agent architecture; consolidator.ts deleted, memory_entries dropped in migration 0009 | 2026-08-03 |
+| [406-memory-curation-rebuild-adhoc-retire](./completed/406-memory-curation-rebuild-adhoc-retire.md) | Memory Phase 2 Plan 406 — memory_entries rebuild cache + ad-hoc input chain + Phase D retire (migration 0009 drops legacy tables, consolidator.ts deleted) | 2026-08-04 |
 
 ### Canvas / Conductor
 

@@ -153,7 +153,6 @@ export function claimRun(db: Database, input: ClaimRunInput): ClaimRunResult {
 export interface CompleteRunInput {
   dispositions: InputDisposition[];
   publicationStatus: PublicationStatus;
-  cacheStatus: CacheStatus;
   now?: number;
 }
 
@@ -183,10 +182,10 @@ export function completeRun(db: Database, runId: string, input: CompleteRunInput
       `UPDATE curation_runs
          SET status = 'succeeded',
              publication_status = ?,
-             cache_status = ?,
+             cache_status = 'ok',
              finished_at = ?
        WHERE run_id = ?`
-    ).run(input.publicationStatus, input.cacheStatus, now, runId);
+    ).run(input.publicationStatus, now, runId);
 
     const updateInput = db.prepare(
       `UPDATE curation_run_inputs

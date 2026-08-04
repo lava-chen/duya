@@ -29,8 +29,6 @@ const mocks = vi.hoisted(() => ({
   createSnapshot: vi.fn(),
   // curation_health mock
   appendHealthReport: vi.fn(),
-  // memory_entries_rebuild mock
-  rebuildMemoryEntriesFromFiles: vi.fn(),
   // ad_hoc_watcher mock
   scanAdHocChanges: vi.fn(),
 }));
@@ -41,10 +39,6 @@ vi.mock('../../../packages/agent/src/memory-state/curation_ledger', () => ({
   completeRun: mocks.completeRun,
   failRun: mocks.failRun,
   computeInputSetHash: mocks.computeInputSetHash,
-}));
-
-vi.mock('../../../packages/agent/src/memory-state/memory_entries_rebuild', () => ({
-  rebuildMemoryEntriesFromFiles: mocks.rebuildMemoryEntriesFromFiles,
 }));
 
 vi.mock('../ad_hoc_watcher', () => ({
@@ -115,7 +109,6 @@ describe('runCurationCycle', () => {
     db = { prepare: vi.fn() } as unknown as Database;
     vi.clearAllMocks();
     mocks.computeInputSetHash.mockReturnValue('input-hash-1');
-    mocks.rebuildMemoryEntriesFromFiles.mockResolvedValue({ processed: 0, skipped: 0, durationMs: 0 });
     mocks.scanAdHocChanges.mockResolvedValue([]);
   });
 
@@ -287,93 +280,6 @@ describe('runCurationCycle', () => {
     expect(mocks.deleteStaging).toHaveBeenCalled();
     expect(mocks.validateStaging).not.toHaveBeenCalled();
     expect(mocks.preparePublication).not.toHaveBeenCalled();
-  });
-
-  it('5. rebuilds memory_entries cache after a successful publication', async () => {
-    const inputs = [
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
-    ];
-    mocks.queryEligibleInputs.mockReturnValue(inputs);
-    mocks.claimRun.mockReturnValue({ runId: 'run-5', lockToken: 'tok-5' });
-    mocks.createStaging.mockResolvedValue({ stagingDir: path.join(env.stagingRoot, 'run-5'), manifestHash: 'stg-hash' });
-    mocks.runCurationAgent.mockResolvedValue({
-      timedOut: false,
-      receipt: { inputs: [], health: { added: 0, merged: 0, retired: 0, no_change: 0, rejected: 0 } },
-    });
-    mocks.validateStaging.mockReturnValue({ valid: true, errors: [], warnings: [] });
-    mocks.createSnapshot.mockResolvedValue({ snapshotDir: path.join(env.snapshotRoot, 'snap-5'), manifestHash: 'snap-hash' });
-    mocks.preparePublication.mockResolvedValue({
-      run_id: 'run-5', generation: 2, old_manifest_hash: 'old', new_manifest_hash: 'new',
-      old_policy_version: null, new_policy_version: null, old_layout_version: null, new_layout_version: null,
-      backup_dir: path.join(env.stagingRoot, 'run-5', 'backup'), steps: [],
-    });
-    mocks.rebuildMemoryEntriesFromFiles.mockResolvedValue({ processed: 2, skipped: 0, durationMs: 5 });
-
-    await runCurationCycle(db, {
-      memoryRoot: env.memoryRoot,
-      configRoot: env.configRoot,
-      stagingRoot: env.stagingRoot,
-      snapshotRoot: env.snapshotRoot,
-      providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
-      systemLocation: 'global',
-      workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
-      sessionId: 'session-1',
-      now: T0,
-    });
-
-    expect(mocks.rebuildMemoryEntriesFromFiles).toHaveBeenCalledTimes(1);
-    expect(mocks.rebuildMemoryEntriesFromFiles.mock.calls[0][1]).toBe(env.memoryRoot);
-    expect(mocks.completeRun).toHaveBeenCalledWith(
-      expect.anything(),
-      'run-5',
-      expect.objectContaining({ publicationStatus: 'succeeded', cacheStatus: 'ok' }),
-    );
-  });
-
-  it('6. sets cache_status=cache_pending and still succeeds when rebuild fails', async () => {
-    const inputs = [
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
-    ];
-    mocks.queryEligibleInputs.mockReturnValue(inputs);
-    mocks.claimRun.mockReturnValue({ runId: 'run-6', lockToken: 'tok-6' });
-    mocks.createStaging.mockResolvedValue({ stagingDir: path.join(env.stagingRoot, 'run-6'), manifestHash: 'stg-hash' });
-    mocks.runCurationAgent.mockResolvedValue({
-      timedOut: false,
-      receipt: { inputs: [], health: { added: 0, merged: 0, retired: 0, no_change: 0, rejected: 0 } },
-    });
-    mocks.validateStaging.mockReturnValue({ valid: true, errors: [], warnings: [] });
-    mocks.createSnapshot.mockResolvedValue({ snapshotDir: path.join(env.snapshotRoot, 'snap-6'), manifestHash: 'snap-hash' });
-    mocks.preparePublication.mockResolvedValue({
-      run_id: 'run-6', generation: 2, old_manifest_hash: 'old', new_manifest_hash: 'new',
-      old_policy_version: null, new_policy_version: null, old_layout_version: null, new_layout_version: null,
-      backup_dir: path.join(env.stagingRoot, 'run-6', 'backup'), steps: [],
-    });
-    mocks.rebuildMemoryEntriesFromFiles.mockRejectedValue(new Error('disk full'));
-
-    const result = await runCurationCycle(db, {
-      memoryRoot: env.memoryRoot,
-      configRoot: env.configRoot,
-      stagingRoot: env.stagingRoot,
-      snapshotRoot: env.snapshotRoot,
-      providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
-      systemLocation: 'global',
-      workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
-      sessionId: 'session-1',
-      now: T0,
-    });
-
-    expect(result.success).toBe(true);
-    expect(mocks.completeRun).toHaveBeenCalledWith(
-      expect.anything(),
-      'run-6',
-      expect.objectContaining({ publicationStatus: 'succeeded', cacheStatus: 'cache_pending' }),
-    );
   });
 
   it('7. merges rollout and ad-hoc inputs into one batch, truncated to MAX_INPUTS', async () => {
