@@ -135,7 +135,6 @@ export interface CreateCompactionSummaryMessageInput {
   readonly tokensAfter?: number;
   readonly seqIndex?: number;
   readonly metadata?: Readonly<Record<string, unknown>>;
-  readonly persistence?: AgentMessagePersistence;
   readonly visibility?: AgentMessageVisibility;
 }
 
@@ -161,7 +160,6 @@ export class AgentMessageFactory {
       kind: 'user',
       id: this.idGenerator(),
       createdAt: this.clock(),
-      persistence: input.persistence ?? 'durable',
       visibility: input.visibility ?? 'visible',
       content: input.content,
     };
@@ -194,7 +192,6 @@ export class AgentMessageFactory {
       kind: 'assistant',
       id: this.idGenerator(),
       createdAt: this.clock(),
-      persistence: input.persistence ?? 'durable',
       visibility: input.visibility ?? 'visible',
       content: input.content,
     };
@@ -221,7 +218,6 @@ export class AgentMessageFactory {
       kind: 'tool_result',
       id: this.idGenerator(),
       createdAt: this.clock(),
-      persistence: input.persistence ?? 'durable',
       visibility: input.visibility ?? 'visible',
       toolCallId: input.toolCallId,
       toolName: input.toolName,
@@ -245,11 +241,9 @@ export class AgentMessageFactory {
       kind: 'runtime_context',
       id: this.idGenerator(),
       createdAt: this.clock(),
-      persistence: input.persistence ?? 'transient',
       visibility: input.visibility ?? 'visible',
       source: input.source,
       content: input.content,
-      includeInModel: input.includeInModel,
     };
     if (metadata !== undefined) message.metadata = metadata;
     return message;
@@ -268,7 +262,6 @@ export class AgentMessageFactory {
       kind: 'compaction_summary',
       id: this.idGenerator(),
       createdAt: this.clock(),
-      persistence: input.persistence ?? 'transient',
       visibility: input.visibility ?? 'visible',
       summary: input.summary,
       compactionEntryId: input.compactionEntryId,
