@@ -3,8 +3,11 @@
 //
 // The IPC / accessors (PluginManager, ConfigManager, better-sqlite3,
 // readPluginManifest) are mocked so the tests run in isolation. The
-// pure transform `buildMainMCPCandidates` is exercised directly with
-// synthetic input — this is where the contract-level coverage lives.
+// pure transforms now live in @duya/plugin-core/src/mcp/collect.ts and
+// are exercised here against the shared engine (`buildMCPCandidates`
+// and friends). The main-process-specific pieces that remain in
+// collect-main.ts (`getMainLegacySettingsPath`, and the async
+// `collectMainMCPCandidates` accessor wrapper) are tested directly.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
@@ -63,24 +66,26 @@ import { getPluginManager } from '../../plugins/PluginManager.js';
 import { getConfigManager } from '../../config/manager.js';
 import { getDatabase } from '../../db/connection.js';
 import {
-  buildMainMCPCandidates,
-  buildMainCandidatesFromPluginEntry,
-  buildMainCandidatesFromSettingsEntries,
-  buildMainBundledLiteratureCandidate,
-  buildMainBundledLiteratureBundlePath,
+  buildMCPCandidates,
+  buildCandidatesFromPluginEntry,
+  buildCandidatesFromSettingsEntries,
+  buildBundledLiteratureCandidate,
+  buildBundledLiteratureBundlePath,
+  readLegacyFileMcpServers,
+  type MCPCollectorPluginEntry,
+  type MCPCollectorSettingsItem,
+  type MCPCollectorInput,
+} from '@duya/plugin-core/src/mcp/collect.js';
+import {
   getMainLegacySettingsPath,
-  readMainLegacyFileMcpServers,
   collectMainMCPCandidates,
-  type MainCollectorPluginEntry,
-  type MainCollectorSettingsItem,
-  type MainCollectorInput,
 } from './collect-main.js';
 
 const mockedGetPluginManager = vi.mocked(getPluginManager);
 const mockedGetConfigManager = vi.mocked(getConfigManager);
 const mockedGetDatabase = vi.mocked(getDatabase);
 
-const emptyInput: MainCollectorInput = {
+const emptyInput: MCPCollectorInput = {
   installedPlugins: [],
   legacyFileItems: [],
   agentSettingsMcpServers: [],
@@ -90,20 +95,20 @@ const emptyInput: MainCollectorInput = {
 };
 
 // ============================================================================
-// Per-source pure helpers
+// Per-source pure helpers (shared engine)
 // ============================================================================
 
-describe('buildMainCandidatesFromPluginEntry', () => {
+describe('buildCandidatesFromPluginEntry', () => {
   it('returns an empty array for a disabled plugin', () => {
-    const entry: MainCollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'p', name: 'P', enabled: false, installPath: '/p',
       manifest: { capabilities: { mcpServers: [{ name: 'x', command: 'node', args: [] }] } },
     };
-    expect(buildMainCandidatesFromPluginEntry(entry)).toEqual([]);
+    expect(buildCandidatesFromPluginEntry(entry)).toEqual([]);
   });
 
   it('builds a candidate with pluginId, pluginName, pluginRoot, pluginDataPath', () => {
-    const entry: MainCollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'com.duya.literature',
       name: 'Literature Plugin',
       enabled: true,
@@ -117,7 +122,7 @@ describe('buildMainCandidatesFromPluginEntry', () => {
         },
       },
     };
-    const result = buildMainCandidatesFromPluginEntry(entry);
+    const result = buildCandidatesFromPluginEntry(entry);
     expect(result).toHaveLength(1);
     expect(result[0]).toEqual({
       source: 'plugin',
@@ -135,7 +140,7 @@ describe('buildMainCandidatesFromPluginEntry', () => {
   });
 
   it('skips plugin MCP servers missing name or command', () => {
-    const entry: MainCollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'p', name: 'P', enabled: true, installPath: '/p',
       manifest: {
         capabilities: {
@@ -147,38 +152,38 @@ describe('buildMainCandidatesFromPluginEntry', () => {
         },
       },
     };
-    const result = buildMainCandidatesFromPluginEntry(entry);
+    const result = buildCandidatesFromPluginEntry(entry);
     expect(result).toHaveLength(1);
     expect(result[0].rawConfig.name).toBe('good');
   });
 });
 
-describe('buildMainCandidatesFromSettingsEntries', () => {
+describe('buildCandidatesFromSettingsEntries', () => {
   it('preserves allowedAgentIds on the candidate', () => {
-    const items: MainCollectorSettingsItem[] = [
+    const items: MCPCollectorSettingsItem[] = [
       { name: 'search', command: 'node', args: [], allowedAgentIds: ['agent-a'] },
     ];
-    const result = buildMainCandidatesFromSettingsEntries('agentSettings', items);
+    const result = buildCandidatesFromSettingsEntries('agentSettings', items);
     expect(result).toHaveLength(1);
     expect(result[0].rawConfig.allowedAgentIds).toEqual(['agent-a']);
   });
 
   it('preserves the sourceSubOrigin on every candidate', () => {
-    const items: MainCollectorSettingsItem[] = [
+    const items: MCPCollectorSettingsItem[] = [
       { name: 'a', command: 'node', args: [] },
     ];
-    const agent = buildMainCandidatesFromSettingsEntries('agentSettings', items);
-    const kv = buildMainCandidatesFromSettingsEntries('settingsKv', items);
-    const legacy = buildMainCandidatesFromSettingsEntries('legacyFile', items);
+    const agent = buildCandidatesFromSettingsEntries('agentSettings', items);
+    const kv = buildCandidatesFromSettingsEntries('settingsKv', items);
+    const legacy = buildCandidatesFromSettingsEntries('legacyFile', items);
     expect(agent.every((c) => c.sourceSubOrigin === 'agentSettings')).toBe(true);
     expect(kv.every((c) => c.sourceSubOrigin === 'settingsKv')).toBe(true);
     expect(legacy.every((c) => c.sourceSubOrigin === 'legacyFile')).toBe(true);
   });
 });
 
-describe('buildMainBundledLiteratureCandidate', () => {
+describe('buildBundledLiteratureCandidate', () => {
   it('ALWAYS returns a candidate, even when the bundled script does not exist', () => {
-    const result = buildMainBundledLiteratureCandidate(
+    const result = buildBundledLiteratureCandidate(
       '/nonexistent/path/for/main/tests',
       {},
     );
@@ -191,7 +196,7 @@ describe('buildMainBundledLiteratureCandidate', () => {
   });
 
   it('uses the packaged bundle path when isPackaged is true', () => {
-    const result = buildMainBundledLiteratureCandidate(
+    const result = buildBundledLiteratureCandidate(
       '/should/not/be/used', {}, true, '/resources',
     );
     expect(result.rawConfig.args?.[0]).toContain('resources');
@@ -201,7 +206,7 @@ describe('buildMainBundledLiteratureCandidate', () => {
   });
 
   it('uses the dev bundle path when isPackaged is false', () => {
-    const result = buildMainBundledLiteratureCandidate(
+    const result = buildBundledLiteratureCandidate(
       '/repo', {}, false, '/resources',
     );
     expect(result.rawConfig.args?.[0]).toContain('repo');
@@ -212,9 +217,9 @@ describe('buildMainBundledLiteratureCandidate', () => {
   });
 });
 
-describe('buildMainBundledLiteratureBundlePath', () => {
+describe('buildBundledLiteratureBundlePath', () => {
   it('returns packaged path when packaged with resourcesPath', () => {
-    const p = buildMainBundledLiteratureBundlePath('/cwd', true, '/resources');
+    const p = buildBundledLiteratureBundlePath('/cwd', true, '/resources');
     expect(p).toContain('resources');
     expect(p).toContain('agent-bundle');
     expect(p).toContain('literature-mcp-server.js');
@@ -222,7 +227,7 @@ describe('buildMainBundledLiteratureBundlePath', () => {
   });
 
   it('returns dev path when not packaged', () => {
-    const p = buildMainBundledLiteratureBundlePath('/cwd', false, '/resources');
+    const p = buildBundledLiteratureBundlePath('/cwd', false, '/resources');
     expect(p).toContain('cwd');
     expect(p).toContain('packages');
     expect(p).toContain('agent');
@@ -231,7 +236,7 @@ describe('buildMainBundledLiteratureBundlePath', () => {
   });
 
   it('returns dev path when packaged but resourcesPath missing', () => {
-    const p = buildMainBundledLiteratureBundlePath('/cwd', true, undefined);
+    const p = buildBundledLiteratureBundlePath('/cwd', true, undefined);
     expect(p).toContain('cwd');
     expect(p).toContain('packages');
     expect(p).toContain('bundle');
@@ -290,30 +295,30 @@ describe('getMainLegacySettingsPath', () => {
 });
 
 // ============================================================================
-// readMainLegacyFileMcpServers — typed issues
+// readLegacyFileMcpServers — typed issues
 // ============================================================================
 
-describe('readMainLegacyFileMcpServers — file existence', () => {
+describe('readLegacyFileMcpServers — file existence', () => {
   it('returns no items and no issues when settingsPath is null', async () => {
-    const r = await readMainLegacyFileMcpServers(null);
+    const r = await readLegacyFileMcpServers(null);
     expect(r.items).toEqual([]);
     expect(r.issues).toEqual([]);
   });
 
   it('returns no items and no issues when the file does not exist (ENOENT)', async () => {
-    const r = await readMainLegacyFileMcpServers('/no/such/file.json');
+    const r = await readLegacyFileMcpServers('/no/such/file.json');
     expect(r.items).toEqual([]);
     expect(r.issues).toEqual([]);
   });
 });
 
-describe('readMainLegacyFileMcpServers — malformed JSON', () => {
+describe('readLegacyFileMcpServers — malformed JSON', () => {
   it('emits a phase: discovery mcp-settings-invalid issue when the file is not valid JSON', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
     try {
       const p = join(dir, 'settings.json');
       writeFileSync(p, 'this is not json');
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items).toEqual([]);
       expect(r.issues).toHaveLength(1);
       const err = r.issues[0].error as { type: string; reason: string };
@@ -330,7 +335,7 @@ describe('readMainLegacyFileMcpServers — malformed JSON', () => {
     try {
       const p = join(dir, 'settings.json');
       writeFileSync(p, JSON.stringify(['not', 'an', 'object']));
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items).toEqual([]);
       expect(r.issues).toHaveLength(1);
       expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
@@ -344,7 +349,7 @@ describe('readMainLegacyFileMcpServers — malformed JSON', () => {
     try {
       const p = join(dir, 'settings.json');
       writeFileSync(p, JSON.stringify({ mcpServers: 'oops' }));
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items).toEqual([]);
       expect(r.issues).toHaveLength(1);
       expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
@@ -358,7 +363,7 @@ describe('readMainLegacyFileMcpServers — malformed JSON', () => {
     try {
       const p = join(dir, 'settings.json');
       writeFileSync(p, JSON.stringify({ unrelated: true }));
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items).toEqual([]);
       expect(r.issues).toEqual([]);
     } finally {
@@ -367,7 +372,7 @@ describe('readMainLegacyFileMcpServers — malformed JSON', () => {
   });
 });
 
-describe('readMainLegacyFileMcpServers — per-entry validation', () => {
+describe('readLegacyFileMcpServers — per-entry validation', () => {
   it('returns the mcpServers array when the file is well-formed', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
     try {
@@ -381,7 +386,7 @@ describe('readMainLegacyFileMcpServers — per-entry validation', () => {
           ],
         }),
       );
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items).toHaveLength(2);
       expect(r.issues).toEqual([]);
       expect(r.items[0].name).toBe('main-legacy-lit');
@@ -405,7 +410,7 @@ describe('readMainLegacyFileMcpServers — per-entry validation', () => {
           ],
         }),
       );
-      const r = await readMainLegacyFileMcpServers(p);
+      const r = await readLegacyFileMcpServers(p);
       expect(r.items.map((i) => i.name)).toEqual(['good', 'good-2']);
       expect(r.issues).toHaveLength(2);
       expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
@@ -417,18 +422,18 @@ describe('readMainLegacyFileMcpServers — per-entry validation', () => {
 });
 
 // ============================================================================
-// Pure transform: 5-source coverage (new contract: MCPCollectionResult)
+// Pure transform: candidate assembly (shared engine)
 // ============================================================================
 
-describe('buildMainMCPCandidates (pure) — 5 sources', () => {
+describe('buildMCPCandidates (pure) — source coverage', () => {
   it('returns MCPCollectionResult with bundled always present', () => {
-    const r = buildMainMCPCandidates({ ...emptyInput, cwd: '/nonexistent/cwd' });
+    const r = buildMCPCandidates({ ...emptyInput, cwd: '/nonexistent/cwd' });
     expect(r.candidates.find((c) => c.source === 'bundled')).toBeDefined();
     expect(r.issues).toEqual([]);
   });
 
   it('emits bundled + plugin + one user TOML source', () => {
-    const r = buildMainMCPCandidates({
+    const r = buildMCPCandidates({
       ...emptyInput,
       installedPlugins: [
         {

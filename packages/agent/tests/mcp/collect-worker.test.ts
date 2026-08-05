@@ -1,10 +1,10 @@
 // packages/agent/tests/mcp/collect-worker.test.ts
 // Unit tests for the worker-side MCP candidate collector.
 //
-// Tests target the pure transform `buildWorkerMCPCandidates` directly
-// so the IPC layer does not need to be mocked. The async wrapper
-// `collectWorkerMCPCandidates` is exercised separately with a minimal
-// mock of the db-client shape.
+// The pure transforms now live in @duya/plugin-core/src/mcp/collect.ts
+// and are exercised here against the shared engine (`buildMCPCandidates`
+// and friends). The async wrapper `collectWorkerMCPCandidates` is
+// exercised separately with a minimal mock of the db-client shape.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
@@ -15,27 +15,27 @@ import {
   buildBundledLiteratureCandidate,
   buildCandidatesFromPluginEntry,
   buildCandidatesFromSettingsEntries,
-  buildWorkerMCPCandidates,
+  buildMCPCandidates,
   readLegacyFileMcpServers,
-  collectWorkerMCPCandidates,
-  type CollectorPluginEntry,
-  type WorkerCollectorInput,
-} from '../../src/mcp/collect-worker.js';
+  type MCPCollectorPluginEntry,
+  type MCPCollectorInput,
+} from '@duya/plugin-core/src/mcp/collect.js';
+import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import type { MCPConfigItem } from '../../src/mcp/config.js';
 
 const baseEnv: Record<string, string> = {};
 
-const emptyWorkerInput: WorkerCollectorInput = {
+const emptyWorkerInput: MCPCollectorInput = {
   installedPlugins: [],
   agentSettingsMcpServers: [],
   settingsKvMcpServers: [],
-  legacyFileMcpServers: undefined,
+  legacyFileItems: [],
   environment: {},
   cwd: '/nonexistent/cwd',
 };
 
 // ============================================================================
-// Per-source pure helpers
+// Per-source pure helpers (shared engine)
 // ============================================================================
 
 describe('buildBundledLiteratureBundlePath', () => {
@@ -72,7 +72,7 @@ describe('buildBundledLiteratureCandidate', () => {
 
 describe('buildCandidatesFromPluginEntry', () => {
   it('returns an empty array for a disabled plugin', () => {
-    const entry: CollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'p', name: 'P', enabled: false, installPath: '/p',
       manifest: { capabilities: { mcpServers: [{ name: 'x', command: 'node', args: [] }] } },
     };
@@ -80,14 +80,14 @@ describe('buildCandidatesFromPluginEntry', () => {
   });
 
   it('returns an empty array when manifest is missing', () => {
-    const entry: CollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'p', name: 'P', enabled: true, installPath: '/p',
     };
     expect(buildCandidatesFromPluginEntry(entry)).toEqual([]);
   });
 
   it('builds a candidate with pluginId, pluginName, pluginRoot, pluginDataPath', () => {
-    const entry: CollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'com.duya.literature',
       name: 'Literature Plugin',
       enabled: true,
@@ -119,7 +119,7 @@ describe('buildCandidatesFromPluginEntry', () => {
   });
 
   it('skips plugin MCP servers missing name or command', () => {
-    const entry: CollectorPluginEntry = {
+    const entry: MCPCollectorPluginEntry = {
       id: 'p', name: 'P', enabled: true, installPath: '/p',
       manifest: {
         capabilities: {
@@ -316,12 +316,12 @@ describe('readLegacyFileMcpServers — per-entry validation', () => {
 });
 
 // ============================================================================
-// Pure transform: 5-source coverage (new contract: MCPCollectionResult)
+// Pure transform: candidate assembly (shared engine)
 // ============================================================================
 
-describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
+describe('buildMCPCandidates (pure) — source coverage', () => {
   it('returns MCPCollectionResult with bundled always present', () => {
-    const r = buildWorkerMCPCandidates({
+    const r = buildMCPCandidates({
       ...emptyWorkerInput,
       cwd: '/nonexistent/cwd',
     });
@@ -330,7 +330,7 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
   });
 
   it('emits bundled + plugin + one user TOML source', () => {
-    const r = buildWorkerMCPCandidates({
+    const r = buildMCPCandidates({
       ...emptyWorkerInput,
       installedPlugins: [
         {
@@ -338,7 +338,7 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
           manifest: { capabilities: { mcpServers: [{ name: 'plugin-mcp', command: 'node', args: [] }] } },
         },
       ],
-      userTomlMcpServers: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
+      userTomlItems: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
     });
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('bundled')).toBe(true);
@@ -352,26 +352,8 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
     expect(settingsSubOrigins).toEqual(new Set(['tomlFile']));
   });
 
-  it('ignores legacy user stores even when a fixture provides them', () => {
-    const items: MCPConfigItem[] = [
-      { name: 'literature', command: 'node', args: [] },
-    ];
-    const r = buildWorkerMCPCandidates({
-      ...emptyWorkerInput,
-      agentSettingsMcpServers: items,
-      settingsKvMcpServers: items,
-      legacyFileMcpServers: items,
-      userTomlMcpServers: items,
-    });
-    const settingsSubOrigins = r.candidates
-      .filter((c) => c.source === 'settings')
-      .map((c) => c.sourceSubOrigin)
-      .sort();
-    expect(settingsSubOrigins).toEqual(['tomlFile']);
-  });
-
   it('skips a disabled plugin but keeps its settings siblings', () => {
-    const r = buildWorkerMCPCandidates({
+    const r = buildMCPCandidates({
       ...emptyWorkerInput,
       installedPlugins: [
         {
@@ -379,14 +361,14 @@ describe('buildWorkerMCPCandidates (pure) — 5 sources', () => {
           manifest: { capabilities: { mcpServers: [{ name: 's1', command: 'node', args: [] }] } },
         },
       ],
-      userTomlMcpServers: [{ name: 's2', command: 'node', args: [], enabled: true }],
+      userTomlItems: [{ name: 's2', command: 'node', args: [], enabled: true }],
     });
     const sources = r.candidates.map((c) => c.source).sort();
     expect(sources).toEqual(['bundled', 'settings']);
   });
 
   it('bundled literature and official plugin literature both surface (coexistence; engine applies fallback)', () => {
-    const r = buildWorkerMCPCandidates({
+    const r = buildMCPCandidates({
       ...emptyWorkerInput,
       installedPlugins: [
         {
