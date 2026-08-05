@@ -137,8 +137,6 @@ export function adaptMailboxRows(
   const message = factory.createRuntimeContextMessage({
     source: 'mailbox',
     content,
-    includeInModel: options.includeInModel ?? true,
-    persistence: 'transient',
     visibility: options.visibility ?? 'hidden',
     seqIndex: options.seqIndex,
     metadata: {
@@ -226,8 +224,6 @@ export function adaptMailboxHardReplacement(
   return factory.createRuntimeContextMessage({
     source: 'mailbox',
     content,
-    includeInModel: options.includeInModel ?? true,
-    persistence: 'transient',
     visibility: options.visibility ?? 'hidden',
     seqIndex: options.seqIndex,
     metadata: {
