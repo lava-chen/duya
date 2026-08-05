@@ -1855,11 +1855,33 @@ export class StreamingToolExecutor {
 
       if (tool.status === 'yielded') continue
 
-      if ((tool.status === 'completed' || tool.status === 'failed' || tool.status === 'cancelled') && tool.results) {
+      if (tool.status === 'completed' || tool.status === 'failed' || tool.status === 'cancelled') {
+        // Capture the terminal status before flipping to 'yielded' so the
+        // cancellation branch below can still inspect the original state.
+        const wasCancelled = tool.status === 'cancelled'
         tool.status = 'yielded'
 
-        for (const message of tool.results) {
-          yield { message, newContext: this.toolUseContext }
+        const results = tool.results
+        if (results && results.length > 0) {
+          for (const message of results) {
+            yield { message, newContext: this.toolUseContext }
+          }
+        } else if (wasCancelled) {
+          // A sibling_error abort cancels queued/not-yet-started tools with
+          // no results. Unlike discard or user interruption (both of which
+          // have upstream cleanup in the agent loop), this path continues the
+          // turn, so we must synthesise a result here to keep every tool_use
+          // paired — otherwise the next provider request carries an orphan
+          // tool_use and is rejected with 400. Other cancellation reasons are
+          // left to their existing upstream handling to avoid duplicate or
+          // orphan results.
+          const reason = this.getAbortReason(tool)
+          if (reason === 'sibling_error') {
+            yield {
+              message: this.createSyntheticErrorMessage(tool.id, reason),
+              newContext: this.toolUseContext,
+            }
+          }
         }
       } else if (tool.status === 'executing' && tool.batch !== ToolBatch.READ) {
         break
