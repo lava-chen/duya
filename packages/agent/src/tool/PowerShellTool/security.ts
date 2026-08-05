@@ -1,4 +1,4 @@
-import type { SecurityCheckResult, SecurityWarning, Severity } from '../../permissions/safetyConstants.js';
+import type { SecurityCheckResult, SecurityWarning, Severity } from '../../permissions/policy.js';
 
 interface PatternRule {
   pattern: RegExp;

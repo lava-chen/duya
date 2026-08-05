@@ -15,8 +15,9 @@ codify how Duya drives GitHub from chat.
 ## What this plugin adds
 
 - MCP server `github` (stdio) — wraps the official `github-mcp-server`
-  binary so the agent can call `repos.*`, `issues.*`, `pull_requests.*`,
-  `actions.*`, and `releases.*` tools.
+  image (ghcr.io/github/github-mcp-server) run via Docker so the agent
+  can call `repos.*`, `issues.*`, `pull_requests.*`, `actions.*`, and
+  `releases.*` tools. Requires Docker to be installed and running.
 - Five skills:
   - `repository-exploration` — quick orientation in any repo: structure,
     code location, history.

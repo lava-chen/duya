@@ -138,6 +138,14 @@ export interface ToolResult {
   result: string;
   error?: boolean;
   metadata?: ToolResultMetadata;
+  /**
+   * Optional deferred context associated with a tool result. When present, the
+   * executor surfaces it as a `deferredContext` update so the agent can inject
+   * it as a transient runtime-context message on the next provider turn (never
+   * persisted to the durable history). Resolves to a string or JSON-serializable
+   * value (e.g. a follow-up review payload).
+   */
+  pendingContext?: Promise<unknown>;
 }
 
 export interface ToolResultMetadata {

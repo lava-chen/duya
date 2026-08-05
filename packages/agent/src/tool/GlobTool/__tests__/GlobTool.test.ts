@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GlobTool } from '../GlobTool.js';
+import { GlobTool, splitAbsoluteGlob } from '../GlobTool.js';
 
 let root: string;
 let outside: string;
@@ -27,6 +27,50 @@ describe('GlobTool basic', () => {
     expect(result.error).toBeFalsy();
     const parsed = JSON.parse(result.result);
     expect(parsed.numFiles).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('GlobTool absolute pattern support', () => {
+  it('globs an absolute pattern rooted at the pattern directory', async () => {
+    const tool = new GlobTool();
+    const result = await tool.execute({ pattern: join(root, 'memory', '**', '*.md') });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.numFiles).toBeGreaterThanOrEqual(1);
+  });
+
+  it('globs an absolute pattern with a single-level wildcard', async () => {
+    const tool = new GlobTool();
+    const result = await tool.execute({ pattern: join(root, 'memory', '*.md') });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.numFiles).toBeGreaterThanOrEqual(1);
+  });
+
+  it('rejects an absolute pattern outside allowedRoots', async () => {
+    const sandboxed = new GlobTool({ allowedRoots: [join(root, 'memory')] });
+    const result = await sandboxed.execute({ pattern: join(outside, 'o.md') });
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('outside the allowed roots');
+  });
+
+  it('allows an absolute pattern inside allowedRoots', async () => {
+    const sandboxed = new GlobTool({ allowedRoots: [join(root, 'memory')] });
+    const result = await sandboxed.execute({ pattern: join(root, 'memory', 'a.md') });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.numFiles).toBe(1);
+  });
+
+  it('splitAbsoluteGlob splits absolute globs into root + relative pattern', () => {
+    expect(splitAbsoluteGlob(join(root, 'memory', '**', '*.md'))).toEqual({
+      root: join(root, 'memory'),
+      rel: '**/*.md',
+    });
+    expect(splitAbsoluteGlob(join(root, 'memory', 'a.md'))).toEqual({
+      root: join(root, 'memory'),
+      rel: 'a.md',
+    });
   });
 });
 

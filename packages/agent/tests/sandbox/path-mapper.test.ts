@@ -101,6 +101,14 @@ describe('PathMapper', () => {
         .toBe('path: /workspace-foo');
     });
 
+    it('leaves a nested /workspace directory name untouched', () => {
+      // Regression: an ls error for a nested relative path must not have the
+      // inner "/workspace" segment welded onto the host cwd.
+      const mapper = new PathMapper({ hostCwd: 'E:\\Projects\\duya' });
+      expect(mapper.rewriteOutputToHost('ls: ./.duya/workspace/CREST学习: No such file or directory'))
+        .toBe('ls: ./.duya/workspace/CREST学习: No such file or directory');
+    });
+
     it('handles multiple container paths in output', () => {
       const mapper = new PathMapper({ hostCwd: 'E:\\Projects\\duya' });
       const output = 'diff /workspace/a.ts /workspace/b.ts';

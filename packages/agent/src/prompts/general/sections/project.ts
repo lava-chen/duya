@@ -1,7 +1,7 @@
 /**
  * General Agent — Project
- *:
- * Merges `projectGrounding` + `projectContinuity` + the AGENTS.md file index.
+ *
+ * Merges `projectContinuity` + the AGENTS.md file index.
  * AGENTS.md contents are injected as the first user message (Codex-compatible)
  * rather than duplicated in the system prompt.
  *
@@ -10,10 +10,7 @@
  */
 
 import type { PromptContext } from '../../types.js'
-import {
-  getProjectContinuitySection,
-  getProjectGroundingSection,
-} from '../../sections/projectGrounding.js'
+import { getProjectContinuitySection } from '../../sections/projectContinuity.js'
 import { getAgentsMdManager } from '../../../agentsmd/index.js'
 import type { AgentsFileInfo } from '../../../agentsmd/types.js'
 
@@ -44,11 +41,10 @@ ${uniqueFiles.map(describeInstructionFile).join('\n')}`;
 }
 
 export function getProjectSection(ctx: PromptContext): string {
-  const grounding = getProjectGroundingSection(ctx)
   const continuity = getProjectContinuitySection(ctx)
   const instructions = getProjectInstructionsSection()
 
-  const parts: string[] = [grounding, continuity]
+  const parts: string[] = [continuity]
   if (instructions) {
     parts.push(instructions)
   }

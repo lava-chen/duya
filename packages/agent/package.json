@@ -17,6 +17,10 @@
     "./file-parser": {
       "types": "./dist/file-parser/index.d.ts",
       "default": "./dist/file-parser/index.js"
+    },
+    "./message": {
+      "types": "./dist/message/index.d.ts",
+      "default": "./dist/message/index.js"
     }
   },
   "scripts": {

@@ -105,9 +105,16 @@ export class PathMapper {
     if (!output || !this.hostCwd) return output;
 
     const escaped = escapeRegex(this.containerRoot);
-    // Match containerRoot followed by / or a non-path character or end.
-    // This prevents replacing "/workspace" inside "/workspace-foo".
-    const regex = new RegExp(`${escaped}(?=/|[^a-zA-Z0-9_-]|$)`, 'g');
+    // Match containerRoot only when it is a path root, never when it appears
+    // as a nested directory name (e.g. "./.duya/workspace/..."). Requiring a
+    // non-path character (or start-of-string) before it prevents the
+    // containerRoot inside a deeper relative path from being welded onto the
+    // host cwd. The trailing lookahead still prevents matching inside a
+    // sibling directory such as "/workspace-foo".
+    const regex = new RegExp(
+      `(?<![a-zA-Z0-9_./-])${escaped}(?=/|[^a-zA-Z0-9_-]|$)`,
+      'g',
+    );
     return output.replace(regex, this.hostForward);
   }
 }

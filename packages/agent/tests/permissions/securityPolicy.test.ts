@@ -20,7 +20,7 @@ import {
   analyzeCommandSafety,
   isReadOnlyCommand,
   isCatastrophicToolCall,
-} from '../../src/permissions/securityPolicy'
+} from '../../src/permissions/policy'
 import type { ToolPermissionContext } from '../../src/permissions/types'
 
 // ----------------------------------------------------------------------------

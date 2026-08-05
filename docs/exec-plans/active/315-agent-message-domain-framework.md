@@ -20,7 +20,16 @@ be verified independently.
 
 ## Deferred integration
 
-- Migrate `DuyaAgent.this.messages` to the framework in small call-site groups.
+- [x] Migrate `DuyaAgent.this.messages` to the framework in small call-site groups.
+      Unified write path: `this.messages` is now a timeline-derived getter
+      (`projectTimelinePersistenceMessages(this.timeline.snapshot())`), so the
+      timeline is the single source of truth for the durable persistence
+      projection. `_commitMessages()` only refreshes `sessionInfo` counters.
+      All manual `this.messages = ...` syncs removed. The error path now
+      reconciles the timeline via `setMessages(persistableMessages(...))` so
+      an incomplete assistant is excluded from the durable projection.
+      Behavior change: micro-cleanup's tool_result truncation is no longer
+      persisted — the DB keeps full tool content (confirmed with user).
 - Move mailbox, AGENTS.md, attachments, memory, mode, and task notifications to
   explicit runtime-context messages.
 - Persist compaction entries instead of overwriting or re-appending history.

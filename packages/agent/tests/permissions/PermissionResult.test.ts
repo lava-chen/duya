@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getRuleBehaviorDescription } from '../../src/permissions/PermissionResult'
+import { getRuleBehaviorDescription } from '../../src/permissions/rules'
 
 describe('PermissionResult', () => {
   describe('getRuleBehaviorDescription', () => {

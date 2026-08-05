@@ -9,12 +9,13 @@
  */
 
 import { create } from 'zustand';
+import { resumeBackgroundTask } from '@/lib/stream-session-manager';
 
 // =============================================================================
 // Types (mirrors agent_mailbox schema, camelCase for frontend)
 // =============================================================================
 
-export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace';
+export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace' | 'background_notification';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 
 export interface MailboxRow {
@@ -392,8 +393,25 @@ export function initMailboxEventListener(): () => void {
   }
 
   eventListenerRegistered = true;
-  const unsubscribe = electronAPI.mailbox.onEvent((event) => {
-    useMailboxStore.getState().applyEvent(event as MailboxBroadcastEvent);
+  const unsubscribe = electronAPI.mailbox.onEvent((rawEvent) => {
+    const event = rawEvent as MailboxBroadcastEvent;
+    useMailboxStore.getState().applyEvent(event);
+
+    // A background sub-agent / background bash command can finish after its
+    // parent turn has already completed. Resume the owning session through the
+    // normal HTTP+SSE path so the notification becomes a real model follow-up,
+    // not merely a row waiting for the user's next input. Only when the session
+    // is idle — if it is mid-run, its checkpoint claims the notification.
+    if (event.type === 'mail:created') {
+      const row = dbRowToMailboxRow(event.row);
+      if (row.kind === 'background_notification' && row.sessionId) {
+        // Do NOT gate on canSend() here: resumeBackgroundTask already defers to
+        // the terminal phase when the session is mid-run. Gating on canSend()
+        // skipped the call entirely, so the deferral never registered and the
+        // notification sat in the mailbox until the user's next input.
+        void resumeBackgroundTask(row.sessionId);
+      }
+    }
   });
 
   return () => {

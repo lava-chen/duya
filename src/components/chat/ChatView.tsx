@@ -27,6 +27,7 @@ import type { MailboxRow } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
 import { MailboxPanel } from './MailboxPanel';
 import { compactContext } from '@/lib/agent-sse-client';
+import { projectMessageTranscript } from '@/lib/project-message-transcript';
 import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
 import type { AgentMode } from './AgentModeSelector';
 import { ContextUsageRing } from './ContextUsageRing';
@@ -337,9 +338,20 @@ export function ChatView({
       }));
   }, [isStreaming, mailboxRows, messages]);
 
+  /**
+   * Filter persisted messages through the agent-side visibility field.
+   * Hidden runtime_context rows (attachment context, mailbox instructions,
+   * background notifications, etc.) are removed before rendering. Tool
+   * results remain in the returned array so MessageList can group them as usual.
+   */
+  const visibleMessages = useMemo(
+    () => projectMessageTranscript(messages).messages,
+    [messages],
+  );
+
   const renderedMessages = useMemo(
-    () => [...messages, ...mailboxMessages],
-    [mailboxMessages, messages],
+    () => [...visibleMessages, ...mailboxMessages],
+    [visibleMessages, mailboxMessages],
   );
 
   const selectedProject = useMemo(() => {

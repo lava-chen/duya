@@ -52,10 +52,7 @@ export type { PromptProfile } from './modes/types.js'
 export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './research/types.js'
 
 // Shared sections (used by multiple configs)
-export {
-  getProjectContinuitySection,
-  getProjectGroundingSection,
-} from './sections/projectGrounding.js'
+export { getProjectContinuitySection } from './sections/projectContinuity.js'
 
 // Dynamic Sections
 export { getEnvironmentSection } from './sections/dynamic/environment.js'

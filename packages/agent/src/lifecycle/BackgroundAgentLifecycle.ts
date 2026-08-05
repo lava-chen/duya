@@ -7,8 +7,8 @@ import { sendEvent } from '../process/worker-protocol.js'
 import { logger } from '../utils/logger.js'
 import type { AgentProgressEvent } from '../tool/SubagentTool/runAgent.js'
 import type { Message } from '../types.js'
-import { enqueuePendingNotification } from '../queue/index.js'
 import { buildTaskNotificationXml, DEFAULT_MAX_RESULT_CHARS, type BuildTaskNotificationInput } from './buildTaskNotification.js'
+import { sendBackgroundNotification } from './mailboxBackgroundNotification.js'
 
 export interface RegisterInput {
   taskId: string
@@ -194,10 +194,10 @@ export class BackgroundAgentLifecycle {
       const taskError = progressError ?? extractAgentError(lastMessage)
       if (taskError) {
         this.fail(taskId, taskError)
-        this.enqueueTaskNotification(taskId, 'failed', { error: taskError })
+        await this.enqueueTaskNotification(taskId, 'failed', { error: taskError })
       } else {
         this.complete(taskId, result)
-        this.enqueueTaskNotification(taskId, 'completed', {
+        await this.enqueueTaskNotification(taskId, 'completed', {
           finalMessage: extractFinalText(result),
           totalToolUseCount: result.totalToolUseCount,
           totalDurationMs: result.totalDurationMs,
@@ -207,7 +207,7 @@ export class BackgroundAgentLifecycle {
       if ((err as Error).name === 'AbortError') {
         logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
         this.kill(taskId, 'parent_abort')
-        this.enqueueTaskNotification(taskId, 'killed', { error: 'parent_abort' })
+        await this.enqueueTaskNotification(taskId, 'killed', { error: 'parent_abort' })
       } else {
         const message = (err as Error).message ?? 'Unknown error'
         logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
@@ -215,7 +215,7 @@ export class BackgroundAgentLifecycle {
         if (terminalProgress !== 'error') {
           onProgress?.({ type: 'error', data: message, agentId: taskId })
         }
-        this.enqueueTaskNotification(taskId, 'failed', { error: message })
+        await this.enqueueTaskNotification(taskId, 'failed', { error: message })
       }
     } finally {
       try { await OutputFileWriter.close(r.outputFilePath) } catch { /* ignore */ }
@@ -224,16 +224,16 @@ export class BackgroundAgentLifecycle {
   }
 
   /**
-   * Build a <task-notification> envelope and enqueue it via
-   * enqueuePendingNotification. Idempotent per taskId — repeat calls
-   * after the first are dropped. Mirrors claude-code's `notified` flag
+   * Build a <task-notification> envelope and write it to the parent session's
+   * mailbox as a `background_notification` row. Idempotent per taskId — repeat
+   * calls after the first are dropped. Mirrors claude-code's `notified` flag
    * in LocalAgentTask.tsx:227-240.
    */
-  private enqueueTaskNotification(
+  private async enqueueTaskNotification(
     taskId: string,
     status: 'completed' | 'failed' | 'killed',
     extras: { finalMessage?: string; error?: string; totalToolUseCount?: number; totalDurationMs?: number }
-  ): void {
+  ): Promise<void> {
     if (this.notified.has(taskId)) {
       logger.debug('[SubAgent] task notification already enqueued, skipping', { taskId, status }, 'SubAgent')
       return
@@ -254,11 +254,12 @@ export class BackgroundAgentLifecycle {
       error: extras.error,
       maxResultChars: this.maxResultChars,
     }
-    enqueuePendingNotification(
-      buildTaskNotificationXml(input),
-      { taskId, status },
-      r.parentSessionId,
-    )
+    const xml = buildTaskNotificationXml(input)
+    await sendBackgroundNotification({
+      sessionId: r.parentSessionId,
+      xml,
+      taskId,
+    })
   }
 
   /**

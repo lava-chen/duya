@@ -4,8 +4,8 @@
  * protocol so the main LLM (and renderer) can recognize a system
  * notification distinct from a user prompt.
  *
- * Caller is responsible for enqueueing the result via
- * enqueuePendingNotification() (mode='task-notification', priority='later').
+ * Caller is responsible for delivering the result via
+ * sendBackgroundNotification() (writes a background_notification mailbox row).
  * BackgroundAgentLifecycle.run() does both.
  *
  * Token frugality: when `maxResultChars` is set and `finalMessage`

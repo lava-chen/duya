@@ -35,6 +35,9 @@ const KIND_LABEL_KEYS: Record<MailboxKind, 'mailbox.composer.kindFollowup' | 'ma
   constraint: 'mailbox.composer.kindConstraint',
   stop: 'mailbox.composer.stop',
   abort_and_replace: 'mailbox.bubble.replace',
+  // System notifications (sub-agent / background command completion) never
+  // appear as user-editable rows; this label is only a compile-time fill.
+  background_notification: 'mailbox.composer.kindFollowup',
 };
 
 const KIND_COLORS: Record<MailboxKind, string> = {
@@ -43,6 +46,7 @@ const KIND_COLORS: Record<MailboxKind, string> = {
   constraint: '#ef4444',
   stop: '#f59e0b',
   abort_and_replace: '#ef4444',
+  background_notification: 'var(--muted)',
 };
 
 // =============================================================================

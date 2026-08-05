@@ -29,17 +29,17 @@ import {
 } from '../../utils/shell/intelligence.js';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
-import { enqueuePendingNotification } from '../../queue/index.js';
 import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
+import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
 import {
   analyzeCommandSafety,
   isReadOnlyCommand,
-} from '../../permissions/securityPolicy.js';
+} from '../../permissions/policy.js';
 import type {
   SecurityCheckResult,
   SecurityWarning,
-} from '../../permissions/safetyConstants.js';
-import { isBypassMode } from '../../permissions/PermissionMode.js';
+} from '../../permissions/policy.js';
+import { isBypassMode } from '../../permissions/policy.js';
 
 // ============================================================================
 // Windows Encoding & Path Fixes
@@ -269,7 +269,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
     // Background execution path: spawn a detached process, redirect output
     // to a temp file, register in BashTaskRegistry, and return immediately.
     // The process keeps running after execute() resolves; completion is
-    // reported later via enqueuePendingNotification so the LLM can resume.
+    // reported later via a background_notification mailbox so the LLM can resume.
     const isBackground =
       validation.data.run_in_background === true ||
       validation.data.background === true;
@@ -297,14 +297,36 @@ export class BashTool extends BaseTool implements ToolExecutor {
       // files and break path translation inside the container.
       if (provider === 'docker' && shellInfo.family === 'unix' && workingDirectory) {
         try {
-          const sandboxResult = await executeIsolated(normalizedCommand, workingDirectory, {
-            filesystem: {
-              allowRead: [],
-              // workingDirectory is guaranteed non-empty by the outer if.
-              allowWrite: [workingDirectory],
-              denyWrite: ['/etc', '/sys', '/proc', '/dev'],
+          const sandboxResult = await executeIsolated(
+            normalizedCommand,
+            workingDirectory,
+            {
+              filesystem: {
+                allowRead: [],
+                // workingDirectory is guaranteed non-empty by the outer if.
+                allowWrite: [workingDirectory],
+                denyWrite: ['/etc', '/sys', '/proc', '/dev'],
+              },
             },
-          });
+            context?.abortController?.signal,
+            resolvedTimeout,
+          );
+
+          if (sandboxResult.timedOut) {
+            return {
+              id: crypto.randomUUID(),
+              name: this.name,
+              result: `Command timed out (${resolvedTimeout}ms): ${command}\n\n${sandboxResult.stdout}`,
+              error: true,
+              metadata: {
+                timeout: true,
+                exitCode: sandboxResult.exitCode,
+                durationMs: resolvedTimeout,
+                sandboxed: true,
+                provider: 'docker',
+              },
+            };
+          }
 
           const output = [sandboxResult.stdout, sandboxResult.stderr]
             .filter(Boolean)
@@ -585,7 +607,11 @@ export class BashTool extends BaseTool implements ToolExecutor {
             ? completedTask.endTime - completedTask.startTime
             : undefined,
         });
-        enqueuePendingNotification(xml, { taskId: toolUseId, status }, sessionId);
+        void sendBackgroundNotification({
+          sessionId,
+          xml,
+          taskId: toolUseId,
+        });
       });
 
       proc.on('error', (err) => {

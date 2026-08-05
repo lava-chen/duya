@@ -28,7 +28,7 @@ vi.mock('../../../logging/logger', () => ({
   },
 }));
 
-import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '../../../../packages/agent/src/permissions/riskTierPermissions.js';
+import { riskTierToBehavior, normalizeRiskTier, DEFAULT_MISSING_TIER } from '../../../../packages/agent/src/permissions/policy.js';
 import { redactSecrets } from '../../../../src/lib/errors/extractErrorMessage.js';
 import { PolicyEngine, DEFAULT_POLICY } from '../../../../packages/plugin-core/src/security/policy-engine.js';
 import { toStatusDTO } from '../types';

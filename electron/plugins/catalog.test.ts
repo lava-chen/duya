@@ -186,7 +186,7 @@ describe('Plan 313 Phase 1a — github-development catalog entry', () => {
         'release-notes',
       ],
       mcpServers: [
-        { name: 'github', command: 'github-mcp-server', args: ['stdio'] },
+        { name: 'github', command: 'docker', args: ['run', '-i', '--rm', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server'] },
       ],
     },
     permissions: [
@@ -229,12 +229,12 @@ describe('Plan 313 Phase 1a — github-development catalog entry', () => {
     });
   });
 
-  it('uses github-mcp-server stdio as the transitional transport', async () => {
+  it('runs the official github-mcp-server image via Docker as the transitional transport', async () => {
     const { BUNDLED_PLUGIN_CATALOG } = await import('./catalog.js');
     const entry = BUNDLED_PLUGIN_CATALOG.find((e) => e.id === 'com.duya.github-development');
     const server = entry?.manifest.capabilities.mcpServers?.[0];
-    expect(server?.command).toBe('github-mcp-server');
-    expect(server?.args).toEqual(['stdio']);
+    expect(server?.command).toBe('docker');
+    expect(server?.args).toEqual(['run', '-i', '--rm', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server']);
   });
 });
 

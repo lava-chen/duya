@@ -156,6 +156,12 @@ export interface ToolExecutionResult {
 export interface MessageUpdate {
   message?: Message
   newContext?: ToolUseContext
+  /**
+   * Deferred context associated with a tool result. Carried so the agent can
+   * inject it as a transient runtime-context message on the next provider turn
+   * without persisting it to the durable history.
+   */
+  deferredContext?: { toolUseId: string; toolName: string; promise: Promise<unknown> }
 }
 
 /**
@@ -466,6 +472,15 @@ export class StreamingToolExecutor {
   private readonly pendingExtraResults = new Map<
     string,
     { toolName: string; promise: Promise<{ result: string; is_error?: boolean }> }
+  >()
+
+  // Deferred context. Populated by `executeTool` when a ToolResult carries a
+  // `pendingContext`; drained by `getRemainingResults` and surfaced as a
+  // `deferredContext` update so the agent can inject it as transient runtime
+  // context on the next provider turn. Map keyed by tool_use_id.
+  private readonly pendingDeferredContextList = new Map<
+    string,
+    { toolName: string; promise: Promise<unknown> }
   >()
 
   // WeakRef cleanup support
@@ -1512,6 +1527,16 @@ export class StreamingToolExecutor {
         })
       }
 
+      // Capture deferred context (e.g. a follow-up review payload). Surfaces
+      // as a `deferredContext` update so the agent can inject it as transient
+      // runtime context on the next provider turn without persisting it.
+      if (result.pendingContext) {
+        this.pendingDeferredContextList.set(tool.id, {
+          toolName: tool.block.name,
+          promise: result.pendingContext,
+        })
+      }
+
       this.finalizeTool(tool, messages)
 
     } catch (error) {
@@ -1962,6 +1987,13 @@ export class StreamingToolExecutor {
     if (this.pendingExtraResults.size > 0) {
       yield* this.drainPendingExtraResults()
     }
+
+    // Drain deferred contexts (e.g. a follow-up review payload). Each one is
+    // surfaced as a `deferredContext` update (not a tool_result) so the agent
+    // can inject it as transient runtime context on the next provider turn.
+    if (this.pendingDeferredContextList.size > 0) {
+      yield* this.drainPendingDeferredContexts()
+    }
   }
 
   // ==========================================================================
@@ -2006,6 +2038,20 @@ export class StreamingToolExecutor {
           status: result.is_error ? 'error' : 'done',
         },
       };
+    }
+  }
+
+  /**
+   * Drain the pendingDeferredContextList map. Each entry's promise is surfaced
+   * as a `deferredContext` update (not a tool_result) so the agent can inject
+   * it as transient runtime context on the next provider turn without
+   * persisting it to the durable history.
+   */
+  private async *drainPendingDeferredContexts(): AsyncGenerator<MessageUpdate, void> {
+    const entries = Array.from(this.pendingDeferredContextList.entries());
+    this.pendingDeferredContextList.clear();
+    for (const [toolUseId, { toolName, promise }] of entries) {
+      yield { deferredContext: { toolUseId, toolName, promise } };
     }
   }
 

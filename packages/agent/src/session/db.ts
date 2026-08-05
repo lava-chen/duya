@@ -27,6 +27,10 @@ import { resolveAgentPermissionProfile } from './permission-resolver.js';
  * Check if we're running in IPC mode (Agent subprocess).
  * In IPC mode, database operations are forwarded to Main Process.
  */
+// Plan 317: The production runtime (forked/spawned child with DUYA_AGENT_MODE=true
+// and an IPC channel via stdio fd 4) always resolves USE_IPC_MODE to true, so
+// appendMessages/addMessage always take the messageDb IPC branch. The local
+// open-db branch below is preserved solely for the CLI and test paths.
 const USE_IPC_MODE = process.env.DUYA_AGENT_MODE === 'true' && typeof process.send === 'function';
 
 // Lazy-loaded IPC client (avoid circular dependency)
@@ -911,7 +915,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
           cancelled_at           INTEGER,
           cancelled_by           TEXT,
           cancel_reason          TEXT,
-          CHECK (kind IN ('followup','correction','constraint','stop','abort_and_replace')),
+          CHECK (kind IN ('followup','correction','constraint','stop','abort_and_replace','background_notification')),
           CHECK (status IN ('pending','observed','applied','cancelled')),
           CHECK (apply_mode IS NULL OR apply_mode IN
             ('promote_to_user_message','runtime_instruction','tool_guard',
@@ -3404,7 +3408,7 @@ export function deleteModelCapability(modelName: string): boolean {
 // Mailbox Types & CRUD (Plan 202 — AgentMailbox PR1)
 // =============================================================================
 
-export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace';
+export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace' | 'background_notification';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 export type MailboxApplyMode = 'promote_to_user_message' | 'runtime_instruction' | 'tool_guard'
   | 'permission_context' | 'interrupt_signal' | 'deferred_to_next_turn';
@@ -3470,6 +3474,7 @@ const KIND_PRIORITY: Record<MailboxKind, number> = {
   correction: 50,
   constraint: 50,
   followup: 100,
+  background_notification: 100,
 };
 
 export function mailboxSend(data: CreateMailboxData): MailboxRow {

@@ -74,7 +74,7 @@ describe('useAttachments — unified attachment state (Plan 220 Phase 0 baseline
     });
   });
 
-  it('buildModelContent concatenates pasted-text bodies before the typed input', () => {
+  it('buildModelContent does NOT inline pasted-text; the agent injects it as attachment context', () => {
     const { result } = renderHook(() => useAttachments());
     act(() => {
       result.current.addAttachment({
@@ -90,10 +90,11 @@ describe('useAttachments — unified attachment state (Plan 220 Phase 0 baseline
     });
 
     const out = result.current.buildModelContent('fix this');
-    // Pasted text comes first, user input last, separated by blank line.
-    expect(out).toContain('paste-text-here');
+    // Pasted text is sent as an attachment (options.files) and injected by the
+    // agent, so it must NOT be baked into the user message content.
+    expect(out).not.toContain('paste-text-here');
     expect(out).toContain('fix this');
-    expect(out.indexOf('paste-text-here')).toBeLessThan(out.indexOf('fix this'));
+    expect(out).toBe('fix this');
   });
 
   it('buildModelContent returns the typed input unchanged when there are no attachments', () => {

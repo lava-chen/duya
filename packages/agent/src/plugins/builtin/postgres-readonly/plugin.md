@@ -18,10 +18,11 @@ exercises the subdirectory `skills/<name>/SKILL.md` layout, the
 ## What this plugin adds
 
 - MCP server `postgres-readonly` (stdio) — wraps
-  `@modelcontextprotocol/server-postgres` with the `--read-only`
-  flag enabled. The server blocks INSERT/UPDATE/DELETE at the
-  server boundary; the connection string is injected through the
-  `connectionString` setup field.
+  `@modelcontextprotocol/server-postgres`. The server wraps every
+  query in `BEGIN TRANSACTION READ ONLY` + `ROLLBACK`, so
+  INSERT/UPDATE/DELETE fail at the server boundary; the connection
+  string is injected as the server's first positional argument from
+  the `connectionString` setup field.
 - Three skills:
   - `schema-inspection` — enumerate databases, tables, columns,
     and indexes without writing anything.
@@ -35,10 +36,13 @@ exercises the subdirectory `skills/<name>/SKILL.md` layout, the
 
 Read-only is enforced at three layers, all of them mandatory:
 
-1. **MCP server boundary** — the `--read-only` flag on
-   `@modelcontextprotocol/server-postgres` blocks write statements
-   at the server. Even a tool call that bypasses the agent's
-   permission tier cannot mutate data through this server.
+1. **MCP server boundary** — the server begins every query with
+   `BEGIN TRANSACTION READ ONLY` and ends with `ROLLBACK`, so write
+   statements fail at the transaction. Even a tool call that bypasses
+   the agent's permission tier cannot mutate data through this server.
+   (Note: `@modelcontextprotocol/server-postgres` does not accept a
+   `--read-only` CLI flag; its read-only guarantee comes from the
+   read-only transaction it opens per query.)
 2. **Permission policy** — `permissions/policy.json` sets
    `defaultMode: "read"` and pins every write-capable action
    (`query.insert`, `query.update`, `query.delete`, `table.drop`,
@@ -76,11 +80,11 @@ Recommended setup:
 2. Build the connection string with that role:
    `postgresql://duya_reader:<strong-secret>@<host>:5432/<db>?sslmode=require`
 3. Paste the connection string into the `connectionString` setup
-   field. The MCP server picks it up via the `DATABASE_URL` env
-   var.
+   field. The MCP server receives it as its first positional
+   argument.
 
 Never use a superuser or write-capable role for this plugin.
-The MCP `--read-only` flag and the policy enforcement are
+The MCP read-only transaction and the policy enforcement are
 defense-in-depth — the role's grants are the actual boundary.
 
 ## When to suggest this plugin

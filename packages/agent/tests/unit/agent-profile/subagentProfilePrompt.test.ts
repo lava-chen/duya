@@ -90,7 +90,6 @@ describe('PRESET_AGENT_PROFILES → resolveEnabledSections', () => {
     expect(enabled.has('sessionGuidance')).toBe(false);
     expect(enabled.has('skills')).toBe(false);
     expect(enabled.has('agentsMd')).toBe(false);
-    expect(enabled.has('projectGrounding')).toBe(false);
     expect(enabled.has('projectContinuity')).toBe(false);
 
     // Sanity: intro/system should still be on.
@@ -123,7 +122,6 @@ describe('PRESET_AGENT_PROFILES → resolveEnabledSections', () => {
     expect(enabled.has('toolUsage')).toBe(true);
     expect(enabled.has('memory')).toBe(true);
     expect(enabled.has('agentsMd')).toBe(true);
-    expect(enabled.has('projectGrounding')).toBe(true);
     expect(enabled.has('projectContinuity')).toBe(true);
     expect(enabled.has('environment')).toBe(true);
   });

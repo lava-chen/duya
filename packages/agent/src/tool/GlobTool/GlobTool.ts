@@ -30,7 +30,7 @@ export class GlobTool extends BaseTool {
     properties: {
       pattern: {
         type: 'string',
-        description: 'Glob pattern to match files (e.g., **/*.ts, *.json, src/**/*.js)',
+        description: 'Glob pattern to match files (e.g., **/*.ts, *.json, src/**/*.js). May be an absolute path (e.g. C:\\repo\\src\\**\\*.ts), in which case the search is rooted at that directory.',
       },
       path: {
         type: 'string',
@@ -74,7 +74,7 @@ export class GlobTool extends BaseTool {
     // Prefer the live context cwd, fall back to whatever was captured at
     // construct time. Both must be asar-safe — process.cwd() in the packaged
     // Electron main process resolves to the install dir.
-    const safeCwd = sanitizeWorkingDirectory(searchPath)
+    let safeCwd = sanitizeWorkingDirectory(searchPath)
       ?? sanitizeWorkingDirectory(workingDirectory)
       ?? sanitizeWorkingDirectory(process.cwd());
 
@@ -88,6 +88,20 @@ export class GlobTool extends BaseTool {
         }),
         error: true,
       };
+    }
+
+    // An absolute pattern carries its own search root. Re-root the search to
+    // the pattern's directory and validate the allowedRoots boundary against
+    // that root (the original cwd may be a different project when the caller
+    // globs an absolute path outside it).
+    let effectivePattern = pattern;
+    if (path.isAbsolute(pattern)) {
+      const { root, rel } = splitAbsoluteGlob(pattern);
+      const rootCwd = sanitizeWorkingDirectory(root);
+      if (rootCwd) {
+        safeCwd = rootCwd;
+        if (rel) effectivePattern = rel;
+      }
     }
 
     if (this.allowedRoots && this.allowedRoots.length > 0) {
@@ -104,7 +118,7 @@ export class GlobTool extends BaseTool {
       }
     }
 
-    return executeGlob(pattern, safeCwd, { maxResults });
+    return executeGlob(effectivePattern, safeCwd, { maxResults });
   }
 
   renderToolResultMessage(result: ToolResult): RenderedToolMessage {
@@ -247,14 +261,36 @@ export function isPathSafe(requestedPath: string, basePath: string): boolean {
 }
 
 /**
- * Checks if pattern contains dangerous path traversal
+ * Splits an absolute glob pattern into its directory root and the
+ * remaining relative glob. The root is the leading path up to (but not
+ * including) the first segment that contains a glob metacharacter
+ * (`*`, `?`, `[`, `]`, `{`, `}`). When the pattern has no wildcard, the
+ * last segment is treated as a file name and the remainder as the root.
+ *
+ * Examples:
+ *   "C:\\repo\\src\\**\\*.ts"  -> root "C:\\repo\\src", rel "**\\*.ts"
+ *   "/home/user/repo/*.md"     -> root "/home/user/repo", rel "*.md"
+ *   "C:\\repo\\a.md"           -> root "C:\\repo", rel "a.md"
+ */
+export function splitAbsoluteGlob(absPattern: string): { root: string; rel: string } {
+  const segments = absPattern.split(/[\\/]+/);
+  let idx = segments.findIndex((s) => /[*?[\]{}]/.test(s));
+  if (idx === -1) {
+    // No wildcard — treat the whole path as a potential exact file.
+    idx = segments.length - 1;
+  }
+  return {
+    root: segments.slice(0, idx).join(path.sep),
+    rel: segments.slice(idx).join('/'),
+  };
+}
+
+/**
+ * Checks if pattern contains dangerous path traversal. Absolute patterns
+ * are allowed (they are re-rooted by executeGlob), but the trailing
+ * relative portion is still validated for traversal and UNC leakage.
  */
 export function isPatternSafe(pattern: string): { safe: boolean; reason?: string } {
-  // Check absolute paths
-  if (path.isAbsolute(pattern)) {
-    return { safe: false, reason: 'Absolute paths are not allowed' };
-  }
-
   // Check parent directory traversal (allow reasonable ../ usage)
   const segments = pattern.split(/[/\\]/);
   let parentTraversalCount = 0;
@@ -294,8 +330,22 @@ export async function executeGlob(
   const startTime = Date.now();
   const maxResults = options.maxResults || 100;
 
+  // An absolute pattern carries its own search root. Re-root the search to
+  // the pattern's directory so callers can pass "C:\\repo\\src\\**\\*.ts"
+  // directly without a separate `path` argument. The pattern is validated
+  // after re-rooting (the trailing relative portion is what is matched).
+  let effectivePattern = pattern;
+  let effectiveCwd = cwd;
+  if (path.isAbsolute(pattern)) {
+    const { root, rel } = splitAbsoluteGlob(pattern);
+    if (rel) {
+      effectivePattern = rel;
+      effectiveCwd = root;
+    }
+  }
+
   // Validate pattern
-  const patternCheck = isPatternSafe(pattern);
+  const patternCheck = isPatternSafe(effectivePattern);
   if (!patternCheck.safe) {
     return {
       id,
@@ -308,12 +358,12 @@ export async function executeGlob(
   // Resolve search directory using expandPath for cross-platform compatibility
   let searchDir: string;
   try {
-    searchDir = expandPath(cwd);
+    searchDir = expandPath(effectiveCwd);
   } catch {
     return {
       id,
       name: 'glob',
-      result: `Invalid working directory: ${cwd}`,
+      result: `Invalid working directory: ${effectiveCwd}`,
       error: true,
     };
   }
@@ -338,7 +388,7 @@ export async function executeGlob(
     };
   }
 
-  const matcher = picomatch(pattern, { dot: true });
+  const matcher = picomatch(effectivePattern, { dot: true });
   const results: string[] = [];
   let truncated = false;
 

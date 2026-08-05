@@ -83,6 +83,7 @@ export interface SandboxExecuteResult {
   stderr: string;
   exitCode: number;
   provider: SandboxProvider;
+  timedOut?: boolean;
 }
 
 /**
@@ -94,6 +95,7 @@ export async function executeIsolated(
   cwd: string,
   overrides?: Partial<SandboxPolicy>,
   signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<SandboxExecuteResult> {
   const effectivePolicy = overrides
     ? createSandboxPolicy(overrides)
@@ -104,6 +106,7 @@ export async function executeIsolated(
     cwd,
     policy: effectivePolicy,
     signal,
+    timeoutMs,
   });
 
   return {
