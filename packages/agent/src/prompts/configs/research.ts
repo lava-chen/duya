@@ -13,10 +13,7 @@
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
 import { initializeAgentsMd } from '../sections/dynamic/agentsMdSection.js'
-import {
-  getProjectContinuitySection,
-  getProjectGroundingSection,
-} from '../sections/projectGrounding.js'
+import { getProjectContinuitySection } from '../sections/projectContinuity.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
@@ -35,7 +32,6 @@ import { getToneAndStylePromptSection } from '../research/sections/toneAndStyle.
 export const researchConfig: PromptSystemConfig = {
   name: 'research',
   staticSections: [
-    { name: 'projectGrounding', compute: getProjectGroundingSection },
     { name: 'projectContinuity', compute: getProjectContinuitySection },
     { name: 'projectInstructions', compute: getProjectInstructionsSection },
     // Research-specific sections — bypass profile gating (always render).

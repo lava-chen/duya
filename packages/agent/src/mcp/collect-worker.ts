@@ -171,7 +171,7 @@ export function buildBundledLiteratureBundlePath(
 export function buildBundledLiteratureCandidate(
   cwd: string,
   environment: Record<string, string>,
-  isPackaged: boolean = !!process.resourcesPath && !process.defaultApp,
+  isPackaged: boolean = process.env.DUYA_DEV !== '1' && !!process.resourcesPath && !process.defaultApp,
   resourcesPath: string | undefined = process.resourcesPath,
 ): MCPCandidate {
   const literatureBundlePath = buildBundledLiteratureBundlePath(
@@ -489,6 +489,14 @@ export async function collectWorkerMCPCandidates(): Promise<MCPCollectionResult>
     userTomlMcpServers: [],
     environment: { ...process.env } as Record<string, string>,
     cwd: process.cwd(),
+    // The forked worker runs Electron with ELECTRON_RUN_AS_NODE=1, so
+    // process.resourcesPath points at node_modules/electron/dist/resources
+    // even in dev and process.defaultApp is undefined — both would make
+    // `!!process.resourcesPath && !process.defaultApp` report "packaged"
+    // incorrectly. Use the explicit DUYA_DEV flag (set by the main process
+    // only in dev) as the authoritative signal instead.
+    isPackaged: process.env.DUYA_DEV !== '1',
+    resourcesPath: process.resourcesPath,
   };
 
   try {

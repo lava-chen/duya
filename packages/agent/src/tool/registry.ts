@@ -40,7 +40,7 @@ export interface ToolMetaInput {
    * the permission gate applies tier-based gating before the
    * mode-based bypass check. See `riskTierPermissions.ts`.
    */
-  riskTier?: import('../permissions/riskTierPermissions.js').RiskTier;
+  riskTier?: import('../permissions/policy.js').RiskTier;
 }
 
 /**
@@ -69,7 +69,7 @@ interface RegisteredTool {
    * `exposeMode: 'always'` by the prompt builder and the search
    * scorer — preserves backward compatibility.
    */
-  meta?: { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/riskTierPermissions.js').RiskTier };
+  meta?: { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/policy.js').RiskTier };
 }
 
 /**
@@ -393,7 +393,7 @@ export class ToolRegistry {
    * shape stored via the third `meta` argument of `register`, or
    * `undefined` for tools registered without explicit metadata.
    */
-  getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/riskTierPermissions.js').RiskTier } | undefined {
+  getMeta(name: string): { inputSchemaSummary?: string; exposeMode?: ExposeMode; riskTier?: import('../permissions/policy.js').RiskTier } | undefined {
     return this.findEntry(name)?.meta;
   }
 

@@ -15,6 +15,7 @@ export const MAILBOX_KIND_PRIORITY: Record<string, number> = {
   correction: 50,
   constraint: 50,
   followup: 100,
+  background_notification: 100,
 };
 
 /** Default priority used when the incoming kind is not in the map. */
@@ -27,6 +28,7 @@ export const MAILBOX_KINDS = [
   'constraint',
   'stop',
   'abort_and_replace',
+  'background_notification',
 ] as const;
 
 export type MailboxKind = typeof MAILBOX_KINDS[number];

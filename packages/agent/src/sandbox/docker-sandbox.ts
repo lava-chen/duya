@@ -217,19 +217,70 @@ interface ExecuteOptions {
   cwd: string;
   policy: SandboxPolicy;
   signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 interface ExecuteResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  timedOut?: boolean;
+}
+
+/**
+ * Wait for a container to exit. On timeout the container is killed (SIGKILL)
+ * so partial output can still be read; on an external abort signal it is
+ * force-deleted. Both resolve cleanly instead of leaving a hung wait.
+ */
+async function waitForContainerExit(
+  containerId: string,
+  opts: { timeoutMs?: number; signal?: AbortSignal },
+): Promise<{ exitCode: number; timedOut: boolean }> {
+  const { timeoutMs, signal } = opts;
+  const waitPromise = dockerRequest('POST', `/v1.47/containers/${containerId}/wait`);
+
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  if (timeoutMs) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      dockerRequest('POST', `/v1.47/containers/${containerId}/kill`).catch(() => {});
+    }, timeoutMs);
+  }
+
+  const onAbort = () => {
+    dockerRequest('DELETE', `/v1.47/containers/${containerId}?force=true`).catch(() => {});
+  };
+  if (signal) {
+    if (signal.aborted) {
+      onAbort();
+      waitPromise.catch(() => {});
+      return { exitCode: -1, timedOut: false };
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  try {
+    const waitRes = await waitPromise;
+    let exitCode = -1;
+    try {
+      const data = JSON.parse(waitRes.body.toString('utf-8'));
+      exitCode = typeof data.StatusCode === 'number' ? data.StatusCode : -1;
+    } catch {
+      // Unparseable wait response — keep -1.
+    }
+    return { exitCode, timedOut };
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onAbort);
+  }
 }
 
 /**
  * Execute a command inside a Docker container with sandbox isolation.
  */
 export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteResult> {
-  const { command, cwd, policy, signal } = options;
+  const { command, cwd, policy, signal, timeoutMs } = options;
 
   // Bidirectional path translation: the LLM emits host paths, but the
   // container only knows /workspace. Translate before execution and
@@ -297,18 +348,32 @@ export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteR
       throw new Error(`Docker start failed: ${startRes.body.toString('utf-8')}`);
     }
 
-    // Wait for container to finish
-    const waitRes = await dockerRequest('POST', `/v1.47/containers/${containerId}/wait`);
-    const waitData = JSON.parse(waitRes.body.toString('utf-8'));
-    const exitCode = typeof waitData.StatusCode === 'number' ? waitData.StatusCode : -1;
+    // Wait for the container to exit. On timeout the container is killed
+    // (SIGKILL) so partial output can still be read; on external abort it is
+    // force-deleted. Both surface as a clean result instead of a hung wait.
+    let exitCode = -1;
+    let timedOut = false;
+    try {
+      const waited = await waitForContainerExit(containerId, { timeoutMs, signal });
+      exitCode = waited.exitCode;
+      timedOut = waited.timedOut;
+    } catch {
+      // Aborted or wait failed — the container may be gone; skip logs.
+    }
 
-    // Get logs (multiplexed stdout+stderr)
-    const logsRes = await dockerRequest(
-      'GET',
-      `/v1.47/containers/${containerId}/logs?stdout=1&stderr=1`,
-    );
-
-    const { stdout, stderr } = demuxDockerLogs(logsRes.body);
+    // Get logs (multiplexed stdout+stderr). The container may have been
+    // removed on abort, so treat a log fetch failure as non-fatal.
+    let stdout = '';
+    let stderr = '';
+    try {
+      const logsRes = await dockerRequest(
+        'GET',
+        `/v1.47/containers/${containerId}/logs?stdout=1&stderr=1`,
+      );
+      ({ stdout, stderr } = demuxDockerLogs(logsRes.body));
+    } catch {
+      // Logs unavailable — return whatever we have.
+    }
 
     // Translate container paths back to host paths so the LLM sees
     // familiar paths in command output (e.g. grep results, error messages).
@@ -316,6 +381,7 @@ export async function executeInDocker(options: ExecuteOptions): Promise<ExecuteR
       stdout: mapper.rewriteOutputToHost(stdout),
       stderr: mapper.rewriteOutputToHost(stderr),
       exitCode,
+      timedOut,
     };
   } finally {
     try {

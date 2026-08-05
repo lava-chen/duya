@@ -58,10 +58,9 @@ describe('runtime mailbox checkpoints', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       role: 'user',
-      seq_index: 7,
       metadata: {
-        mailboxRuntimeInstruction: true,
-        mailboxRowIds: ['mail-1'],
+        runtimeContext: true,
+        source: 'mailbox',
       },
     });
     expect(messages[0]?.content).toContain('Use the updated requirement');

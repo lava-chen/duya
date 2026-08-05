@@ -2225,6 +2225,105 @@ const migrations: Migration[] = [
       }
     },
   },
+  {
+    id: 45,
+    name: 'mailbox-kind-background_notification',
+    migrate(db: BetterSqlite3Db): void {
+      // Relax the agent_mailbox.kind CHECK to accept the new
+      // 'background_notification' kind (sub-agent / background command
+      // completion notifications now flow through the mailbox like followups).
+      // SQLite cannot ALTER a CHECK constraint, so rebuild the table when the
+      // current definition lacks the new kind. Idempotent: a table whose SQL
+      // already contains 'background_notification' is left untouched.
+      const sql = (
+        db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'",
+        ).get() as { sql?: string } | undefined
+      )?.sql;
+      if (!sql || sql.includes('background_notification')) return;
+
+      const tableInfo = db.prepare('PRAGMA table_info(agent_mailbox)').all() as Array<{ name: string; pk: number }>;
+      // Copy only the columns that exist in the rebuilt table. Older dev DBs
+      // may carry a stale column (e.g. `display_order`, long since removed from
+      // the schema) that the canonical definition below no longer has; copying
+      // the intersection drops it safely instead of failing the INSERT.
+      const rebuildColumns = [
+        'id','session_id','submitted_during_run_id','content','kind','status',
+        'priority','constraints_json','attachments_json','source','client_msg_id',
+        'created_at','claim_token','claim_expires_at','observed_at',
+        'observed_at_checkpoint','observed_by_run_id','claim_attempts',
+        'last_claim_error','edit_locked_at','apply_mode','applied_at',
+        'applied_at_checkpoint','applied_summary','resulting_user_msg_id',
+        'failure_reason','edit_history_json','cancelled_at','cancelled_by',
+        'cancel_reason',
+      ];
+      const copyColumns = tableInfo
+        .map((col) => col.name)
+        .filter((name) => rebuildColumns.includes(name));
+      const quoted = copyColumns.map((n) => `"${n}"`).join(', ');
+
+      // runMigrations already wraps each migration in a transaction, so the
+      // rebuild below runs atomically without an explicit BEGIN/COMMIT here.
+      db.exec(`
+        ALTER TABLE agent_mailbox RENAME TO agent_mailbox_old;
+
+        CREATE TABLE agent_mailbox (
+          id                     TEXT PRIMARY KEY,
+          session_id             TEXT NOT NULL,
+          submitted_during_run_id TEXT NOT NULL,
+          content                TEXT NOT NULL,
+          kind                   TEXT NOT NULL,
+          status                 TEXT NOT NULL,
+          priority               INTEGER NOT NULL DEFAULT 100,
+          constraints_json       TEXT,
+          attachments_json       TEXT,
+          source                 TEXT NOT NULL DEFAULT 'ui',
+          client_msg_id          TEXT,
+          created_at             INTEGER NOT NULL,
+          claim_token            TEXT,
+          claim_expires_at       INTEGER,
+          observed_at            INTEGER,
+          observed_at_checkpoint TEXT,
+          observed_by_run_id     TEXT,
+          claim_attempts         INTEGER NOT NULL DEFAULT 0,
+          last_claim_error       TEXT,
+          edit_locked_at         INTEGER,
+          apply_mode             TEXT,
+          applied_at             INTEGER,
+          applied_at_checkpoint  TEXT,
+          applied_summary        TEXT,
+          resulting_user_msg_id  TEXT,
+          failure_reason         TEXT,
+          edit_history_json      TEXT,
+          cancelled_at           INTEGER,
+          cancelled_by           TEXT,
+          cancel_reason          TEXT,
+          CHECK (kind IN ('followup','correction','constraint','stop','abort_and_replace','background_notification')),
+          CHECK (status IN ('pending','observed','applied','cancelled')),
+          CHECK (apply_mode IS NULL OR apply_mode IN
+            ('promote_to_user_message','runtime_instruction','tool_guard',
+             'permission_context','interrupt_signal','deferred_to_next_turn'))
+        );
+
+        INSERT INTO agent_mailbox (${quoted})
+          SELECT ${quoted} FROM agent_mailbox_old;
+
+        DROP TABLE agent_mailbox_old;
+
+        CREATE INDEX IF NOT EXISTS idx_mailbox_claim_ready
+          ON agent_mailbox(session_id, status, priority, created_at)
+          WHERE status = 'pending'
+             OR (status = 'observed' AND claim_expires_at IS NOT NULL);
+
+        CREATE INDEX IF NOT EXISTS idx_mailbox_session_recent
+          ON agent_mailbox(session_id, created_at DESC);
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_mailbox_client_msg
+          ON agent_mailbox(session_id, client_msg_id)
+          WHERE client_msg_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 /**

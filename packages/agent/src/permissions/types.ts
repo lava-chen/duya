@@ -376,5 +376,5 @@ export type ToolPermissionContext = {
    * Returns `undefined` for non-connector tools (no tier-based gating).
    * The DuyaAgent wires this to `ToolRegistry.getMeta(name)?.riskTier`.
    */
-  readonly getToolRiskTier?: (toolName: string) => import('./riskTierPermissions.js').RiskTier | undefined
+  readonly getToolRiskTier?: (toolName: string) => import('./policy.js').RiskTier | undefined
 }

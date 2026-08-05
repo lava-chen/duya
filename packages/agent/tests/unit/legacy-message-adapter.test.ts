@@ -192,4 +192,23 @@ describe('legacy message adapter', () => {
       content: 'native',
     })).toThrow('adapter envelope');
   });
+
+  it('preserves an empty-string displayContent on user messages', () => {
+    // A user who only pastes text (no typed input) sends displayContent=''.
+    // The adapter must keep the empty string so the renderer does not fall
+    // back to the LLM-facing content (which includes the pasted body).
+    const messages: Message[] = [
+      {
+        id: 'user-1',
+        role: 'user',
+        content: 'pasted full body',
+        displayContent: '',
+        timestamp: 1,
+      },
+    ];
+
+    const adapted = legacyMessagesToAgentMessages(messages);
+    expect(adapted[0]).toMatchObject({ kind: 'user', displayContent: '' });
+    expect(agentMessagesToLegacyMessages(adapted)).toEqual(messages);
+  });
 });

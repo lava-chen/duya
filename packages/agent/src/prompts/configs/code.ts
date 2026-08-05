@@ -17,10 +17,7 @@ import { getSystemSection } from '../code/sections/system.js'
 import { getPersonalitySection } from '../code/sections/personality.js'
 import { getWorkingWithTheUserSection } from '../code/sections/workingWithTheUser.js'
 import { getRulesSection } from '../code/sections/rules.js'
-import {
-  getProjectContinuitySection,
-  getProjectGroundingSection,
-} from '../sections/projectGrounding.js'
+import { getProjectContinuitySection } from '../sections/projectContinuity.js'
 import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 import { getMemorySection } from '../sections/dynamic/memorySection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
@@ -44,7 +41,6 @@ export const codeConfig: PromptSystemConfig = {
     { name: 'identity', compute: getIdentitySection },
     { name: 'system', compute: getSystemSection },
     { name: 'duyaDesktopContext', compute: getDuyaDesktopContextSection },
-    { name: 'projectGrounding', compute: getProjectGroundingSection },
     { name: 'projectContinuity', compute: getProjectContinuitySection },
     // keepCodingInstructions: omit personality when an output style is active
     // and the style doesn't explicitly request keeping coding instructions.

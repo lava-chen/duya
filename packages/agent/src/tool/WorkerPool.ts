@@ -13,14 +13,24 @@ import * as fs from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
-import { enqueuePendingNotification } from '../queue/index.js';
 import { buildTaskNotificationXml } from '../lifecycle/buildTaskNotification.js';
+import { sendBackgroundNotification } from '../lifecycle/mailboxBackgroundNotification.js';
 
 const execAsync = promisify(exec);
 
-// Get __dirname equivalent in ESM
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Resolve the directory of this module across the three runtimes that load
+// the agent package (raw ESM, esbuild CJS with the `import_meta_url`
+// polyfill, and esbuild CJS without the polyfill like `build-electron.mjs`
+// where `import.meta` is `undefined` but CJS exposes `__dirname`). Computed
+// lazily so the crash does not happen at module-init time.
+// See src/plugins/builtin/_registry.ts for the same pattern.
+function resolveDirname(): string {
+  const meta = import.meta as { url?: string } | undefined;
+  if (meta && typeof meta.url === 'string') {
+    return path.dirname(fileURLToPath(meta.url));
+  }
+  return __dirname;
+}
 
 /**
  * Resolve the correct path to BashWorker.js
@@ -28,8 +38,9 @@ const __dirname = path.dirname(__filename);
  * In packaged app: need to find agent directory instead of agent-bundle
  */
 function resolveBashWorkerPath(): string {
+  const dirname = resolveDirname();
   // First try the default path (works in dev mode)
-  const defaultPath = path.join(__dirname, 'BashTool', 'BashWorker.js');
+  const defaultPath = path.join(dirname, 'BashTool', 'BashWorker.js');
   if (fs.existsSync(defaultPath)) {
     return defaultPath;
   }
@@ -38,9 +49,9 @@ function resolveBashWorkerPath(): string {
   // Try to find the agent directory
   const possiblePaths = [
     // If we're in agent-bundle, look for agent at same level
-    path.join(__dirname, '..', 'agent', 'tool', 'BashTool', 'BashWorker.js'),
+    path.join(dirname, '..', 'agent', 'tool', 'BashTool', 'BashWorker.js'),
     // If we're in agent-bundle/tool, look for agent/tool
-    path.join(__dirname, '..', '..', 'agent', 'tool', 'BashTool', 'BashWorker.js'),
+    path.join(dirname, '..', '..', 'agent', 'tool', 'BashTool', 'BashWorker.js'),
     // Try resources/agent directly
     path.join(process.cwd(), 'resources', 'agent', 'tool', 'BashTool', 'BashWorker.js'),
     // Try relative to execPath (Electron packaged app)
@@ -86,8 +97,8 @@ export interface WorkerResult {
 export interface WorkerTaskExtended extends WorkerTask {
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
   /** Parent session id, used to route background-task completion
-   *  notifications back to the originating conversation via
-   *  enqueuePendingNotification(). */
+   *  notifications back to the originating conversation via the
+   *  background_notification mailbox. */
   sessionId?: string;
 }
 
@@ -505,7 +516,11 @@ export class WorkerPool {
                 ? completedTask.endTime - completedTask.startTime
                 : undefined,
             });
-            enqueuePendingNotification(xml, { taskId: task.id, status }, parentSessionId);
+            void sendBackgroundNotification({
+              sessionId: parentSessionId,
+              xml,
+              taskId: task.id,
+            });
           }
 
           // Release the worker back to pool

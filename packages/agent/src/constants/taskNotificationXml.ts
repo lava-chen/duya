@@ -1,11 +1,11 @@
 /**
- * XML tag names used to mark subagent completion notifications in chat
- * message bodies. Mirrors claude-code's task-notification protocol — when
- * a background subagent finishes, the lifecycle layer wraps the result in
- * a <task-notification>...</task-notification> envelope and enqueues it
- * onto the command queue with mode='task-notification'. The main LLM sees
- * a structured system message instead of free-form text that could be
- * mistaken for a user prompt.
+ * XML tag names used to mark background-task completion notifications in
+ * message bodies. Mirrors claude-code's task-notification protocol — when a
+ * background subagent or background bash command finishes, the lifecycle layer
+ * wraps the result in a <task-notification>...</task-notification> envelope and
+ * writes it to the parent session's mailbox as a `background_notification` row.
+ * The main LLM sees a structured system message instead of free-form text that
+ * could be mistaken for a user prompt.
  *
  * The renderer also reads these tags to decide whether to display the
  * entry as a regular chat bubble or as a system notification row in

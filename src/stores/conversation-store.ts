@@ -156,6 +156,7 @@ interface ConversationState {
   loadFromDatabase: () => Promise<void>;
   loadThreadMessages: (threadId: string, options?: { force?: boolean }) => Promise<void>;
   syncThreadToDatabase: (thread: Thread) => Promise<void>;
+  /** @deprecated Plan 317: frontend no longer writes chat messages; the Agent worker is the authoritative writer. */
   syncMessageToDatabase: (threadId: string, message: Message) => Promise<void>;
   syncThreadTitleToDatabase: (id: string, title: string) => Promise<void>;
   forceSync: () => Promise<void>; // Force immediate sync with database
@@ -543,11 +544,9 @@ export const useConversationStore = create<ConversationState>()(
           }
         }
 
-        // Sync user message to database immediately only when explicitly requested.
-        // Chat send flow is optimistic-first; agent persistence is the authoritative write path.
-        if (message.role === 'user' && options?.persist) {
-          get().syncMessageToDatabase(threadId, message);
-        }
+        // User messages are persisted by the Agent worker (authoritative write
+        // path); the frontend only renders optimistically. `persist: true` is
+        // never used in the chat flow (Plan 317), so no frontend DB write here.
       },
 
       clearMessages: (threadId) => {
@@ -841,6 +840,7 @@ export const useConversationStore = create<ConversationState>()(
         }
       },
 
+      /** @deprecated Plan 317: frontend no longer writes chat messages. */
       syncMessageToDatabase: async (threadId, message) => {
         try {
           await addMessageIPC({

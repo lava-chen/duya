@@ -75,7 +75,6 @@ export interface LegacyMessageAdapterOptions {
 interface AgentMessageBaseFields {
   id: string;
   createdAt: number;
-  persistence: 'durable' | 'transient';
   visibility: 'visible' | 'hidden';
   metadata: Readonly<Record<string, unknown>>;
 }
@@ -102,6 +101,14 @@ function getEnvelope(value: unknown): LegacyMessageEnvelope | undefined {
 
 function getLegacyEnvelope(message: LegacyAgentMessage): LegacyMessageEnvelope | undefined {
   return getEnvelope((message as unknown as Record<PropertyKey, unknown>)[LEGACY_ENVELOPE]);
+}
+
+/**
+ * Brand predicate: true when the message carries a legacy adapter envelope.
+ * Used by message-projectors to distinguish adapter-produced messages.
+ */
+export function hasLegacyEnvelope(message: unknown): message is LegacyAgentMessage {
+  return getEnvelope((message as unknown as Record<PropertyKey, unknown>)[LEGACY_ENVELOPE]) !== undefined;
 }
 
 function isRuntimeMetadata(metadata: Record<string, unknown> | undefined): boolean {
@@ -152,8 +159,7 @@ function baseFields(
   return {
     id: message.id || `legacy-message-${index}`,
     createdAt: message.timestamp ?? 0,
-    persistence: source ? 'transient' : 'durable',
-    visibility: source === 'mailbox' || source === 'background_notification'
+    visibility: source === 'mailbox' || source === 'background_notification' || source === 'attachment'
       ? 'hidden'
       : 'visible',
     metadata: adapterMetadata(message),
@@ -168,7 +174,6 @@ function createSystemMessage(
   return {
     ...base,
     kind: 'custom:legacy-system',
-    includeInModel: true,
     payload: {
       content,
       name: message.name,
@@ -183,7 +188,6 @@ function createCompactionBoundaryMessage(
   return {
     ...base,
     kind: 'custom:legacy-compaction-boundary',
-    includeInModel: false,
     payload: { compactBoundaryId: message.compactBoundaryId },
   };
 }
@@ -196,7 +200,6 @@ function createUnknownRoleMessage(
   return {
     ...base,
     kind: 'custom:legacy-unknown-role',
-    includeInModel: false,
     payload: {
       role: String((message as Message & Record<string, unknown>).role),
       content,
@@ -258,7 +261,6 @@ export function legacyMessageToAgentMessage(
       kind: 'runtime_context',
       source,
       content,
-      includeInModel: true,
     }, envelope);
   }
 
@@ -267,7 +269,7 @@ export function legacyMessageToAgentMessage(
       ...base,
       kind: 'user',
       content,
-      displayContent: message.displayContent
+      displayContent: message.displayContent !== undefined
         ? cloneValue(message.displayContent)
         : undefined,
       attachments: message.attachments ? cloneValue(message.attachments) : undefined,

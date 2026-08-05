@@ -222,7 +222,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'vision_analyze',
     ],
     promptProfile: {
-      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'rules', 'personality', 'agentsMd', 'projectGrounding', 'projectContinuity'],
+      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'rules', 'personality', 'agentsMd', 'projectContinuity'],
     },
     promptSystem: 'gateway',
     userVisible: false,
@@ -288,7 +288,6 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
         'skills',
         'sessionGuidance',
         'agentsMd',
-        'projectGrounding',
         'projectContinuity',
         'widgetGuidelines',
         'visionGuidelines',
@@ -331,7 +330,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       // run (design §7.3, §7.5).
       disableSections: [
         'memory', 'memoryContent', 'skills', 'sessionGuidance',
-        'agentsMd', 'projectGrounding', 'projectContinuity',
+        'agentsMd', 'projectContinuity',
         'visionGuidelines', 'rules',
       ],
     },

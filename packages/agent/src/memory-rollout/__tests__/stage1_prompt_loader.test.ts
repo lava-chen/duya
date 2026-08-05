@@ -6,7 +6,7 @@ import * as crypto from 'crypto';
 import { loadPolicy, STAGE1_HARD_CONTRACT, assembleStage1Prompt } from '../stage1_prompt_loader';
 import { Stage1Extractor } from '../extractor';
 import { createMemoryStateFixture } from '../../memory-state/__tests__/fixture';
-import type { LLMClient } from '../../llm/base';
+import type { AIClient } from '@duya/ai';
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 
 interface LoaderEnv {
@@ -142,14 +142,14 @@ describe('assembleStage1Prompt', () => {
   });
 });
 
-function makeMockLLM(responseText: string): LLMClient {
-  const mock: Partial<LLMClient> = {
+function makeMockLLM(responseText: string): AIClient {
+  const mock: Partial<AIClient> = {
     async *streamChat(_messages, options) {
       yield { type: 'text', data: options?.systemPrompt ?? '' };
       yield { type: 'text', data: responseText };
     },
   };
-  return mock as LLMClient;
+  return mock as AIClient;
 }
 
 describe('Stage1Extractor with policyPath', () => {
@@ -172,7 +172,7 @@ describe('Stage1Extractor with policyPath', () => {
     fs.writeFileSync(`${policyPath}.version`, '3', 'utf8');
 
     let capturedSystemPrompt = '';
-    const llmClient: LLMClient = {
+    const llmClient: AIClient = {
       async *streamChat(_messages, options) {
         capturedSystemPrompt = options?.systemPrompt ?? '';
         yield { type: 'text', data: JSON.stringify({
@@ -183,7 +183,7 @@ describe('Stage1Extractor with policyPath', () => {
           raw_memory: { items: [] },
         }) };
       },
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     // Stage1Extractor requires a real rollout catalog row + lease; for this
     // unit test we only verify that the systemPrompt passed to streamChat

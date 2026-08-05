@@ -307,8 +307,8 @@ export const BUNDLED_PLUGIN_CATALOG: PluginCatalogEntry[] = [
         mcpServers: [
           {
             name: 'github',
-            command: 'github-mcp-server',
-            args: ['stdio'],
+            command: 'docker',
+            args: ['run', '-i', '--rm', '-e', 'GITHUB_PERSONAL_ACCESS_TOKEN', 'ghcr.io/github/github-mcp-server'],
           },
         ],
       },

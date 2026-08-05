@@ -26,7 +26,7 @@ import type {
 } from '../types.js';
 import type { ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
-import { checkPathReadPermission } from '../../permissions/pathPermission.js';
+import { checkPathReadPermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { getFileParserConfig } from '../../file-parser/config.js';

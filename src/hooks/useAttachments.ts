@@ -422,13 +422,12 @@ export function useAttachments(): UseAttachmentsApi {
     (inputText: string): string => {
       const parts: string[] = [];
 
-      // 1. Pasted text bodies.
-      const pasted = state.attachments
-        .filter((a): a is FileAttachment & { kind: 'pasted-text'; text: string } =>
-          a.kind === 'pasted-text',
-        )
-        .map((a) => a.text);
-      if (pasted.length > 0) parts.push(pasted.join('\n\n'));
+      // 1. Pasted text is intentionally NOT inlined here. It is sent to the
+      //    agent as an attachment (`options.files`) and injected there as a
+      //    hidden runtime_context; the agent decides whether to inline it or
+      //    persist it to disk and surface a file pointer (large text). Baking
+      //    it into the user message content would duplicate it (once inline,
+      //    once in the attachment context) and could blow the model window.
 
       // 2. Terminal refs (formatted as code block).
       const terminals = state.attachments

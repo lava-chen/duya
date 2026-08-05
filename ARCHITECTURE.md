@@ -160,42 +160,52 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
 - `SessionSearch` / `MessageSession` are optional continuity tools, not a
   default substitute for handling the user's task with local tools.
 
-### Agent Message Domain (staged, not runtime-active)
+### Agent Message Domain (runtime-active)
 
-`packages/agent/src/message/message-framework.ts` is a standalone next-generation
-message domain. It separates append-only timeline entries, extensible Agent
-messages, provider `Message[]` projection, runtime context, UI visibility, and
-compaction checkpoints. Compaction appends a checkpoint; model context is
-projected from its summary plus the retained suffix without deleting raw history.
+`packages/agent/src/message/message-framework.ts` is the runtime message domain.
+It separates append-only timeline entries, extensible Agent messages, provider
+`Message[]` projection, runtime context, UI visibility, and compaction
+checkpoints. Compaction appends a checkpoint; model context is projected from
+its summary plus the retained suffix without deleting raw history.
 
-The framework is not exported from `packages/agent/src/index.ts` and is not used
-by `DuyaAgent`, persistence, or the Renderer yet. The current runtime remains
-unchanged. Later migrations must move one call-site group at a time and retain
-the old-path regression coverage until each switch is verified.
+The domain is wired into `DuyaAgent` (`packages/agent/src/agent/DuyaAgent.ts`):
+`MessageTimeline` is the runtime authority for conversation history, the
+`messages` getter is a durable projection of the timeline snapshot, compaction
+goes through `MessageCompactionController`, and runtime context (mailbox,
+attachment, task-notification) is injected via `runtime-context-adapters`. The
+renderer reuses the same boundary projector (`projectTranscriptMessages`) for
+visibility filtering (`src/lib/project-message-transcript.ts`).
 
-### 消息持久化流程
+It is exported through the bundle-safe subpath `@duya/agent/message`
+(`packages/agent/src/message/index.ts`), not the main entry
+`packages/agent/src/index.ts`, so it never pulls in native deps such as
+better-sqlite3.
 
-```
-Agent 发出消息
-  │
-  ├─ 1. Agent Process 通过 child_process IPC 发给 Main
-  │
-  ├─ 2. Main 落库（SQLite-backed 队列）
-  │     └─ INSERT INTO messages ...
-  │     └─ 如果是用户消息，同时更新 chat_sessions.updated_at
-  │
-  ├─ 3. Main 推送 Renderer
-  │     └─ BrowserWindow.webContents.send() → Renderer 更新 Zustand
-  │
-  └─ 4. 断线重连时，Renderer 从队列重放未确认消息
-         └─ query messages WHERE id > last_acknowledged_id
+### Message Persistence
 
-streamChat 完成（最终快照）
-  │
-  ├─ Agent 发最终消息列表
-  ├─ Main 执行 message:replace（DELETE + INSERT 原子替换）
-  └─ Main 通知 Renderer 持久化完成
-```
+Message persistence converges on a single append-only writer with
+stable-boundary batch writes.
+
+- **Single writer = Agent worker.** All messages (user / assistant / tool_use /
+  tool_result) are persisted by the worker to the `messages` table through
+  `appendMessages` over IPC. The renderer no longer writes to the DB.
+- **Stable-boundary batch persistence.** No time-based incremental saving (the
+  5s incremental-save queue and the `existingMessageCount` correction chain are
+  removed). Writes happen only at stable points where a message is already
+  complete: user message arrival, completion of each tool round (tool_use +
+  tool_result together), completion of an assistant reply (once `token_usage`
+  is available), and turn end. Concretely the worker persists the whole turn's
+  new messages (user + assistant + tool_use + tool_result) in a single
+  end-of-turn `appendMessages`, and re-appends the full list after compaction
+  (`INSERT OR IGNORE` is idempotent). A crash can lose only the in-flight
+  assistant draft.
+- **`conversation_entries` is sealed (not wired).** The dual data model is
+  retired; persistence uniformly uses the `messages` table.
+- **Front-end chat messages are optimistic only.** User messages live in the
+  renderer store and are never written to the DB by the renderer.
+- **Unified IPC transport.** `USE_IPC_MODE` is always true in production; the
+  worker persists through the IPC `messageDb` client. The local open-DB branch
+  is only for the CLI / tests.
 
 ### IPC 消息协议
 
@@ -412,6 +422,8 @@ Renderer 通过 `agent:disconnected` 感知 Agent 崩溃，已落库的消息不
 
 DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `settings.json` 中配置任意数量的 LLM 服务商，每位服务商都**可独立选用**。系统不再强制全局"唯一活跃服务商"约束。
 
+> **服务商目录单一数据源**：`@duya/ai` 现为 provider 的单一数据源（`ProviderCatalog`，见 `packages/ai/src/providers/catalog.ts` + `catalog-data.ts`）。前端"服务商设置"快速添加目录（`VENDOR_PRESETS`）与模型预设元数据统一从 `@duya/ai` 派生，不再在 `src/lib/provider-presets.tsx` 各自硬编码维护。
+
 #### 数据结构
 
 - **`AppConfig.apiProviders: Record<string, ApiProvider>`** — 全部已配置服务商，按 id 索引。
@@ -614,12 +626,9 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY_
 
 #### Project-grounded harness invariants (Plan 226)
 
-Workspace-capable prompt profiles share two governance layers before their
+Workspace-capable prompt profiles share a governance layer before their
 role-specific instructions:
 
-- `projectGrounding` requires scoped `AGENTS.md` discovery, bounded plan/spec
-  recovery, runtime-path confirmation, dirty-worktree protection, and a clear
-  sufficiency gate before mutation.
 - `projectContinuity` is enabled for coordinating/full agents and defines the
   canonical plan, checkpoint, handoff, and reconciliation contract for work
   spanning sessions or agents.
@@ -707,9 +716,9 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 
 1. **唯一写入点**：SQLite 实例只在 Main 进程，避免多进程写入冲突
 2. **WAL 模式**：启用 `journal_mode = WAL`，支持读写并发；`busy_timeout = 5000` 防止写锁冲突
-3. **每条消息先落库再转发**：Agent 发出的每条消息先通过 `db:request` 落库（SQLite-backed 队列），再转发给 Renderer，断线重连后可回放
+3. **稳定边界批量落库**：Agent worker 是消息唯一写者，在稳定边界（用户消息到达、tool round 完成、assistant 回复完成、turn 结束）一次性 `appendMessages` 落库 `messages` 表，不再逐条写穿
 4. **两条访问通道**：
-   - **Agent Process → Main**：通过 child_process IPC `db:request`/`db:response`（每条消息落库）
+   - **Agent Process → Main**：通过 child_process IPC `db:request`/`db:response`（稳定边界批量落库）
    - **Renderer → Main**：通过 IPC invoke（主动查询，如切换 session 时加载历史）
 5. **API Key 脱敏**：返回给 Renderer 的 Provider 数据自动遮蔽 API Key
 6. **Provider 存储**：Provider 配置由 ConfigManager 管理（加密存储在 `config/settings.json`），不存储在数据库
@@ -722,7 +731,7 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 | 表名 | 用途 | 访问方 |
 |------|------|--------|
 | `chat_sessions` | Session 元信息 | Renderer (列表) / Agent Process (状态查询) |
-| `messages` | 聊天消息历史 | Renderer (加载历史) / Agent Process (写入新消息) / Main (落库后转发) |
+| `messages` | 聊天消息历史 | Agent Process (单一写者，稳定边界 `appendMessages`) / Renderer (加载历史，只读) |
 | `permission_requests` | 权限请求记录 | Agent Process (写入) / Renderer (查询) |
 | `settings` | 应用设置 | Renderer / Agent Process |
 | `tasks` | 任务管理 | Agent Process (写入) / Renderer (查询) |
@@ -1510,14 +1519,16 @@ of truth for Agent target selection.
   and `status: running`. A successful tool invocation means the sub-agent was
   dispatched; it does not mean the delegated task completed.
 - `BackgroundAgentLifecycle` owns the terminal `completed` / `failed` /
-  `killed` transition and enqueues exactly one `<task-notification>` for the
-  parent session.
-- `DuyaAgent` only performs non-blocking notification drains. When a terminal
-  notification arrives after the parent turn has ended, the worker emits
-  `chat:background_task_ready`; Electron relays it to the renderer, which
-  starts an empty `backgroundTaskResume` SSE turn. That turn drains the queued
-  notification without persisting a synthetic empty user message. Wakeups that
-  race the prior SSE terminal event are deferred until that stream is terminal.
+  `killed` transition and writes exactly one `background_notification` mailbox
+  row (a `<task-notification>` envelope) for the parent session.
+- `DuyaAgent` claims background notifications at its mailbox checkpoints
+  (`before_model_turn` / `before_final_answer`), injecting them as transient
+  runtime context. When a terminal notification arrives after the parent turn
+  has ended, the renderer's mailbox listener sees the `background_notification`
+  `mail:created` event and starts an empty `backgroundTaskResume` SSE turn. That
+  turn claims the notification without persisting a synthetic empty user
+  message. Wakeups that race the prior SSE terminal event are deferred until
+  that stream is terminal.
 - Renderer status is driven by the sub-agent's own `agent_progress` terminal
   event, not by the parent stream phase or the Agent tool launch receipt.
 - Live sub-agent rows are consolidated in the TaskDrawer; the chat composer

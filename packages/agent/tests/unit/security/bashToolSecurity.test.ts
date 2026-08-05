@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analyzeCommandSafety } from '../../../src/permissions/securityPolicy.js';
+import { analyzeCommandSafety } from '../../../src/permissions/policy.js';
 
 describe('BashTool Security', () => {
   describe('dangerous command detection', () => {

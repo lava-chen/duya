@@ -11,16 +11,10 @@ const PRIORITY_ORDER: Record<QueuePriority, number> = {
 export interface QueuedCommand<T = unknown> {
   id: string
   value: string
-  mode: 'prompt' | 'task-notification'
+  mode: 'prompt'
   priority: QueuePriority
   agentId: string | undefined
   rawMessage: T
-  /**
-   * Marks commands that contain raw protocol XML (e.g. <task-notification>)
-   * which must not leak into the user's editable input buffer via UP/ESC
-   * recall. Mirrors claude-code's `isMeta` flag.
-   */
-  isMeta?: boolean
 }
 
 function comparePriority(a: QueuePriority, b: QueuePriority): number {
@@ -40,23 +34,6 @@ export function enqueue<T = unknown>(
     priority: command.priority ?? 'next',
     agentId: command.agentId ?? undefined,
     rawMessage: command.rawMessage,
-  })
-  signal.emit()
-}
-
-export function enqueuePendingNotification<T = unknown>(
-  value: string,
-  rawMessage: T,
-  agentId?: string,
-): void {
-  commandQueue.push({
-    id: crypto.randomUUID(),
-    value,
-    mode: 'task-notification',
-    priority: 'later',
-    agentId,
-    rawMessage,
-    isMeta: true,
   })
   signal.emit()
 }
@@ -139,23 +116,4 @@ function findHighestPriorityIndex<T = unknown>(
     }
   }
   return bestIdx
-}
-
-// Editable mode helpers — distinguish user-editable input (prompts) from
-// system-generated protocol messages (task-notification) that must never
-// leak into the user's input buffer. Mirrors claude-code's split between
-// `isPromptInputModeEditable` and `isQueuedCommandEditable`.
-const NON_EDITABLE_MODES = new Set<QueuedCommand['mode']>(['task-notification'])
-
-export function isPromptInputModeEditable(mode: QueuedCommand['mode']): boolean {
-  return !NON_EDITABLE_MODES.has(mode)
-}
-
-/**
- * Whether this queued command can be pulled into the input buffer via UP/ESC.
- * System-generated commands (task-notifications) contain raw XML and must
- * not leak into the user's input.
- */
-export function isQueuedCommandEditable(cmd: QueuedCommand): boolean {
-  return isPromptInputModeEditable(cmd.mode) && !cmd.isMeta
 }
