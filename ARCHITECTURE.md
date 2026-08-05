@@ -1128,6 +1128,18 @@ v2 subdirectory `skills/<name>/SKILL.md` layout. `deriveCapabilityCounts`
 derives counts from the on-disk directory so the catalog stays in sync
 with the actual files.
 
+### Permission models (two distinct concepts)
+
+- `packages/agent/src/permissions/` — **Tool permission gating**: per-tool
+  allow/deny/ask decisions driven by user rules, permission modes, and the
+  auto-mode LLM classifier. Applied at tool-execution time in the agent.
+- `packages/plugin-core/src/security/` — **Plugin trust & policy**: trust
+  levels, plugin permission requests, and enterprise policy for plugins.
+  Decides what a plugin *may declare/install*, not what a *tool call* may do.
+
+Put tool-call gating rules in `agent/src/permissions/`. Put plugin-oriented
+trust/policy logic in `plugin-core/src/security/`. Do not merge the two.
+
 ### Five-tier permission model
 
 `permissions/policy.json` maps each MCP tool call to one of five tiers.

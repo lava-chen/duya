@@ -145,6 +145,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 |------|-------------|-----------|
 | [241-on-demand-tool-discovery](./completed/241-on-demand-tool-discovery.md) | `tool_search` meta-entry + schema summary + builtin tiering + dynamic dispatch (3 phases) | — |
 | [317-message-persistence-simplification](./completed/317-message-persistence-simplification.md) | 单一写者 + 单一 append-only `messages` 表 + 稳定边界批量落库；封存 `conversation_entries`；废弃前端写库旁路；统一 IPC 传输 | 2026-08-05 |
+| [318-plugin-management-unification](./completed/318-plugin-management-unification.md) | Plugin management unification — converge MCP collectors into plugin-core, rm orphaned BundledPluginRegistry, clarify permission vs plugin-security boundary | 2026-08-05 |
 | [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode | 2026-07-07 |
 | [222-interagent-message-session](./completed/222-interagent-message-session.md) | MessageSession tool for cross-session agent Q&A + cycle detection | — |
 | [212-subagent-task-notification](./completed/212-subagent-task-notification.md) | `<task-notification>` envelope + `messageQueueManager` task-notification mode | — |
