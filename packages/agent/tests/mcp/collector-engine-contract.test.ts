@@ -11,18 +11,18 @@
 
 import { describe, it, expect } from 'vitest';
 import { resolveMCPDiscovery } from '@duya/plugin-core/src/mcp/resolve.js';
-import { buildWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
+import { buildMCPCandidates } from '@duya/plugin-core/src/mcp/collect.js';
 
 describe('collector → engine contract: bundled script missing produces a TYPED mcp-bundled-missing issue', () => {
   it('the engine emits exactly mcp-bundled-missing for a missing bundled script (no other type accepted)', async () => {
     // 1. Build a real worker output with the bundled literature path
     //    pointing at a non-existent script. The collector ALWAYS
     //    emits the bundled candidate (Phase 1B contract).
-    const result = buildWorkerMCPCandidates({
+    const result = buildMCPCandidates({
       installedPlugins: [],
       agentSettingsMcpServers: [],
       settingsKvMcpServers: [],
-      legacyFileMcpServers: undefined,
+      legacyFileItems: [],
       environment: {},
       cwd: '/nonexistent/cwd/with/no/bundle',
     });
@@ -79,7 +79,7 @@ describe('collector → engine contract: bundled script missing produces a TYPED
 describe('collector → engine contract: legacyFile 5-source round-trip', () => {
   it('worker collector with all 5 sources produces an inventory where legacyFile candidates are present, distinct, and resolvable', async () => {
     const items = { name: 'lit', command: 'node', args: [] };
-    const result = buildWorkerMCPCandidates({
+    const result = buildMCPCandidates({
       installedPlugins: [
         {
           id: 'p1', name: 'P1', enabled: true, installPath: '/p1',
@@ -88,7 +88,7 @@ describe('collector → engine contract: legacyFile 5-source round-trip', () => 
       ],
       agentSettingsMcpServers: [items],
       settingsKvMcpServers: [items],
-      legacyFileMcpServers: [items],
+      legacyFileItems: [items],
       environment: {},
       cwd: '/nonexistent/cwd',
     });

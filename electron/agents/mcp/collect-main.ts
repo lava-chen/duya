@@ -1,11 +1,12 @@
 // electron/agents/mcp/collect-main.ts
-// Main-process MCP candidate collector.
+// Main-process MCP candidate-collection adapter.
 //
 // Produces `MCPCollectionResult { candidates, issues }` from the
-// main-process data sources (plugin registry, settings, bundled
-// resolver, legacy on-disk settings.json). STRICTLY collectors only —
-// no env expansion, no shadow / fallback resolution, no
-// allowedAgentIds filtering, no connection, no state caching.
+// main-process data sources (plugin registry, user mcp.toml) and feeds
+// them through the environment-agnostic engine in @duya/plugin-core
+// (`buildMCPCandidates`). STRICTLY a collector wrapper — no env
+// expansion, no shadow / fallback resolution, no allowedAgentIds
+// filtering, no connection, no state caching.
 //
 // The worker adapter is `packages/agent/src/mcp/collect-worker.ts`.
 // Both adapters produce results that satisfy the same
@@ -13,20 +14,17 @@
 // this collector from the main process and feeds its output to
 // `resolveMCPDiscovery()`.
 //
-// SCOPE NOTE — main-process source coverage:
-//   1. bundled (literature bootstrap fallback) — always emitted
-//   2. plugin registry (read via PluginManager.listInstalled() +
-//      per-plugin manifest read)
-//   3. settings — agentSettings (via getConfigManager().getAgentSettings())
-//   4. settings — settingsKv (via better-sqlite3 direct read on the
-//      settings table; same SQL pattern as db-bridge.ts:763)
-//   5. settings — legacyFile (on-disk settings.json; self-contained
-//      fs + JSON.parse, no agent-runtime import)
+// SCOPE NOTE — the main process only owns the READ of the plugin
+// registry and the user-managed mcp.toml. The deprecated settings
+// stores (agentSettings / settingsKv / legacy settings.json) are NOT
+// re-imported here; the unified engine declares them on
+// `MCPCollectorInput` for source-completeness, but which adapter
+// actually populates them is that adapter's decision.
 //
-// All 5 sources are now covered. legacyFile is implemented here
-// without importing from `@duya/agent`.
+// The pure transforms (bundled resolver, per-source candidate builders,
+// legacy settings.json reader, assembly) all live in
+// @duya/plugin-core/src/mcp/collect.ts. This module only fetches data.
 
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 
 import { getLogger } from '../../logging/logger.js';
@@ -34,304 +32,19 @@ import { getPluginManager } from '../../plugins/PluginManager.js';
 import { readPluginManifest } from '../../plugins/manifest.js';
 import { readUserMcpToml } from '../../services/mcp-toml-config.js';
 import {
+  buildMCPCandidates,
+  type MCPCollectorInput,
+  type MCPCollectorPluginEntry,
+  type MCPCollectorSettingsItem,
+} from '@duya/plugin-core/src/mcp/collect.js';
+import {
   getMCPErrorMessage,
   getMCPErrorSeverity,
   getMCPSuggestedAction,
-  type MCPCandidate,
   type MCPCollectionResult,
   type MCPIssue,
   type MCPSourceContext,
 } from '@duya/plugin-core';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-/**
- * Narrow manifest slice the collector needs. Decoupled from
- * `PluginManifest` so test code can construct entries by hand.
- */
-export interface MainCollectorManifestSlice {
-  capabilities?: {
-    mcpServers?: Array<{
-      name: string;
-      transport?: 'stdio' | 'streamable-http';
-      command?: string;
-      args?: string[];
-      env?: Record<string, string>;
-      url?: string;
-      headers?: Record<string, string>;
-    }>;
-  };
-}
-
-export interface MainCollectorPluginEntry {
-  id: string;
-  name: string;
-  enabled?: boolean;
-  installPath?: string;
-  dataPath?: string;
-  manifest?: MainCollectorManifestSlice;
-}
-
-export interface MainCollectorSettingsItem {
-  name: string;
-  transport?: 'stdio' | 'streamable-http';
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
-  url?: string;
-  headers?: Record<string, string>;
-  enabled?: boolean;
-  allowedAgentIds?: string[];
-}
-
-export interface MainCollectorInput {
-  installedPlugins: MainCollectorPluginEntry[];
-  /** The only user-managed source, DUYA userData/mcp.toml. */
-  userTomlItems?: MainCollectorSettingsItem[];
-  legacyFileItems: MainCollectorSettingsItem[];
-  agentSettingsMcpServers: MainCollectorSettingsItem[];
-  settingsKvMcpServers: MainCollectorSettingsItem[];
-  environment: Record<string, string>;
-  cwd: string;
-  isPackaged?: boolean;
-  resourcesPath?: string;
-}
-
-// ============================================================================
-// Issue factory for source-read problems (Phase 1B contract)
-// ============================================================================
-
-function settingsInvalidIssue(
-  source: MCPSourceContext,
-  reason: string,
-  serverName?: string,
-): MCPIssue {
-  const error = {
-    type: 'mcp-settings-invalid' as const,
-    source,
-    ...(serverName !== undefined ? { serverName } : {}),
-    reason,
-  };
-  return {
-    phase: 'discovery',
-    source,
-    serverName: serverName ?? '<settings>',
-    error,
-    humanMessage: getMCPErrorMessage(error),
-    severity: getMCPErrorSeverity(error),
-    suggestedAction: getMCPSuggestedAction(error),
-  };
-}
-
-// ============================================================================
-// Bundled resolver (main side)
-// ============================================================================
-
-export function buildMainBundledLiteratureBundlePath(
-  cwd: string,
-  isPackaged: boolean,
-  resourcesPath: string | undefined,
-): string {
-  if (isPackaged && resourcesPath) {
-    return join(resourcesPath, 'agent-bundle', 'literature-mcp-server.js');
-  }
-  return join(cwd, 'packages', 'agent', 'bundle', 'literature-mcp-server.js');
-}
-
-export function buildMainBundledLiteratureCandidate(
-  cwd: string,
-  environment: Record<string, string>,
-  isPackaged: boolean = !!process.resourcesPath && !process.defaultApp,
-  resourcesPath: string | undefined = process.resourcesPath,
-): MCPCandidate {
-  const literatureBundlePath = buildMainBundledLiteratureBundlePath(
-    cwd,
-    isPackaged,
-    resourcesPath,
-  );
-  return {
-    source: 'bundled',
-    rawConfig: {
-      name: 'literature',
-      command: process.execPath,
-      args: [literatureBundlePath, '--db-path', environment.DUYA_CUSTOM_DB_PATH || ''],
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        DUYA_BETTER_SQLITE3_PATH: environment.DUYA_BETTER_SQLITE3_PATH || '',
-      },
-    },
-  };
-}
-
-// ============================================================================
-// Legacy settings.json reader (main side, with typed issues)
-// ============================================================================
-
-export interface ReadMainLegacyResult {
-  items: MainCollectorSettingsItem[];
-  issues: MCPIssue[];
-}
-
-/**
- * Read the `mcpServers` array from the legacy on-disk `settings.json`
- * file. Returns BOTH the parsed array AND any source-read issues.
- *
- * Issue policy (Phase 1B contract):
- *   - path is null                       → no items, no issues
- *   - file does not exist                → no items, no issues
- *   - file exists but JSON is malformed  → empty items, mcp-settings-invalid issue
- *   - file is well-formed JSON but
- *     `mcpServers` is not an array        → empty items, mcp-settings-invalid issue
- *   - file is well-formed, mcpServers is
- *     an array, individual entries that
- *     lack required fields are SKIPPED
- *     with per-entry issues
- *   - valid entries → included in items
- */
-export async function readMainLegacyFileMcpServers(
-  settingsPath: string | null,
-): Promise<ReadMainLegacyResult> {
-  if (!settingsPath) return { items: [], issues: [] };
-
-  let raw: string;
-  try {
-    raw = await readFile(settingsPath, 'utf-8');
-  } catch (err) {
-    if (isErrnoCode(err, 'ENOENT')) {
-      return { items: [], issues: [] };
-    }
-    return {
-      items: [],
-      issues: [
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          `Failed to read legacy settings.json: ${messageOf(err)}`,
-        ),
-      ],
-    };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    return {
-      items: [],
-      issues: [
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          `legacy settings.json is not valid JSON: ${messageOf(err)}`,
-        ),
-      ],
-    };
-  }
-
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return {
-      items: [],
-      issues: [
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          'legacy settings.json root must be an object',
-        ),
-      ],
-    };
-  }
-  const root = parsed as { mcpServers?: unknown };
-  if (root.mcpServers === undefined) {
-    return { items: [], issues: [] };
-  }
-  if (!Array.isArray(root.mcpServers)) {
-    return {
-      items: [],
-      issues: [
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          'legacy settings.json mcpServers must be an array',
-        ),
-      ],
-    };
-  }
-
-  const items: MainCollectorSettingsItem[] = [];
-  const issues: MCPIssue[] = [];
-  for (const [i, entry] of root.mcpServers.entries()) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      issues.push(
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          `legacy mcpServers[${i}] is not an object`,
-        ),
-      );
-      continue;
-    }
-    const e = entry as Record<string, unknown>;
-    if (typeof e.name !== 'string' || e.name.trim().length === 0) {
-      issues.push(
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          `legacy mcpServers[${i}].name is missing or empty`,
-          typeof e.name === 'string' ? e.name : undefined,
-        ),
-      );
-      continue;
-    }
-    if (typeof e.command !== 'string') {
-      issues.push(
-        settingsInvalidIssue(
-          { source: 'settings', sourceSubOrigin: 'legacyFile' },
-          `legacy mcpServers[${i}].command is missing or not a string`,
-          e.name,
-        ),
-      );
-      continue;
-    }
-    const item: MainCollectorSettingsItem = {
-      name: e.name,
-      command: e.command,
-      enabled: typeof e.enabled === 'boolean' ? e.enabled : true,
-      args: Array.isArray(e.args)
-        ? (e.args as unknown[]).filter((x): x is string => typeof x === 'string')
-        : undefined,
-    };
-    const env =
-      e.env && typeof e.env === 'object' && !Array.isArray(e.env)
-        ? (() => {
-            const out: Record<string, string> = {};
-            for (const [k, v] of Object.entries(e.env)) {
-              if (typeof v === 'string') out[k] = v;
-            }
-            return Object.keys(out).length > 0 ? out : undefined;
-          })()
-        : undefined;
-    if (env) item.env = env;
-    if (Array.isArray(e.allowedAgentIds)) {
-      const allowed = (e.allowedAgentIds as unknown[]).filter(
-        (x): x is string => typeof x === 'string',
-      );
-      if (allowed.length > 0) item.allowedAgentIds = allowed;
-    }
-    items.push(item);
-  }
-  return { items, issues };
-}
-
-// Small helpers — local, no Node `util` dependency.
-function isErrnoCode(err: unknown, code: string): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code?: unknown }).code === code
-  );
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return typeof err === 'string' ? err : String(err);
-}
 
 // ============================================================================
 // Legacy settings.json PATH (main side, no agent runtime import)
@@ -353,8 +66,6 @@ function messageOf(err: unknown): string {
  *   truth and the function returns `<duyaAppDataPath>/settings.json`.
  * - `env` defaults to `process.env` and is used as a fallback to look
  *   for `DUYA_APP_DATA_PATH` when the first argument is undefined.
- *   This matches the contract of the worker-side `getSettingsPath()`,
- *   which inspects `process.env.DUYA_APP_DATA_PATH` as a fallback.
  *
  * Returns the absolute path to `settings.json`, or `null` when no
  * app data directory is resolvable.
@@ -374,139 +85,41 @@ export function getMainLegacySettingsPath(
 }
 
 // ============================================================================
-// Per-source candidate builders
+// Issue factory for source-read problems (Phase 1B contract)
 // ============================================================================
 
-export function buildMainCandidatesFromPluginEntry(
-  entry: MainCollectorPluginEntry,
-): MCPCandidate[] {
-  if (entry.enabled !== true) return [];
-  if (!entry.id) return [];
-  if (!entry.installPath) return [];
-  const mcpServers = entry.manifest?.capabilities?.mcpServers ?? [];
-  const out: MCPCandidate[] = [];
-  for (const server of mcpServers) {
-    if (!server.name || (!server.command && !server.url)) continue;
-    out.push({
-      source: 'plugin',
-      pluginId: entry.id,
-      pluginName: entry.name,
-      pluginRoot: entry.installPath,
-      pluginDataPath: entry.dataPath,
-      rawConfig: {
-        transport: server.transport,
-        name: server.name,
-        command: server.command,
-        args: server.args,
-        env: server.env,
-        url: server.url,
-        headers: server.headers,
-      },
-    });
-  }
-  return out;
-}
-
-export function buildMainCandidatesFromSettingsEntries(
-  sourceSubOrigin: 'legacyFile' | 'settingsKv' | 'agentSettings' | 'tomlFile',
-  entries: MainCollectorSettingsItem[],
-): MCPCandidate[] {
-  const out: MCPCandidate[] = [];
-  for (const item of entries) {
-    if (item.enabled === false) continue;
-    if (!item.name || (!item.command && !item.url)) continue;
-    out.push({
-      source: 'settings',
-      sourceSubOrigin,
-      rawConfig: {
-        transport: item.transport,
-        name: item.name,
-        command: item.command,
-        args: item.args,
-        env: item.env,
-        url: item.url,
-        headers: item.headers,
-        allowedAgentIds: item.allowedAgentIds,
-      },
-    });
-  }
-  return out;
+function errorToIssue(err: unknown, reasonPrefix: string): MCPIssue {
+  const error = {
+    type: 'mcp-settings-invalid' as const,
+    source: { source: 'settings', sourceSubOrigin: 'tomlFile' } as MCPSourceContext,
+    reason: `${reasonPrefix}: ${err instanceof Error ? err.message : String(err)}`,
+  };
+  return {
+    phase: 'discovery',
+    source: error.source,
+    serverName: '<settings>',
+    error,
+    humanMessage: getMCPErrorMessage(error),
+    severity: getMCPErrorSeverity(error),
+    suggestedAction: getMCPSuggestedAction(error),
+  };
 }
 
 // ============================================================================
-// Pure: build candidates from fully-resolved main input
+// Public entry: fetch via main-process accessors, feed the pure engine
 // ============================================================================
 
 /**
- * Pure transform. Returns `MCPCollectionResult`. legacyFile issues
- * are produced by `readMainLegacyFileMcpServers` upstream; this
- * function only assembles the candidate list.
- */
-export function buildMainMCPCandidates(
-  input: MainCollectorInput,
-): MCPCollectionResult {
-  const candidates: MCPCandidate[] = [];
-
-  candidates.push(
-    buildMainBundledLiteratureCandidate(
-      input.cwd,
-      input.environment,
-      input.isPackaged,
-      input.resourcesPath,
-    ),
-  );
-
-  for (const plugin of input.installedPlugins) {
-    candidates.push(...buildMainCandidatesFromPluginEntry(plugin));
-  }
-
-  if (input.userTomlItems) {
-    candidates.push(
-      ...buildMainCandidatesFromSettingsEntries('tomlFile', input.userTomlItems),
-    );
-  }
-
-  return { candidates, issues: [] };
-}
-
-// ============================================================================
-// Public entry: fetch via main-process accessors and call the pure builder
-// ============================================================================
-
-/**
- * Read the `mcpServers` value from the settingsKv table.
- */
-function readSettingsKvMcpServers(logger: ReturnType<typeof getLogger>): MainCollectorSettingsItem[] {
-  try {
-    const db = getDatabase();
-    if (!db) return [];
-    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('mcpServers') as
-      | { value: string }
-      | undefined;
-    if (!row) return [];
-    const parsed = JSON.parse(row.value);
-    if (!Array.isArray(parsed)) return [];
-    return parsed as MainCollectorSettingsItem[];
-  } catch (err) {
-    logger.warn(
-      'collectMainMCPCandidates: settingsKv mcpServers read failed',
-      { error: err instanceof Error ? err.message : String(err) },
-    );
-    return [];
-  }
-}
-
-/**
- * The full main-process candidate collector. Fetches from the plugin
- * manager, the config manager, the settingsKv table, and the legacy
- * on-disk settings.json; delegates the per-source transforms to the
- * pure builders. Returns a typed `MCPCollectionResult`.
+ * The full main-process candidate collector. Fetches the plugin
+ * registry and the user mcp.toml; delegates all per-source transforms
+ * and the final assembly to `buildMCPCandidates` in @duya/plugin-core.
+ * Returns a typed `MCPCollectionResult`.
  */
 export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
   const logger = getLogger();
   const issues: MCPIssue[] = [];
 
-  const input: MainCollectorInput = {
+  const input: MCPCollectorInput = {
     installedPlugins: [],
     legacyFileItems: [],
     agentSettingsMcpServers: [],
@@ -521,8 +134,8 @@ export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
   //    manifest is read on demand from disk via readPluginManifest.
   try {
     const items = getPluginManager().listInstalled();
-    input.installedPlugins = items.map((item): MainCollectorPluginEntry => {
-      const entry: MainCollectorPluginEntry = {
+    input.installedPlugins = items.map((item): MCPCollectorPluginEntry => {
+      const entry: MCPCollectorPluginEntry = {
         id: item.id,
         name: item.name,
         enabled: item.enabled,
@@ -548,17 +161,13 @@ export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
     );
   }
 
-  // User-controlled MCPs are collected only from mcp.toml. Legacy JSON and
-  // SQLite settings are migration inputs, never live runtime sources.
+  // 2. The only user-managed MCP source: the user mcp.toml.
   try {
-    input.userTomlItems = await readUserMcpToml();
+    input.userTomlItems = (await readUserMcpToml()) as MCPCollectorSettingsItem[];
   } catch (err) {
-    issues.push(settingsInvalidIssue(
-      { source: 'settings', sourceSubOrigin: 'tomlFile' },
-      `mcp.toml is invalid: ${messageOf(err)}`,
-    ));
+    issues.push(errorToIssue(err, 'mcp.toml is invalid'));
   }
 
-  const built = buildMainMCPCandidates(input);
+  const built = buildMCPCandidates(input);
   return { candidates: built.candidates, issues: [...issues, ...built.issues] };
 }
