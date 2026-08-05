@@ -24,7 +24,7 @@ const agentRequire = createRequire(
 );
 const Database = agentRequire('better-sqlite3') as typeof import('better-sqlite3');
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
-import type { LLMClient } from '../../packages/agent/src/llm/base.js';
+import type { AIClient } from '@duya/ai';
 import {
   startMemoryWorker,
   getMemoryWorkerHandle,
@@ -97,7 +97,7 @@ interface ShadowFixture {
   mainDb: BetterSqlite3Database;
   memoryRoot: string;
   dbDir: string;
-  llmClient: LLMClient;
+  llmClient: AIClient;
   cleanup: () => void;
 }
 
@@ -160,7 +160,7 @@ function createShadowFixture(
     );
   `);
 
-  const llmClient: LLMClient = {
+  const llmClient: AIClient = {
     streamChat: llmError
       ? vi.fn().mockImplementation(async function* () {
           throw llmError;

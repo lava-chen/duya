@@ -126,11 +126,6 @@ const interagentRouter = new InteragentRouter({
 });
 
 workerManager.setMessageHandler((sessionId, msg) => {
-  if (msg.type === 'chat:background_task_ready' && msg.sessionId === sessionId) {
-    process.send?.({ type: 'chat:background_task_ready', sessionId });
-    return;
-  }
-
   if (msg.type === 'bash_task:update' && msg.sessionId === sessionId) {
     // Forward the bash background task snapshot to the main process so it
     // can rebroadcast to every BrowserWindow. The renderer subscribes via

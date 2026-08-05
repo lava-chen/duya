@@ -15,7 +15,7 @@ import type {
 import {
   permissionRuleValueFromString,
   permissionRuleValueToString,
-} from './permissionRuleParser.js'
+} from './rules.js'
 import {
   createDenialTrackingState,
   DENIAL_LIMITS,
@@ -23,19 +23,25 @@ import {
   recordSuccess,
   shouldFallbackToPrompting,
   type DenialTrackingState,
-} from './denialTracking.js'
-import { classifyAction } from './yoloClassifier.js'
-import { recordAutoModeDenial } from './autoModeDenials.js'
-import { isAutoModeAllowlistedTool } from './classifierDecision.js'
-import { riskTierToBehavior } from './riskTierPermissions.js'
-import type { LLMClient } from '../llm/base.js'
+} from './classifier.js'
+import {
+  classifyAction,
+  recordAutoModeDenial,
+  isAutoModeAllowlistedTool,
+} from './classifier.js'
+import {
+  riskTierToBehavior,
+  analyzeCommandSafety,
+  isReadOnlyCommand,
+  isCatastrophicToolCall,
+  isToolWithinWorkspace,
+} from './policy.js'
+import type { AIClient } from '@duya/ai'
 import type { Message } from '../types.js'
-import { analyzeCommandSafety, isReadOnlyCommand, isCatastrophicToolCall } from './securityPolicy.js'
 import {
   checkPowerShellSecurity,
   isReadOnlyPowerShellCommand,
 } from '../tool/PowerShellTool/security.js'
-import * as path from 'path'
 
 const PERMISSION_RULE_SOURCES = [
   'userSettings',
@@ -234,7 +240,7 @@ export interface ToolPermissionCheckContext {
   localDenialTracking?: DenialTrackingState
   abortController: AbortController
   /** LLM client for auto mode classifier */
-  llmClient?: LLMClient
+  llmClient?: AIClient
   /** Model name for auto mode classifier */
   classifierModel?: string
   /** Messages for auto mode classifier transcript */
@@ -631,89 +637,6 @@ function handleDenialLimitExceeded(
     },
     message: `Permission to use ${toolName} was denied.`,
   }
-}
-
-/**
- * Check if a tool's operation is confined within the workspace directory.
- * Tools operating within the workspace get automatic allow.
- */
-function isToolWithinWorkspace(
-  toolName: string,
-  input: Record<string, unknown>,
-  context: ToolPermissionContext,
-): boolean {
-  // Only check file-system tools
-  const fileSystemTools = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep']
-  if (!fileSystemTools.includes(toolName)) {
-    return false
-  }
-
-  // Collect all paths from tool input
-  const paths: string[] = []
-
-  if (typeof input.path === 'string') {
-    paths.push(input.path)
-  }
-  if (typeof input.command === 'string') {
-    // Extract paths from bash command (cd, paths in arguments)
-    const cdMatch = input.command.match(/cd\s+["']?([^"';\s]+)/)
-    if (cdMatch) {
-      paths.push(cdMatch[1])
-    }
-  }
-  if (typeof input.cwd === 'string') {
-    paths.push(input.cwd)
-  }
-  if (typeof input.file_path === 'string') {
-    paths.push(input.file_path)
-  }
-  if (typeof input.directory === 'string') {
-    paths.push(input.directory)
-  }
-  if (Array.isArray(input.paths)) {
-    for (const p of input.paths) {
-      if (typeof p === 'string') paths.push(p)
-    }
-  }
-
-  if (paths.length === 0) {
-    return false
-  }
-
-  // Build list of allowed directories
-  const allowedDirs: string[] = []
-
-  // Add additional working directories from context
-  for (const [dirPath] of context.additionalWorkingDirectories) {
-    allowedDirs.push(path.resolve(dirPath))
-  }
-
-  // Add default workspace directory from context or fallback to ~/.duya/workspace
-  if (context.defaultWorkspaceDirectory) {
-    allowedDirs.push(path.resolve(context.defaultWorkspaceDirectory))
-    allowedDirs.push(path.resolve(path.join(context.defaultWorkspaceDirectory, '..')))
-  } else {
-    // Fallback to default ~/.duya/workspace
-    const homeDir = process.env.HOME || process.env.USERPROFILE || ''
-    if (homeDir) {
-      allowedDirs.push(path.resolve(path.join(homeDir, '.duya', 'workspace')))
-      allowedDirs.push(path.resolve(path.join(homeDir, '.duya')))
-    }
-  }
-
-  // Check if all paths are within allowed directories
-  for (const p of paths) {
-    const resolved = path.resolve(p)
-    const isWithin = allowedDirs.some((allowed) => {
-      const rel = path.relative(allowed, resolved)
-      return !rel.startsWith('..') && !path.isAbsolute(rel)
-    })
-    if (!isWithin) {
-      return false
-    }
-  }
-
-  return true
 }
 
 export {

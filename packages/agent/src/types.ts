@@ -143,7 +143,7 @@ export interface AgentOptions {
   /** Enable automatic retry with exponential backoff for API failures */
   enableRetry?: boolean;
   /** Retry configuration (only used when enableRetry is true) */
-  retryConfig?: import('./llm/withRetry.js').RetryConfig;
+  retryConfig?: import('@duya/ai').RetryConfig;
   /** Vision model configuration for image understanding */
   visionConfig?: VisionConfig;
   /** Blocked domains for browser tool */
@@ -227,6 +227,12 @@ export interface ChatOptions {
      */
     tools: Array<Pick<Tool, 'name' | 'description' | 'input_schema'>>;
     turn: number;
+    /**
+     * Cache plan fingerprint for this exact request. Stable across turns
+     * when the stable prefix (system prompt + tool surface) is unchanged,
+     * so observers can detect a reachable provider cache breakpoint.
+     */
+    cachePlan: { fingerprint: string };
   }) => void;
   tools?: Tool[];
   toolRegistry?: import('./tool/registry.js').ToolRegistry;
@@ -407,6 +413,12 @@ export type MCPConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 
 // 文件附件
 export interface FileAttachment {
   id: string;
+  /**
+   * Discriminator carried through from the renderer (e.g. 'pasted-text',
+   * 'terminal-ref', 'browser-ref', 'file-tree-ref', 'file', 'image').
+   * Optional for backward compat; absent kinds default to 'file'.
+   */
+  kind?: string;
   name: string;
   type: string;
   url: string; // data URL, blob URL, or file path

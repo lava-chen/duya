@@ -21,7 +21,7 @@ import * as fs from 'fs';
 import * as fsPromises from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import type { LLMClient } from '../../packages/agent/src/llm/base.js';
+import type { AIClient } from '@duya/ai';
 import { parseAndValidate } from '../../packages/agent/src/memory-rollout/extractor.js';
 import { STAGE1_USER_PROMPT_TEMPLATE } from '../../packages/agent/src/memory-rollout/prompt.js';
 import { assembleStage1Prompt } from '../../packages/agent/src/memory-rollout/stage1_prompt_loader.js';
@@ -123,7 +123,7 @@ export interface CanaryResult {
 export interface RunCanaryOptions {
   candidatePolicy: string;
   fixtures: CanaryFixture[];
-  llmClient: LLMClient;
+  llmClient: AIClient;
   hardContract: string;
 }
 
@@ -237,7 +237,7 @@ export interface PromotePolicyOptions {
   /** Path to the live policy file (e.g. memory-config/stage1_policy.md). */
   livePolicyPath: string;
   fixtures: CanaryFixture[];
-  llmClient: LLMClient;
+  llmClient: AIClient;
   hardContract: string;
 }
 
@@ -331,7 +331,7 @@ export interface TriggerCanaryOptions {
   fixturesDir: string;
   /** Path to the live policy file (memory-config/stage1_policy.md). */
   livePolicyPath: string;
-  llmClient: LLMClient;
+  llmClient: AIClient;
   hardContract: string;
 }
 

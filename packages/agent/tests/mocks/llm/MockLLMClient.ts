@@ -1,10 +1,10 @@
-import type { LLMClient } from '../../../src/llm/base.js';
+import type { AIClient } from '@duya/ai';
 import type { SSEEvent } from '../../../src/types.js';
 
 /**
  * Mock LLM client for testing
  */
-export class MockLLMClient implements LLMClient {
+export class MockLLMClient implements AIClient {
   private responses: SSEEvent[][] = [];
   private responseIndex = 0;
   private throwError = false;

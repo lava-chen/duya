@@ -61,12 +61,15 @@ describe('Agent 工具循环端到端测试', () => {
       }
     });
 
-    vi.doMock('../../src/llm/index.js', () => ({
-      createLLMClient: vi.fn(() => ({
-        streamChat: mockStreamChat,
-      })),
-      inferProvider: vi.fn(() => 'anthropic'),
-    }));
+    vi.doMock('@duya/ai', async (importOriginal) => {
+      const mod = await importOriginal<typeof import('@duya/ai')>();
+      return {
+        ...mod,
+        createAIClient: vi.fn(() => ({ streamChat: mockStreamChat })),
+        createAIClientWithRetry: vi.fn(() => ({ streamChat: mockStreamChat })),
+        inferProvider: vi.fn(() => 'anthropic'),
+      };
+    });
 
     // 动态 import 以获取新的 agent 实例
     const { duyaAgent } = await import('../../src/index.js');
@@ -154,12 +157,15 @@ describe('Agent 工具循环端到端测试', () => {
       }
     });
 
-    vi.doMock('../../src/llm/index.js', () => ({
-      createLLMClient: vi.fn(() => ({
-        streamChat: mockStreamChat,
-      })),
-      inferProvider: vi.fn(() => 'anthropic'),
-    }));
+    vi.doMock('@duya/ai', async (importOriginal) => {
+      const mod = await importOriginal<typeof import('@duya/ai')>();
+      return {
+        ...mod,
+        createAIClient: vi.fn(() => ({ streamChat: mockStreamChat })),
+        createAIClientWithRetry: vi.fn(() => ({ streamChat: mockStreamChat })),
+        inferProvider: vi.fn(() => 'anthropic'),
+      };
+    });
 
     const { duyaAgent } = await import('../../src/index.js');
     const { ToolRegistry } = await import('../../src/tool/registry.js');

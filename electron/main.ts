@@ -342,7 +342,7 @@ if (gotTheLock) {
       try {
         const { bootstrap } = await import('./memory-state');
         const { startMemoryWorker } = await import('./memory/memory-worker');
-        const { createRetryableLLMClient } = await import('../packages/agent/src/llm/index.js');
+        const { createAIClientWithRetry } = await import('@duya/ai');
         const { getDatabasePath } = await import('./config/boot-config');
         const { toLLMProvider } = await import('./config/index');
         const { toRuntimeConfigFromLegacy } = await import('../src/lib/providers/domain/ProviderRuntimeAdapter.js');
@@ -377,17 +377,14 @@ if (gotTheLock) {
             // the correct apiFormat + modelCompat flags. Without these,
             // the Stage 1 extractor may misparse reasoning content.
             const runtime = toRuntimeConfigFromLegacy(provider, model);
-            llmClient = createRetryableLLMClient(
-              llmProvider,
-              {
-                apiKey: provider.apiKey,
-                baseURL: provider.baseUrl,
-                model,
-                apiFormat: runtime.apiFormat,
-                providerId: runtime.providerId,
-                modelCapabilities: runtime.modelCompat,
-              },
-            );
+            llmClient = createAIClientWithRetry({
+              apiKey: provider.apiKey,
+              baseURL: provider.baseUrl,
+              model,
+              apiFormat: runtime.apiFormat,
+              providerId: runtime.providerId,
+              modelCapabilities: runtime.modelCompat,
+            });
           }
         } catch (llmErr) {
           logger.warn('Memory worker: LLM client construction failed; extraction disabled', { error: llmErr instanceof Error ? llmErr.message : String(llmErr) }, LogComponent.DB);
