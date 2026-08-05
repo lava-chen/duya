@@ -1,6 +1,7 @@
 /**
  * MiniMax via OpenAI-compatible API.
- * Uses reasoning_content field for thinking output.
+ * Default responses embed thinking in <think>...</think> tags inside the
+ * content field. Set reasoning_split=true to get reasoning_content instead.
  */
 import type { Model } from '../types.js';
 
@@ -13,7 +14,7 @@ export const minimaxOpenAIModels: Model<'openai-chat'>[] = [
     baseUrl: 'https://api.minimaxi.com/v1',
     reasoning: true,
     thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
-    compat: { openAIThinkingFormat: 'reasoning-content' },
+    compat: { openAIThinkingFormat: 'think-tag-fallback' },
     input: ['text', 'image'],
     contextWindow: 200000,
     maxTokens: 8192,

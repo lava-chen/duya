@@ -9,6 +9,50 @@ export { createOpenAICompletionsClient } from './api/openai-completions.js';
 export { transformMessages, isSameModel } from './api/transform-messages.js';
 export { ThinkTagParser } from './utils/think-tag-parser.js';
 export {
+  calculateBackoffDelay,
+  calculatePersistentBackoffDelay,
+  sleep,
+  sleepWithHeartbeat,
+  BackoffPresets,
+  getBackoffPreset,
+  type BackoffOptions,
+} from './utils/backoff.js';
+export {
+  APIErrorType,
+  LLMAPIError,
+  createLLMAPIError,
+  isRetryableError,
+  isStaleConnectionError,
+  isAbortError,
+  classifyError,
+  formatErrorForDisplay,
+  createErrorEvent,
+  createRetryEvent,
+} from './utils/errors.js';
+export {
+  normalizeUsage,
+  calculateCacheHitRate,
+  formatUsage,
+  toOpenAiUsage,
+  ZERO_USAGE,
+  type UsageLike,
+  type NormalizedUsage,
+} from './utils/usage.js';
+export {
+  withRetry,
+  wrapStreamWithRetry,
+  createRetryWrapper,
+  retryOperation,
+  shouldResetConnection,
+  DEFAULT_RETRY_CONFIG,
+  type RetryConfig,
+  type RetryResult,
+} from './utils/retry.js';
+export { inferProvider, isMiniMaxURL, type LLMProvider } from './utils/infer-provider.js';
+export { resolveDefaultBaseURL } from './utils/default-base-url.js';
+export type { CacheRetention } from './utils/prompt-caching.js';
+export { createAIClientWithRetry, type RetryableAIClientOptions } from './retry-client.js';
+export {
   getSupportedThinkingLevels,
   clampThinkingLevel,
   getNativeLevel,
@@ -64,13 +108,37 @@ export {
   deepseekModels,
   qwenModels,
   glmModels,
+  glmAnthropicModels,
   kimiModels,
   openAIModels,
   openaiResponsesModels,
   anthropicModels,
   openrouterModels,
   ollamaModels,
+  xaiModels,
+  stepfunModels,
+  volcengineModels,
+  bailianModels,
 } from './providers/index.js';
+
+export type {
+  AuthType,
+  AuthInteraction,
+  AuthInfoLink,
+  DeviceCodeInfo,
+  Credential,
+  CredentialStore,
+} from './auth/types.js';
+
+export {
+  createProviderCatalog,
+  BUILTIN_CATALOG,
+  BUILTIN_CATALOG_ENTRIES,
+  type ProviderCatalog,
+  type ProviderCatalogEntry,
+  type CatalogProtocol,
+  type CatalogModel,
+} from './providers/catalog.js';
 
 import type { AIClient, AIClientOptions } from './types.js';
 
@@ -93,6 +161,10 @@ export function createAIClient(options: AIClientOptions): AIClient {
     case 'openai-responses':
       return createLazyClient(() =>
         import('./api/openai-responses.js').then(m => m.createOpenAIResponsesClient(options))
+      );
+    case 'ollama':
+      return createLazyClient(() =>
+        import('./api/ollama-chat.js').then(m => (m as any).createOllamaClient(options))
       );
     case 'gemini':
       throw new Error('gemini not yet implemented (P2)');

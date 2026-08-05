@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Anthropic from '@anthropic-ai/sdk';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
-import type { Message, Model } from '../src/types.js';
+import type { AssistantMessage, Message, Model } from '../src/types.js';
 import {
   getMiniMaxAnthropicMaxTokens,
   isMiniMaxInvalidParameters2013,
@@ -21,7 +22,9 @@ import {
   normalizeToolResultOrdering,
   handleThinkingBlocks,
   toAnthropicMessages,
+  parseAnthropicEvent,
 } from '../src/api/anthropic-messages.js';
+import { ThinkTagParser } from '../src/utils/think-tag-parser.js';
 import { anthropicModels } from '../src/providers/anthropic.js';
 import { minimaxAnthropicModels } from '../src/providers/minimax-anthropic.js';
 
@@ -565,5 +568,146 @@ describe('toAnthropicMessages strict tool ID binding', () => {
 
     const events = flattenBindingEvents(out);
     expect(events.length).toBe(6); // 3 uses + 3 results
+  });
+});
+
+// ─── parseAnthropicEvent MiniMax thinking handling ──────────────────────────
+
+describe('parseAnthropicEvent MiniMax thinking handling', () => {
+  const baseMsg = (): AssistantMessage => ({
+    role: 'assistant',
+    content: [],
+    api: 'anthropic',
+    providerId: 'minimax-anthropic',
+    model: 'MiniMax-M3',
+    usage: { input_tokens: 0, output_tokens: 0 },
+    stopReason: 'completed',
+    timestamp: 0,
+  });
+
+  const miniMaxState = () => ({
+    currentBlockIdx: -1,
+    isMiniMax: true,
+    thinkParser: new ThinkTagParser(),
+  });
+
+  const anthropicState = () => ({
+    currentBlockIdx: -1,
+    isMiniMax: false,
+  });
+
+  it('synthesizes a thinking block when thinking_delta arrives without content_block_start', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    const event = {
+      type: 'content_block_delta',
+      delta: { type: 'thinking_delta', thinking: 'step 1' },
+    } as unknown as Anthropic.MessageStreamEvent;
+
+    const result = parseAnthropicEvent(event, msg, state);
+
+    expect(result).toEqual({
+      type: 'thinking_delta',
+      contentIndex: 0,
+      delta: 'step 1',
+      partial: msg,
+    });
+    expect(msg.content).toEqual([{ type: 'thinking', thinking: 'step 1', thinkingSignature: '' }]);
+    expect(state.currentBlockIdx).toBe(0);
+  });
+
+  it('accumulates multiple orphan thinking_delta events into the same block', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    const e1 = {
+      type: 'content_block_delta',
+      delta: { type: 'thinking_delta', thinking: 'step 1' },
+    } as unknown as Anthropic.MessageStreamEvent;
+    const e2 = {
+      type: 'content_block_delta',
+      delta: { type: 'thinking_delta', thinking: 'step 2' },
+    } as unknown as Anthropic.MessageStreamEvent;
+
+    parseAnthropicEvent(e1, msg, state);
+    parseAnthropicEvent(e2, msg, state);
+
+    expect(msg.content).toEqual([{ type: 'thinking', thinking: 'step 1step 2', thinkingSignature: '' }]);
+  });
+
+  it('splits <thinking> text deltas into thinking and text channels (MiniMax)', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    const event = {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: '<thinking>reasoning here</thinking>final answer' },
+    } as unknown as Anthropic.MessageStreamEvent;
+
+    const result = parseAnthropicEvent(event, msg, state);
+
+    expect(Array.isArray(result)).toBe(true);
+    const events = result as Array<{ type: string; delta: string }>;
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('thinking_delta');
+    expect(events[0].delta).toBe('reasoning here');
+    expect(events[1].type).toBe('text_delta');
+    expect(events[1].delta).toBe('final answer');
+
+    expect(msg.content).toEqual([
+      { type: 'thinking', thinking: 'reasoning here', thinkingSignature: '' },
+      { type: 'text', text: 'final answer' },
+    ]);
+  });
+
+  it('handles <thinking> tags split across multiple text deltas', () => {
+    const msg = baseMsg();
+    const state = miniMaxState();
+    const e1 = {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: '<thinkin' },
+    } as unknown as Anthropic.MessageStreamEvent;
+    const e2 = {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: 'g>reasoning</thinking>answer' },
+    } as unknown as Anthropic.MessageStreamEvent;
+
+    const r1 = parseAnthropicEvent(e1, msg, state);
+    const r2 = parseAnthropicEvent(e2, msg, state);
+
+    expect(r1).toEqual({ type: 'start', partial: msg });
+    const events = r2 as Array<{ type: string; delta: string }>;
+    expect(events).toHaveLength(2);
+    expect(events[0].delta).toBe('reasoning');
+    expect(events[1].delta).toBe('answer');
+    expect(msg.content).toEqual([
+      { type: 'thinking', thinking: 'reasoning', thinkingSignature: '' },
+      { type: 'text', text: 'answer' },
+    ]);
+  });
+
+  it('does not split <thinking> tags for non-MiniMax Anthropic streams', () => {
+    const msg = baseMsg();
+    msg.providerId = 'anthropic';
+    msg.model = 'claude-sonnet-4-20250514';
+    const state = anthropicState();
+    // Seed a text block as if content_block_start had occurred.
+    msg.content.push({ type: 'text', text: '' });
+    state.currentBlockIdx = 0;
+
+    const event = {
+      type: 'content_block_delta',
+      delta: { type: 'text_delta', text: '<thinking>reasoning</thinking>answer' },
+    } as unknown as Anthropic.MessageStreamEvent;
+
+    const result = parseAnthropicEvent(event, msg, state);
+
+    expect(result).toEqual({
+      type: 'text_delta',
+      contentIndex: 0,
+      delta: '<thinking>reasoning</thinking>answer',
+      partial: msg,
+    });
+    expect(msg.content).toEqual([
+      { type: 'text', text: '<thinking>reasoning</thinking>answer' },
+    ]);
   });
 });
