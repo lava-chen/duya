@@ -95,15 +95,6 @@ export function spawnAgentServer(): Promise<number> {
     let stdoutBuffer = '';
 
     child.on('message', (msg: any) => {
-      if (msg.type === 'chat:background_task_ready' && typeof msg.sessionId === 'string') {
-        for (const window of BrowserWindow.getAllWindows()) {
-          if (!window.isDestroyed()) {
-            window.webContents.send('chat:background_task_ready', { sessionId: msg.sessionId });
-          }
-        }
-        return;
-      }
-
       if (msg.type === 'bash_task:update' && typeof msg.sessionId === 'string') {
         // Rebroadcast the bash background task snapshot to every renderer.
         // The renderer's useBashTasks hook filters by activeThreadId.

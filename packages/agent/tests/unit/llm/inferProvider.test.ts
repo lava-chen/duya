@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { inferProvider } from '../../../src/llm/index.js';
+import { inferProvider } from '@duya/ai';
 import type { LLMProvider } from '../../../src/types.js';
 
 describe('inferProvider', () => {

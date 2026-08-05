@@ -31,7 +31,7 @@ import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
-import type { LLMClient } from '../../packages/agent/src/llm/index.js';
+import type { AIClient } from '@duya/ai';
 import { Stage1Extractor } from '../../packages/agent/src/memory-rollout/extractor.js';
 import {
   selectEligible,
@@ -57,7 +57,7 @@ export interface MemoryWorkerDeps {
   /** Main DUYA DB (read-only — used for catalog sync + message reads). */
   mainDb: Database;
   /** LLM client for Stage 1 extraction. */
-  llmClient: LLMClient;
+  llmClient: AIClient;
   /** Projection root; default `~/.duya/memory`. */
   rootDir?: string;
   /**

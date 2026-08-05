@@ -19,7 +19,7 @@ import type { Database } from 'better-sqlite3';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import type { LLMClient } from '../llm/index.js';
+import type { AIClient } from '@duya/ai';
 import type { Message } from '../types.js';
 import {
   acquireLease,
@@ -416,20 +416,20 @@ interface CatalogMappingRow {
  * large payloads (long conversation histories).
  */
 export class Stage1Extractor {
-  private readonly streamChat: LLMClient['streamChat'];
+  private readonly streamChat: AIClient['streamChat'];
 
   private policyCache: { content: string; hash: string; version: number } | null = null;
 
   constructor(
     private readonly memoryDb: Database,
     private readonly mainDb: Database,
-    private readonly llmClient: LLMClient,
+    private readonly llmClient: AIClient,
     private readonly opts?: { rootDir?: string; policyPath?: string; memoryRoot?: string },
   ) {
     if (typeof llmClient.streamChat !== 'function') {
-      throw new Error('LLMClient.streamChat is required for Stage1Extractor');
+      throw new Error('AIClient.streamChat is required for Stage1Extractor');
     }
-    // Bind streamChat to the LLMClient instance. LazyLLMClientProxy.streamChat
+    // Bind streamChat to the AIClient instance. LazyLLMClientProxy.streamChat
     // calls `this.getClient()` internally — without binding, `this` would be
     // undefined when invoked via `this.streamChat(...)`.
     this.streamChat = llmClient.streamChat.bind(llmClient);

@@ -21,7 +21,7 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
-import { buildAttachmentContext } from '../llm/attachment-context.js';
+
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig, Tool } from '../types.js';
@@ -33,25 +33,20 @@ import {
   turnReviewDb,
 } from '../ipc/db-client.js';
 import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
-import { IncrementalSaveQueue } from './incremental-save-queue.js';
+
 import { sendMemoryWakeup } from '../memory-rollout/wakeup.js';
 import { getRolloutLogger, type ProviderToolSnapshot, type RolloutTurn } from '../session/rollout-logger.js';
 import { getAgentsMdManager } from '../agentsmd/manager.js';
 import {
   enqueue,
-  enqueuePendingNotification,
   dequeue,
-  dequeueAllMatching,
   hasCommandsInQueue,
   clearCommandQueue,
   getCommandQueueLength,
-  getCommandQueueSnapshot,
-  isQueuedCommandEditable,
-  subscribeToCommandQueue,
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle, shouldRegenerateTitle } from '../session/title-generator.js';
-import { classifyError, APIErrorType } from '../llm/errors.js';
+import { classifyError, APIErrorType } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
@@ -66,9 +61,9 @@ import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
 import { storePendingAnswer } from '../tool/AskUserQuestionTool/AskUserQuestionTool.js';
 import { isCDNImageUrl } from '../utils/urlSafety.js';
 import { resizeImageBuffer, needsResizing, TARGET_IMAGE_SIZE_BYTES } from '../utils/imageResizer.js';
-import { isModelLikelyMultimodal } from '../llm/multimodal-detection.js';
-import { detectModelCapability } from '../llm/model-capability-cache.js';
-import type { ProbeConfig } from '../llm/model-capability-cache.js';
+import { isModelLikelyMultimodal } from '../utils/multimodal-detection.js';
+import { detectModelCapability } from '../utils/model-capability-cache.js';
+import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
@@ -231,27 +226,6 @@ const HEARTBEAT_INTERVAL = 5000; // Send pong every 5 seconds during streaming
 // Independent heartbeat timer to keep process alive during long operations
 let chatHeartbeatTimer: NodeJS.Timeout | null = null;
 const CHAT_HEARTBEAT_INTERVAL = 8000; // Send pong every 8 seconds while chat is active
-let backgroundResumeSignalledForSession: string | null = null;
-
-function scheduleBackgroundTaskResume(): void {
-  setImmediate(() => {
-    const activeSessionId = sessionId;
-    if (!activeSessionId || chatInProgress || backgroundResumeSignalledForSession === activeSessionId) return;
-
-    const hasPendingNotification = getCommandQueueSnapshot().some(
-      (command) => command.mode === 'task-notification' && command.agentId === activeSessionId,
-    );
-    if (!hasPendingNotification) return;
-
-    backgroundResumeSignalledForSession = activeSessionId;
-    sendToMain({ type: 'chat:background_task_ready', sessionId: activeSessionId });
-  });
-}
-
-// Terminal background work is stored in the process-local queue. A completed
-// foreground turn otherwise has no reason to inspect that queue again, so
-// wake the renderer to start an internal follow-up request for this session.
-subscribeToCommandQueue(scheduleBackgroundTaskResume);
 
 // ----------------------------------------------------------------------------
 // Bash background task list — push snapshot to renderer on any change.
@@ -1110,19 +1084,16 @@ async function initAgent(
   });
 
   // Wire the compaction callback so proactive compaction inside
-  // streamChat persists the compacted message list to DB and updates
-  // existingMessageCount. Without this, the next incremental save
-  // would use a stale baseline, causing duplicate or missing rows.
+  // streamChat persists the compacted message list to DB. Persisting
+  // the full list is safe: appendMessages uses INSERT OR IGNORE, so
+  // rows already in the DB are deduped and only new/changed rows land.
   agent.onMessagesCompacted = (newMessageCount: number): void => {
     log(`[Agent-Process] Messages compacted, new count=${newMessageCount}`);
     const currentMessages = agent.getMessages();
-    // Persist the full compacted message list. INSERT OR IGNORE in
-    // appendMessages handles dedup for rows that are already in DB.
     appendMessages(sessionId!, currentMessages)
       .then((result) => {
         if (result.success) {
-          existingMessageCount = currentMessages.length;
-          log(`[Agent-Process] Compaction persisted, existingMessageCount=${existingMessageCount}`);
+          log(`[Agent-Process] Compaction persisted, persisted=${result.count}`);
         }
       })
       .catch((err) => {
@@ -1235,26 +1206,6 @@ async function loadAgentSkills(workDir?: string, skillPaths?: string[], security
 function sendToMain(msg: Record<string, unknown>): void {
   process.send?.(msg);
   sendEvent(msg);
-}
-
-function findToolResultBlocks(m: Message): boolean {
-  if (Array.isArray(m.content)) {
-    return m.content.some(
-      (b: unknown) => (b as Record<string, unknown>).type === 'tool_result'
-    );
-  }
-  return false;
-}
-
-function findLastToolResultIndex(messages: Message[]): number {
-  let lastIdx = -1;
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
-    if (m.role === 'tool' || findToolResultBlocks(m)) {
-      lastIdx = i;
-    }
-  }
-  return lastIdx;
 }
 
 async function persistTurnReview(
@@ -1973,9 +1924,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     // Images that could not be auto-inlined (CDN URLs, local file read
     // failures, or missing base64 data) are silently skipped. The LLM won't
-    // see these images as content blocks. buildAttachmentContext includes
-    // image files and generates a brief text reference ("This image file
-    // is attached in this message") so the LLM knows they exist.
+    // see these images as content blocks. The attachment text context is
+    // separately injected as a durable runtime_context message by
+    // DuyaAgent._injectRuntimeContext via adaptAttachmentContext, so the
+    // user message content no longer embeds it (avoids duplicate injection).
     //
     // For non-multimodal models, image content blocks are intentionally
     // omitted — pre-analysis text from the vision model (if configured)
@@ -1985,28 +1937,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     //
     // vision_analyze tool remains registered so the LLM can request
     // re-analysis of previously analyzed or newly referenced images.
-
-    // Assemble attachment context before passing to streamChat so LLM clients
-    // receive fully assembled messages without needing attachment awareness
-    const attachmentCtx = buildAttachmentContext(files || []);
-    if (attachmentCtx) {
-      if (typeof messageContent === 'string') {
-        messageContent = attachmentCtx + '\n' + messageContent;
-      } else {
-        const firstTextIdx = messageContent.findIndex(
-          (b: unknown) => (b as Record<string, unknown>).type === 'text'
-        );
-        if (firstTextIdx >= 0) {
-          const block = messageContent[firstTextIdx] as unknown as Record<string, string>;
-          block.text = attachmentCtx + '\n' + (block.text || '');
-        } else {
-          messageContent = [
-            { type: 'text' as const, text: attachmentCtx },
-            ...messageContent,
-          ];
-        }
-      }
-    }
 
     rolloutLogger = getRolloutLogger(msg.sessionId);
     const recordRolloutProviderRequest = (snapshot: {
@@ -2116,9 +2046,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
     let eventCount = 0;
-    const incrementalSaveQueue = new IncrementalSaveQueue(msg.sessionId);
-    let lastIncrementalSave = Date.now();
-    const INCREMENTAL_SAVE_INTERVAL = 5000; // Save every 5 seconds during streaming
+    // Stable-boundary persistence baseline: capture the message count at turn
+    // start so the single end-of-turn append can persist exactly the messages
+    // this turn produced (user/assistant/tool_use/tool_result), in order,
+    // without an incremental counter.
+    const turnStartMessageCount = agent.getMessages().length;
 
     for await (const event of eventGen) {
       eventCount++;
@@ -2158,68 +2090,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         lastPongTime = Date.now();
         sendToMain({ type: 'pong', timestamp: lastPongTime });
         debugLog('Sent heartbeat pong during streaming');
-      }
-
-      // Incremental persistence: save messages periodically during streaming
-      // Use IncrementalSaveQueue to serialize saves and prevent race conditions
-      if (Date.now() - lastIncrementalSave > INCREMENTAL_SAVE_INTERVAL) {
-        lastIncrementalSave = Date.now();
-        let currentMessages = agent.getMessages();
-        // A stream can still have a running tool call here, so only reorder
-        // complete rounds. Full validation would incorrectly delete a pending
-        // tool_use before its executor produces a result.
-        const canonicalCurrentMessages = reorderCompleteToolRounds(currentMessages);
-        if (canonicalCurrentMessages !== currentMessages) {
-          agent.setMessages(canonicalCurrentMessages);
-          currentMessages = canonicalCurrentMessages;
-        }
-        let newMessages = currentMessages.slice(existingMessageCount);
-        applyRequestDisplayContent(newMessages, msg.options?.displayContent);
-        // Attach the latest tokenUsage to the last assistant message before
-        // persisting. Without this, the incremental save may persist the last
-        // assistant message before the final save attaches token_usage — and
-        // appendMessages uses INSERT OR IGNORE, so the token_usage would be
-        // lost forever (the context ring would show no data).
-        if (tokenUsage && newMessages.length > 0) {
-          const lastAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
-          if (lastAssistant) {
-            (lastAssistant as Record<string, unknown>).token_usage = tokenUsage;
-          }
-        }
-        // Do not persist the trailing assistant message until we know its
-        // token usage. Because appendMessages uses INSERT OR IGNORE, an
-        // assistant message saved without token_usage can never be updated,
-        // which breaks the context ring. Tool results that follow the
-        // assistant are also held back so they stay adjacent to their
-        // assistant message.
-        const trailingAssistantRevIndex = [...newMessages].reverse().findIndex(m => m.role === 'assistant');
-        if (trailingAssistantRevIndex >= 0) {
-          const trailingAssistantIndex = newMessages.length - 1 - trailingAssistantRevIndex;
-          const trailingAssistant = newMessages[trailingAssistantIndex];
-          if (!(trailingAssistant as Record<string, unknown>).token_usage) {
-            newMessages = newMessages.slice(0, trailingAssistantIndex);
-          }
-        }
-        if (newMessages.length > 0) {
-          incrementalSaveQueue.trigger(newMessages).then(result => {
-            debugLog('incremental save', { success: result.success, messageCount: newMessages.length });
-            if (result.success) {
-              // Only update existingMessageCount when tool_result messages are present.
-              // A tool_result represents a completed tool round. Streaming text
-              // (assistant role) is never counted here — final update happens at chat:done.
-              const hasToolResult = newMessages.some(
-                (m: Message) => m.role === 'tool' || findToolResultBlocks(m)
-              );
-              if (hasToolResult) {
-                const lastToolResultIdx = findLastToolResultIndex(newMessages);
-                const completedCount = lastToolResultIdx + 1;
-                existingMessageCount = existingMessageCount + completedCount;
-              }
-            }
-          }).catch(err => {
-            debugLog('incremental save failed', { error: err instanceof Error ? err.message : String(err) });
-          });
-        }
       }
 
       if (event.type === 'result' && event.data) {
@@ -2268,15 +2138,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     }
 
     let agentMessages = agent.getMessages();
-    // Mark incremental queue as flushed and wait for any pending saves to complete
-    incrementalSaveQueue.markFlushed();
-    await incrementalSaveQueue.flush();
 
     // Do not create a new poisoned history row at turn completion. In
     // particular, a failed canvas tool followed by the model's corrected tool
     // call can arrive as consecutive assistant messages before either result
-    // is written. Canonicalize the whole in-memory history before deriving the
-    // append-only delta so the database is valid on its first write.
+    // is written. Canonicalize the whole in-memory history before appending so
+    // the database is valid on its first write. This is a crash-recovery / DB
+    // integrity guard (unmatched tool_use/tool_result would be rejected by
+    // strict Anthropic-compatible providers), not an incremental-state fix.
     const canonicalMessages = validateMessageHistory(agentMessages);
     if (canonicalMessages !== agentMessages) {
       agent.setMessages(canonicalMessages);
@@ -2297,7 +2166,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         warn('[Agent-Process] No tokenUsage received during stream');
       }
       try {
-        const newMessages = agentMessages.slice(existingMessageCount);
+        // Stable boundary: persist exactly this turn's new messages in one
+        // append, sliced from the count captured before the stream started.
+        const newMessages = agentMessages.slice(turnStartMessageCount);
         applyRequestDisplayContent(newMessages, msg.options?.displayContent);
         const lastNewAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
         log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total), lastNewAssistant token_usage present=${!!(lastNewAssistant && (lastNewAssistant as Record<string, unknown>).token_usage)}`);
@@ -2335,8 +2206,8 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
         sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
 
-        // Update existingMessageCount to reflect the newly persisted messages.
-        // This ensures subsequent chats correctly calculate the delta for incremental saves.
+        // Record the persisted count as the baseline for the defensive
+        // resync at the top of the next turn (compare DB count vs our view).
         existingMessageCount = agentMessages.length;
         log(`[Agent-Process] Updated existingMessageCount to ${existingMessageCount}`);
 
@@ -2427,7 +2298,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
               titleLLMClient = agent.llmClient;
             } else {
               try {
-                const { createLLMClient } = await import('../llm/index.js');
+                const { createAIClient } = await import('@duya/ai');
                 const { findModelCompat } = await import('@duya/ai');
 
                 // Resolve apiFormat: use provided value, or infer from the
@@ -2444,9 +2315,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
                 const titleModelCompat = titleGenerationModelConfig.modelCompat
                   ?? findModelCompat(titleApiFormat, titleGenerationModelConfig.model);
 
-                titleLLMClient = createLLMClient(
-                  titleGenerationModelConfig.provider as 'anthropic' | 'openai' | 'ollama',
-                  {
+                titleLLMClient = createAIClient({
                     apiKey: titleGenerationModelConfig.apiKey,
                     baseURL: titleGenerationModelConfig.baseURL,
                     model: titleGenerationModelConfig.model,
@@ -2966,7 +2835,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             });
             break;
           }
-          backgroundResumeSignalledForSession = null;
           chatInProgress = true;
           handleChatStart(chatMsg).catch((err) => {
             // Defensive: any uncaught error inside handleChatStart
@@ -2983,7 +2851,6 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             chatInProgress = false;
             setImmediate(() => {
               void drainQueuedChatStart();
-              scheduleBackgroundTaskResume();
             });
           });
           break;
@@ -3008,13 +2875,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             clearCommandQueue();
             lastInterruptTime = 0;
           } else if (hasCommandsInQueue()) {
-            // First press while idle with queued messages: pop the front of the queue.
-            // Filter to editable commands only — system-generated <task-notification>
-            // envelopes (mode='task-notification', isMeta=true) must NEVER leak into
-            // the user's input buffer via the interrupt-pop path. Mirrors
-            // claude-code's isQueuedCommandEditable guard in messageQueueManager.ts.
+            // First press while idle with queued messages: pop the front of the
+            // queue. Only user commands (agentId undefined) are interrupt-popped;
+            // queue holds user prompts only now that background notifications
+            // flow through the mailbox instead of the command queue.
             const popped = dequeue<ChatStartMessage>(
-              (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined && isQueuedCommandEditable(cmd)
+              (cmd: QueuedCommand<ChatStartMessage>) => cmd.agentId === undefined
             );
             if (popped) {
               log('[Agent-Process] Interrupt popped queued command from queue, remaining:', getCommandQueueLength());

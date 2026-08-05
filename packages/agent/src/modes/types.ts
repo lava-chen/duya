@@ -1,4 +1,4 @@
-import type { LLMClient } from '../llm/base.js';
+import type { AIClient } from '@duya/ai';
 import type { SSEEvent, Tool } from '../types.js';
 import type { ResearchMemoryRuntime } from '../research-memory/types.js';
 import type { ToolExecutor } from '../tool/registry.js';
@@ -130,7 +130,7 @@ export interface ModeModifierDisplay {
  * and persistence — they do NOT run through the agent tool loop.
  */
 export interface OrchestratorDeps {
-  llmClient: LLMClient;
+  llmClient: AIClient;
   abortController: AbortController;
   sessionId?: string;
   workingDirectory?: string;

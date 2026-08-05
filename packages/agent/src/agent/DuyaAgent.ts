@@ -4,13 +4,9 @@
  *
  * Implementation home for the `duyaAgent` class. The public surface
  * (type re-exports, supporting utilities) lives in `src/index.ts`,
- * which re-exports `duyaAgent` from this file.
- *
- * Module-level helpers (`extractTextFromContent`,
- * `collectRecentImageAttachments`, `buildBackgroundTaskNotification`,
- * `buildAgentIdentityBlock`) live alongside the class because they are
- * only used by it; if any become useful to other modules, lift them
- * into their own files.
+ * which re-exports `duyaAgent` from this file. Pure helpers
+ * (`extractTextFromContent`, `persistableMessages`,
+ * `buildAgentIdentityBlock`, etc.) live in `./utils/agent-helpers.ts`.
  */
 
 import {
@@ -21,7 +17,6 @@ import type {
   AgentRuntimeMode,
   ChatOptions,
   FileAttachment,
-  ImageContent,
   Message,
   MessageContent,
   Tool,
@@ -35,27 +30,22 @@ import type {
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
-import { compactHistory } from '../compact/compact.js';
-import type { CompactResult, TokenEstimation } from '../compact/compact.js';
-import { needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD } from '../compact/compact.js';
+import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
-import { createLLMClient, createRetryableLLMClient, inferProvider } from '../llm/index.js';
-import type { LLMClient, LLMClientOptionsExtended, RetryConfig } from '../llm/index.js';
-import { findModelCompat } from '@duya/ai';
-import type { ApiFormat } from '@duya/ai';
+import { createAIClient, createAIClientWithRetry, inferProvider } from '@duya/ai';
+import type { AIClient, AIClientOptions, RetryConfig } from '@duya/ai';
 import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
-import { dequeueAllMatching, enqueuePendingNotification } from '../queue/index.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource } from '../permissions/types.js';
-import { permissionModeFromString } from '../permissions/PermissionMode.js';
-import { settingsJsonToRules } from '../permissions/permissionsLoader.js';
-import { permissionRuleValueToString } from '../permissions/permissionRuleParser.js';
+import { permissionModeFromString } from '../permissions/policy.js';
+import { settingsJsonToRules } from '../permissions/rules.js';
+import { permissionRuleValueToString } from '../permissions/rules.js';
 import { logger } from '../utils/logger.js';
 import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
@@ -65,69 +55,8 @@ import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
-import type { MailboxApplyMode, MailboxRow } from '../session/db.js';
+import type { MailboxRow } from '../session/db.js';
 import path from 'node:path';
-
-function extractTextFromContent(content: string | MessageContent[]): string {
-  if (typeof content === 'string') return content
-  const parts: string[] = []
-  for (const block of content) {
-    if (block.type === 'text') {
-      parts.push((block as { text: string }).text || '')
-    } else if (block.type === 'tool_use') {
-      const b = block as unknown as { name: string }
-      parts.push(`[Tool call: ${b.name || 'unknown'}]`)
-    } else if (block.type === 'tool_result') {
-      const b = block as unknown as { content: string | Array<{ type: string; text: string }> }
-      const resultText = typeof b.content === 'string'
-        ? b.content
-        : Array.isArray(b.content)
-          ? b.content.filter(c => c.type === 'text').map(c => c.text).join('\n')
-          : ''
-      parts.push(`[Tool result: ${resultText.slice(0, 300)}]`)
-    }
-  }
-  return parts.join('\n')
-}
-
-function collectRecentImageAttachments(messages: Message[]): Array<{
-  name: string;
-  path?: string;
-  url?: string;
-  type: string;
-}> {
-  const recent: Array<{
-    name: string;
-    path?: string;
-    url?: string;
-    type: string;
-  }> = [];
-  const seen = new Set<string>();
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const attachments = messages[i]?.attachments as FileAttachment[] | undefined;
-    if (!attachments || attachments.length === 0) continue;
-
-    for (const attachment of [...attachments].reverse()) {
-      if (!attachment?.type?.startsWith('image/')) continue;
-      const source = attachment.path || attachment.url;
-      if (!source) continue;
-
-      const dedupeKey = `${attachment.name}::${source}`;
-      if (seen.has(dedupeKey)) continue;
-      seen.add(dedupeKey);
-
-      recent.push({
-        name: attachment.name,
-        path: attachment.path,
-        url: attachment.url,
-        type: attachment.type,
-      });
-    }
-  }
-
-  return recent;
-}
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
@@ -147,68 +76,73 @@ import type { AgentDefinition } from '../tool/SubagentTool/index.js';
 import { CompactionManager, createCompactionManager } from '../compact/CompactionManager.js';
 import type { CompactOptions } from '../compact/types.js';
 
-/** Empty set used by _resolveTools (no tools discovered yet at startup). */
-const EMPTY_DISCOVERED: ReadonlySet<string> = new Set();
-
-function drainBackgroundTaskNotifications(parentSessionId?: string): string[] {
-  if (!parentSessionId) return []
-  return dequeueAllMatching(
-    (cmd) => cmd.mode === 'task-notification' && cmd.agentId === parentSessionId
-  ).map((cmd) => cmd.value)
-}
-
-type RuntimeMailboxDecision =
-  | { action: 'continue'; absorbed: boolean }
-  | { action: 'soft_stop'; summary: string }
-  | { action: 'hard_replace'; replacement: string };
-
-interface RuntimeMailboxClaim {
-  rows: MailboxRow[];
-  claimTokens: string[];
-}
-
-function isRuntimeMailboxMessage(message: Message): boolean {
-  return message.metadata?.mailboxRuntimeInstruction === true;
-}
-
-function persistableMessages(messages: Message[]): Message[] {
-  return messages.filter((message) => !isRuntimeMailboxMessage(message));
-}
-
-function formatMailboxRuntimeInstruction(rows: MailboxRow[]): string {
-  const lines = rows
-    .map((row, index) => {
-      const label = row.kind === 'constraint'
-        ? 'constraint'
-        : row.kind === 'correction'
-          ? 'correction'
-          : 'follow-up';
-      return `${index + 1}. (${label}) ${row.content.trim()}`;
-    })
-    .filter((line) => line.trim().length > 0);
-
-  return [
-    '<runtime-user-guidance>',
-    'The user sent the following instruction while you were already working.',
-    'Incorporate it into the current plan at the next safe point. Do not mention this wrapper.',
-    ...lines,
-    '</runtime-user-guidance>',
-  ].join('\n');
-}
-
-function chooseMailboxApplyMode(row: MailboxRow): MailboxApplyMode {
-  if (row.kind === 'stop' || row.kind === 'abort_and_replace') {
-    return 'interrupt_signal';
-  }
-  return 'runtime_instruction';
-}
+// New message domain framework (plan 315)
+import {
+  MessageTimeline,
+  buildAgentContext,
+  legacyMessageToAgentMessage,
+  legacyMessagesToAgentMessages,
+  projectModelMessages,
+  extractLegacySystemSegments,
+  projectTimelinePersistenceMessages,
+  getLegacyCompactionCheckpoint,
+  type LegacyCustomAgentMessage,
+  type CompactionEntry,
+  type RuntimeContextAgentMessage,
+  type AgentMessage,
+} from '../message/index.js';
+import { MessageCompactionController } from '../message/message-compaction-controller.js';
+import {
+  adaptAttachmentContext,
+  adaptBackgroundNotification,
+  adaptMailboxHardReplacement,
+  adaptMailboxRows,
+  projectRuntimeContextToProviderMessage,
+  RUNTIME_CONTEXT_METADATA_KEYS,
+} from '../message/runtime-context-adapters.js';
+import { persistLargePastedAttachments } from '../utils/attachment-context.js';
+import {
+  EMPTY_DISCOVERED,
+  extractTextFromContent,
+  collectRecentImageAttachments,
+  persistableMessages,
+  computeCachePlanFingerprint,
+  chooseMailboxApplyMode,
+  buildAgentIdentityBlock,
+  type RuntimeMailboxDecision,
+  type RuntimeMailboxClaim,
+} from './utils/agent-helpers.js';
+import { VisualAnalysisService } from './visual-analysis.js';
 
 /**
  * duyaAgent 类
  */
 export class duyaAgent {
-  private llmClient: LLMClient;
-  private messages: Message[] = [];
+  private llmClient: AIClient;
+  /**
+   * Plan 315: durable persistence projection derived from the append-only
+   * timeline (single source of truth). Recomputes on every read and excludes
+   * transient runtime-only entries (mailbox, background notifications).
+   * Kept as a getter so the write path never double-writes a separate array
+   * (the old field would drift from the timeline).
+   */
+  get messages(): Message[] {
+    return projectTimelinePersistenceMessages(this.timeline.snapshot());
+  }
+  /**
+   * Plan 315: append-only message timeline. The runtime authority for the
+   * conversation history. `messages` (above) is the durable provider-shaped
+   * projection of this timeline for legacy callers.
+   */
+  private timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+  /** Plan 315: tracks message ids already appended to timeline, O(1) dedup. */
+  private syncedMessageIds: Set<string> = new Set();
+  /**
+   * Plan 315: bridges the legacy CompactionManager to the append-only
+   * timeline, so compaction appends a checkpoint entry instead of mutating
+   * the history in place.
+   */
+  private compactionController!: MessageCompactionController<LegacyCustomAgentMessage>;
   private abortController: AbortController | null = null;
   private sessionInfo: SessionInfo;
   private compactionManager: CompactionManager;
@@ -227,8 +161,7 @@ export class duyaAgent {
   private alwaysDenyRules: ToolPermissionRulesBySource = {};
   private alwaysAskRules: ToolPermissionRulesBySource = {};
   private additionalWorkingDirectories: Map<string, AdditionalWorkingDirectory> = new Map();
-  private visionClient?: LLMClient; // Optional vision model client
-  private visionConfig?: import('../types.js').VisionConfig; // Vision model configuration
+  private visualAnalysis: VisualAnalysisService;
   private blockedDomains: string[] = [];
   private browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
   private researchMemoryRuntime: ResearchMemory;
@@ -365,26 +298,26 @@ export class duyaAgent {
 
     // Build extended options including @duya/ai fields from runtimeConfig.
     // apiFormat/providerId/modelCompat flow: ProviderRuntimeAdapter →
-    // runtimeConfig → DuyaAgent → createLLMClient → @duya/ai createAIClient.
-    const llmClientOptions: LLMClientOptionsExtended = {
+    // runtimeConfig → DuyaAgent → createAIClient → @duya/ai createAIClient.
+    const llmClientOptions: AIClientOptions = {
       apiKey: options.apiKey,
       baseURL,
       model,
       authStyle: options.authStyle,
-      apiFormat: options.runtimeConfig?.apiFormat,
-      providerId: options.runtimeConfig?.providerId,
+      apiFormat: options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat'),
+      providerId: options.runtimeConfig?.providerId ?? provider,
       modelCapabilities: options.runtimeConfig?.modelCompat,
     };
 
     if (enableRetry) {
       logger.debug('[duyaAgent] Using retryable LLM client');
-      this.llmClient = createRetryableLLMClient(provider, {
+      this.llmClient = createAIClientWithRetry({
         ...llmClientOptions,
         retryConfig: options.retryConfig,
       });
     } else {
       logger.debug('[duyaAgent] Using standard LLM client (retry disabled)');
-      this.llmClient = createLLMClient(provider, llmClientOptions);
+      this.llmClient = createAIClient(llmClientOptions);
     }
 
     this.apiKey = options.apiKey;
@@ -405,33 +338,10 @@ export class duyaAgent {
     this.language = options.language;
 
     // Initialize vision model client if configured
-    logger.info(`[duyaAgent] Vision config check: enabled=${options.visionConfig?.enabled}, provider=${options.visionConfig?.provider}, model=${options.visionConfig?.model}, baseURL=${options.visionConfig?.baseURL}`);
-    if (options.visionConfig?.enabled) {
-      this.visionConfig = options.visionConfig;
-      const visionProvider = inferProvider(options.visionConfig.baseURL || '', options.visionConfig.provider);
-      logger.info(`[duyaAgent] Vision provider inferred: provider=${options.visionConfig.provider}, baseURL=${options.visionConfig.baseURL} -> resolved=${visionProvider}`);
-      try {
-        // Resolve apiFormat + modelCompat so vision requests also flow
-        // through the @duya/ai protocol layer. Without these flags,
-        // reasoning-capable vision models (GLM-4V, Qwen-VL, etc.) would
-        // not get their reasoning_content parsed correctly.
-        const visionApiFormat: ApiFormat = visionProvider === 'anthropic' ? 'anthropic' : 'openai-chat';
-        const visionModelCompat = findModelCompat(visionApiFormat, options.visionConfig.model);
-        this.visionClient = createLLMClient(visionProvider, {
-          apiKey: options.visionConfig.apiKey,
-          baseURL: options.visionConfig.baseURL || this.getDefaultBaseURL(visionProvider),
-          model: options.visionConfig.model,
-          apiFormat: visionApiFormat,
-          providerId: options.visionConfig.provider,
-          modelCapabilities: visionModelCompat,
-        });
-        logger.info(`[duyaAgent] Vision model initialized: ${options.visionConfig.model} (resolved provider: ${visionProvider})`);
-      } catch (err) {
-        logger.warn(`[duyaAgent] Failed to initialize vision model: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    } else {
-      logger.info(`[duyaAgent] Vision model NOT initialized - disabled or not configured`);
-    }
+    this.visualAnalysis = new VisualAnalysisService(
+      options.visionConfig,
+      (provider) => this.getDefaultBaseURL(provider),
+    );
 
     // AGENTS.md is loaded eagerly in streamChat via refreshForTask so it is
     // always available before the first provider request and before any prompt
@@ -520,6 +430,14 @@ export class duyaAgent {
     this.blockedDomains = options.blockedDomains ?? [];
     this.browserBackendMode = options.browserBackendMode ?? 'auto';
     this.researchMemoryRuntime = new ResearchMemory();
+
+    // Plan 315: bridge the legacy CompactionManager to the append-only
+    // timeline so compaction appends a checkpoint entry instead of mutating
+    // the in-memory history in place.
+    this.compactionController = new MessageCompactionController({
+      timeline: this.timeline,
+      compactionManager: this.compactionManager,
+    });
   }
 
   private getDefaultBaseURL(provider: 'anthropic' | 'openai' | 'ollama'): string {
@@ -543,86 +461,6 @@ export class duyaAgent {
     this._model = value;
     // Model id is read by _buildSystemPrompt → promptSystem.buildContext({ modelId: this.model })
     // on every turn, so no separate prompt-manager sync is needed here.
-  }
-
-  /**
-   * Analyze an image using the configured vision model.
-   * Returns text description of the image.
-   * Throws an error if vision is unavailable or the API call fails.
-   */
-  async analyzeImage(imageBase64: string, mediaType: string, customPrompt?: string): Promise<string> {
-    logger.debug('[duyaAgent] analyzeImage called', {
-      hasVisionClient: !!this.visionClient,
-      visionConfig: this.visionConfig,
-      imageBase64Length: imageBase64.length,
-      mediaType,
-      customPrompt: customPrompt?.substring(0, 100),
-    });
-
-    if (!this.visionClient) {
-      logger.warn('[duyaAgent] analyzeImage: No vision client configured');
-      throw new Error('Vision model is not configured. Please configure a vision model in Settings > Vision Model.');
-    }
-
-    const prompt = customPrompt || 'Please describe this image in detail. What do you see? Include any text, colors, shapes, objects, people, and the overall scene.';
-
-    const userMessage: Message = {
-      role: 'user',
-      content: [
-        { type: 'text', text: prompt },
-        {
-          type: 'image',
-          source: { type: 'base64', media_type: mediaType as ImageContent['source']['media_type'], data: imageBase64 },
-        },
-      ],
-    };
-
-    const result: string[] = [];
-    let lastError: string | null = null;
-    try {
-      logger.debug('[duyaAgent] Starting vision stream');
-      const stream = this.visionClient.streamChat([userMessage], {
-        maxTokens: 2048,
-        temperature: 0,
-      });
-
-      let eventCount = 0;
-      for await (const event of stream) {
-        eventCount++;
-        logger.debug(`[duyaAgent] Vision stream event: ${event.type} (${eventCount})`);
-        if (event.type === 'text') {
-          result.push(event.data);
-          logger.debug(`[duyaAgent] Vision text event: ${event.data?.substring(0, 100)}`);
-        }
-        if (event.type === 'error') {
-          lastError = event.data as string;
-          logger.debug(`[duyaAgent] Vision stream error event: ${lastError}`);
-          break;
-        }
-        if (event.type === 'done') {
-          logger.debug('[duyaAgent] Vision stream ended: done');
-          break;
-        }
-      }
-      logger.debug(`[duyaAgent] Vision stream finished, events: ${eventCount}`);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      logger.warn(`[duyaAgent] Vision analysis failed: ${errMsg}`);
-      throw new Error(`Vision model API error: ${errMsg}`);
-    }
-
-    if (lastError) {
-      throw new Error(`Vision model returned an error: ${lastError}`);
-    }
-
-    const analysis = result.join('').trim();
-    logger.info(`[duyaAgent] Vision analysis complete: ${analysis.length} chars`);
-
-    if (!analysis) {
-      throw new Error('Vision model returned empty analysis. The model may not support image input, or the image format may be unsupported.');
-    }
-
-    return analysis;
   }
 
   /**
@@ -695,26 +533,24 @@ export class duyaAgent {
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
-    let messages = this._resolveInitialMessages(prompt, options);
     const contextWindow =
       this.runtimeConfig?.modelCapabilities?.contextWindow &&
       this.runtimeConfig.modelCapabilities.contextWindow > 0
         ? this.runtimeConfig.modelCapabilities.contextWindow
         : DEFAULT_CONTEXT_WINDOW;
 
-    // Extract system-role messages from message history (compaction summaries,
-    // session memory, etc.) and merge into the system prompt.
-    // Anthropic API does not support system-role messages in the messages array;
-    // they must go through the separate `system` parameter. If left in the
-    // messages array, toAnthropicMessages skips them silently, dropping all
-    // compaction context and causing the agent to "forget" earlier turns.
-    //
-    // This extraction must also run after reactive compaction mid-stream,
-    // because compaction produces new system-role summary messages that would
-    // otherwise be silently dropped on the next provider request.
-    const extracted = this._extractSystemMessagesIntoPrompt(messages, systemPromptContent);
-    systemPromptContent = extracted.systemPromptContent;
-    messages = extracted.messages;
+    // Handle options.messages fallback (CLI / harness scenarios)
+    if (this.messages.length === 0 && options?.messages?.length) {
+      this.setMessages([...options.messages]);
+    }
+
+    // Plan 315: project the timeline to the model boundary. System content
+    // from legacy system messages and compaction reinjected context is
+    // extracted into PromptSegments and merged into the system prompt. The
+    // resulting messages array contains only user/assistant/tool roles.
+    const projected = this._projectModelMessages(systemPromptContent);
+    systemPromptContent = projected.systemPromptContent;
+    let messages = projected.messages;
 
     // === Plan 224 Phase 3+4: apply declarative mode modifiers ===
     // Modifier-paradigm modes (conductor, plan-task) inject tools,
@@ -807,6 +643,16 @@ export class duyaAgent {
     const seqIndex = Date.now();
     const runId = crypto.randomUUID();
 
+    // Deferred tool contexts collected from tool results during this
+    // streamChat call. They are injected into the provider payload on the
+    // next turn (transient runtime context) but never persisted to the
+    // durable history.
+    const deferredContexts: Array<{
+      toolUseId: string;
+      toolName: string;
+      promise: Promise<unknown>;
+    }> = [];
+
     // Track total elapsed time for the entire stream (including all turns and tool execution)
     const streamStartTime = Date.now();
 
@@ -894,19 +740,8 @@ export class duyaAgent {
         systemPromptContent += discoveredToolPromptSuffix;
       }
 
-      // Pick up background results that completed after a previous user-facing
-      // turn ended. This is deliberately non-blocking: unfinished agents stay
-      // in the background and their notification remains queued until ready.
-      const queuedBackgroundNotifications = drainBackgroundTaskNotifications(this.sessionId)
-      for (const xml of queuedBackgroundNotifications) {
-        messages.push({
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: xml,
-          timestamp: Date.now(),
-          metadata: { isTaskNotification: true },
-        })
-      }
+      // Background results that completed after a previous turn end are
+      // picked up at the mailbox checkpoint below, not here.
 
       // Only add user message on first turn (original prompt)
       // Subsequent turns are continuations after tool results, not new prompts
@@ -954,7 +789,7 @@ export class duyaAgent {
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
           } as Message;
-          messages.push(userMessage);
+          this._pushDurable(messages, userMessage);
           runtimePromptMessageId = userMessage.id ?? null;
         } else if (lastMessage) {
           lastMessage.seq_index = seqIndex;
@@ -992,7 +827,7 @@ export class duyaAgent {
             activeAgents: agentDefinitions,
             allAgents: agentDefinitions,
           },
-          analyzeImage: this.analyzeImage.bind(this),
+          analyzeImage: this.visualAnalysis.analyzeImage.bind(this.visualAnalysis),
           // Phase 2A worker closure: providerName -> internalKey
           // resolver. StreamingToolExecutor consults this for
           // every model-returned tool name. The closure is
@@ -1064,22 +899,23 @@ export class duyaAgent {
       messages = microCleanupMessages(messages);
 
       // Proactive context compaction before each LLM call
-      if (this.shouldCompact()) {
+      if (this.compactionController.shouldCompact()) {
         logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
         try {
-          const compactResult = await this.compact();
-          logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactResult.strategy}, removed=${compactResult.tokensRemoved} tokens, retained=${compactResult.tokensRetained} tokens`);
-          // Update messages reference since compact() replaces this.messages
-          messages = this.messages;
-          // Notify external listener so it can persist the compacted
-          // message list and update its baseline count.
-          this.onMessagesCompacted?.(this.messages.length);
-          // Re-extract system-role messages produced by compaction. Compaction
-          // summaries are role='system'; without this they would be silently
-          // dropped by toAnthropicMessages on the next provider request.
-          const reExtracted = this._extractSystemMessagesIntoPrompt(messages, systemPromptContent);
-          systemPromptContent = reExtracted.systemPromptContent;
-          messages = reExtracted.messages;
+          const compactEntry = await this.compactionController.compactProactive();
+          if (compactEntry) {
+            logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
+            // The controller appended a checkpoint entry to the timeline
+            // instead of mutating history in place; `this.messages` is a
+            // timeline-derived getter, so it already reflects the compaction.
+            // Notify external listener so it can persist the compacted
+            // message list and update its baseline count.
+            this.onMessagesCompacted?.(this.messages.length);
+            // Re-project model messages from the updated timeline.
+            const reProjected = this._projectModelMessages(systemPromptContent);
+            systemPromptContent = reProjected.systemPromptContent;
+            messages = reProjected.messages;
+          }
         } catch (compactError) {
           const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
@@ -1095,7 +931,7 @@ export class duyaAgent {
       );
       if (mailboxDecision.action === 'soft_stop') {
         const stopMessage = mailboxDecision.summary || 'Stopped as requested.';
-        messages.push({
+        this._pushDurable(messages, {
           id: crypto.randomUUID(),
           role: 'assistant',
           content: stopMessage,
@@ -1103,24 +939,14 @@ export class duyaAgent {
           duration_ms: Date.now() - streamStartTime,
           seq_index: seqIndex,
         });
-        this.messages = persistableMessages(messages);
-        this.sessionInfo.messageCount = this.messages.length;
-        this.sessionInfo.updatedAt = Date.now();
+        this._commitMessages();
         yield { type: 'text', data: stopMessage };
         yield { type: 'done', reason: 'completed' };
         return;
       }
-      if (mailboxDecision.action === 'hard_replace') {
-        const replacement = mailboxDecision.replacement || 'The user replaced the previous instruction.';
-        messages.push({
-          id: crypto.randomUUID(),
-          role: 'user',
-          content: `<runtime-user-replacement>\n${replacement}\n</runtime-user-replacement>`,
-          timestamp: Date.now(),
-          seq_index: seqIndex,
-          metadata: { mailboxRuntimeInstruction: true },
-        });
-      }
+      // hard_replace: the replacement runtime_context was already pushed by
+      // _claimMailboxAtCheckpoint; fall through to the LLM call with it in
+      // the message history.
 
       try {
         // Stream from LLM with FULL message history
@@ -1157,6 +983,11 @@ export class duyaAgent {
             });
           }
         }
+
+        // Inject transient runtime context (attachment text + deferred tool
+        // contexts) into the provider payload. These are never persisted to
+        // the durable history.
+        await this._injectRuntimeContext(llmMessages, options, deferredContexts);
         try {
           options?.onSystemPromptReady?.({
             systemPrompt: systemPromptContent,
@@ -1168,6 +999,11 @@ export class duyaAgent {
               input_schema,
             })),
             turn: turnCount,
+            // Cache plan fingerprint derived from the stable prefix (system
+            // prompt + tool surface). Stable across turns while the prompt is
+            // unchanged, so observers can detect a reachable provider cache
+            // breakpoint.
+            cachePlan: { fingerprint: computeCachePlanFingerprint(systemPromptContent, tools) },
           });
         } catch (error) {
           logger.warn('[Agent] System prompt observer failed; continuing without observer', { error });
@@ -1265,13 +1101,20 @@ export class duyaAgent {
             finalAssistantContent.push(...assistantContent);
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
-              messages.push({ id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
+              this._pushDurable(messages, { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
             }
 
             // Now get remaining tool results and add them after assistant message
             logger.debug(`[Agent] Turn ${turnCount}: entering getRemainingResults, needsFollowUp=${needsFollowUp}`);
             let toolResultMessageCount = 0;
             for await (const result of executor.getRemainingResults()) {
+              // Deferred tool context (e.g. a follow-up review payload) is
+              // surfaced here. It is injected into the provider payload on
+              // the next turn and never persisted to the durable history.
+              if (result.deferredContext) {
+                deferredContexts.push(result.deferredContext);
+                continue;
+              }
               if (result.message) {
                 // Check if this is an agent_progress message
                 const isAgentProgress = result.message.metadata?.type === 'agent_progress';
@@ -1301,7 +1144,7 @@ export class duyaAgent {
                   if (!result.message.id) {
                     result.message.id = crypto.randomUUID();
                   }
-                  messages.push(result.message);
+                  this._pushDurable(messages, result.message);
 
                   // Yield tool result event
                   let toolResultId = '';
@@ -1406,24 +1249,6 @@ export class duyaAgent {
             // place, so nothing to copy back here. The next turn reads the
             // same references via this.widgetStyleHistory / this.canvasFreshness.
 
-            // Drain completed background sub-agents and inject their
-            // <task-notification> XML envelopes (claude-code protocol).
-            // metadata.isTaskNotification lets the renderer hide these
-            // from the chat UI without relying on a string-prefix sniff.
-            const completedNotificationXml = drainBackgroundTaskNotifications(this.sessionId)
-            if (completedNotificationXml.length > 0) {
-              for (const xml of completedNotificationXml) {
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'user',
-                  content: xml,
-                  timestamp: Date.now(),
-                  metadata: { isTaskNotification: true },
-                })
-              }
-              needsFollowUp = true
-            }
-
             // Do NOT yield the LLM's 'done' event to the SSE client here.
             // In multi-turn conversations, the LLM client yields a 'done' event
             // at the end of each turn. Forwarding it would cause the client to
@@ -1470,10 +1295,8 @@ export class duyaAgent {
 
         // Check max turns limit
         if (turnCount >= maxTurns) {
-          // Update this.messages BEFORE yielding done event
-          this.messages = persistableMessages(messages);
-          this.sessionInfo.messageCount = this.messages.length;
-          this.sessionInfo.updatedAt = Date.now();
+          // Refresh sessionInfo counters BEFORE yielding done event
+          this._commitMessages();
 
           yield { type: 'done', reason: 'max_turns' };
           return;
@@ -1482,22 +1305,6 @@ export class duyaAgent {
         // If no tool_use blocks were emitted, we're done
         // Note: assistant message was already added in 'done' event handler
         if (!needsFollowUp) {
-          // Close the race between the last turn-boundary drain and finalizing
-          // the response, but never wait for agents that are still running.
-          const completedNotificationXml = drainBackgroundTaskNotifications(this.sessionId)
-          if (completedNotificationXml.length > 0) {
-            for (const xml of completedNotificationXml) {
-              messages.push({
-                id: crypto.randomUUID(),
-                role: 'user',
-                content: xml,
-                timestamp: Date.now(),
-                metadata: { isTaskNotification: true },
-              })
-            }
-            continue
-          }
-
           // A message can arrive while the model is producing its final text.
           // Re-check before finalising so in-run guidance is not limited to
           // tool-heavy flows that naturally create another model turn.
@@ -1508,25 +1315,17 @@ export class duyaAgent {
             'before_final_answer',
           );
           if (finalMailboxDecision.action === 'hard_replace') {
-            messages.push({
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: `<runtime-user-replacement>\n${finalMailboxDecision.replacement || 'The user replaced the previous instruction.'}\n</runtime-user-replacement>`,
-              timestamp: Date.now(),
-              seq_index: seqIndex,
-              metadata: { mailboxRuntimeInstruction: true },
-            });
+            // Replacement runtime_context was already pushed by
+            // _claimMailboxAtCheckpoint; loop to give the model a fresh turn.
             continue;
           }
           if (finalMailboxDecision.action === 'continue' && finalMailboxDecision.absorbed) {
             continue;
           }
 
-          // Update this.messages BEFORE yielding done event
+          // Refresh sessionInfo counters BEFORE yielding done event
           // so API route can retrieve the final state
-          this.messages = persistableMessages(messages);
-          this.sessionInfo.messageCount = this.messages.length;
-          this.sessionInfo.updatedAt = Date.now();
+          this._commitMessages();
 
           yield { type: 'done', reason: 'completed' };
           return;
@@ -1552,13 +1351,17 @@ export class duyaAgent {
             const triggerError = errorMessage.includes('prompt_too_long')
               ? 'prompt_too_long' as const
               : 'context_length_exceeded' as const;
-            const reactiveResult = await this.compactionManager.reactiveCompact(messages, triggerError);
-            messages = reactiveResult.messages;
-            logger.info(`[Agent] Turn ${turnCount}: Reactive compaction succeeded, strategy=${reactiveResult.strategy}, retained=${reactiveResult.tokensRetained} tokens`);
-            // Retry this turn with compacted messages
-            executor.discard();
-            turnCount--; // Decrement so the next iteration uses the same turn number
-            continue;
+            const compactEntry = await this.compactionController.compactReactive(triggerError);
+            if (compactEntry) {
+              logger.info(`[Agent] Turn ${turnCount}: Reactive compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
+              const reProjected = this._projectModelMessages(systemPromptContent);
+              systemPromptContent = reProjected.systemPromptContent;
+              messages = reProjected.messages;
+              // Retry this turn with compacted messages
+              executor.discard();
+              turnCount--; // Decrement so the next iteration uses the same turn number
+              continue;
+            }
           } catch (reactiveError) {
             const reactiveErrorMsg = reactiveError instanceof Error ? reactiveError.message : String(reactiveError);
             logger.error(`[Agent] Turn ${turnCount}: Reactive compaction failed: ${reactiveErrorMsg}`);
@@ -1583,10 +1386,14 @@ export class duyaAgent {
           }
         }
 
-        // Update this.messages BEFORE yielding error/done events
-        this.messages = persistableMessages(messages);
-        this.sessionInfo.messageCount = this.messages.length;
-        this.sessionInfo.updatedAt = Date.now();
+        // Reconcile the timeline with the cleaned working array so the
+        // incomplete assistant (removed above) is excluded from the durable
+        // projection. `this.messages` is now a timeline-derived getter, so
+        // the removal must be reflected in the timeline itself.
+        this.setMessages(persistableMessages(messages));
+
+        // Refresh sessionInfo counters BEFORE yielding error/done events
+        this._commitMessages();
 
         if (error instanceof Error && error.name === 'AbortError') {
           // Generate synthetic tool_results for any pending tool_use blocks
@@ -1606,7 +1413,7 @@ export class duyaAgent {
                   ))
                 );
                 if (!hasResult) {
-                  messages.push({
+                  this._pushDurable(messages, {
                     id: crypto.randomUUID(),
                     role: 'user',
                     content: [{
@@ -1634,10 +1441,8 @@ export class duyaAgent {
     }
 
     // User interrupted - executor already created in current turn
-    // Update this.messages BEFORE yielding done event
-    this.messages = persistableMessages(messages);
-    this.sessionInfo.messageCount = this.messages.length;
-    this.sessionInfo.updatedAt = Date.now();
+    // Refresh sessionInfo counters BEFORE yielding done event
+    this._commitMessages();
     yield { type: 'done', reason: 'aborted' };
   }
 
@@ -1649,6 +1454,108 @@ export class duyaAgent {
   // each concern out so the main loop reads as orchestration rather than
   // implementation. Helpers are private; they are not part of the public
   // surface and may be reorganized freely.
+
+  /**
+   * Refresh sessionInfo counters from the timeline. `this.messages` is a
+   * timeline-derived getter, so no array assignment happens here — the
+   * timeline is the single source of truth for the durable projection.
+   */
+  private _commitMessages(): void {
+    this.sessionInfo.messageCount = this.messages.length;
+    this.sessionInfo.updatedAt = Date.now();
+  }
+
+  /**
+   * Append a message to the timeline if not already present. O(1) via
+   * syncedMessageIds set. Called at every durable message creation site
+   * so the timeline is always current — no batch reverse sync needed.
+   */
+  private _appendMessageToTimeline(message: Message): void {
+    if (!message.id || this.syncedMessageIds.has(message.id)) return;
+    const index = this.timeline.snapshot().length;
+    const adapted = legacyMessageToAgentMessage(message, { index });
+    this.timeline.appendMessage({
+      type: 'message',
+      id: `${crypto.randomUUID()}:${index}`,
+      parentId: null,
+      createdAt: adapted.createdAt,
+      message: adapted,
+    });
+    this.syncedMessageIds.add(message.id);
+  }
+
+  /**
+   * Append a native runtime_context message to the timeline with dedup.
+   * For `source='attachment'`, dedup by attachmentIds metadata (the same
+   * set of attachments is not recorded twice). Returns true when the message
+   * was appended, false if it was deduplicated as already present.
+   */
+  private _appendRuntimeContextToTimeline(
+    message: RuntimeContextAgentMessage,
+  ): boolean {
+    if (!message.id || this.syncedMessageIds.has(message.id)) return false;
+    if (message.source === 'attachment') {
+      const ids = (message.metadata?.[
+        RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds as string
+      ] ?? []) as unknown[];
+      const attachmentIds = Array.isArray(ids)
+        ? ids.filter((x): x is string => typeof x === 'string')
+        : [];
+      if (attachmentIds.length > 0 && this._hasAttachmentRuntimeContext(attachmentIds)) {
+        return false;
+      }
+    }
+    this.timeline.appendMessage({
+      type: 'message',
+      id: `${crypto.randomUUID()}:${this.timeline.snapshot().length}`,
+      parentId: null,
+      createdAt: message.createdAt,
+      message: message as AgentMessage<LegacyCustomAgentMessage>,
+    });
+    this.syncedMessageIds.add(message.id);
+    // `this.messages` is a timeline-derived getter, so the appended entry is
+    // reflected automatically in the persistence output.
+    this.sessionInfo.messageCount = this.messages.length;
+    return true;
+  }
+
+  /**
+   * True when any attachment runtime_context entry in the current timeline
+   * carries every one of the supplied attachment IDs.
+   */
+  private _hasAttachmentRuntimeContext(attachmentIds: readonly string[]): boolean {
+    if (attachmentIds.length === 0) return false;
+    const snapshot = this.timeline.snapshot();
+    for (const entry of snapshot) {
+      if (entry.type !== 'message') continue;
+      const msg = entry.message as unknown as Record<string, unknown>;
+      if (msg.kind !== 'runtime_context') continue;
+      if ((msg as { source?: string }).source !== 'attachment') continue;
+      const md = (msg as { metadata?: Readonly<Record<string, unknown>> }).metadata;
+      const ids = (md?.[RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds as string] ?? []) as unknown[];
+      const existingIds = Array.isArray(ids)
+        ? ids.filter((x): x is string => typeof x === 'string')
+        : [];
+      if (
+        existingIds.length === attachmentIds.length &&
+        existingIds.every((id) => attachmentIds.includes(id))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Push a durable message to both the working array and the timeline.
+   * Transient messages (mailbox, background notifications) should use
+   * `messages.push()` directly — they are filtered out by persistableMessages
+   * and never reach the timeline.
+   */
+  private _pushDurable(messages: Message[], message: Message): void {
+    messages.push(message);
+    this._appendMessageToTimeline(message);
+  }
 
   private async _claimMailboxAtCheckpoint(
     runId: string,
@@ -1693,7 +1600,11 @@ export class duyaAgent {
 
     const abort = claim.rows.find((row) => row.kind === 'abort_and_replace');
     if (abort) {
-      await applyRow(abort, claim.rows.indexOf(abort), 'hard replacement requested before model turn');
+      const abortIndex = claim.rows.indexOf(abort);
+      await applyRow(abort, abortIndex, 'hard replacement requested before model turn');
+      const ctx = adaptMailboxHardReplacement(abort, claim.claimTokens[abortIndex], { seqIndex });
+      const projected = projectRuntimeContextToProviderMessage(ctx);
+      if (projected) messages.push(projected);
       return { action: 'hard_replace', replacement: abort.content.trim() };
     }
 
@@ -1708,21 +1619,32 @@ export class duyaAgent {
       return { action: 'continue', absorbed: false };
     }
 
+    // Segregate terminal background-task notifications from user guidance rows
+    // so each follows its own adapter. Background notifications keep the raw
+    // <task-notification> XML envelope (sub-agents / background bash), while
+    // followup/correction/constraint rows collapse into a guidance block.
+    const guidanceRows = usableRows.filter((row) => row.kind !== 'background_notification');
+    const backgroundNotificationRows = usableRows.filter((row) => row.kind === 'background_notification');
+
     for (const row of usableRows) {
       await applyRow(row, claim.rows.indexOf(row), 'absorbed as runtime instruction before model turn');
     }
 
-    messages.push({
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: formatMailboxRuntimeInstruction(usableRows),
-      timestamp: Date.now(),
-      seq_index: seqIndex,
-      metadata: {
-        mailboxRuntimeInstruction: true,
-        mailboxRowIds: usableRows.map((row) => row.id),
-      },
-    });
+    for (const row of backgroundNotificationRows) {
+      const ctx = adaptBackgroundNotification(row, { seqIndex });
+      const projected = projectRuntimeContextToProviderMessage(ctx);
+      if (projected) messages.push(projected);
+    }
+
+    if (guidanceRows.length > 0) {
+      // Align claim tokens with the guidance (non-empty) rows.
+      const guidanceTokens = guidanceRows.map((row) => claim.claimTokens[claim.rows.indexOf(row)]);
+      const adapted = adaptMailboxRows(guidanceRows, guidanceTokens, { seqIndex });
+      for (const ctx of adapted) {
+        const projected = projectRuntimeContextToProviderMessage(ctx);
+        if (projected) messages.push(projected);
+      }
+    }
 
     logger.info(`[AgentMailbox] absorbed ${usableRows.length} row(s) at ${checkpoint}`);
     return { action: 'continue', absorbed: true };
@@ -2052,42 +1974,69 @@ export class duyaAgent {
   }
 
   /**
-   * Pick the initial message history for this turn.
+   * Inject runtime context at each LLM turn.
    *
-   * `this.messages` is the source of truth — `getOrCreateAgent` is supposed
-   * to have reloaded it from the DB before `streamChat` is called. We only
-   * fall back to `options.messages` when `this.messages` is empty (which
-   * should not happen in the normal UI flow but can happen in CLI / harness
-   * scenarios).
+   * Two categories, with different persistence semantics:
    *
-   * The `_prompt` parameter is intentionally ignored: it represents the
-   * user's *current* turn input, which is appended later by the loop, not
-   * part of the history to replay. It is kept in the signature so the
-   * helper can be extended in the future (e.g. prepending a system note
-   * derived from the prompt) without changing the call site.
+   *   1. Attachment text context (from `options.attachments`) via the shared
+   *      `adaptAttachmentContext` adapter. These are **durable**: appended to
+   *      the timeline (so they persist across restarts) as hidden
+   *      runtime_context messages. The timeline is deduplicated by attachment
+   *      IDs so a re-injection after reload does not duplicate.
+   *
+   *   2. Deferred tool contexts collected from tool results during this
+   *      streamChat call, wrapped in a `<deferred-tool-context>` block.
+   *      These remain **transient**: appended only to `llmMessages` so they
+   *      never land in the durable history.
    */
-  private _resolveInitialMessages(
-    _prompt: string | MessageContent[],
-    options?: ChatOptions,
-  ): Message[] {
-    logger.info(
-      `[Agent] streamChat start: this.messages has ${this.messages.length} messages`
-    );
-    if (this.messages.length > 0) {
-      logger.info(
-        `[Agent] Using this.messages as source of truth (${this.messages.length} messages)`
-      );
-      return this.messages;
+  private async _injectRuntimeContext(
+    llmMessages: Message[],
+    options: ChatOptions | undefined,
+    deferredContexts: Array<{
+      toolUseId: string;
+      toolName: string;
+      promise: Promise<unknown>;
+    }>,
+  ): Promise<void> {
+    const attachments = (options as ChatOptions & { attachments?: FileAttachment[] } | undefined)
+      ?.attachments;
+    if (attachments && attachments.length > 0) {
+      // Persist pasted-text attachments that exceed the inline limit to
+      // `~/.duya/attachments/` and rewrite them as file pointers so the model
+      // reads the full content on demand instead of blowing the input window.
+      const prepared = await persistLargePastedAttachments(attachments);
+      const ctx = adaptAttachmentContext(prepared);
+      if (ctx) {
+        // Append as a durable timeline entry (hidden runtime_context).
+        // `_appendRuntimeContextToTimeline` skips when the same attachment IDs
+        // are already present, so reloads don't duplicate.
+        this._appendRuntimeContextToTimeline(ctx);
+        const projected = projectRuntimeContextToProviderMessage(ctx);
+        if (projected) llmMessages.push(projected);
+      }
     }
-    if (options?.messages && options.messages.length > 0) {
-      this.messages = [...options.messages];
-      logger.info(
-        `[Agent] Fallback: using options.messages (${this.messages.length} messages)`
+
+    if (deferredContexts.length > 0) {
+      const pending = deferredContexts.splice(0);
+      const settled = await Promise.allSettled(
+        pending.map(async (deferred) => {
+          const value = await deferred.promise;
+          const content =
+            typeof value === 'string' ? value : JSON.stringify(value);
+          return `<deferred-tool-context>\n${content}\n</deferred-tool-context>`;
+        }),
       );
-      return this.messages;
+      for (const item of settled) {
+        if (item.status !== 'fulfilled') continue;
+        llmMessages.push({
+          id: crypto.randomUUID(),
+          role: 'user',
+          content: item.value,
+          timestamp: Date.now(),
+          metadata: { runtimeContext: true, isDeferredToolContext: true },
+        });
+      }
     }
-    logger.info(`[Agent] Edge case: both empty, starting fresh`);
-    return this.messages;
   }
 
   /**
@@ -2207,20 +2156,73 @@ export class duyaAgent {
   }
 
   /**
-   * 获取消息历史
+   * 获取消息历史 (legacy interface)
+   * Returns the durable, persistence-ready legacy Message[] shape that the
+   * desktop renderer expects. Hidden runtime context is excluded.
    */
   getMessages(): readonly Message[] {
     return this.messages;
   }
 
+  /**
+   * Set the entire message history from persistence. Converts the legacy
+   * Message[] to timeline entries via the legacy adapter.
+   */
   setMessages(messages: Message[]): void {
-    this.messages = [...messages];
-    this.sessionInfo.messageCount = messages.length;
+    // A Plan 315 checkpoint marker is a durable projection of a CompactionEntry,
+    // not a real history message. Reconstruct the entry so `buildAgentContext`
+    // can restore the compaction boundary and reinjected system context after a
+    // restart; otherwise the summary and system context would be lost. The entry
+    // is appended AFTER the retained messages to match the in-memory order
+    // (compaction follows the messages it rewrites), so `buildAgentContext`
+    // finds `firstKeptIndex < compactionIndex` and emits the summary message.
+    let compaction: CompactionEntry | undefined;
+    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.syncedMessageIds = new Set();
+    for (const [index, message] of messages.entries()) {
+      const checkpoint = getLegacyCompactionCheckpoint(message);
+      if (checkpoint) {
+        compaction = {
+          type: 'compaction',
+          id: checkpoint.id,
+          parentId: null,
+          createdAt: checkpoint.createdAt,
+          summary: extractTextFromContent(message.content),
+          firstKeptMessageId: checkpoint.firstKeptMessageId,
+          compactedMessageIds: [...checkpoint.compactedMessageIds],
+          tokensBefore: checkpoint.tokensBefore,
+          tokensAfter: checkpoint.tokensAfter,
+          strategy: checkpoint.strategy,
+          previousCompactionId: checkpoint.previousCompactionId,
+          reinjectedSystemMessages: checkpoint.reinjectedSystemMessages,
+        };
+        continue;
+      }
+      const adapted = legacyMessageToAgentMessage(message, { index });
+      this.timeline.appendMessage({
+        type: 'message',
+        id: `${crypto.randomUUID()}:${index}`,
+        parentId: null,
+        createdAt: adapted.createdAt,
+        message: adapted,
+      });
+      if (message.id) this.syncedMessageIds.add(message.id);
+    }
+    if (compaction) {
+      this.timeline.appendCompaction(compaction);
+    }
+    // `this.messages` is a timeline-derived getter, so it reflects the
+    // rebuilt timeline automatically.
+    this.sessionInfo.messageCount = this.messages.length;
     this.sessionInfo.updatedAt = Date.now();
   }
 
+  /**
+   * Clear all messages from the timeline and projected list.
+   */
   clearMessages(): void {
-    this.messages = [];
+    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.syncedMessageIds = new Set();
     this.sessionInfo.updatedAt = Date.now();
   }
 
@@ -2456,58 +2458,72 @@ export class duyaAgent {
    * 添加用户消息
    */
   addMessage(message: Message): void {
-    this.messages.push({
+    const withTimestamp: Message = {
       ...message,
       timestamp: message.timestamp ?? Date.now(),
+    };
+    const index = this.timeline.snapshot().length;
+    const adapted = legacyMessageToAgentMessage(withTimestamp, { index });
+    this.timeline.appendMessage({
+      type: 'message',
+      id: `${crypto.randomUUID()}:${index}`,
+      parentId: null,
+      createdAt: adapted.createdAt,
+      message: adapted,
     });
+    this.syncedMessageIds.add(withTimestamp.id!);
+    this.sessionInfo.messageCount = this.messages.length;
+    this.sessionInfo.updatedAt = Date.now();
   }
 
   /**
    * 检查是否应该进行压缩
    */
   shouldCompact(): boolean {
-    this.compactionManager.updateContextTokens(this.messages);
-    return this.compactionManager.shouldCompact();
+    return this.compactionController.shouldCompact();
   }
 
   /**
-   * Extract system-role messages from the message history and merge them into
-   * the system prompt. Anthropic API does not allow system-role messages in
-   * the `messages` array; they must go through the separate `system` parameter.
+   * Project the timeline to the model boundary using `projectModelMessages`.
    *
-   * Called twice per streamChat:
-   *   1. At the streamChat entry (before the turn loop).
-   *   2. After any compaction (proactive or reactive) inside the turn loop,
-   *      because compaction produces new system-role summary messages that
-   *      would otherwise be silently dropped by toAnthropicMessages.
+   * Replaces `_extractSystemMessagesIntoPrompt` with the Plan 315 model
+   * boundary projection. System content from legacy system messages and
+   * compaction reinjected context is extracted into PromptSegments, then
+   * merged into the system prompt. The resulting messages array contains
+   * only user/assistant/tool roles — no system messages.
    *
-   * Returns the updated systemPromptContent and the filtered message list.
-   * Also mutates `this.messages` so the caller's `this.messages` stays in sync.
+   * Returns the projected model messages; it does not mutate `this.messages`,
+   * which remains the durable persistence projection derived from the
+   * timeline.
    */
-  _extractSystemMessagesIntoPrompt(
-    messages: Message[],
+  private _projectModelMessages(
     systemPromptContent: string,
   ): { systemPromptContent: string; messages: Message[] } {
-    const systemContentParts: string[] = [];
-    const nonSystemMessages: Message[] = [];
-    for (const msg of messages) {
-      if (msg.role === 'system') {
-        systemContentParts.push(
-          typeof msg.content === 'string' ? msg.content : extractTextFromContent(msg.content),
-        );
-      } else {
-        nonSystemMessages.push(msg);
-      }
-    }
-    if (systemContentParts.length === 0) {
-      return { systemPromptContent, messages };
-    }
-    const merged = systemPromptContent
-      ? systemPromptContent + '\n\n---\n\n## Conversation Context\n\n' + systemContentParts.join('\n\n---\n\n')
-      : systemContentParts.join('\n\n---\n\n');
-    this.messages = nonSystemMessages;
-    logger.info(`[Agent] Extracted ${systemContentParts.length} system messages into system prompt`);
-    return { systemPromptContent: merged, messages: nonSystemMessages };
+    const snapshot = this.timeline.snapshot();
+    const context = buildAgentContext(snapshot);
+
+    // Extract system segments from legacy system messages and compaction
+    const systemSegments = extractLegacySystemSegments(
+      context.messages,
+      context.compaction,
+    );
+
+    // Project to model boundary: { system, messages }
+    const projection = projectModelMessages(context.messages, { systemSegments });
+
+    // Merge projected system with existing system prompt
+    const systemFromProjection = typeof projection.system === 'string'
+      ? projection.system
+      : '';
+    const merged = systemPromptContent && systemFromProjection
+      ? `${systemPromptContent}\n\n---\n\n## Conversation Context\n\n${systemFromProjection}`
+      : (systemPromptContent || systemFromProjection);
+
+    logger.info(
+      `[Agent] projectModelMessages: ${context.messages.length} agent messages → ${projection.messages.length} model messages, ${systemSegments.length} system segments`,
+    );
+
+    return { systemPromptContent: merged, messages: [...projection.messages] };
   }
 
   /**
@@ -2516,110 +2532,6 @@ export class duyaAgent {
   getContextStats() {
     this.compactionManager.updateContextTokens(this.messages);
     return this.compactionManager.getStats();
-  }
-
-  /**
-   * Compress message history to save context window space.
-   *
-   * Uses an LLM to summarize older messages, preserving the system message
-   * and the most recent turns, and folding the middle.
-   *
-   * @deprecated Prefer `compact()`. The new `CompactionManager` supports
-   * multiple strategies (micro / session_memory / snip / reactive) and is
-   * wired into `streamChat`'s proactive (pre-turn) and reactive (mid-turn
-   * error recovery) paths. This method is kept only for external callers
-   * that depend on its specific return shape (`{ messagesCompressed,
-   * estimatedTokensSaved }`); new code should call `compact()` instead.
-   * Will be removed in the next minor release. See Plan 211 Phase E.
-   */
-  async compressHistory(options?: {
-    maxMessagesToKeep?: number;
-    model?: string;
-  }): Promise<{ messagesCompressed: number; estimatedTokensSaved: number }> {
-    logger.warn('compressHistory is deprecated, use compactionManager.compact instead');
-    if (this.messages.length === 0) {
-      return { messagesCompressed: 0, estimatedTokensSaved: 0 };
-    }
-
-    const maxMessagesToKeep = options?.maxMessagesToKeep ?? 50;
-
-    // Call LLM-based compactHistory with the agent's LLM summarizer
-    const result = await compactHistory(this.messages, {
-      summarize: async (text: string, prompt: string): Promise<string> => {
-        const summaryMessages: Message[] = [
-          {
-            role: 'user',
-            content: text,
-          },
-        ];
-
-        const chunks: string[] = [];
-        const stream = this.llmClient.streamChat(summaryMessages, {
-          systemPrompt: prompt,
-          maxTokens: 4096,
-          temperature: 0.3,
-          signal: new AbortController().signal,
-        });
-
-        for await (const event of stream) {
-          if (event.type === 'text') {
-            chunks.push(event.data);
-          }
-          if (event.type === 'done' || event.type === 'error') {
-            break;
-          }
-        }
-
-        return chunks.join('').trim();
-      },
-      maxMessagesToKeep,
-    });
-
-    // If no compression happened (conversation was small enough), return early
-    if (result.messagesCompressed === 0) {
-      return {
-        messagesCompressed: 0,
-        estimatedTokensSaved: 0,
-      };
-    }
-
-    // Reconstruct messages: system messages + summary + recent messages
-    const SYSTEM_MESSAGE_PREFIXES = ['system', 'instruction', 'You are', 'You are a', 'This session is being continued'];
-
-    const systemMessages: Message[] = [];
-    const conversationMessages: Message[] = [];
-
-    for (const msg of this.messages) {
-      const isSystem =
-        msg.role === 'system' ||
-        SYSTEM_MESSAGE_PREFIXES.some((prefix) =>
-          typeof msg.content === 'string' && msg.content.startsWith(prefix)
-        );
-
-      if (isSystem) {
-        systemMessages.push(msg);
-      } else {
-        conversationMessages.push(msg);
-      }
-    }
-
-    const recentMessages = conversationMessages.slice(-maxMessagesToKeep);
-
-    // Build compressed history: system + LLM summary + recent
-    const summaryMessage: Message = {
-      role: 'system',
-      content: result.summary,
-      timestamp: Date.now(),
-    };
-
-    this.messages = [...systemMessages, summaryMessage, ...recentMessages];
-    this.sessionInfo.messageCount = this.messages.length;
-    this.sessionInfo.updatedAt = Date.now();
-
-    return {
-      messagesCompressed: result.messagesCompressed,
-      estimatedTokensSaved: result.estimatedTokensSaved,
-    };
   }
 
   /**
@@ -2635,48 +2547,20 @@ export class duyaAgent {
       return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0 };
     }
 
-    // Set up summarizer if we have an LLM client
-    if (!this.compactionManager) {
+    const compactEntry = await this.compactionController.compactProactive(options);
+    if (!compactEntry) {
       return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0 };
     }
 
-    // Execute compaction
-    const result = await this.compactionManager.compact(this.messages, options);
-
-    // Update messages
-    this.messages = result.messages;
+    // `this.messages` is a timeline-derived getter; the checkpoint entry
+    // appended by the controller is reflected automatically.
     this.sessionInfo.messageCount = this.messages.length;
     this.sessionInfo.updatedAt = Date.now();
 
     return {
-      strategy: result.strategy,
-      tokensRemoved: result.tokensRemoved,
-      tokensRetained: result.tokensRetained,
+      strategy: compactEntry.strategy,
+      tokensRemoved: compactEntry.tokensBefore - (compactEntry.tokensAfter ?? 0),
+      tokensRetained: compactEntry.tokensAfter ?? 0,
     };
   }
-}
-
-/**
- * Build the identity block prepended to the system prompt when an agent profile is applied.
- * This tells the LLM clearly what role it should play.
- *
- * When the profile provides `identityPrompt`, that single concise
- * sentence is used verbatim — it lets a preset express a precise role
- * (e.g. the gateway relay agent) without the generic name/description
- * scaffolding. Otherwise fall back to the generic block.
- */
-function buildAgentIdentityBlock(profile: AgentProfile): string {
-  if (profile.identityPrompt) {
-    return profile.identityPrompt;
-  }
-
-  const lines: string[] = [
-    `You are a "${profile.name}" agent.`,
-  ];
-
-  if (profile.description) {
-    lines.push(`Your role: ${profile.description}.`);
-  }
-
-  return lines.join('\n');
 }

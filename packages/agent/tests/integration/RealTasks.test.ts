@@ -22,12 +22,15 @@ import { tmpdir } from 'node:os';
 // Mock LLM client
 const mockStreamChat = vi.fn();
 
-vi.mock('../../src/llm/index.js', () => ({
-  createLLMClient: vi.fn(() => ({
-    streamChat: mockStreamChat,
-  })),
-  inferProvider: vi.fn(() => 'anthropic'),
-}));
+vi.mock('@duya/ai', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@duya/ai')>();
+  return {
+    ...mod,
+    createAIClient: vi.fn(() => ({ streamChat: mockStreamChat })),
+    createAIClientWithRetry: vi.fn(() => ({ streamChat: mockStreamChat })),
+    inferProvider: vi.fn(() => 'anthropic'),
+  };
+});
 
 import { duyaAgent } from '../../src/index.js';
 

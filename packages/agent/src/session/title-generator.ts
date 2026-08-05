@@ -9,7 +9,7 @@
  * 5. Fail-safe: Any error falls back to intelligent heuristic extraction, user never notices
  */
 
-import type { LLMClient } from '../llm/index.js';
+import type { AIClient } from '@duya/ai';
 import type { Message, MessageContent } from '../types.js';
 
 const MAX_INPUT_LENGTH = 300;
@@ -451,7 +451,7 @@ export function generateHeuristicTitle(messages: readonly Message[]): string | n
  */
 export async function generateSessionTitle(
   messages: readonly Message[],
-  llmClient?: LLMClient,
+  llmClient?: AIClient,
   signal?: AbortSignal,
   sessionId?: string,
 ): Promise<{ title: string | null }> {

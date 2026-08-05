@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHasPermissionsToUseTool } from '../../../src/permissions/permissions.js';
 import type { ToolPermissionContext } from '../../../src/permissions/types.js';
-import type { LLMClient } from '../../../src/llm/base.js';
+import type { AIClient } from '@duya/ai';
 
 function permissionContext(): ToolPermissionContext {
   return {
@@ -14,7 +14,7 @@ function permissionContext(): ToolPermissionContext {
   };
 }
 
-function checkContext(llmClient?: LLMClient) {
+function checkContext(llmClient?: AIClient) {
   return {
     getAppState: () => ({
       toolPermissionContext: permissionContext(),
@@ -32,7 +32,7 @@ describe('auto mode low-risk local permissions', () => {
       generate: vi.fn(async () => {
         throw new Error('classifier should not be called');
       }),
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     const decision = await createHasPermissionsToUseTool()(
       'Read',
@@ -50,7 +50,7 @@ describe('auto mode low-risk local permissions', () => {
       generate: vi.fn(async () => {
         throw new Error('classifier should not be called');
       }),
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     const decision = await createHasPermissionsToUseTool()(
       'Bash',
@@ -68,7 +68,7 @@ describe('auto mode low-risk local permissions', () => {
       generate: vi.fn(async () => {
         throw new Error('classifier should not be called');
       }),
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     const decision = await createHasPermissionsToUseTool()(
       'powershell',
@@ -86,7 +86,7 @@ describe('auto mode low-risk local permissions', () => {
       generate: vi.fn(async () => {
         throw new Error('classifier should not be called');
       }),
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     const decision = await createHasPermissionsToUseTool()(
       'browser',
@@ -104,7 +104,7 @@ describe('auto mode low-risk local permissions', () => {
       generate: vi.fn(async () => {
         throw new Error('classifier should not be called');
       }),
-    } as unknown as LLMClient;
+    } as unknown as AIClient;
 
     const decision = await createHasPermissionsToUseTool()(
       'browser',

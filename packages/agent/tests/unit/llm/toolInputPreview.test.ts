@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractToolInputPreview } from '../../../src/llm/tool-input-preview.js';
+import { extractToolInputPreview } from '../../../src/utils/tool-input-preview.js';
 
 describe('extractToolInputPreview', () => {
   it('extracts the file path before the streamed JSON object is complete', () => {

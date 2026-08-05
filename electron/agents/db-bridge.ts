@@ -2488,7 +2488,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           SELECT id, priority, created_at, status, claim_attempts
           FROM agent_mailbox
           WHERE session_id = @sessionId
-            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
+            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
@@ -2521,7 +2521,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           WHERE session_id = @sessionId
             AND priority = @priority
             AND created_at <= @windowEnd
-            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace'))
+            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)

@@ -17,7 +17,7 @@ const agentRequire = createRequire(
 );
 const Database = agentRequire('better-sqlite3') as typeof import('better-sqlite3');
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
-import type { LLMClient } from '../../../packages/agent/src/llm/base.js';
+import type { AIClient } from '@duya/ai';
 import { migration0001 } from '../../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../../memory-state/migrations/0002_lease_stage1.sql';
 import { migration0003 } from '../../memory-state/migrations/0003_outbox.sql';
@@ -60,7 +60,7 @@ interface CurationFixture {
   configRoot: string;
   stagingRoot: string;
   snapshotRoot: string;
-  llmClient: LLMClient;
+  llmClient: AIClient;
   cleanup: () => void;
 }
 
@@ -95,7 +95,7 @@ function createCurationFixture(): CurationFixture {
     );
   `);
 
-  const llmClient: LLMClient = {
+  const llmClient: AIClient = {
     streamChat: vi.fn().mockImplementation(async function* () {
       yield { type: 'text', data: '{"job_status":"succeeded_no_output","rollout_slug":"noop"}' };
       yield { type: 'done' };

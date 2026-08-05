@@ -5,7 +5,7 @@ import * as path from 'path';
 import { loadFixtures, type CanaryFixture } from '../stage1_canary';
 import { runCanary, type CanaryResult } from '../stage1_canary';
 import { STAGE1_HARD_CONTRACT, assembleStage1Prompt } from '../../../packages/agent/src/memory-rollout/stage1_prompt_loader';
-import type { LLMClient } from '../../../packages/agent/src/llm/base';
+import type { AIClient } from '@duya/ai';
 import { promotePolicy } from '../stage1_canary';
 import { triggerPostCurationCanary } from '../stage1_canary';
 
@@ -88,13 +88,13 @@ describe('loadFixtures', () => {
   });
 });
 
-function makeMockLLM(responseJson: string): LLMClient {
-  const mock: Partial<LLMClient> = {
+function makeMockLLM(responseJson: string): AIClient {
+  const mock: Partial<AIClient> = {
     async *streamChat(_messages, _options) {
       yield { type: 'text', data: responseJson };
     },
   };
-  return mock as LLMClient;
+  return mock as AIClient;
 }
 
 const VALID_RESPONSE_WITH_PREFERENCE = JSON.stringify({

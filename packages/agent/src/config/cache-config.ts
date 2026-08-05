@@ -4,7 +4,7 @@
  * Centralized configuration for all caching layers.
  */
 
-import type { CacheRetention } from '../llm/prompt-caching.js'
+import type { CacheRetention } from '@duya/ai'
 import type { CacheMonitorConfig } from '../observability/cache-monitor.js'
 
 /**

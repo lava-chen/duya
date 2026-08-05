@@ -18,8 +18,8 @@ import type { MessageRow } from '../../session/db.js';
 import { SESSION_SEARCH_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
 import { getDb, getMessages } from '../../session/db.js';
-import { createLLMClient } from '../../llm/index.js';
-import type { LLMClient } from '../../llm/base.js';
+import { createAIClient } from '@duya/ai';
+import type { AIClient } from '@duya/ai';
 import { findModelCompat } from '@duya/ai';
 import type { ApiFormat } from '@duya/ai';
 import type BetterSqlite3 from 'better-sqlite3';
@@ -1144,7 +1144,7 @@ export class SessionSearchTool extends BaseTool {
   /**
    * Create LLM client based on configured provider
    */
-  private createLLMClient(): LLMClient {
+  private createLLMClient(): AIClient {
     if (!this.summaryLLMConfig) {
       throw new Error('Summary LLM not configured');
     }
@@ -1156,7 +1156,7 @@ export class SessionSearchTool extends BaseTool {
     const summaryApiFormat: ApiFormat = this.summaryLLMConfig.provider === 'anthropic' ? 'anthropic' : 'openai-chat';
     const summaryModelCompat = findModelCompat(summaryApiFormat, this.summaryLLMConfig.model);
 
-    return createLLMClient(this.summaryLLMConfig.provider, {
+    return createAIClient({
       apiKey: this.summaryLLMConfig.apiKey,
       model: this.summaryLLMConfig.model,
       baseURL: this.summaryLLMConfig.baseURL || '',
