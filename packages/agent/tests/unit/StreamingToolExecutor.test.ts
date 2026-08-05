@@ -182,6 +182,56 @@ describe('StreamingToolExecutor', () => {
       expect(results.length).toBe(1);
       expect(results[0]).toContain('Permission denied');
     });
+
+    it('synthesises a tool_result for sibling-error-cancelled tools with no results', () => {
+      // A queued tool cancelled by a sibling_error abort never starts, so it
+      // has no results. It must still yield a synthetic tool_result so every
+      // tool_use stays paired (avoids "tool_use without tool_result" 400s).
+      registry.register(
+        { name: 'hang', description: 'Never resolves', input_schema: {} },
+        { execute: () => new Promise(() => {}) }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-c', name: 'hang', input: {} });
+
+      const tool = executor.getTools()[0];
+      tool.status = 'cancelled';
+      tool.results = undefined;
+      // Simulate a sibling tool error aborting this queued tool.
+      (executor as unknown as { hasErrored: boolean }).hasErrored = true;
+
+      const yielded = [...executor.getCompletedResults()];
+      const synthetic = yielded.filter(
+        (u) => u.message?.tool_call_id === 'use-c'
+      );
+
+      expect(synthetic.length).toBe(1);
+      expect(synthetic[0].message!.role).toBe('tool');
+      expect(String(synthetic[0].message!.content)).toContain(
+        'Cancelled: parallel tool call'
+      );
+    });
+
+    it('does not synthesise a tool_result for discard-cancelled tools', () => {
+      // discard() is handled by upstream agent cleanup; synthesising here
+      // would leave an orphan tool_result. Only sibling_error is covered.
+      registry.register(
+        { name: 'hang', description: 'Never resolves', input_schema: {} },
+        { execute: () => new Promise(() => {}) }
+      );
+
+      const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+      executor.addTool({ id: 'use-d', name: 'hang', input: {} });
+
+      const tool = executor.getTools()[0];
+      tool.status = 'cancelled';
+      tool.results = undefined;
+      executor.discard();
+
+      const yielded = [...executor.getCompletedResults()];
+      expect(yielded.filter((u) => u.message?.tool_call_id === 'use-d')).toHaveLength(0);
+    });
   });
 
   describe('discard', () => {

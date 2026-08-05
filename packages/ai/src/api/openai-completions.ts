@@ -151,6 +151,90 @@ function getBudgetForEffort(effort: string): number {
 // =============================================================================
 
 /**
+ * Remove orphaned tool_use / tool_result pairs from the intermediate
+ * Message[] before OpenAI conversion.
+ *
+ * OpenAI-compatible endpoints (MiniMax etc.) reject an assistant message that
+ * carries tool_calls whose results are missing from the immediately-following
+ * message (HTTP 400, e.g. "messages.1.3: tool_use ids were found without
+ * tool_result blocks immediately after"). A history can lose a tool_result
+ * legitimately — an interrupted round, a dropped tool_call_id, or an async
+ * result that never landed — and the OpenAI path has no self-healing (unlike
+ * the Anthropic path in anthropic-messages.ts). This repairs the pair both
+ * ways: tool_use blocks without a result are dropped (with a text fallback so
+ * the assistant turn is never empty), and tool_result messages without a
+ * matching tool_use are dropped.
+ */
+export function repairToolPairing(messages: Message[]): Message[] {
+  const toolUseIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'tool_use') toolUseIds.add(block.id);
+      }
+    }
+    if (m.role === 'tool') {
+      if (m.tool_call_id) toolResultIds.add(m.tool_call_id);
+      if (Array.isArray(m.content)) {
+        for (const block of m.content) {
+          if (block.type === 'tool_result') toolResultIds.add(block.tool_use_id);
+        }
+      }
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      for (const block of m.content) {
+        if (block.type === 'tool_result') toolResultIds.add(block.tool_use_id);
+      }
+    }
+  }
+
+  const result: Message[] = [];
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.content)) {
+      // Drop orphan tool_use blocks; keep the turn non-empty with text.
+      const filtered = m.content.filter(
+        (b) => b.type !== 'tool_use' || toolResultIds.has(b.id),
+      );
+      result.push(
+        filtered.length === 0
+          ? { ...m, content: [{ type: 'text', text: '(tool call removed)' }] }
+          : { ...m, content: filtered },
+      );
+      continue;
+    }
+    if (m.role === 'tool') {
+      // An empty or unmatched tool_call_id can never be paired; drop the
+      // whole message so no dangling tool message reaches the API.
+      if (!m.tool_call_id || !toolUseIds.has(m.tool_call_id)) continue;
+      if (Array.isArray(m.content)) {
+        const filtered = m.content.filter(
+          (b) => b.type !== 'tool_result' || toolUseIds.has(b.tool_use_id),
+        );
+        if (filtered.length > 0) result.push({ ...m, content: filtered });
+      } else {
+        result.push(m);
+      }
+      continue;
+    }
+    if (m.role === 'user' && Array.isArray(m.content)) {
+      const filtered = m.content.filter(
+        (b) => b.type !== 'tool_result' || toolUseIds.has(b.tool_use_id),
+      );
+      result.push(
+        filtered.length === 0
+          ? { ...m, content: [{ type: 'text', text: '(tool result removed)' }] }
+          : { ...m, content: filtered },
+      );
+      continue;
+    }
+    result.push(m);
+  }
+  return result;
+}
+
+/**
  * Convert duya Message[] to OpenAI ChatCompletionMessageParam[].
  *
  * System messages are skipped (they are passed separately via the systemPrompt
@@ -162,6 +246,9 @@ function getBudgetForEffort(effort: string): number {
 function toOpenAIMessages(
   messages: Message[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
+  // Repair orphaned tool_use/tool_result pairs before conversion so the
+  // request never carries a tool call without its result (provider 400).
+  messages = repairToolPairing(messages);
   const result: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
   for (const msg of messages) {

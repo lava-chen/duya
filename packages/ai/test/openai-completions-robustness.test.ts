@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { synthesizeRuntimeToolId } from '../src/api/openai-completions.js';
+import {
+  repairToolPairing,
+  synthesizeRuntimeToolId,
+} from '../src/api/openai-completions.js';
+import type { Message } from '../src/types.js';
 import { withIdleTimeout } from '../src/utils/idle-timeout.js';
 
 describe('synthesizeRuntimeToolId', () => {
@@ -99,5 +103,91 @@ describe('withIdleTimeout', () => {
       values.push(v);
     }
     expect(values).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('repairToolPairing', () => {
+  it('drops orphan tool_use blocks whose result is missing', () => {
+    const input: Message[] = [
+      { role: 'user', content: 'Run tools' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will.' },
+          { type: 'tool_use', id: 'call_00_A', name: 'bash', input: { command: 'a' } },
+        ],
+      },
+    ];
+    const out = repairToolPairing(input);
+    const assistant = out[1];
+    const content = Array.isArray(assistant.content) ? assistant.content : [];
+    expect(content.some((b) => b.type === 'tool_use')).toBe(false);
+    // The assistant turn is kept non-empty with a text fallback.
+    expect(content.some((b) => b.type === 'text')).toBe(true);
+  });
+
+  it('keeps intact tool_use/tool_result pairs unchanged', () => {
+    const input: Message[] = [
+      { role: 'user', content: 'Run it' },
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_00_A', name: 'bash', input: { command: 'a' } }],
+      },
+      { role: 'tool', tool_call_id: 'call_00_A', content: 'ok' },
+    ];
+    const out = repairToolPairing(input);
+    expect(out).toHaveLength(3);
+  });
+
+  it('drops orphan tool_result messages without a matching tool_use', () => {
+    const input: Message[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: [{ type: 'text', text: 'hello' }] },
+      { role: 'tool', tool_call_id: 'call_missing', content: 'stale result' },
+    ];
+    const out = repairToolPairing(input);
+    expect(out.some((m) => m.role === 'tool')).toBe(false);
+    expect(out).toHaveLength(2);
+  });
+
+  it('keeps only the tool_use blocks that have a result when some results are missing', () => {
+    const input: Message[] = [
+      { role: 'user', content: 'do stuff' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_00_A', name: 'bash', input: { command: 'a' } },
+          { type: 'tool_use', id: 'call_01_B', name: 'bash', input: { command: 'b' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_00_A', content: 'result-a' },
+    ];
+    const out = repairToolPairing(input);
+    const assistant = out[1];
+    const content = Array.isArray(assistant.content) ? assistant.content : [];
+    const kept = content.filter((b) => b.type === 'tool_use').map((b) => b.id);
+    expect(kept).toEqual(['call_00_A']);
+  });
+
+  it('reproduces and repairs the reported 400 shape (assistant tool_use without result)', () => {
+    // Mirrors the user-reported error: "messages.1.3: tool_use ids were found
+    // without tool_result blocks immediately after: call_00_..., call_01_..."
+    const input: Message[] = [
+      { role: 'user', content: 'Run tools' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will run the tools.' },
+          { type: 'tool_use', id: 'call_00_Tp5nrJfZvUk2duytm9xM4482', name: 'bash', input: { command: 'a' } },
+          { type: 'tool_use', id: 'call_01_V3LR6pZYfPEc8hsY4eyi8351', name: 'bash', input: { command: 'b' } },
+        ],
+      },
+    ];
+    const tinyOut = repairToolPairing(input);
+    const assistant = tinyOut[1];
+    const content = Array.isArray(assistant.content) ? assistant.content : [];
+    expect(content.some((b) => b.type === 'tool_use')).toBe(false);
+    // No dangling tool messages remain.
+    expect(tinyOut.some((m) => m.role === 'tool')).toBe(false);
   });
 });
