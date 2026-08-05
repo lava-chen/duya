@@ -37,6 +37,7 @@ import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { checkCacheEligibility, applyCacheControl } from '../utils/prompt-caching.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
+import { ThinkTagParser } from '../utils/think-tag-parser.js';
 
 // =============================================================================
 // Constants
@@ -973,11 +974,33 @@ export function resolveAnthropicThinking(
  * tag parsing, idle timeout) that belong in the agent layer, not here.
  * This implementation performs the pure protocol→AssistantMessage mapping.
  */
-function parseAnthropicEvent(
+export function parseAnthropicEvent(
   event: Anthropic.MessageStreamEvent,
   assistantMsg: AssistantMessage,
-  state: { currentBlockIdx: number },
-): AssistantMessageEvent {
+  state: { currentBlockIdx: number; isMiniMax: boolean; thinkParser?: ThinkTagParser },
+): AssistantMessageEvent | AssistantMessageEvent[] {
+  // Helpers to lazily create the current content block. MiniMax sometimes
+  // emits deltas (especially thinking_delta) without a preceding
+  // content_block_start, so we synthesize the block on demand rather than
+  // dropping the delta.
+  function ensureThinkingBlock(): ThinkingContent {
+    const block = assistantMsg.content[state.currentBlockIdx];
+    if (block && block.type === 'thinking') return block;
+    state.currentBlockIdx = assistantMsg.content.length;
+    const newBlock: ThinkingContent = { type: 'thinking', thinking: '', thinkingSignature: '' };
+    assistantMsg.content.push(newBlock);
+    return newBlock;
+  }
+
+  function ensureTextBlock(): TextContent {
+    const block = assistantMsg.content[state.currentBlockIdx];
+    if (block && block.type === 'text') return block;
+    state.currentBlockIdx = assistantMsg.content.length;
+    const newBlock: TextContent = { type: 'text', text: '' };
+    assistantMsg.content.push(newBlock);
+    return newBlock;
+  }
+
   switch (event.type) {
     case 'message_start': {
       const msg = event.message;
@@ -1051,25 +1074,51 @@ function parseAnthropicEvent(
 
     case 'content_block_delta': {
       const delta = event.delta;
-      const block = assistantMsg.content[state.currentBlockIdx];
 
       if (delta.type === 'thinking_delta') {
-        if (block && block.type === 'thinking') {
-          block.thinking += delta.thinking;
-          return { type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: delta.thinking, partial: assistantMsg };
+        // MiniMax sometimes emits thinking_delta without a preceding
+        // content_block_start for the thinking block. Synthesize the block
+        // on demand so reasoning is not dropped.
+        const block = ensureThinkingBlock();
+        block.thinking += delta.thinking;
+        return { type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: delta.thinking, partial: assistantMsg };
+      }
+
+      if (delta.type === 'signature_delta') {
+        const block = ensureThinkingBlock();
+        block.thinkingSignature = (block.thinkingSignature || '') + delta.signature;
+        return { type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: '', partial: assistantMsg };
+      }
+
+      if (delta.type === 'text_delta') {
+        const textDelta = typeof delta.text === 'string' ? delta.text : String(delta.text);
+
+        // MiniMax Anthropic-compatible endpoint occasionally wraps reasoning
+        // in <thinking>...</thinking> inside text deltas. Split the stream
+        // into thinking/text channels so the UI can render reasoning.
+        if (state.isMiniMax && state.thinkParser) {
+          const { thinking, text } = state.thinkParser.feed(textDelta);
+          const events: AssistantMessageEvent[] = [];
+          if (thinking) {
+            ensureThinkingBlock().thinking += thinking;
+            events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: thinking, partial: assistantMsg });
+          }
+          if (text) {
+            ensureTextBlock().text += text;
+            events.push({ type: 'text_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+          }
+          return events.length > 0 ? events : { type: 'start', partial: assistantMsg };
         }
-      } else if (delta.type === 'signature_delta') {
-        if (block && block.type === 'thinking') {
-          block.thinkingSignature = (block.thinkingSignature || '') + delta.signature;
-          return { type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: '', partial: assistantMsg };
-        }
-      } else if (delta.type === 'text_delta') {
+
+        const block = assistantMsg.content[state.currentBlockIdx];
         if (block && block.type === 'text') {
-          const textDelta = typeof delta.text === 'string' ? delta.text : String(delta.text);
           block.text += textDelta;
           return { type: 'text_delta', contentIndex: state.currentBlockIdx, delta: textDelta, partial: assistantMsg };
         }
-      } else if (delta.type === 'input_json_delta') {
+      }
+
+      if (delta.type === 'input_json_delta') {
+        const block = assistantMsg.content[state.currentBlockIdx];
         if (block && block.type === 'tool_use') {
           // Accumulate JSON string; parse at content_block_stop.
           const partial = typeof delta.partial_json === 'string'
@@ -1613,7 +1662,11 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         stopReason: 'completed',
         timestamp: Date.now(),
       };
-      const state = { currentBlockIdx: -1 };
+      const state = {
+        currentBlockIdx: -1,
+        isMiniMax,
+        thinkParser: isMiniMax ? new ThinkTagParser() : undefined,
+      };
 
       // 6.5. Emit parameter diagnostics before the stream starts.
       const diagnostics = collectDiagnostics(model, {
@@ -1685,21 +1738,49 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // `done`, usage tracking may be attributed to the wrong turn.
       let pendingDone: SSEEvent | null = null;
       for await (const event of withIdleTimeout<Anthropic.MessageStreamEvent>(stream)) {
-        const internalEvent = parseAnthropicEvent(event, assistantMsg, state);
-        if (internalEvent.type === 'done') {
-          // Yield usage first, then the done event.
-          if (internalEvent.message.usage) {
-            yield { type: 'result', data: internalEvent.message.usage };
+        const internalEvents = parseAnthropicEvent(event, assistantMsg, state);
+        const events = Array.isArray(internalEvents) ? internalEvents : [internalEvents];
+        for (const internalEvent of events) {
+          if (internalEvent.type === 'done') {
+            // Yield usage first, then the done event.
+            if (internalEvent.message.usage) {
+              yield { type: 'result', data: internalEvent.message.usage };
+            }
+            const doneSse = emitSSE(internalEvent);
+            if (doneSse) {
+              pendingDone = doneSse;
+            }
+          } else {
+            const sse = emitSSE(internalEvent);
+            if (sse) yield sse;
           }
-          const doneSse = emitSSE(internalEvent);
-          if (doneSse) {
-            pendingDone = doneSse;
-          }
-        } else {
-          const sse = emitSSE(internalEvent);
-          if (sse) yield sse;
         }
       }
+
+      // Flush any remaining <think>/<thinking> tag buffer from MiniMax text
+      // deltas so trailing reasoning or text is not lost.
+      if (state.thinkParser) {
+        const { thinking, text } = state.thinkParser.flush();
+        if (thinking) {
+          const block = assistantMsg.content[state.currentBlockIdx];
+          if (block && block.type === 'thinking') {
+            block.thinking += thinking;
+          } else {
+            assistantMsg.content.push({ type: 'thinking', thinking, thinkingSignature: '' });
+          }
+          yield { type: 'thinking', data: thinking };
+        }
+        if (text) {
+          const block = assistantMsg.content[state.currentBlockIdx];
+          if (block && block.type === 'text') {
+            block.text += text;
+          } else {
+            assistantMsg.content.push({ type: 'text', text });
+          }
+          yield { type: 'text', data: text };
+        }
+      }
+
       if (pendingDone) {
         yield pendingDone;
       }

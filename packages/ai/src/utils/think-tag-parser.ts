@@ -18,8 +18,29 @@ export interface ThinkTagParseResult {
   text: string;
 }
 
-const OPEN_TAG = '<think>';
-const CLOSE_TAG = '</think>';
+// MiniMax emits reasoning wrapped in <thinking>...</thinking>, while
+// DeepSeek/Qwen use <think>...</think>. Support both so callers don't
+// need to know which provider produced the stream.
+const OPEN_TAGS = ['<think>', '<thinking>'];
+const CLOSE_TAGS = ['</think>', '</thinking>'];
+
+function findMatchingPrefix(buffer: string, candidates: string[]): string | null {
+  for (const candidate of candidates) {
+    if (buffer.startsWith(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function anyCandidateStartsWith(buffer: string, candidates: string[]): boolean {
+  for (const candidate of candidates) {
+    if (candidate.startsWith(buffer)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export class ThinkTagParser {
   private state: ParseState = 'text';
@@ -27,8 +48,9 @@ export class ThinkTagParser {
   private thinkingAccum: string = '';
   private textAccum: string = '';
   // When true, thinking content without a '<' is buffered until the next
-  // '<' (potential closing tag) or flush(). Set when <think> is consumed
-  // as a whole tag within a single feed() call (not split across feeds).
+  // '<' (potential closing tag) or flush(). Set when an opening tag is
+  // consumed as a whole tag within a single feed() call (not split across
+  // feeds).
   private deferThinking: boolean = false;
 
   /**
@@ -55,30 +77,34 @@ export class ThinkTagParser {
           this.buffer = this.buffer.slice(tagIdx);
         } else {
           // tagIdx === 0 — buffer starts with '<'
-          if (this.buffer.startsWith(OPEN_TAG)) {
+          const openTag = findMatchingPrefix(this.buffer, OPEN_TAGS);
+          if (openTag) {
             this.state = 'thinking';
-            this.buffer = this.buffer.slice(OPEN_TAG.length);
+            this.buffer = this.buffer.slice(openTag.length);
             // If the '<' was carried over from a previous feed() (split
             // tag), emit thinking content immediately (streaming). If the
-            // entire '<think>' arrived in this chunk (whole tag), defer
+            // entire opening tag arrived in this chunk (whole tag), defer
             // emission until a '<' or flush() to avoid emitting content
             // that may be followed by a closing tag boundary.
             this.deferThinking = !hadBufferAtStart;
-          } else if (this.buffer.startsWith(CLOSE_TAG)) {
-            // Stray closing tag in text mode — emit as text
-            textOut.push(CLOSE_TAG);
-            this.buffer = this.buffer.slice(CLOSE_TAG.length);
-          } else {
-            // Partial tag or not a think tag.
-            // Check if buffer could be a prefix of OPEN_TAG or CLOSE_TAG.
-            if (OPEN_TAG.startsWith(this.buffer) || CLOSE_TAG.startsWith(this.buffer)) {
-              // Wait for more data
-              break;
-            }
-            // Not a think tag — emit the '<' as text
-            textOut.push('<');
-            this.buffer = this.buffer.slice(1);
+            continue;
           }
+          const closeTag = findMatchingPrefix(this.buffer, CLOSE_TAGS);
+          if (closeTag) {
+            // Stray closing tag in text mode — emit as text
+            textOut.push(closeTag);
+            this.buffer = this.buffer.slice(closeTag.length);
+            continue;
+          }
+          // Partial tag or not a think tag.
+          // Check if buffer could be a prefix of any known tag.
+          if (anyCandidateStartsWith(this.buffer, [...OPEN_TAGS, ...CLOSE_TAGS])) {
+            // Wait for more data
+            break;
+          }
+          // Not a think tag — emit the '<' as text
+          textOut.push('<');
+          this.buffer = this.buffer.slice(1);
         }
       } else {
         // state === 'thinking'
@@ -97,23 +123,27 @@ export class ThinkTagParser {
           this.deferThinking = false;
         } else {
           // tagIdx === 0 — buffer starts with '<'
-          if (this.buffer.startsWith(CLOSE_TAG)) {
+          const closeTag = findMatchingPrefix(this.buffer, CLOSE_TAGS);
+          if (closeTag) {
             this.state = 'text';
-            this.buffer = this.buffer.slice(CLOSE_TAG.length);
+            this.buffer = this.buffer.slice(closeTag.length);
             this.deferThinking = false;
-          } else if (this.buffer.startsWith(OPEN_TAG)) {
-            // Nested opening tag in thinking mode — emit as thinking
-            thinkingOut.push(OPEN_TAG);
-            this.buffer = this.buffer.slice(OPEN_TAG.length);
-            this.deferThinking = false;
-          } else {
-            if (CLOSE_TAG.startsWith(this.buffer) || OPEN_TAG.startsWith(this.buffer)) {
-              break;
-            }
-            thinkingOut.push('<');
-            this.buffer = this.buffer.slice(1);
-            this.deferThinking = false;
+            continue;
           }
+          const openTag = findMatchingPrefix(this.buffer, OPEN_TAGS);
+          if (openTag) {
+            // Nested opening tag in thinking mode — emit as thinking
+            thinkingOut.push(openTag);
+            this.buffer = this.buffer.slice(openTag.length);
+            this.deferThinking = false;
+            continue;
+          }
+          if (anyCandidateStartsWith(this.buffer, [...OPEN_TAGS, ...CLOSE_TAGS])) {
+            break;
+          }
+          thinkingOut.push('<');
+          this.buffer = this.buffer.slice(1);
+          this.deferThinking = false;
         }
       }
     }

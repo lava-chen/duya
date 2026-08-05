@@ -113,6 +113,14 @@ export interface ToolResult {
    */
   pendingExtraResult?: Promise<{ result: string; is_error?: boolean }>;
   /**
+   * Optional deferred context associated with a tool result. When present,
+   * StreamingToolExecutor surfaces it as a `deferredContext` update so the
+   * agent can inject it as transient runtime context on the next provider
+   * turn (never persisted to the durable history). Resolves to a string or
+   * JSON-serializable value (e.g. a follow-up review payload).
+   */
+  pendingContext?: Promise<unknown>;
+  /**
    * Inline image attachments for multimodal main models. When present,
    * StreamingToolExecutor builds the tool_result content as a
    * `MessageContent[]` array ([text, ...ImageContent]) instead of a plain

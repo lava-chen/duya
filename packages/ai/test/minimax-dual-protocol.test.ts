@@ -5,9 +5,9 @@
  * thinking wire-shapes:
  *  - Anthropic preset (minimax-anthropic.ts): forceAdaptiveThinking drives
  *    { type: 'adaptive' } via resolveAnthropicThinking.
- *  - OpenAI preset (minimax-openai.ts): reasoning-content format is passive —
- *    resolveOpenAIThinking returns undefined and reasoning arrives in the
- *    reasoning_content field of the response.
+ *  - OpenAI preset (minimax-openai.ts): think-tag-fallback format is passive —
+ *    resolveOpenAIThinking returns undefined and reasoning arrives inside
+ *    <think>...</think> tags in the content field of the response.
  *
  * These tests verify the capability flags are mutually exclusive and that
  * each resolver produces the contract-correct shape for the corresponding
@@ -32,8 +32,8 @@ describe('MiniMax M3 dual-protocol presets', () => {
       expect(minimaxAnthropic.compat?.openAIThinkingFormat).toBeUndefined();
     });
 
-    it('MiniMax OpenAI preset has openAIThinkingFormat: "reasoning-content"', () => {
-      expect(minimaxOpenAI.compat?.openAIThinkingFormat).toBe('reasoning-content');
+    it('MiniMax OpenAI preset has openAIThinkingFormat: "think-tag-fallback"', () => {
+      expect(minimaxOpenAI.compat?.openAIThinkingFormat).toBe('think-tag-fallback');
     });
 
     it('MiniMax OpenAI preset has NO forceAdaptiveThinking', () => {
@@ -90,8 +90,8 @@ describe('MiniMax M3 dual-protocol presets', () => {
   });
 
   describe('resolveOpenAIThinking with MiniMax OpenAI preset', () => {
-    // reasoning-content format is passive: no request parameter is sent;
-    // reasoning arrives in the reasoning_content field of the response.
+    // think-tag-fallback format is passive: no request parameter is sent;
+    // reasoning is parsed from <think>...</think> tags in the content field.
     const efforts = ['low', 'medium', 'high', 'max'];
 
     it('returns undefined for "off"', () => {
@@ -103,23 +103,23 @@ describe('MiniMax M3 dual-protocol presets', () => {
     });
 
     for (const effort of efforts) {
-      it(`returns undefined for "${effort}" (reasoning-content is passive)`, () => {
+      it(`returns undefined for "${effort}" (think-tag-fallback is passive)`, () => {
         expect(resolveOpenAIThinking(minimaxOpenAI, effort)).toBeUndefined();
       });
     }
 
     it('returns undefined for "minimal" (not in thinkingLevelMap but accepted by resolver)', () => {
       // resolveOpenAIThinking accepts any effort string; minimal maps to
-      // 'low' in EFFORT_MAP, but reasoning-content still returns undefined.
+      // 'low' in EFFORT_MAP, but think-tag-fallback still returns undefined.
       expect(resolveOpenAIThinking(minimaxOpenAI, 'minimal')).toBeUndefined();
     });
 
-    it('returns undefined for "xhigh" (maps to high, but reasoning-content still passive)', () => {
+    it('returns undefined for "xhigh" (maps to high, but think-tag-fallback still passive)', () => {
       expect(resolveOpenAIThinking(minimaxOpenAI, 'xhigh')).toBeUndefined();
     });
 
     it('never emits a reasoning_effort / enable_thinking / thinking parameter', () => {
-      // The reasoning-content branch must not produce any of the other
+      // The think-tag-fallback branch must not produce any of the other
       // format-specific wire shapes.
       for (const effort of efforts) {
         const result = resolveOpenAIThinking(minimaxOpenAI, effort);
@@ -142,7 +142,7 @@ describe('MiniMax M3 dual-protocol presets', () => {
 
     it('resolveOpenAIThinking ignores forceAdaptiveThinking and uses openAIThinkingFormat', () => {
       // The OpenAI resolver only reads compat.openAIThinkingFormat.
-      // reasoning-content → undefined regardless of effort.
+      // think-tag-fallback → undefined regardless of effort.
       const result = resolveOpenAIThinking(minimaxOpenAI, 'high');
       expect(result).toBeUndefined();
     });
