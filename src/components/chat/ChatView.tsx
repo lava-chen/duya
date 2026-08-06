@@ -748,7 +748,11 @@ export function ChatView({
         const queuedRow = await sendMailbox({
           sessionId,
           content,
-          kind: 'followup',
+          // Default in-run followups are queued: they are absorbed right
+          // before the agent finalises (before_final_answer). Pressing
+          // "Guide" in the mailbox bubble flips the row to kind=followup for
+          // immediate injection at before_model_turn.
+          kind: 'queued',
           submittedDuringRunId: sessionId,
           attachments: files,
         });

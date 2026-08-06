@@ -10,18 +10,19 @@
  *     -> projectPersistenceMessages (projectors)     -> durable Message[]
  *
  * The durable projection is what reaches `messageDb.add/append/replace`.
- * Transient/hidden runtime context must never appear in the durable output,
- * and provider state, thinking signatures, attachments, token usage, and
- * seq_index must survive the round-trip losslessly.
+ * Every message persists (no transient category); runtime context is hidden
+ * at the transcript boundary, not dropped. Provider state, thinking
+ * signatures, attachments, token usage, and seq_index must survive the
+ * round-trip losslessly.
  */
 
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../../src/types.js';
 import { messageRowToMessage, type MessageRow } from '../../src/session/db.js';
 import {
-  legacyMessageToAgentMessage,
-  legacyMessagesToAgentMessages,
-} from '../../src/message/legacy-message-adapter.js';
+  ingestMessage,
+  ingestMessages,
+} from '../../src/message/message-factories.js';
 import {
   getLegacyCompactionCheckpoint,
   projectPersistenceMessages,
@@ -34,7 +35,7 @@ import {
 // runs inside `DuyaAgent.getMessages()` through
 // `projectTimelinePersistenceMessages`.
 function projectDurableMessages(messages: readonly Message[]): Message[] {
-  const agentMessages = legacyMessagesToAgentMessages(messages);
+  const agentMessages = ingestMessages(messages);
   return projectPersistenceMessages(agentMessages);
 }
 
@@ -71,7 +72,7 @@ function makeRow(overrides: Partial<MessageRow> & Pick<MessageRow, 'id' | 'role'
 
 describe('DB row -> Agent -> legacy persistence round-trip', () => {
   it('round-trips a compaction checkpoint through msg_type and tool_input', () => {
-    const retained = legacyMessageToAgentMessage({
+    const retained = ingestMessage({
       id: 'retained-user',
       role: 'user',
       content: 'continue from here',
@@ -223,7 +224,7 @@ describe('DB row -> Agent -> legacy persistence round-trip', () => {
     });
   });
 
-  it('filters out transient runtime context (mailbox, task notifications) from the durable projection', () => {
+  it('persists every runtime context message (mailbox, task notifications) at the durable projection', () => {
     const rows: MessageRow[] = [
       makeRow({
         id: 'user-1',
@@ -231,7 +232,7 @@ describe('DB row -> Agent -> legacy persistence round-trip', () => {
         content: 'Do the task',
         seq_index: 0,
       }),
-      // Mailbox instruction — transient, must not reach messageDb.
+      // Mailbox instruction — persisted durably (no transient category).
       makeRow({
         id: 'mailbox-1',
         role: 'user',
@@ -239,7 +240,7 @@ describe('DB row -> Agent -> legacy persistence round-trip', () => {
         msg_type: 'mailbox',
         seq_index: 1,
       }),
-      // Background task notification — transient, must not reach messageDb.
+      // Background task notification — persisted durably at hidden visibility.
       makeRow({
         id: 'task-1',
         role: 'user',
@@ -258,10 +259,14 @@ describe('DB row -> Agent -> legacy persistence round-trip', () => {
     const legacyMessages = rows.map((row) => messageRowToMessage(row));
     const durable = projectDurableMessages(legacyMessages);
 
-    // Only durable messages survive: user-1 and assistant-1.
-    expect(durable.map((m) => m.id)).toEqual(['user-1', 'assistant-1']);
-    expect(durable.map((m) => m.id)).not.toContain('mailbox-1');
-    expect(durable.map((m) => m.id)).not.toContain('task-1');
+    // Every message survives the durable projection in order; runtime context
+    // is hidden at the transcript boundary, not dropped from persistence.
+    expect(durable.map((m) => m.id)).toEqual([
+      'user-1',
+      'mailbox-1',
+      'task-1',
+      'assistant-1',
+    ]);
   });
 
   it('preserves compaction summaries and boundaries as durable legacy messages', () => {

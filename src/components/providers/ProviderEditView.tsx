@@ -168,7 +168,12 @@ export function ProviderEditView() {
   const isEdit = !!editProvider;
 
   const initialEnabled = useMemo(() => {
-    if (!editProvider) return [];
+    if (!editProvider) {
+      // For new providers, seed enabled models from the preset's
+      // catalog defaults so the user sees them immediately without
+      // needing to fetch from the API first.
+      return preset?.defaultModels?.map((m) => m.modelId) ?? [];
+    }
     try {
       const opts =
         typeof editProvider.options === 'string'
@@ -181,7 +186,7 @@ export function ProviderEditView() {
     } catch {
       return [];
     }
-  }, [editProvider]);
+  }, [editProvider, preset]);
 
   const initialCustom = useMemo(() => {
     if (!editProvider) return [];
@@ -238,6 +243,18 @@ export function ProviderEditView() {
     };
   }, [editProvider?.id]);
 
+  // Catalog default models for the selected preset, mapped to
+  // FetchedModel shape so they seed the model list immediately.
+  const presetModels = useMemo<FetchedModel[]>(
+    () =>
+      (preset?.defaultModels ?? []).map((m) => ({
+        id: m.modelId,
+        name: m.displayName,
+        ownedBy: 'preset',
+      })),
+    [preset],
+  );
+
   // ── Hook state ──
   const modelSelection = useModelSelection({ initialEnabled });
   const apiKeyState = useApiKeyState({ apiKey: editProvider?.apiKey ?? '' });
@@ -277,6 +294,10 @@ export function ProviderEditView() {
     initialEnabled,
     initialCustomModels: initialCustom,
     initialContextWindows,
+    // Seed the model list with catalog defaults so the user
+    // sees available models immediately without needing to
+    // configure API key + fetch first.
+    presetModels,
   });
 
   useEffect(() => {

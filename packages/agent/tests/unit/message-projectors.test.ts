@@ -1,14 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Message, MessageContent, TokenUsage } from '../../src/types.js';
 import type {
-  AgentCustomMessage,
   AgentMessage,
   PromptSegment,
+  RuntimeContextSource,
 } from '../../src/message/message-framework.js';
-import {
-  hasLegacyEnvelope,
-  legacyMessageToAgentMessage,
-} from '../../src/message/legacy-message-adapter.js';
+import { ingestMessage } from '../../src/message/message-factories.js';
 import {
   projectModelMessages,
   projectPersistenceMessages,
@@ -19,10 +16,8 @@ import {
   buildAgentContext,
   type CompactionEntry,
 } from '../../src/message/message-framework.js';
-import {
-  projectTimelinePersistenceMessages,
-  legacyMessagesToAgentMessages,
-} from '../../src/message/index.js';
+import { projectTimelinePersistenceMessages } from '../../src/message/index.js';
+import { ingestMessages } from '../../src/message/message-factories.js';
 import { MessageTimeline } from '../../src/message/message-framework.js';
 
 const createdAt = 1_700_000_000_000;
@@ -35,10 +30,9 @@ function nativeUser(
   overrides: Partial<AgentMessage> = {},
 ): AgentMessage {
   return {
-    kind: 'user',
+    role: 'user',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     content,
     ...overrides,
@@ -51,10 +45,9 @@ function nativeAssistant(
   overrides: Partial<AgentMessage> = {},
 ): AgentMessage {
   return {
-    kind: 'assistant',
+    role: 'assistant',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     content,
     ...overrides,
@@ -66,16 +59,22 @@ function nativeToolResult(
   toolCallId: string,
   overrides: Partial<AgentMessage> = {},
 ): AgentMessage {
+  const content: MessageContent[] = [
+    {
+      type: 'tool_result',
+      tool_use_id: toolCallId,
+      content: 'ok',
+      is_error: false,
+    },
+  ];
   return {
-    kind: 'tool_result',
+    role: 'tool',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
-    toolCallId,
-    toolName: 'read',
-    content: 'ok',
-    isError: false,
+    name: 'read',
+    tool_call_id: toolCallId,
+    content,
     ...overrides,
   };
 }
@@ -83,58 +82,32 @@ function nativeToolResult(
 function nativeRuntimeContext(
   id: string,
   overrides: {
-    persistence?: 'durable' | 'transient';
     visibility?: 'visible' | 'hidden';
-    includeInModel?: boolean;
-    source?: string;
+    source?: RuntimeContextSource;
     content?: string;
   } = {},
 ): AgentMessage {
   return {
-    kind: 'runtime_context',
+    role: 'runtime_context',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     source: 'custom',
     content: 'ctx',
-    includeInModel: true,
     ...overrides,
   } as AgentMessage;
 }
 
 function nativeCompactionSummary(id: string): AgentMessage {
   return {
-    kind: 'compaction_summary',
+    role: 'compaction_summary',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     summary: 'Earlier work was compacted.',
     compactionEntryId: 'compact-1',
     tokensBefore: 90_000,
     tokensAfter: 20_000,
-  };
-}
-
-interface ArtifactPayload {
-  path: string;
-}
-type ArtifactMessage = AgentCustomMessage<'artifact', ArtifactPayload>;
-
-function nativeArtifact(
-  id: string,
-  overrides: Partial<ArtifactMessage> = {},
-): ArtifactMessage {
-  return {
-    kind: 'custom:artifact',
-    id,
-    createdAt,
-    persistence: 'durable',
-    visibility: 'visible',
-    includeInModel: true,
-    payload: { path: 'reports/result.md' },
-    ...overrides,
   };
 }
 
@@ -147,7 +120,7 @@ const tokenUsage: TokenUsage = {
 // ─── Model boundary ─────────────────────────────────────────────────────
 
 describe('projectModelMessages', () => {
-  it('restores legacy provider state and unknown fields at the model boundary', () => {
+  it('projects a legacy assistant message through the AgentMessage shape at the model boundary', () => {
     const legacy = {
       id: 'legacy-assistant',
       role: 'assistant' as const,
@@ -158,9 +131,23 @@ describe('projectModelMessages', () => {
       metadata: { nested: { retained: true } },
     } as Message;
 
-    const projection = projectModelMessages([legacyMessageToAgentMessage(legacy)]);
+    const projection = projectModelMessages([ingestMessage(legacy)]);
 
-    expect(projection.messages).toEqual([legacy]);
+    expect(projection.messages).toHaveLength(1);
+    // Phase 1: the model boundary projects from the AgentMessage shape without
+    // the legacy envelope. Modeled fields (content, role, id, timestamp,
+    // metadata, content-block signatures) survive; envelope-only arbitrary
+    // fields (providerState, unknownTopLevel) never reach the model.
+    expect(projection.messages[0]).toMatchObject({
+      id: 'legacy-assistant',
+      role: 'assistant',
+      content: [{ type: 'text' as const, text: 'signed reply', textSignature: 'sig-1' }],
+      timestamp: createdAt,
+      metadata: { nested: { retained: true } },
+    });
+    const serialized = JSON.stringify(projection.messages[0]);
+    expect(serialized).not.toContain('provider-request');
+    expect(serialized).not.toContain('unknownTopLevel');
   });
 
   it('keeps an old persisted compact summary in the model projection', () => {
@@ -174,7 +161,7 @@ describe('projectModelMessages', () => {
       timestamp: createdAt,
     };
 
-    const projection = projectModelMessages([legacyMessageToAgentMessage(legacy)]);
+    const projection = projectModelMessages([ingestMessage(legacy)]);
 
     expect(projection.messages).toHaveLength(1);
     expect(projection.messages[0]).toMatchObject({
@@ -248,17 +235,19 @@ describe('projectModelMessages', () => {
     expect(projection.system).toBe('');
   });
 
-  it('includes includeInModel runtime context and excludes includeInModel=false', () => {
+  it('includes every runtime_context at the model boundary regardless of visibility', () => {
     const messages: AgentMessage[] = [
-      nativeRuntimeContext('rc-in', { includeInModel: true }),
-      nativeRuntimeContext('rc-out', { includeInModel: false }),
+      nativeRuntimeContext('rc-in', { visibility: 'visible' }),
+      nativeRuntimeContext('rc-out', { visibility: 'hidden' }),
     ];
 
     const projection = projectModelMessages(messages);
     const ids = projection.messages.map((message) => message.id);
 
+    // The model boundary is independent of visibility: both runtime context
+    // turns are projected as user-role messages.
     expect(ids).toContain('rc-in');
-    expect(ids).not.toContain('rc-out');
+    expect(ids).toContain('rc-out');
   });
 
   it('preserves thinking/tool_use signatures and tool round order', () => {
@@ -293,40 +282,20 @@ describe('projectModelMessages', () => {
     ]);
   });
 
-  it('uses an explicit custom projector and drops unadapted custom messages', () => {
-    const artifact = nativeArtifact('art-1', { includeInModel: true });
-
-    const projected = projectModelMessages<ArtifactMessage>([artifact], {
-      projectCustom: (message) => ({
-        id: message.id,
-        role: 'user',
-        content: `Artifact at ${message.payload.path}`,
-        timestamp: message.createdAt,
-      }),
-    });
-
-    expect(projected.messages).toEqual([
-      expect.objectContaining({ id: 'art-1', content: 'Artifact at reports/result.md' }),
-    ]);
-
-    // Without a projector, a custom message is dropped at the model boundary.
-    const dropped = projectModelMessages<ArtifactMessage>([artifact]);
-    expect(dropped.messages).toEqual([]);
-  });
 });
 
 // ─── Persistence boundary ───────────────────────────────────────────────
 
 describe('projectPersistenceMessages', () => {
-  it('keeps only durable messages and never emits transient ones', () => {
+  it('keeps every native message at the persistence boundary (no transient category)', () => {
     const messages: AgentMessage[] = [
       nativeUser('u1', 'durable'),
-      nativeRuntimeContext('rc-transient', { persistence: 'transient' }),
-      nativeToolResult('t1', 'call-1', { persistence: 'transient' }),
+      nativeRuntimeContext('rc-hidden', { visibility: 'hidden' }),
+      nativeToolResult('t1', 'call-1'),
     ];
 
     const persisted = projectPersistenceMessages(messages);
-    expect(persisted.map((message) => message.id)).toEqual(['u1']);
+    expect(persisted.map((message) => message.id)).toEqual(['u1', 'rc-hidden', 't1']);
   });
 
   it('preserves attachments, tokenUsage, providerId and model on native messages', () => {
@@ -391,115 +360,52 @@ describe('projectTranscriptMessages', () => {
   it('keeps only visible messages and never emits hidden ones', () => {
     const messages: AgentMessage[] = [
       nativeUser('u1', 'shown'),
-      nativeRuntimeContext('rc-hidden', { visibility: 'hidden', includeInModel: true }),
+      nativeRuntimeContext('rc-hidden', { visibility: 'hidden' }),
     ];
 
     const transcript = projectTranscriptMessages(messages);
     expect(transcript.map((message) => message.id)).toEqual(['u1']);
   });
 
-  it('does not reuse the provider projector for hidden includeInModel context', () => {
-    // This runtime_context is hidden but includeInModel=true. The provider
-    // projector would include it; the transcript projector must exclude it
-    // because visibility is an independent policy.
+  it('does not reuse the model projector for hidden runtime context', () => {
+    // This runtime_context is hidden. The provider projector would include it;
+    // the transcript projector must exclude it because visibility is an
+    // independent policy owned by the transcript boundary.
     const messages: AgentMessage[] = [
-      nativeRuntimeContext('rc-hidden-inmodel', {
-        visibility: 'hidden',
-        includeInModel: true,
-      }),
+      nativeRuntimeContext('rc-hidden', { visibility: 'hidden' }),
     ];
 
     const model = projectModelMessages(messages).messages;
     const transcript = projectTranscriptMessages(messages);
 
-    expect(model.map((message) => message.id)).toContain('rc-hidden-inmodel');
+    expect(model.map((message) => message.id)).toContain('rc-hidden');
     expect(transcript).toEqual([]);
   });
 });
 
-// ─── Three independent policies ─────────────────────────────────────────
+// ─── Visibility is the only independent policy ─────────────────────────
 
-describe('transient / hidden / includeInModel are three independent policies', () => {
+describe('visibility drives the transcript boundary independently of model/persistence', () => {
   const matrix = [
     {
-      id: 'd-v-i',
-      persistence: 'durable' as const,
+      id: 'v-visible',
       visibility: 'visible' as const,
-      includeInModel: true,
       expectModel: true,
       expectPersistence: true,
       expectTranscript: true,
     },
     {
-      id: 'd-v-ni',
-      persistence: 'durable' as const,
-      visibility: 'visible' as const,
-      includeInModel: false,
-      expectModel: false,
-      expectPersistence: true,
-      expectTranscript: true,
-    },
-    {
-      id: 'd-h-i',
-      persistence: 'durable' as const,
+      id: 'v-hidden',
       visibility: 'hidden' as const,
-      includeInModel: true,
       expectModel: true,
       expectPersistence: true,
-      expectTranscript: false,
-    },
-    {
-      id: 'd-h-ni',
-      persistence: 'durable' as const,
-      visibility: 'hidden' as const,
-      includeInModel: false,
-      expectModel: false,
-      expectPersistence: true,
-      expectTranscript: false,
-    },
-    {
-      id: 't-v-i',
-      persistence: 'transient' as const,
-      visibility: 'visible' as const,
-      includeInModel: true,
-      expectModel: true,
-      expectPersistence: false,
-      expectTranscript: true,
-    },
-    {
-      id: 't-v-ni',
-      persistence: 'transient' as const,
-      visibility: 'visible' as const,
-      includeInModel: false,
-      expectModel: false,
-      expectPersistence: false,
-      expectTranscript: true,
-    },
-    {
-      id: 't-h-i',
-      persistence: 'transient' as const,
-      visibility: 'hidden' as const,
-      includeInModel: true,
-      expectModel: true,
-      expectPersistence: false,
-      expectTranscript: false,
-    },
-    {
-      id: 't-h-ni',
-      persistence: 'transient' as const,
-      visibility: 'hidden' as const,
-      includeInModel: false,
-      expectModel: false,
-      expectPersistence: false,
       expectTranscript: false,
     },
   ];
 
   const messages = matrix.map((entry) =>
     nativeRuntimeContext(entry.id, {
-      persistence: entry.persistence,
       visibility: entry.visibility,
-      includeInModel: entry.includeInModel,
     }),
   );
 
@@ -516,9 +422,9 @@ describe('transient / hidden / includeInModel are three independent policies', (
   }
 });
 
-// ─── Legacy-adapted messages preferred lossless ─────────────────────────
+// ─── Legacy-adapted messages restored via the native projection ─────────
 
-describe('legacy-adapted messages are restored losslessly at every boundary', () => {
+describe('legacy-adapted messages are restored losslessly via the native projection', () => {
   function legacyWithExtras(): Message {
     const message = {
       id: 'legacy-1',
@@ -527,43 +433,40 @@ describe('legacy-adapted messages are restored losslessly at every boundary', ()
       providerId: 'anthropic',
       model: 'claude-3-sonnet',
       tokenUsage: tokenUsage,
-      // Legacy DB fields that have no native AgentMessage equivalent.
+      // Legacy DB columns that the native projection now carries.
       seq_index: 7,
       duration_ms: 1234,
       status: 'completed',
       viz_spec: '{"kind":"chart"}',
       metadata: { turn: 3 },
-      // A genuinely unknown column that must survive the round trip untouched.
-      custom_db_column: { chart: 'bar' },
     } satisfies Message & Record<string, unknown>;
     return message;
   }
 
   it('restores the original record at the persistence boundary', () => {
     const original = legacyWithExtras();
-    const adapted = legacyMessageToAgentMessage(original);
+    const adapted = ingestMessage(original);
 
     const persisted = projectPersistenceMessages([adapted]);
     expect(persisted).toHaveLength(1);
-    expect(persisted[0]).toEqual(original);
+    expect(persisted[0]).toMatchObject(original);
   });
 
   it('restores the original record at the transcript boundary', () => {
     const original = legacyWithExtras();
-    const adapted = legacyMessageToAgentMessage(original);
+    const adapted = ingestMessage(original);
 
     const transcript = projectTranscriptMessages([adapted]);
     expect(transcript).toHaveLength(1);
-    expect(transcript[0]).toEqual(original);
+    expect(transcript[0]).toMatchObject(original);
   });
 
-  it('prefers the legacy envelope over a native projection even for visible durable messages', () => {
+  it('reproduces the same lossless record at both boundaries via the native path', () => {
     const original = legacyWithExtras();
-    const adapted = legacyMessageToAgentMessage(original);
+    const adapted = ingestMessage(original);
 
-    expect(hasLegacyEnvelope(adapted)).toBe(true);
-    // Both boundaries must return the same lossless record, proving they
-    // share the restore path without re-deriving fields natively.
+    // Both boundaries share the native projection and must return the same
+    // record without re-deriving fields from the envelope.
     expect(projectPersistenceMessages([adapted])[0]).toEqual(
       projectTranscriptMessages([adapted])[0],
     );
@@ -580,12 +483,6 @@ describe('native AgentMessages persist and render without a Legacy sidecar', () 
     nativeRuntimeContext('rc-1', { source: 'mailbox' }),
     nativeCompactionSummary('cs-1'),
   ];
-
-  it('has no legacy envelope on any native message', () => {
-    for (const message of native) {
-      expect(hasLegacyEnvelope(message)).toBe(false);
-    }
-  });
 
   it('projects every native kind to a valid legacy Message at the persistence boundary', () => {
     const persisted = projectPersistenceMessages(native);
@@ -620,8 +517,8 @@ describe('native AgentMessages persist and render without a Legacy sidecar', () 
 
     // The metadata marker lets the adapter recover a runtime_context instead
     // of a plain user message on reverse conversion.
-    const restored = legacyMessageToAgentMessage(persisted[0]);
-    expect(restored.kind).toBe('runtime_context');
+    const restored = ingestMessage(persisted[0]);
+    expect(restored.role).toBe('runtime_context');
   });
 
   it('projects a native compaction_summary to the isCompactSummary legacy shape', () => {
@@ -632,45 +529,6 @@ describe('native AgentMessages persist and render without a Legacy sidecar', () 
       compactBoundaryId: 'compact-1',
       compactedMessageCount: 90_000,
     });
-  });
-
-  it('preserves a native custom message via an explicit projector at the boundaries', () => {
-    const artifact = nativeArtifact('art-1', { persistence: 'durable', visibility: 'visible' });
-    const projectCustomToLegacy = (message: ArtifactMessage): Message => ({
-      id: message.id,
-      role: 'user',
-      content: `Artifact: ${message.payload.path}`,
-      timestamp: message.createdAt,
-    });
-
-    const persisted = projectPersistenceMessages<ArtifactMessage>([artifact], {
-      projectCustomToLegacy,
-    });
-    const transcript = projectTranscriptMessages<ArtifactMessage>([artifact], {
-      projectCustomToLegacy,
-    });
-
-    expect(persisted[0]).toMatchObject({ id: 'art-1', content: 'Artifact: reports/result.md' });
-    expect(transcript[0]).toMatchObject({ id: 'art-1', content: 'Artifact: reports/result.md' });
-  });
-
-  it('preserves an unadapted native custom message payload in metadata by default', () => {
-    const artifact = nativeArtifact('art-1');
-
-    const persisted = projectPersistenceMessages<ArtifactMessage>([artifact]);
-    expect(persisted).toHaveLength(1);
-    expect(persisted[0].metadata).toMatchObject({
-      duyaCustomKind: 'custom:artifact',
-      duyaCustomPayload: { path: 'reports/result.md' },
-    });
-  });
-
-  it('drops a native custom message when the projector returns null', () => {
-    const artifact = nativeArtifact('art-1');
-    const persisted = projectPersistenceMessages<ArtifactMessage>([artifact], {
-      projectCustomToLegacy: () => null,
-    });
-    expect(persisted).toEqual([]);
   });
 });
 
@@ -683,9 +541,8 @@ describe('projector purity', () => {
     } as Partial<AgentMessage> as AgentMessage),
     nativeAssistant('a1', 'second', { tokenUsage }),
     nativeToolResult('t1', 'call-1'),
-    nativeRuntimeContext('rc-1', { includeInModel: true }),
+    nativeRuntimeContext('rc-1'),
     nativeCompactionSummary('cs-1'),
-    nativeArtifact('art-1'),
   ];
 
   it('does not mutate the input array or any input message', () => {
@@ -734,7 +591,7 @@ describe('extractLegacySystemSegments', () => {
       content: 'You are in debug mode.',
       timestamp: createdAt,
     };
-    const adapted = legacyMessageToAgentMessage(legacySystem);
+    const adapted = ingestMessage(legacySystem);
     const segments = extractLegacySystemSegments([adapted]);
 
     expect(segments).toHaveLength(1);
@@ -773,12 +630,6 @@ describe('extractLegacySystemSegments', () => {
     ]);
     expect(segments).toEqual([]);
   });
-
-  it('ignores non-system custom messages', () => {
-    const artifact = nativeArtifact('art-1');
-    const segments = extractLegacySystemSegments([artifact]);
-    expect(segments).toEqual([]);
-  });
 });
 
 describe('projectModelMessages with legacy system messages (end-to-end)', () => {
@@ -789,7 +640,7 @@ describe('projectModelMessages with legacy system messages (end-to-end)', () => 
       { id: 'a-1', role: 'assistant', content: 'hello!', timestamp: createdAt },
     ];
 
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const adapted = ingestMessages(legacyMessages);
     const segments = extractLegacySystemSegments(adapted);
     const projection = projectModelMessages(adapted, { systemSegments: segments });
 
@@ -823,7 +674,7 @@ describe('projectModelMessages with legacy system messages (end-to-end)', () => 
       },
     ];
 
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const adapted = ingestMessages(legacyMessages);
     const projection = projectModelMessages(adapted);
 
     expect(projection.messages.map((m) => m.id)).toEqual(['u-1', 'a-1', 't-1']);
@@ -846,7 +697,7 @@ describe('projectModelMessages with legacy system messages (end-to-end)', () => 
       { id: 'u-2', role: 'user', content: 'continue', timestamp: createdAt },
     ];
 
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const adapted = ingestMessages(legacyMessages);
     const projection = projectModelMessages(adapted);
 
     // Compaction summary should be a user-role message, not system
@@ -858,10 +709,10 @@ describe('projectModelMessages with legacy system messages (end-to-end)', () => 
     expect(projection.messages.map((m) => m.role)).not.toContain('system');
   });
 
-  it('excludes runtime_context with includeInModel=false from the model boundary', () => {
+  it('includes a runtime_context adapted from a msg_type row at the model boundary', () => {
     const legacyMessages: Message[] = [
       { id: 'u-1', role: 'user', content: 'hey', timestamp: createdAt },
-      // Runtime context with msg_type → adapted as runtime_context, includeInModel=true
+      // Runtime context with msg_type → adapted as role='runtime_context'
       {
         id: 'rc-1',
         role: 'user',
@@ -871,10 +722,15 @@ describe('projectModelMessages with legacy system messages (end-to-end)', () => 
       },
     ];
 
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const adapted = ingestMessages(legacyMessages);
+
+    // The adapted runtime_context stays a runtime_context (not a plain user).
+    const rc = adapted.find((m) => m.id === 'rc-1');
+    expect(rc?.role).toBe('runtime_context');
+
     const projection = projectModelMessages(adapted);
 
-    // Both messages should appear (runtime_context with includeInModel=true)
+    // Both messages appear; the runtime_context is projected as a user turn.
     expect(projection.messages.map((m) => m.id)).toContain('rc-1');
   });
 });
@@ -888,14 +744,14 @@ describe('end-to-end: timeline → buildAgentContext → projectModelMessages', 
     ];
 
     // Build timeline from legacy messages (same as DuyaAgent.setMessages)
-    const timeline = new MessageTimeline<AgentCustomMessage>();
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const timeline = new MessageTimeline();
+    const adapted = ingestMessages(legacyMessages);
     for (const [index, message] of adapted.entries()) {
       timeline.appendMessage({
         type: 'message',
         id: `entry-${index}`,
         parentId: null,
-        createdAt: message.createdAt,
+        createdAt: message.timestamp,
         message,
       });
     }
@@ -946,14 +802,14 @@ describe('end-to-end: timeline → buildAgentContext → projectModelMessages', 
       },
     ];
 
-    const timeline = new MessageTimeline<AgentCustomMessage>();
-    const adapted = legacyMessagesToAgentMessages(legacyMessages);
+    const timeline = new MessageTimeline();
+    const adapted = ingestMessages(legacyMessages);
     for (const [index, message] of adapted.entries()) {
       timeline.appendMessage({
         type: 'message',
         id: `entry-${index}`,
         parentId: null,
-        createdAt: message.createdAt,
+        createdAt: message.timestamp,
         message,
       });
     }

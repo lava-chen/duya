@@ -10,10 +10,7 @@
  */
 
 export const MAILBOX_KIND_PRIORITY: Record<string, number> = {
-  abort_and_replace: 0,
-  stop: 10,
-  correction: 50,
-  constraint: 50,
+  queued: 100,
   followup: 100,
   background_notification: 100,
 };
@@ -23,11 +20,8 @@ export const MAILBOX_DEFAULT_PRIORITY = 100;
 
 /** Valid mailbox kinds. Keep in sync with CHECK (kind IN ...) in schema. */
 export const MAILBOX_KINDS = [
+  'queued',
   'followup',
-  'correction',
-  'constraint',
-  'stop',
-  'abort_and_replace',
   'background_notification',
 ] as const;
 

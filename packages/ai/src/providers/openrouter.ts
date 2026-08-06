@@ -1,15 +1,14 @@
 import type { Model } from '../types.js';
+import { createProvider } from './create-provider.js';
+import { envApiKeyAuth } from '../auth/helpers.js';
+import { openrouterModels } from './openrouter.models.js';
+import { openAICompletionsStreams } from './adapters.js';
 
-export const openrouterModels: Model<'openai-chat'>[] = [
-  {
-    id: 'auto',
-    name: 'OpenRouter Auto',
-    api: 'openai-chat',
-    providerId: 'openrouter',
-    baseUrl: 'https://openrouter.ai/api/v1',
-    reasoning: false,
-    input: ['text', 'image'],
-    contextWindow: 128000,
-    maxTokens: 4096,
-  },
-];
+export const openrouter = createProvider({
+  id: 'openrouter',
+  name: 'OpenRouter',
+  baseUrl: 'https://openrouter.ai/api/v1',
+  auth: envApiKeyAuth('OpenRouter API Key', ['OPENROUTER_API_KEY']),
+  models: openrouterModels,
+  api: openAICompletionsStreams({ apiKey: '', baseURL: 'https://openrouter.ai/api/v1', model: '', apiFormat: 'openai-chat', providerId: 'openrouter' }),
+});

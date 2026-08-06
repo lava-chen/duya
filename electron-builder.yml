@@ -69,6 +69,13 @@ extraResources:
   - from: packages/agent/skills/
     to: agent/skills/
     filter: ["**/*"]
+  # Builtin plugin source tree — synced into ~/.duya/plugins/cache/builtin/
+  # at startup (electron/plugins/cache/builtin-sync.ts). Ships the
+  # .duya-plugin/plugin.json + skills/ + workflows/ + mcp/ + permissions/
+  # assets so the catalog can read builtin plugins from disk in prod.
+  - from: packages/plugin-core/src/plugins/builtin/
+    to: builtin-plugins/
+    filter: ["**/*"]
   - from: public/
     to: public/
     filter: ["**/*"]

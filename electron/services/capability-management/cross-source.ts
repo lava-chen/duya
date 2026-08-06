@@ -150,7 +150,7 @@ export function buildCrossSourceSkillCandidates(
   const candidates: SkillCandidate[] = [];
   const descriptions = new Map<string, string>();
 
-  // Bundled: read from packages/agent/src/plugins/builtin/<name>/skills/<skill>
+  // Bundled: read from packages/plugin-core/src/plugins/builtin/<name>/skills/<skill>
   for (const pluginDir of listSubdirectories(options.bundledDir)) {
     for (const skillName of listSubdirectories(join(options.bundledDir, pluginDir, 'skills'))) {
       candidates.push({

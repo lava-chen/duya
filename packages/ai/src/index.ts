@@ -53,6 +53,29 @@ export { resolveDefaultBaseURL } from './utils/default-base-url.js';
 export type { CacheRetention } from './utils/prompt-caching.js';
 export { createAIClientWithRetry, type RetryableAIClientOptions } from './retry-client.js';
 export {
+  toRuntimeConfig,
+  toRuntimeConfigFromLegacy,
+  buildHeaders,
+  normalizeBaseUrl,
+  validateRuntimeConfig,
+  toLegacyLlmProviderDiscriminator,
+  resolveLlmClientDiscriminator,
+  inferApiFormatFromLegacyProviderType,
+  redactSecrets,
+  type BuildOptions,
+} from './runtime-adapter.js';
+export type {
+  ProviderRuntimeConfig,
+  RuntimeAuthStyle,
+  RuntimeAuthSource,
+  RuntimeEndpointSource,
+  RuntimeLegacyProviderType,
+  RuntimeLegacyProviderSource,
+  RuntimeModelCapability,
+  RuntimeProviderSource,
+  RuntimeValidationResult,
+} from './runtime-adapter.js';
+export {
   getSupportedThinkingLevels,
   clampThinkingLevel,
   getNativeLevel,
@@ -92,6 +115,9 @@ export type {
   ThinkingContent,
   ThinkingLevel,
   ThinkingLevelMap,
+  ModelCost,
+  ModelCostRates,
+  ModelCostTier,
   ToolResult,
   ToolResultContent,
   ToolResultMetadata,
@@ -103,8 +129,8 @@ export type {
 
 export { allProviderModels } from './providers/index.js';
 export {
-  minimaxAnthropicModels,
-  minimaxOpenAIModels,
+  minimaxModels,
+  minimaxCnModels,
   deepseekModels,
   qwenModels,
   glmModels,
@@ -128,7 +154,27 @@ export type {
   DeviceCodeInfo,
   Credential,
   CredentialStore,
+  AuthResult,
 } from './auth/types.js';
+
+// ─── Provider factory & Models (Task 2-6) ───
+export { createProvider, type CreateProviderOptions } from './providers/create-provider.js';
+export { createModels, type Models, type CreateModelsOptions } from './providers/models.js';
+export { lazyApi, lazyStream, type ProviderStreams } from './providers/lazy.js';
+export type { Provider, ProviderAuthConfig, ProviderOAuth, ProviderApi } from './providers/types.js';
+export { anthropicStreams, openAICompletionsStreams, openAIResponsesStreams } from './providers/adapters.js';
+export { ModelsError, type ModelsErrorCode } from './auth/error.js';
+export { InMemoryCredentialStore } from './auth/credential-store.js';
+export { envApiKeyAuth, lazyOAuth, type EnvResolver } from './auth/helpers.js';
+export { resolveProviderAuth, type AuthResolutionOverrides } from './auth/resolve.js';
+export { generatePkcePair, buildAuthorizeUrl } from './auth/oauth/pkce.js';
+export {
+  requestDeviceCode,
+  pollDeviceToken,
+  randomState,
+  type DeviceCodeRequest,
+  type DeviceCodeResponse,
+} from './auth/oauth/device-code.js';
 
 export {
   createProviderCatalog,

@@ -1,3 +1,0 @@
-[
-  { "id": "vercel", "provider": "vercel", "scopes": [], "toolsets": ["deployment"], "required": true }
-]

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ipc/skills-handlers.ts - Skills-related IPC handlers
  *
  * Handlers for:
@@ -450,25 +450,16 @@ export function registerSkillsHandlers(): void {
         }
       }
 
-      // Also scan builtin plugin source directories. The install cache
+      // Also scan builtin plugin cache directories. The install cache
       // only contains plugin.json — the skills/ directory lives in the
-      // source tree (packages/agent/src/plugins/builtin/<name>/skills/).
+      // builtin cache (~/.duya/plugins/cache/builtin/<id>/<version>/skills/).
       // This makes builtin plugin skills visible even before install.
       try {
-        const { listBuiltinPlugins } = await import('../../packages/agent/src/plugins/builtin/_registry.js');
-        for (const candidate of listBuiltinPlugins()) {
-          const skillsDir = path.join(candidate.dir, 'skills');
+        const { listBuiltinCachePlugins } = await import('../plugins/cache/builtin-sync.js');
+        for (const candidate of listBuiltinCachePlugins()) {
+          const skillsDir = path.join(candidate.root, 'skills');
           if (fs.existsSync(skillsDir)) {
-            // Derive plugin id from plugin.json if present
-            let pluginId = candidate.name;
-            try {
-              const jsonPath = path.join(candidate.dir, 'plugin.json');
-              if (fs.existsSync(jsonPath)) {
-                const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
-                if (raw.id) pluginId = raw.id;
-              }
-            } catch { /* use name fallback */ }
-            loadSkillsFromDir(skillsDir, 'plugin', pluginId);
+            loadSkillsFromDir(skillsDir, 'plugin', candidate.id);
           }
         }
       } catch (e) {

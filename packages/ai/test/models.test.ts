@@ -6,7 +6,7 @@ const minimaxAnthropicM3: Model<'anthropic'> = {
   id: 'MiniMax-M3',
   name: 'MiniMax M3 (Anthropic)',
   api: 'anthropic',
-  providerId: 'minimax-anthropic',
+  providerId: 'minimax',
   baseUrl: 'https://api.minimaxi.com/anthropic',
   reasoning: true,
   thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },

@@ -6,7 +6,7 @@
 export * from './types.js'
 
 // Token Budget
-export { TokenBudgetManager, createTokenBudget, estimateMessageTokens, estimateMessagesTokens, roughTokenCountEstimation } from './tokenBudget.js'
+export { TokenBudgetManager, estimateMessageTokens, estimateMessagesTokens } from './tokenBudget.js'
 
 // Compaction Manager
 export { CompactionManager, createCompactionManager, type CompactionManagerConfig, type CompactionManagerEvent } from './CompactionManager.js'
@@ -25,6 +25,3 @@ export { microCleanupMessages } from './microCompactCleanup.js'
 
 // Historical canvas tool-call compression (LLM-facing only)
 export { compressHistoricalCanvasToolCalls } from './canvasHistoryCompress.js'
-
-// Legacy exports from compact.ts for backward compatibility
-export { compactHistory, estimateContextTokens, needsCompression, DEFAULT_CONTEXT_WINDOW, COMPRESSION_THRESHOLD, type CompactResult, type TokenEstimation } from './compact.js'

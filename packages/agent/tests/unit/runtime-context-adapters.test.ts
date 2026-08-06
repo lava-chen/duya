@@ -8,7 +8,6 @@ import {
   RUNTIME_CONTEXT_METADATA_KEYS,
   adaptAttachmentContext,
   adaptCustomRuntimeContext,
-  adaptMailboxHardReplacement,
   adaptMailboxRows,
   adaptTaskNotificationXml,
   dedupeRuntimeContextMessages,
@@ -104,36 +103,32 @@ function makeNotificationXml(taskId: string, overrides: {
 // ─── adaptMailboxRows ────────────────────────────────────────────────────
 
 describe('adaptMailboxRows', () => {
-  it('wraps followup/correction/constraint rows in a single runtime_context message', () => {
+  it('wraps queued and followup rows in a single runtime_context message', () => {
     const ids = deterministicIds('mb');
     const rows = [
       makeMailboxRow({ id: 'r1', content: 'follow up please', kind: 'followup' }),
-      makeMailboxRow({ id: 'r2', content: 'fix the bug', kind: 'correction' }),
-      makeMailboxRow({ id: 'r3', content: 'stay under 100 tokens', kind: 'constraint' }),
+      makeMailboxRow({ id: 'r2', content: 'use the queued plan', kind: 'queued' }),
     ];
-    const tokens = ['tok-1', 'tok-2', 'tok-3'];
+    const tokens = ['tok-1', 'tok-2'];
 
     const messages = adaptMailboxRows(rows, tokens, options(ids.next));
 
     expect(messages).toHaveLength(1);
     const msg = messages[0];
-    expect(msg.kind).toBe('runtime_context');
+    expect(msg.role).toBe('runtime_context');
     expect(msg.source).toBe('mailbox');
-    expect(msg.persistence).toBe('transient');
     expect(msg.visibility).toBe('hidden');
-    expect(msg.includeInModel).toBe(true);
-    expect(msg.createdAt).toBe(FIXED_NOW);
+    expect(msg.timestamp).toBe(FIXED_NOW);
     expect(msg.content).toContain('<runtime-user-guidance>');
     expect(msg.content).toContain('1. (follow-up) follow up please');
-    expect(msg.content).toContain('2. (correction) fix the bug');
-    expect(msg.content).toContain('3. (constraint) stay under 100 tokens');
+    expect(msg.content).toContain('2. (follow-up) use the queued plan');
   });
 
   it('preserves mailbox row IDs, claim tokens, and kinds in metadata', () => {
     const ids = deterministicIds('mb');
     const rows = [
       makeMailboxRow({ id: 'r1', kind: 'followup', source: 'cli' }),
-      makeMailboxRow({ id: 'r2', kind: 'correction', source: 'cli' }),
+      makeMailboxRow({ id: 'r2', kind: 'queued', source: 'cli' }),
     ];
 
     const [msg] = adaptMailboxRows(rows, ['tok-1', 'tok-2'], options(ids.next));
@@ -141,21 +136,19 @@ describe('adaptMailboxRows', () => {
     expect(msg.metadata).toMatchObject({
       [RUNTIME_CONTEXT_METADATA_KEYS.mailboxRowIds]: ['r1', 'r2'],
       [RUNTIME_CONTEXT_METADATA_KEYS.claimTokens]: ['tok-1', 'tok-2'],
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxKinds]: ['followup', 'correction'],
+      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxKinds]: ['followup', 'queued'],
       [RUNTIME_CONTEXT_METADATA_KEYS.mailboxSource]: 'cli',
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxHardReplacement]: false,
     });
   });
 
-  it('skips stop and abort_and_replace rows (control signals, not guidance)', () => {
+  it('keeps background_notification rows out of the guidance block (adapted separately)', () => {
     const ids = deterministicIds('mb');
     const rows = [
       makeMailboxRow({ id: 'r1', kind: 'followup', content: 'keep going' }),
-      makeMailboxRow({ id: 'r2', kind: 'stop', content: 'stop now' }),
-      makeMailboxRow({ id: 'r3', kind: 'abort_and_replace', content: 'replace' }),
+      makeMailboxRow({ id: 'r2', kind: 'background_notification', content: '<task-notification/>' }),
     ];
 
-    const messages = adaptMailboxRows(rows, ['tok-1', 'tok-2', 'tok-3'], options(ids.next));
+    const messages = adaptMailboxRows(rows, ['tok-1', 'tok-2'], options(ids.next));
 
     expect(messages).toHaveLength(1);
     expect(messages[0].metadata).toMatchObject({
@@ -181,7 +174,7 @@ describe('adaptMailboxRows', () => {
 
   it('returns an empty array when no usable rows remain', () => {
     const ids = deterministicIds('mb');
-    const rows = [makeMailboxRow({ id: 'r1', kind: 'stop' })];
+    const rows = [makeMailboxRow({ id: 'r1', kind: 'background_notification' })];
 
     expect(adaptMailboxRows(rows, ['tok-1'], options(ids.next))).toEqual([]);
   });
@@ -206,11 +199,9 @@ describe('adaptTaskNotificationXml', () => {
 
     const msg = adaptTaskNotificationXml(xml, options(ids.next));
 
-    expect(msg.kind).toBe('runtime_context');
+    expect(msg.role).toBe('runtime_context');
     expect(msg.source).toBe('background_notification');
-    expect(msg.persistence).toBe('transient');
     expect(msg.visibility).toBe('hidden');
-    expect(msg.includeInModel).toBe(true);
     expect(msg.content).toBe(xml);
   });
 
@@ -289,13 +280,13 @@ describe('multiple notification ordering', () => {
     const mixed: AgentMessage[] = [mailboxMsg, notifMsg, customMsg];
 
     expect(mixed.map((m) => m.id)).toEqual(['mix-1', 'mix-2', 'mix-3']);
-    expect(mixed.map((m) => m.kind)).toEqual([
+    expect(mixed.map((m) => m.role)).toEqual([
       'runtime_context',
       'runtime_context',
       'runtime_context',
     ]);
     expect(
-      mixed.map((m) => (m.kind === 'runtime_context' ? m.source : null)),
+      mixed.map((m) => (m.role === 'runtime_context' ? m.source : null)),
     ).toEqual(['mailbox', 'background_notification', 'custom']);
   });
 });
@@ -369,18 +360,6 @@ describe('dedupeRuntimeContextMessages', () => {
     });
   });
 
-  it('dedupes hard replacement by mailbox row ID', () => {
-    const ids = deterministicIds('hr');
-    const row = makeMailboxRow({ id: 'replace-1', kind: 'abort_and_replace', content: 'new task' });
-    const first = adaptMailboxHardReplacement(row, 'tok-1', options(ids.next));
-    const second = adaptMailboxHardReplacement(row, 'tok-2', options(ids.next));
-
-    const result = dedupeRuntimeContextMessages([first, second]);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe('hr-1');
-  });
-
   it('passes through non-runtime-context messages untouched', () => {
     const ids = deterministicIds('tn');
     const notif = adaptTaskNotificationXml(
@@ -388,10 +367,9 @@ describe('dedupeRuntimeContextMessages', () => {
       options(ids.next),
     );
     const userMsg: AgentMessage = {
-      kind: 'user',
+      role: 'user',
       id: 'u1',
-      createdAt: FIXED_NOW,
-      persistence: 'durable',
+      timestamp: FIXED_NOW,
       visibility: 'visible',
       content: 'hello',
     };
@@ -414,56 +392,6 @@ describe('dedupeRuntimeContextMessages', () => {
   });
 });
 
-// ─── Hard replacement ────────────────────────────────────────────────────
-
-describe('adaptMailboxHardReplacement', () => {
-  it('wraps abort_and_replace content in <runtime-user-replacement> with source=mailbox', () => {
-    const ids = deterministicIds('hr');
-    const row = makeMailboxRow({
-      id: 'replace-1',
-      kind: 'abort_and_replace',
-      content: '  switch to plan B  ',
-    });
-
-    const msg = adaptMailboxHardReplacement(row, 'tok-1', options(ids.next));
-
-    expect(msg.kind).toBe('runtime_context');
-    expect(msg.source).toBe('mailbox');
-    expect(msg.persistence).toBe('transient');
-    expect(msg.visibility).toBe('hidden');
-    expect(msg.includeInModel).toBe(true);
-    expect(msg.content).toContain('<runtime-user-replacement>');
-    expect(msg.content).toContain('switch to plan B');
-  });
-
-  it('preserves the row ID and claim token in metadata', () => {
-    const ids = deterministicIds('hr');
-    const row = makeMailboxRow({ id: 'replace-1', kind: 'abort_and_replace', source: 'cli' });
-
-    const msg = adaptMailboxHardReplacement(row, 'tok-xyz', options(ids.next));
-
-    expect(msg.metadata).toMatchObject({
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxRowIds]: ['replace-1'],
-      [RUNTIME_CONTEXT_METADATA_KEYS.claimTokens]: ['tok-xyz'],
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxKinds]: ['abort_and_replace'],
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxSource]: 'cli',
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxHardReplacement]: true,
-    });
-  });
-
-  it('falls back to a default message when content is empty', () => {
-    const ids = deterministicIds('hr');
-    const row = makeMailboxRow({ id: 'replace-1', kind: 'abort_and_replace', content: '   ' });
-
-    const msg = adaptMailboxHardReplacement(row, null, options(ids.next));
-
-    expect(msg.content).toContain('The user replaced the previous instruction.');
-    expect(msg.metadata).toMatchObject({
-      [RUNTIME_CONTEXT_METADATA_KEYS.claimTokens]: [],
-    });
-  });
-});
-
 // ─── Attachment context ──────────────────────────────────────────────────
 
 describe('adaptAttachmentContext', () => {
@@ -476,11 +404,9 @@ describe('adaptAttachmentContext', () => {
     const msg = adaptAttachmentContext(attachments, options(ids.next));
 
     expect(msg).not.toBeNull();
-    expect(msg!.kind).toBe('runtime_context');
+    expect(msg!.role).toBe('runtime_context');
     expect(msg!.source).toBe('attachment');
-    expect(msg!.persistence).toBe('durable');
     expect(msg!.visibility).toBe('hidden');
-    expect(msg!.includeInModel).toBe(true);
     expect(msg!.content).toContain('meeting notes');
     expect(msg!.metadata).toMatchObject({
       [RUNTIME_CONTEXT_METADATA_KEYS.attachmentIds]: ['a1'],
@@ -507,19 +433,17 @@ describe('adaptCustomRuntimeContext', () => {
     const ids = deterministicIds('cu');
     const msg = adaptCustomRuntimeContext('environment: production', options(ids.next));
 
-    expect(msg.kind).toBe('runtime_context');
+    expect(msg.role).toBe('runtime_context');
     expect(msg.source).toBe('custom');
-    expect(msg.persistence).toBe('transient');
     expect(msg.visibility).toBe('visible');
-    expect(msg.includeInModel).toBe(true);
     expect(msg.content).toBe('environment: production');
   });
 });
 
-// ─── Transient not persisted ─────────────────────────────────────────────
+// ─── Runtime context is persisted ───────────────────────────────────────
 
-describe('transient messages are not persisted', () => {
-  it('mailbox, notification, replacement, and custom produce persistence=transient; attachment produces persistence=durable', () => {
+describe('runtime context is persisted', () => {
+  it('every adapter-produced message is a runtime_context with a source', () => {
     const ids = deterministicIds('all');
     const opt = options(ids.next);
 
@@ -529,21 +453,15 @@ describe('transient messages are not persisted', () => {
       opt,
     )[0];
     const notifMsg = adaptTaskNotificationXml(makeNotificationXml('task-1'), opt);
-    const replaceMsg = adaptMailboxHardReplacement(
-      makeMailboxRow({ id: 'r2', kind: 'abort_and_replace' }),
-      'tok-2',
-      opt,
-    );
     const attachmentMsg = adaptAttachmentContext([makeAttachment()], opt);
     const customMsg = adaptCustomRuntimeContext('hint', opt);
 
-    for (const msg of [mailboxMsg, notifMsg, replaceMsg, customMsg]) {
-      expect(msg).toMatchObject({ persistence: 'transient' });
+    for (const msg of [mailboxMsg, notifMsg, attachmentMsg!, customMsg]) {
+      expect(msg.role).toBe('runtime_context');
     }
-    expect(attachmentMsg).toMatchObject({ persistence: 'durable' });
   });
 
-  it('projectPersistenceMessages drops every adapter-produced message', () => {
+  it('projectPersistenceMessages persists every adapter-produced message as a user-role message', () => {
     const ids = deterministicIds('all');
     const opt = options(ids.next);
 
@@ -554,24 +472,24 @@ describe('transient messages are not persisted', () => {
         opt,
       )[0],
       adaptTaskNotificationXml(makeNotificationXml('task-1'), opt),
-      adaptMailboxHardReplacement(
-        makeMailboxRow({ id: 'r2', kind: 'abort_and_replace' }),
-        'tok-2',
-        opt,
-      ),
       adaptCustomRuntimeContext('hint', opt),
     ];
 
     const persisted = projectPersistenceMessages(messages);
 
-    expect(persisted).toEqual([]);
+    // Runtime context is not dropped: every message projects to a user-role
+    // legacy Message at the persistence boundary.
+    expect(persisted).toHaveLength(messages.length);
+    for (const message of persisted) {
+      expect(message.role).toBe('user');
+    }
   });
 });
 
 // ─── Provider compatibility projection ───────────────────────────────────
 
 describe('projectRuntimeContextToProviderMessage', () => {
-  it('projects an includeInModel runtime_context to a user-role Message', () => {
+  it('projects a runtime_context to a user-role Message', () => {
     const ids = deterministicIds('proj');
     const msg = adaptTaskNotificationXml(
       makeNotificationXml('task-1'),
@@ -584,21 +502,25 @@ describe('projectRuntimeContextToProviderMessage', () => {
     expect(projected!.id).toBe(msg.id);
     expect(projected!.role).toBe('user');
     expect(projected!.content).toBe(msg.content);
-    expect(projected!.timestamp).toBe(msg.createdAt);
+    expect(projected!.timestamp).toBe(msg.timestamp);
     expect(projected!.metadata).toEqual({
       runtimeContext: true,
       source: 'background_notification',
     });
   });
 
-  it('returns null when includeInModel is false', () => {
+  it('always projects a runtime_context to a user-role Message (no null path)', () => {
     const ids = deterministicIds('proj');
     const msg = adaptCustomRuntimeContext(
       'hidden hint',
-      options(ids.next, { includeInModel: false }),
+      options(ids.next),
     );
 
-    expect(projectRuntimeContextToProviderMessage(msg)).toBeNull();
+    const projected = projectRuntimeContextToProviderMessage(msg);
+
+    expect(projected).not.toBeNull();
+    expect(projected.role).toBe('user');
+    expect(projected.content).toBe('hidden hint');
   });
 
   it('does not carry internal tracking metadata into the provider message', () => {
@@ -640,16 +562,15 @@ describe('projectRuntimeContextToProviderMessage', () => {
 // ─── Options overrides ───────────────────────────────────────────────────
 
 describe('option overrides', () => {
-  it('respects visibility and includeInModel overrides', () => {
+  it('respects the visibility override', () => {
     const ids = deterministicIds('ov');
     const msg = adaptMailboxRows(
       [makeMailboxRow({ id: 'r1', kind: 'followup' })],
       ['tok-1'],
-      options(ids.next, { visibility: 'visible', includeInModel: false }),
+      options(ids.next, { visibility: 'visible' }),
     )[0];
 
     expect(msg.visibility).toBe('visible');
-    expect(msg.includeInModel).toBe(false);
   });
 
   it('merges caller metadata with adapter metadata', () => {

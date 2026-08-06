@@ -19,7 +19,7 @@ export interface CatalogModel {
 }
 
 export interface ProviderCatalogEntry {
-  id: string;                 // 稳定 id，对应前端 VendorPreset.key
+  id: string;                 // Stable id, maps to frontend VendorPreset.key
   name: string;
   descriptionZh: string;
   protocol: CatalogProtocol;
@@ -38,9 +38,30 @@ export interface ProviderCatalogEntry {
     apiKeyUrl?: string;
     docsUrl?: string;
     pricingUrl?: string;
+    statusPageUrl?: string;
     billingModel?: 'pay_as_you_go' | 'coding_plan' | 'token_plan' | 'free' | 'self_hosted';
     notes?: string[];
   };
+  // ── Domain fields (for frontend LlmProviderService / ModelSyncService / etc.) ──
+  /** Domain category for the provider entity. */
+  providerCategory?: 'official' | 'aggregator' | 'custom' | 'local' | 'managed' | 'proxy';
+  /** Auth form fields for the settings UI. */
+  authFields?: Array<{ key: string; label: string; secret: boolean; required: boolean }>;
+  /** Model source strategy for the provider. */
+  modelsSource?:
+    | { type: 'static' }
+    | { type: 'openai-compatible-models'; path?: string }
+    | { type: 'custom-url'; url: string };
+  /** Display labels for defaultModels when source is 'static'. */
+  defaultModelLabels?: Record<string, string>;
+  /** Candidate endpoints for future speed-test / auto-select. */
+  endpointCandidates?: string[];
+  /** Icon color for UI rendering. */
+  iconColor?: string;
+  /** Provider website URL. */
+  websiteUrl?: string;
+  /** Legacy protocol name (e.g. 'openai-compatible', 'ollama') for migration UI. */
+  legacyProtocol?: string;
 }
 
 export interface ProviderCatalog {

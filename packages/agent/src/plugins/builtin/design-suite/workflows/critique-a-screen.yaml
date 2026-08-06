@@ -1,9 +1,0 @@
-id: critique-a-screen
-name: Critique a screen
-description: Produce prioritized design feedback for a screen or flow.
-prompt: |
-  Review {{target}} using the design-critique skill. State the user goal,
-  observations, severity-ranked findings, and the smallest high-impact changes.
-requiredCapabilities:
-  - mcp:design-audit
-permissionTier: read

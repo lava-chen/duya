@@ -1103,9 +1103,12 @@ Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredT
 
 The first-party plugin catalog is the curated set of plugins shipped with
 DUYA itself. They live under
-`packages/agent/src/plugins/builtin/<plugin-name>/` and are registered in
-`electron/plugins/catalog.ts` as `BUNDLED_PLUGIN_CATALOG` entries with
-`source: 'bundled'` and `trustLevel: 'official'`. Catalog entries are
+`packages/plugin-core/src/plugins/builtin/<plugin-name>/` and are synced
+at startup into `~/.duya/plugins/cache/builtin/<id>/<version>/` by
+`syncBuiltinPlugins()`. The catalog scanner in
+`electron/plugins/catalog.ts` reads each cache root via
+`readPluginManifest` and exposes entries with `source: 'bundled'` and
+`trustLevel: 'official'`. Catalog entries are
 default-off: `installed: false, enabled: false` — the user opts in per
 plugin.
 
@@ -1114,7 +1117,7 @@ plugin.
 Every first-party plugin follows the v2 layout:
 
 ```
-packages/agent/src/plugins/builtin/<plugin-name>/
+packages/plugin-core/src/plugins/builtin/<plugin-name>/
 ├── plugin.json              # v2 manifest (schemaVersion: 'duya.plugin.v1')
 ├── plugin.md                # human-readable overview, setup, and status
 ├── mcp/servers.json         # MCP server config (stdio until Phase 2a)
@@ -1208,7 +1211,7 @@ role plus the DUYA permission policy.
 - Plan: [docs/exec-plans/active/313-first-party-plugin-catalog.md](./docs/exec-plans/active/313-first-party-plugin-catalog.md)
 - Product definition: [docs/design-docs/2026-07-29-plugin-product-definition.md](./docs/design-docs/2026-07-29-plugin-product-definition.md)
 - Catalog loader: [electron/plugins/catalog.ts](./electron/plugins/catalog.ts)
-- Capability discovery: [packages/agent/src/plugins/builtin/capability-discovery.ts](./packages/agent/src/plugins/builtin/capability-discovery.ts)
+- Capability discovery: [packages/plugin-core/src/plugins/loader/capability-discovery.ts](./packages/plugin-core/src/plugins/loader/capability-discovery.ts)
 - Workflow schema: [packages/plugin-core/src/workflows/schema.ts](./packages/plugin-core/src/workflows/schema.ts)
 
 ### Official remote MCP assets (2026-07-30)
@@ -1218,7 +1221,7 @@ role plus the DUYA permission policy.
 for remote endpoints and expands optional request headers only from managed
 configuration; plugin packages must not include credentials. Official endpoint
 and upstream Skill provenance is centralized in
-`packages/agent/src/plugins/builtin/official-assets.ts`. Provider-specific
+`packages/plugin-core/src/plugins/loader/official-assets.ts`. Provider-specific
 OAuth token brokering remains the responsibility of the app-connection layer
 (Plan 312), so a remote preset must retain its stdio fallback until it has an
 authorized connection.

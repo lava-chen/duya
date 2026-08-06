@@ -1,9 +1,0 @@
-id: wcag-audit
-name: Run accessibility audit
-description: Create a practical, evidence-based accessibility audit.
-prompt: |
-  Audit {{target}} with the accessibility-review skill. Return severity,
-  affected users, evidence, remediation, and verification for each finding.
-requiredCapabilities:
-  - mcp:design-audit
-permissionTier: read

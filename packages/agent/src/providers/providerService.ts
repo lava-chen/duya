@@ -105,24 +105,16 @@ export function toProviderInfoDTO(p: ApiProvider): ProviderInfoItem {
 }
 
 // ----------------------------------------------------------------------------
-// Phase 1 re-exports: prefer these in new code.
+// Re-exports: prefer the canonical adapter in @duya/ai.
 // ----------------------------------------------------------------------------
 export {
   toRuntimeConfig,
-  toRuntimeConfigFromDomain,
+  toRuntimeConfigFromLegacy,
   toLegacyLlmProviderDiscriminator,
   inferApiFormatFromLegacyProviderType,
-  inferAuthStyle,
   buildHeaders,
   normalizeBaseUrl,
   redactSecrets,
-} from './ProviderRuntimeAdapter.js';
+} from '@duya/ai';
 
-export type {
-  ProviderRuntimeConfig,
-  RuntimeApiFormat,
-  RuntimeAuthStyle,
-  RuntimeModelCapability,
-  ProviderHealthStatus,
-  ProviderErrorKind,
-} from './runtime-types.js';
+export type { ProviderRuntimeConfig, RuntimeAuthStyle, RuntimeModelCapability } from '@duya/ai';

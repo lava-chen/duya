@@ -22,11 +22,9 @@ import { Command } from '@commander-js/extra-typings';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { createBuiltinRegistry } from '../tool/builtin.js';
 import { sessionSearchTool, type SummaryLLMConfig } from '../tool/SessionSearchTool/index.js';
-import type { AgentOptions, SSEEvent } from '../types.js';
+import type { AgentOptions, Message, SSEEvent } from '../types.js';
 import type { ToolRegistry } from '../tool/registry.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
-import { QueryEngine } from '../query-engine/index.js';
-import type { CLIParsedArgs } from '../query-engine/types.js';
 import { Colors, color } from './colors.js';
 import { REPL } from './repl.js';
 import {
@@ -673,6 +671,99 @@ export async function runCLI(
 }
 
 /**
+ * Extract assistant text content from messages for print output.
+ */
+function extractPrintText(messages: readonly Message[]): string {
+  const texts: string[] = [];
+  for (const msg of messages) {
+    if (msg.role !== 'assistant') continue;
+    const content = msg.content;
+    if (typeof content === 'string') {
+      texts.push(content);
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === 'text') texts.push(block.text);
+      }
+    }
+  }
+  return texts.join('\n');
+}
+
+/**
+ * Format messages as markdown for print output.
+ */
+function formatPrintMarkdown(messages: readonly Message[]): string {
+  const lines: string[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      lines.push(`## User\n\n${content}\n`);
+    } else if (msg.role === 'assistant') {
+      const content = msg.content;
+      if (typeof content === 'string') {
+        lines.push(`## Assistant\n\n${content}\n`);
+      } else if (Array.isArray(content)) {
+        lines.push('## Assistant\n');
+        for (const block of content) {
+          if (block.type === 'text') {
+            lines.push(`\n${block.text}\n`);
+          } else if (block.type === 'tool_use') {
+            lines.push(`\n**[Tool: ${block.name}]**\n\`\`\`json\n${JSON.stringify(block.input, null, 2)}\n\`\`\`\n`);
+          } else if (block.type === 'tool_result') {
+            lines.push(`\n*[Tool Result]*\n${block.content}\n`);
+          }
+        }
+      }
+    }
+  }
+  return lines.join('---\n');
+}
+
+/**
+ * Run a single headless print query against the agent and write formatted
+ * output to stdout. Replaces the former QueryEngine.print path.
+ */
+async function runPrintQuery(
+  agent: duyaAgent,
+  prompt: string,
+  format: string | undefined,
+): Promise<void> {
+  let tokenUsage: { total_tokens?: number } = {};
+  try {
+    for await (const event of agent.streamChat(prompt)) {
+      if (event.type === 'result' && event.data.total_tokens) {
+        tokenUsage = event.data;
+      }
+    }
+  } catch (error) {
+    console.error(`${Colors.BRIGHT_RED}Error:${Colors.RESET} ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  const messages = agent.getMessages();
+  const outputFormat = format || 'text';
+  switch (outputFormat) {
+    case 'json':
+      console.log(JSON.stringify({
+        content: extractPrintText(messages),
+        toolCalls: messages
+          .filter((m) => m.role === 'assistant')
+          .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+          .filter((c) => c.type === 'tool_use'),
+        tokenUsage,
+      }, null, 2));
+      break;
+    case 'markdown':
+      console.log(formatPrintMarkdown(messages));
+      break;
+    case 'text':
+    default:
+      console.log(extractPrintText(messages));
+      break;
+  }
+}
+
+/**
  * Run print mode - single query output
  */
 async function runPrintMode(prompt: string, options: CLIOptions): Promise<void> {
@@ -704,22 +795,15 @@ async function runPrintMode(prompt: string, options: CLIOptions): Promise<void> 
     baseURL = activeProvider.base_url;
   }
 
-  const engine = new QueryEngine({
-    agentConfig: {
-      apiKey,
-      model: model || '',
-      baseURL,
-      workingDirectory: options.workspace,
-      communicationPlatform: 'cli',
-    },
-    mode: 'print',
+  const agent = new duyaAgent({
+    apiKey,
+    model: model || '',
+    baseURL,
     workingDirectory: options.workspace,
+    communicationPlatform: 'cli',
   });
 
-  await engine.print(prompt, {
-    format: options.format,
-    cwd: options.workspace,
-  });
+  await runPrintQuery(agent, prompt, options.format);
 }
 
 /**
@@ -764,16 +848,12 @@ async function runHeadlessMode(scriptPath: string, options: CLIOptions): Promise
     process.exit(1);
   }
 
-  const engine = new QueryEngine({
-    agentConfig: {
-      apiKey,
-      model: model || '',
-      baseURL,
-      workingDirectory: options.workspace,
-      communicationPlatform: 'cli',
-    },
-    mode: 'print',
+  const agent = new duyaAgent({
+    apiKey,
+    model: model || '',
+    baseURL,
     workingDirectory: options.workspace,
+    communicationPlatform: 'cli',
   });
 
   // Execute each line as a separate prompt
@@ -785,10 +865,7 @@ async function runHeadlessMode(scriptPath: string, options: CLIOptions): Promise
     }
 
     console.log(`\n--- Executing: ${trimmed.slice(0, 50)}... ---\n`);
-    await engine.print(trimmed, {
-      format: options.format,
-      cwd: options.workspace,
-    });
+    await runPrintQuery(agent, trimmed, options.format);
   }
 }
 
@@ -848,6 +925,17 @@ if (args.includes('--print') || args.includes('--headless') || args.includes('--
 }
 
 // CLI argument parser for custom modes
+interface CLIParsedArgs {
+  mode: 'interactive' | 'print' | 'headless';
+  prompt?: string;
+  scriptPath?: string;
+  options: {
+    model?: string;
+    cwd?: string;
+    format?: 'text' | 'json' | 'markdown';
+  };
+}
+
 function parseCLIArgs(args: string[]): CLIParsedArgs {
   const mode: 'interactive' | 'print' | 'headless' = args.includes('--headless') ? 'headless' :
     args.includes('--print') ? 'print' : 'interactive';

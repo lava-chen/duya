@@ -19,7 +19,7 @@
 
 import type { FileAttachment, Message, MsgType, ToolResultInfo } from '@/types';
 import {
-  legacyMessagesToAgentMessages,
+  ingestMessages,
   projectTranscriptMessages,
   type Message as AgentMessage,
 } from '@duya/agent/message';
@@ -125,7 +125,7 @@ function resolveDisplayContent(msg: Message): Message {
  * (structural `visibility` field); displayContent normalisation is resolved here.
  */
 export function projectMessageTranscript(messages: Message[]): ProjectedTranscript {
-  const agentMessages = legacyMessagesToAgentMessages(messages.map(toAgentMessage));
+  const agentMessages = ingestMessages(messages.map(toAgentMessage));
   const projected = projectTranscriptMessages(agentMessages);
 
   const visible: Message[] = [];

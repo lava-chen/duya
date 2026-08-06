@@ -6,7 +6,7 @@ const targetModel: Model<'anthropic'> = {
   id: 'MiniMax-M3',
   name: 'MiniMax M3',
   api: 'anthropic',
-  providerId: 'minimax-anthropic',
+  providerId: 'minimax',
   baseUrl: 'https://api.minimaxi.com/anthropic',
   reasoning: true,
   thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high', max: 'max' },
@@ -20,7 +20,7 @@ describe('isSameModel', () => {
     const msg: Message = {
       role: 'assistant',
       content: [],
-      providerId: 'minimax-anthropic',
+      providerId: 'minimax',
       model: 'MiniMax-M3',
       api: 'anthropic',
     };
@@ -31,7 +31,7 @@ describe('isSameModel', () => {
     const msg: Message = {
       role: 'assistant',
       content: [],
-      providerId: 'minimax-openai',
+      providerId: 'deepseek',
       model: 'MiniMax-M3',
       api: 'anthropic',
     };
@@ -42,7 +42,7 @@ describe('isSameModel', () => {
     const msg: Message = {
       role: 'assistant',
       content: [],
-      providerId: 'minimax-anthropic',
+      providerId: 'minimax',
       model: 'MiniMax-M3',
       api: 'openai-chat',
     };
@@ -65,7 +65,7 @@ describe('transformMessages', () => {
     const msg: Message = {
       role: 'assistant',
       content: [thinkingBlock],
-      providerId: 'minimax-anthropic',
+      providerId: 'minimax',
       model: 'MiniMax-M3',
       api: 'anthropic',
     };
@@ -104,7 +104,7 @@ describe('transformMessages', () => {
     const msg: Message = {
       role: 'assistant',
       content: [textBlock, { type: 'tool_use', id: 't1', name: 'foo', input: {} }],
-      providerId: 'minimax-anthropic',
+      providerId: 'minimax',
       model: 'MiniMax-M3',
       api: 'anthropic',
     };

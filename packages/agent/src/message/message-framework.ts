@@ -4,37 +4,6 @@ export type AgentMessageContent = string | MessageContent[];
 
 export type AgentMessageVisibility = 'visible' | 'hidden';
 
-export interface AgentMessageBase {
-  id: string;
-  createdAt: number;
-  visibility: AgentMessageVisibility;
-  metadata?: Readonly<Record<string, unknown>>;
-}
-
-export interface UserAgentMessage extends AgentMessageBase {
-  kind: 'user';
-  content: AgentMessageContent;
-  displayContent?: AgentMessageContent;
-  attachments?: readonly unknown[];
-}
-
-export interface AssistantAgentMessage extends AgentMessageBase {
-  kind: 'assistant';
-  content: AgentMessageContent;
-  providerId?: string;
-  model?: string;
-  tokenUsage?: TokenUsage;
-  stopReason?: string;
-}
-
-export interface ToolResultAgentMessage extends AgentMessageBase {
-  kind: 'tool_result';
-  toolCallId: string;
-  toolName: string;
-  content: AgentMessageContent;
-  isError: boolean;
-}
-
 export type RuntimeContextSource =
   | 'agents_md'
   | 'attachment'
@@ -45,52 +14,107 @@ export type RuntimeContextSource =
   | 'system'
   | 'custom';
 
-export interface RuntimeContextAgentMessage extends AgentMessageBase {
-  kind: 'runtime_context';
+/**
+ * Runtime context (AGENTS.md, mailbox, background notification, mode, memory,
+ * attachment, system). Modeled as a user-role provider turn when projected.
+ */
+export interface RuntimeContextMessage {
+  role: 'runtime_context';
+  id: string;
+  timestamp: number;
+  visibility: AgentMessageVisibility;
   source: RuntimeContextSource;
   content: AgentMessageContent;
+  metadata?: Readonly<Record<string, unknown>>;
 }
 
-export interface CompactionSummaryAgentMessage extends AgentMessageBase {
-  kind: 'compaction_summary';
+/**
+ * Compaction summary that stands in for compacted history. Derived from a
+ * durable CompactionEntry rather than an independent historical record.
+ */
+export interface CompactionSummaryMessage {
+  role: 'compaction_summary';
+  id: string;
+  timestamp: number;
+  visibility: AgentMessageVisibility;
   summary: string;
   compactionEntryId: string;
   tokensBefore: number;
   tokensAfter?: number;
+  metadata?: Readonly<Record<string, unknown>>;
+}
+
+/** Legacy `role: 'system'` message adapted from an old provider row. */
+export interface LegacySystemMessage {
+  role: 'legacy_system';
+  id: string;
+  timestamp: number;
+  visibility: AgentMessageVisibility;
+  payload: { content: AgentMessageContent; name?: string };
+}
+
+/** Legacy compact-boundary marker adapted from an old provider row. */
+export interface LegacyCompactionBoundaryMessage {
+  role: 'legacy_compaction_boundary';
+  id: string;
+  timestamp: number;
+  visibility: AgentMessageVisibility;
+  payload: {
+    compactBoundaryId?: string;
+    /** Original marker content, kept so persistence can rebuild the row. */
+    content: AgentMessageContent;
+    compactedMessageCount?: number;
+    compactedMessageIds?: readonly string[];
+  };
+}
+
+/** Legacy message with a role the new domain does not model. */
+export interface LegacyUnknownRoleMessage {
+  role: 'legacy_unknown_role';
+  id: string;
+  timestamp: number;
+  visibility: AgentMessageVisibility;
+  payload: { role: string; content: AgentMessageContent };
 }
 
 /**
- * Applications may extend the framework without widening the provider Message type.
- *
- * @example
- * type ArtifactMessage = AgentCustomMessage<'artifact', { path: string }>;
- * type AppMessage = AgentMessage<ArtifactMessage>;
+ * Fixed registry of the framework's custom (non-provider) message roles.
+ * The composite `AgentMessage` is the provider `Message` OR one of these.
  */
-export interface AgentCustomMessage<
-  TKind extends string = string,
-  TPayload = unknown,
-> extends AgentMessageBase {
-  kind: `custom:${TKind}`;
-  payload: TPayload;
+export interface CustomAgentMessages {
+  runtimeContext: RuntimeContextMessage;
+  compactionSummary: CompactionSummaryMessage;
+  legacySystem: LegacySystemMessage;
+  legacyCompactionBoundary: LegacyCompactionBoundaryMessage;
+  legacyUnknownRole: LegacyUnknownRoleMessage;
 }
 
+/**
+ * Unified agent message: the flat provider `Message` for user/assistant/tool
+ * turns, unioned with the framework's custom message roles.
+ */
+export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];
+
+// ─── Backward-compatible aliases ────────────────────────────────────────
+
+export type RuntimeContextAgentMessage = RuntimeContextMessage;
+export type CompactionSummaryAgentMessage = CompactionSummaryMessage;
+
+export type UserAgentMessage = Message & { role: 'user' };
+export type AssistantAgentMessage = Message;
+export type ToolResultAgentMessage = Message & { role: 'tool' };
+
 export type CoreAgentMessage =
-  | UserAgentMessage
-  | AssistantAgentMessage
-  | ToolResultAgentMessage
-  | RuntimeContextAgentMessage
-  | CompactionSummaryAgentMessage;
+  | Message
+  | RuntimeContextMessage
+  | CompactionSummaryMessage;
 
-export type AgentMessage<TCustom extends AgentCustomMessage = never> =
-  | CoreAgentMessage
-  | TCustom;
-
-export interface MessageEntry<TCustom extends AgentCustomMessage = never> {
+export interface MessageEntry {
   type: 'message';
   id: string;
   parentId: string | null;
   createdAt: number;
-  message: AgentMessage<TCustom>;
+  message: AgentMessage;
 }
 
 export interface CompactionEntry {
@@ -166,16 +190,16 @@ export interface CustomStateEntry extends TimelineControlEntryBase {
   payload: unknown;
 }
 
-export type MessageTimelineEntry<TCustom extends AgentCustomMessage = never> =
-  | MessageEntry<TCustom>
+export type MessageTimelineEntry =
+  | MessageEntry
   | CompactionEntry
   | ModelChangeEntry
   | ModeChangeEntry
   | BranchEntry
   | CustomStateEntry;
 
-export interface AgentContextProjection<TCustom extends AgentCustomMessage = never> {
-  messages: AgentMessage<TCustom>[];
+export interface AgentContextProjection {
+  messages: AgentMessage[];
   compaction?: CompactionEntry;
   warnings: string[];
 }
@@ -193,32 +217,21 @@ export interface PromptSegment {
   readonly content: string | readonly MessageContent[];
 }
 
-export type CustomMessageProjector<TCustom extends AgentCustomMessage> = (
-  message: TCustom,
-) => Message | readonly Message[] | null;
-
-function isCustomAgentMessage(
-  message: AgentMessage<AgentCustomMessage>,
-): message is AgentCustomMessage {
-  return message.kind.startsWith('custom:');
-}
-
-export function isDurableAgentMessage(
-  message: AgentMessage<AgentCustomMessage>,
-): boolean {
-  return message.persistence === 'durable';
-}
-
-export function isVisibleAgentMessage(
-  message: AgentMessage<AgentCustomMessage>,
-): boolean {
+export function isVisibleAgentMessage(message: AgentMessage): boolean {
   return message.visibility === 'visible';
 }
 
-export function findSafeCompactionBoundary<
-  TCustom extends AgentCustomMessage = never,
->(
-  messages: readonly AgentMessage<TCustom>[],
+/**
+ * Shared deep-clone helper for the message domain. Both the legacy adapter
+ * (envelope snapshots) and the boundary projectors (output isolation) need
+ * structurally independent copies of message payloads.
+ */
+export function cloneValue<T>(value: T): T {
+  return structuredClone(value);
+}
+
+export function findSafeCompactionBoundary(
+  messages: readonly AgentMessage[],
   proposedFirstKeptIndex: number,
 ): { firstKeptIndex: number; firstKeptMessageId?: string } {
   if (messages.length === 0) {
@@ -232,7 +245,7 @@ export function findSafeCompactionBoundary<
 
   for (let index = proposedIndex; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.kind === 'user') {
+    if (message?.role === 'user') {
       return { firstKeptIndex: index, firstKeptMessageId: message.id };
     }
   }
@@ -243,11 +256,11 @@ export function findSafeCompactionBoundary<
   };
 }
 
-export function buildAgentContext<TCustom extends AgentCustomMessage = never>(
-  entries: readonly MessageTimelineEntry<TCustom>[],
-): AgentContextProjection<TCustom> {
+export function buildAgentContext(
+  entries: readonly MessageTimelineEntry[],
+): AgentContextProjection {
   const messageEntries = entries.filter(
-    (entry): entry is MessageEntry<TCustom> => entry.type === 'message',
+    (entry): entry is MessageEntry => entry.type === 'message',
   );
   const latestCompaction = [...entries]
     .reverse()
@@ -281,14 +294,13 @@ export function buildAgentContext<TCustom extends AgentCustomMessage = never>(
 
   const retainedMessages = entries
     .slice(firstKeptIndex)
-    .filter((entry): entry is MessageEntry<TCustom> => entry.type === 'message')
+    .filter((entry): entry is MessageEntry => entry.type === 'message')
     .map((entry) => entry.message);
 
-  const summaryMessage: CompactionSummaryAgentMessage = {
-    kind: 'compaction_summary',
+  const summaryMessage: AgentMessage = {
+    role: 'compaction_summary',
     id: `${latestCompaction.id}:summary`,
-    createdAt: latestCompaction.createdAt,
-    persistence: 'transient',
+    timestamp: latestCompaction.createdAt,
     visibility: 'visible',
     summary: latestCompaction.summary,
     compactionEntryId: latestCompaction.id,
@@ -303,118 +315,12 @@ export function buildAgentContext<TCustom extends AgentCustomMessage = never>(
   };
 }
 
-export function toModelMessages<TCustom extends AgentCustomMessage = never>(
-  messages: readonly AgentMessage<TCustom>[],
-  projectCustom?: CustomMessageProjector<TCustom>,
-): Message[] {
-  const result: Message[] = [];
-
-  for (const message of messages) {
-    if (message.kind === 'user') {
-      result.push({
-        id: message.id,
-        role: 'user',
-        content: message.content,
-        displayContent: message.displayContent,
-        attachments: message.attachments ? [...message.attachments] : undefined,
-        timestamp: message.createdAt,
-      });
-      continue;
-    }
-
-    if (message.kind === 'assistant') {
-      result.push({
-        id: message.id,
-        role: 'assistant',
-        content: message.content,
-        providerId: message.providerId,
-        model: message.model,
-        tokenUsage: message.tokenUsage,
-        timestamp: message.createdAt,
-      });
-      continue;
-    }
-
-    if (message.kind === 'tool_result') {
-      result.push({
-        id: message.id,
-        role: 'tool',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: message.toolCallId,
-          content: message.content,
-          is_error: message.isError,
-        }],
-        name: message.toolName,
-        tool_call_id: message.toolCallId,
-        timestamp: message.createdAt,
-      });
-      continue;
-    }
-
-    if (message.kind === 'runtime_context') {
-      result.push({
-        id: message.id,
-        role: 'user',
-        content: message.content,
-        timestamp: message.createdAt,
-        metadata: {
-          runtimeContext: true,
-          source: message.source,
-        },
-      });
-      continue;
-    }
-
-    if (message.kind === 'compaction_summary') {
-      result.push({
-        id: message.id,
-        role: 'user',
-        content: [
-          'Another agent continued this task and produced the following context summary.',
-          'Use it as prior context without repeating completed work.',
-          '',
-          message.summary,
-        ].join('\n'),
-        timestamp: message.createdAt,
-        isCompactSummary: true,
-        compactBoundaryId: message.compactionEntryId,
-      });
-      continue;
-    }
-
-    const customMessage = message as TCustom;
-    if (!isCustomAgentMessage(customMessage)) {
-      continue;
-    }
-    // Legacy marker kinds never carry model content and must not enter context
-    if (
-      customMessage.kind === 'custom:legacy-compaction-boundary' ||
-      customMessage.kind === 'custom:legacy-unknown-role'
-    ) {
-      continue;
-    }
-    if (!projectCustom) {
-      continue;
-    }
-
-    const projected = projectCustom(customMessage);
-    if (Array.isArray(projected)) {
-      result.push(...projected);
-    } else if (projected) {
-      result.push(projected as Message);
-    }
-  }
-
-  return result;
-}
-
-export class MessageTimeline<TCustom extends AgentCustomMessage = never> {
-  private readonly timeline: MessageTimelineEntry<TCustom>[];
+export class MessageTimeline {
+  private readonly timeline: MessageTimelineEntry[];
   private readonly entryIds: Set<string>;
   private readonly messageIds: Set<string>;
 
-  constructor(entries: readonly MessageTimelineEntry<TCustom>[] = []) {
+  constructor(entries: readonly MessageTimelineEntry[] = []) {
     this.timeline = [];
     this.entryIds = new Set();
     this.messageIds = new Set();
@@ -423,7 +329,7 @@ export class MessageTimeline<TCustom extends AgentCustomMessage = never> {
     }
   }
 
-  appendMessage(entry: MessageEntry<TCustom>): void {
+  appendMessage(entry: MessageEntry): void {
     this.appendEntry(entry);
   }
 
@@ -447,25 +353,25 @@ export class MessageTimeline<TCustom extends AgentCustomMessage = never> {
     this.appendEntry(entry);
   }
 
-  snapshot(): readonly MessageTimelineEntry<TCustom>[] {
+  snapshot(): readonly MessageTimelineEntry[] {
     return [...this.timeline];
   }
 
-  buildContext(): AgentContextProjection<TCustom> {
+  buildContext(): AgentContextProjection {
     return buildAgentContext(this.timeline);
   }
 
-  private appendEntry(entry: MessageTimelineEntry<TCustom>): void {
+  private appendEntry(entry: MessageTimelineEntry): void {
     if (this.entryIds.has(entry.id)) {
       throw new Error(`Duplicate timeline entry id: ${entry.id}`);
     }
-    if (entry.type === 'message' && this.messageIds.has(entry.message.id)) {
+    if (entry.type === 'message' && entry.message.id && this.messageIds.has(entry.message.id)) {
       throw new Error(`Duplicate agent message id: ${entry.message.id}`);
     }
 
     this.timeline.push(entry);
     this.entryIds.add(entry.id);
-    if (entry.type === 'message') {
+    if (entry.type === 'message' && entry.message.id) {
       this.messageIds.add(entry.message.id);
     }
   }

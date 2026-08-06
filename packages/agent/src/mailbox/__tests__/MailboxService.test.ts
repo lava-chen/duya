@@ -88,8 +88,8 @@ function insertRow(
 describe.skipIf(!nativeSqliteAvailable)('MailboxService', () => {
   it('claims the highest-priority pending row first', () => {
     const db = createDb();
-    insertRow(db, { id: 'followup', kind: 'followup', priority: 100, createdAt: 1 });
-    insertRow(db, { id: 'stop', kind: 'stop', priority: 10, createdAt: 2 });
+    insertRow(db, { id: 'low', kind: 'followup', priority: 100, createdAt: 1 });
+    insertRow(db, { id: 'high', kind: 'followup', priority: 10, createdAt: 2 });
 
     const service = new MailboxService(db);
     const result = service.claimBatch({
@@ -98,7 +98,7 @@ describe.skipIf(!nativeSqliteAvailable)('MailboxService', () => {
       checkpoint: 'before_model_turn',
     });
 
-    expect(result.rows.map((row) => row.id)).toEqual(['stop']);
+    expect(result.rows.map((row) => row.id)).toEqual(['high']);
     expect(result.claimTokens).toHaveLength(1);
     expect(result.rows[0].status).toBe('observed');
     expect(result.rows[0].edit_locked_at).toBeTypeOf('number');
@@ -120,10 +120,10 @@ describe.skipIf(!nativeSqliteAvailable)('MailboxService', () => {
     expect(result.rows.map((row) => row.id)).toEqual(['a', 'b']);
   });
 
-  it('leaves ordinary queued rows unclaimed until they are guided', () => {
+  it('excludes queued rows at before_model_turn but claims followup rows', () => {
     const db = createDb();
-    insertRow(db, { id: 'queued', priority: 100, createdAt: 1000, source: 'ui' });
-    insertRow(db, { id: 'guided', priority: 100, createdAt: 1001, applyMode: 'runtime_instruction' });
+    insertRow(db, { id: 'queued', kind: 'queued', priority: 100, createdAt: 1000, source: 'ui' });
+    insertRow(db, { id: 'followup', kind: 'followup', priority: 100, createdAt: 1001, source: 'ui' });
 
     const service = new MailboxService(db);
     const result = service.claimBatch({
@@ -132,7 +132,29 @@ describe.skipIf(!nativeSqliteAvailable)('MailboxService', () => {
       checkpoint: 'before_model_turn',
     });
 
-    expect(result.rows.map((row) => row.id)).toEqual(['guided']);
+    expect(result.rows.map((row) => row.id)).toEqual(['followup']);
+  });
+
+  it('claims queued rows only at before_final_answer, not before_model_turn', () => {
+    const db = createDb();
+    insertRow(db, { id: 'queued-a', kind: 'queued', priority: 100, createdAt: 1000, source: 'ui' });
+    insertRow(db, { id: 'queued-b', kind: 'queued', priority: 100, createdAt: 1001, source: 'ui' });
+
+    const service = new MailboxService(db);
+
+    const modelTurn = service.claimBatch({
+      sessionId: 's1',
+      runId: 'run1',
+      checkpoint: 'before_model_turn',
+    });
+    expect(modelTurn.rows).toEqual([]);
+
+    const finalAnswer = service.claimBatch({
+      sessionId: 's1',
+      runId: 'run1',
+      checkpoint: 'before_final_answer',
+    });
+    expect(finalAnswer.rows.map((row) => row.id)).toEqual(['queued-a', 'queued-b']);
   });
 
   it('reclaims expired observed rows', () => {

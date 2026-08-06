@@ -66,6 +66,14 @@ export interface UseProviderModelsArgs {
    *  edit-mode hydration. Loaded once from
    *  `listModelCapabilitiesIPC` by the view. */
   initialContextWindows?: Record<string, number>;
+  /**
+   * Catalog default models for the selected preset. These seed
+   * the `fetched` list immediately so the user sees available
+   * models without needing to configure API key + fetch first.
+   * When `fetch()` is called, API results are merged with
+   * these (preset models not in the API response are retained).
+   */
+  presetModels?: FetchedModel[];
 }
 
 export interface UseProviderModelsResult {
@@ -110,9 +118,10 @@ export function useProviderModels({
   initialEnabled,
   initialCustomModels = [],
   initialContextWindows,
+  presetModels = [],
 }: UseProviderModelsArgs): UseProviderModelsResult {
   const { t } = useTranslation();
-  const [fetched, setFetched] = useState<FetchedModel[]>([]);
+  const [fetched, setFetched] = useState<FetchedModel[]>(presetModels);
   const [enabled, setEnabled] = useState<string[]>(initialEnabled);
   const [customModels, setCustomModels] = useState<string[]>(initialCustomModels);
   const [isFetching, setIsFetching] = useState(false);
@@ -208,7 +217,11 @@ export function useProviderModels({
         provider_id: providerId,
       });
       if (result.success && result.models) {
-        setFetched(result.models);
+        // Merge API results with preset models: keep preset models
+        // that the API didn't return so the user doesn't lose them.
+        const apiIds = new Set(result.models.map((m) => m.id));
+        const preserved = presetModels.filter((m) => !apiIds.has(m.id));
+        setFetched([...result.models, ...preserved]);
       } else {
         setFetchError(
           result.error?.message ?? t('provider.fetchModelsFailed'),
@@ -221,7 +234,7 @@ export function useProviderModels({
     } finally {
       setIsFetching(false);
     }
-  }, [protocol, authStyle, baseUrl, apiKey, providerId, t]);
+  }, [protocol, authStyle, baseUrl, apiKey, providerId, presetModels, t]);
 
   const enable = useCallback((modelId: string) => {
     setEnabled((prev) => (prev.includes(modelId) ? prev : [...prev, modelId]));
@@ -295,12 +308,12 @@ export function useProviderModels({
     (nextEnabled: string[], nextCustom: string[] = []) => {
       setEnabled(nextEnabled);
       setCustomModels(nextCustom);
-      setFetched([]);
+      setFetched(presetModels);
       setFetchError(null);
       setIsFetching(false);
       setContextWindows(new Map());
     },
-    [],
+    [presetModels],
   );
 
   return {

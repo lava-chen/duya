@@ -29,23 +29,17 @@ import { useTranslation } from '@/hooks/useTranslation';
 // as a chip anymore — the row is intentionally chip-less).
 // =============================================================================
 
-const KIND_LABEL_KEYS: Record<MailboxKind, 'mailbox.composer.kindFollowup' | 'mailbox.composer.kindCorrection' | 'mailbox.composer.kindConstraint' | 'mailbox.composer.stop' | 'mailbox.bubble.replace'> = {
+const KIND_LABEL_KEYS: Record<MailboxKind, 'mailbox.composer.kindFollowup'> = {
+  queued: 'mailbox.composer.kindFollowup',
   followup: 'mailbox.composer.kindFollowup',
-  correction: 'mailbox.composer.kindCorrection',
-  constraint: 'mailbox.composer.kindConstraint',
-  stop: 'mailbox.composer.stop',
-  abort_and_replace: 'mailbox.bubble.replace',
   // System notifications (sub-agent / background command completion) never
   // appear as user-editable rows; this label is only a compile-time fill.
   background_notification: 'mailbox.composer.kindFollowup',
 };
 
 const KIND_COLORS: Record<MailboxKind, string> = {
+  queued: 'var(--accent)',
   followup: 'var(--accent)',
-  correction: '#f59e0b',
-  constraint: '#ef4444',
-  stop: '#f59e0b',
-  abort_and_replace: '#ef4444',
   background_notification: 'var(--muted)',
 };
 

@@ -118,7 +118,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     extraEnv: { API_TIMEOUT_MS: '3000000', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
   },
   {
-    key: 'minimax-global',
+    key: 'minimax',
     name: 'MiniMax (Global)',
     description: 'MiniMax Code Plan - Global region',
     providerType: 'anthropic',

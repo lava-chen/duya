@@ -106,7 +106,7 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
 import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
 import type { Message, MessageContent } from '../../../src/types.js';
 import { MessageTimeline } from '../../../src/message/message-framework.js';
-import { legacyMessageToAgentMessage } from '../../../src/message/legacy-message-adapter.js';
+import { ingestMessage } from '../../../src/message/message-factories.js';
 import { MessageCompactionController } from '../../../src/message/message-compaction-controller.js';
 import { projectTimelinePersistenceMessages } from '../../../src/message/message-projectors.js';
 import type { EnhancedCompactionResult } from '../../../src/compact/CompactionManager.js';
@@ -234,7 +234,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       ];
       const timeline = new MessageTimeline();
       for (const [index, message] of source.entries()) {
-        const adapted = legacyMessageToAgentMessage(message, { index });
+        const adapted = ingestMessage(message, { index });
         timeline.appendMessage({
           type: 'message',
           id: `entry-${index}`,
@@ -459,7 +459,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
             id: 'mail-1',
             session_id: 'sess-mailbox',
             content: 'Use concise language',
-            kind: 'correction',
+            kind: 'followup',
             status: 'observed',
           } as never,
         ],

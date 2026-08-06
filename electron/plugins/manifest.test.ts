@@ -1,15 +1,16 @@
 // electron/plugins/manifest.test.ts
-// Plan 311 — Phase 4: v2 manifest parsing & v1 compatibility tests.
+// Plan: plugin-config-simplification — tests for the minimal
+// `.duya-plugin/plugin.json` reader + legacy v1/v2 compat + lenient
+// fallback.
 //
 // Covers `readPluginManifest` for:
-// - v1 manifests parse unchanged (zero migration)
-// - v2 manifests parse `components` / `permissionPolicy` / `publisher`
-// - v2 manifests can omit `capabilities` in favour of `components`
+// - Minimal `.duya-plugin/plugin.json` resolves capabilities from disk
+// - v1/v2 root `plugin.json` parse unchanged (marketplace compat)
 // - Unsupported schemaVersion is rejected
-// - `readPluginManifestLenient` degrades gracefully on malformed JSON
+// - `readPluginManifestLenient` degrades gracefully (never throws)
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -34,6 +35,115 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
+});
+
+// ----------------------------------------------------------------------------
+// Minimal `.duya-plugin/plugin.json` — the new builtin shape
+// ----------------------------------------------------------------------------
+
+describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
+  it('parses identity fields and derives id from name', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'my-plugin',
+        version: '1.0.0',
+        description: 'A minimal plugin.',
+        author: { name: 'DUYA Team' },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.schemaVersion).toBe('duya.plugin.v2');
+    expect(manifest.id).toBe('com.duya.my-plugin');
+    expect(manifest.name).toBe('my-plugin');
+    expect(manifest.version).toBe('1.0.0');
+    expect(manifest.author.name).toBe('DUYA Team');
+    // No capability files on disk → empty capabilities + empty components.
+    expect(manifest.capabilities.skills).toBeUndefined();
+    expect(manifest.components?.skills).toEqual([]);
+  });
+
+  it('resolves skills + mcpServers + workflows from disk', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'full-plugin',
+        version: '0.2.0',
+        description: 'A plugin with disk capabilities.',
+      }),
+    );
+    // skills/<name>/SKILL.md
+    mkdirSync(join(dir, 'skills', 'alpha'), { recursive: true });
+    writeFileSync(join(dir, 'skills', 'alpha', 'SKILL.md'), '# Alpha\n');
+    mkdirSync(join(dir, 'skills', 'beta'), { recursive: true });
+    writeFileSync(join(dir, 'skills', 'beta', 'SKILL.md'), '# Beta\n');
+    // mcp/servers.json
+    mkdirSync(join(dir, 'mcp'), { recursive: true });
+    writeFileSync(
+      join(dir, 'mcp', 'servers.json'),
+      JSON.stringify({
+        servers: [{ name: 'my-mcp', command: 'node', args: ['server.js'] }],
+      }),
+    );
+    // permissions/policy.json
+    mkdirSync(join(dir, 'permissions'), { recursive: true });
+    writeFileSync(
+      join(dir, 'permissions', 'policy.json'),
+      JSON.stringify({
+        defaultMode: 'read',
+        permissions: [{ name: 'workspace.read' }],
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.capabilities.skills).toEqual(['alpha', 'beta']);
+    expect(manifest.capabilities.mcpServers).toEqual([
+      { name: 'my-mcp', command: 'node', args: ['server.js'] },
+    ]);
+    expect(manifest.components?.skills).toEqual(['alpha', 'beta']);
+    expect(manifest.components?.mcpServers).toEqual(['my-mcp']);
+    expect(manifest.permissionPolicy?.defaultMode).toBe('read');
+    expect(manifest.permissions).toEqual([{ name: 'workspace.read', scope: undefined, domains: undefined }]);
+  });
+
+  it('parses optional interface + setup fields', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'market-plugin',
+        version: '1.0.0',
+        description: 'Has market UI metadata.',
+        author: { name: 'DUYA Team' },
+        homepage: 'https://example.com',
+        license: 'MIT',
+        keywords: ['example', 'test'],
+        interface: {
+          displayName: 'Market Plugin',
+          longDescription: 'A longer description for the market.',
+          category: 'development',
+          brandColor: '#ff0000',
+        },
+        setup: [
+          { id: 'token', label: 'API Token', type: 'secret', required: true },
+        ],
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.homepage).toBe('https://example.com');
+    expect(manifest.license).toBe('MIT');
+    expect(manifest.keywords).toEqual(['example', 'test']);
+    expect(manifest.interface?.displayName).toBe('Market Plugin');
+    expect(manifest.interface?.category).toBe('development');
+    expect(manifest.interface?.brandColor).toBe('#ff0000');
+    expect(manifest.setup).toEqual([
+      { id: 'token', label: 'API Token', type: 'secret', required: true, connectionId: undefined },
+    ]);
+  });
 });
 
 // ----------------------------------------------------------------------------
@@ -200,56 +310,6 @@ describe('readPluginManifest — v2 parsing', () => {
     expect(manifest.components).toBeUndefined();
     expect(manifest.permissionPolicy).toBeUndefined();
   });
-
-  it('parses a v2 manifest with a partial permissionPolicy', () => {
-    writeFileSync(
-      join(dir, 'plugin.json'),
-      JSON.stringify({
-        schemaVersion: 'duya.plugin.v2',
-        id: 'com.duya.v2-partial-policy',
-        name: 'PartialPolicy',
-        version: '2.0.0',
-        description: 'Partial policy.',
-        author: { name: 'DUYA Team' },
-        components: { mcpServers: [], skills: [], workflows: [], appConnections: [] },
-        permissionPolicy: {
-          writeActionsRequireApproval: true,
-        },
-        permissions: [],
-        engines: { duya: '>=0.1.0' },
-      }),
-    );
-
-    const manifest = readPluginManifest(dir);
-    expect(manifest.permissionPolicy?.writeActionsRequireApproval).toBe(true);
-    expect(manifest.permissionPolicy?.defaultMode).toBeUndefined();
-    expect(manifest.permissionPolicy?.destructiveActionsRequireApproval).toBeUndefined();
-  });
-
-  it('rejects an invalid permissionPolicy.defaultMode', () => {
-    writeFileSync(
-      join(dir, 'plugin.json'),
-      JSON.stringify({
-        schemaVersion: 'duya.plugin.v2',
-        id: 'com.duya.v2-bad-mode',
-        name: 'BadMode',
-        version: '2.0.0',
-        description: 'Bad mode.',
-        author: { name: 'DUYA Team' },
-        components: { mcpServers: [], skills: [], workflows: [], appConnections: [] },
-        permissionPolicy: {
-          defaultMode: 'admin',
-        },
-        permissions: [],
-        engines: { duya: '>=0.1.0' },
-      }),
-    );
-
-    // The parser does not throw — it silently drops the invalid value.
-    // This is consistent with the lenient v2 parsing philosophy.
-    const manifest = readPluginManifest(dir);
-    expect(manifest.permissionPolicy?.defaultMode).toBeUndefined();
-  });
 });
 
 // ----------------------------------------------------------------------------
@@ -276,24 +336,31 @@ describe('readPluginManifest — unsupported schemaVersion', () => {
 });
 
 // ----------------------------------------------------------------------------
-// readPluginManifestLenient — graceful degradation
+// readPluginManifestLenient — graceful degradation (never throws)
 // ----------------------------------------------------------------------------
 
-describe('readPluginManifestLenient — v1/v2 fallback', () => {
-  it('reads a plugin.md and returns a v1-shaped partial manifest', () => {
+describe('readPluginManifestLenient — graceful fallback', () => {
+  it('reads a minimal .duya-plugin/plugin.json and returns a full manifest', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
     writeFileSync(
-      join(dir, 'plugin.md'),
-      '---\nname: my-plugin\ndescription: A plugin from markdown.\n---\n\nThis is the agent context body.\n',
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'lenient-plugin',
+        version: '0.1.0',
+        description: 'Lenient test.',
+      }),
     );
 
     const result = readPluginManifestLenient(dir);
-    expect(result.source).toBe('plugin.md');
-    expect(result.manifest.schemaVersion).toBe('duya.plugin.v1');
-    expect(result.manifest.name).toBe('my-plugin');
-    expect(result.agentContext).toBe('This is the agent context body.');
+    expect(result.source).toBe('plugin.json');
+    expect(result.warnings).toEqual([]);
+    expect(result.manifest.schemaVersion).toBe('duya.plugin.v2');
+    expect(result.manifest.name).toBe('lenient-plugin');
+    // agentContext falls back to description when interface.longDescription is absent.
+    expect(result.agentContext).toBe('Lenient test.');
   });
 
-  it('falls back to plugin.json when plugin.md is absent', () => {
+  it('falls back to legacy plugin.json when .duya-plugin/ is absent', () => {
     writeFileSync(
       join(dir, 'plugin.json'),
       JSON.stringify({
@@ -324,7 +391,11 @@ describe('readPluginManifestLenient — v1/v2 fallback', () => {
     expect(result.manifest).toEqual({});
   });
 
-  it('throws when neither plugin.md nor plugin.json exists', () => {
-    expect(() => readPluginManifestLenient(dir)).toThrow();
+  it('returns warnings (does not throw) when neither manifest exists', () => {
+    const result = readPluginManifestLenient(dir);
+    expect(result.source).toBe('plugin.json');
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.manifest).toEqual({});
+    expect(result.agentContext).toBe('');
   });
 });

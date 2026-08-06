@@ -1,25 +1,34 @@
-// manifest.ts — hand-written manifest parser.
+// manifest.ts — plugin manifest reader.
 //
-// This parser cannot switch to `PluginManifestSchema.parse` (zod, in
-// src/lib/plugin-types.ts) because it must return the handwritten
-// `PluginManifest` shape from ./types.ts, which is NOT shape-compatible
-// with the zod-inferred manifest:
-//  - zod models `capabilities.skills` as `Array<{ path, description? }>`;
-//    the main-process view (and the bundled catalog / on-disk v1 loader)
-//    emits plain skill-name strings.
-//  - zod has no `setup` field; this parser reads and preserves it.
-//  - zod makes `capabilities.mcpServers.args` required-with-default and
-//    adds `env`; the main-process view treats `args` as optional and
-//    omits `env`.
-// Switching to zod parse would therefore break `readPluginManifest`
-// consumers (catalog.ts inline manifests, capability-counts.ts, and the
-// tests in manifest.test.ts / catalog.test.ts). Migrating the loader and
-// the inline manifests to the zod shape is owned by Plan 311 (v1/v2
-// compat) and is out of scope for the type convergence pass.
+// Two shapes coexist after the plugin-config-simplification refactor:
+//
+// 1. Minimal Codex-style `.duya-plugin/plugin.json` (builtin plugins).
+//    On disk it carries only identity + optional `setup` + optional
+//    `interface`. The reader resolves every capability (skills, MCP
+//    servers, workflows, hooks), every permission, and the permission
+//    policy from sibling directory files (`mcp/servers.json`,
+//    `permissions/policy.json`, `skills/<n>/SKILL.md`, `workflows/*.yaml`)
+//    and returns a fully-populated `PluginManifest` runtime view. This is
+//    the unified framework: one reader, disk is truth.
+//
+// 2. Legacy v1/v2 root `plugin.json` (marketplace + local plugins, kept
+//    for compatibility). The hand-written parser below reads the
+//    declared `capabilities`/`permissions`/`permissionPolicy`/`components`
+//    straight from the JSON. The shape is NOT zod-compatible (see the
+//    historical note in `types.ts`); migrating marketplace storage to the
+//    minimal shape is owned by Plan 86/311 and is out of scope here.
+//
+// `plugin.md` as a declaration layer is removed (Plan 86 override): the
+// long-form content moved to `interface.longDescription` + `README.md`.
 
 import fs from 'fs';
 import path from 'path';
-import type { PluginCapabilityKind, PluginManifest } from './types';
+import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
+import { discoverAllCapabilities } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
+
+// ----------------------------------------------------------------------------
+// Shared low-level helpers
+// ----------------------------------------------------------------------------
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -52,46 +61,220 @@ function asOptionalString(value: unknown): string | null {
   return null;
 }
 
-function extractMarkdownFrontmatter(content: string): { yaml: string; body: string } {
-  const trimmed = content.trimStart();
-  if (!trimmed.startsWith('---')) return { yaml: '', body: content };
-  const endIdx = trimmed.indexOf('\n---', 3);
-  if (endIdx === -1) {
-    const closingIdx = trimmed.indexOf('---', 3);
-    if (closingIdx === -1) return { yaml: '', body: content };
-    return { yaml: trimmed.slice(3, closingIdx).trim(), body: trimmed.slice(closingIdx + 3).trim() };
+// ----------------------------------------------------------------------------
+// Minimal `.duya-plugin/plugin.json` reader + disk resolution
+// ----------------------------------------------------------------------------
+
+const DOT_FOLDER_DIR = '.duya-plugin';
+const DOT_FOLDER_MANIFEST = path.join(DOT_FOLDER_DIR, 'plugin.json');
+
+const VALID_DEFAULT_MODES = ['read', 'draft', 'write', 'modify', 'dangerous'] as const;
+type DefaultMode = (typeof VALID_DEFAULT_MODES)[number];
+
+/**
+ * Read `permissions/policy.json` and split it into the two manifest fields
+ * it backs: `permissionPolicy` (the tier defaults) and `permissions` (the
+ * capability request list). Absent file → no policy, no permissions. This
+ * makes `permissions/policy.json` the single source of truth for everything
+ * permission-related; `.duya-plugin/plugin.json` never touches permissions.
+ */
+function readPermissionsPolicy(pluginRoot: string): {
+  permissionPolicy: PluginManifest['permissionPolicy'];
+  permissions: PluginManifest['permissions'];
+} {
+  const policyPath = path.join(pluginRoot, 'permissions', 'policy.json');
+  if (!fs.existsSync(policyPath)) {
+    return { permissionPolicy: undefined, permissions: [] };
   }
-  return { yaml: trimmed.slice(3, endIdx).trim(), body: trimmed.slice(endIdx + 4).trim() };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(policyPath, 'utf8'));
+  } catch {
+    return { permissionPolicy: undefined, permissions: [] };
+  }
+  if (!isObject(raw)) {
+    return { permissionPolicy: undefined, permissions: [] };
+  }
+
+  const defaultModeRaw = raw.defaultMode;
+  const permissionPolicy: PluginManifest['permissionPolicy'] = {
+    defaultMode:
+      typeof defaultModeRaw === 'string' && (VALID_DEFAULT_MODES as readonly string[]).includes(defaultModeRaw)
+        ? (defaultModeRaw as DefaultMode)
+        : undefined,
+    writeActionsRequireApproval:
+      typeof raw.writeActionsRequireApproval === 'boolean'
+        ? raw.writeActionsRequireApproval
+        : undefined,
+    destructiveActionsRequireApproval:
+      typeof raw.destructiveActionsRequireApproval === 'boolean'
+        ? raw.destructiveActionsRequireApproval
+        : undefined,
+  };
+
+  const permsRaw = raw.permissions;
+  const permissions: PluginManifest['permissions'] = Array.isArray(permsRaw)
+    ? permsRaw
+        .filter((entry): entry is Record<string, unknown> => isObject(entry))
+        .map((entry) => ({
+          name: typeof entry.name === 'string' ? entry.name : '',
+          scope: typeof entry.scope === 'string' ? entry.scope : undefined,
+          domains: Array.isArray(entry.domains)
+            ? entry.domains.filter((d): d is string => typeof d === 'string')
+            : undefined,
+        }))
+        .filter((p) => p.name.length > 0)
+    : [];
+
+  return { permissionPolicy, permissions };
 }
 
-function parseSimpleYamlLine(line: string): { key: string; value: string } | null {
-  const match = line.match(/^(\w[\w_-]*):\s*(.*)$/);
-  if (!match) return null;
-  return { key: match[1], value: match[2].trim() };
+/**
+ * Read the connection ids declared in `apps/connections.json` without
+ * re-validating the provider (the app-connection manifest parser in
+ * `electron/services/app-connections` owns provider validation and the
+ * `SUPPORTED_PROVIDERS` list — Plan 312). Here we only need the id list
+ * for the `components.appConnections` capability summary.
+ */
+function readAppConnectionIds(pluginRoot: string): string[] {
+  const connsPath = path.join(pluginRoot, 'apps', 'connections.json');
+  if (!fs.existsSync(connsPath)) return [];
+  try {
+    const raw = JSON.parse(fs.readFileSync(connsPath, 'utf8'));
+    const list = Array.isArray(raw) ? raw : isObject(raw) && Array.isArray(raw.connections) ? raw.connections : [];
+    return list
+      .filter((entry): entry is Record<string, unknown> => isObject(entry))
+      .map((entry) => (typeof entry.id === 'string' ? entry.id : ''))
+      .filter((id) => id.length > 0);
+  } catch {
+    return [];
+  }
 }
 
-function parseSimpleYaml(yaml: string): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const line of yaml.split('\n')) {
-    const parsed = parseSimpleYamlLine(line);
-    if (parsed) {
-      result[parsed.key] = parsed.value;
-    }
+function parseSetupField(
+  item: unknown,
+  index: number,
+): PluginManifest['setup'][number] {
+  if (!isObject(item)) {
+    throw new Error(`Invalid setup[${index}]`);
   }
-  return result;
+  const type = asString(item.type, `setup[${index}].type`);
+  if (!['text', 'secret', 'path', 'url', 'app-connection'].includes(type)) {
+    throw new Error(`Invalid setup[${index}].type`);
+  }
+  return {
+    id: asString(item.id, `setup[${index}].id`),
+    label: asString(item.label, `setup[${index}].label`),
+    type: type as 'text' | 'secret' | 'path' | 'url' | 'app-connection',
+    required: item.required === true,
+    connectionId:
+      type === 'app-connection' && typeof item.connectionId === 'string' && item.connectionId.trim().length > 0
+        ? item.connectionId
+        : undefined,
+  };
 }
 
-export function readPluginManifest(pluginRoot: string): PluginManifest {
-  const manifestPath = path.join(pluginRoot, 'plugin.json');
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error(`plugin.json not found: ${manifestPath}`);
+function parseInterfaceBlock(raw: unknown): PluginInterface | undefined {
+  if (!isObject(raw)) return undefined;
+  const block: PluginInterface = {};
+  const displayName = asOptionalString(raw.displayName);
+  if (displayName) block.displayName = displayName;
+  const longDescription = asOptionalString(raw.longDescription);
+  if (longDescription) block.longDescription = longDescription;
+  const category = asOptionalString(raw.category);
+  if (category) block.category = category as PluginInterface['category'];
+  const brandColor = asOptionalString(raw.brandColor);
+  if (brandColor) block.brandColor = brandColor;
+  if (Array.isArray(raw.screenshots)) {
+    block.screenshots = raw.screenshots.filter((s): s is string => typeof s === 'string');
   }
+  return Object.keys(block).length > 0 ? block : undefined;
+}
 
+/**
+ * Read a minimal `.duya-plugin/plugin.json` and resolve a full
+ * `PluginManifest` runtime view from the plugin directory. Identity comes
+ * from the JSON file; everything else comes from sibling directory files.
+ */
+function readMinimalManifest(pluginRoot: string, manifestPath: string): PluginManifest {
   const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as unknown;
   if (!isObject(raw)) {
     throw new Error('Invalid plugin manifest root');
   }
 
+  const name = asString(raw.name, 'name');
+  const version = asString(raw.version, 'version');
+  const description = asString(raw.description, 'description');
+  const id =
+    typeof raw.id === 'string' && raw.id.trim().length > 0 ? raw.id : `com.duya.${name}`;
+
+  const authorRaw = raw.author;
+  const author: PluginManifest['author'] = isObject(authorRaw)
+    ? {
+        name: asString(authorRaw.name, 'author.name'),
+        url: typeof authorRaw.url === 'string' ? authorRaw.url : undefined,
+        email: typeof authorRaw.email === 'string' ? authorRaw.email : undefined,
+      }
+    : { name: 'Unknown' };
+
+  // Resolve capabilities from disk (single source of truth).
+  const caps = discoverAllCapabilities(pluginRoot);
+  const skillNames = caps.skills.map((s) => s.name);
+  const mcpServers = caps.mcpServers;
+  const workflowNames = caps.workflows.map((w) => w.name);
+  const hooks = caps.hooks;
+
+  const { permissionPolicy, permissions } = readPermissionsPolicy(pluginRoot);
+
+  const setup: PluginManifest['setup'] = Array.isArray(raw.setup)
+    ? raw.setup.map((item, index) => parseSetupField(item, index))
+    : undefined;
+
+  const interfaceBlock = parseInterfaceBlock(raw.interface);
+
+  const manifest: PluginManifest = {
+    schemaVersion: 'duya.plugin.v2',
+    id,
+    name,
+    version,
+    description,
+    author,
+    homepage: asOptionalString(raw.homepage) ?? undefined,
+    repository: asOptionalString(raw.repository) ?? undefined,
+    license: asOptionalString(raw.license) ?? undefined,
+    keywords: asOptionalStringArray(raw.keywords) ?? undefined,
+    interface: interfaceBlock,
+    capabilities: {
+      skills: skillNames.length ? skillNames : undefined,
+      mcpServers: mcpServers.length ? mcpServers : undefined,
+      hooks: hooks.length
+        ? hooks.map((h) => ({ event: h.event, handler: h.handler }))
+        : undefined,
+      // cli/ui are not discovered from disk for builtin plugins.
+    },
+    components: {
+      mcpServers: mcpServers.map((s) => s.name),
+      appConnections: readAppConnectionIds(pluginRoot),
+      skills: skillNames,
+      workflows: workflowNames,
+    },
+    permissionPolicy,
+    permissions,
+    setup,
+    // `engines` is not part of the minimal on-disk shape; default to the
+    // current app floor. Marketplace plugins still declare it via the
+    // legacy parser branch.
+    engines: { duya: '>=0.1.0' },
+  };
+
+  return manifest;
+}
+
+// ----------------------------------------------------------------------------
+// Legacy v1/v2 root `plugin.json` parser (marketplace / local compat)
+// ----------------------------------------------------------------------------
+
+function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
   const schemaVersion = asString(raw.schemaVersion, 'schemaVersion');
   if (schemaVersion !== 'duya.plugin.v1' && schemaVersion !== 'duya.plugin.v2') {
     throw new Error(`Unsupported schemaVersion: ${schemaVersion}`);
@@ -106,8 +289,7 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
   // `components`). When v2 omits `capabilities` we still synthesize an
   // empty object so the `PluginManifest.capabilities` field stays
   // present and downstream code can read `manifest.capabilities.*`
-  // without a separate undefined-check. The synthesised shape is
-  // equivalent to v1's "all-undefined" capabilities.
+  // without a separate undefined-check.
   const capabilitiesRaw = raw.capabilities;
   if (schemaVersion === 'duya.plugin.v1' && !isObject(capabilitiesRaw)) {
     throw new Error('Invalid plugin manifest field: capabilities');
@@ -124,9 +306,6 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
     throw new Error('Invalid plugin manifest field: engines');
   }
 
-  // Plan 311 — v2 components & permissionPolicy. Both optional from
-  // the type-system perspective (the v1 path leaves them undefined),
-  // but v2 manifests are expected to populate `components`.
   const componentsRaw = raw.components;
   const components = isObject(componentsRaw)
     ? {
@@ -174,7 +353,13 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
     author: {
       name: asString(authorRaw.name, 'author.name'),
       url: typeof authorRaw.url === 'string' ? authorRaw.url : undefined,
+      email: typeof authorRaw.email === 'string' ? authorRaw.email : undefined,
     },
+    homepage: asOptionalString(raw.homepage) ?? undefined,
+    repository: asOptionalString(raw.repository) ?? undefined,
+    license: asOptionalString(raw.license) ?? undefined,
+    keywords: asOptionalStringArray(raw.keywords) ?? undefined,
+    interface: parseInterfaceBlock(raw.interface),
     capabilities: {
       skills: capsRaw.skills ? asStringArray(capsRaw.skills, 'capabilities.skills') : undefined,
       mcpServers: Array.isArray(capsRaw.mcpServers)
@@ -231,28 +416,7 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
       };
     }),
     setup: Array.isArray(raw.setup)
-      ? raw.setup.map((item, index) => {
-          if (!isObject(item)) {
-            throw new Error(`Invalid setup[${index}]`);
-          }
-          const type = asString(item.type, `setup[${index}].type`);
-          if (!['text', 'secret', 'path', 'url', 'app-connection'].includes(type)) {
-            throw new Error(`Invalid setup[${index}].type`);
-          }
-          return {
-            id: asString(item.id, `setup[${index}].id`),
-            label: asString(item.label, `setup[${index}].label`),
-            type: type as 'text' | 'secret' | 'path' | 'url' | 'app-connection',
-            required: item.required === true,
-            // Plan 312 — only read for app-connection fields; the loader
-            // in PluginManager later pairs this with the connections.json
-            // declaration to compute the needs_setup health state.
-            connectionId:
-              type === 'app-connection' && typeof item.connectionId === 'string' && item.connectionId.trim().length > 0
-                ? item.connectionId
-                : undefined,
-          };
-        })
+      ? raw.setup.map((item, index) => parseSetupField(item, index))
       : undefined,
     engines: {
       duya: asString(enginesRaw.duya, 'engines.duya'),
@@ -263,78 +427,78 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
   return manifest;
 }
 
+// ----------------------------------------------------------------------------
+// Public API
+// ----------------------------------------------------------------------------
+
+/**
+ * Read a plugin manifest from `pluginRoot`.
+ *
+ * Resolution order:
+ *   1. `<root>/.duya-plugin/plugin.json` — minimal Codex-style shape; the
+ *      reader resolves capabilities/permissions/policy from sibling
+ *      directory files. This is the builtin path.
+ *   2. `<root>/plugin.json` — legacy v1/v2 shape (marketplace/local).
+ *
+ * Throws when neither file is present.
+ */
+export function readPluginManifest(pluginRoot: string): PluginManifest {
+  const dotPath = path.join(pluginRoot, DOT_FOLDER_MANIFEST);
+  if (fs.existsSync(dotPath)) {
+    return readMinimalManifest(pluginRoot, dotPath);
+  }
+
+  const rootPath = path.join(pluginRoot, 'plugin.json');
+  if (fs.existsSync(rootPath)) {
+    const raw = JSON.parse(fs.readFileSync(rootPath, 'utf8')) as unknown;
+    if (!isObject(raw)) {
+      throw new Error('Invalid plugin manifest root');
+    }
+    return parseLegacyV1V2Manifest(raw);
+  }
+
+  throw new Error(`plugin.json not found: ${pluginRoot}`);
+}
+
 export interface ManifestReadResult {
   manifest: Partial<PluginManifest>;
   agentContext: string;
-  source: 'plugin.json' | 'plugin.md';
+  source: 'plugin.json';
   warnings: string[];
 }
 
+/**
+ * Lenient manifest read — never throws. `plugin.md` is no longer a
+ * supported declaration layer (Plan 86 override); only `plugin.json`
+ * (minimal or legacy) is read. Parse failures return an empty manifest
+ * + warnings so a stale/broken plugin never blocks catalog loading.
+ */
 export function readPluginManifestLenient(pluginRoot: string): ManifestReadResult {
-  const mdPath = path.join(pluginRoot, 'plugin.md');
-  const jsonPath = path.join(pluginRoot, 'plugin.json');
-
-  if (fs.existsSync(mdPath)) {
-    const content = fs.readFileSync(mdPath, 'utf-8');
-    const { yaml, body } = extractMarkdownFrontmatter(content);
-    const frontmatter = parseSimpleYaml(yaml);
-    const warnings: string[] = [];
-
-    const name = asOptionalString(frontmatter.name);
-    const version = asOptionalString(frontmatter.version);
-    const description = asOptionalString(frontmatter.description);
-    const id = name ? `com.duya.${name}` : undefined;
-
-    if (!name) warnings.push('Missing name in plugin.md frontmatter');
-    if (!description) warnings.push('Missing description in plugin.md frontmatter');
-
+  try {
+    const manifest = readPluginManifest(pluginRoot);
     return {
-      manifest: {
-        schemaVersion: 'duya.plugin.v1',
-        id,
-        name: name ?? undefined,
-        version: version ?? undefined,
-        description: description ?? undefined,
-        author: { name: frontmatter.author ?? 'Unknown' },
-        capabilities: {},
-        permissions: [],
-        engines: { duya: '>=0.1.0' },
-      },
-      agentContext: body || description || '',
-      source: 'plugin.md',
-      warnings,
+      manifest,
+      agentContext: manifest.interface?.longDescription ?? manifest.description,
+      source: 'plugin.json',
+      warnings: [],
+    };
+  } catch (err) {
+    return {
+      manifest: {},
+      agentContext: '',
+      source: 'plugin.json',
+      warnings: [err instanceof Error ? err.message : String(err)],
     };
   }
-
-  if (fs.existsSync(jsonPath)) {
-    try {
-      const manifest = readPluginManifest(pluginRoot);
-      return {
-        manifest,
-        agentContext: manifest.description,
-        source: 'plugin.json',
-        warnings: [],
-      };
-    } catch (err) {
-      return {
-        manifest: {},
-        agentContext: '',
-        source: 'plugin.json',
-        warnings: [err instanceof Error ? err.message : String(err)],
-      };
-    }
-  }
-
-  throw new Error(`No plugin.md or plugin.json found in: ${pluginRoot}`);
 }
 
 export function listCapabilityKinds(manifest: PluginManifest): PluginCapabilityKind[] {
   const kinds: PluginCapabilityKind[] = [];
   // v2 manifests declare capabilities under `components` (string[] lists);
-  // v1 manifests declare them under `capabilities` (typed objects). Inline
-  // v2 catalog entries (e.g. bundled skill entries in catalog.ts) omit
-  // `capabilities` entirely, so reading `manifest.capabilities.*` without
-  // a v2 branch would crash with "Cannot read properties of undefined".
+  // v1 manifests declare them under `capabilities` (typed objects). The
+  // minimal-shape reader populates BOTH (components from disk names,
+  // capabilities from disk objects), so the v2 branch is authoritative
+  // for builtin plugins and the v1 branch covers legacy marketplace rows.
   if (manifest.schemaVersion === 'duya.plugin.v2') {
     const components = manifest.components;
     if (components?.skills?.length) kinds.push('skills');
@@ -350,4 +514,3 @@ export function listCapabilityKinds(manifest: PluginManifest): PluginCapabilityK
   if (caps?.hooks?.length) kinds.push('hooks');
   return kinds;
 }
-

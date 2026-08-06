@@ -21,6 +21,9 @@
  */
 
 import type { ModelCompat } from '@duya/ai';
+import type { ApiFormat, ProviderRuntimeConfig } from '@duya/ai';
+
+export type { ApiFormat, ProviderRuntimeConfig };
 
 export type ProviderCategory =
   | 'official'
@@ -29,15 +32,6 @@ export type ProviderCategory =
   | 'local'
   | 'managed'
   | 'proxy';
-
-export type ApiFormat =
-  | 'openai-chat'
-  | 'openai-responses'
-  | 'anthropic'
-  | 'gemini'
-  | 'ollama'
-  | 'bedrock'
-  | 'vertex';
 
 export type AuthType = 'api-key' | 'bearer' | 'oauth' | 'none';
 
@@ -166,24 +160,6 @@ export interface ModelCapability {
   };
   source: 'preset' | 'models-api' | 'user' | 'probe';
   updatedAt: number;
-}
-
-/** What the agent runtime actually consumes. */
-export interface ProviderRuntimeConfig {
-  providerId: string;
-  providerName: string;
-  apiFormat: ApiFormat;
-  baseUrl: string;
-  apiKey?: string;
-  accessToken?: string;
-  headers: Record<string, string>;
-  model: string;
-  modelCapabilities?: ModelCapability;
-  /** Provider-specific compat flags from @duya/ai preset models.
-   *  Drives thinking format selection, forceAdaptiveThinking, etc.
-   *  Resolved by findModelCompat(apiFormat, model) in toRuntimeConfig. */
-  modelCompat?: ModelCompat;
-  requestOptions: Record<string, unknown>;
 }
 
 export interface ProviderHealthStatus {

@@ -21,7 +21,7 @@ import type {
   ProviderHealthStatus,
   ProviderPreset,
 } from '../types';
-import { findPresetByKey } from '../presets';
+import { findPresetByKey } from '../catalog';
 import { redactSecrets } from '../domain/ProviderValidation';
 import { modelSyncService } from '../models/ModelSyncService';
 

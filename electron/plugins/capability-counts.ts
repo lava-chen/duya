@@ -3,16 +3,14 @@
 // on-disk directory via `discoverAllCapabilities` when one is resolvable,
 // falling back to counting the fields in the manifest otherwise.
 // Plan 311 — extended with `workflows` count (on-disk discovery for
-// bundled / builtin plugins; manifest `components.workflows` for v2
-// marketplace plugins; 0 for v1 manifests without a plugin dir).
+// builtin plugins; manifest `components.workflows` for v2 marketplace
+// plugins; 0 for v1 manifests without a plugin dir).
 //
-// The bundled catalog entries (`BUNDLED_PLUGIN_CATALOG` in `catalog.ts`)
-// used to ship hard-coded counts that drifted every time a skill was
-// added to `packages/agent/src/plugins/builtin/<name>/skills/`. This
-// helper reads the disk so the count and the directory are guaranteed
-// to agree at all times.
+// The catalog scanner (`getBuiltinCatalogEntries` in `catalog.ts`) calls
+// this with the builtin cache root so counts always agree with the
+// on-disk `skills/`, `workflows/`, and `mcp/servers.json` files.
 
-import { discoverAllCapabilities } from '../../packages/agent/src/plugins/builtin/capability-discovery.js';
+import { discoverAllCapabilities } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
 import type { PluginCatalogEntry } from './types';
 
 export interface CapabilityCounts {
@@ -33,7 +31,7 @@ export interface CapabilityCounts {
  * Derive `capabilityCounts` for a single plugin.
  *
  * If `pluginDir` resolves to an existing directory under
- * `packages/agent/src/plugins/builtin/`, the counts come from the
+ * `packages/plugin-core/src/plugins/builtin/`, the counts come from the
  * directory's `skills/`, `agents/`, `commands/`, `hooks/hooks.json`
  * (skills, agents, commands, hooks), and `workflows/*.yaml`
  * (workflows, Plan 311). `mcpServers` and `cli` come from

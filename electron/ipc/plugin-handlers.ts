@@ -11,7 +11,7 @@
  */
 
 import { ipcMain } from 'electron';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
@@ -36,8 +36,8 @@ import { getKnownMarketplacesManager } from '../plugins/marketplace/known-market
 import { isBlockedMarketplaceName } from '../plugins/marketplace/impersonation-detector';
 import type { MarketplaceEntry } from '../plugins/marketplace/types';
 // Plan 311 — workflow template discovery & summary projection.
-import { listBuiltinPlugins } from '../../packages/agent/src/plugins/builtin/_registry.js';
-import { discoverWorkflows, discoverSkills } from '../../packages/agent/src/plugins/builtin/capability-discovery.js';
+import { listBuiltinCachePlugins } from '../plugins/cache/builtin-sync.js';
+import { discoverWorkflows, discoverSkills } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
 import {
   toWorkflowSummary,
   type WorkflowTemplate,
@@ -76,56 +76,25 @@ function handleResult<T>(result: { success: true; data: T } | { success: false; 
  * Plan 311 — Resolve the on-disk directory to scan for workflow templates.
  *
  * Installed plugins copy their files to a cache dir (`installPath`), but
- * bundled plugins are staged from `packages/agent/src/plugins/builtin/`
- * and the cache copy may not include the `workflows/` subdirectory. This
- * helper tries `installPath` first (works for local / marketplace plugins
- * and bundled plugins whose cache includes workflows), then falls back to
- * scanning the builtin plugin directories by matching the plugin id
- * against each directory's `plugin.json` / `plugin.md` frontmatter.
+ * bundled plugins are staged from the builtin cache
+ * (`~/.duya/plugins/cache/builtin/<id>/<version>/`). This helper tries
+ * `installPath` first, then falls back to matching the plugin id against
+ * the builtin cache entries (read via `listBuiltinCachePlugins`).
  *
  * Returns `undefined` when no directory with a `workflows/` subfolder can
  * be resolved — callers treat that as "no workflows".
  */
 function resolvePluginDiscoveryDir(pluginId: string, installPath?: string): string | undefined {
-  // 1. Install path (cache copy). Works when the install staging copied
-  //    the full plugin directory (local source) or when a bundled plugin
-  //    was installed with its workflows dir intact. When `installPath`
-  //    is omitted (bundled-but-not-installed), skip straight to the
-  //    builtin-dir fallback.
+  // 1. Install path (cache copy). Works for local / marketplace plugins and
+  //    bundled plugins whose install staging includes the workflows dir.
   if (installPath && existsSync(join(installPath, 'workflows'))) {
     return installPath;
   }
 
-  // 2. Bundled plugins live under packages/agent/src/plugins/builtin/.
-  //    Scan each directory and match by manifest id. The literature
-  //    plugin only ships `plugin.md` (no `plugin.json`), so we check
-  //    both files. The `plugin.md` frontmatter uses `name` (not `id`);
-  //    the catalog synthesises the id as `com.duya.<name>`.
-  for (const candidate of listBuiltinPlugins()) {
-    const jsonPath = join(candidate.dir, 'plugin.json');
-    if (existsSync(jsonPath)) {
-      try {
-        const raw = JSON.parse(readFileSync(jsonPath, 'utf8')) as { id?: string };
-        if (raw.id === pluginId) return candidate.dir;
-      } catch {
-        // skip unreadable manifest
-      }
-      continue;
-    }
-
-    // plugin.md frontmatter: id is `com.duya.<name>`.
-    const mdPath = join(candidate.dir, 'plugin.md');
-    if (existsSync(mdPath)) {
-      try {
-        const content = readFileSync(mdPath, 'utf8');
-        const nameMatch = content.match(/^name:\s*(.+)$/m);
-        if (nameMatch) {
-          const derivedId = `com.duya.${nameMatch[1].trim()}`;
-          if (derivedId === pluginId) return candidate.dir;
-        }
-      } catch {
-        // skip unreadable plugin.md
-      }
+  // 2. Builtin plugins: match by id against the builtin cache entries.
+  for (const candidate of listBuiltinCachePlugins()) {
+    if (candidate.id === pluginId && existsSync(join(candidate.root, 'workflows'))) {
+      return candidate.root;
     }
   }
 

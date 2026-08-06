@@ -4,7 +4,6 @@ import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
-import { getBuiltinPluginDir } from '../../packages/agent/src/plugins/builtin/_registry.js';
 import { PluginRegistryStore } from './PluginRegistryStore';
 import { PluginSetupStore } from './PluginSetupStore';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
@@ -283,21 +282,22 @@ export class PluginManager {
           fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
         }
       } else {
-        // Bundled catalog rows are backed by real package directories. Without
-        // these assets an install only contains plugin.json, which leaves the
-        // marketplace advertising skills and MCP declarations that the runtime
-        // can never discover.
-        const builtinDirName = catalogEntry.id.replace(/^com\.duya\./, '');
-        const bundledSourceDir =
-          catalogEntry.source === 'bundled'
-            ? getBuiltinPluginDir(builtinDirName)
-            : undefined;
-        if (bundledSourceDir && fs.existsSync(bundledSourceDir)) {
-          copyBundledPluginAssets(bundledSourceDir, stagingPath);
+        // Plan: plugin-config-simplification — builtin plugins are synced
+        // to `~/.duya/plugins/cache/builtin/<id>/<version>/` at startup,
+        // and the catalog sets `builtinCacheDir` to that cache root. Copy
+        // the entire directory (`.duya-plugin/plugin.json` + all capability
+        // assets) so the install is a faithful mirror of the source tree.
+        // No inline manifest is synthesised — disk is the single source.
+        if (catalogEntry.builtinCacheDir && fs.existsSync(catalogEntry.builtinCacheDir)) {
+          copyDirectoryRecursive(catalogEntry.builtinCacheDir, stagingPath);
+        } else {
+          this.logger.warn('Builtin plugin cache dir missing; falling back to manifest-only install', {
+            pluginId: catalogEntry.id,
+            builtinCacheDir: catalogEntry.builtinCacheDir,
+          }, LogComponent.Main);
+          const manifestPath = path.join(stagingPath, 'plugin.json');
+          fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
         }
-
-        const manifestPath = path.join(stagingPath, 'plugin.json');
-        fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
 
         // Skill marketplace entries ship a single skill directory alongside
         // the synthetic plugin.json. Copy the bundled skill source into
@@ -559,25 +559,4 @@ export function getPluginManager(): PluginManager {
     pluginManagerSingleton = new PluginManager();
   }
   return pluginManagerSingleton;
-}
-
-/**
- * Copy a bundled package's capability assets while retaining the catalog
- * manifest as the installation manifest. The package's authoring manifest is
- * v2 and is not yet the main-process runtime contract.
- */
-function copyBundledPluginAssets(sourceDir: string, destDir: string): void {
-  ensureDir(destDir);
-  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
-    if (entry.name === 'plugin.json') continue;
-    const sourcePath = path.join(sourceDir, entry.name);
-    const destPath = path.join(destDir, entry.name);
-    if (entry.isDirectory()) {
-      copyDirectoryRecursive(sourcePath, destPath);
-    } else if (entry.isSymbolicLink()) {
-      fs.symlinkSync(fs.readlinkSync(sourcePath), destPath);
-    } else {
-      fs.copyFileSync(sourcePath, destPath);
-    }
-  }
 }

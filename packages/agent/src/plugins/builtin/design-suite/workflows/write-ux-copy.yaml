@@ -1,7 +1,0 @@
-id: write-ux-copy
-name: Write UX copy
-description: Draft clear UI copy across normal, loading, empty, success, and error states.
-prompt: |
-  Write UX copy for {{target}} with the ux-copy skill. Include the main action
-  and relevant empty, loading, success, and error states.
-permissionTier: draft

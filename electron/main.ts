@@ -336,8 +336,6 @@ if (gotTheLock) {
     const memoryExplicitOn = process.env.DUYA_MEMORY_ENABLED === '1' || process.env.DUYA_MEMORY_ENABLED === 'true'
       || process.env.DUYA_MEMORY_V2_ENABLED === '1' || process.env.DUYA_MEMORY_V2_ENABLED === 'true';
     const memoryEnabled = memoryExplicitOn || (isDev && !memoryExplicitOff);
-    // DEBUG: log memory gate decision
-    logger.warn('Memory worker gate', { isDev, memoryExplicitOn, memoryExplicitOff, memoryEnabled, DUYA_MEMORY_ENABLED: process.env.DUYA_MEMORY_ENABLED, DUYA_MEMORY_V2_ENABLED: process.env.DUYA_MEMORY_V2_ENABLED }, LogComponent.DB);
     if (memoryEnabled) {
       try {
         const { bootstrap } = await import('./memory-state');
@@ -345,7 +343,7 @@ if (gotTheLock) {
         const { createAIClientWithRetry } = await import('@duya/ai');
         const { getDatabasePath } = await import('./config/boot-config');
         const { toLLMProvider } = await import('./config/index');
-        const { toRuntimeConfigFromLegacy } = await import('../src/lib/providers/domain/ProviderRuntimeAdapter.js');
+        const { toRuntimeConfigFromLegacy } = await import('@duya/ai');
 
         const mainDb = getDatabase();
         if (!mainDb) {
@@ -359,6 +357,7 @@ if (gotTheLock) {
         // configured — the worker will still run reconcile + outbox,
         // just no extraction.
         let llmClient = null;
+        let curationProviderConfig = null;
         try {
           const cm = getConfigManager();
           const provider = cm.getMemoryProvider();
@@ -371,7 +370,7 @@ if (gotTheLock) {
                 ? llmProvider
                 : 'ollama',
             );
-            logger.warn('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: cm.getMemoryModel() }, LogComponent.DB);
+            logger.info('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: cm.getMemoryModel() }, LogComponent.DB);
             // Build a ProviderRuntimeConfig from the legacy ApiProvider so
             // domestic providers (MiniMax, DeepSeek, Qwen, GLM, Kimi) get
             // the correct apiFormat + modelCompat flags. Without these,
@@ -385,17 +384,42 @@ if (gotTheLock) {
               providerId: runtime.providerId,
               modelCapabilities: runtime.modelCompat,
             });
+            // Credentials for the Phase 2 curator subprocess (orchestrator
+            // spawns it via the shared agent process pool).
+            curationProviderConfig = {
+              apiKey: provider.apiKey,
+              model,
+              baseUrl: provider.baseUrl,
+              provider: llmProvider,
+            };
           }
         } catch (llmErr) {
           logger.warn('Memory worker: LLM client construction failed; extraction disabled', { error: llmErr instanceof Error ? llmErr.message : String(llmErr) }, LogComponent.DB);
         }
 
         if (llmClient) {
+          // Phase 2 curation wiring (Plan 406): without these deps every
+          // curation tick is silently skipped (skipped_no_curation_deps).
+          // The live config root sits inside the memory root; staging and
+          // snapshots are siblings so run workspaces stay out of the
+          // published tree.
+          const os = await import('os');
+          const memoryRoot = path.join(os.homedir(), '.duya', 'memory');
+          const curation = curationProviderConfig
+            ? {
+                configRoot: path.join(memoryRoot, 'memory-config'),
+                stagingRoot: path.join(os.homedir(), '.duya', 'memory-staging'),
+                snapshotRoot: path.join(os.homedir(), '.duya', 'memory-snapshots'),
+                providerConfig: curationProviderConfig,
+                systemLocation: memoryRoot,
+                pool: getAgentProcessPool(),
+              }
+            : undefined;
           startMemoryWorker(
-            { memoryDb, mainDb, llmClient },
+            { memoryDb, mainDb, llmClient, curation },
             { instancesPerMinute: 60, concurrency: 2 },
           );
-          logger.warn('Memory worker started (shadow mode)', undefined, LogComponent.DB);
+          logger.info('Memory worker started (shadow mode)', { curation: curation ? 'wired' : 'disabled' }, LogComponent.DB);
         } else {
           logger.warn('Memory worker: no LLM client; worker not started', undefined, LogComponent.DB);
         }
@@ -671,6 +695,24 @@ registerReferencesHandlers();
 registerLoggerHandlers();
 registerUpdaterHandlers();
 registerAgentServerHandlers();
+// ============================================================
+// Step 4.5a: Sync builtin plugins into ~/.duya/plugins/cache/builtin/
+//
+// Idempotent, synchronous, fast (small JSON+MD+YAML assets). Must run
+// before registerPluginHandlers() so the first catalog read sees the
+// synced builtin roots. Failures are non-fatal — the catalog tolerates
+// an empty builtin set.
+// ============================================================
+try {
+  const { syncBuiltinPlugins } = await import('./plugins/cache/builtin-sync.js');
+  syncBuiltinPlugins();
+} catch (err) {
+  logger.warn(
+    'Builtin plugin sync failed; catalog may be missing builtin entries',
+    { error: err instanceof Error ? err.message : String(err) },
+    'Main',
+  );
+}
 registerPluginHandlers();
 registerAppConnectionHandlers();
 registerCapabilityManagementHandlers();
