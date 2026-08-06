@@ -35,7 +35,7 @@ import { getProviderStore } from './provider-store-electron';
 import { maskApiProvider, toLegacyApiProvider } from '../../../src/lib/providers/legacy';
 import type { LlmProvider, ModelCapability } from '../../../src/lib/providers/types';
 import { redactSecrets } from '../../../src/lib/providers/domain/ProviderValidation';
-import { findPresetByKey } from '../../../src/lib/providers/presets';
+import { findPresetByKey } from '../../../src/lib/providers/catalog';
 // ProviderStore is imported for type-only use in the register options
 // below. The runtime singleton comes from getProviderStore().
 import type { ProviderStore } from './provider-store';

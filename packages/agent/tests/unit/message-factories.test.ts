@@ -34,7 +34,7 @@ describe('AgentMessageFactory', () => {
       expect(user.id).toBe('u1');
       expect(assistant.id).toBe('a1');
       expect(tool.id).toBe('t1');
-      expect([user, assistant, tool].map((m) => m.createdAt)).toEqual([
+      expect([user, assistant, tool].map((m) => m.timestamp)).toEqual([
         12345, 12345, 12345,
       ]);
     });
@@ -48,21 +48,20 @@ describe('AgentMessageFactory', () => {
       expect(message.id).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
       );
-      expect(message.createdAt).toBeGreaterThanOrEqual(before);
-      expect(message.createdAt).toBeLessThanOrEqual(after);
+      expect(message.timestamp).toBeGreaterThanOrEqual(before);
+      expect(message.timestamp).toBeLessThanOrEqual(after);
     });
   });
 
   describe('createUserMessage', () => {
-    it('builds a minimal durable visible user message', () => {
+    it('builds a minimal visible user message', () => {
       const factory = createDeterministicFactory(['u1']);
       const message = factory.createUserMessage({ content: 'hello' });
 
       expect(message).toEqual({
-        kind: 'user',
+        role: 'user',
         id: 'u1',
-        createdAt: FIXED_NOW,
-        persistence: 'durable',
+        timestamp: FIXED_NOW,
         visibility: 'visible',
         content: 'hello',
       });
@@ -80,7 +79,7 @@ describe('AgentMessageFactory', () => {
       });
 
       expect(message.displayContent).toBe('summarize doc.pdf');
-      expect(message.attachments).toBe(attachments);
+      expect(message.attachments).toEqual(attachments);
     });
 
     it('records seqIndex in metadata under the stable key', () => {
@@ -137,7 +136,7 @@ describe('AgentMessageFactory', () => {
       });
     });
 
-    it('stores providerId, model, tokenUsage, and stopReason as first-class fields', () => {
+    it('stores providerId, model, tokenUsage first-class and stopReason in metadata', () => {
       const factory = createDeterministicFactory(['a1']);
       const usage: TokenUsage = {
         input_tokens: 10,
@@ -155,7 +154,9 @@ describe('AgentMessageFactory', () => {
       expect(message.providerId).toBe('anthropic');
       expect(message.model).toBe('claude-3');
       expect(message.tokenUsage).toBe(usage);
-      expect(message.stopReason).toBe('end_turn');
+      expect(message.metadata).toMatchObject({
+        [AGENT_MESSAGE_METADATA_KEYS.stopReason]: 'end_turn',
+      });
     });
 
     it('preserves duration, status, and seqIndex in metadata', () => {
@@ -186,11 +187,17 @@ describe('AgentMessageFactory', () => {
       });
 
       expect(message).toMatchObject({
-        kind: 'tool_result',
-        toolCallId: 'tu_1',
-        toolName: 'read',
-        content: 'file contents',
-        isError: false,
+        role: 'tool',
+        name: 'read',
+        tool_call_id: 'tu_1',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tu_1',
+            content: 'file contents',
+            is_error: false,
+          },
+        ],
       });
     });
 
@@ -204,7 +211,18 @@ describe('AgentMessageFactory', () => {
         status: 'error',
       });
 
-      expect(message.isError).toBe(true);
+      expect(message).toMatchObject({
+        role: 'tool',
+        tool_call_id: 'tu_err',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tu_err',
+            content: 'command failed with exit code 1',
+            is_error: true,
+          },
+        ],
+      });
       expect(message.metadata).toMatchObject({
         [AGENT_MESSAGE_METADATA_KEYS.status]: 'error',
       });
@@ -220,29 +238,32 @@ describe('AgentMessageFactory', () => {
       });
 
       expect(message).toMatchObject({
-        kind: 'tool_result',
-        toolCallId: 'tu_interrupted',
-        content: 'Interrupted by user',
-        isError: true,
+        role: 'tool',
+        tool_call_id: 'tu_interrupted',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tu_interrupted',
+            content: 'Interrupted by user',
+            is_error: true,
+          },
+        ],
       });
     });
   });
 
   describe('createRuntimeContextMessage', () => {
-    it('defaults to transient persistence and visible visibility', () => {
+    it('defaults to visible visibility', () => {
       const factory = createDeterministicFactory(['r1']);
       const message = factory.createRuntimeContextMessage({
         source: 'agents_md',
         content: 'AGENTS.md contents',
-        includeInModel: true,
       });
 
       expect(message).toMatchObject({
-        kind: 'runtime_context',
+        role: 'runtime_context',
         source: 'agents_md',
-        persistence: 'transient',
         visibility: 'visible',
-        includeInModel: true,
       });
     });
 
@@ -251,17 +272,14 @@ describe('AgentMessageFactory', () => {
       const mailbox = factory.createRuntimeContextMessage({
         source: 'mailbox',
         content: '<runtime-user-guidance>do x</runtime-user-guidance>',
-        includeInModel: true,
       });
       const notification = factory.createRuntimeContextMessage({
         source: 'background_notification',
         content: '<task-notification>done</task-notification>',
-        includeInModel: true,
       });
       const attachment = factory.createRuntimeContextMessage({
         source: 'attachment',
         content: 'parsed attachment text',
-        includeInModel: true,
       });
 
       expect(mailbox.source).toBe('mailbox');
@@ -281,12 +299,11 @@ describe('AgentMessageFactory', () => {
       });
 
       expect(message).toMatchObject({
-        kind: 'compaction_summary',
+        role: 'compaction_summary',
         summary: 'prior work summarized',
         compactionEntryId: 'compaction-1',
         tokensBefore: 90_000,
         tokensAfter: 20_000,
-        persistence: 'transient',
       });
     });
 

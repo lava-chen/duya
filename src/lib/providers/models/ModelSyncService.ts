@@ -15,7 +15,7 @@
  */
 
 import type { LlmProvider, ModelCapability, ProviderPreset } from '../types';
-import { findPresetByKey, PRESET_BY_KEY } from '../presets';
+import { findPresetByKey, PRESET_BY_KEY } from '../catalog';
 import { modelCapabilityService } from './ModelCapabilityService';
 
 export interface SyncResult {

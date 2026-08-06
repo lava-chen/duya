@@ -64,7 +64,18 @@ export interface PluginManifest {
   author: {
     name: string;
     url?: string;
+    email?: string;
   };
+  // Plan: plugin-config-simplification — Codex-style identity fields.
+  // Optional on disk; populated by `readPluginManifest` when present in
+  // `.duya-plugin/plugin.json`. `publisher` (below) is retained for v1/v2
+  // marketplace compatibility but is deprecated in favor of `author`.
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  keywords?: string[];
+  /** Optional market-UI metadata block (replaces deleted plugin.md). */
+  interface?: PluginInterface;
   /** Audited official upstream MCP/skill provenance for a bundled preset. */
   officialAssets?: {
     mcp: {
@@ -154,6 +165,23 @@ export interface PluginManifest {
 
 export type PluginCategory = 'productivity' | 'development' | 'research' | 'data' | 'communication' | 'media' | 'automation' | 'other';
 
+/**
+ * Plan: plugin-config-simplification — `interface` block.
+ *
+ * Optional market-UI metadata. Replaces the long-form content that used to
+ * live in `plugin.md` (now deleted). Pure-skill plugins with no market
+ * presence omit this block entirely. `category` here is the authoritative
+ * category for a plugin when present; catalog falls back to deriving it
+ * from the plugin source/keywords otherwise.
+ */
+export interface PluginInterface {
+  displayName?: string;
+  longDescription?: string;
+  category?: PluginCategory;
+  brandColor?: string;
+  screenshots?: string[];
+}
+
 // NOTE: mirrors zod schema in src/lib/plugin-types.ts — kept as the
 // main-process view because the shapes are NOT compatible:
 //  - Optionality is inverted on four fields: `category`, `trustLevel`,
@@ -197,6 +225,16 @@ export interface PluginCatalogEntry {
    * regular plugin entries.
    */
   skillSourceDir?: string;
+  /**
+   * Plan: plugin-config-simplification — absolute path to the builtin
+   * plugin's cache root (`~/.duya/plugins/cache/builtin/<id>/<version>/`).
+   * Set by the catalog scanner for `source: 'bundled'` entries so
+   * `PluginManager.installFromCatalog` can copy the on-disk
+   * `.duya-plugin/plugin.json` + capability assets directly, instead of
+   * synthesising an inline manifest. Undefined for marketplace/local/skill
+   * entries.
+   */
+  builtinCacheDir?: string;
   capabilityCounts?: {
     skills: number;
     mcpServers: number;

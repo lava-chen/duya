@@ -15,10 +15,9 @@
 import type { AgentOptions, Message, SessionInfo } from '../types.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, resolveDefaultBaseURL } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ThinkingLevel } from '@duya/ai';
-import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
+import { resolveLlmClientDiscriminator } from '@duya/ai';
 import { MessageTimeline } from '../message/message-framework.js';
-import type { LegacyCustomAgentMessage } from '../message/legacy-message-adapter.js';
-import { legacyMessageToAgentMessage } from '../message/legacy-message-adapter.js';
+import { ingestMessage } from '../message/message-factories.js';
 import { projectTimelinePersistenceMessages } from '../message/message-projectors.js';
 
 export class DuyaAgentV2 {
@@ -51,7 +50,7 @@ export class DuyaAgentV2 {
 
   // === 消息域（plan 315，单一事实源） ===
   /** Append-only message timeline. The runtime authority for history. */
-  private timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+  private timeline = new MessageTimeline();
   /** O(1) dedup for messages already appended to timeline. */
   private syncedMessageIds: Set<string> = new Set();
 
@@ -160,15 +159,15 @@ export class DuyaAgentV2 {
 
   /** 从持久化重建消息历史，逐条转成 timeline entries。 */
   setMessages(messages: Message[]): void {
-    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
     for (const [index, message] of messages.entries()) {
-      const adapted = legacyMessageToAgentMessage(message, { index });
+      const adapted = ingestMessage(message, { index });
       this.timeline.appendMessage({
         type: 'message',
         id: `${crypto.randomUUID()}:${index}`,
         parentId: null,
-        createdAt: adapted.createdAt,
+        createdAt: adapted.timestamp ?? 0,
         message: adapted,
       });
       if (message.id) this.syncedMessageIds.add(message.id);
@@ -178,7 +177,7 @@ export class DuyaAgentV2 {
   }
 
   clearMessages(): void {
-    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
     this.sessionInfo.updatedAt = Date.now();
   }

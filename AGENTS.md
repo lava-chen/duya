@@ -447,6 +447,7 @@ question you're asking.
 - Skipping Playwright verification for UI changes
 - Forgetting `npm run typecheck:all` before committing
 - NOT checking active plans before starting work ⚠️
+- `postinstall` runs `electron-builder install-app-deps`, which compiles `better-sqlite3` for the Electron ABI — after any `npm install`, Vitest (Node ABI) crashes with `NODE_MODULE_VERSION` mismatch in all DB-backed tests. Run `npm run rebuild:node` before `npm run test`, and `npm run rebuild` before `electron:dev` if you switched.
 - Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
 
 ## Docs Structure

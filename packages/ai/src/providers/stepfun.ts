@@ -1,26 +1,14 @@
 import type { Model } from '../types.js';
+import { createProvider } from './create-provider.js';
+import { envApiKeyAuth } from '../auth/helpers.js';
+import { stepfunModels } from './stepfun.models.js';
+import { anthropicStreams } from './adapters.js';
 
-export const stepfunModels: Model<'anthropic'>[] = [
-  {
-    id: 'step-3.5-flash',
-    name: 'Step-3.5 Flash',
-    api: 'anthropic',
-    providerId: 'stepfun',
-    baseUrl: 'https://api.stepfun.ai/step_plan/v1',
-    reasoning: false,
-    input: ['text', 'image'],
-    contextWindow: 131072,
-    maxTokens: 8192,
-  },
-  {
-    id: 'step-3.5-flash-2603',
-    name: 'Step-3.5 Flash (2603)',
-    api: 'anthropic',
-    providerId: 'stepfun',
-    baseUrl: 'https://api.stepfun.ai/step_plan/v1',
-    reasoning: false,
-    input: ['text', 'image'],
-    contextWindow: 131072,
-    maxTokens: 8192,
-  },
-];
+export const stepfun = createProvider({
+  id: 'stepfun',
+  name: 'StepFun',
+  baseUrl: 'https://api.stepfun.ai/step_plan/v1',
+  auth: envApiKeyAuth('StepFun API Key', ['STEPFUN_API_KEY']),
+  models: stepfunModels,
+  api: anthropicStreams({ apiKey: '', baseURL: 'https://api.stepfun.ai/step_plan/v1', model: '', apiFormat: 'anthropic', providerId: 'stepfun' }),
+});

@@ -1,17 +1,14 @@
 import type { Model } from '../types.js';
+import { createProvider } from './create-provider.js';
+import { envApiKeyAuth } from '../auth/helpers.js';
+import { qwenModels } from './qwen.models.js';
+import { openAICompletionsStreams } from './adapters.js';
 
-export const qwenModels: Model<'openai-chat'>[] = [
-  {
-    id: 'qwq-32b-preview',
-    name: 'QwQ 32B Preview',
-    api: 'openai-chat',
-    providerId: 'qwen',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    reasoning: true,
-    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },
-    compat: { openAIThinkingFormat: 'qwen-style' },
-    input: ['text'],
-    contextWindow: 131072,
-    maxTokens: 8192,
-  },
-];
+export const qwen = createProvider<'openai-chat'>({
+  id: 'qwen',
+  name: 'Qwen',
+  baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  auth: envApiKeyAuth('DASHSCOPE_API_KEY', ['DASHSCOPE_API_KEY']),
+  models: qwenModels,
+  api: openAICompletionsStreams({ apiKey: '', baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: '', apiFormat: 'openai-chat', providerId: 'qwen' }),
+});

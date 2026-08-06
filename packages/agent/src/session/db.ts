@@ -915,7 +915,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
           cancelled_at           INTEGER,
           cancelled_by           TEXT,
           cancel_reason          TEXT,
-          CHECK (kind IN ('followup','correction','constraint','stop','abort_and_replace','background_notification')),
+          CHECK (kind IN ('queued','followup','background_notification')),
           CHECK (status IN ('pending','observed','applied','cancelled')),
           CHECK (apply_mode IS NULL OR apply_mode IN
             ('promote_to_user_message','runtime_instruction','tool_guard',
@@ -3408,7 +3408,7 @@ export function deleteModelCapability(modelName: string): boolean {
 // Mailbox Types & CRUD (Plan 202 — AgentMailbox PR1)
 // =============================================================================
 
-export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace' | 'background_notification';
+export type MailboxKind = 'queued' | 'followup' | 'background_notification';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 export type MailboxApplyMode = 'promote_to_user_message' | 'runtime_instruction' | 'tool_guard'
   | 'permission_context' | 'interrupt_signal' | 'deferred_to_next_turn';
@@ -3469,10 +3469,7 @@ export interface EditMailboxPatch {
 
 /** Priority mapping for each kind */
 const KIND_PRIORITY: Record<MailboxKind, number> = {
-  abort_and_replace: 0,
-  stop: 10,
-  correction: 50,
-  constraint: 50,
+  queued: 100,
   followup: 100,
   background_notification: 100,
 };

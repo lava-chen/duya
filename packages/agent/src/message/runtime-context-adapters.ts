@@ -12,23 +12,20 @@ import {
 } from './message-factories.js';
 import type {
   AgentMessage,
-  AgentCustomMessage,
   AgentMessageVisibility,
-  RuntimeContextAgentMessage,
+  RuntimeContextMessage,
 } from './message-framework.js';
 import { buildAttachmentContext } from '../utils/attachment-context.js';
 
 /**
  * Pure adapters that convert runtime inputs (mailbox rows, task-notification
  * XML, hard replacements, attachment-derived context, and custom runtime
- * system info) into explicit {@link RuntimeContextAgentMessage} entries.
+ * system info) into explicit {@link RuntimeContextMessage} entries.
  *
  * Contract:
  * - Pure: no claim/apply/dequeue side effects. Receives already-fetched data
  *   and only transforms it.
- * - persistence='transient' for every produced message.
  * - mailbox and background_notification default to visibility='hidden'.
- * - includeInModel is decided explicitly per input, overridable via options.
  * - Structured metadata (mailbox row IDs, claim tokens, task IDs) is preserved
  *   on metadata so callers can dedupe and correlate without sniffing content.
  * - Same mailbox row ID or notification task ID is dedupeable via
@@ -41,7 +38,7 @@ import { buildAttachmentContext } from '../utils/attachment-context.js';
 // ─── Metadata keys ───────────────────────────────────────────────────────
 
 /**
- * Stable metadata keys carried on {@link RuntimeContextAgentMessage.metadata}
+ * Stable metadata keys carried on {@link RuntimeContextMessage.metadata}
  * so downstream consumers (dedup, persistence, renderer) can identify the
  * origin without parsing message content.
  */
@@ -54,8 +51,6 @@ export const RUNTIME_CONTEXT_METADATA_KEYS = {
   mailboxKinds: 'mailboxKinds',
   /** string — the MailboxRow.source field of the first absorbed row. */
   mailboxSource: 'mailboxSource',
-  /** boolean — true when the message is a hard replacement (abort_and_replace). */
-  mailboxHardReplacement: 'mailboxHardReplacement',
   /** string — parsed <task-id> from a task-notification XML. */
   taskId: 'taskId',
   /** string — parsed <tool-use-id> from a task-notification XML. */
@@ -75,8 +70,6 @@ export interface RuntimeContextAdapterOptions {
   readonly clock?: AgentMessageClock;
   /** Override the per-source visibility default. */
   readonly visibility?: AgentMessageVisibility;
-  /** Override the per-source includeInModel default. */
-  readonly includeInModel?: boolean;
   /** Extra metadata merged into the produced message. */
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly seqIndex?: number;
@@ -92,25 +85,21 @@ function createFactory(options: RuntimeContextAdapterOptions): AgentMessageFacto
 // ─── 1. Mailbox rows -> source='mailbox' ─────────────────────────────────
 
 /**
- * Mailbox kinds that produce runtime guidance content. `stop` and
- * `abort_and_replace` are control signals handled separately (soft stop
- * produces an assistant message; hard replacement uses
- * {@link adaptMailboxHardReplacement}).
+ * Mailbox kinds that produce runtime guidance content. `background_notification`
+ * is adapted separately via {@link adaptBackgroundNotification}.
  */
 const MAILBOX_GUIDANCE_KINDS: ReadonlySet<MailboxKind> = new Set([
+  'queued',
   'followup',
-  'correction',
-  'constraint',
 ]);
 
 /**
- * Wraps followup/correction/constraint mailbox rows in a
- * `<runtime-user-guidance>` block, matching the legacy DuyaAgent format so
- * the model sees identical content during the incremental migration.
+ * Wraps followup mailbox rows in a `<runtime-user-guidance>` block, matching
+ * the legacy DuyaAgent format so the model sees identical content during the
+ * incremental migration.
  *
  * Rows without a claim token are skipped (they were not successfully claimed
- * and should not become runtime context). `stop` and `abort_and_replace`
- * rows are skipped here — they are control signals, not guidance content.
+ * and should not become runtime context).
  *
  * All absorbed rows are collapsed into a single runtime_context message so
  * the model receives one coherent guidance block, matching the existing
@@ -120,7 +109,7 @@ export function adaptMailboxRows(
   rows: readonly MailboxRow[],
   claimTokens: readonly string[],
   options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage[] {
+): RuntimeContextMessage[] {
   const usable: { row: MailboxRow; token: string }[] = [];
   for (let i = 0; i < rows.length; i += 1) {
     const row = rows[i];
@@ -145,7 +134,6 @@ export function adaptMailboxRows(
       [RUNTIME_CONTEXT_METADATA_KEYS.claimTokens]: usable.map((entry) => entry.token),
       [RUNTIME_CONTEXT_METADATA_KEYS.mailboxKinds]: usable.map((entry) => entry.row.kind),
       [RUNTIME_CONTEXT_METADATA_KEYS.mailboxSource]: usable[0].row.source,
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxHardReplacement]: false,
     },
   });
   return [message];
@@ -163,7 +151,7 @@ export function adaptMailboxRows(
 export function adaptTaskNotificationXml(
   xml: string,
   options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage {
+): RuntimeContextMessage {
   const taskId = extractNotificationField(xml, TASK_ID_TAG);
   const toolUseId = extractNotificationField(xml, TOOL_USE_ID_TAG);
   const status = extractNotificationField(xml, STATUS_TAG);
@@ -177,8 +165,6 @@ export function adaptTaskNotificationXml(
   return factory.createRuntimeContextMessage({
     source: 'background_notification',
     content: xml,
-    includeInModel: options.includeInModel ?? true,
-    persistence: 'transient',
     visibility: options.visibility ?? 'hidden',
     seqIndex: options.seqIndex,
     metadata,
@@ -195,44 +181,12 @@ export function adaptTaskNotificationXml(
 export function adaptBackgroundNotification(
   row: MailboxRow,
   options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage {
+): RuntimeContextMessage {
   return adaptTaskNotificationXml(row.content, {
     ...options,
     metadata: {
       ...options.metadata,
       [RUNTIME_CONTEXT_METADATA_KEYS.mailboxRowIds]: [row.id],
-    },
-  });
-}
-
-// ─── 3. Hard replacement -> source='mailbox' ─────────────────────────────
-
-/**
- * Adapts an `abort_and_replace` mailbox row into a runtime_context message
- * wrapping the replacement content in `<runtime-user-replacement>`. The
- * mailbox row ID and claim token are preserved on metadata so the same
- * replacement is not applied twice.
- */
-export function adaptMailboxHardReplacement(
-  row: MailboxRow,
-  claimToken: string | null,
-  options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage {
-  const replacement = row.content.trim() || 'The user replaced the previous instruction.';
-  const content = `<runtime-user-replacement>\n${replacement}\n</runtime-user-replacement>`;
-  const factory = createFactory(options);
-  return factory.createRuntimeContextMessage({
-    source: 'mailbox',
-    content,
-    visibility: options.visibility ?? 'hidden',
-    seqIndex: options.seqIndex,
-    metadata: {
-      ...options.metadata,
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxRowIds]: [row.id],
-      [RUNTIME_CONTEXT_METADATA_KEYS.claimTokens]: claimToken ? [claimToken] : [],
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxKinds]: [row.kind],
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxSource]: row.source,
-      [RUNTIME_CONTEXT_METADATA_KEYS.mailboxHardReplacement]: true,
     },
   });
 }
@@ -249,15 +203,15 @@ export function adaptMailboxHardReplacement(
  * a card in the renderer, so this context is model-only and must not be
  * re-rendered as a separate user message.
  *
- * Defaults to `persistence='durable'`: unlike transient mailbox/notification
- * context, attachment context represents the user's filed content and must
- * survive a restart so the model can still reference it later. Deduplication
- * is handled by {@link dedupeRuntimeContextMessages} on reload.
+ * Unlike transient mailbox/notification context, attachment context represents
+ * the user's filed content and must survive a restart so the model can still
+ * reference it later. Deduplication is handled by
+ * {@link dedupeRuntimeContextMessages} on reload.
  */
 export function adaptAttachmentContext(
   attachments: readonly FileAttachment[],
   options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage | null {
+): RuntimeContextMessage | null {
   const contextText = buildAttachmentContext([...attachments]);
   if (!contextText) return null;
 
@@ -265,8 +219,6 @@ export function adaptAttachmentContext(
   return factory.createRuntimeContextMessage({
     source: 'attachment',
     content: contextText,
-    includeInModel: options.includeInModel ?? true,
-    persistence: 'durable',
     visibility: options.visibility ?? 'hidden',
     seqIndex: options.seqIndex,
     metadata: {
@@ -287,13 +239,11 @@ export function adaptAttachmentContext(
 export function adaptCustomRuntimeContext(
   content: string,
   options: RuntimeContextAdapterOptions = {},
-): RuntimeContextAgentMessage {
+): RuntimeContextMessage {
   const factory = createFactory(options);
   return factory.createRuntimeContextMessage({
     source: 'custom',
     content,
-    includeInModel: options.includeInModel ?? true,
-    persistence: 'transient',
     visibility: options.visibility ?? 'visible',
     seqIndex: options.seqIndex,
     metadata: options.metadata,
@@ -317,10 +267,7 @@ export function adaptCustomRuntimeContext(
  *
  * The input array is never mutated; a new array is returned.
  */
-export function dedupeRuntimeContextMessages<
-  TCustom extends AgentCustomMessage,
-  T extends AgentMessage<TCustom>,
->(
+export function dedupeRuntimeContextMessages<T extends AgentMessage>(
   messages: readonly T[],
 ): T[] {
   const seenMailboxRowIds = new Set<string>();
@@ -328,7 +275,7 @@ export function dedupeRuntimeContextMessages<
   const result: T[] = [];
 
   for (const message of messages) {
-    if (message.kind !== 'runtime_context') {
+    if (message.role !== 'runtime_context') {
       result.push(message);
       continue;
     }
@@ -371,36 +318,10 @@ export function dedupeRuntimeContextMessages<
 
 // ─── Provider compatibility projection ───────────────────────────────────
 
-/**
- * Projects a single {@link RuntimeContextAgentMessage} to a provider-compatible
- * user-role {@link Message}. This is a one-way API adaptation: the domain
- * message remains a runtime_context, and this projection only exists so the
- * provider sees a `role: 'user'` turn.
- *
- * Returns `null` when `includeInModel` is false. Internal tracking metadata
- * (mailbox row IDs, claim tokens, task IDs) is intentionally NOT carried into
- * the provider message — those are domain concerns, not model context. Only
- * `runtimeContext: true` and `source` are attached so the reverse adapter can
- * recover the runtime_context kind.
- *
- * The input message is never mutated.
- */
-export function projectRuntimeContextToProviderMessage(
-  message: RuntimeContextAgentMessage,
-): Message | null {
-  if (!message.includeInModel) return null;
-
-  return {
-    id: message.id,
-    role: 'user',
-    content: message.content,
-    timestamp: message.createdAt,
-    metadata: {
-      runtimeContext: true,
-      source: message.source,
-    },
-  };
-}
+// The canonical provider projection lives in message-projectors.ts (the pure
+// boundary module, shared with the renderer-facing subpath). Re-exported here
+// so existing adapter callers keep a single import site.
+export { projectRuntimeContextToProviderMessage } from './message-projectors.js';
 
 // ─── Internal helpers ────────────────────────────────────────────────────
 
@@ -412,13 +333,7 @@ export function projectRuntimeContextToProviderMessage(
 function formatMailboxRuntimeInstruction(rows: readonly MailboxRow[]): string {
   const lines = rows
     .map((row, index) => {
-      const label =
-        row.kind === 'constraint'
-          ? 'constraint'
-          : row.kind === 'correction'
-            ? 'correction'
-            : 'follow-up';
-      return `${index + 1}. (${label}) ${row.content.trim()}`;
+      return `${index + 1}. (follow-up) ${row.content.trim()}`;
     })
     .filter((line) => line.trim().length > 0);
 

@@ -17,9 +17,13 @@ export function markMailboxForGuidance(
   ).get(id) as Record<string, unknown> | undefined;
   if (!existing || existing.status !== 'pending') return null;
 
+  // Guide re-classifies a queued row as an immediate followup: set
+  // apply_mode=runtime_instruction (so before_model_turn claims it) and
+  // kind=followup (so the UI/agent treat it as immediate, not queued).
   const result = database.prepare(`
     UPDATE agent_mailbox
-    SET apply_mode = 'runtime_instruction'
+    SET apply_mode = 'runtime_instruction',
+        kind = 'followup'
     WHERE id = @id AND status = 'pending'
   `).run({ id });
   if (result.changes === 0) return null;

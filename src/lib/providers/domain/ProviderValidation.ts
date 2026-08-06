@@ -14,6 +14,9 @@
  */
 
 import type { LlmProvider, ValidationResult } from '../types';
+import { redactSecrets } from '@duya/ai';
+
+export { redactSecrets };
 
 const SECRET_KEYS = new Set([
   'apikey',
@@ -60,22 +63,6 @@ export function redactSecret(value: unknown): string {
   } catch {
     return '[unserializable]';
   }
-}
-
-/** Redact any string-shaped value that might contain a secret.
- *  Used to scrub error messages and log lines. */
-export function redactSecrets(input: string | undefined | null): string {
-  if (!input) return '';
-  let out = input;
-  // Bearer <token>
-  out = out.replace(/(Bearer\s+)[A-Za-z0-9._\-+/=]{8,}/g, '$1[REDACTED]');
-  // x-api-key: <token>
-  out = out.replace(/(x-api-key["']?\s*[:=]\s*["']?)[A-Za-z0-9._\-+/=]{8,}/gi, '$1[REDACTED]');
-  // authorization: <token>
-  out = out.replace(/(authorization["']?\s*[:=]\s*["']?)[A-Za-z0-9._\-+/=]{8,}/gi, '$1[REDACTED]');
-  // apiKey=<token> / api_key=<token>
-  out = out.replace(/((?:api[_-]?key|access[_-]?token)["']?\s*[:=]\s*["']?)[A-Za-z0-9._\-+/=]{8,}/gi, '$1[REDACTED]');
-  return out;
 }
 
 function ok(): ValidationResult {

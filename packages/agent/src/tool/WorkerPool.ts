@@ -23,7 +23,6 @@ const execAsync = promisify(exec);
 // polyfill, and esbuild CJS without the polyfill like `build-electron.mjs`
 // where `import.meta` is `undefined` but CJS exposes `__dirname`). Computed
 // lazily so the crash does not happen at module-init time.
-// See src/plugins/builtin/_registry.ts for the same pattern.
 function resolveDirname(): string {
   const meta = import.meta as { url?: string } | undefined;
   if (meta && typeof meta.url === 'string') {

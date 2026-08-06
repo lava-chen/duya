@@ -10,8 +10,33 @@ import type { ProviderCatalogEntry } from './catalog.js';
  *   key -> id, protocol 'openai-compatible' -> 'openai-chat',
  *   authStyle -> authTypes, defaultEnvOverrides -> envOverrides,
  *   fields -> fields, category -> category, defaultModels[*].upstreamModelId kept.
- *   meta.statusPageUrl is dropped (not consumed).
+ *
+ * Domain field mapping (frontend ProviderPreset -> ProviderCatalogEntry):
+ *   preset.category -> providerCategory,
+ *   preset.authFields -> authFields,
+ *   preset.modelsSource -> modelsSource,
+ *   preset.defaultModelLabels -> defaultModelLabels,
+ *   preset.endpointCandidates -> endpointCandidates,
+ *   preset.ui.iconColor -> iconColor,
+ *   preset.ui.websiteUrl -> websiteUrl,
+ *   preset.legacyProtocol -> legacyProtocol.
  */
+
+/** Shared API-key auth field for providers that use a single API key. */
+const API_KEY_AUTH_FIELDS = [
+  { key: 'api_key', label: 'API Key', secret: true, required: true },
+];
+
+/** Bearer-token auth field used by managed providers (Bedrock / Vertex). */
+const BEARER_TOKEN_AUTH_FIELDS = [
+  { key: 'api_key', label: 'Bearer Token', secret: true, required: true },
+];
+
+/** Base-URL auth field used by local providers (Ollama). */
+const BASE_URL_AUTH_FIELDS = [
+  { key: 'base_url', label: 'Base URL', secret: false, required: true },
+];
+
 export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
   // ── Official Anthropic ──
   {
@@ -34,6 +59,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       apiKeyUrl: 'https://console.anthropic.com/',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#D4915D',
+    websiteUrl: 'https://www.anthropic.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Anthropic Third-party (generic) ──
@@ -52,6 +83,10 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     ],
     fields: ['name', 'api_key', 'base_url', 'extra_env', 'model_mapping'],
     iconKey: 'server',
+    providerCategory: 'custom',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    legacyProtocol: 'anthropic',
   },
 
   // ── OpenRouter ──
@@ -74,6 +109,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       apiKeyUrl: 'https://openrouter.ai/keys',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/models' },
+    websiteUrl: 'https://openrouter.ai',
+    legacyProtocol: 'openrouter',
   },
 
   // ── DeepSeek ──
@@ -102,6 +142,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://platform.deepseek.com/docs',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#1E88E5',
+    websiteUrl: 'https://platform.deepseek.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Zhipu GLM (China) ──
@@ -134,6 +180,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'coding_plan',
       notes: ['高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#0F62FE',
+    websiteUrl: 'https://bigmodel.cn',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Zhipu GLM (Global) ──
@@ -166,6 +218,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'coding_plan',
       notes: ['高峰时段（14:00-18:00 UTC+8）消耗 3 倍积分'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#0F62FE',
+    websiteUrl: 'https://z.ai',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Kimi ──
@@ -194,6 +252,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://www.kimi.com/code/docs/more/third-party-agents.html',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#6366F1',
+    websiteUrl: 'https://www.kimi.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Moonshot ──
@@ -223,6 +287,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'pay_as_you_go',
       notes: ['建议设置每日消费上限，防止 agentic 循环快速消耗 token'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#6366F1',
+    websiteUrl: 'https://platform.moonshot.cn',
+    legacyProtocol: 'anthropic',
   },
 
   // ── StepFun Step Plan ──
@@ -248,6 +318,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://platform.stepfun.com/docs',
       billingModel: 'coding_plan',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://platform.stepfun.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── MiniMax (China) ──
@@ -278,11 +353,17 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'token_plan',
       notes: ['中国区用户专用，需要 MiniMax 编程套餐订阅'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#FF6B6B',
+    websiteUrl: 'https://platform.minimaxi.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── MiniMax (Global) ──
   {
-    id: 'minimax-global',
+    id: 'minimax',
     name: 'MiniMax (Global)',
     descriptionZh: 'MiniMax 编程套餐 — 国际区',
     protocol: 'anthropic',
@@ -307,6 +388,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://platform.minimax.io/docs/token-plan/opencode',
       billingModel: 'token_plan',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#FF6B6B',
+    websiteUrl: 'https://platform.minimax.io',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Volcengine Ark ──
@@ -338,6 +425,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'coding_plan',
       notes: ['需先在控制台激活 Endpoint', 'API Key 为临时凭证'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#FF6A00',
+    websiteUrl: 'https://www.volcengine.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Xiaomi MiMo (按量付费) ──
@@ -364,6 +457,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://platform.xiaomimimo.com/#/docs/integration/claudecode',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://api.xiaomimimo.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Xiaomi MiMo Token Plan ──
@@ -389,6 +487,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://platform.xiaomimimo.com/#/docs/integration/claudecode',
       billingModel: 'token_plan',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://api.xiaomimimo.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── xAI Grok ──
@@ -411,6 +514,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://docs.x.ai/docs',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://console.x.ai/',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Arcee ──
@@ -434,6 +542,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://docs.arcee.ai/',
       billingModel: 'pay_as_you_go',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://www.arcee.ai/',
+    legacyProtocol: 'anthropic',
   },
 
   // ── Aliyun Bailian ──
@@ -471,6 +584,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'coding_plan',
       notes: ['必须使用 Coding Plan 专用 Key（以 sk-sp- 开头）', '普通 DashScope Key 无法使用', '禁止用于自动化脚本'],
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#FF6A00',
+    websiteUrl: 'https://bailian.console.aliyun.com',
+    legacyProtocol: 'anthropic',
   },
 
   // ── AWS Bedrock ──
@@ -499,6 +618,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'pay_as_you_go',
       notes: ['需在 AWS Console 订阅 Claude 模型'],
     },
+    providerCategory: 'managed',
+    authFields: BEARER_TOKEN_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://aws.amazon.com/bedrock',
+    legacyProtocol: 'bedrock',
   },
 
   // ── Google Vertex AI ──
@@ -526,6 +650,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       billingModel: 'pay_as_you_go',
       notes: ['需启用 Vertex AI 并在 Model Garden 订阅 Claude 模型'],
     },
+    providerCategory: 'managed',
+    authFields: BEARER_TOKEN_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    iconColor: '#4285F4',
+    websiteUrl: 'https://cloud.google.com/vertex-ai',
+    legacyProtocol: 'vertex',
   },
 
   // ── Ollama ──
@@ -559,6 +689,12 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
         '不确定能运行什么模型？用 CanIRun.ai 检测: https://www.canirun.ai/',
       ],
     },
+    providerCategory: 'local',
+    authFields: BASE_URL_AUTH_FIELDS,
+    modelsSource: { type: 'custom-url', url: '/api/tags' },
+    endpointCandidates: ['http://localhost:11434', 'http://127.0.0.1:11434'],
+    websiteUrl: 'https://ollama.com',
+    legacyProtocol: 'ollama',
   },
 
   // ── LiteLLM ──
@@ -581,5 +717,227 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       docsUrl: 'https://docs.litellm.ai/docs/',
       billingModel: 'self_hosted',
     },
+    providerCategory: 'aggregator',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
+    websiteUrl: 'https://github.com/BerriAI/litellm',
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ════════════════════════════════════════════════════════════════
+  // ── Missing providers (exist in frontend presets, were absent here) ──
+  // ════════════════════════════════════════════════════════════════
+
+  // ── OpenAI Official ──
+  {
+    id: 'openai-official',
+    name: 'OpenAI',
+    descriptionZh: 'OpenAI 官方 API — GPT-4o / o1 / o3 系列',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: 'https://api.openai.com/v1',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'gpt-4o', displayName: 'GPT-4o' },
+      { modelId: 'gpt-4o-mini', displayName: 'GPT-4o Mini' },
+      { modelId: 'o1', displayName: 'o1' },
+      { modelId: 'o1-mini', displayName: 'o1 Mini' },
+      { modelId: 'o3-mini', displayName: 'o3 Mini' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'openai',
+    meta: {
+      apiKeyUrl: 'https://platform.openai.com/api-keys',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/models' },
+    iconColor: '#00A67E',
+    websiteUrl: 'https://platform.openai.com',
+    legacyProtocol: 'openai',
+  },
+
+  // ── OpenAI-Compatible Generic ──
+  {
+    id: 'openai-compatible-generic',
+    name: 'OpenAI-Compatible (Generic)',
+    descriptionZh: 'OpenAI 兼容 API — 填写地址和密钥',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: '',
+    envOverrides: {},
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url'],
+    iconKey: 'server',
+    providerCategory: 'custom',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/models' },
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── DeepSeek (OpenAI-compatible) ──
+  {
+    id: 'deepseek-openai',
+    name: 'DeepSeek (OpenAI)',
+    descriptionZh: 'DeepSeek OpenAI 兼容 API — R1 / V3',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: 'https://api.deepseek.com/v1',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'deepseek-reasoner', displayName: 'DeepSeek R1 (Reasoning)' },
+      { modelId: 'deepseek-chat', displayName: 'DeepSeek V3 (Chat)' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'deepseek',
+    meta: {
+      apiKeyUrl: 'https://platform.deepseek.com/api_keys',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://platform.deepseek.com',
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── Qwen (OpenAI-compatible) ──
+  {
+    id: 'qwen-openai',
+    name: 'Qwen (OpenAI)',
+    descriptionZh: '通义千问 OpenAI 兼容 API',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'qwq-32b-preview', displayName: 'QwQ 32B Preview' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'qwen',
+    meta: {
+      apiKeyUrl: 'https://dashscope.console.aliyun.com/apiKey',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://dashscope.console.aliyun.com',
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── GLM (OpenAI-compatible) ──
+  {
+    id: 'glm-openai',
+    name: 'GLM (OpenAI)',
+    descriptionZh: '智谱 GLM OpenAI 兼容 API',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'glm-4-plus', displayName: 'GLM-4 Plus' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'zhipu',
+    meta: {
+      apiKeyUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://open.bigmodel.cn',
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── Kimi (OpenAI-compatible) ──
+  {
+    id: 'kimi-openai',
+    name: 'Kimi (OpenAI)',
+    descriptionZh: 'Moonshot Kimi OpenAI 兼容 API',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: 'https://api.moonshot.cn/v1',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'moonshot-v1-auto', displayName: 'Moonshot V1 Auto' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'kimi',
+    meta: {
+      apiKeyUrl: 'https://platform.moonshot.cn/console/api-keys',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'static' },
+    websiteUrl: 'https://platform.moonshot.cn',
+    legacyProtocol: 'openai-compatible',
+  },
+
+  // ── Google Gemini ──
+  {
+    id: 'google-gemini',
+    name: 'Google Gemini',
+    descriptionZh: 'Google Gemini — 原生 API',
+    protocol: 'gemini',
+    authTypes: ['api_key'],
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    envOverrides: {},
+    defaultModels: [
+      { modelId: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+      { modelId: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+      { modelId: 'gemini-2.0-pro', displayName: 'Gemini 2.0 Pro' },
+    ],
+    fields: ['api_key'],
+    iconKey: 'google',
+    meta: {
+      apiKeyUrl: 'https://aistudio.google.com/apikey',
+      billingModel: 'pay_as_you_go',
+    },
+    providerCategory: 'official',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/v1beta/models' },
+    iconColor: '#4285F4',
+    websiteUrl: 'https://aistudio.google.com',
+    legacyProtocol: 'google',
+  },
+
+  // ── Custom Anthropic ──
+  {
+    id: 'custom-anthropic',
+    name: 'Custom Anthropic',
+    descriptionZh: 'Anthropic 兼容自定义 API — 填写地址和密钥',
+    protocol: 'anthropic',
+    authTypes: ['api_key'],
+    baseUrl: '',
+    envOverrides: {},
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url'],
+    iconKey: 'server',
+    providerCategory: 'custom',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
+    legacyProtocol: 'anthropic',
+  },
+
+  // ── Custom OpenAI ──
+  {
+    id: 'custom-openai',
+    name: 'Custom OpenAI',
+    descriptionZh: 'OpenAI 兼容自定义 API — 填写地址和密钥',
+    protocol: 'openai-chat',
+    authTypes: ['api_key'],
+    baseUrl: '',
+    envOverrides: {},
+    defaultModels: [],
+    fields: ['name', 'api_key', 'base_url'],
+    iconKey: 'server',
+    providerCategory: 'custom',
+    authFields: API_KEY_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
+    legacyProtocol: 'openai-compatible',
   },
 ];

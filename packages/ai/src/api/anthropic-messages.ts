@@ -1522,7 +1522,8 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
   // MiniMax detection: explicit provider id, endpoint shape, or the
   // adaptive-thinking compat flag (set for MiniMax routes in models.ts).
   const isMiniMax =
-    options.providerId === 'minimax-anthropic' ||
+    options.providerId === 'minimax' ||
+    options.providerId === 'minimax-cn' ||
     isMiniMaxEndpoint(options.baseURL) ||
     !!options.modelCapabilities?.forceAdaptiveThinking;
 

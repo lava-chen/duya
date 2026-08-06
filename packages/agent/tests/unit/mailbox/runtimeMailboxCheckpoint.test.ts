@@ -11,7 +11,7 @@ describe('runtime mailbox checkpoints', () => {
       id: 'mail-1',
       session_id: 'session-1',
       content: 'Use the updated requirement',
-      kind: 'correction',
+      kind: 'followup',
       status: 'observed',
     };
     const claimBatch = vi.spyOn(mailboxDb, 'claimBatch').mockResolvedValue({

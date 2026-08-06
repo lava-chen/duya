@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import { mkdtempSync, rmSync } from 'fs';
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   tempRoot: '',
+  fixtureDir: '',
   cacheDir: '',
   storeEntries: [] as Array<Record<string, unknown>>,
   storeUpsertPlugin: vi.fn(),
@@ -25,33 +26,41 @@ vi.mock('../logging/logger', () => ({
 
 vi.mock('./catalog', () => ({
   getPluginCatalog: vi.fn(() => []),
+  // Plan: plugin-config-simplification — the catalog entry now carries
+  // `builtinCacheDir` (the synced cache root) and a v2 manifest read from
+  // `.duya-plugin/plugin.json`. PluginManager copies the entire cache dir
+  // instead of synthesising an inline `plugin.json`.
   getPluginCatalogEntry: vi.fn((pluginId: string) => {
-    if (pluginId !== 'com.duya.literature') {
+    if (pluginId !== 'com.duya.test-plugin') {
       return null;
     }
     return {
-      id: 'com.duya.literature',
-      name: 'Literature Plugin',
+      id: 'com.duya.test-plugin',
+      name: 'test-plugin',
       source: 'bundled',
+      builtinCacheDir: state.fixtureDir,
       manifest: {
-        id: 'com.duya.literature',
-        name: 'Literature Plugin',
+        schemaVersion: 'duya.plugin.v2',
+        id: 'com.duya.test-plugin',
+        name: 'test-plugin',
         version: '0.1.0',
-        permissions: [],
+        description: 'Test plugin for install flow.',
+        author: { name: 'DUYA Team' },
         capabilities: {
-          skills: [],
+          skills: ['test-skill'],
           mcpServers: [
-            {
-              name: 'literature',
-              command: 'node',
-              args: ['./agent-bundle/literature-mcp-server.js'],
-            },
+            { name: 'test-mcp', command: 'node', args: ['server.js'] },
           ],
-          cli: [],
-          ui: [],
-          hooks: [],
         },
-        setup: [],
+        components: {
+          mcpServers: ['test-mcp'],
+          appConnections: [],
+          skills: ['test-skill'],
+          workflows: [],
+        },
+        permissions: [{ name: 'workspace.read' }],
+        setup: undefined,
+        engines: { duya: '>=0.1.0' },
       },
     };
   }),
@@ -131,16 +140,53 @@ vi.mock('../../packages/plugin-core/src/security/path-validator', () => ({
 
 import { PluginManager } from './PluginManager';
 
+/**
+ * Build a minimal on-disk fixture plugin at state.fixtureDir with the
+ * `.duya-plugin/plugin.json` + skills/ + mcp/ layout that
+ * PluginManager.installFromCatalog copies from `builtinCacheDir`.
+ */
+function buildFixturePlugin(dir: string): void {
+  mkdirSync(path.join(dir, '.duya-plugin'), { recursive: true });
+  writeFileSync(
+    path.join(dir, '.duya-plugin', 'plugin.json'),
+    JSON.stringify({
+      name: 'test-plugin',
+      version: '0.1.0',
+      description: 'Test plugin for install flow.',
+      author: { name: 'DUYA Team' },
+      license: 'MIT',
+    }, null, 2),
+  );
+
+  mkdirSync(path.join(dir, 'skills', 'test-skill'), { recursive: true });
+  writeFileSync(path.join(dir, 'skills', 'test-skill', 'SKILL.md'), '# test-skill\n');
+
+  mkdirSync(path.join(dir, 'mcp'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'mcp', 'servers.json'),
+    JSON.stringify({ servers: [{ name: 'test-mcp', command: 'node', args: ['server.js'] }] }, null, 2),
+  );
+
+  mkdirSync(path.join(dir, 'permissions'), { recursive: true });
+  writeFileSync(
+    path.join(dir, 'permissions', 'policy.json'),
+    JSON.stringify({ defaultMode: 'workspace', permissions: [] }, null, 2),
+  );
+}
+
 describe('PluginManager.installFromCatalog', () => {
   beforeEach(() => {
     state.tempRoot = mkdtempSync(path.join(tmpdir(), 'duya-plugin-manager-'));
-    state.cacheDir = path.join(state.tempRoot, 'cache', 'com.duya.literature', '0.1.0');
+    state.fixtureDir = path.join(state.tempRoot, 'fixture', 'test-plugin');
+    state.cacheDir = path.join(state.tempRoot, 'cache', 'com.duya.test-plugin', '0.1.0');
     state.storeEntries = [];
     state.storeUpsertPlugin.mockReset();
 
     fs.mkdirSync(path.join(state.tempRoot, 'installed'), { recursive: true });
     fs.mkdirSync(path.join(state.tempRoot, 'data'), { recursive: true });
     fs.mkdirSync(path.join(state.tempRoot, 'staging'), { recursive: true });
+
+    buildFixturePlugin(state.fixtureDir);
   });
 
   afterEach(() => {
@@ -152,10 +198,10 @@ describe('PluginManager.installFromCatalog', () => {
   it('upserts installed plugin metadata after catalog install', async () => {
     const manager = new PluginManager();
 
-    const result = await manager.installFromCatalog('com.duya.literature');
+    const result = await manager.installFromCatalog('com.duya.test-plugin');
 
     expect(result).toMatchObject({
-      id: 'com.duya.literature',
+      id: 'com.duya.test-plugin',
       version: '0.1.0',
       enabled: true,
     });
@@ -163,22 +209,30 @@ describe('PluginManager.installFromCatalog', () => {
     expect(state.storeUpsertPlugin).toHaveBeenCalledTimes(1);
     expect(state.storeUpsertPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
-        id: 'com.duya.literature',
+        id: 'com.duya.test-plugin',
         version: '0.1.0',
         marketplace: 'builtin',
       }),
     );
 
-    const manifestPath = path.join(state.cacheDir, 'plugin.json');
-    expect(fs.existsSync(manifestPath)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(manifestPath, 'utf8'))).toMatchObject({
-      id: 'com.duya.literature',
-      name: 'Literature Plugin',
+    // The install copies the entire builtin cache dir (including
+    // `.duya-plugin/plugin.json`), NOT a synthesised inline `plugin.json`.
+    const minimalManifestPath = path.join(state.cacheDir, '.duya-plugin', 'plugin.json');
+    expect(existsSync(minimalManifestPath)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(minimalManifestPath, 'utf8'))).toMatchObject({
+      name: 'test-plugin',
+      version: '0.1.0',
     });
 
+    // The legacy root `plugin.json` is NOT written — disk is the single source.
+    expect(existsSync(path.join(state.cacheDir, 'plugin.json'))).toBe(false);
+
+    // Skill assets are copied from the fixture dir.
     expect(
-      fs.existsSync(path.join(state.cacheDir, 'skills', 'paper-analysis.md'))
-        || fs.existsSync(path.join(state.cacheDir, 'skills', 'paper-analysis', 'SKILL.md')),
+      existsSync(path.join(state.cacheDir, 'skills', 'test-skill', 'SKILL.md')),
     ).toBe(true);
+
+    // MCP server config is copied from the fixture dir.
+    expect(existsSync(path.join(state.cacheDir, 'mcp', 'servers.json'))).toBe(true);
   });
 });

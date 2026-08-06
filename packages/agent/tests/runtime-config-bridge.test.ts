@@ -19,7 +19,7 @@
 
 import { describe, it, expect } from 'vitest';
 import type { AgentOptions } from '../src/types.js';
-import { toLegacyLlmProviderDiscriminator } from '../src/providers/ProviderRuntimeAdapter.js';
+import { toLegacyLlmProviderDiscriminator } from '@duya/ai';
 
 interface InitMessageProviderConfig {
   apiKey: string;

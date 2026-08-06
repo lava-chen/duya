@@ -25,6 +25,7 @@ import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js'
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig, Tool } from '../types.js';
+import type { ProviderRuntimeConfig } from '@duya/ai';
 import {
   messageDb,
   pluginDb,
@@ -100,17 +101,7 @@ interface InitMessage {
      * `provider` discriminator. New code should treat this as the
      * authoritative runtime config.
      */
-    runtimeConfig?: {
-      providerId: string;
-      providerName?: string;
-      apiFormat: 'openai-chat' | 'openai-responses' | 'anthropic' | 'gemini' | 'ollama' | 'bedrock' | 'vertex';
-      baseUrl: string;
-      apiKey?: string;
-      accessToken?: string;
-      headers: Record<string, string>;
-      model: string;
-      requestOptions?: Record<string, unknown>;
-    };
+    runtimeConfig?: ProviderRuntimeConfig;
   };
   workingDirectory?: string;
   defaultWorkspaceDirectory?: string;

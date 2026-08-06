@@ -15,7 +15,7 @@ import { resumeBackgroundTask } from '@/lib/stream-session-manager';
 // Types (mirrors agent_mailbox schema, camelCase for frontend)
 // =============================================================================
 
-export type MailboxKind = 'followup' | 'correction' | 'constraint' | 'stop' | 'abort_and_replace' | 'background_notification';
+export type MailboxKind = 'queued' | 'followup' | 'background_notification';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 
 export interface MailboxRow {

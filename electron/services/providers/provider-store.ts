@@ -50,10 +50,10 @@ import type { ApiProvider, LlmProvider, ModelCapability, ProviderRuntimeConfig, 
 import {
   toRuntimeConfig,
   validateRuntimeConfig,
-} from '../../../src/lib/providers/domain/ProviderRuntimeAdapter';
+} from '@duya/ai';
 import { modelSyncService } from '../../../src/lib/providers/models/ModelSyncService';
 import { providerHealthService } from '../../../src/lib/providers/health/ProviderHealthService';
-import { findPresetByKey } from '../../../src/lib/providers/presets';
+import { findPresetByKey } from '../../../src/lib/providers/catalog';
 import { validateProvider } from '../../../src/lib/providers/domain/ProviderValidation';
 import { redactSecrets } from '../../../src/lib/providers/domain/ProviderValidation';
 import { isMaskedKey } from '../../../src/lib/providers/secret';

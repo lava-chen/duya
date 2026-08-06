@@ -1,26 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import type { Message } from '../../src/types.js';
 import {
   MessageTimeline,
   buildAgentContext,
   findSafeCompactionBoundary,
-  isDurableAgentMessage,
   isVisibleAgentMessage,
-  toModelMessages,
-  type AgentCustomMessage,
   type AgentMessage,
   type CompactionEntry,
   type MessageEntry,
 } from '../../src/message/message-framework.js';
+import { projectModelMessages } from '../../src/message/message-projectors.js';
 
 const createdAt = 1_700_000_000_000;
 
 function user(id: string, content: string): AgentMessage {
   return {
-    kind: 'user',
+    role: 'user',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     content,
   };
@@ -28,10 +24,9 @@ function user(id: string, content: string): AgentMessage {
 
 function assistant(id: string, content: string): AgentMessage {
   return {
-    kind: 'assistant',
+    role: 'assistant',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
     content,
   };
@@ -39,15 +34,20 @@ function assistant(id: string, content: string): AgentMessage {
 
 function toolResult(id: string, toolCallId: string): AgentMessage {
   return {
-    kind: 'tool_result',
+    role: 'tool',
     id,
-    createdAt,
-    persistence: 'durable',
+    timestamp: createdAt,
     visibility: 'visible',
-    toolCallId,
-    toolName: 'read',
-    content: 'ok',
-    isError: false,
+    name: 'read',
+    tool_call_id: toolCallId,
+    content: [
+      {
+        type: 'tool_result',
+        tool_use_id: toolCallId,
+        content: 'ok',
+        is_error: false,
+      },
+    ],
   };
 }
 
@@ -103,21 +103,18 @@ describe('MessageTimeline', () => {
 });
 
 describe('message policy helpers', () => {
-  it('separates durability from UI visibility', () => {
+  it('separates hidden UI visibility from model inclusion', () => {
     const runtimeMessage: AgentMessage = {
-      kind: 'runtime_context',
+      role: 'runtime_context',
       id: 'mailbox-1',
-      createdAt,
-      persistence: 'transient',
+      timestamp: createdAt,
       visibility: 'hidden',
       source: 'mailbox',
       content: 'Continue with the new instruction.',
-      includeInModel: true,
     };
 
-    expect(isDurableAgentMessage(runtimeMessage)).toBe(false);
     expect(isVisibleAgentMessage(runtimeMessage)).toBe(false);
-    expect(toModelMessages([runtimeMessage])).toHaveLength(1);
+    expect(projectModelMessages([runtimeMessage]).messages).toHaveLength(1);
   });
 });
 
@@ -142,7 +139,7 @@ describe('compaction projection', () => {
       'a2',
       'u3',
     ]);
-    expect(toModelMessages(projection.messages)[0]).toMatchObject({
+    expect(projectModelMessages(projection.messages).messages[0]).toMatchObject({
       role: 'user',
       isCompactSummary: true,
       compactBoundaryId: 'compact-1',
@@ -209,53 +206,5 @@ describe('compaction projection', () => {
       firstKeptIndex: 4,
       firstKeptMessageId: 'u2',
     });
-  });
-});
-
-describe('custom message projection', () => {
-  interface ArtifactPayload {
-    path: string;
-  }
-
-  type ArtifactMessage = AgentCustomMessage<'artifact', ArtifactPayload>;
-
-  it('uses an explicit adapter only at the model boundary', () => {
-    const artifact: ArtifactMessage = {
-      kind: 'custom:artifact',
-      id: 'artifact-1',
-      createdAt,
-      persistence: 'durable',
-      visibility: 'visible',
-      includeInModel: true,
-      payload: { path: 'reports/result.md' },
-    };
-
-    const projected = toModelMessages<ArtifactMessage>([artifact], (message) => ({
-      id: message.id,
-      role: 'user',
-      content: `Artifact available at ${message.payload.path}`,
-      timestamp: message.createdAt,
-    } satisfies Message));
-
-    expect(projected).toEqual([
-      expect.objectContaining({
-        role: 'user',
-        content: 'Artifact available at reports/result.md',
-      }),
-    ]);
-  });
-
-  it('does not leak an unadapted custom message into provider context', () => {
-    const artifact: ArtifactMessage = {
-      kind: 'custom:artifact',
-      id: 'artifact-1',
-      createdAt,
-      persistence: 'durable',
-      visibility: 'visible',
-      includeInModel: true,
-      payload: { path: 'reports/result.md' },
-    };
-
-    expect(toModelMessages<ArtifactMessage>([artifact])).toEqual([]);
   });
 });

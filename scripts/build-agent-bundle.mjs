@@ -56,7 +56,7 @@ fs.writeFileSync(
 
 // Build Literature MCP server as a separate CommonJS bundle
 await build({
-  entryPoints: ['packages/agent/src/plugins/literature/server/mcp-server.ts'],
+  entryPoints: ['packages/plugin-core/src/plugins/builtin/literature/server/mcp-server.ts'],
   outfile: path.join(outdir, 'literature-mcp-server.js'),
   bundle: true,
   platform: 'node',

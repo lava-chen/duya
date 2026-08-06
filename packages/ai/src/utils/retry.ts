@@ -27,8 +27,12 @@ import {
 /**
  * Enable verbose debug output via DEBUG=1 env var (the structured agent
  * logger is unavailable in @duya/ai, so we use console with a prefix).
+ *
+ * `process` may be undefined when @duya/ai is bundled into the browser
+ * renderer, so guard the reference instead of reading it directly.
  */
-const DEBUG = process.env.DEBUG === '1';
+const ENV = typeof process !== 'undefined' && process.env ? process.env : {};
+const DEBUG = ENV.DEBUG === '1';
 
 /**
  * Retry configuration options
@@ -94,8 +98,8 @@ function createRetryState(): RetryState {
  * Check if persistent retry mode is enabled via environment
  */
 function isPersistentRetryEnabled(): boolean {
-  return process.env.DUYA_UNATTENDED_RETRY === 'true' ||
-         process.env.DUYA_PERSISTENT_RETRY === 'true';
+  return ENV.DUYA_UNATTENDED_RETRY === 'true' ||
+         ENV.DUYA_PERSISTENT_RETRY === 'true';
 }
 
 /**

@@ -111,12 +111,19 @@ export class MailboxService {
   claimBatch(input: ClaimBatchInput): ClaimBatchResult {
     const now = Date.now();
     const limit = Math.max(1, Math.min(input.limit ?? 10, 25));
+    // Claimable kinds depend on the checkpoint: immediate followups and
+    // background notifications are claimable at before_model_turn; queued
+    // rows are only absorbed right before the answer finalises.
+    const claimableKinds =
+      input.checkpoint === 'before_final_answer'
+        ? "'followup','queued','background_notification'"
+        : "'followup','background_notification'";
     const txn = this.db.transaction((): ClaimBatchResult => {
       const anchor = this.db.prepare(`
         SELECT id, priority, created_at, status, claim_attempts
         FROM agent_mailbox
         WHERE session_id = @sessionId
-          AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
+          AND kind IN (${claimableKinds})
           AND (
             status = 'pending'
             OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
@@ -145,7 +152,7 @@ export class MailboxService {
         WHERE session_id = @sessionId
           AND priority = @priority
           AND created_at <= @windowEnd
-          AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
+          AND kind IN (${claimableKinds})
           AND (
             status = 'pending'
             OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)

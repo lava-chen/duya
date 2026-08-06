@@ -1,26 +1,14 @@
 import type { Model } from '../types.js';
+import { createProvider } from './create-provider.js';
+import { envApiKeyAuth } from '../auth/helpers.js';
+import { volcengineModels } from './volcengine.models.js';
+import { anthropicStreams } from './adapters.js';
 
-export const volcengineModels: Model<'anthropic'>[] = [
-  {
-    id: 'doubao-1.5-pro-32k',
-    name: 'Doubao 1.5 Pro 32K',
-    api: 'anthropic',
-    providerId: 'volcengine',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
-    reasoning: false,
-    input: ['text', 'image'],
-    contextWindow: 32000,
-    maxTokens: 8192,
-  },
-  {
-    id: 'doubao-1.5-lite-32k',
-    name: 'Doubao 1.5 Lite 32K',
-    api: 'anthropic',
-    providerId: 'volcengine',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
-    reasoning: false,
-    input: ['text', 'image'],
-    contextWindow: 32000,
-    maxTokens: 8192,
-  },
-];
+export const volcengine = createProvider({
+  id: 'volcengine',
+  name: 'Volcengine',
+  baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+  auth: envApiKeyAuth('ARK_API_KEY', ['ARK_API_KEY']),
+  models: volcengineModels,
+  api: anthropicStreams({ apiKey: '', baseURL: 'https://ark.cn-beijing.volces.com/api/coding', model: '', apiFormat: 'anthropic', providerId: 'volcengine' }),
+});

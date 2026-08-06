@@ -34,7 +34,7 @@ export {
   normalizeBaseUrl,
   validateRuntimeConfig,
   toLegacyLlmProviderDiscriminator,
-} from './domain/ProviderRuntimeAdapter';
+} from '@duya/ai';
 
 export { LlmProviderService, toRendererDto } from './domain/LlmProviderService';
 
@@ -43,13 +43,7 @@ export {
   PRESET_BY_KEY,
   findPresetByKey,
   findPresetsByCategory,
-  ANTHROPIC_PRESETS,
-  OPENAI_PRESETS,
-  OLLAMA_PRESETS,
-  GOOGLE_PRESETS,
-  BEDROCK_PRESETS,
-  CUSTOM_PRESETS,
-} from './presets';
+} from './catalog';
 
 export { ModelCapabilityService, modelCapabilityService } from './models/ModelCapabilityService';
 export { ModelSyncService, modelSyncService } from './models/ModelSyncService';

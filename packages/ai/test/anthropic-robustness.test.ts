@@ -25,8 +25,8 @@ import {
   parseAnthropicEvent,
 } from '../src/api/anthropic-messages.js';
 import { ThinkTagParser } from '../src/utils/think-tag-parser.js';
-import { anthropicModels } from '../src/providers/anthropic.js';
-import { minimaxAnthropicModels } from '../src/providers/minimax-anthropic.js';
+import { anthropicModels } from '../src/providers/anthropic.models.js';
+import { minimaxModels } from '../src/providers/minimax.models.js';
 
 // ─── Block builders ─────────────────────────────────────────────────────────
 
@@ -300,7 +300,7 @@ describe('normalizeToolResultOrdering', () => {
 // ─── handleThinkingBlocks ───────────────────────────────────────────────────
 
 describe('handleThinkingBlocks', () => {
-  const minimaxModel = minimaxAnthropicModels[0];
+  const minimaxModel = minimaxModels[0];
   const anthropicModel = anthropicModels[0];
   const otherThirdPartyModel: Model<'anthropic'> = {
     ...anthropicModel,
@@ -378,7 +378,7 @@ describe('handleThinkingBlocks', () => {
 // ─── toAnthropicMessages thinking handling ──────────────────────────────────
 
 describe('toAnthropicMessages drops MiniMax thinking blocks', () => {
-  const minimaxModel = minimaxAnthropicModels[0];
+  const minimaxModel = minimaxModels[0];
   const anthropicModel = anthropicModels[0];
 
   it('drops unsigned thinking blocks for MiniMax Anthropic-compatible endpoint', () => {
@@ -390,7 +390,7 @@ describe('toAnthropicMessages drops MiniMax thinking blocks', () => {
           { type: 'thinking', thinking: 'step 1' },
           { type: 'text', text: 'a1' },
         ],
-        providerId: 'minimax-anthropic',
+        providerId: 'minimax',
         model: 'MiniMax-M3',
         api: 'anthropic',
       },
@@ -478,7 +478,7 @@ function assertStrictAdjacency(messages: MessageParam[]): void {
 }
 
 describe('toAnthropicMessages strict tool ID binding', () => {
-  const minimaxModel = minimaxAnthropicModels[0];
+  const minimaxModel = minimaxModels[0];
 
   it('tightens tool results when an assistant turn interrupts the round', () => {
     const messages: Message[] = [
@@ -578,7 +578,7 @@ describe('parseAnthropicEvent MiniMax thinking handling', () => {
     role: 'assistant',
     content: [],
     api: 'anthropic',
-    providerId: 'minimax-anthropic',
+    providerId: 'minimax',
     model: 'MiniMax-M3',
     usage: { input_tokens: 0, output_tokens: 0 },
     stopReason: 'completed',

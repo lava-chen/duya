@@ -1,28 +1,14 @@
 import type { Model } from '../types.js';
+import { createProvider } from './create-provider.js';
+import { envApiKeyAuth } from '../auth/helpers.js';
+import { bailianModels } from './bailian.models.js';
+import { anthropicStreams } from './adapters.js';
 
-export const bailianModels: Model<'anthropic'>[] = [
-  {
-    id: 'qwen3.6-plus',
-    name: 'Qwen 3.6 Plus',
-    api: 'anthropic',
-    providerId: 'bailian',
-    baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
-    reasoning: true,
-    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },
-    input: ['text', 'image'],
-    contextWindow: 131072,
-    maxTokens: 8192,
-  },
-  {
-    id: 'qwen3.5-plus',
-    name: 'Qwen 3.5 Plus',
-    api: 'anthropic',
-    providerId: 'bailian',
-    baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
-    reasoning: true,
-    thinkingLevelMap: { off: null, low: 'low', medium: 'medium', high: 'high' },
-    input: ['text', 'image'],
-    contextWindow: 131072,
-    maxTokens: 8192,
-  },
-];
+export const bailian = createProvider({
+  id: 'bailian',
+  name: 'Bailian',
+  baseUrl: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+  auth: envApiKeyAuth('DASHSCOPE_API_KEY', ['DASHSCOPE_API_KEY']),
+  models: bailianModels,
+  api: anthropicStreams({ apiKey: '', baseURL: 'https://coding.dashscope.aliyuncs.com/apps/anthropic', model: '', apiFormat: 'anthropic', providerId: 'bailian' }),
+});

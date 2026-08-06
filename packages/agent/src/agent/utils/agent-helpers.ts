@@ -124,10 +124,7 @@ export function computeCachePlanFingerprint(systemPrompt: string, tools: Tool[])
   return `cache-v1-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
-export function chooseMailboxApplyMode(row: MailboxRow): MailboxApplyMode {
-  if (row.kind === 'stop' || row.kind === 'abort_and_replace') {
-    return 'interrupt_signal';
-  }
+export function chooseMailboxApplyMode(_row: MailboxRow): MailboxApplyMode {
   return 'runtime_instruction';
 }
 

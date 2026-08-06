@@ -95,13 +95,13 @@ describe('signature persistence — messageRowToMessage restoration', () => {
       msg_type: 'text',
       provider_state: JSON.stringify({
         api: 'anthropic',
-        providerId: 'minimax-anthropic',
+        providerId: 'minimax',
         model: 'MiniMax-M3',
       }),
     });
     const msg = messageRowToMessage(row);
     expect(msg.api).toBe('anthropic');
-    expect(msg.providerId).toBe('minimax-anthropic');
+    expect(msg.providerId).toBe('minimax');
     expect(msg.model).toBe('MiniMax-M3');
   });
 

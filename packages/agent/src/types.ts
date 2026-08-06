@@ -29,7 +29,7 @@ import type {
   TokenUsage,
   AgentProgressEvent,
   StopReason,
-  ModelCompat,
+  ProviderRuntimeConfig,
 } from '@duya/ai';
 
 export type {
@@ -173,43 +173,8 @@ export interface AgentOptions {
    * SHOULD prefer `apiFormat` / `headers` from this object over the
    * legacy `provider` discriminator. New code paths should treat
    * this as the authoritative source.
-   *
-   * Field shape mirrors `packages/agent/src/providers/runtime-types.ts`
-   * `ProviderRuntimeConfig` (kept inline to avoid a circular import).
    */
-  runtimeConfig?: {
-    providerId: string;
-    providerName?: string;
-    apiFormat: 'openai-chat' | 'openai-responses' | 'anthropic' | 'gemini' | 'ollama' | 'bedrock' | 'vertex';
-    baseUrl: string;
-    apiKey?: string;
-    accessToken?: string;
-    headers: Record<string, string>;
-    model: string;
-    /**
-     * Per-model capability row from the renderer's
-     * `provider_model_capabilities` table. Currently used to thread
-     * the user-toggled `contextWindow` (200K vs 1M) into the
-     * compaction budget and skill listing; new fields can be added
-     * without an interface bump.
-     */
-    modelCapabilities?: {
-      providerId?: string;
-      modelId?: string;
-      displayName?: string;
-      contextWindow?: number;
-      maxOutputTokens?: number;
-      supportsToolUse?: boolean;
-      supportsVision?: boolean;
-      supportsReasoning?: boolean;
-      supportsPromptCache?: boolean;
-    };
-    /** Provider-specific compat flags from @duya/ai preset models.
-     *  Drives thinking format selection, forceAdaptiveThinking, etc.
-     *  Resolved by findModelCompat(apiFormat, model) in toRuntimeConfig. */
-    modelCompat?: ModelCompat;
-    requestOptions?: Record<string, unknown>;
-  };
+  runtimeConfig?: ProviderRuntimeConfig;
 }
 
 // 对话选项

@@ -35,7 +35,7 @@ import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig } from '@duya/ai';
-import { resolveLlmClientDiscriminator } from '../providers/ProviderRuntimeAdapter.js';
+import { resolveLlmClientDiscriminator } from '@duya/ai';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
@@ -80,13 +80,12 @@ import type { CompactOptions } from '../compact/types.js';
 import {
   MessageTimeline,
   buildAgentContext,
-  legacyMessageToAgentMessage,
-  legacyMessagesToAgentMessages,
+  ingestMessage,
+  ingestMessages,
   projectModelMessages,
   extractLegacySystemSegments,
   projectTimelinePersistenceMessages,
   getLegacyCompactionCheckpoint,
-  type LegacyCustomAgentMessage,
   type CompactionEntry,
   type RuntimeContextAgentMessage,
   type AgentMessage,
@@ -95,7 +94,6 @@ import { MessageCompactionController } from '../message/message-compaction-contr
 import {
   adaptAttachmentContext,
   adaptBackgroundNotification,
-  adaptMailboxHardReplacement,
   adaptMailboxRows,
   projectRuntimeContextToProviderMessage,
   RUNTIME_CONTEXT_METADATA_KEYS,
@@ -134,7 +132,7 @@ export class duyaAgent {
    * conversation history. `messages` (above) is the durable provider-shaped
    * projection of this timeline for legacy callers.
    */
-  private timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+  private timeline = new MessageTimeline();
   /** Plan 315: tracks message ids already appended to timeline, O(1) dedup. */
   private syncedMessageIds: Set<string> = new Set();
   /**
@@ -142,7 +140,7 @@ export class duyaAgent {
    * timeline, so compaction appends a checkpoint entry instead of mutating
    * the history in place.
    */
-  private compactionController!: MessageCompactionController<LegacyCustomAgentMessage>;
+  private compactionController!: MessageCompactionController;
   private abortController: AbortController | null = null;
   private sessionInfo: SessionInfo;
   private compactionManager: CompactionManager;
@@ -1473,12 +1471,12 @@ export class duyaAgent {
   private _appendMessageToTimeline(message: Message): void {
     if (!message.id || this.syncedMessageIds.has(message.id)) return;
     const index = this.timeline.snapshot().length;
-    const adapted = legacyMessageToAgentMessage(message, { index });
+    const adapted = ingestMessage(message, { index });
     this.timeline.appendMessage({
       type: 'message',
       id: `${crypto.randomUUID()}:${index}`,
       parentId: null,
-      createdAt: adapted.createdAt,
+      createdAt: adapted.timestamp ?? 0,
       message: adapted,
     });
     this.syncedMessageIds.add(message.id);
@@ -1509,8 +1507,8 @@ export class duyaAgent {
       type: 'message',
       id: `${crypto.randomUUID()}:${this.timeline.snapshot().length}`,
       parentId: null,
-      createdAt: message.createdAt,
-      message: message as AgentMessage<LegacyCustomAgentMessage>,
+      createdAt: message.timestamp,
+      message: message as AgentMessage,
     });
     this.syncedMessageIds.add(message.id);
     // `this.messages` is a timeline-derived getter, so the appended entry is
@@ -1598,22 +1596,6 @@ export class duyaAgent {
       });
     };
 
-    const abort = claim.rows.find((row) => row.kind === 'abort_and_replace');
-    if (abort) {
-      const abortIndex = claim.rows.indexOf(abort);
-      await applyRow(abort, abortIndex, 'hard replacement requested before model turn');
-      const ctx = adaptMailboxHardReplacement(abort, claim.claimTokens[abortIndex], { seqIndex });
-      const projected = projectRuntimeContextToProviderMessage(ctx);
-      if (projected) messages.push(projected);
-      return { action: 'hard_replace', replacement: abort.content.trim() };
-    }
-
-    const stop = claim.rows.find((row) => row.kind === 'stop');
-    if (stop) {
-      await applyRow(stop, claim.rows.indexOf(stop), 'soft stop requested before model turn');
-      return { action: 'soft_stop', summary: stop.content.trim() || 'Stopped as requested.' };
-    }
-
     const usableRows = claim.rows.filter((row) => row.content.trim().length > 0);
     if (!usableRows.length) {
       return { action: 'continue', absorbed: false };
@@ -1622,7 +1604,7 @@ export class duyaAgent {
     // Segregate terminal background-task notifications from user guidance rows
     // so each follows its own adapter. Background notifications keep the raw
     // <task-notification> XML envelope (sub-agents / background bash), while
-    // followup/correction/constraint rows collapse into a guidance block.
+    // followup rows collapse into a guidance block.
     const guidanceRows = usableRows.filter((row) => row.kind !== 'background_notification');
     const backgroundNotificationRows = usableRows.filter((row) => row.kind === 'background_notification');
 
@@ -2177,7 +2159,7 @@ export class duyaAgent {
     // (compaction follows the messages it rewrites), so `buildAgentContext`
     // finds `firstKeptIndex < compactionIndex` and emits the summary message.
     let compaction: CompactionEntry | undefined;
-    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
     for (const [index, message] of messages.entries()) {
       const checkpoint = getLegacyCompactionCheckpoint(message);
@@ -2198,12 +2180,12 @@ export class duyaAgent {
         };
         continue;
       }
-      const adapted = legacyMessageToAgentMessage(message, { index });
+      const adapted = ingestMessage(message, { index });
       this.timeline.appendMessage({
         type: 'message',
         id: `${crypto.randomUUID()}:${index}`,
         parentId: null,
-        createdAt: adapted.createdAt,
+        createdAt: adapted.timestamp ?? 0,
         message: adapted,
       });
       if (message.id) this.syncedMessageIds.add(message.id);
@@ -2221,7 +2203,7 @@ export class duyaAgent {
    * Clear all messages from the timeline and projected list.
    */
   clearMessages(): void {
-    this.timeline = new MessageTimeline<LegacyCustomAgentMessage>();
+    this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
     this.sessionInfo.updatedAt = Date.now();
   }
@@ -2463,12 +2445,12 @@ export class duyaAgent {
       timestamp: message.timestamp ?? Date.now(),
     };
     const index = this.timeline.snapshot().length;
-    const adapted = legacyMessageToAgentMessage(withTimestamp, { index });
+    const adapted = ingestMessage(withTimestamp, { index });
     this.timeline.appendMessage({
       type: 'message',
       id: `${crypto.randomUUID()}:${index}`,
       parentId: null,
-      createdAt: adapted.createdAt,
+      createdAt: adapted.timestamp ?? 0,
       message: adapted,
     });
     this.syncedMessageIds.add(withTimestamp.id!);

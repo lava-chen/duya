@@ -217,6 +217,9 @@ export interface Message {
   name?: string;
   tool_call_id?: string;
   timestamp?: number;
+  /** UI-only: whether this message renders in the transcript. Hidden messages
+   * (runtime context, notifications) are model/persistence only. */
+  visibility?: 'visible' | 'hidden';
   metadata?: Record<string, unknown>;
   msg_type?: string;
   thinking?: string;
@@ -291,6 +294,29 @@ export interface ModelCompat {
   streamOnly?: boolean;
 }
 
+// ─── Model pricing (per million tokens, USD) ───
+
+export interface ModelCostRates {
+  /** $/million input tokens. */
+  input: number;
+  /** $/million output tokens. */
+  output: number;
+  /** $/million cache-read tokens. */
+  cacheRead: number;
+  /** $/million cache-write tokens. */
+  cacheWrite: number;
+}
+
+export interface ModelCostTier extends ModelCostRates {
+  /** Use this tier for requests whose total input usage exceeds this token count. */
+  inputTokensAbove: number;
+}
+
+export interface ModelCost extends ModelCostRates {
+  /** Request-wide pricing tiers. The highest matching input threshold applies. */
+  tiers?: ModelCostTier[];
+}
+
 export interface Model<TApi extends ApiFormat = ApiFormat> {
   id: string;
   name: string;
@@ -303,6 +329,8 @@ export interface Model<TApi extends ApiFormat = ApiFormat> {
   contextWindow: number;
   maxTokens: number;
   compat?: ModelCompat;
+  /** $/million-token pricing. Optional — absent models report no cost. */
+  cost?: ModelCost;
 }
 
 // ─── Internal events (not exposed to consumers) ───

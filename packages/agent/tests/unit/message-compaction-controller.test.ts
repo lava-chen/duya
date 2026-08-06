@@ -20,10 +20,9 @@ const CREATED_AT = 1_700_000_000_000;
 
 function user(id: string, content: string): AgentMessage {
   return {
-    kind: 'user',
+    role: 'user',
     id,
-    createdAt: CREATED_AT,
-    persistence: 'durable',
+    timestamp: CREATED_AT,
     visibility: 'visible',
     content,
   };
@@ -31,10 +30,9 @@ function user(id: string, content: string): AgentMessage {
 
 function assistant(id: string, content: string): AgentMessage {
   return {
-    kind: 'assistant',
+    role: 'assistant',
     id,
-    createdAt: CREATED_AT,
-    persistence: 'durable',
+    timestamp: CREATED_AT,
     visibility: 'visible',
     content,
   };
@@ -50,10 +48,9 @@ function assistantWithToolUse(
     { type: 'tool_use', id: toolUseId, name: toolName, input: {} },
   ];
   return {
-    kind: 'assistant',
+    role: 'assistant',
     id,
-    createdAt: CREATED_AT,
-    persistence: 'durable',
+    timestamp: CREATED_AT,
     visibility: 'visible',
     content,
   };
@@ -64,16 +61,22 @@ function toolResult(
   toolCallId: string,
   toolName: string,
 ): AgentMessage {
+  const content: MessageContent[] = [
+    {
+      type: 'tool_result',
+      tool_use_id: toolCallId,
+      content: 'result payload',
+      is_error: false,
+    },
+  ];
   return {
-    kind: 'tool_result',
+    role: 'tool',
     id,
-    createdAt: CREATED_AT,
-    persistence: 'durable',
+    timestamp: CREATED_AT,
     visibility: 'visible',
-    toolCallId,
-    toolName,
-    content: 'result payload',
-    isError: false,
+    name: toolName,
+    tool_call_id: toolCallId,
+    content,
   };
 }
 

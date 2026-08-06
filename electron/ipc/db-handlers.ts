@@ -2501,14 +2501,6 @@ function invertPatch(patch: Record<string, unknown>, actionType: string): Record
 // ==================== Mailbox Handlers (Plan 202 — PR1) ====================
 
 export function registerMailboxHandlers(): void {
-  const KIND_PRIORITY: Record<string, number> = {
-    abort_and_replace: 0,
-    stop: 10,
-    correction: 50,
-    constraint: 50,
-    followup: 100,
-  };
-
   ipcMain.handle('mailbox:send', (_event, data: {
     id: string;
     sessionId: string;
@@ -2522,7 +2514,7 @@ export function registerMailboxHandlers(): void {
   }) => {
     const database = getDb();
     const now = Date.now();
-    const priority = KIND_PRIORITY[data.kind] ?? 100;
+    const priority = 100;
 
     // Idempotency check
     if (data.clientMsgId) {

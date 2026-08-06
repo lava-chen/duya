@@ -2318,15 +2318,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // ==================== Mailbox actions (Plan 202 — PR1) ====================
     case 'mailbox:send': {
       const now = Date.now();
-      const priority = (() => {
-        const kind = p.kind as string;
-        switch (kind) {
-          case 'abort_and_replace': return 0;
-          case 'stop': return 10;
-          case 'correction': case 'constraint': return 50;
-          default: return 100;
-        }
-      })();
+      const priority = 100;
 
       // Idempotency check
       if (p.clientMsgId) {
@@ -2399,8 +2391,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         fields.push('kind = @kind');
         fields.push('priority = @priority');
         params.kind = p.kind;
-        const kindPriority: Record<string, number> = { abort_and_replace: 0, stop: 10, correction: 50, constraint: 50, followup: 100 };
-        params.priority = kindPriority[p.kind as string] ?? 100;
+        params.priority = 100;
       }
 
       if (fields.length === 0) return existing;
@@ -2483,12 +2474,20 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const runId = p.runId as string;
       const checkpoint = p.checkpoint as string;
 
+      // Claimable kinds depend on the checkpoint: immediate followups and
+      // background notifications are claimable at before_model_turn; queued
+      // rows are only absorbed right before the answer finalises.
+      const claimableKinds =
+        checkpoint === 'before_final_answer'
+          ? "'followup','queued','background_notification'"
+          : "'followup','background_notification'";
+
       const claim = db.transaction(() => {
         const anchor = db.prepare(`
           SELECT id, priority, created_at, status, claim_attempts
           FROM agent_mailbox
           WHERE session_id = @sessionId
-            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
+            AND kind IN (${claimableKinds})
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
@@ -2521,7 +2520,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           WHERE session_id = @sessionId
             AND priority = @priority
             AND created_at <= @windowEnd
-            AND (apply_mode = 'runtime_instruction' OR kind IN ('stop', 'abort_and_replace', 'background_notification'))
+            AND kind IN (${claimableKinds})
             AND (
               status = 'pending'
               OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)

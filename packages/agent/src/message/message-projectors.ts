@@ -1,24 +1,18 @@
 import type { Message, MessageContent } from '../types.js';
 import {
-  toModelMessages,
-  type AgentCustomMessage,
   type AgentMessage,
-  type AssistantAgentMessage,
-  type CompactionSummaryAgentMessage,
-  type CustomMessageProjector,
+  type AgentMessageVisibility,
+  type CompactionSummaryMessage,
+  type LegacyCompactionBoundaryMessage,
+  type LegacySystemMessage,
+  type LegacyUnknownRoleMessage,
   type PromptSegment,
-  type RuntimeContextAgentMessage,
-  type ToolResultAgentMessage,
-  type UserAgentMessage,
+  type RuntimeContextMessage,
   type CompactionEntry,
   type MessageTimelineEntry,
   buildAgentContext,
+  cloneValue,
 } from './message-framework.js';
-import {
-  agentMessageToLegacyMessage,
-  hasLegacyEnvelope,
-  type LegacyAgentMessage,
-} from './legacy-message-adapter.js';
 
 /**
  * Three explicit output boundaries for {@link AgentMessage}.
@@ -33,9 +27,8 @@ import {
  * - Transcript boundary  -> the visible subset rendered in the UI.
  *
  * All projectors are pure: they never mutate their input and they produce
- * deterministic output for a given input. Legacy-adapted messages are
- * restored losslessly via the adapter envelope; native AgentMessages are
- * projected by kind without requiring a sidecar.
+ * deterministic output for a given input. Every role is projected natively
+ * from the AgentMessage shape; no adapter envelope is involved.
  *
  * These projectors do not change the external contract: each boundary still
  * emits the legacy `Message[]` shape (or a provider split), so DB schema, IPC
@@ -55,84 +48,110 @@ export interface ModelMessageProjection {
    */
   readonly system: string | readonly MessageContent[];
   /**
-   * Provider messages in order. Includes `includeInModel` runtime context and
-   * compaction summaries as user-role turns; excludes `includeInModel=false`
-   * runtime context and custom messages without a projector.
+   * Provider messages in order. Includes runtime context and compaction
+   * summaries as user-role turns; excludes legacy marker roles.
    */
   readonly messages: readonly Message[];
 }
 
-export interface ProjectModelMessagesOptions<TCustom extends AgentCustomMessage> {
+export interface ProjectModelMessagesOptions {
   /** System segments merged into the system prompt. */
   readonly systemSegments?: readonly PromptSegment[];
-  /** Custom-message projector for the model boundary. */
-  readonly projectCustom?: CustomMessageProjector<TCustom>;
 }
 
 /**
  * Projects AgentMessages to the provider boundary: a separate system prompt
- * plus a `Message[]` ready for the model. The model boundary is gated only by
- * `includeInModel`; it is independent of `persistence` and `visibility`.
+ * plus a `Message[]` ready for the model.
  */
-export function projectModelMessages<TCustom extends AgentCustomMessage = never>(
-  messages: readonly AgentMessage<TCustom>[],
-  options: ProjectModelMessagesOptions<TCustom> = {},
+export function projectModelMessages(
+  messages: readonly AgentMessage[],
+  options: ProjectModelMessagesOptions = {},
 ): ModelMessageProjection {
   const providerMessages: Message[] = [];
   for (const message of messages) {
-    // Custom messages: project via projectCustom; legacy marker kinds never
-    // carry model content and are excluded from the model boundary.
-    if (message.kind.startsWith('custom:')) {
-      const custom = message as TCustom;
-      if (
-        message.kind === 'custom:legacy-compaction-boundary' ||
-        message.kind === 'custom:legacy-unknown-role'
-      ) {
-        continue;
-      }
-      if (options.projectCustom) {
-        const projected = options.projectCustom(custom);
-        if (Array.isArray(projected)) {
-          providerMessages.push(...projected);
-        } else if (projected) {
-          providerMessages.push(projected as Message);
-        }
-      }
-      continue;
-    }
-
-    // Compaction summary: model boundary adds instructional framing
-    if (message.kind === 'compaction_summary') {
-      providerMessages.push({
-        id: message.id,
-        role: 'user',
-        content: [
-          'Another agent continued this task and produced the following context summary.',
-          'Use it as prior context without repeating completed work.',
-          '',
-          message.summary,
-        ].join('\n'),
-        timestamp: message.createdAt,
-        isCompactSummary: true,
-        compactBoundaryId: message.compactionEntryId,
-      });
-      continue;
-    }
-
-    // All other messages: unified boundary converter handles both
-    // legacy-envelope (agentMessageToLegacyMessage) and native (kind-specific).
-    // Custom messages are handled above, so the projector is only a fallback
-    // for the default branch, which is unreachable here.
-    const legacy = toBoundaryMessage(
-      message,
-      options.projectCustom as NativeCustomToLegacyProjector<TCustom> | undefined,
-    );
-    if (legacy) {
-      providerMessages.push(legacy);
-    }
+    providerMessages.push(...toModelBoundary(message));
   }
   const system = mergeSystemSegments(options.systemSegments);
   return { system, messages: providerMessages };
+}
+
+/**
+ * Projects a single {@link RuntimeContextMessage} to a provider-compatible
+ * user-role {@link Message}. This is a one-way API adaptation: the domain
+ * message remains a runtime_context, and this projection only exists so the
+ * provider sees a `role: 'user'` turn.
+ *
+ * Internal tracking metadata (mailbox row IDs, claim tokens, task IDs) is
+ * intentionally NOT carried into the provider message — those are domain
+ * concerns, not model context. Only `runtimeContext: true` and `source` are
+ * attached so the reverse adapter can recover the runtime_context kind.
+ *
+ * The input message is never mutated.
+ */
+export function projectRuntimeContextToProviderMessage(
+  message: RuntimeContextMessage,
+): Message {
+  return {
+    id: message.id,
+    role: 'user',
+    content: message.content,
+    timestamp: message.timestamp,
+    metadata: {
+      runtimeContext: true,
+      source: message.source,
+    },
+  };
+}
+
+/**
+ * Converts a role-based AgentMessage to the provider boundary. Legacy marker
+ * roles are excluded (their content lives in the system prompt via
+ * {@link extractLegacySystemSegments}).
+ *
+ * Only user/assistant/tool turns are restored losslessly from the legacy
+ * envelope. System, compaction-summary, runtime-context, and unknown-role
+ * messages are routed by role instead, so a legacy system row is never
+ * re-injected into the messages array as a `system` turn.
+ */
+function toModelBoundary(message: AgentMessage): Message[] {
+  const role = (message as { role?: string }).role;
+  if (role !== 'user' && role !== 'assistant' && role !== 'tool') {
+    return toModelBoundaryByRole(message);
+  }
+
+  // Phase 1: user/assistant/tool are projected natively. The ingest adapter
+  // now preserves every original field on the object, so the spread is
+  // lossless without the legacy envelope.
+  return [{ ...(message as Message), id: (message as Message).id, timestamp: (message as Message).timestamp }];
+}
+
+function toModelBoundaryByRole(message: AgentMessage): Message[] {
+  switch (message.role) {
+    case 'runtime_context':
+      return [projectRuntimeContextToProviderMessage(message)];
+    case 'compaction_summary':
+      return [
+        {
+          id: message.id,
+          role: 'user',
+          content: [
+            'Another agent continued this task and produced the following context summary.',
+            'Use it as prior context without repeating completed work.',
+            '',
+            message.summary,
+          ].join('\n'),
+          timestamp: message.timestamp,
+          isCompactSummary: true,
+          compactBoundaryId: message.compactionEntryId,
+        },
+      ];
+    case 'legacy_system':
+    case 'legacy_compaction_boundary':
+    case 'legacy_unknown_role':
+      return [];
+    default:
+      return [];
+  }
 }
 
 function mergeSystemSegments(
@@ -172,34 +191,31 @@ function mergeSystemSegments(
  * Extract system content from legacy-adapted system messages and compaction
  * reinjected system messages into PromptSegments for the model boundary.
  *
- * Legacy system messages (role='system' in the DB) are adapted to
- * `custom:legacy-system` AgentMessages. `projectModelMessages` skips all
- * `custom:*` kinds, so their content would be lost without this extraction.
- * Compaction entries may carry `reinjectedSystemMessages` that also belong
- * in the system prompt.
+ * Legacy system messages (role='system' in the DB) are adapted to role
+ * `legacy_system`. `projectModelMessages` skips that role, so their content
+ * would be lost without this extraction. Compaction entries may carry
+ * `reinjectedSystemMessages` that also belong in the system prompt.
  *
  * @param messages - AgentMessage[] from buildAgentContext
  * @param compaction - Optional CompactionEntry from buildAgentContext
  * @returns PromptSegment[] for use with projectModelMessages
  */
-export function extractLegacySystemSegments<TCustom extends AgentCustomMessage = AgentCustomMessage>(
-  messages: readonly AgentMessage<TCustom>[],
+export function extractLegacySystemSegments(
+  messages: readonly AgentMessage[],
   compaction?: { readonly id: string; readonly reinjectedSystemMessages?: readonly (string | readonly MessageContent[])[] } | null,
 ): PromptSegment[] {
   const segments: PromptSegment[] = [];
 
-  for (const message of messages) {
-    if (message.kind === 'custom:legacy-system') {
-      // LegacySystemAgentMessage has payload.content with the system text
-      const payload = (message as { payload?: { content?: unknown } }).payload;
-      if (payload?.content) {
-        segments.push({
-          id: message.id,
-          contributorId: 'legacy-system',
-          placement: 'history-prefix' as const,
-          content: payload.content as string | readonly MessageContent[],
-        });
-      }
+  for (const agentMessage of messages) {
+    if (agentMessage.role !== 'legacy_system') continue;
+    const payload = agentMessage.payload;
+    if (payload?.content) {
+      segments.push({
+        id: agentMessage.id,
+        contributorId: 'legacy-system',
+        placement: 'history-prefix' as const,
+        content: payload.content as string | readonly MessageContent[],
+      });
     }
   }
 
@@ -220,35 +236,64 @@ export function extractLegacySystemSegments<TCustom extends AgentCustomMessage =
 
 // ─── Shared boundary conversion (persistence + transcript) ──────────────
 
-/**
- * Projects a native custom AgentMessage to the legacy `Message` shape at the
- * persistence/transcript boundaries. Returning `null` drops the message.
- */
-export type NativeCustomToLegacyProjector<TCustom extends AgentCustomMessage> = (
-  message: TCustom,
-) => Message | null;
-
-export interface ProjectBoundaryOptions<TCustom extends AgentCustomMessage> {
-  /**
-   * Optional projector for native custom messages. When omitted, native
-   * custom messages are preserved as a user-role `Message` with the payload
-   * serialized into `metadata` so nothing is silently lost at the boundary.
-   */
-  readonly projectCustomToLegacy?: NativeCustomToLegacyProjector<TCustom>;
-}
-
-function cloneValue<T>(value: T): T {
-  return structuredClone(value);
-}
-
 function cloneMetadata(
   metadata: Readonly<Record<string, unknown>> | undefined,
 ): Record<string, unknown> | undefined {
-  return metadata ? cloneValue(metadata) : undefined;
+  if (!metadata) return undefined;
+  const cloned = cloneValue(metadata);
+  return Object.keys(cloned).length > 0 ? cloned : undefined;
 }
 
-function nativeUserToLegacy(message: UserAgentMessage): Message {
-  return {
+/**
+ * Reads a runtime-only DB column from the AgentMessage. The native factory
+ * stores these under camelCase `metadata` keys (seqIndex / durationMs /
+ * status), while rows loaded from the DB carry them as top-level snake_case
+ * fields. Prefer the top-level field, then fall back to the metadata key.
+ */
+function runtimeField(
+  message: Message,
+  snakeKey: string,
+  metaKey: string,
+): string | number | undefined {
+  const top = (message as Message & Record<string, unknown>)[snakeKey];
+  if (top !== undefined && top !== null) return top as string | number;
+  const meta = message.metadata as Record<string, unknown> | undefined;
+  const metaValue = meta?.[metaKey];
+  return metaValue !== undefined && metaValue !== null
+    ? (metaValue as string | number)
+    : undefined;
+}
+
+/**
+ * Emits the DB columns the row mapping layer reads back (seq_index,
+ * duration_ms, status, sub_agent_id, viz_spec, ...). These previously lived
+ * only in the legacy adapter envelope; now the native projections carry them.
+ */
+function augmentLegacyColumns<T extends Message>(
+  message: Message,
+  target: T,
+): T {
+  const seqIndex = runtimeField(message, 'seq_index', 'seqIndex');
+  const durationMs = runtimeField(message, 'duration_ms', 'durationMs');
+  const status = runtimeField(message, 'status', 'status');
+  if (seqIndex !== undefined) target.seq_index = seqIndex as number;
+  if (durationMs !== undefined) target.duration_ms = durationMs as number;
+  if (status !== undefined) target.status = status as string;
+  if (message.msg_type !== undefined) target.msg_type = message.msg_type;
+  if (message.tool_name !== undefined) target.tool_name = message.tool_name;
+  if (message.tool_input !== undefined) target.tool_input = message.tool_input;
+  if (message.parent_tool_call_id !== undefined) {
+    target.parent_tool_call_id = message.parent_tool_call_id;
+  }
+  if (message.viz_spec !== undefined) target.viz_spec = message.viz_spec;
+  if (message.sub_agent_id !== undefined) target.sub_agent_id = message.sub_agent_id;
+  if (message.api !== undefined) target.api = message.api;
+  if (message.tool_call_id !== undefined) target.tool_call_id = message.tool_call_id;
+  return target;
+}
+
+function nativeUserToLegacy(message: Message): Message {
+  return augmentLegacyColumns(message, {
     id: message.id,
     role: 'user',
     content: cloneValue(message.content),
@@ -258,49 +303,51 @@ function nativeUserToLegacy(message: UserAgentMessage): Message {
     attachments: message.attachments
       ? (cloneValue(message.attachments) as unknown[])
       : undefined,
-    timestamp: message.createdAt,
+    timestamp: message.timestamp,
     metadata: cloneMetadata(message.metadata),
-  };
+  });
 }
 
-function nativeAssistantToLegacy(message: AssistantAgentMessage): Message {
-  const baseMetadata = cloneMetadata(message.metadata);
-  const metadata =
-    message.stopReason !== undefined
-      ? { ...(baseMetadata ?? {}), stopReason: message.stopReason }
-      : baseMetadata;
-  return {
+function nativeAssistantToLegacy(message: Message): Message {
+  return augmentLegacyColumns(message, {
     id: message.id,
     role: 'assistant',
     content: cloneValue(message.content),
     providerId: message.providerId,
     model: message.model,
     tokenUsage: message.tokenUsage ? cloneValue(message.tokenUsage) : undefined,
-    timestamp: message.createdAt,
-    metadata,
-  };
+    timestamp: message.timestamp,
+    metadata: cloneMetadata(message.metadata),
+  });
 }
 
-function nativeToolResultToLegacy(message: ToolResultAgentMessage): Message {
-  return {
+function nativeToolResultToLegacy(message: Message): Message {
+  const toolResult = Array.isArray(message.content)
+    ? message.content.find(
+        (block) => block.type === 'tool_result',
+      )
+    : undefined;
+  return augmentLegacyColumns(message, {
     id: message.id,
     role: 'tool',
-    name: message.toolName,
-    tool_call_id: message.toolCallId,
-    content: [
-      {
-        type: 'tool_result',
-        tool_use_id: message.toolCallId,
-        content: cloneValue(message.content),
-        is_error: message.isError,
-      },
-    ],
-    timestamp: message.createdAt,
+    name: message.name,
+    tool_call_id: message.tool_call_id ?? toolResult?.tool_use_id,
+    content: Array.isArray(message.content)
+      ? cloneValue(message.content)
+      : cloneValue([
+          {
+            type: 'tool_result' as const,
+            tool_use_id: message.tool_call_id ?? '',
+            content: message.content,
+            is_error: false,
+          },
+        ]),
+    timestamp: message.timestamp,
     metadata: cloneMetadata(message.metadata),
-  };
+  });
 }
 
-function nativeRuntimeContextToLegacy(message: RuntimeContextAgentMessage): Message {
+function nativeRuntimeContextToLegacy(message: RuntimeContextMessage): Message {
   const baseMetadata = cloneMetadata(message.metadata);
   return {
     id: message.id,
@@ -310,13 +357,13 @@ function nativeRuntimeContextToLegacy(message: RuntimeContextAgentMessage): Mess
     // reverse conversion, so a native runtime_context round-trips back to a
     // runtime_context AgentMessage instead of a plain user message.
     msg_type: message.source,
-    timestamp: message.createdAt,
+    timestamp: message.timestamp,
     metadata: { ...(baseMetadata ?? {}), runtimeContext: true, source: message.source },
   };
 }
 
 function nativeCompactionSummaryToLegacy(
-  message: CompactionSummaryAgentMessage,
+  message: CompactionSummaryMessage,
 ): Message {
   return {
     id: message.id,
@@ -325,56 +372,65 @@ function nativeCompactionSummaryToLegacy(
     isCompactSummary: true,
     compactBoundaryId: message.compactionEntryId,
     compactedMessageCount: message.tokensBefore,
-    timestamp: message.createdAt,
+    timestamp: message.timestamp,
     metadata: cloneMetadata(message.metadata),
   };
 }
 
-function toBoundaryMessage<TCustom extends AgentCustomMessage>(
-  message: AgentMessage<TCustom>,
-  projectCustomToLegacy: NativeCustomToLegacyProjector<TCustom> | undefined,
+function toBoundaryMessage(
+  message: AgentMessage,
 ): Message | null {
-  // Legacy-adapted messages always win: the adapter envelope is the only
-  // lossless source of provider state, signatures, and unknown DB fields.
-  if (hasLegacyEnvelope(message)) {
-    return agentMessageToLegacyMessage(message as unknown as LegacyAgentMessage);
-  }
+  const role = (message as { role?: string }).role;
 
-  // `hasLegacyEnvelope` is a type guard that narrows the negated branch to
-  // custom-only kinds. Re-widen to the full union so the switch below can
-  // discriminate all core kinds.
-  const nativeMessage = message as AgentMessage<TCustom>;
-
-  switch (nativeMessage.kind) {
+  // user/assistant/tool are lossless via the native projection: ingest keeps
+  // every field the DB row mapping produces, so the row is rebuilt natively.
+  switch (role) {
     case 'user':
-      return nativeUserToLegacy(nativeMessage);
+      return nativeUserToLegacy(message as Message);
     case 'assistant':
-      return nativeAssistantToLegacy(nativeMessage);
-    case 'tool_result':
-      return nativeToolResultToLegacy(nativeMessage);
+      return nativeAssistantToLegacy(message as Message);
+    case 'tool':
+      return nativeToolResultToLegacy(message as Message);
     case 'runtime_context':
-      return nativeRuntimeContextToLegacy(nativeMessage);
+      return nativeRuntimeContextToLegacy(message as RuntimeContextMessage);
     case 'compaction_summary':
-      return nativeCompactionSummaryToLegacy(nativeMessage);
-    default: {
-      // Native custom message. An explicit projector wins; otherwise preserve
-      // the payload in metadata so the message is never silently dropped at
-      // the persistence/transcript boundary.
-      if (projectCustomToLegacy) {
-        return projectCustomToLegacy(message);
-      }
+      return nativeCompactionSummaryToLegacy(message as CompactionSummaryMessage);
+    case 'legacy_system': {
+      const marker = message as LegacySystemMessage;
       return {
-        id: message.id,
-        role: 'user',
-        content: JSON.stringify(message.payload),
-        timestamp: message.createdAt,
-        metadata: {
-          ...(cloneMetadata(message.metadata) ?? {}),
-          duyaCustomKind: message.kind,
-          duyaCustomPayload: cloneValue(message.payload),
-        },
-      };
+        id: marker.id,
+        role: 'system',
+        content: cloneValue(marker.payload.content),
+        name: marker.payload.name,
+        timestamp: marker.timestamp,
+      } as Message;
     }
+    case 'legacy_compaction_boundary': {
+      const marker = message as LegacyCompactionBoundaryMessage;
+      return {
+        id: marker.id,
+        role: 'system',
+        content: cloneValue(marker.payload.content),
+        isCompactBoundary: true,
+        compactBoundaryId: marker.payload.compactBoundaryId,
+        compactedMessageCount: marker.payload.compactedMessageCount,
+        compactedMessageIds: marker.payload.compactedMessageIds
+          ? [...marker.payload.compactedMessageIds]
+          : undefined,
+        timestamp: marker.timestamp,
+      } as Message;
+    }
+    case 'legacy_unknown_role': {
+      const marker = message as LegacyUnknownRoleMessage;
+      return {
+        id: marker.id,
+        role: marker.payload.role,
+        content: cloneValue(marker.payload.content),
+        timestamp: marker.timestamp,
+      } as unknown as Message;
+    }
+    default:
+      return null;
   }
 }
 
@@ -386,13 +442,12 @@ function toBoundaryMessage<TCustom extends AgentCustomMessage>(
  * (mailbox, background notifications, etc.) are always excluded. This is
  * independent of `visibility` and `includeInModel`.
  */
-export function projectPersistenceMessages<TCustom extends AgentCustomMessage = never>(
-  messages: readonly AgentMessage<TCustom>[],
-  options: ProjectBoundaryOptions<TCustom> = {},
+export function projectPersistenceMessages(
+  messages: readonly AgentMessage[],
 ): Message[] {
   const result: Message[] = [];
   for (const message of messages) {
-    const legacy = toBoundaryMessage(message, options.projectCustomToLegacy);
+    const legacy = toBoundaryMessage(message);
     if (legacy) {
       result.push(legacy);
     }
@@ -476,15 +531,12 @@ export function getLegacyCompactionCheckpoint(
  * raw compacted prefix with one marker plus the retained suffix, so a DB reload
  * has enough information to rebuild the same append-only projection.
  */
-export function projectTimelinePersistenceMessages<
-  TCustom extends AgentCustomMessage = never,
->(
-  entries: readonly MessageTimelineEntry<TCustom>[],
-  options: ProjectBoundaryOptions<TCustom> = {},
+export function projectTimelinePersistenceMessages(
+  entries: readonly MessageTimelineEntry[],
 ): Message[] {
   const projection = buildAgentContext(entries);
   if (!projection.compaction) {
-    return projectPersistenceMessages(projection.messages, options);
+    return projectPersistenceMessages(projection.messages);
   }
   const checkpoint = checkpointForEntry(projection.compaction);
   const marker: Message = {
@@ -501,8 +553,7 @@ export function projectTimelinePersistenceMessages<
   return [
     marker,
     ...projectPersistenceMessages(
-      projection.messages.filter((message) => message.kind !== 'compaction_summary'),
-      options,
+      projection.messages.filter((message) => message.role !== 'compaction_summary'),
     ),
   ];
 }
@@ -516,16 +567,15 @@ export function projectTimelinePersistenceMessages<
  * `persistence` and `includeInModel`, and it does NOT reuse the provider
  * projector: the transcript owns its own conversion path.
  */
-export function projectTranscriptMessages<TCustom extends AgentCustomMessage = never>(
-  messages: readonly AgentMessage<TCustom>[],
-  options: ProjectBoundaryOptions<TCustom> = {},
+export function projectTranscriptMessages(
+  messages: readonly AgentMessage[],
 ): Message[] {
   const result: Message[] = [];
   for (const message of messages) {
-    if (message.visibility !== 'visible') {
+    if ((message as { visibility?: AgentMessageVisibility }).visibility !== 'visible') {
       continue;
     }
-    const legacy = toBoundaryMessage(message, options.projectCustomToLegacy);
+    const legacy = toBoundaryMessage(message);
     if (legacy) {
       result.push(legacy);
     }

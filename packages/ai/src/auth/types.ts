@@ -28,6 +28,15 @@ export interface Credential {
   expiresAt?: number;
 }
 
+/** Resolved auth for a single request, plus where it came from. */
+export interface AuthResult {
+  auth: {
+    apiKey?: string;
+    token?: string;
+  };
+  source: string;
+}
+
 export interface CredentialStore {
   get(providerId: string): Promise<Credential | undefined>;
   set(credential: Credential): Promise<void>;

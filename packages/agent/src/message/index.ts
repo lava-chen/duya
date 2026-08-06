@@ -5,13 +5,14 @@
  * the desktop renderer can build the visible transcript from the SAME
  * projector the agent uses, instead of maintaining a parallel visibility
  * filter. This is a bundle-safe subpath: it imports only the pure message
- * modules (message-framework / message-projectors / legacy-message-adapter)
+ * modules (message-framework / message-projectors / message-factories)
  * and never pulls in native deps such as better-sqlite3.
  */
 
 // Boundary projectors (runtime)
 export {
   projectModelMessages,
+  projectRuntimeContextToProviderMessage,
   extractLegacySystemSegments,
   projectPersistenceMessages,
   projectTranscriptMessages,
@@ -20,40 +21,33 @@ export {
   COMPACTION_CHECKPOINT_MESSAGE_TYPE,
   type ModelMessageProjection,
   type ProjectModelMessagesOptions,
-  type ProjectBoundaryOptions,
-  type NativeCustomToLegacyProjector,
   type LegacyCompactionCheckpoint,
 } from './message-projectors.js';
 
-// Legacy adapter (lossless round-trip)
+// Persistence-row ingest (Message -> AgentMessage)
 export {
-  legacyMessageToAgentMessage,
-  legacyMessagesToAgentMessages,
-  agentMessageToLegacyMessage,
-  agentMessagesToLegacyMessages,
-  hasLegacyEnvelope,
-  type LegacyAgentMessage,
-  type LegacyMessageAdapterOptions,
-  type LegacySystemAgentMessage,
-  type LegacyCompactionBoundaryAgentMessage,
-  type LegacyUnknownRoleAgentMessage,
-  type LegacyCustomAgentMessage,
-} from './legacy-message-adapter.js';
+  ingestMessage,
+  ingestMessages,
+  type IngestMessageOptions,
+} from './message-factories.js';
 
 // AgentMessage domain types
 export type {
   AgentMessage,
-  AgentMessageBase,
   AgentMessageContent,
-  AgentMessagePersistence,
   AgentMessageVisibility,
-  AgentCustomMessage,
+  CustomAgentMessages,
   CoreAgentMessage,
   UserAgentMessage,
   AssistantAgentMessage,
   ToolResultAgentMessage,
   RuntimeContextAgentMessage,
   CompactionSummaryAgentMessage,
+  RuntimeContextMessage,
+  CompactionSummaryMessage,
+  LegacySystemMessage,
+  LegacyCompactionBoundaryMessage,
+  LegacyUnknownRoleMessage,
   RuntimeContextSource,
   MessageEntry,
   MessageTimelineEntry,
@@ -63,7 +57,6 @@ export type {
   BranchEntry,
   CustomStateEntry,
   AgentContextProjection,
-  CustomMessageProjector,
 } from './message-framework.js';
 
 export { MessageTimeline, buildAgentContext } from './message-framework.js';

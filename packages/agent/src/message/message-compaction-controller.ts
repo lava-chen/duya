@@ -25,10 +25,8 @@ import { estimateMessagesTokens } from '../compact/tokenBudget.js';
 import {
   findSafeCompactionBoundary,
   MessageTimeline,
-  type AgentCustomMessage,
   type AgentMessage,
   type CompactionEntry,
-  type CustomMessageProjector,
   type MessageTimelineEntry,
 } from './message-framework.js';
 import { projectModelMessages } from './message-projectors.js';
@@ -51,17 +49,13 @@ export interface CompactionManagerLike {
   shouldCompact(): boolean;
 }
 
-export interface MessageCompactionControllerOptions<
-  TCustom extends AgentCustomMessage,
-> {
-  readonly timeline: MessageTimeline<TCustom>;
+export interface MessageCompactionControllerOptions {
+  readonly timeline: MessageTimeline;
   readonly compactionManager: CompactionManagerLike;
   /** Id generator for new `CompactionEntry` ids. Defaults to `crypto.randomUUID`. */
   readonly idGenerator?: () => string;
   /** Clock for `CompactionEntry.createdAt`. Defaults to `Date.now`. */
   readonly clock?: () => number;
-  /** Custom-message projector passed through to `projectModelMessages`. */
-  readonly projectCustom?: CustomMessageProjector<TCustom>;
   /**
    * Invoked after a compaction entry has been appended to the timeline,
    * with the ids of the messages that were compacted. Used by the host
@@ -135,27 +129,23 @@ function extractSummaryText(message: Message): string {
  * counts, and a pointer to the previous compaction entry for full
  * traceability across repeated compactions.
  */
-export class MessageCompactionController<
-  TCustom extends AgentCustomMessage = never,
-> {
-  private readonly timeline: MessageTimeline<TCustom>;
+export class MessageCompactionController {
+  private readonly timeline: MessageTimeline;
   private readonly compactionManager: CompactionManagerLike;
   private readonly idGenerator: () => string;
   private readonly clock: () => number;
-  private readonly projectCustom?: CustomMessageProjector<TCustom>;
   private readonly onCompacted?: (compactedMessageIds: readonly string[]) => void;
 
-  constructor(options: MessageCompactionControllerOptions<TCustom>) {
+  constructor(options: MessageCompactionControllerOptions) {
     this.timeline = options.timeline;
     this.compactionManager = options.compactionManager;
     this.idGenerator = options.idGenerator ?? defaultIdGenerator;
     this.clock = options.clock ?? defaultClock;
-    this.projectCustom = options.projectCustom;
     this.onCompacted = options.onCompacted;
   }
 
   /** Readonly handle to the timeline being bridged. */
-  getTimeline(): MessageTimeline<TCustom> {
+  getTimeline(): MessageTimeline {
     return this.timeline;
   }
 
@@ -170,9 +160,7 @@ export class MessageCompactionController<
    */
   projectInputMessages(): Message[] {
     const projection = this.timeline.buildContext();
-    const modelProjection = projectModelMessages(projection.messages, {
-      projectCustom: this.projectCustom,
-    });
+    const modelProjection = projectModelMessages(projection.messages);
     return [...modelProjection.messages];
   }
 
@@ -251,10 +239,12 @@ export class MessageCompactionController<
 
     // Latest checkpoint projection (previous summary + retained messages).
     const projection = this.timeline.buildContext();
-    const realInputAgentMessages: readonly AgentMessage<TCustom>[] =
+    const realInputAgentMessages: readonly AgentMessage[] =
       projection.messages.filter(
-        (m): m is AgentMessage<TCustom> =>
-          m.kind !== 'compaction_summary' && realMessageIds.has(m.id),
+        (m) =>
+          m.role !== 'compaction_summary' &&
+          typeof m.id === 'string' &&
+          realMessageIds.has(m.id),
       );
 
     if (realInputAgentMessages.length === 0) {
@@ -294,7 +284,7 @@ export class MessageCompactionController<
     // traceable via the `previousCompactionId` chain.
     const compactedMessageIds = realInputAgentMessages
       .slice(0, firstKeptIndex)
-      .map((m) => m.id);
+      .flatMap((m) => (typeof m.id === 'string' ? [m.id] : []));
 
     const tokensBefore = estimateMessagesTokens(inputMessages);
     const previousCompaction = this.findLatestCompaction();
@@ -347,7 +337,7 @@ export class MessageCompactionController<
    * history.
    */
   private resolveSafeBoundary(
-    realInputAgentMessages: readonly AgentMessage<TCustom>[],
+    realInputAgentMessages: readonly AgentMessage[],
     firstRealRetainedId: string | undefined,
   ): { firstKeptIndex: number; firstKeptMessageId: string | undefined } {
     const fallback = {
@@ -377,7 +367,7 @@ export class MessageCompactionController<
     if (
       boundary.firstKeptIndex === 0 &&
       proposedIndex > 0 &&
-      realInputAgentMessages[0]?.kind !== 'user'
+      realInputAgentMessages[0]?.role !== 'user'
     ) {
       return {
         firstKeptIndex: proposedIndex,
@@ -394,7 +384,7 @@ export class MessageCompactionController<
   private collectRealMessageIds(): Set<string> {
     const ids = new Set<string>();
     for (const entry of this.timeline.snapshot()) {
-      if (entry.type === 'message') {
+      if (entry.type === 'message' && typeof entry.message.id === 'string') {
         ids.add(entry.message.id);
       }
     }
@@ -402,7 +392,7 @@ export class MessageCompactionController<
   }
 
   private findLatestCompaction(): CompactionEntry | undefined {
-    const entries: readonly MessageTimelineEntry<TCustom>[] =
+    const entries: readonly MessageTimelineEntry[] =
       this.timeline.snapshot();
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const entry = entries[i]!;

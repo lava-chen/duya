@@ -53,7 +53,8 @@
     "showcase:gif": "node scripts/showcase/showcase.mjs --gif",
     "showcase:compose-gif": "node scripts/showcase/compose-gif.mjs",
     "postinstall": "electron-builder install-app-deps",
-    "rebuild": "electron-rebuild"
+    "rebuild": "electron-rebuild",
+    "rebuild:node": "npm rebuild better-sqlite3"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",

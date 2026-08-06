@@ -91,8 +91,6 @@ const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\
 const CJK_CHARS_PER_TOKEN = 2.5
 /** Token ratio for non-CJK characters */
 const ASCII_CHARS_PER_TOKEN = 4
-/** Safety margin multiplier applied to estimates for proactive compression */
-const SAFETY_MARGIN = 1.3
 
 /**
  * Estimate tokens for a single message.
@@ -114,46 +112,4 @@ export function estimateMessageTokens(message: { role: string; content: string |
  */
 export function estimateMessagesTokens(messages: Array<{ role: string; content: string | unknown }>): number {
   return messages.reduce((sum, msg) => sum + estimateMessageTokens(msg), 0)
-}
-
-/**
- * Estimate token count for raw text using language-aware formula
- */
-export function roughTokenCountEstimation(text: string): number {
-  const cjkCount = (text.match(CJK_REGEX) || []).length
-  const otherCount = text.length - cjkCount
-  return Math.ceil(cjkCount / CJK_CHARS_PER_TOKEN) + Math.ceil(otherCount / ASCII_CHARS_PER_TOKEN)
-}
-
-/**
- * Apply safety margin to token estimate for proactive compression.
- * This accounts for tokenizer differences between our estimate and the actual API.
- */
-export function withSafetyMargin(tokens: number): number {
-  return Math.ceil(tokens * SAFETY_MARGIN)
-}
-
-/**
- * Check if messages exceed the given token budget (with safety margin).
- * Used for proactive context window management before sending to LLM API.
- */
-export function exceedsBudget(
-  messages: Array<{ role: string; content: string | unknown }>,
-  budgetTokens: number,
-  systemPromptTokens: number = 0,
-  reservedTokens: number = 0,
-): boolean {
-  const estimated = estimateMessagesTokens(messages)
-  const withMargin = withSafetyMargin(estimated)
-  return withMargin + systemPromptTokens + reservedTokens > budgetTokens
-}
-
-/**
- * Create a new budget manager instance
- */
-export function createTokenBudget(config?: Partial<TokenBudgetConfig>): TokenBudgetManager {
-  return new TokenBudgetManager({
-    ...DEFAULT_BUDGET_CONFIG,
-    ...config,
-  })
 }

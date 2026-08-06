@@ -12,7 +12,7 @@ import {
   type ProviderStoreReader,
 } from '../provider-store';
 import type { ApiProvider, LlmProvider, ModelCapability } from '../../../../src/lib/providers/types';
-import { validateRuntimeConfig, redactSecrets } from '../../../../src/lib/providers/domain/ProviderRuntimeAdapter';
+import { validateRuntimeConfig, redactSecrets } from '@duya/ai';
 
 class FakeReader implements ProviderStoreReader {
   data: Record<string, ApiProvider> = {};

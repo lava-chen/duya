@@ -19,36 +19,15 @@
 
 import type {
   ApiProvider,
-  ApiFormat,
   LlmProvider,
   MaskedApiProvider,
   ProviderCategory,
   ProviderPreset,
 } from './types';
-import type { ModelCompat } from '@duya/ai';
+import type { ModelCompat, ApiFormat } from '@duya/ai';
+import { inferApiFormatFromLegacyProviderType } from '@duya/ai';
 
-/** Map a legacy `providerType` string to the new `apiFormat`. */
-export function inferApiFormatFromLegacyProviderType(
-  providerType: ApiProvider['providerType'],
-): ApiFormat {
-  switch (providerType) {
-    case 'anthropic':
-    case 'bedrock':
-    case 'vertex':
-      return 'anthropic';
-    case 'openai':
-    case 'openai-compatible':
-    case 'openrouter':
-    case 'google':
-    case 'gemini-image':
-      return 'openai-chat';
-    case 'ollama':
-      return 'ollama';
-    default:
-      // Defensive fallback. New entities must always declare apiFormat.
-      return 'openai-chat';
-  }
-}
+export { inferApiFormatFromLegacyProviderType };
 
 /** Map a legacy `providerType` string to a sensible default `ProviderCategory`. */
 export function inferCategoryFromLegacyProviderType(

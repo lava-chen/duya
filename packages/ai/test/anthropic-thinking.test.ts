@@ -13,13 +13,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import { resolveAnthropicThinking } from '../src/api/anthropic-messages.js';
-import { anthropicModels } from '../src/providers/anthropic.js';
-import { minimaxAnthropicModels } from '../src/providers/minimax-anthropic.js';
+import { anthropicModels } from '../src/providers/anthropic.models.js';
+import { minimaxModels } from '../src/providers/minimax.models.js';
 
 describe('resolveAnthropicThinking', () => {
   const claudeSonnet4 = anthropicModels[0]; // reasoning: true, maxTokens: 16000
   const claude35 = anthropicModels[1]; // reasoning: false
-  const minimaxM3 = minimaxAnthropicModels[0]; // forceAdaptiveThinking: true
+  const minimaxM3 = minimaxModels[0]; // forceAdaptiveThinking: true
 
   describe('effort "off" → undefined', () => {
     it('returns undefined when effort is "off"', () => {

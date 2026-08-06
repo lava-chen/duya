@@ -2,7 +2,7 @@ import { ipcMain } from 'electron';
 import { basename } from 'path';
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../db/connection';
-import { formatLiteratureCitation, type LiteratureCitationStyle } from '../../packages/agent/src/plugins/literature/shared/citation-format';
+import { formatLiteratureCitation, type LiteratureCitationStyle } from '../../packages/plugin-core/src/plugins/builtin/literature/shared/citation-format';
 
 type BetterSqlite3Db = import('better-sqlite3').Database;
 
