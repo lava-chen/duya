@@ -8,6 +8,9 @@ type BetterSqlite3Db = import('better-sqlite3').Database;
  * FTS5 search, and running migrations.
  */
 export function initializeSchema(db: BetterSqlite3Db): void {
+  // LEGACY FROZEN — core data moved to duya-core.db + rollout (plan 326-329);
+  // these tables remain for legacy read-only import and old-version compat.
+  // Do not extend.
   db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
@@ -615,6 +618,8 @@ export function initializeFts5(db: BetterSqlite3Db): void {
     }
 
     // Per-message content index. trigram tokenizer handles CJK + substring via fts_normalize().
+    // LEGACY FROZEN — messages_fts/sessions_fts moved to duya-core.db search (plan 326-329);
+    // these virtual tables remain for legacy read-only import and old-version compat.
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
         session_id UNINDEXED,
@@ -2264,6 +2269,8 @@ const migrations: Migration[] = [
 
       // runMigrations already wraps each migration in a transaction, so the
       // rebuild below runs atomically without an explicit BEGIN/COMMIT here.
+      // LEGACY FROZEN — agent_mailbox moved to duya-core.db (plan 326-329);
+      // this table remains for legacy read-only import and old-version compat.
       db.exec(`
         ALTER TABLE agent_mailbox RENAME TO agent_mailbox_old;
 
@@ -2341,7 +2348,10 @@ const migrations: Migration[] = [
           "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_mailbox'",
         ).get() as { sql?: string } | undefined
       )?.sql;
-      if (!sql || !sql.includes("'queued'") || /'correction'|'constraint'|'stop'|'abort_and_replace'/.test(sql)) {
+      // LEGACY FROZEN — agent_mailbox moved to duya-core.db (plan 326-329). On a
+      // fresh legacy DB the table no longer exists, so there is nothing to tighten.
+      if (!sql) return;
+      if (!sql.includes("'queued'") || /'correction'|'constraint'|'stop'|'abort_and_replace'/.test(sql)) {
         const tableInfo = db.prepare('PRAGMA table_info(agent_mailbox)').all() as Array<{ name: string; pk: number }>;
         const rebuildColumns = [
           'id','session_id','submitted_during_run_id','content','kind','status',
@@ -2417,6 +2427,57 @@ const migrations: Migration[] = [
             WHERE client_msg_id IS NOT NULL;
         `);
       }
+    },
+  },
+  {
+    id: 47,
+    name: 'drop_chat_turn_reviews_fk_to_chat_sessions',
+    migrate(db: BetterSqlite3Db): void {
+      // Plan 328 DoD: no live code may read/write the legacy chat_sessions table.
+      // chat_turn_reviews had a FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+      // ON DELETE CASCADE, forcing db-bridge to ensure a parent row existed before
+      // insert. The working_directory is already stored on chat_turn_reviews itself,
+      // so the FK (and the JOIN in git-handlers) is redundant. Rebuild without the FK
+      // to switch to string association (same pattern as message_attachments, plan 328
+      // decision 6). Idempotent: if the table SQL already lacks the FK reference, skip.
+      const sql = (
+        db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='chat_turn_reviews'",
+        ).get() as { sql?: string } | undefined
+      )?.sql;
+      if (!sql) return;
+      if (!sql.includes('REFERENCES chat_sessions')) return;
+
+      db.exec(`
+        ALTER TABLE chat_turn_reviews RENAME TO chat_turn_reviews_old;
+
+        CREATE TABLE chat_turn_reviews (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          turn_id TEXT NOT NULL,
+          working_directory TEXT NOT NULL,
+          files_json TEXT NOT NULL,
+          patch TEXT NOT NULL,
+          additions INTEGER NOT NULL DEFAULT 0,
+          removals INTEGER NOT NULL DEFAULT 0,
+          truncated INTEGER NOT NULL DEFAULT 0,
+          binary INTEGER NOT NULL DEFAULT 0,
+          captured_at INTEGER NOT NULL,
+          UNIQUE(session_id, turn_id)
+        );
+
+        INSERT INTO chat_turn_reviews
+          (id, session_id, turn_id, working_directory, files_json, patch,
+           additions, removals, truncated, binary, captured_at)
+          SELECT id, session_id, turn_id, working_directory, files_json, patch,
+                 additions, removals, truncated, binary, captured_at
+          FROM chat_turn_reviews_old;
+
+        DROP TABLE chat_turn_reviews_old;
+
+        CREATE INDEX IF NOT EXISTS idx_chat_turn_reviews_latest
+          ON chat_turn_reviews(session_id, captured_at DESC);
+      `);
     },
   },
 ];

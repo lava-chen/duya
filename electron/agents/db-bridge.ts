@@ -6,7 +6,6 @@
  */
 
 import { randomUUID } from 'crypto';
-import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
 import { getDatabase } from '../ipc/db-handlers';
 import { getConfigManager, type ApiProvider } from '../config/manager';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
@@ -17,6 +16,26 @@ import { getPluginManager } from '../plugins/PluginManager';
 import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
+import { getCoreStores } from '../db/core-connection';
+import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
+import type { NewEvent } from '../db/core';
+import {
+  ipcSessionToCoreCreate,
+  ipcSessionToUpdate,
+  coreSessionToIpcRow,
+  ipcMessageToNewEvent,
+  storedEventToIpcMessage,
+  storedEventsToIpcMessages,
+  serializeMessageContent,
+  serializeDisplayContent,
+  ipcTaskToCoreCreate,
+  ipcTaskToUpdate,
+  coreTaskToIpcRow,
+  ipcPermissionToCoreCreate,
+  ipcPermissionToResolve,
+  corePermissionToIpcRow,
+  coreMailboxToIpcRow,
+} from '../ipc/core-db-adapters';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
 
@@ -27,64 +46,15 @@ function debugLog(...args: unknown[]): void {
   }
 }
 
-function serializeMessageContent(value: unknown, role?: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === null || value === undefined) return '';
-  if (Array.isArray(value) && role === 'user') {
-    const textBlocks = value.filter(
-      (b: unknown) => (b as Record<string, unknown>).type === 'text'
-    );
-    return textBlocks.length > 0
-      ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
-      : JSON.stringify(value);
-  }
-  return JSON.stringify(value);
-}
-
-function serializeDisplayContent(value: unknown, role?: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null;
-  return serializeMessageContent(value, role);
-}
-
-const MAILBOX_PERMITTED_APPLY = new Set<string>([
-  'before_model_turn:promote_to_user_message',
-  'before_model_turn:runtime_instruction',
-  'before_model_turn:interrupt_signal',
-  'after_model_turn:runtime_instruction',
-  'after_model_turn:interrupt_signal',
-  'after_model_turn:deferred_to_next_turn',
-  'before_tool_call:tool_guard',
-  'before_tool_call:interrupt_signal',
-  'before_tool_call:runtime_instruction',
-  'after_tool_call:runtime_instruction',
-  'after_tool_call:tool_guard',
-  'after_tool_call:interrupt_signal',
-  'after_tool_call:deferred_to_next_turn',
-  'before_file_write:tool_guard',
-  'before_file_write:interrupt_signal',
-  'before_shell_command:tool_guard',
-  'before_shell_command:interrupt_signal',
-  'before_final_answer:promote_to_user_message',
-  'before_final_answer:runtime_instruction',
-  'before_final_answer:interrupt_signal',
-  'on_permission_request:permission_context',
-  'on_permission_request:interrupt_signal',
-  'on_error_recovery:runtime_instruction',
-  'on_error_recovery:interrupt_signal',
-  'on_error_recovery:deferred_to_next_turn',
-]);
-
-function assertMailboxApplyAllowed(checkpoint: string, mode: string): void {
-  if (!MAILBOX_PERMITTED_APPLY.has(`${checkpoint}:${mode}`)) {
-    throw new Error(`Mailbox apply(mode=${mode}) is not permitted at checkpoint=${checkpoint}`);
-  }
-}
-
-function emitMailboxEvent(name: 'emitMailObserved' | 'emitMailApplied' | 'emitMailCancelled', row: unknown, reason?: string): void {
+function emitMailboxEvent(
+  name: 'emitMailCreated' | 'emitMailEdited' | 'emitMailObserved' | 'emitMailApplied' | 'emitMailCancelled',
+  row: unknown,
+  extra?: string,
+): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const broadcaster = require('../messaging/mailbox-broadcaster');
-    broadcaster[name]?.(row as Record<string, unknown>, reason);
+    broadcaster[name]?.(row as Record<string, unknown>, extra);
   } catch {
     // The agent DB bridge can run in test contexts without Electron windows.
   }
@@ -145,8 +115,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
   const now = Date.now();
 
   switch (action) {
-    // ==================== Session actions ====================
+    // ==================== Session actions (core store thin forward) ====================
     case 'session:create': {
+      const { sessions } = getCoreStores();
+      // Resolve model from provider config if not explicitly specified.
       let providerType: ApiProvider['providerType'] = 'anthropic';
       let defaultModel: string | undefined;
 
@@ -167,114 +139,124 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
 
       const model = (p.model as string) || defaultModel || getDefaultModelForProvider(providerType);
-      // 派生关系字段统一: IPC DTO 用 parent_session_id, DB 列是 parent_id
-      const parentSessionId = (p.parent_session_id as string | undefined) ?? (p.parent_id as string | undefined) ?? null;
-      // agent 子系统属于 trusted internal caller, 允许派生 session 显式 override.
-      const isTrusted = p.is_trusted_permission_override === true;
-      const explicitProfile = typeof p.permission_profile === 'string' ? p.permission_profile : undefined;
+      const data = { ...p, model };
+      const parentSessionId =
+        (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
+      const isTrusted = data.is_trusted_permission_override === true;
+      const explicitProfile = typeof data.permission_profile === 'string' ? data.permission_profile : undefined;
       const permissionProfile: PermissionProfile = resolvePermissionProfile(explicitProfile, parentSessionId, { isTrustedOverride: isTrusted });
 
-      db.prepare(`
-        INSERT INTO chat_sessions (
-          id, title, model, system_prompt, working_directory,
-          project_name, status, mode, provider_id, generation,
-          parent_id, permission_profile, agent_type, agent_name,
-          created_at, updated_at, is_deleted
-        ) VALUES (
-          @id, @title, @model, @system_prompt, @working_directory,
-          @project_name, @status, @mode, @provider_id, @generation,
-          @parent_id, @permission_profile, @agent_type, @agent_name,
-          @created_at, @updated_at, 0
-        )
-        ON CONFLICT(id) DO NOTHING
-      `).run({
-        id: p.id,
-        title: p.title ?? 'New Chat',
-        model,
-        system_prompt: p.system_prompt ?? '',
-        working_directory: p.working_directory ?? '',
-        project_name: p.project_name ?? '',
-        status: p.status ?? 'active',
-        mode: p.mode ?? 'code',
-        provider_id: p.provider_id ?? 'env',
-        generation: p.generation ?? 0,
-        parent_id: parentSessionId,
-        permission_profile: permissionProfile,
-        agent_type: p.agent_type ?? 'main',
-        agent_name: p.agent_name ?? '',
-        created_at: now,
-        updated_at: now,
-      });
-      // SELECT back so a pre-existing row (ON CONFLICT DO NOTHING) is
-      // returned instead of throwing — matches main process sessions.ts.
-      return db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(p.id);
+      // Upsert semantics: if the session already exists, update it (matches
+      // the old ON CONFLICT(id) DO NOTHING + SELECT-back behavior).
+      const existing = sessions.get(data.id as string);
+      if (existing) {
+        sessions.update(data.id as string, ipcSessionToUpdate(data));
+        const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
+        for (const key of extKeys) {
+          if (data[key] !== undefined) {
+            sessions.setExtension(data.id as string, key, data[key]);
+          }
+        }
+        return coreSessionToIpcRow(sessions.get(data.id as string)!);
+      }
+      const session = sessions.create(ipcSessionToCoreCreate(data, permissionProfile));
+      return coreSessionToIpcRow(session);
     }
 
-    case 'session:get':
-      return db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(p.id);
+    case 'session:get': {
+      const { sessions } = getCoreStores();
+      const session = sessions.get(p.id as string);
+      return session ? coreSessionToIpcRow(session) : undefined;
+    }
 
     case 'session:update': {
-      const fields: string[] = ['updated_at = @updated_at'];
-      const params: Record<string, unknown> = { id: p.id as string, updated_at: now };
-
-      const fieldMap: Record<string, string> = {
-        title: 'title',
-        model: 'model',
-        system_prompt: 'system_prompt',
-        working_directory: 'working_directory',
-        project_name: 'project_name',
-        status: 'status',
-        mode: 'mode',
-        permission_profile: 'permission_profile',
-        provider_id: 'provider_id',
-        context_summary: 'context_summary',
-        parent_id: 'parent_id',
-        agent_type: 'agent_type',
-        agent_name: 'agent_name',
-      };
-
-      for (const [key, dbField] of Object.entries(fieldMap)) {
+      const { sessions } = getCoreStores();
+      const id = p.id as string;
+      sessions.update(id, ipcSessionToUpdate(p));
+      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
+      for (const key of extKeys) {
         if (p[key] !== undefined) {
-          fields.push(`${dbField} = @${key}`);
-          params[key] = p[key];
+          sessions.setExtension(id, key, p[key]);
+        }
+      }
+      const updated = sessions.get(id);
+      return updated ? coreSessionToIpcRow(updated) : undefined;
+    }
+
+    // Decision 5: session:delete is now soft delete (status='deleted'), no cascade.
+    case 'session:delete': {
+      const { sessions } = getCoreStores();
+      const existing = sessions.get(p.id as string);
+      if (!existing) return false;
+      sessions.update(p.id as string, { status: 'deleted' });
+      return true;
+    }
+
+    case 'session:list': {
+      const { sessions } = getCoreStores();
+      return sessions.list({ excludeModes: ['automation'] }).map(coreSessionToIpcRow);
+    }
+
+    case 'session:listByWorkingDirectory': {
+      const { sessions } = getCoreStores();
+      return sessions.list({ workingDirectory: (p.workingDirectory as string) || '' }).map(coreSessionToIpcRow);
+    }
+
+    case 'session:listByParentId': {
+      const { sessions } = getCoreStores();
+      return sessions.list({ parentSessionId: p.parentId as string }).map(coreSessionToIpcRow);
+    }
+
+    // Plan 328 Phase 6: session:search combines SessionStore.search (metadata
+    // LIKE) with MessageLog.searchText (rollout content scan). Returns the old
+    // `s.* + snippet` shape — same implementation as the `db:search:sessions`
+    // IPC handler in electron/ipc/db-handlers.ts.
+    case 'session:search': {
+      const { sessions, messageLog } = getCoreStores();
+      const opts = p.opts as { limit?: number } | undefined;
+      const limit = opts?.limit ?? 10;
+      // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
+      const metaHits = sessions.search(p.query as string, limit);
+      const seenIds = new Set(metaHits.map((s) => s.id));
+      const rows: Record<string, unknown>[] = metaHits.map((s) => ({
+        ...coreSessionToIpcRow(s),
+        snippet: '',
+      }));
+
+      // 2. Content matches (rollout scan) — fill in snippet for sessions not
+      //    already in the metadata set, up to `limit` total.
+      if (rows.length < limit) {
+        const remaining = limit - rows.length;
+        const contentHits = messageLog.searchText(p.query as string, { limit: remaining + 5 });
+        for (const hit of contentHits) {
+          if (rows.length >= limit) break;
+          if (seenIds.has(hit.sessionId)) {
+            // Attach snippet to existing metadata hit if not already set.
+            const row = rows.find((r) => r.id === hit.sessionId);
+            if (row && !row.snippet) row.snippet = hit.snippet;
+            continue;
+          }
+          const session = sessions.get(hit.sessionId);
+          if (!session || session.status === 'deleted') continue;
+          seenIds.add(hit.sessionId);
+          rows.push({
+            ...coreSessionToIpcRow(session),
+            snippet: hit.snippet,
+          });
         }
       }
 
-      db.prepare(`UPDATE chat_sessions SET ${fields.join(', ')} WHERE id = @id`).run(params);
-      return db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(p.id);
+      // Sort by updated_at DESC (matches old ORDER BY).
+      rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
+      return rows.slice(0, limit);
     }
-
-    case 'session:delete': {
-      const txn = db.transaction(() => {
-        db.prepare('DELETE FROM messages WHERE session_id = ?').run(p.id);
-        return db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(p.id).changes > 0;
-      });
-      return txn();
-    }
-
-    case 'session:list':
-      return db.prepare('SELECT * FROM chat_sessions WHERE is_deleted = 0 ORDER BY updated_at DESC').all();
-
-    case 'session:listByWorkingDirectory': {
-      const wd = p.workingDirectory as string;
-      if (!wd) {
-        return db.prepare(
-          "SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = '' ORDER BY updated_at DESC"
-        ).all();
-      }
-      return db.prepare(
-        'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = ? ORDER BY updated_at DESC'
-      ).all(wd);
-    }
-
-    case 'session:listByParentId':
-      return db.prepare(
-        'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND parent_id = ? ORDER BY created_at ASC'
-      ).all(p.parentId);
 
     case 'session:loadMessages': {
+      const { messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
-      const messages = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(sessionId);
+      const messages = storedEventsToIpcMessages(messageLog.listBySession(sessionId));
+      // parsed_document attachments still live in the legacy DB (message_attachments
+      // table) until a follow-up plan migrates them. Read from the legacy DB.
       const attachmentRows = db.prepare(
         "SELECT * FROM message_attachments WHERE session_id = ? AND attachment_type = 'parsed_document' ORDER BY created_at ASC"
       ).all(sessionId) as Array<{
@@ -305,526 +287,182 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return { messages, parsedDocuments };
     }
 
-    // ==================== Message actions ====================
+    // ==================== Message actions (core store thin forward) ====================
+    // Decision 5: message:add uses INSERT OR IGNORE semantics via appendBatch
+    // (same-id re-send is a no-op instead of overwriting).
     case 'message:add': {
-      const attachments = p.attachments
-        ? (typeof p.attachments === 'string' ? p.attachments : JSON.stringify(p.attachments))
-        : null;
-      const displayContent = p.display_content ?? serializeDisplayContent(p.displayContent, p.role);
-      const seqIndex = p.seq_index ?? (db.prepare(
-        'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
-      ).get(p.session_id) as { next_seq_index: number }).next_seq_index;
-
-      const row = {
-        id: p.id,
-        session_id: p.session_id,
-        role: p.role,
-        content: serializeMessageContent(p.content, p.role),
-        display_content: displayContent,
-        name: p.name ?? null,
-        tool_call_id: p.tool_call_id ?? null,
-        token_usage: p.token_usage ?? null,
-        msg_type: p.role === 'tool' ? 'tool_result' : (p.msg_type ?? 'text'),
-        thinking: p.thinking ?? null,
-        tool_name: p.tool_name ?? null,
-        tool_input: p.tool_input ?? null,
-        parent_tool_call_id: p.role === 'tool' ? (p.tool_call_id ?? null) : (p.parent_tool_call_id ?? null),
-        viz_spec: p.viz_spec ?? null,
-        status: p.status ?? 'done',
-        seq_index: seqIndex,
-        duration_ms: p.duration_ms ?? null,
-        sub_agent_id: p.sub_agent_id ?? null,
-        attachments,
-        created_at: now,
-      };
-
-      // Wrap INSERT + UPDATE in a single transaction to share one WAL flush.
-      db.transaction(() => {
-        db.prepare(`
-          INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-          VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
-        `).run(row);
-        db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, p.session_id);
-      })();
-      return db.prepare('SELECT * FROM messages WHERE id = ?').get(p.id);
+      const { messageLog } = getCoreStores();
+      const event = ipcMessageToNewEvent(p.session_id as string, p as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
+      messageLog.appendBatch([event]);
+      const events = messageLog.listBySession(p.session_id as string);
+      const stored = events.find((e) => e.id === p.id);
+      return stored ? storedEventToIpcMessage(stored) : null;
     }
 
-    case 'message:getBySession':
-      return db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(p.sessionId);
+    case 'message:getBySession': {
+      const { messageLog } = getCoreStores();
+      return storedEventsToIpcMessages(messageLog.listBySession(p.sessionId as string));
+    }
 
     case 'message:getCount': {
-      const result = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?').get(p.sessionId) as { count: number };
-      return result.count;
+      const { messageLog } = getCoreStores();
+      return messageLog.getCount(p.sessionId as string);
     }
 
-    case 'message:deleteBySession':
-      return db.prepare('DELETE FROM messages WHERE session_id = ?').run(p.sessionId).changes;
+    case 'message:deleteBySession': {
+      const { messageLog } = getCoreStores();
+      const before = messageLog.getCount(p.sessionId as string);
+      messageLog.deleteBySession(p.sessionId as string);
+      return before;
+    }
 
+    // Decision 3: message:append maps to MessageLog.appendBatch (INSERT OR IGNORE
+    // idempotency). turnId is forwarded to NewEvent.turnId for turn-scoped queries.
     case 'message:append': {
+      const { messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
-      const messages = p.messages as Array<{
-        id?: string;
-        role?: string;
-        content?: string | unknown[];
-        name?: string;
-        tool_call_id?: string;
-        token_usage?: string | unknown;
-        msg_type?: string;
-        thinking?: string;
-        tool_name?: string;
-        tool_input?: string;
-        attachments?: unknown;
-        created_at?: number;
-        timestamp?: number;
-      }>;
+      const messages = p.messages as Array<Record<string, unknown>>;
+      const turnId = p.turnId as string | null | undefined;
 
       if (!messages || !Array.isArray(messages)) {
         return { success: false, reason: 'invalid_messages' };
       }
 
-      const now = Date.now();
-      const insertStmt = db.prepare(`
-        INSERT OR IGNORE INTO messages (
-          id, session_id, role, content, name, tool_call_id,
-          display_content,
-          token_usage, msg_type, thinking, tool_name, tool_input,
-          parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id,
-          attachments, created_at
-        ) VALUES (
-          @id, @session_id, @role, @content, @name, @tool_call_id,
-          @display_content,
-          @token_usage, @msg_type, @thinking, @tool_name, @tool_input,
-          @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id,
-          @attachments, @created_at
-        )
-      `);
-
-      let count = 0;
-      const txn = db.transaction(() => {
-        let nextSeqIndex = (db.prepare(
-          'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
-        ).get(sessionId) as { next_seq_index: number }).next_seq_index;
-        for (const msg of messages) {
-          if (!msg.role) {
-            continue;
-          }
-
-          const effectiveContent = msg.content;
-          let contentStr = serializeMessageContent(effectiveContent, msg.role);
-          const displayContentStr = serializeDisplayContent(
-            (msg as Record<string, unknown>).displayContent ?? (msg as Record<string, unknown>).display_content,
-            msg.role,
-          );
-          let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || 'text');
-          const parentToolCallId = msg.role === 'tool'
-            ? (msg.tool_call_id || null)
-            : ((msg as Record<string, unknown>).parent_tool_call_id as string || null);
-          let thinking: string | null = msg.thinking || null;
-          let toolName: string | null = msg.tool_name || null;
-          let toolInput: string | null = msg.tool_input || null;
-
-          // Auto-detect msg_type for tool messages
-          if (!msgType && msg.role === 'tool') {
-            msgType = 'tool_result';
-            // For tool results, tool_call_id is the parent tool_use id
-            // Copy it to parent_tool_call_id for frontend association
-            if (msg.tool_call_id && !(msg as Record<string, unknown>).parent_tool_call_id) {
-              (msg as Record<string, unknown>).parent_tool_call_id = msg.tool_call_id;
-            }
-          }
-
-          // Derive msg_type from content blocks for assistant messages
-          if (!msgType && Array.isArray(effectiveContent) && msg.role === 'assistant') {
-            const blocks = effectiveContent as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
-            const types = blocks.map(b => b.type);
-
-            const toolUseBlock = blocks.find(b => b.type === 'tool_use' && b.name === 'show_widget');
-            if (toolUseBlock) {
-              msgType = 'viz';
-              const widgetCode = (toolUseBlock.input as Record<string, unknown>)?.widget_code;
-              if (typeof widgetCode === 'string' && widgetCode.trim()) {
-                contentStr = widgetCode;
-              }
-            } else if (types.includes('thinking') && types.length === 1) {
-              msgType = 'thinking';
-              thinking = blocks[0].thinking || null;
-              contentStr = thinking || '';
-            } else if (types.includes('tool_use') && types.length === 1) {
-              msgType = 'tool_use';
-              toolName = (blocks[0].name as string) || null;
-              toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
-            } else {
-              msgType = 'text';
-              // For mixed messages (e.g., thinking + text + tool_use), extract thinking if present
-              const thinkingBlock = blocks.find(b => b.type === 'thinking');
-              if (thinkingBlock) {
-                thinking = thinkingBlock.thinking || null;
-              }
-            }
-          }
-
-          try {
-            const requestedSeqIndex = (msg as Record<string, unknown>).seq_index;
-            const seqIndex = typeof requestedSeqIndex === 'number'
-              ? requestedSeqIndex
-              : nextSeqIndex;
-            const insertResult = insertStmt.run({
-              id: msg.id,
-              session_id: sessionId,
-              role: msg.role,
-              content: contentStr,
-              display_content: displayContentStr,
-              name: msg.name || null,
-              tool_call_id: msg.tool_call_id || null,
-              token_usage: msg.token_usage ? JSON.stringify(msg.token_usage) : null,
-              msg_type: msgType,
-              thinking,
-              tool_name: toolName,
-              tool_input: toolInput,
-              parent_tool_call_id: parentToolCallId,
-              viz_spec: (msg as Record<string, unknown>).viz_spec as string || null,
-              status: (msg as Record<string, unknown>).status as string || 'done',
-              seq_index: seqIndex,
-              duration_ms: (msg as Record<string, unknown>).duration_ms as number || null,
-              sub_agent_id: (msg as Record<string, unknown>).sub_agent_id as string || null,
-              attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
-              created_at: msg.timestamp || msg.created_at || now,
-            });
-            // Append-only: never UPDATE an existing message. If the INSERT
-            // was ignored (duplicate id), skip the count increment so the
-            // returned count reflects actually-appended rows.
-            if (insertResult.changes > 0) {
-              count++;
-              nextSeqIndex = Math.max(nextSeqIndex, seqIndex + 1);
-            }
-          } catch (insertErr) {
-            getLogger().error('message:append insert failed', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, sessionId }, LogComponent.AgentCommunicator);
-          }
-        }
-      });
-
       try {
-        txn();
-        return { success: true, count };
+        const events: NewEvent[] = messages.map((msg) =>
+          ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1], turnId ?? null),
+        );
+        // Count actually-appended rows via getCount diff (INSERT OR IGNORE makes
+        // duplicate IDs no-ops). Single-writer model ensures no concurrent inserts.
+        const before = messageLog.getCount(sessionId);
+        messageLog.appendBatch(events);
+        const after = messageLog.getCount(sessionId);
+        return { success: true, count: after - before };
       } catch (err) {
-        getLogger().error('message:append transaction failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
+        getLogger().error('message:append failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
         return { success: false, count: 0, reason: 'transaction_failed' };
       }
     }
 
+    // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
+    // idempotency). Generation optimistic lock is deprecated (append-only store).
     case 'message:replace': {
+      const { sessions, messageLog } = getCoreStores();
       const sessionId = p.sessionId as string;
-      let messages: Array<{
-        id?: string;
-        role: string;
-        content: string;
-        name?: string;
-        tool_call_id?: string;
-        timestamp?: number;
-      }>;
-      const generation = p.generation as number;
-            debugLog('message:replace request', {
+      const messages = p.messages as Array<Record<string, unknown>>;
+
+      debugLog('message:replace request', {
         sessionId,
-        generation,
+        generation: p.generation,
         hasMessages: Array.isArray(p.messages),
         messageCount: Array.isArray(p.messages) ? p.messages.length : -1,
       });
 
-      if (!p.messages || typeof p.messages !== 'object') {
-        getLogger().error('message:replace INVALID messages', undefined, { type: typeof p.messages, messages: p.messages }, LogComponent.AgentCommunicator);
-        return { success: false, reason: 'invalid_messages_format' };
-      }
-      if (!Array.isArray(p.messages)) {
-        getLogger().error('message:replace messages is not array', undefined, { keys: Object.keys(p.messages) }, LogComponent.AgentCommunicator);
+      if (!Array.isArray(messages)) {
         return { success: false, reason: 'messages_not_array' };
       }
-      messages = p.messages as typeof messages;
+
+      // Auto-create session if missing (old behavior: happens when the Worker
+      // creates a session without a DB entry first).
+      if (!sessions.get(sessionId)) {
+        sessions.create({ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() });
+      }
 
       try {
-        const session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
-        if (!session) {
-          return { success: false, reason: 'session_not_found' };
-        }
-
-        let committed = false;
-        let newGeneration = 0;
-
-        const txn = db.transaction(() => {
-          newGeneration = Math.max(generation, session.generation + 1);
-          // Authoritative generation check inside the transaction: claim the
-          // slot atomically. If another writer already bumped generation,
-          // affected rows === 0 and we abort without deleting anything.
-          const claim = db.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ? AND generation = ?').run(newGeneration, now, sessionId, session.generation);
-          if (claim.changes === 0) {
-            return;
-          }
-          db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-
-          const stmt = db.prepare(`
-            INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-            VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
-          `);
-
-          for (let i = 0; i < messages.length; i++) {
-            const msg = messages[i] as Record<string, unknown>;
-
-            const roleValue = typeof msg.role === 'string' && msg.role.length > 0 ? msg.role : 'assistant';
-            const idValue = typeof msg.id === 'string' && msg.id.length > 0 ? msg.id : randomUUID();
-            let contentValue = serializeMessageContent(msg.content, roleValue);
-            const displayContentValue = serializeDisplayContent(
-              msg.displayContent ?? msg.display_content,
-              roleValue,
-            );
-
-            let msgType = roleValue === 'tool' ? 'tool_result' : ((msg.msg_type as string) || 'text');
-            let thinking: string | null = (msg.thinking as string) || null;
-            let toolName: string | null = (msg.tool_name as string) || null;
-            let toolInput: string | null = (msg.tool_input as string) || null;
-            let parentToolCallId: string | null = roleValue === 'tool'
-              ? ((msg.tool_call_id as string) || null)
-              : ((msg.parent_tool_call_id as string) || null);
-
-            if (!msg.msg_type && Array.isArray(msg.content)) {
-              const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
-              const types = blocks.map(b => b.type);
-              if (types.includes('thinking') && types.length === 1) {
-                msgType = 'thinking';
-                thinking = blocks[0].thinking || null;
-                contentValue = thinking || '';
-              } else if (types.includes('tool_use') && types.length === 1) {
-                msgType = 'tool_use';
-                toolName = blocks[0].name || null;
-                toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
-                contentValue = toolInput || '';
-              } else if (roleValue === 'tool') {
-                msgType = 'tool_result';
-                parentToolCallId = (msg.tool_call_id as string) || null;
-              } else {
-                const thinkingBlock = blocks.find(b => b.type === 'thinking');
-                if (thinkingBlock) thinking = thinkingBlock.thinking || null;
-              }
-            } else if (!msg.msg_type && typeof msg.content === 'string') {
-              if (roleValue === 'tool') {
-                msgType = 'tool_result';
-                parentToolCallId = (msg.tool_call_id as string) || null;
-              }
-            }
-
-            if (!roleValue || roleValue.length === 0) {
-              getLogger().error('message:replace SKIPPING invalid role', undefined, { role: msg.role, index: i }, LogComponent.AgentCommunicator);
-              continue;
-            }
-
-            const attachments = msg.attachments
-              ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
-              : null;
-
-            stmt.run({
-              id: idValue,
-              session_id: sessionId,
-              role: roleValue,
-              content: contentValue,
-              display_content: displayContentValue,
-              name: msg.name || null,
-              tool_call_id: msg.tool_call_id || null,
-              token_usage: (msg.token_usage as string) || null,
-              msg_type: msgType,
-              thinking,
-              tool_name: toolName,
-              tool_input: toolInput,
-              parent_tool_call_id: parentToolCallId,
-              viz_spec: (msg.viz_spec as string) || null,
-              status: (msg.status as string) || 'done',
-              seq_index: i,
-              duration_ms: (msg.duration_ms as number) ?? null,
-              sub_agent_id: (msg.sub_agent_id as string) || null,
-              attachments,
-              created_at: msg.timestamp || now,
-            });
-          }
-
-          committed = true;
+        const events: NewEvent[] = messages.map((msg) => {
+          const id = (msg.id as string) || randomUUID();
+          msg.id = id;
+          return ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
         });
-
-        try {
-          txn();
-          if (!committed) {
-            return { success: false, reason: 'stale_generation' };
-          }
-          const result = { success: true, newGeneration, messageCount: messages.length };
-                    debugLog('message:replace success', { sessionId, ...result });
-          return result;
-        } catch (txnError) {
-                    getLogger().error('Transaction failed', txnError instanceof Error ? txnError : new Error(String(txnError)), { sessionId }, LogComponent.AgentCommunicator);
-          throw txnError;
-        }
+        messageLog.appendBatch(events);
+        const result = { success: true, newGeneration: 0, messageCount: events.length };
+        debugLog('message:replace success', { sessionId, ...result });
+        return result;
       } catch (error) {
-                getLogger().error('message:replace failed', error instanceof Error ? error : new Error(String(error)), { sessionId }, LogComponent.AgentCommunicator);
-        debugLog('message:replace failed', {
-          sessionId,
-          reason: error instanceof Error ? error.message : String(error),
-        });
+        getLogger().error('message:replace failed', error instanceof Error ? error : new Error(String(error)), { sessionId }, LogComponent.AgentCommunicator);
         return { success: false, reason: error instanceof Error ? error.message : String(error) };
       }
     }
 
-    // ==================== Lock actions ====================
+    // ==================== Lock actions (core store thin forward) ====================
     case 'lock:acquire': {
-      const sessionId = p.sessionId as string;
-      const lockId = p.lockId as string;
-      const owner = p.owner as string;
-      const ttlSec = (p.ttlSec as number) || 300;
-      const expiresAt = now + ttlSec * 1000;
-
-      const txn = db.transaction(() => {
-        db.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-        try {
-          db.prepare('INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at) VALUES (?, ?, ?, ?)').run(sessionId, lockId, owner, expiresAt);
-          return true;
-        } catch {
-          return false;
-        }
-      });
-      return txn();
+      const { locks } = getCoreStores();
+      return locks.acquire(p.sessionId as string, p.lockId as string, p.owner as string, (p.ttlSec as number) || 300);
     }
 
     case 'lock:renew': {
-      const ttlSec = (p.ttlSec as number) || 300;
-      const expiresAt = now + ttlSec * 1000;
-      const result = db.prepare('UPDATE session_runtime_locks SET expires_at = ? WHERE session_id = ? AND lock_id = ?').run(expiresAt, p.sessionId, p.lockId);
-      return result.changes > 0;
+      const { locks } = getCoreStores();
+      return locks.renew(p.sessionId as string, p.lockId as string, (p.ttlSec as number) || 300);
     }
 
     case 'lock:release': {
-      const result = db.prepare('DELETE FROM session_runtime_locks WHERE session_id = ? AND lock_id = ?').run(p.sessionId, p.lockId);
-      return result.changes > 0;
+      const { locks } = getCoreStores();
+      return locks.release(p.sessionId as string, p.lockId as string);
     }
 
     case 'lock:isLocked': {
-      db.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-      return db.prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?').get(p.sessionId) !== undefined;
+      const { locks } = getCoreStores();
+      return locks.isLocked(p.sessionId as string);
     }
 
-    // ==================== Task actions ====================
+    // ==================== Task actions (core store thin forward) ====================
     case 'task:create': {
-      db.prepare(`
-        INSERT INTO tasks (id, session_id, subject, description, active_form, owner, status, blocks, blocked_by, metadata, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'pending', '[]', '[]', '{}', ?, ?)
-      `).run(p.id, p.session_id, p.subject, p.description, p.active_form ?? null, p.owner ?? null, now, now);
-      return db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.id);
+      const { tasks } = getCoreStores();
+      const task = tasks.create(ipcTaskToCoreCreate(p as Parameters<typeof ipcTaskToCoreCreate>[0]));
+      return coreTaskToIpcRow(task);
     }
 
-    case 'task:get':
-      return db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.id);
+    case 'task:get': {
+      const { tasks } = getCoreStores();
+      const task = tasks.get(p.id as string);
+      return task ? coreTaskToIpcRow(task) : undefined;
+    }
 
-    case 'task:getBySession':
-      return db.prepare('SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC').all(p.sessionId);
+    case 'task:getBySession': {
+      const { tasks } = getCoreStores();
+      return tasks.getBySession(p.sessionId as string).map(coreTaskToIpcRow);
+    }
 
     case 'task:update': {
-      const id = p.id as string;
-      const fields: string[] = ['updated_at = ?'];
-      const values: unknown[] = [now];
-
-      const fieldMap: Record<string, string> = {
-        subject: 'subject',
-        description: 'description',
-        status: 'status',
-        active_form: 'active_form',
-        owner: 'owner',
-      };
-
-      for (const [key, dbField] of Object.entries(fieldMap)) {
-        if (p[key] !== undefined) {
-          fields.push(`${dbField} = ?`);
-          values.push(p[key]);
-        }
-      }
-
-      if (p.blocks !== undefined) {
-        fields.push('blocks = ?');
-        values.push(JSON.stringify(p.blocks));
-      }
-      if (p.blocked_by !== undefined) {
-        fields.push('blocked_by = ?');
-        values.push(JSON.stringify(p.blocked_by));
-      }
-      if (p.metadata !== undefined) {
-        fields.push('metadata = ?');
-        values.push(JSON.stringify(p.metadata));
-      }
-
-      values.push(id);
-      db.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-      return db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+      const { tasks } = getCoreStores();
+      const task = tasks.update(p.id as string, ipcTaskToUpdate(p));
+      return task ? coreTaskToIpcRow(task) : undefined;
     }
 
-    case 'task:delete':
-      return db.prepare('DELETE FROM tasks WHERE id = ?').run(p.id).changes > 0;
+    case 'task:delete': {
+      const { tasks } = getCoreStores();
+      return tasks.delete(p.id as string);
+    }
 
-    case 'task:deleteBySession':
-      db.prepare('DELETE FROM tasks WHERE session_id = ?').run(p.sessionId);
+    case 'task:deleteBySession': {
+      const { tasks } = getCoreStores();
+      tasks.deleteBySession(p.sessionId as string);
       return { success: true };
+    }
 
     case 'task:claim': {
-      const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
-      if (!row) return { success: false, reason: 'task_not_found' };
-      if (row.owner && row.owner !== p.owner) return { success: false, reason: 'already_claimed' };
-      if (row.status === 'completed') return { success: false, reason: 'already_resolved' };
-
-      const blockedBy = JSON.parse((row.blocked_by as string) || '[]') as string[];
-      if (blockedBy.length > 0) {
-        const unresolvedIds = db.prepare(
-          `SELECT id FROM tasks WHERE id IN (${blockedBy.map(() => '?').join(',')}) AND status != 'completed'`
-        ).all(...blockedBy) as { id: string }[];
-        if (unresolvedIds.length > 0) {
-          return { success: false, reason: 'blocked', blockedByTasks: unresolvedIds.map(r => r.id) };
-        }
+      const { tasks } = getCoreStores();
+      const result = tasks.claim(p.id as string, p.owner as string);
+      if (result.success && result.task) {
+        return { success: true, task: coreTaskToIpcRow(result.task) };
       }
-
-      db.prepare(`UPDATE tasks SET owner = ?, status = 'in_progress', updated_at = ? WHERE id = ?`).run(p.owner, now, p.id);
-      return { success: true, task: db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.id) };
+      return result;
     }
 
     case 'task:block': {
-      const from = db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.fromId) as Record<string, unknown> | undefined;
-      const to = db.prepare('SELECT * FROM tasks WHERE id = ?').get(p.toId) as Record<string, unknown> | undefined;
-      if (!from || !to) return false;
-
-      const fromBlocks: string[] = JSON.parse((from.blocks as string) || '[]');
-      const toBlockedBy: string[] = JSON.parse((to.blocked_by as string) || '[]');
-
-      if (!fromBlocks.includes(p.toId as string)) {
-        fromBlocks.push(p.toId as string);
-        db.prepare('UPDATE tasks SET blocks = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(fromBlocks), now, p.fromId);
-      }
-      if (!toBlockedBy.includes(p.fromId as string)) {
-        toBlockedBy.push(p.fromId as string);
-        db.prepare('UPDATE tasks SET blocked_by = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(toBlockedBy), now, p.toId);
-      }
-      return true;
+      const { tasks } = getCoreStores();
+      return tasks.block(p.fromId as string, p.toId as string);
     }
 
     case 'task:unassignTeammate': {
-      const tasks = db.prepare(
-        `SELECT id, subject FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
-      ).all(p.sessionId, p.owner) as { id: string; subject: string }[];
-      if (tasks.length === 0) return { unassignedTasks: [], notificationMessage: '' };
-
-      db.prepare(
-        `UPDATE tasks SET owner = NULL, status = 'pending', updated_at = ? WHERE session_id = ? AND status != 'completed' AND owner = ?`
-      ).run(now, p.sessionId, p.owner);
-
-      const taskList = tasks.map(t => `#${t.id} "${t.subject}"`).join(', ');
-      return {
-        unassignedTasks: tasks.map(t => ({ id: t.id, subject: t.subject })),
-        notificationMessage: `${p.owner} was terminated. ${tasks.length} task(s) were unassigned: ${taskList}.`,
-      };
+      const { tasks } = getCoreStores();
+      return tasks.unassignTeammate(p.sessionId as string, p.owner as string);
     }
 
-    case 'task:getByOwner':
-      return db.prepare(
-        `SELECT * FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
-      ).all(p.sessionId, p.owner);
+    case 'task:getByOwner': {
+      const { tasks } = getCoreStores();
+      return tasks.getByOwner(p.sessionId as string, p.owner as string).map(coreTaskToIpcRow);
+    }
 
     // ==================== Settings actions ====================
     case 'setting:get': {
@@ -865,68 +503,72 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return { success: true };
     }
 
-    // ==================== Permission actions ====================
+    // ==================== Permission actions (core store thin forward) ====================
     case 'permission:create': {
-      db.prepare(`
-        INSERT INTO permission_requests (id, session_id, tool_name, tool_input, status, created_at)
-        VALUES (?, ?, ?, ?, 'pending', ?)
-      `).run(
-        p.id,
-        p.sessionId || null,
-        p.toolName,
-        p.toolInput ? JSON.stringify(p.toolInput) : null,
-        now
-      );
-      return db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(p.id);
+      const { permissions } = getCoreStores();
+      const perm = permissions.create(ipcPermissionToCoreCreate(p as Parameters<typeof ipcPermissionToCoreCreate>[0]));
+      return corePermissionToIpcRow(perm);
     }
 
-    case 'permission:get':
-      return db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(p.id);
+    case 'permission:get': {
+      const { permissions } = getCoreStores();
+      const perm = permissions.get(p.id as string);
+      return perm ? corePermissionToIpcRow(perm) : undefined;
+    }
 
     case 'permission:resolve': {
+      const { permissions } = getCoreStores();
       const extra = p.extra as { message?: string; updatedPermissions?: unknown[]; updatedInput?: Record<string, unknown> } | undefined;
-      db.prepare(`
-        UPDATE permission_requests SET
-          status = ?,
-          decision = ?,
-          message = ?,
-          updated_permissions = ?,
-          updated_input = ?,
-          resolved_at = ?
-        WHERE id = ?
-      `).run(
-        p.status,
-        p.status,
-        extra?.message || null,
-        extra?.updatedPermissions ? JSON.stringify(extra.updatedPermissions) : null,
-        extra?.updatedInput ? JSON.stringify(extra.updatedInput) : null,
-        now,
-        p.id
-      );
-      return db.prepare('SELECT * FROM permission_requests WHERE id = ?').get(p.id);
+      permissions.resolve(p.id as string, {
+        status: p.status as 'pending' | 'allow' | 'deny' | 'timeout' | 'aborted',
+        decision: p.status as string,
+        ...ipcPermissionToResolve(extra),
+      });
+      const resolved = permissions.get(p.id as string);
+      return resolved ? corePermissionToIpcRow(resolved) : undefined;
     }
 
-    // ==================== Search actions ====================
+    // ==================== Search actions (core store thin forward) ====================
+    // Decision 7: combine SessionStore.search (metadata LIKE) with
+    // MessageLog.searchText (rollout content scan). Returns the old
+    // `s.* + snippet` shape so consumers have zero changes.
     case 'search:sessions': {
+      const { sessions, messageLog } = getCoreStores();
       const limit = (p.limit as number) || 10;
-      try {
-        const ftsAvailable = db.prepare("SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'").get();
-        if (ftsAvailable) {
-          return db.prepare(`
-            SELECT DISTINCT m.session_id, s.* FROM messages_fts f
-            JOIN messages m ON f.rowid = m.rowid
-            JOIN chat_sessions s ON m.session_id = s.id
-            WHERE messages_fts MATCH ? AND s.is_deleted = 0
-            ORDER BY s.updated_at DESC LIMIT ?
-          `).all(p.query, limit);
+      // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
+      const metaHits = sessions.search(p.query as string, limit);
+      const seenIds = new Set(metaHits.map((s) => s.id));
+      const rows: Record<string, unknown>[] = metaHits.map((s) => ({
+        ...coreSessionToIpcRow(s),
+        snippet: '',
+      }));
+
+      // 2. Content matches (rollout scan) — fill in snippet for sessions not
+      //    already in the metadata set, up to `limit` total.
+      if (rows.length < limit) {
+        const remaining = limit - rows.length;
+        const contentHits = messageLog.searchText(p.query as string, { limit: remaining + 5 });
+        for (const hit of contentHits) {
+          if (rows.length >= limit) break;
+          if (seenIds.has(hit.sessionId)) {
+            // Attach snippet to existing metadata hit if not already set.
+            const row = rows.find((r) => r.id === hit.sessionId);
+            if (row && !row.snippet) row.snippet = hit.snippet;
+            continue;
+          }
+          const session = sessions.get(hit.sessionId);
+          if (!session || session.status === 'deleted') continue;
+          seenIds.add(hit.sessionId);
+          rows.push({
+            ...coreSessionToIpcRow(session),
+            snippet: hit.snippet,
+          });
         }
-      } catch {}
-      return db.prepare(`
-        SELECT DISTINCT s.* FROM messages m
-        JOIN chat_sessions s ON m.session_id = s.id
-        WHERE m.content LIKE ? AND s.is_deleted = 0
-        ORDER BY s.updated_at DESC LIMIT ?
-      `).all(`%${p.query}%`, limit);
+      }
+
+      // Sort by updated_at DESC (matches old ORDER BY).
+      rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
+      return rows.slice(0, limit);
     }
 
     // ==================== Channel actions ====================
@@ -982,18 +624,28 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     // ==================== Project actions ====================
-    case 'project:getGroups':
-      return db.prepare(`
-        SELECT
-          working_directory,
-          project_name,
-          COUNT(*) as thread_count,
-          MAX(updated_at) as last_activity
-        FROM chat_sessions
-        WHERE is_deleted = 0 AND working_directory != ''
-        GROUP BY working_directory
-        ORDER BY last_activity DESC
-      `).all();
+    case 'project:getGroups': {
+      // Plan 328 Phase 5: aggregate from core SessionStore.
+      const { sessions } = getCoreStores();
+      const all = sessions.list();
+      const groups = new Map<string, { working_directory: string; project_name: string; thread_count: number; last_activity: number }>();
+      for (const s of all) {
+        if (!s.workingDirectory) continue;
+        const existing = groups.get(s.workingDirectory);
+        if (existing) {
+          existing.thread_count += 1;
+          if (s.updatedAt > existing.last_activity) existing.last_activity = s.updatedAt;
+        } else {
+          groups.set(s.workingDirectory, {
+            working_directory: s.workingDirectory,
+            project_name: s.projectName,
+            thread_count: 1,
+            last_activity: s.updatedAt,
+          });
+        }
+      }
+      return Array.from(groups.values()).sort((a, b) => b.last_activity - a.last_activity);
+    }
 
     // ==================== Automation actions ====================
     case 'automation:cron:list': {
@@ -2315,348 +1967,141 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return { success: result.changes > 0 };
     }
 
-    // ==================== Mailbox actions (Plan 202 — PR1) ====================
+    // ==================== Mailbox actions (core store thin forward) ====================
+    // Plan 328 Phase 3: all mailbox cases forward to the Mailbox core store via
+    // core-db-adapters. DTO shape (snake_case flat row) is preserved so the
+    // Worker code has zero changes. The apply matrix is enforced by
+    // Mailbox.assertApplyAllowed (single source of truth, Plan 202 §5.2).
     case 'mailbox:send': {
-      const now = Date.now();
-      const priority = 100;
-
-      // Idempotency check
-      if (p.clientMsgId) {
-        const existing = db.prepare(
-          'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
-        ).get(p.sessionId, p.clientMsgId);
-        if (existing) return existing;
-      }
-
-      db.prepare(`
-        INSERT INTO agent_mailbox (
-          id, session_id, submitted_during_run_id, content, kind, status,
-          priority, constraints_json, attachments_json, source,
-          client_msg_id, created_at
-        ) VALUES (
-          @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
-          @priority, @constraints_json, @attachments_json, @source,
-          @client_msg_id, @created_at
-        )
-      `).run({
-        id: p.id,
-        session_id: p.sessionId,
-        submitted_during_run_id: p.submittedDuringRunId || '',
-        content: p.content,
-        kind: p.kind,
-        priority,
-        constraints_json: p.constraintsJson ?? null,
-        attachments_json: p.attachments ? JSON.stringify(p.attachments) : null,
-        source: p.source ?? 'ui',
-        client_msg_id: p.clientMsgId ?? null,
-        created_at: now,
+      const { mailbox } = getCoreStores();
+      const item = mailbox.enqueue({
+        id: p.id as string,
+        sessionId: p.sessionId as string,
+        submittedRunId: (p.submittedDuringRunId as string) || '',
+        content: p.content as string,
+        kind: p.kind as MailboxKind,
+        attachments: p.attachments as unknown[] | undefined,
+        clientMsgId: (p.clientMsgId as string | null | undefined) ?? null,
+        source: (p.source as string | undefined) ?? 'ui',
+        meta: p.constraintsJson ? { constraints: JSON.parse(p.constraintsJson as string) } : undefined,
       });
-
-      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
-      // Broadcast event
-      try {
-        const { emitMailCreated } = require('../messaging/mailbox-broadcaster');
-        emitMailCreated(row as Record<string, unknown>);
-      } catch { /* broadcaster may not be available in all contexts */ }
+      const row = coreMailboxToIpcRow(item);
+      emitMailboxEvent('emitMailCreated', row);
       return row;
     }
 
     case 'mailbox:edit': {
-      const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id) as Record<string, unknown> | undefined;
+      const { mailbox } = getCoreStores();
+      const existing = mailbox.get(p.id as string);
       if (!existing) return null;
-      if (existing.status === 'applied' && existing.applied_summary === 'queued_for_next_agent_turn') {
-        return existing;
+      // Retry-safe: if the row was already promoted as queued_for_next_agent_turn,
+      // return it unchanged so the renderer's retry is idempotent.
+      if (existing.status === 'applied' && existing.appliedSummary === 'queued_for_next_agent_turn') {
+        return coreMailboxToIpcRow(existing);
       }
-      if (existing.status !== 'pending') return null;
-      if (existing.edit_locked_at !== null) return null;
-
-      const now = Date.now();
-      const fields: string[] = [];
-      const params: Record<string, unknown> = { id: p.id };
-
-      const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
-      if (existing.edit_history_json) {
-        try { editHistory.push(...JSON.parse(existing.edit_history_json as string)); } catch { /* ignore */ }
-      }
-
-      if (p.content !== undefined) {
-        editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
-        fields.push('content = @content');
-        params.content = p.content;
-      }
-      if (p.kind !== undefined) {
-        if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
-          editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
-        }
-        fields.push('kind = @kind');
-        fields.push('priority = @priority');
-        params.kind = p.kind;
-        params.priority = 100;
-      }
-
-      if (fields.length === 0) return existing;
-
-      fields.push('edit_history_json = @edit_history_json');
-      params.edit_history_json = JSON.stringify(editHistory);
-
-      db.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
-      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
-      // Broadcast event
-      try {
-        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
-        emitMailEdited(row as Record<string, unknown>, existing.content as string);
-      } catch { /* broadcaster may not be available */ }
+      const previousContent = existing.content;
+      const edited = mailbox.edit(p.id as string, {
+        content: p.content as string | undefined,
+        kind: p.kind as MailboxKind | undefined,
+      });
+      if (!edited) return null;
+      const row = coreMailboxToIpcRow(edited);
+      emitMailboxEvent('emitMailEdited', row, previousContent);
       return row;
     }
 
     case 'mailbox:guide': {
-      const guided = markMailboxForGuidance(db, p.id as string);
+      const { mailbox } = getCoreStores();
+      const existing = mailbox.get(p.id as string);
+      if (!existing) return null;
+      const previousContent = existing.content;
+      const guided = mailbox.guide(p.id as string);
       if (!guided) return null;
-      try {
-        const { emitMailEdited } = require('../messaging/mailbox-broadcaster');
-        emitMailEdited(guided.row, guided.previousContent);
-      } catch { /* broadcaster may not be available */ }
-      return guided.row;
-    }
-
-    case 'mailbox:promoteQueued': {
-      const row = promoteQueuedMailbox(db, p.id as string);
-      if (!row) return null;
-      emitMailboxEvent('emitMailApplied', row);
+      const row = coreMailboxToIpcRow(guided);
+      emitMailboxEvent('emitMailEdited', row, previousContent);
       return row;
     }
 
-    case 'mailbox:cancel': {
-      const now = Date.now();
-      const reason = p.reason as string | undefined;
-      const result = db.prepare(`
-        UPDATE agent_mailbox
-        SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
-        WHERE id = @id AND status = 'pending'
-      `).run({ id: p.id, now, reason: reason ?? null });
+    case 'mailbox:promoteQueued': {
+      const { mailbox } = getCoreStores();
+      // promoteQueued requires sessionId — fetch the item first to get it.
+      const existing = mailbox.get(p.id as string);
+      if (!existing) return null;
+      const row = mailbox.promoteQueued(existing.sessionId, p.id as string);
+      if (!row) return null;
+      emitMailboxEvent('emitMailApplied', coreMailboxToIpcRow(row));
+      return coreMailboxToIpcRow(row);
+    }
 
-      if (result.changes === 0) return null;
-      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
-      // Broadcast event
-      try {
-        const { emitMailCancelled } = require('../messaging/mailbox-broadcaster');
-        emitMailCancelled(row as Record<string, unknown>, reason);
-      } catch { /* broadcaster may not be available */ }
+    case 'mailbox:cancel': {
+      const { mailbox } = getCoreStores();
+      const reason = p.reason as string | undefined;
+      const cancelled = mailbox.cancel(p.id as string, reason, 'user');
+      if (!cancelled) return null;
+      const row = coreMailboxToIpcRow(cancelled);
+      emitMailboxEvent('emitMailCancelled', row, reason);
       return row;
     }
 
     case 'mailbox:list': {
+      const { mailbox } = getCoreStores();
       const limit = (p.limit as number) ?? 50;
-      const statuses = p.status as string[] | undefined;
-      if (statuses && statuses.length > 0) {
-        const placeholders = statuses.map(() => '?').join(',');
-        return db.prepare(
-          `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
-        ).all(p.sessionId, ...statuses, limit);
-      }
-      return db.prepare(
-        'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
-      ).all(p.sessionId, limit);
+      const statuses = p.status as MailboxStatus[] | undefined;
+      return mailbox
+        .list(p.sessionId as string, { status: statuses, limit })
+        .map(coreMailboxToIpcRow);
     }
 
-    case 'mailbox:listForSession':
-      return db.prepare(
-        'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
-      ).all(p.sessionId);
+    case 'mailbox:listForSession': {
+      const { mailbox } = getCoreStores();
+      return mailbox.listForSession(p.sessionId as string).map(coreMailboxToIpcRow);
+    }
 
     case 'mailbox:claimBatch': {
-      const now = Date.now();
-      const leaseMs = Math.max(1000, Number(p.leaseMs ?? 30000));
-      const coalesceWindowMs = Math.min(Math.max(0, Number(p.coalesceWindowMs ?? 1500)), 2000);
-      const limit = Math.max(1, Math.min(Number(p.limit ?? 10), 25));
-      const maxClaimAttempts = Math.max(1, Number(p.maxClaimAttempts ?? 5));
-      const sessionId = p.sessionId as string;
-      const runId = p.runId as string;
-      const checkpoint = p.checkpoint as string;
-
-      // Claimable kinds depend on the checkpoint: immediate followups and
-      // background notifications are claimable at before_model_turn; queued
-      // rows are only absorbed right before the answer finalises.
-      const claimableKinds =
-        checkpoint === 'before_final_answer'
-          ? "'followup','queued','background_notification'"
-          : "'followup','background_notification'";
-
-      const claim = db.transaction(() => {
-        const anchor = db.prepare(`
-          SELECT id, priority, created_at, status, claim_attempts
-          FROM agent_mailbox
-          WHERE session_id = @sessionId
-            AND kind IN (${claimableKinds})
-            AND (
-              status = 'pending'
-              OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
-            )
-          ORDER BY priority ASC, created_at ASC
-          LIMIT 1
-        `).get({ sessionId, now }) as Record<string, unknown> | undefined;
-
-        if (!anchor) return { rows: [], claimTokens: [] };
-
-        if (anchor.status === 'observed' && Number(anchor.claim_attempts ?? 0) >= maxClaimAttempts) {
-          db.prepare(`
-            UPDATE agent_mailbox
-            SET status = 'cancelled',
-                cancelled_at = @now,
-                cancelled_by = 'system:max_claim_attempts',
-                cancel_reason = 'max_claim_attempts_exceeded',
-                failure_reason = 'max_claim_attempts_exceeded'
-            WHERE id = @id AND status = 'observed'
-          `).run({ id: anchor.id, now });
-          const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(anchor.id);
-          emitMailboxEvent('emitMailCancelled', row, 'max_claim_attempts_exceeded');
-          return { rows: [], claimTokens: [] };
-        }
-
-        const windowEnd = Number(anchor.created_at) + coalesceWindowMs;
-        const candidates = db.prepare(`
-          SELECT *
-          FROM agent_mailbox
-          WHERE session_id = @sessionId
-            AND priority = @priority
-            AND created_at <= @windowEnd
-            AND kind IN (${claimableKinds})
-            AND (
-              status = 'pending'
-              OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
-            )
-          ORDER BY priority ASC, created_at ASC
-          LIMIT @limit
-        `).all({
-          sessionId,
-          priority: anchor.priority,
-          windowEnd,
-          now,
-          limit,
-        }) as Record<string, unknown>[];
-
-        const rows: Record<string, unknown>[] = [];
-        const claimTokens: string[] = [];
-        for (const candidate of candidates) {
-          if (candidate.status === 'observed' && Number(candidate.claim_attempts ?? 0) >= maxClaimAttempts) {
-            db.prepare(`
-              UPDATE agent_mailbox
-              SET status = 'cancelled',
-                  cancelled_at = @now,
-                  cancelled_by = 'system:max_claim_attempts',
-                  cancel_reason = 'max_claim_attempts_exceeded',
-                  failure_reason = 'max_claim_attempts_exceeded'
-              WHERE id = @id AND status = 'observed'
-            `).run({ id: candidate.id, now });
-            const cancelled = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(candidate.id);
-            emitMailboxEvent('emitMailCancelled', cancelled, 'max_claim_attempts_exceeded');
-            continue;
-          }
-
-          const token = randomUUID();
-          const result = db.prepare(`
-            UPDATE agent_mailbox
-            SET status = 'observed',
-                claim_token = @token,
-                claim_expires_at = @expiresAt,
-                observed_at = COALESCE(observed_at, @now),
-                observed_at_checkpoint = COALESCE(observed_at_checkpoint, @checkpoint),
-                observed_by_run_id = @runId,
-                edit_locked_at = COALESCE(edit_locked_at, @now),
-                claim_attempts = claim_attempts + CASE WHEN status = 'observed' THEN 1 ELSE 0 END,
-                last_claim_error = NULL
-            WHERE id = @id
-              AND (
-                status = 'pending'
-                OR (status = 'observed' AND claim_expires_at IS NOT NULL AND claim_expires_at < @now)
-              )
-          `).run({
-            id: candidate.id,
-            token,
-            expiresAt: now + leaseMs,
-            now,
-            checkpoint,
-            runId,
-          });
-
-          if (result.changes > 0) {
-            const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(candidate.id) as Record<string, unknown>;
-            rows.push(row);
-            claimTokens.push(token);
-            emitMailboxEvent('emitMailObserved', row);
-          }
-        }
-
-        return { rows, claimTokens };
+      const { mailbox } = getCoreStores();
+      const result = mailbox.claimBatch({
+        sessionId: p.sessionId as string,
+        runId: p.runId as string,
+        checkpoint: p.checkpoint as CheckpointType,
+        limit: p.limit as number | undefined,
+        leaseMs: p.leaseMs as number | undefined,
+        coalesceWindowMs: p.coalesceWindowMs as number | undefined,
+        maxClaimAttempts: p.maxClaimAttempts as number | undefined,
       });
-
-      return claim();
+      const rows = result.rows.map((item) => {
+        const row = coreMailboxToIpcRow(item);
+        emitMailboxEvent('emitMailObserved', row);
+        return row;
+      });
+      return { rows, claimTokens: result.claimTokens };
     }
 
     case 'mailbox:apply': {
-      const now = Date.now();
-      const id = p.id as string;
-      const claimToken = p.claimToken as string;
-      const mode = p.mode as string;
-      const checkpoint = p.checkpoint as string;
-      assertMailboxApplyAllowed(checkpoint, mode);
-
-      const apply = db.transaction(() => {
-        const result = db.prepare(`
-          UPDATE agent_mailbox
-          SET status = 'applied',
-              apply_mode = @mode,
-              applied_at = @now,
-              applied_at_checkpoint = @checkpoint,
-              applied_summary = @summary,
-              resulting_user_msg_id = @resultingUserMsgId,
-              claim_expires_at = NULL
-          WHERE id = @id
-            AND status = 'observed'
-            AND claim_token = @claimToken
-        `).run({
-          id,
-          claimToken,
-          mode,
-          now,
-          checkpoint,
-          summary: (p.summary as string | undefined) ?? null,
-          resultingUserMsgId: (p.resultingUserMsgId as string | undefined) ?? null,
-        });
-
-        if (result.changes === 0) {
-          throw new Error('Mailbox apply failed: row is not observed or claim token is stale');
-        }
-        return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id);
+      const { mailbox } = getCoreStores();
+      const item = mailbox.apply({
+        id: p.id as string,
+        claimToken: p.claimToken as string,
+        mode: p.mode as MailboxApplyMode,
+        checkpoint: p.checkpoint as CheckpointType,
+        summary: p.summary as string | undefined,
+        resultingEventId: (p.resultingUserMsgId as string | null | undefined) ?? null,
       });
-
-      const row = apply();
+      const row = coreMailboxToIpcRow(item);
       emitMailboxEvent('emitMailApplied', row);
       return row;
     }
 
     case 'mailbox:cancelByAgent': {
-      const now = Date.now();
-      const result = db.prepare(`
-        UPDATE agent_mailbox
-        SET status = 'cancelled',
-            cancelled_at = @now,
-            cancelled_by = 'agent',
-            cancel_reason = @reason,
-            failure_reason = @reason,
-            claim_expires_at = NULL
-        WHERE id = @id
-          AND status = 'observed'
-          AND claim_token = @claimToken
-      `).run({
-        id: p.id,
-        claimToken: p.claimToken,
-        reason: (p.reason as string | undefined) ?? 'cancelled_by_agent',
-        now,
+      const { mailbox } = getCoreStores();
+      const reason = (p.reason as string | undefined) ?? 'cancelled_by_agent';
+      const cancelled = mailbox.cancelByAgent({
+        id: p.id as string,
+        claimToken: p.claimToken as string,
+        reason,
       });
-      if (result.changes === 0) return null;
-      const row = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(p.id);
-      emitMailboxEvent('emitMailCancelled', row, p.reason as string | undefined);
+      if (!cancelled) return null;
+      const row = coreMailboxToIpcRow(cancelled);
+      emitMailboxEvent('emitMailCancelled', row, reason);
       return row;
     }
 
@@ -2670,6 +2115,9 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         throw new Error('Invalid turn review payload');
       }
 
+      // Plan 328: chat_turn_reviews no longer has a FK to chat_sessions (migration 47
+      // dropped it). working_directory is stored on chat_turn_reviews itself, so no
+      // parent-row check or placeholder INSERT is needed — string association only.
       db.prepare(`
         INSERT INTO chat_turn_reviews (
           id, session_id, turn_id, working_directory, files_json, patch,

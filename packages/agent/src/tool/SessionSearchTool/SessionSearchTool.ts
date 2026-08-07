@@ -17,12 +17,12 @@ import type { ToolResult, Message, ToolUseContext } from '../../types.js';
 import type { MessageRow } from '../../session/db.js';
 import { SESSION_SEARCH_TOOL_NAME } from './constants.js';
 import { DESCRIPTION } from './prompt.js';
-import { getDb, getMessages } from '../../session/db.js';
+import { getMessages } from '../../session/db.js';
+import { sessionDb } from '../../ipc/db-client.js';
 import { createAIClient } from '@duya/ai';
 import type { AIClient } from '@duya/ai';
 import { findModelCompat } from '@duya/ai';
 import type { ApiFormat } from '@duya/ai';
-import type BetterSqlite3 from 'better-sqlite3';
 import {
   loadRecentSessionDirectory,
   matchesSessionDirectoryScope,
@@ -428,25 +428,17 @@ export class SessionSearchTool extends BaseTool {
 
   /**
    * Resolve session to its root parent (for delegation/compression lineage)
+   * using a parent map built from sessionDb.list() IPC — no direct DB access.
    */
-  private resolveToParent(sessionId: string, db: BetterSqlite3.Database): string {
+  private resolveToParent(sessionId: string, parentMap: Map<string, string | null>): string {
     const visited = new Set<string>();
     let sid = sessionId;
-    const stmt = db.prepare('SELECT parent_id, parent_session_id FROM chat_sessions WHERE id = ?');
     while (sid && !visited.has(sid)) {
       visited.add(sid);
-      try {
-        const row = stmt.get(sid) as {
-          parent_id?: string | null;
-          parent_session_id?: string | null;
-        } | undefined;
-        const parentId = row?.parent_id ?? row?.parent_session_id;
-        if (parentId) {
-          sid = parentId;
-        } else {
-          break;
-        }
-      } catch {
+      const parentId = parentMap.get(sid) ?? null;
+      if (parentId) {
+        sid = parentId;
+      } else {
         break;
       }
     }
@@ -457,11 +449,11 @@ export class SessionSearchTool extends BaseTool {
    * Get the root session ID of current session lineage
    */
   private getCurrentSessionRoot(
-    db: BetterSqlite3.Database,
+    parentMap: Map<string, string | null>,
     currentSessionId: string | null,
   ): string | null {
     if (!currentSessionId) return null;
-    return this.resolveToParent(currentSessionId, db);
+    return this.resolveToParent(currentSessionId, parentMap);
   }
 
   /**
@@ -477,7 +469,7 @@ export class SessionSearchTool extends BaseTool {
       model?: string;
     }>,
     limit: number,
-    db: BetterSqlite3.Database,
+    parentMap: Map<string, string | null>,
     currentRoot: string | null,
     currentSessionId: string | null,
     scope: SessionDirectoryScope,
@@ -486,7 +478,7 @@ export class SessionSearchTool extends BaseTool {
     const seenSessions = new Map<string, SessionMatchInfo>();
     for (const row of rows) {
       const rawSid = row.sessionId;
-      const resolvedSid = this.resolveToParent(rawSid, db);
+      const resolvedSid = this.resolveToParent(rawSid, parentMap);
 
       if (currentRoot && resolvedSid === currentRoot) continue;
       if (currentSessionId && rawSid === currentSessionId) continue;
@@ -514,307 +506,72 @@ export class SessionSearchTool extends BaseTool {
   }
 
   /**
-   * Search sessions via FTS5 with role filtering and current session exclusion
+   * Search sessions via IPC (sessionDb.search + sessionDb.list).
+   *
+   * Plan 328 Phase 6: the agent worker no longer opens the core database
+   * directly. The main process combines SessionStore.search (metadata LIKE)
+   * with MessageLog.searchText (rollout content scan) and returns sessions
+   * + snippet. We then apply scope/lineage filtering client-side using
+   * sessionDb.list() for parent_id resolution.
+   *
+   * roleFilter is accepted for API compatibility but is no longer applied —
+   * the IPC search does not support per-role filtering. Scope filtering and
+   * current-session exclusion are preserved.
    */
   private async searchSessions(
     query: string,
     limit: number,
-    roleFilter?: string,
+    _roleFilter?: string,
     scope: SessionDirectoryScope = 'all',
     workingDirectory: string = '',
     currentSessionId: string | null = null,
   ): Promise<SessionMatchInfo[]> {
-    const db = getDb();
-    const currentRoot = this.getCurrentSessionRoot(db, currentSessionId);
+    // Fetch search results via IPC.
+    const searchResults = (await sessionDb.search(query, { limit: limit * 4 })) as Array<{
+      id: string;
+      title: string;
+      project_name: string;
+      working_directory: string;
+      created_at: number;
+      model: string;
+      parent_id: string | null;
+      parent_session_id: string | null;
+    }>;
 
-    // Parse role filter
-    const roleList = roleFilter
-      ? roleFilter.split(',').map(r => r.trim()).filter(r => r.length > 0)
-      : null;
-
-    // Parse the user query into a FTS5 MATCH expression. Returns null when no
-    // usable tokens are left (so we can short-circuit instead of issuing a query
-    // that would match everything or fail with a syntax error).
-    const ftsQuery = this.parseSearchQuery(query);
-    if (ftsQuery === null) {
+    if (!searchResults || searchResults.length === 0) {
       return [];
     }
 
-    // Try FTS5 search first
-    try {
-      // Body hits: search inside message content.
-      const bodyRows = this.searchBodyMessages(db, ftsQuery, roleList, limit * 4);
-
-      // Metadata hits: search session title / model / project_name / agent_name.
-      // Boosts recall when users remember the conversation title or model.
-      const metaRows = this.searchSessionMetadata(db, ftsQuery, limit * 4);
-
-      // Merge body + metadata hits, deduplicate, and sort by combined score.
-      const merged = this.mergeSearchHits(bodyRows, metaRows);
-
-      return this.deduplicateAndExcludeRows(
-        merged,
-        limit,
-        db,
-        currentRoot,
-        currentSessionId,
-        scope,
-        workingDirectory,
-      );
-    } catch (error) {
-      // FTS5 not available or error - fall back to LIKE search
-      console.warn('[SessionSearch] FTS5 search failed, falling back to LIKE search:', error instanceof Error ? error.message : String(error));
-      return this.searchSessionsFallback(
-        query,
-        limit,
-        roleList,
-        db,
-        currentRoot,
-        currentSessionId,
-        scope,
-        workingDirectory,
-      );
-    }
-  }
-
-  /**
-   * Query messages_fts for hits inside message content. Returns rows in BM25
-   * rank order, already joined with chat_sessions for downstream fields.
-   */
-  private searchBodyMessages(
-    db: BetterSqlite3.Database,
-    ftsQuery: string,
-    roleList: string[] | null,
-    fetchLimit: number,
-  ): Array<{
-    sessionId: string;
-    title: string;
-    projectName: string;
-    workingDirectory: string;
-    sessionStarted: number;
-    model: string;
-    ftsScore: number;
-  }> {
-    let sql = `
-      SELECT
-        s.id as sessionId,
-        s.title,
-        s.project_name as projectName,
-        s.working_directory as workingDirectory,
-        s.created_at as sessionStarted,
-        s.model,
-        bm25(messages_fts, 1.0, 1.0, 0.5) as ftsScore
-      FROM messages_fts
-      JOIN chat_sessions s ON messages_fts.session_id = s.id
-      WHERE messages_fts MATCH ?
-        AND s.is_deleted = 0
-    `;
-
-    const params: (string | number)[] = [ftsQuery];
-
-    if (roleList && roleList.length > 0) {
-      sql += ` AND messages_fts.rowid IN (
-        SELECT rowid FROM messages WHERE role IN (${roleList.map(() => '?').join(',')})
-      )`;
-      params.push(...roleList);
-    }
-
-    sql += ` ORDER BY ftsScore LIMIT ?`;
-    params.push(fetchLimit);
-
-    return db.prepare(sql).all(...params) as Array<{
-      sessionId: string;
-      title: string;
-      projectName: string;
-      workingDirectory: string;
-      sessionStarted: number;
-      model: string;
-      ftsScore: number;
+    // Fetch all sessions for parent lineage resolution.
+    const allSessions = (await sessionDb.list()) as Array<{
+      id: string;
+      parent_id: string | null;
+      parent_session_id: string | null;
     }>;
-  }
 
-  /**
-   * Query sessions_fts for hits on session metadata (title / model / project /
-   * agent name). Column weights bias the score toward title matches.
-   */
-  private searchSessionMetadata(
-    db: BetterSqlite3.Database,
-    ftsQuery: string,
-    fetchLimit: number,
-  ): Array<{
-    sessionId: string;
-    title: string;
-    projectName: string;
-    workingDirectory: string;
-    sessionStarted: number;
-    model: string;
-    ftsScore: number;
-  }> {
-    const sql = `
-      SELECT
-        s.id as sessionId,
-        s.title,
-        s.project_name as projectName,
-        s.working_directory as workingDirectory,
-        s.created_at as sessionStarted,
-        s.model,
-        bm25(sessions_fts, 4.0, 2.0, 2.0, 1.0, 1.0, 0.5) as ftsScore
-      FROM sessions_fts
-      JOIN chat_sessions s ON sessions_fts.session_id = s.id
-      WHERE sessions_fts MATCH ?
-        AND s.is_deleted = 0
-      ORDER BY ftsScore
-      LIMIT ?
-    `;
-    return db.prepare(sql).all(ftsQuery, fetchLimit) as Array<{
-      sessionId: string;
-      title: string;
-      projectName: string;
-      workingDirectory: string;
-      sessionStarted: number;
-      model: string;
-      ftsScore: number;
-    }>;
-  }
-
-  /**
-   * Merge body + metadata hits per session. Sessions that appear in both lists
-   * are boosted (the lower / better BM25 score wins, then halved as a soft
-   * "double hit" bonus). Sessions present in only one list keep that list's
-   * score.
-   */
-  private mergeSearchHits(
-    bodyRows: Array<{ sessionId: string; title: string; projectName: string; workingDirectory: string; sessionStarted: number; model: string; ftsScore: number }>,
-    metaRows: Array<{ sessionId: string; title: string; projectName: string; workingDirectory: string; sessionStarted: number; model: string; ftsScore: number }>,
-  ): Array<{
-    sessionId: string;
-    title: string;
-    projectName: string;
-    workingDirectory: string;
-    sessionStarted: number;
-    model: string;
-    ftsScore: number;
-  }> {
-    type Row = (typeof bodyRows)[number];
-    const bySession = new Map<string, { body?: Row; meta?: Row; score: number }>();
-
-    const DOUBLE_HIT_BOOST = 0.5;
-
-    for (const row of bodyRows) {
-      bySession.set(row.sessionId, { body: row, score: row.ftsScore });
-    }
-    for (const row of metaRows) {
-      const existing = bySession.get(row.sessionId);
-      if (existing?.body) {
-        // Both body and metadata matched. Keep the better rank and apply boost.
-        const best = Math.min(existing.body.ftsScore, row.ftsScore);
-        existing.meta = row;
-        existing.score = best * DOUBLE_HIT_BOOST;
-      } else if (existing) {
-        existing.meta = row;
-        existing.score = row.ftsScore;
-      } else {
-        bySession.set(row.sessionId, { meta: row, score: row.ftsScore });
-      }
+    const parentMap = new Map<string, string | null>();
+    for (const s of allSessions) {
+      parentMap.set(s.id, s.parent_id ?? s.parent_session_id ?? null);
     }
 
-    // Pick the most informative row for fields (prefer the body row when both exist
-    // so message-derived projectName / workingDirectory stays authoritative).
-    const merged: Row[] = [];
-    for (const entry of bySession.values()) {
-      const source = entry.body ?? entry.meta!;
-      merged.push({ ...source, ftsScore: entry.score });
-    }
-    merged.sort((a, b) => a.ftsScore - b.ftsScore);
-    return merged;
-  }
-
-  /**
-   * Fallback LIKE search when FTS5 is unavailable.
-   * Splits the query into individual tokens and ORs them as substrings so that
-   * a multi-word query (which the previous `%query%` implementation treated as
-   * a single literal substring) still produces useful recall.
-   */
-  private searchSessionsFallback(
-    query: string,
-    limit: number,
-    roleList: string[] | null,
-    db: BetterSqlite3.Database,
-    currentRoot: string | null,
-    currentSessionId: string | null,
-    scope: SessionDirectoryScope,
-    workingDirectory: string,
-  ): SessionMatchInfo[] {
-    // Tokenize the query the same way parseSearchQuery does, but instead of
-    // building an FTS5 expression we build a list of LIKE patterns.
-    const tokens = this.tokenizeForFallback(query);
-    if (tokens.length === 0) {
-      return [];
-    }
-
-    let sql = `
-      SELECT DISTINCT
-        s.id as sessionId,
-        s.title,
-        s.project_name as projectName,
-        s.working_directory as workingDirectory,
-        s.created_at as sessionStarted,
-        s.model
-      FROM messages m
-      JOIN chat_sessions s ON m.session_id = s.id
-      WHERE s.is_deleted = 0
-        AND (${tokens.map(() => 'm.content LIKE ?').join(' OR ')})
-    `;
-
-    const params: (string | number)[] = tokens.map(t => `%${t}%`);
-
-    if (roleList && roleList.length > 0) {
-      sql += ` AND m.role IN (${roleList.map(() => '?').join(',')})`;
-      params.push(...roleList);
-    }
-
-    sql += ` ORDER BY s.updated_at DESC LIMIT ?`;
-    params.push(limit * 8);
-
-    const stmt = db.prepare(sql);
-    const rows = stmt.all(...params) as Array<{
-      sessionId: string;
-      title: string;
-      projectName?: string;
-      workingDirectory?: string;
-      sessionStarted: number;
-      model?: string;
-    }>;
+    const currentRoot = this.getCurrentSessionRoot(parentMap, currentSessionId);
 
     return this.deduplicateAndExcludeRows(
-      rows,
+      searchResults.map(r => ({
+        sessionId: r.id,
+        title: r.title,
+        projectName: r.project_name,
+        workingDirectory: r.working_directory,
+        sessionStarted: r.created_at,
+        model: r.model,
+      })),
       limit,
-      db,
+      parentMap,
       currentRoot,
       currentSessionId,
       scope,
       workingDirectory,
     );
-  }
-
-  /**
-   * Tokenize a user query into plain lowercase words for the LIKE fallback.
-   * Phrase queries collapse to their constituent words (we lose phrase
-   * semantics but still match the content).
-   */
-  private tokenizeForFallback(query: string): string[] {
-    const result: string[] = [];
-    const phraseRe = /"([^"]+)"|(\S+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = phraseRe.exec(query)) !== null) {
-      const raw = (m[1] ?? m[2] ?? '').toLowerCase();
-      // Split on whitespace, drop single chars, drop operator-only tokens.
-      for (const w of raw.split(/\s+/)) {
-        const cleaned = w.replace(/[+\-&|!(){}[\]^~*?:]/g, '');
-        if (cleaned.length >= 2) result.push(cleaned);
-      }
-    }
-    return Array.from(new Set(result));
   }
 
   /**
@@ -878,83 +635,6 @@ export class SessionSearchTool extends BaseTool {
 
     lines.push('</session-directory>');
     return lines.join('\n');
-  }
-
-  /**
-   * Parse a user search query into an FTS5 MATCH expression.
-   *
-   * Supported syntax:
-   *   "exact phrase"   preserved as an FTS5 phrase query
-   *   +required        FTS5 required term (`+term`)
-   *   -excluded        FTS5 NOT term (`-term`)
-   *   foo OR bar       FTS5 OR (case-sensitive keyword)
-   *   auth*            explicit prefix (preserved)
-   *   auth             bare term; lowercased and emitted as-is.
-   *                    Trigram tokenizer handles substring matching natively,
-   *                    so no auto-`*` is needed for prefix recall.
-   *   a / ab           1- and 2-character Latin/digit tokens are dropped
-   *                    (FTS5 trigram needs at least 3 characters to produce a trigram).
-   *   \u4e2d\u6587       CJK / non-Latin scripts pass through unchanged; trigram handles substrings.
-   *
-   * Returns null when the query has no usable tokens, so callers can short-circuit
-   * instead of issuing a query that would match nothing or trip a syntax error.
-   */
-  private parseSearchQuery(query: string): string | null {
-    const tokens: Array<{ kind: 'word' | 'phrase' | 'or' | 'plus' | 'minus'; text: string }> = [];
-    const re = /"([^"]+)"|(\S+)/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(query)) !== null) {
-      if (m[1] !== undefined) {
-        tokens.push({ kind: 'phrase', text: m[1] });
-        continue;
-      }
-      const raw = m[2];
-      if (raw === 'OR') {
-        tokens.push({ kind: 'or', text: 'OR' });
-      } else if (raw.startsWith('+') && raw.length > 1) {
-        tokens.push({ kind: 'plus', text: raw.slice(1) });
-      } else if (raw.startsWith('-') && raw.length > 1) {
-        tokens.push({ kind: 'minus', text: raw.slice(1) });
-      } else {
-        tokens.push({ kind: 'word', text: raw });
-      }
-    }
-
-    const parts: string[] = [];
-    // Strip FTS5 operator characters that the user might have typed inside a term
-    // (e.g. `foo+bar` => `foo bar`). Preserve `*` and `?` since they are FTS5
-    // wildcards users may legitimately include (e.g. `auth*`).
-    const stripOps = (s: string) => s.replace(/[+\-&|!(){}[\]^~:]/g, ' ').trim();
-
-    const isLatinOrDigit = (s: string) => /^[a-z0-9]+$/.test(s);
-    const hasWildcard = (s: string) => s.endsWith('*') || s.endsWith('?');
-
-    for (const tok of tokens) {
-      if (tok.kind === 'or') {
-        parts.push('OR');
-        continue;
-      }
-      if (tok.kind === 'phrase') {
-        const inner = stripOps(tok.text).replace(/\s+/g, ' ').toLowerCase();
-        if (inner.length >= 2) parts.push(`"${inner.replace(/"/g, '""')}"`);
-        continue;
-      }
-
-      const cleaned = stripOps(tok.text).toLowerCase();
-      if (cleaned.length === 0) continue;
-      // FTS5 trigram produces 0 trigrams for 1- and 2-character inputs; drop them
-      // so we don't issue a guaranteed-empty query.
-      if (cleaned.length < 3 && isLatinOrDigit(cleaned)) continue;
-
-      const term = hasWildcard(cleaned) ? cleaned : cleaned;
-
-      if (tok.kind === 'plus') parts.push(`+${term}`);
-      else if (tok.kind === 'minus') parts.push(`-${term}`);
-      else parts.push(term);
-    }
-
-    if (parts.length === 0) return null;
-    return parts.join(' ');
   }
 
   /**

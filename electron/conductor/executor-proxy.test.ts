@@ -6,8 +6,19 @@ const mocks = vi.hoisted(() => ({
   createCanvas: vi.fn(),
   updateCanvas: vi.fn(),
   getSession: vi.fn(),
-  updateSession: vi.fn(),
+  getExtension: vi.fn(),
+  setExtension: vi.fn(),
   getCanvasSnapshot: vi.fn(),
+}));
+
+vi.mock('../db/core-connection', () => ({
+  getCoreStores: () => ({
+    sessions: {
+      get: mocks.getSession,
+      getExtension: mocks.getExtension,
+      setExtension: mocks.setExtension,
+    },
+  }),
 }));
 
 vi.mock('../db/queries/conductors', () => {
@@ -29,13 +40,6 @@ vi.mock('../db/queries/conductors', () => {
     elementExists: vi.fn(),
     findElementsByType: vi.fn(),
     findAttachedConnectors: vi.fn(),
-  };
-});
-
-vi.mock('../db/queries/sessions', () => {
-  return {
-    getSession: mocks.getSession,
-    updateSession: mocks.updateSession,
   };
 });
 
@@ -78,8 +82,8 @@ describe('ConductorExecutorProxy canvas management', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listCanvases.mockReturnValue([firstCanvas, secondCanvas]);
-    mocks.getSession.mockReturnValue({ id: 'session-1', conductor_canvas_id: 'canvas-1' });
-    mocks.updateSession.mockReturnValue({ id: 'session-1', conductor_canvas_id: 'canvas-2' });
+    mocks.getSession.mockReturnValue({ id: 'session-1', working_directory: null });
+    mocks.getExtension.mockReturnValue('canvas-1');
   });
 
   it('uses the durable session binding for current-canvas identity', async () => {
@@ -101,10 +105,8 @@ describe('ConductorExecutorProxy canvas management', () => {
     const response = await proxy.execute(request({ action: 'switch', canvasId: 'canvas-2' }));
 
     expect(response.success).toBe(true);
-    expect(mocks.updateSession).toHaveBeenCalledWith('session-1', {
-      conductor_mode_enabled: 1,
-      conductor_canvas_id: 'canvas-2',
-    });
+    expect(mocks.setExtension).toHaveBeenCalledWith('session-1', 'conductor_mode_enabled', 1);
+    expect(mocks.setExtension).toHaveBeenCalledWith('session-1', 'conductor_canvas_id', 'canvas-2');
     expect(changed).toHaveBeenCalledWith({
       operation: 'switch',
       sessionId: 'session-1',
@@ -125,11 +127,8 @@ describe('ConductorExecutorProxy canvas management', () => {
   });
 
   it('filters list by project_path when the session has a working directory', async () => {
-    mocks.getSession.mockReturnValue({
-      id: 'session-1',
-      working_directory: '/proj/A',
-      conductor_canvas_id: 'canvas-1',
-    });
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue('canvas-1');
     mocks.listCanvasesForProject.mockReturnValue([firstCanvas]);
     const proxy = new ConductorExecutorProxy();
 
@@ -148,11 +147,8 @@ describe('ConductorExecutorProxy canvas management', () => {
   });
 
   it('passes the session working directory as projectPath to createCanvas', async () => {
-    mocks.getSession.mockReturnValue({
-      id: 'session-1',
-      working_directory: '/proj/A',
-      conductor_canvas_id: null,
-    });
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue(null);
     mocks.createCanvas.mockReturnValue({
       id: 'canvas-new',
       name: 'New board',
@@ -209,11 +205,8 @@ describe('ConductorExecutorProxy canvas management', () => {
 
   it('rejects switch to a canvas bound to a different project', async () => {
     const foreignCanvas = { ...firstCanvas, id: 'canvas-foreign', projectPath: '/proj/B' };
-    mocks.getSession.mockReturnValue({
-      id: 'session-1',
-      working_directory: '/proj/A',
-      conductor_canvas_id: 'canvas-1',
-    });
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue('canvas-1');
     mocks.listCanvases.mockReturnValue([firstCanvas, foreignCanvas]);
     const proxy = new ConductorExecutorProxy();
 
@@ -221,15 +214,12 @@ describe('ConductorExecutorProxy canvas management', () => {
 
     expect(response.success).toBe(false);
     expect(response.error?.code).toBe('CANVAS_NOT_ACCESSIBLE');
-    expect(mocks.updateSession).not.toHaveBeenCalled();
+    expect(mocks.setExtension).not.toHaveBeenCalled();
   });
 
   it('allows switch to a legacy canvas whose project_path is null', async () => {
-    mocks.getSession.mockReturnValue({
-      id: 'session-1',
-      working_directory: '/proj/A',
-      conductor_canvas_id: 'canvas-1',
-    });
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue('canvas-1');
     // secondCanvas has projectPath: null (legacy/shared)
     mocks.listCanvases.mockReturnValue([firstCanvas, secondCanvas]);
     const proxy = new ConductorExecutorProxy();
@@ -237,19 +227,14 @@ describe('ConductorExecutorProxy canvas management', () => {
     const response = await proxy.execute(request({ action: 'switch', canvasId: 'canvas-2' }));
 
     expect(response.success).toBe(true);
-    expect(mocks.updateSession).toHaveBeenCalledWith('session-1', {
-      conductor_mode_enabled: 1,
-      conductor_canvas_id: 'canvas-2',
-    });
+    expect(mocks.setExtension).toHaveBeenCalledWith('session-1', 'conductor_mode_enabled', 1);
+    expect(mocks.setExtension).toHaveBeenCalledWith('session-1', 'conductor_canvas_id', 'canvas-2');
   });
 
   it('rejects rename of a canvas bound to a different project', async () => {
     const foreignCanvas = { ...firstCanvas, id: 'canvas-foreign', projectPath: '/proj/B' };
-    mocks.getSession.mockReturnValue({
-      id: 'session-1',
-      working_directory: '/proj/A',
-      conductor_canvas_id: 'canvas-1',
-    });
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue('canvas-1');
     mocks.listCanvases.mockReturnValue([firstCanvas, foreignCanvas]);
     const proxy = new ConductorExecutorProxy();
 
@@ -274,7 +259,8 @@ describe('ConductorExecutorProxy canvas.find_empty_space', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listCanvases.mockReturnValue([firstCanvas]);
-    mocks.getSession.mockReturnValue({ id: 'session-1', conductor_canvas_id: 'canvas-1' });
+    mocks.getSession.mockReturnValue({ id: 'session-1' });
+    mocks.getExtension.mockReturnValue('canvas-1');
   });
 
   function findEmptyRequest(

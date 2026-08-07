@@ -12,44 +12,53 @@
  *   - 派生 + 父.profile=garbage + settings=bypass → auto (parent profile 非法, 降级到新装默认)
  *
  * DEFAULT_PROFILE 自 0.x.y 起为 'auto' (YOLO), 与新安装默认一致.
+ *
+ * Plan 328 Phase 5: parent permission_profile now reads from the core
+ * SessionStore (via getCoreStoresOrNull) instead of the legacy
+ * chat_sessions table. The settings table still lives on the legacy DB.
+ * This test mocks both connections:
+ *   - getDatabase → legacy in-memory DB (settings table only)
+ *   - getCoreStoresOrNull → real SessionStore over an in-memory core DB
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import { SessionStore, type SqliteDatabase } from './core';
 
-// Mock getDatabase BEFORE importing resolver
-let testDb: Database.Database;
+// Shared singletons for the two mocked modules. `vi.hoisted` guarantees
+// the mock factory closures (also hoisted) see the same objects as the
+// test bodies, regardless of import evaluation order.
+const mocks = vi.hoisted(() => ({
+  // Legacy DB — only the `settings` table (readDefaultFromSettings still
+  // reads it; not migrated in Plan 328).
+  testDb: null as Database.Database | null,
+  // Core DB + SessionStore — for parent-session lookups via
+  // getCoreStoresOrNull() in readParentProfileOrDefault.
+  coreDb: null as SqliteDatabase | null,
+  sessionStore: null as SessionStore | null,
+}));
 
+// Mock getDatabase BEFORE importing resolver — returns the legacy DB.
 vi.mock('./connection', () => ({
-  getDatabase: () => testDb,
+  getDatabase: () => mocks.testDb,
+}));
+
+// Mock getCoreStoresOrNull BEFORE importing resolver — returns a real
+// SessionStore backed by an in-memory core database so the resolver's
+// `stores.sessions.get(parentSessionId)` reads actual fixture rows
+// instead of always falling through to DEFAULT_PROFILE.
+vi.mock('./core-connection', () => ({
+  getCoreStoresOrNull: () =>
+    mocks.sessionStore ? { sessions: mocks.sessionStore } : null,
 }));
 
 import { resolvePermissionProfile } from './permission-resolver';
 
-function initSchema(db: Database.Database): void {
+function initLegacySchema(db: Database.Database): void {
+  // Only the `settings` table lives on the legacy DB now — parent
+  // sessions are read from the core SessionStore, so `chat_sessions`
+  // is no longer needed here.
   db.exec(`
-    CREATE TABLE IF NOT EXISTS chat_sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL DEFAULT 'New Chat',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      model TEXT NOT NULL DEFAULT '',
-      system_prompt TEXT NOT NULL DEFAULT '',
-      working_directory TEXT NOT NULL DEFAULT '',
-      project_name TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      mode TEXT NOT NULL DEFAULT 'code',
-      permission_profile TEXT NOT NULL DEFAULT 'default',
-      provider_id TEXT NOT NULL DEFAULT 'env',
-      context_summary TEXT NOT NULL DEFAULT '',
-      context_summary_updated_at INTEGER NOT NULL DEFAULT 0,
-      is_deleted INTEGER NOT NULL DEFAULT 0,
-      generation INTEGER NOT NULL DEFAULT 0,
-      agent_profile_id TEXT DEFAULT NULL,
-      parent_id TEXT REFERENCES chat_sessions(id),
-      agent_type TEXT NOT NULL DEFAULT 'main',
-      agent_name TEXT NOT NULL DEFAULT ''
-    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -57,10 +66,25 @@ function initSchema(db: Database.Database): void {
   `);
 }
 
-function insertSession(db: Database.Database, id: string, profile: string | null, parentId: string | null = null): void {
-  db.prepare(
-    'INSERT INTO chat_sessions (id, permission_profile, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-  ).run(id, profile, parentId, Date.now(), Date.now());
+function initCoreSchema(db: SqliteDatabase): SessionStore {
+  for (const m of SessionStore.migrations) m.up(db);
+  return new SessionStore(db);
+}
+
+function insertSession(
+  store: SessionStore,
+  id: string,
+  profile: string | null,
+  parentId: string | null = null,
+): void {
+  // SessionStore.create uses `permissionMode ?? 'default'`, so passing
+  // `undefined` (null profile) yields the schema default; passing `''`
+  // or `'garbage'` stores the literal string for the resolver to reject.
+  store.create({
+    id,
+    permissionMode: profile ?? undefined,
+    parentSessionId: parentId,
+  });
 }
 
 function setSetting(db: Database.Database, key: string, value: string): void {
@@ -72,13 +96,27 @@ function clearSetting(db: Database.Database, key: string): void {
 }
 
 describe('resolvePermissionProfile', () => {
+  let testDb: Database.Database;
+  let coreDb: SqliteDatabase;
+  let sessionStore: SessionStore;
+
   beforeEach(() => {
-    testDb = new Database(':memory:');
-    initSchema(testDb);
+    mocks.testDb = new Database(':memory:');
+    testDb = mocks.testDb;
+    initLegacySchema(testDb);
+
+    mocks.coreDb = new Database(':memory:') as unknown as SqliteDatabase;
+    coreDb = mocks.coreDb;
+    sessionStore = initCoreSchema(coreDb);
+    mocks.sessionStore = sessionStore;
   });
 
   afterEach(() => {
     testDb.close();
+    coreDb.close();
+    mocks.testDb = null;
+    mocks.coreDb = null;
+    mocks.sessionStore = null;
   });
 
   describe('普通新 session (parentSessionId 为空)', () => {
@@ -125,13 +163,13 @@ describe('resolvePermissionProfile', () => {
   describe('派生 session (parentSessionId 有值, 关键安全规则)', () => {
     it('parent=default + settings=bypass → child=default (绝不能升权)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
-      insertSession(testDb, 'parent-1', 'default');
+      insertSession(sessionStore, 'parent-1', 'default');
       expect(resolvePermissionProfile(undefined, 'parent-1')).toBe('default');
     });
 
     it('parent=full_access + settings=default → child=full_access (继承)', () => {
       setSetting(testDb, 'permissionMode', 'default');
-      insertSession(testDb, 'parent-2', 'full_access');
+      insertSession(sessionStore, 'parent-2', 'full_access');
       expect(resolvePermissionProfile(undefined, 'parent-2')).toBe('full_access');
     });
 
@@ -142,44 +180,44 @@ describe('resolvePermissionProfile', () => {
 
     it('parent=auto + settings=bypass → child=auto (继承, 不读 settings)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
-      insertSession(testDb, 'parent-3', 'auto');
+      insertSession(sessionStore, 'parent-3', 'auto');
       expect(resolvePermissionProfile(undefined, 'parent-3')).toBe('auto');
     });
 
     it('parent.profile=garbage + settings=bypass → child=auto (parent 非法, 降级到新装默认)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
-      insertSession(testDb, 'parent-4', 'garbage');
+      insertSession(sessionStore, 'parent-4', 'garbage');
       expect(resolvePermissionProfile(undefined, 'parent-4')).toBe('auto');
     });
 
     it('parent.profile="" (空字符串) + settings=bypass → child=auto (空字符串非法, 降级到新装默认)', () => {
       setSetting(testDb, 'permissionMode', 'bypass');
-      // 模拟 DB 端返回空字符串 (与 NULL 在 resolver 中同样被视为非法)
-      testDb.prepare(
-        'INSERT INTO chat_sessions (id, permission_profile, created_at, updated_at) VALUES (?, ?, ?, ?)',
-      ).run('parent-5', '', Date.now(), Date.now());
+      // SessionStore.create stores '' literally (`'' ?? 'default'` is `''`),
+      // mirroring the old raw-SQL behavior where empty string is treated
+      // as invalid by isValidProfile and falls back to DEFAULT_PROFILE.
+      insertSession(sessionStore, 'parent-5', '');
       expect(resolvePermissionProfile(undefined, 'parent-5')).toBe('auto');
     });
   });
 
   describe('派生 session + explicit override', () => {
     it('parent=full_access + explicit=default (untrusted) → child=full_access (忽略 untrusted)', () => {
-      insertSession(testDb, 'parent-6', 'full_access');
+      insertSession(sessionStore, 'parent-6', 'full_access');
       expect(resolvePermissionProfile('default', 'parent-6')).toBe('full_access');
     });
 
     it('parent=default + explicit=full_access (untrusted) → child=default (忽略 untrusted)', () => {
-      insertSession(testDb, 'parent-7', 'default');
+      insertSession(sessionStore, 'parent-7', 'default');
       expect(resolvePermissionProfile('full_access', 'parent-7')).toBe('default');
     });
 
     it('parent=default + explicit=full_access (trusted) → child=full_access (允许 trusted 升权)', () => {
-      insertSession(testDb, 'parent-8', 'default');
+      insertSession(sessionStore, 'parent-8', 'default');
       expect(resolvePermissionProfile('full_access', 'parent-8', { isTrustedOverride: true })).toBe('full_access');
     });
 
     it('parent=full_access + explicit=default (trusted) → child=default (trusted 降权允许)', () => {
-      insertSession(testDb, 'parent-9', 'full_access');
+      insertSession(sessionStore, 'parent-9', 'full_access');
       expect(resolvePermissionProfile('default', 'parent-9', { isTrustedOverride: true })).toBe('default');
     });
 
@@ -188,7 +226,7 @@ describe('resolvePermissionProfile', () => {
     });
 
     it('parent=default + explicit=garbage (trusted) → child=default (illegal explicit 忽略)', () => {
-      insertSession(testDb, 'parent-10', 'default');
+      insertSession(sessionStore, 'parent-10', 'default');
       expect(resolvePermissionProfile('garbage', 'parent-10', { isTrustedOverride: true })).toBe('default');
     });
   });

@@ -7,26 +7,33 @@ import {
   type MessageForHash,
 } from './sourceFingerprint';
 import type { AgentType, ScopeKind } from './schema';
+import type { SessionStore, CoreSession } from '../db/core';
 
 /**
- * Main-DB catalog sync (Plan 301 Phase C).
+ * Main-DB catalog sync (Plan 301 Phase C, updated for Plan 328 Phase 5).
  *
- * One-way read from `chat_sessions` + `messages` in `duya-main.db`,
- * materializing one `rollout_catalog` row per session in
- * `memory-state.db`. Wired into the memory-worker runTick (Plan 305):
- * throttled to `catalogSyncIntervalMs` on regular ticks, always runs
- * on forceSweep.
+ * One-way read from the core database (`duya-core.db` sessions +
+ * message_index tables), materializing one `rollout_catalog` row per
+ * session in `memory-state.db`. Wired into the memory-worker runTick
+ * (Plan 305): throttled to `catalogSyncIntervalMs` on regular ticks,
+ * always runs on forceSweep.
+ *
+ * Plan 328 decision 10: the sessions source changed from the legacy
+ * `chat_sessions` table to `SessionStore.list` (core `sessions` table),
+ * and the fingerprint input changed from `messages` rows to
+ * `message_index` rows (id + seq + created_at). Deleted sessions are
+ * tombstoned, not row-deleted, so memory entries that already cite
+ * them keep their provenance.
  *
  * Sync performs NO eligibility filtering (Plan 302 owns that) and NO
- * agent_type / mode derivation — values are copied verbatim from
- * `chat_sessions`. Deleted sessions are tombstoned, not row-deleted,
- * so memory entries that already cite them keep their provenance.
+ * agent_type / mode derivation — values are copied verbatim from the
+ * core `sessions` table.
  */
 
 export interface SyncResult {
   inserted: number;
   updated: number;
-  tombstoned: number; // sessions deleted in main DB
+  tombstoned: number; // sessions deleted in core DB
   errors: number;
   durationMs: number;
 }
@@ -35,6 +42,11 @@ export interface SyncSessionResult {
   status: 'inserted' | 'updated' | 'tombstoned' | 'unchanged';
 }
 
+/**
+ * Internal row shape used by the sync logic. Mapped from CoreSession
+ * via `coreSessionToChatRow` so the rest of the sync code stays
+ * unchanged from the legacy `chat_sessions` read path.
+ */
 interface ChatSessionRow {
   id: string;
   title: string;
@@ -70,16 +82,38 @@ interface ExistingRolloutRow {
   last_message_at: number | null;
 }
 
-const SESSION_COLUMNS = `
-  id, title, created_at, updated_at, model, system_prompt,
-  working_directory, project_name, status, mode, permission_profile,
-  provider_id, context_summary, context_summary_updated_at, is_deleted,
-  generation, agent_profile_id, parent_id, agent_type, agent_name,
-  conductor_mode_enabled, conductor_canvas_id
-`;
-
-const SELECT_ALL_SESSIONS_SQL = `SELECT ${SESSION_COLUMNS} FROM chat_sessions`;
-const SELECT_ONE_SESSION_SQL = `SELECT ${SESSION_COLUMNS} FROM chat_sessions WHERE id = ?`;
+/**
+ * Map a CoreSession (camelCase, extensions JSON) to the internal
+ * ChatSessionRow (snake_case, flat fields). This keeps the sync logic
+ * unchanged from the legacy read path — only the data source switched.
+ */
+function coreSessionToChatRow(s: CoreSession): ChatSessionRow {
+  const ext = s.extensions ?? {};
+  return {
+    id: s.id,
+    title: s.title,
+    created_at: s.createdAt,
+    updated_at: s.updatedAt,
+    model: s.model,
+    system_prompt: (ext.system_prompt as string) ?? '',
+    working_directory: s.workingDirectory,
+    project_name: s.projectName,
+    status: s.status,
+    mode: s.mode,
+    permission_profile: s.permissionMode,
+    provider_id: s.providerId,
+    context_summary: (ext.context_summary as string) ?? '',
+    context_summary_updated_at: (ext.context_summary_updated_at as number) ?? 0,
+    is_deleted: s.status === 'deleted' ? 1 : 0,
+    generation: 0,
+    agent_profile_id: s.agentProfileId,
+    parent_id: s.parentSessionId,
+    agent_type: s.agentType,
+    agent_name: s.agentName,
+    conductor_mode_enabled: (ext.conductor_mode_enabled as number) ?? 0,
+    conductor_canvas_id: (ext.conductor_canvas_id as string) ?? null,
+  };
+}
 
 const SELECT_EXISTING_ROLLOUT_SQL = `
   SELECT rollout_id, first_seen_at, source_fingerprint, generation,
@@ -138,7 +172,7 @@ const UPSERT_ACTIVE_SQL = `
  * memory entries that cite the deleted session keep their provenance.
  *
  * The INSERT branch (no existing row) carries the verbatim `agent_type`
- * from `chat_sessions` because the catalog CHECK constraint requires it.
+ * from the core session because the catalog CHECK constraint requires it.
  * Provenance fields default to NULL/0 when no prior row exists.
  */
 const UPSERT_TOMBSTONE_SQL = `
@@ -241,12 +275,11 @@ function resolveScope(opts: {
 
 /**
  * Compute message metadata (count, last_message_id, last_message_at)
- * from the projected message list. The caller already has the
- * messages array; we avoid a second DB round-trip.
+ * from the projected message index rows. The caller already has the
+ * rows array; we avoid a second DB round-trip.
  *
- * `readMessagesForFingerprint` returns rows in
- * `ORDER BY created_at ASC, rowid ASC`, so the last element is the
- * latest message.
+ * `readMessagesForFingerprint` returns rows in `ORDER BY seq ASC`, so
+ * the last element is the latest message.
  */
 function computeMessageMetadata(messages: MessageForHash[]): {
   message_count: number;
@@ -265,31 +298,30 @@ function computeMessageMetadata(messages: MessageForHash[]): {
 }
 
 /**
- * Sync a single session from the main DB into the memory DB.
+ * Sync a single session from the core DB into the memory DB.
  *
  * Wrapped in a single transaction so a half-written row never escapes
  * to readers. Returns the status:
  *   - 'inserted'   — new rollout_catalog row
  *   - 'updated'    — fingerprint changed, generation bumped
- *   - 'tombstoned' — session is deleted/archived/purged in main DB
+ *   - 'tombstoned' — session is deleted/archived/purged in core DB
  *   - 'unchanged'  — fingerprint matches; only heartbeat fields touched
  */
 export function syncSessionFromMainDb(opts: {
-  mainDb: Database;
+  coreDb: Database;
+  sessions: SessionStore;
   memoryDb: Database;
   sessionId: string;
   cwd?: string;
   workspaceOverridesPath?: string;
 }): SyncSessionResult {
   const logger = getLogger();
-  const { mainDb, memoryDb, sessionId } = opts;
+  const { coreDb, sessions, memoryDb, sessionId } = opts;
 
-  const session = mainDb.prepare(SELECT_ONE_SESSION_SQL).get(sessionId) as
-    | ChatSessionRow
-    | undefined;
+  const coreSession = sessions.get(sessionId);
 
-  if (!session) {
-    // Session no longer exists in main DB. Tombstone it so the
+  if (!coreSession) {
+    // Session no longer exists in core DB. Tombstone it so the
     // catalog row retains provenance for memory entries that cite it.
     const now = Date.now();
     const txn = memoryDb.transaction(() => {
@@ -299,11 +331,13 @@ export function syncSessionFromMainDb(opts: {
     return { status: 'tombstoned' };
   }
 
+  const session = coreSessionToChatRow(coreSession);
+
   // Per-session transaction. One txn per session (NOT one big txn for
   // all sessions) so the lock is held briefly and a single failure
   // does not roll back the entire sync.
   const txn = memoryDb.transaction(() => {
-    return syncOneSession(mainDb, memoryDb, session, opts);
+    return syncOneSession(coreDb, memoryDb, session, opts);
   });
 
   try {
@@ -320,8 +354,8 @@ export function syncSessionFromMainDb(opts: {
 }
 
 /**
- * Full sync — iterate every chat_sessions row and materialize a
- * rollout_catalog row for each. Called from the memory-worker runTick
+ * Full sync — iterate every session row in the core DB and materialize
+ * a rollout_catalog row for each. Called from the memory-worker runTick
  * (throttled by catalogSyncIntervalMs, always on forceSweep).
  *
  * Each session is synced in its own transaction so a single failure
@@ -329,7 +363,8 @@ export function syncSessionFromMainDb(opts: {
  * many sessions failed; the sync continues on to the next session.
  */
 export function syncAllFromMainDb(opts: {
-  mainDb: Database;
+  coreDb: Database;
+  sessions: SessionStore;
   memoryDb: Database;
   cwd?: string;
   workspaceOverridesPath?: string;
@@ -341,12 +376,16 @@ export function syncAllFromMainDb(opts: {
   let tombstoned = 0;
   let errors = 0;
 
-  const sessions = opts.mainDb.prepare(SELECT_ALL_SESSIONS_SQL).all() as ChatSessionRow[];
+  // includeDeleted=true so deleted sessions are tombstoned rather than
+  // silently dropped. The SessionStore.list filter preserves tombstone
+  // semantics from the legacy `is_deleted` column.
+  const coreSessions = opts.sessions.list({ includeDeleted: true });
+  const sessions = coreSessions.map(coreSessionToChatRow);
 
   for (const session of sessions) {
     try {
       const txn = opts.memoryDb.transaction(() => {
-        return syncOneSession(opts.mainDb, opts.memoryDb, session, opts);
+        return syncOneSession(opts.coreDb, opts.memoryDb, session, opts);
       });
       const result = txn();
       switch (result.status) {
@@ -375,7 +414,7 @@ export function syncAllFromMainDb(opts: {
   }
 
   const durationMs = Date.now() - start;
-  logger.warn(
+  logger.debug(
     'memory-state: catalog sync complete',
     { inserted, updated, tombstoned, errors, durationMs, totalSessions: sessions.length },
     LogComponent.DB
@@ -386,7 +425,7 @@ export function syncAllFromMainDb(opts: {
 
 /**
  * Mark a rollout's source as missing. Called by the reaper (Plan 305)
- * when `last_seen_at` is older than 30 days AND the main DB still has
+ * when `last_seen_at` is older than 30 days AND the core DB still has
  * the session row — i.e. we somehow missed the deletion event.
  *
  * Does NOT delete the row. Only flips `source_status` to 'missing'
@@ -414,11 +453,11 @@ export function markSourceMissing(opts: {
 
 /**
  * Sync one session. Assumes the caller has already opened a transaction
- * on `memoryDb`. Reads `messages` from `mainDb` (read-only) and writes
- * the `rollout_catalog` row to `memoryDb`.
+ * on `memoryDb`. Reads `message_index` rows from `coreDb` (read-only)
+ * and writes the `rollout_catalog` row to `memoryDb`.
  */
 function syncOneSession(
-  mainDb: Database,
+  coreDb: Database,
   memoryDb: Database,
   session: ChatSessionRow,
   opts: { cwd?: string; workspaceOverridesPath?: string }
@@ -433,7 +472,7 @@ function syncOneSession(
   }
 
   // Active session — compute fingerprint and message metadata.
-  const messages = readMessagesForFingerprint(mainDb, session.id);
+  const messages = readMessagesForFingerprint(coreDb, session.id);
   return activeSync(memoryDb, session, messages, opts, now);
 }
 
@@ -511,9 +550,9 @@ function activeSync(
 
 /**
  * Tombstone a rollout for a session that is deleted/archived/purged
- * in the main DB. The session row is still present in `chat_sessions`,
- * so we can read its `agent_type`, `mode`, etc. for the INSERT branch
- * (in case there's no existing rollout row to update).
+ * in the core DB. The session row is still present in the core
+ * `sessions` table, so we can read its `agent_type`, `mode`, etc. for
+ * the INSERT branch (in case there's no existing rollout row to update).
  */
 function tombstoneRollout(
   memoryDb: Database,
@@ -545,8 +584,8 @@ function tombstoneRollout(
 
 /**
  * Mark an existing rollout row as deleted. Used when the session is
- * GONE from `chat_sessions` entirely (not just soft-deleted). The
- * catalog row's prior metadata is preserved; only `source_status`,
+ * GONE from the core `sessions` table entirely (not just soft-deleted).
+ * The catalog row's prior metadata is preserved; only `source_status`,
  * `source_deleted_at`, and `last_seen_at` are touched.
  *
  * If no rollout row exists yet, there is nothing to tombstone — log

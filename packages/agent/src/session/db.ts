@@ -518,82 +518,12 @@ function getDbPath(): string {
  * Initialize database schema, creating tables if they don't exist.
  */
 function initializeSchema(db: BetterSqlite3.Database): void {
+  // Plan 328 decision 9: core session/message tables (chat_sessions, messages,
+  // tasks, session_runtime_locks, agent_mailbox, FTS) moved to duya-core.db +
+  // rollout. CLI standalone mode abandons session persistence, so these tables
+  // are no longer created here. Non-core tables (attachments, model capabilities,
+  // research_*) remain.
   db.exec(`
-    CREATE TABLE IF NOT EXISTS chat_sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL DEFAULT 'New Chat',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      model TEXT NOT NULL DEFAULT '',
-      system_prompt TEXT NOT NULL DEFAULT '',
-      working_directory TEXT NOT NULL DEFAULT '',
-      project_name TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      mode TEXT NOT NULL DEFAULT 'code',
-      permission_profile TEXT NOT NULL DEFAULT 'default',
-      provider_id TEXT NOT NULL DEFAULT 'env',
-      context_summary TEXT NOT NULL DEFAULT '',
-      context_summary_updated_at INTEGER NOT NULL DEFAULT 0,
-      is_deleted INTEGER NOT NULL DEFAULT 0,
-      generation INTEGER NOT NULL DEFAULT 0,
-      agent_profile_id TEXT DEFAULT NULL,
-      parent_id TEXT REFERENCES chat_sessions(id),
-      agent_type TEXT NOT NULL DEFAULT 'main',
-      agent_name TEXT NOT NULL DEFAULT ''
-    );
-
-    CREATE TABLE IF NOT EXISTS messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      display_content TEXT,
-      name TEXT,
-      tool_call_id TEXT,
-      token_usage TEXT,
-      msg_type TEXT NOT NULL DEFAULT 'text',
-      thinking TEXT,
-      tool_name TEXT,
-      tool_input TEXT,
-      parent_tool_call_id TEXT,
-      viz_spec TEXT,
-      status TEXT NOT NULL DEFAULT 'done',
-      seq_index INTEGER,
-      duration_ms INTEGER,
-      sub_agent_id TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS session_runtime_locks (
-      session_id TEXT PRIMARY KEY,
-      lock_id TEXT NOT NULL,
-      owner TEXT NOT NULL,
-      expires_at INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      subject TEXT NOT NULL,
-      description TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'in_progress', 'completed')),
-      active_form TEXT,
-      owner TEXT,
-      blocks TEXT NOT NULL DEFAULT '[]',
-      blocked_by TEXT NOT NULL DEFAULT '[]',
-      metadata TEXT NOT NULL DEFAULT '{}',
-      created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') * 1000 AS INTEGER)),
-      updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s', 'now') * 1000 AS INTEGER)),
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
-    CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
-    CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id);
-    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-    CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
-
     -- Message attachments table for storing base64 image data
     -- Prevents MiniMax CDN URL substitution from affecting agent behavior
     CREATE TABLE IF NOT EXISTS message_attachments (
@@ -604,9 +534,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
       mime_type TEXT NOT NULL,
       data TEXT NOT NULL,
       original_url TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+      created_at INTEGER NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id);
@@ -622,106 +550,6 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     );
   `);
 
-  // Initialize FTS5 for session search
-  initializeFts5(db);
-
-  // Schema migration: Add permission_profile column if it doesn't exist
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('permission_profile')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'default'`);
-      logger.info('Migration: Added permission_profile column to chat_sessions', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: adding permission_profile column', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Add generation column if it doesn't exist
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('generation')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`);
-      logger.info('Migration: Added generation column to chat_sessions', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: adding generation column', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Add parent_session_id column if it doesn't exist
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('parent_session_id')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN parent_session_id TEXT REFERENCES chat_sessions(id)`);
-      logger.info('Migration: Added parent_session_id column to chat_sessions', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: adding parent_session_id column', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Add owner, metadata columns to tasks table
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('owner')) {
-      db.exec(`ALTER TABLE tasks ADD COLUMN owner TEXT`);
-      logger.info('Migration: Added owner column to tasks', undefined, 'DB');
-    }
-    if (!columns.includes('metadata')) {
-      db.exec(`ALTER TABLE tasks ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'`);
-      logger.info('Migration: Added metadata column to tasks', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: adding owner/metadata to tasks', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Add agent_profile_id column if it doesn't exist
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(chat_sessions)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('agent_profile_id')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent_profile_id TEXT DEFAULT NULL`);
-      logger.info('Migration: Added agent_profile_id column to chat_sessions', undefined, 'DB');
-    }
-    if (!columns.includes('parent_id')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN parent_id TEXT REFERENCES chat_sessions(id)`);
-      logger.info('Migration: Added parent_id column to chat_sessions', undefined, 'DB');
-    }
-    if (!columns.includes('agent_type')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent_type TEXT NOT NULL DEFAULT 'main'`);
-      logger.info('Migration: Added agent_type column to chat_sessions', undefined, 'DB');
-    }
-    if (!columns.includes('agent_name')) {
-      db.exec(`ALTER TABLE chat_sessions ADD COLUMN agent_name TEXT NOT NULL DEFAULT ''`);
-      logger.info('Migration: Added agent_name column to chat_sessions', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: adding agent profile columns to chat_sessions', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Add name, tool_call_id, display_content columns to messages table
-  try {
-    const tableInfo = db.prepare('PRAGMA table_info(messages)').all() as Array<{ name: string }>;
-    const columns = tableInfo.map(c => c.name);
-    if (!columns.includes('name')) {
-      db.exec(`ALTER TABLE messages ADD COLUMN name TEXT`);
-      logger.info('Migration: Added name column to messages', undefined, 'DB');
-    }
-    if (!columns.includes('tool_call_id')) {
-      db.exec(`ALTER TABLE messages ADD COLUMN tool_call_id TEXT`);
-      logger.info('Migration: Added tool_call_id column to messages', undefined, 'DB');
-    }
-    if (!columns.includes('display_content')) {
-      db.exec(`ALTER TABLE messages ADD COLUMN display_content TEXT`);
-      logger.info('Migration: Added display_content column to messages', undefined, 'DB');
-    }
-    db.exec(`UPDATE messages SET display_content = NULL WHERE display_content = ''`);
-  } catch (error) {
-    logger.error('Migration failed: adding columns to messages', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
   // Schema migration: Create message_attachments table if not exists (for base64 image storage)
   try {
     const attachmentsTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='message_attachments'").get();
@@ -735,9 +563,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
           mime_type TEXT NOT NULL,
           data TEXT NOT NULL,
           original_url TEXT,
-          created_at INTEGER NOT NULL,
-          FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+          created_at INTEGER NOT NULL
         );
         CREATE INDEX idx_attachments_message_id ON message_attachments(message_id);
         CREATE INDEX idx_attachments_session_id ON message_attachments(session_id);
@@ -782,8 +608,7 @@ function initializeSchema(db: BetterSqlite3.Database): void {
           iterations INTEGER NOT NULL DEFAULT 0,
           coverage REAL NOT NULL DEFAULT 0,
           created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL,
-          FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+          updated_at INTEGER NOT NULL
         )
       `);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_research_sessions_session ON research_sessions(session_id)`);
@@ -877,67 +702,6 @@ function initializeSchema(db: BetterSqlite3.Database): void {
     }
   } catch (error) {
     logger.error('Migration failed: creating research_activities table', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-
-  // Schema migration: Create agent_mailbox table for Codex-like in-run instruction pipeline
-  try {
-    const mailboxTableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_mailbox'").get();
-    if (!mailboxTableInfo) {
-      db.exec(`
-        CREATE TABLE agent_mailbox (
-          id                     TEXT PRIMARY KEY,
-          session_id             TEXT NOT NULL,
-          submitted_during_run_id TEXT NOT NULL,
-          content                TEXT NOT NULL,
-          kind                   TEXT NOT NULL,
-          status                 TEXT NOT NULL,
-          priority               INTEGER NOT NULL DEFAULT 100,
-          constraints_json       TEXT,
-          attachments_json       TEXT,
-          source                 TEXT NOT NULL DEFAULT 'ui',
-          client_msg_id          TEXT,
-          created_at             INTEGER NOT NULL,
-          claim_token            TEXT,
-          claim_expires_at       INTEGER,
-          observed_at            INTEGER,
-          observed_at_checkpoint TEXT,
-          observed_by_run_id     TEXT,
-          claim_attempts         INTEGER NOT NULL DEFAULT 0,
-          last_claim_error       TEXT,
-          edit_locked_at         INTEGER,
-          apply_mode             TEXT,
-          applied_at             INTEGER,
-          applied_at_checkpoint  TEXT,
-          applied_summary        TEXT,
-          resulting_user_msg_id  TEXT,
-          failure_reason         TEXT,
-          edit_history_json      TEXT,
-          cancelled_at           INTEGER,
-          cancelled_by           TEXT,
-          cancel_reason          TEXT,
-          CHECK (kind IN ('queued','followup','background_notification')),
-          CHECK (status IN ('pending','observed','applied','cancelled')),
-          CHECK (apply_mode IS NULL OR apply_mode IN
-            ('promote_to_user_message','runtime_instruction','tool_guard',
-             'permission_context','interrupt_signal','deferred_to_next_turn'))
-        );
-
-        CREATE INDEX idx_mailbox_claim_ready
-          ON agent_mailbox(session_id, status, priority, created_at)
-          WHERE status = 'pending'
-             OR (status = 'observed' AND claim_expires_at IS NOT NULL);
-
-        CREATE INDEX idx_mailbox_session_recent
-          ON agent_mailbox(session_id, created_at DESC);
-
-        CREATE UNIQUE INDEX uq_mailbox_client_msg
-          ON agent_mailbox(session_id, client_msg_id)
-          WHERE client_msg_id IS NOT NULL;
-      `);
-      logger.info('Migration: Created agent_mailbox table', undefined, 'DB');
-    }
-  } catch (error) {
-    logger.error('Migration failed: creating agent_mailbox table', error instanceof Error ? error : undefined, undefined, 'DB');
   }
 
   // Schema migration: Create durable research event/report/source/citation tables (Deep Research P0)
@@ -1058,162 +822,9 @@ export function normalizeForFts(s: string | null | undefined): string {
   return `${split} ${original}`;
 }
 
-/**
- * Register the SQL UDF used by FTS5 triggers to normalize content at insert time.
- * Must be called on the same DB connection that owns the FTS5 virtual tables.
- */
-function registerFtsUdfs(db: BetterSqlite3.Database): void {
-  db.function('fts_normalize', { deterministic: true }, (s: unknown) => {
-    return normalizeForFts(typeof s === 'string' ? s : null);
-  });
-}
-
-/**
- * Initialize FTS5 virtual tables for session search.
- *
- * Schema:
- *   - messages_fts: per-message content, trigram tokenizer, used for body hits.
- *   - sessions_fts: per-session metadata (title / model / project_name / agent_name),
- *                   used for metadata hits (search by conversation title, model, etc.).
- *
- * Migration: existing installs may have messages_fts built with `porter unicode61`,
- * which does not handle CJK or substring matching. We detect the old schema via
- * sqlite_master and drop+rebuild it; the new triggers then repopulate from messages.
- */
-function initializeFts5(db: BetterSqlite3.Database): void {
-  try {
-    // Check if FTS5 is available
-    const fts5Available = db.prepare("SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'").get();
-    if (!fts5Available) {
-      logger.info('FTS5 not available, session search will use LIKE fallback', undefined, 'DB');
-      return;
-    }
-
-    // Register UDFs used by FTS triggers before any trigger that references them.
-    registerFtsUdfs(db);
-
-    // Detect old (porter unicode61) messages_fts and drop it so we can rebuild with trigram.
-    const oldSchema = db
-      .prepare("SELECT sql FROM sqlite_master WHERE name = 'messages_fts'")
-      .get() as { sql: string | null } | undefined;
-    if (oldSchema?.sql && /porter unicode61/i.test(oldSchema.sql)) {
-      logger.warn(
-        'Rebuilding messages_fts: porter unicode61 -> trigram (one-time migration)',
-        undefined,
-        'DB',
-      );
-      db.exec(`
-        DROP TRIGGER IF EXISTS messages_ai;
-        DROP TRIGGER IF EXISTS messages_ad;
-        DROP TRIGGER IF EXISTS messages_au;
-        DROP TABLE IF EXISTS messages_fts;
-      `);
-    }
-
-    // Per-message content index. trigram tokenizer handles CJK + substring + case via fts_normalize().
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-        session_id UNINDEXED,
-        content,
-        tokenize='trigram'
-      );
-    `);
-
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages WHEN new.msg_type IN ('text', 'tool_result') BEGIN
-        INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages WHEN old.msg_type IN ('text', 'tool_result') BEGIN
-        DELETE FROM messages_fts WHERE rowid = old.rowid;
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages WHEN old.msg_type IN ('text', 'tool_result') OR new.msg_type IN ('text', 'tool_result') BEGIN
-        DELETE FROM messages_fts WHERE rowid = old.rowid;
-        INSERT INTO messages_fts(rowid, session_id, content)
-        VALUES (new.rowid, new.session_id, fts_normalize(new.content));
-      END;
-    `);
-
-    // Build the index if empty (covers fresh installs and post-migration rebuild).
-    const ftsCount = db.prepare('SELECT COUNT(*) as cnt FROM messages_fts').get() as { cnt: number };
-    if (ftsCount.cnt === 0) {
-      db.exec(`
-        INSERT INTO messages_fts(rowid, session_id, content)
-        SELECT rowid, session_id, fts_normalize(content)
-        FROM messages WHERE msg_type IN ('text', 'tool_result');
-      `);
-      logger.info('FTS5 messages_fts populated (trigram)', undefined, 'DB');
-    }
-
-    // Per-session metadata index. title heavily weighted in the search query.
-    db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-        session_id UNINDEXED,
-        title,
-        model,
-        project_name,
-        agent_name,
-        tokenize='trigram'
-      );
-    `);
-
-    // Keep sessions_fts in sync with chat_sessions. Soft delete is handled at query
-    // time (s.is_deleted = 0) so the same trigger covers all update paths.
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS chat_sessions_ai_fts AFTER INSERT ON chat_sessions BEGIN
-        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
-        VALUES (
-          new.rowid,
-          new.id,
-          fts_normalize(coalesce(new.title, '')),
-          fts_normalize(coalesce(new.model, '')),
-          fts_normalize(coalesce(new.project_name, '')),
-          fts_normalize(coalesce(new.agent_name, ''))
-        );
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS chat_sessions_ad_fts AFTER DELETE ON chat_sessions BEGIN
-        DELETE FROM sessions_fts WHERE session_id = old.id;
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS chat_sessions_au_fts AFTER UPDATE ON chat_sessions BEGIN
-        DELETE FROM sessions_fts WHERE session_id = old.id;
-        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
-        VALUES (
-          new.rowid,
-          new.id,
-          fts_normalize(coalesce(new.title, '')),
-          fts_normalize(coalesce(new.model, '')),
-          fts_normalize(coalesce(new.project_name, '')),
-          fts_normalize(coalesce(new.agent_name, ''))
-        );
-      END;
-    `);
-
-    const sessionsFtsCount = db
-      .prepare('SELECT COUNT(*) as cnt FROM sessions_fts')
-      .get() as { cnt: number };
-    if (sessionsFtsCount.cnt === 0) {
-      db.exec(`
-        INSERT INTO sessions_fts(rowid, session_id, title, model, project_name, agent_name)
-        SELECT rowid,
-               id,
-               fts_normalize(coalesce(title, '')),
-               fts_normalize(coalesce(model, '')),
-               fts_normalize(coalesce(project_name, '')),
-               fts_normalize(coalesce(agent_name, ''))
-        FROM chat_sessions;
-      `);
-      logger.info('FTS5 sessions_fts populated (trigram)', undefined, 'DB');
-    }
-
-    logger.info('FTS5 initialized successfully (trigram + sessions_fts)', undefined, 'DB');
-  } catch (error) {
-    logger.error('Failed to initialize FTS5', error instanceof Error ? error : undefined, undefined, 'DB');
-  }
-}
+// Plan 328 decision 7: FTS5 virtual tables (messages_fts / sessions_fts) and
+// their sync triggers were removed. Session search now runs on the core DB via
+// SessionStore.search + MessageLog.searchText.
 
 // ============================================================
 // Session CRUD Operations
@@ -1224,69 +835,25 @@ function initializeFts5(db: BetterSqlite3.Database): void {
  * @param data - Session creation data
  * @returns The created session
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function createSession(data: CreateSessionData): ChatSession {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.sessionDb.create(data) as unknown as ChatSession;
   }
 
-  const db = getDb();
   const now = Date.now();
-  // 派生关系字段统一: DB 列是 parent_id, 同时接受 parent_session_id.
-  const parentSessionId = data.parent_session_id ?? data.parent_id ?? null;
-  // 在 INSERT 前一次性解析 permission_profile. agent 端无 settings 表, 普通 new 落 default.
-  const permissionProfile = resolveAgentPermissionProfile(
-    data.permission_profile,
-    parentSessionId,
-    { isTrustedOverride: data.is_trusted_permission_override === true },
-  );
-
-  const stmt = db.prepare(`
-    INSERT INTO chat_sessions (
-      id, title, model, system_prompt, working_directory,
-      project_name, status, mode, permission_profile, provider_id, generation,
-      agent_profile_id, parent_id, parent_session_id, agent_type, agent_name,
-      created_at, updated_at, is_deleted
-    ) VALUES (
-      @id, @title, @model, @system_prompt, @working_directory,
-      @project_name, @status, @mode, @permission_profile, @provider_id, @generation,
-      @agent_profile_id, @parent_id, @parent_session_id, @agent_type, @agent_name,
-      @created_at, @updated_at, 0
-    )
-  `);
-
-  stmt.run({
-    id: data.id,
-    title: data.title ?? 'New Chat',
-    model: data.model ?? '',
-    system_prompt: data.system_prompt ?? '',
-    working_directory: data.working_directory ?? '',
-    project_name: data.project_name ?? '',
-    status: data.status ?? 'active',
-    mode: data.mode ?? 'code',
-    permission_profile: permissionProfile,
-    provider_id: data.provider_id ?? 'env',
-    generation: data.generation ?? 0,
-    agent_profile_id: data.agent_profile_id ?? null,
-    parent_id: data.parent_id ?? null,
-    parent_session_id: data.parent_session_id ?? null,
-    agent_type: data.agent_type ?? 'main',
-    agent_name: data.agent_name ?? '',
-    created_at: now,
-    updated_at: now,
-  });
-
-  // Return constructed session directly instead of re-querying
   return {
     id: data.id,
-    title: data.title ?? 'New Chat',
-    model: data.model ?? '',
-    system_prompt: data.system_prompt ?? '',
-    working_directory: data.working_directory ?? '',
-    project_name: data.project_name ?? '',
-    status: data.status ?? 'active',
-    mode: data.mode ?? 'code',
+    title: data.title ?? null,
+    model: data.model ?? null,
+    system_prompt: data.system_prompt ?? null,
+    working_directory: data.working_directory ?? null,
+    project_name: data.project_name ?? null,
+    status: data.status ?? null,
+    mode: data.mode ?? null,
     permission_profile: null,
-    provider_id: data.provider_id ?? 'env',
+    provider_id: data.provider_id ?? null,
     context_summary: null,
     context_summary_updated_at: null,
     is_deleted: 0,
@@ -1294,8 +861,8 @@ export function createSession(data: CreateSessionData): ChatSession {
     agent_profile_id: data.agent_profile_id ?? null,
     parent_id: data.parent_id ?? null,
     parent_session_id: data.parent_session_id ?? null,
-    agent_type: data.agent_type ?? 'main',
-    agent_name: data.agent_name ?? '',
+    agent_type: data.agent_type ?? null,
+    agent_name: data.agent_name ?? null,
     created_at: now,
     updated_at: now,
   };
@@ -1306,14 +873,14 @@ export function createSession(data: CreateSessionData): ChatSession {
  * @param sessionId - The session ID
  * @returns The session or null if not found
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function getSession(sessionId: string): ChatSession | null {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.sessionDb.get(sessionId) as unknown as ChatSession | null;
   }
 
-  const db = getDb();
-  const stmt = db.prepare('SELECT * FROM chat_sessions WHERE id = ?');
-  return stmt.get(sessionId) as ChatSession | null;
+  return null;
 }
 
 /**
@@ -1322,88 +889,14 @@ export function getSession(sessionId: string): ChatSession | null {
  * @param data - The update data
  * @returns The updated session or null if not found
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function updateSession(sessionId: string, data: UpdateSessionData): ChatSession | null {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.sessionDb.update(sessionId, data as unknown as Record<string, unknown>) as unknown as ChatSession | null;
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  // Build dynamic update query
-  const fields: string[] = ['updated_at = @updated_at'];
-  const params: Record<string, unknown> = { sessionId, updated_at: now };
-
-  if (data.title !== undefined) {
-    fields.push('title = @title');
-    params.title = data.title;
-  }
-  if (data.model !== undefined) {
-    fields.push('model = @model');
-    params.model = data.model;
-  }
-  if (data.system_prompt !== undefined) {
-    fields.push('system_prompt = @system_prompt');
-    params.system_prompt = data.system_prompt;
-  }
-  if (data.working_directory !== undefined) {
-    fields.push('working_directory = @working_directory');
-    params.working_directory = data.working_directory;
-  }
-  if (data.project_name !== undefined) {
-    fields.push('project_name = @project_name');
-    params.project_name = data.project_name;
-  }
-  if (data.status !== undefined) {
-    fields.push('status = @status');
-    params.status = data.status;
-  }
-  if (data.mode !== undefined) {
-    fields.push('mode = @mode');
-    params.mode = data.mode;
-  }
-  if (data.permission_profile !== undefined) {
-    fields.push('permission_profile = @permission_profile');
-    params.permission_profile = data.permission_profile;
-  }
-  if (data.provider_id !== undefined) {
-    fields.push('provider_id = @provider_id');
-    params.provider_id = data.provider_id;
-  }
-  if (data.context_summary !== undefined) {
-    fields.push('context_summary = @context_summary');
-    params.context_summary = data.context_summary;
-  }
-  if (data.parent_session_id !== undefined) {
-    fields.push('parent_session_id = @parent_session_id');
-    params.parent_session_id = data.parent_session_id;
-  }
-  if (data.parent_id !== undefined) {
-    fields.push('parent_id = @parent_id');
-    params.parent_id = data.parent_id;
-  }
-  if (data.agent_profile_id !== undefined) {
-    fields.push('agent_profile_id = @agent_profile_id');
-    params.agent_profile_id = data.agent_profile_id;
-  }
-  if (data.agent_type !== undefined) {
-    fields.push('agent_type = @agent_type');
-    params.agent_type = data.agent_type;
-  }
-  if (data.agent_name !== undefined) {
-    fields.push('agent_name = @agent_name');
-    params.agent_name = data.agent_name;
-  }
-
-  const stmt = db.prepare(`
-    UPDATE chat_sessions
-    SET ${fields.join(', ')}
-    WHERE id = @sessionId
-  `);
-
-  stmt.run(params);
-
-  return getSession(sessionId);
+  return null;
 }
 
 /**
@@ -1411,42 +904,36 @@ export function updateSession(sessionId: string, data: UpdateSessionData): ChatS
  * @param sessionId - The session ID
  * @returns True if deleted, false if not found
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function deleteSession(sessionId: string): boolean {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.sessionDb.delete(sessionId) as unknown as boolean;
   }
 
-  const db = getDb();
-
-  const txn = db.transaction(() => {
-    // Delete messages first (foreign key constraint)
-    db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-    // Delete session
-    const result = db.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
-    return result.changes > 0;
-  });
-
-  return txn();
+  return false;
 }
 
 /**
  * List all chat sessions, ordered by updated_at descending.
  * @returns Array of sessions
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function listSessions(): ChatSession[] {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.sessionDb.list() as unknown as ChatSession[];
   }
 
-  const db = getDb();
-  const stmt = db.prepare('SELECT * FROM chat_sessions ORDER BY updated_at DESC');
-  return stmt.all() as ChatSession[];
+  return [];
 }
 
 /**
  * Async session listing for code that must work in both the Electron agent
  * subprocess (IPC) and standalone/local database modes.
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export async function listSessionsAsync(): Promise<ChatSession[]> {
   if (USE_IPC_MODE && getIpcClient()) {
     return await getIpcClient()!.sessionDb.list() as ChatSession[];
@@ -1464,62 +951,22 @@ export async function listSessionsAsync(): Promise<ChatSession[]> {
  * @param data - Message creation data
  * @returns The created message
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function addMessage(data: CreateMessageData): MessageRow {
   const ipc = getIpcClient();
   if (USE_IPC_MODE && ipc) {
     return ipc.messageDb.add(data as unknown as Parameters<typeof ipc.messageDb.add>[0]) as unknown as MessageRow;
   }
 
-  const db = getDb();
   const now = Date.now();
   const content = serializeMessageContent(data.content, data.role);
   const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
-  const seqIndex = data.seq_index ?? (db.prepare(
-    'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
-  ).get(data.session_id) as { next_seq_index: number }).next_seq_index;
   const msgType = data.role === 'tool' ? 'tool_result' : (data.msg_type ?? 'text');
   const parentToolCallId = data.role === 'tool'
     ? (data.tool_call_id ?? null)
     : (data.parent_tool_call_id ?? null);
 
-  const stmt = db.prepare(`
-    INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-    VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
-  `);
-
-  const row = {
-    id: data.id,
-    session_id: data.session_id,
-    role: data.role,
-    content,
-    display_content: displayContent,
-    name: data.name ?? null,
-    tool_call_id: data.tool_call_id ?? null,
-    token_usage: data.token_usage ?? null,
-    msg_type: msgType,
-    thinking: data.thinking ?? null,
-    tool_name: data.tool_name ?? null,
-    tool_input: data.tool_input ?? null,
-    parent_tool_call_id: parentToolCallId,
-    viz_spec: data.viz_spec ?? null,
-    status: data.status ?? 'done',
-    seq_index: seqIndex,
-    duration_ms: data.duration_ms ?? null,
-    sub_agent_id: data.sub_agent_id ?? null,
-    attachments: data.attachments
-      ? (typeof data.attachments === 'string' ? data.attachments : JSON.stringify(data.attachments))
-      : null,
-    created_at: now,
-  };
-
-  // Wrap INSERT + UPDATE in a single transaction to share one WAL flush
-  // instead of two implicit commits (halves fsync cost on each message).
-  db.transaction(() => {
-    stmt.run(row);
-    db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
-  })();
-
-  // Return constructed MessageRow directly instead of re-querying
   return {
     id: data.id,
     session_id: data.session_id,
@@ -1536,7 +983,7 @@ export function addMessage(data: CreateMessageData): MessageRow {
     parent_tool_call_id: parentToolCallId,
     viz_spec: data.viz_spec ?? null,
     status: data.status ?? 'done',
-    seq_index: seqIndex,
+    seq_index: data.seq_index ?? null,
     duration_ms: data.duration_ms ?? null,
     sub_agent_id: data.sub_agent_id ?? null,
     attachments: data.attachments
@@ -1551,14 +998,14 @@ export function addMessage(data: CreateMessageData): MessageRow {
  * @param sessionId - The session ID
  * @returns Array of messages
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function getMessages(sessionId: string): MessageRow[] {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.messageDb.getBySession(sessionId) as unknown as MessageRow[];
   }
 
-  const db = getDb();
-  const stmt = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC');
-  return stmt.all(sessionId) as MessageRow[];
+  return [];
 }
 
 /**
@@ -1566,18 +1013,15 @@ export function getMessages(sessionId: string): MessageRow[] {
  * This is the preferred method for loading session messages that may contain
  * image blocks with CDN URLs. It replaces CDN URLs with locally stored base64 data.
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function getMessagesWithAttachments(sessionId: string): Message[] {
   if (USE_IPC_MODE && getIpcClient()) {
     const rows = getIpcClient()!.messageDb.getBySession(sessionId) as unknown as MessageRow[];
     return rows.map(row => messageRowToMessage(row));
   }
 
-  const db = getDb();
-  const rows = db.prepare('SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC').all(sessionId) as MessageRow[];
-
-  // Bulk-load all attachments for the session for efficient rehydration
-  const attachmentMap = getAttachmentsForSession(sessionId);
-  return rows.map(row => messageRowToMessage(row, attachmentMap));
+  return [];
 }
 
 /**
@@ -1585,15 +1029,14 @@ export function getMessagesWithAttachments(sessionId: string): Message[] {
  * @param sessionId - The session ID
  * @returns Message count
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function getMessageCount(sessionId: string): number {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.messageDb.getCount(sessionId) as unknown as number;
   }
 
-  const db = getDb();
-  const stmt = db.prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ?');
-  const result = stmt.get(sessionId) as { count: number };
-  return result.count;
+  return 0;
 }
 
 /**
@@ -1601,22 +1044,14 @@ export function getMessageCount(sessionId: string): number {
  * @param sessionId - The session ID
  * @returns Number of deleted messages
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function clearMessages(sessionId: string): number {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.messageDb.deleteBySession(sessionId) as unknown as number;
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  const txn = db.transaction(() => {
-    const result = db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-    // Update session's updated_at
-    db.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
-    return result.changes;
-  });
-
-  return txn();
+  return 0;
 }
 
 // ============================================================
@@ -1978,6 +1413,8 @@ export function rehydrateContentWithAttachments(
  * @param ttlSec - Time-to-live in seconds (default: 300)
  * @returns True if lock acquired, false if session is already locked
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function acquireSessionLock(
   sessionId: string,
   lockId: string,
@@ -1988,27 +1425,7 @@ export function acquireSessionLock(
     return getIpcClient()!.lockDb.acquire(sessionId, lockId, owner, ttlSec) as unknown as boolean;
   }
 
-  const db = getDb();
-  const now = Date.now();
-  const expiresAt = now + ttlSec * 1000;
-
-  const txn = db.transaction(() => {
-    // Delete expired locks first
-    db.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-
-    // Try to insert — PK conflict means session is already locked
-    try {
-      db.prepare(
-        'INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at) VALUES (?, ?, ?, ?)'
-      ).run(sessionId, lockId, owner, expiresAt);
-      return true;
-    } catch {
-      // Lock already exists for this session
-      return false;
-    }
-  });
-
-  return txn();
+  return false;
 }
 
 /**
@@ -2018,6 +1435,8 @@ export function acquireSessionLock(
  * @param ttlSec - New time-to-live in seconds (default: 300)
  * @returns True if lock was renewed, false if lock not found or not owned
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function renewSessionLock(
   sessionId: string,
   lockId: string,
@@ -2027,15 +1446,7 @@ export function renewSessionLock(
     return getIpcClient()!.lockDb.renew(sessionId, lockId, ttlSec) as unknown as boolean;
   }
 
-  const db = getDb();
-  const now = Date.now();
-  const expiresAt = now + ttlSec * 1000;
-
-  const result = db.prepare(
-    'UPDATE session_runtime_locks SET expires_at = ? WHERE session_id = ? AND lock_id = ?'
-  ).run(expiresAt, sessionId, lockId);
-
-  return result.changes > 0;
+  return false;
 }
 
 /**
@@ -2044,16 +1455,14 @@ export function renewSessionLock(
  * @param lockId - Lock identifier
  * @returns True if lock was released, false if lock not found
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function releaseSessionLock(sessionId: string, lockId: string): boolean {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.lockDb.release(sessionId, lockId) as unknown as boolean;
   }
 
-  const db = getDb();
-  const result = db.prepare(
-    'DELETE FROM session_runtime_locks WHERE session_id = ? AND lock_id = ?'
-  ).run(sessionId, lockId);
-  return result.changes > 0;
+  return false;
 }
 
 /**
@@ -2061,19 +1470,14 @@ export function releaseSessionLock(sessionId: string, lockId: string): boolean {
  * @param sessionId - The session ID
  * @returns True if locked, false otherwise
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function isSessionLocked(sessionId: string): boolean {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.lockDb.isLocked(sessionId) as unknown as boolean;
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  // Clean up expired locks first
-  db.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-
-  const stmt = db.prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?');
-  return stmt.get(sessionId) !== undefined;
+  return false;
 }
 
 // ============================================================
@@ -2231,33 +1635,15 @@ export function sessionToSessionInfo(session: ChatSession): SessionInfo {
  * Avoids N+1 queries when displaying session list with message counts.
  * @returns Array of SessionInfo with messageCount populated
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function listSessionsWithMessageCount(): SessionInfo[] {
   if (USE_IPC_MODE && getIpcClient()) {
     const sessions = getIpcClient()!.sessionDb.list() as unknown as ChatSession[];
     return sessions.map(sessionToSessionInfo);
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  const rows = db.prepare(`
-    SELECT
-      s.id,
-      s.created_at,
-      s.updated_at,
-      (SELECT COUNT(*) FROM messages WHERE session_id = s.id) as message_count
-    FROM chat_sessions s
-    ORDER BY s.updated_at DESC
-  `).all() as Array<{ id: string; created_at: number; updated_at: number; message_count: number }>;
-
-  void now; // Suppress unused warning
-
-  return rows.map(row => ({
-    id: row.id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    messageCount: row.message_count,
-  }));
+  return [];
 }
 
 /**
@@ -2270,6 +1656,8 @@ export function listSessionsWithMessageCount(): SessionInfo[] {
  * @param generation - The generation number for this write attempt
  * @returns ReplaceMessagesResult indicating success or failure reason
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export async function replaceMessages(
   sessionId: string,
   messages: readonly Message[],
@@ -2285,177 +1673,7 @@ export async function replaceMessages(
     }
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  try {
-    // Optimistic pre-check: skip the transaction entirely if the session is
-    // already gone. The authoritative generation check is the conditional
-    // UPDATE inside the transaction below.
-    const session = db.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
-    if (!session) {
-      return { success: false, reason: 'session_not_found' };
-    }
-
-    // Skip if generation doesn't match (stale write from old request)
-    if (generation < session.generation) {
-      logger.info('Skipping stale replaceMessages', { gen: generation, current: session.generation, sessionId }, 'DB');
-      return { success: false, reason: 'stale_generation' };
-    }
-
-    let committed = false;
-    const txn = db.transaction(() => {
-      // Authoritative generation check inside the transaction: only proceed
-      // if the row still has the generation we expect. If another writer
-      // bumped it in between, affected rows === 0 and we abort.
-      const newGeneration = Math.max(generation, session.generation + 1);
-      const claim = db.prepare(
-        'UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ? AND generation = ?'
-      ).run(newGeneration, now, sessionId, session.generation);
-      if (claim.changes === 0) {
-        return;
-      }
-
-      db.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-
-      const stmt = db.prepare(`
-        INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at, provider_state, thinking_signature, tool_signature, text_signature)
-        VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at, @provider_state, @thinking_signature, @tool_signature, @text_signature)
-      `);
-
-      for (const [index, msg] of messages.entries()) {
-        let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || 'text');
-        let thinking: string | null = msg.thinking || null;
-        let toolName: string | null = msg.tool_name || null;
-        let toolInput: string | null = msg.tool_input || null;
-        let parentToolCallId: string | null = msg.role === 'tool'
-          ? (msg.tool_call_id || null)
-          : (msg.parent_tool_call_id || null);
-        let vizSpec: string | null = msg.viz_spec || null;
-        const effectiveContent = msg.content;
-        let contentStr = serializeMessageContent(effectiveContent, msg.role);
-        const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
-
-        // For user messages with image content blocks,
-        // extract only the text blocks for DB storage. Image data lives in
-        // message_attachments table and should not be stored in content.
-        // Assistant messages (thinking, tool_use) keep their full structure.
-        if (msg.role === 'user' && Array.isArray(effectiveContent)) {
-          const textBlocks = effectiveContent.filter(
-            (b: unknown) => (b as Record<string, unknown>).type === 'text'
-          );
-          if (textBlocks.length > 0) {
-            contentStr = textBlocks
-              .map((b: unknown) => (b as Record<string, string>).text || '')
-              .join('\n');
-          }
-        }
-
-        if (!msg.msg_type && Array.isArray(msg.content)) {
-          const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
-          const types = blocks.map(b => b.type);
-          const toolUseBlock = blocks.find(b => b.type === 'tool_use' && b.name === 'show_widget');
-          if (toolUseBlock) {
-            const widgetCode = (toolUseBlock.input as Record<string, unknown>)?.widget_code;
-            if (typeof widgetCode === 'string' && widgetCode.trim()) {
-              msgType = 'viz';
-              vizSpec = widgetCode;
-              contentStr = widgetCode;
-            }
-          } else if (types.includes('thinking') && types.length === 1) {
-            msgType = 'thinking';
-            thinking = blocks[0].thinking || null;
-            contentStr = thinking || '';
-          } else if (types.includes('tool_use') && types.length === 1) {
-            msgType = 'tool_use';
-            toolName = blocks[0].name || null;
-            toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
-          } else if (msg.role === 'tool') {
-            msgType = 'tool_result';
-            parentToolCallId = msg.tool_call_id || null;
-          } else {
-            const thinkingBlock = blocks.find(b => b.type === 'thinking');
-            if (thinkingBlock) thinking = thinkingBlock.thinking || null;
-          }
-        } else if (!msg.msg_type && typeof msg.content === 'string') {
-          if (msg.role === 'tool') {
-            msgType = 'tool_result';
-            parentToolCallId = msg.tool_call_id || null;
-          }
-        }
-
-        // Infer status for tool messages if not explicitly set
-        let messageStatus = msg.status;
-        if (!messageStatus && msg.role === 'tool' && typeof contentStr === 'string' && contentStr.includes('<tool_error>')) {
-          messageStatus = 'error';
-        }
-
-        // Extract signatures from content blocks for dedicated-column persistence.
-        // This preserves opaque provider state (Anthropic signatures, OpenAI reasoning
-        // items) across context compression and session reload.
-        const { thinkingSignature, toolSignature, textSignature } = extractSignatures(msg.content);
-        const providerState = msg.providerId || msg.model || msg.api
-          ? JSON.stringify({ api: msg.api, providerId: msg.providerId, model: msg.model })
-          : null;
-
-        stmt.run({
-          id: msg.id || crypto.randomUUID(),
-          session_id: sessionId,
-          role: msg.role,
-          content: contentStr,
-          display_content: displayContent,
-          name: msg.name || null,
-          tool_call_id: msg.tool_call_id || null,
-          token_usage: (msg as unknown as Record<string, unknown>).token_usage as string || null,
-          msg_type: msgType,
-          thinking,
-          tool_name: toolName,
-          tool_input: toolInput,
-          parent_tool_call_id: parentToolCallId,
-          viz_spec: vizSpec,
-          status: messageStatus || 'done',
-          seq_index: msg.seq_index ?? index,
-          duration_ms: msg.duration_ms ?? null,
-          sub_agent_id: msg.sub_agent_id || null,
-          attachments: msg.attachments
-            ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
-            : null,
-          created_at: msg.timestamp || now,
-          provider_state: providerState,
-          thinking_signature: thinkingSignature ?? null,
-          tool_signature: toolSignature ?? null,
-          text_signature: textSignature ?? null,
-        });
-      }
-
-      // Extract and store image attachments inside the transaction so a
-      // failure rolls back the message writes too. Attachments are a
-      // side effect of the same logical operation; keeping them atomic
-      // prevents half-written state where messages exist without their
-      // image data.
-      try {
-        extractAndStoreAttachments(sessionId, messages);
-      } catch (err) {
-        logger.error('Failed to store attachments in transaction', err instanceof Error ? err : new Error(String(err)), { sessionId }, 'DB');
-        throw err;
-      }
-
-      committed = true;
-    });
-
-    txn();
-
-    if (!committed) {
-      // Another writer bumped generation between our pre-check and the
-      // transactional claim. Treat as a stale write.
-      return { success: false, reason: 'stale_generation' };
-    }
-
-    return { success: true, messageCount: messages.length };
-  } catch (error) {
-    logger.error('replaceMessages failed', error instanceof Error ? error : new Error(String(error)), { sessionId }, 'DB');
-    return { success: false, reason: 'error' };
-  }
+  return { success: false, reason: 'error' };
 }
 
 /**
@@ -2463,6 +1681,8 @@ export async function replaceMessages(
  * No DELETE, no generation check. Only inserts messages that don't exist yet.
  * Used for incremental persistence: each message is written once and never replaced.
  */
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export async function appendMessages(
   sessionId: string,
   messages: readonly Message[],
@@ -2482,171 +1702,7 @@ export async function appendMessages(
     }
   }
 
-  try {
-    const now = Date.now();
-    const db = getDb();
-
-    const insertStmt = db.prepare(`
-      INSERT OR IGNORE INTO messages (
-        id, session_id, role, content, name, tool_call_id,
-        display_content,
-        token_usage, msg_type, thinking, tool_name, tool_input,
-        parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id,
-        attachments, created_at,
-        provider_state, thinking_signature, tool_signature, text_signature
-      ) VALUES (
-        @id, @session_id, @role, @content, @name, @tool_call_id,
-        @display_content,
-        @token_usage, @msg_type, @thinking, @tool_name, @tool_input,
-        @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id,
-        @attachments, @created_at,
-        @provider_state, @thinking_signature, @tool_signature, @text_signature
-      )
-    `);
-
-    let count = 0;
-    const txn = db.transaction(() => {
-      for (const msg of messages) {
-        if (!msg.role) {
-          continue;
-        }
-
-        const effectiveContent = msg.content;
-        let contentStr = serializeMessageContent(effectiveContent, msg.role);
-        const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
-
-        // For user messages with image content blocks, extract only text.
-        if (msg.role === 'user' && Array.isArray(effectiveContent)) {
-          const textBlocks = effectiveContent.filter(
-            (b: unknown) => (b as Record<string, unknown>).type === 'text'
-          );
-          if (textBlocks.length > 0) {
-            contentStr = textBlocks
-              .map((b: unknown) => (b as Record<string, string>).text || '')
-              .join('\n');
-          }
-        }
-
-        let msgType = msg.role === 'tool' ? 'tool_result' : (msg.msg_type || null);
-        const parentToolCallId = msg.role === 'tool'
-          ? (msg.tool_call_id || null)
-          : ((msg as unknown as Record<string, unknown>).parent_tool_call_id as string || null);
-        let thinking: string | null = null;
-        let toolName: string | null = null;
-        let toolInput: string | null = null;
-
-        // Auto-detect msg_type for tool messages
-        if (!msgType && msg.role === 'tool') {
-          msgType = 'tool_result';
-          // For tool results, tool_call_id is the parent tool_use id
-          // Copy it to parent_tool_call_id for frontend association
-          if (msg.tool_call_id && !((msg as unknown) as Record<string, unknown>).parent_tool_call_id) {
-            ((msg as unknown) as Record<string, unknown>).parent_tool_call_id = msg.tool_call_id;
-          }
-        }
-
-        if (!msg.msg_type && Array.isArray(msg.content)) {
-          const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
-          const types = blocks.map(b => b.type);
-
-          const toolUseBlock = blocks.find(b => b.type === 'tool_use' && b.name === 'show_widget');
-          if (toolUseBlock) {
-            const widgetCode = (toolUseBlock.input as Record<string, unknown>)?.widget_code;
-            if (typeof widgetCode === 'string' && widgetCode.trim()) {
-              msgType = 'viz';
-              contentStr = widgetCode;
-            }
-          } else if (types.includes('thinking') && types.length === 1) {
-            msgType = 'thinking';
-            thinking = blocks[0].thinking || null;
-            contentStr = thinking || '';
-          } else if (types.includes('tool_use') && types.length === 1) {
-            msgType = 'tool_use';
-            toolName = (blocks[0].name as string) || null;
-            toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
-          } else {
-            msgType = 'text';
-            // For mixed messages (e.g., thinking + text + tool_use), extract thinking if present
-            const thinkingBlock = blocks.find(b => b.type === 'thinking');
-            if (thinkingBlock) {
-              thinking = thinkingBlock.thinking || null;
-            }
-          }
-        }
-
-        try {
-          // Extract signatures from content blocks for dedicated-column persistence.
-          // This preserves opaque provider state (Anthropic signatures, OpenAI reasoning
-          // items) across context compression and session reload.
-          const { thinkingSignature, toolSignature, textSignature } = extractSignatures(msg.content);
-          const providerState = msg.providerId || msg.model || msg.api
-            ? JSON.stringify({
-                api: msg.api,
-                providerId: msg.providerId,
-                model: msg.model,
-              })
-            : null;
-
-          const insertResult = insertStmt.run({
-            id: msg.id,
-            session_id: sessionId,
-            role: msg.role,
-            content: contentStr,
-            display_content: displayContent,
-            name: msg.name || null,
-            tool_call_id: msg.tool_call_id || null,
-            token_usage: (msg as unknown as Record<string, unknown>).token_usage
-              ? JSON.stringify((msg as unknown as Record<string, unknown>).token_usage)
-              : null,
-            msg_type: msgType,
-            thinking,
-            tool_name: toolName,
-            tool_input: toolInput,
-            parent_tool_call_id: parentToolCallId,
-            viz_spec: (msg as unknown as Record<string, unknown>).viz_spec as string || null,
-            status: (msg as unknown as Record<string, unknown>).status as string || 'done',
-            seq_index: (msg as unknown as Record<string, unknown>).seq_index as number || null,
-            duration_ms: (msg as unknown as Record<string, unknown>).duration_ms as number || null,
-            sub_agent_id: (msg as unknown as Record<string, unknown>).sub_agent_id as string || null,
-            attachments: msg.attachments && msg.attachments.length > 0
-              ? JSON.stringify(msg.attachments)
-              : null,
-            created_at: msg.timestamp || now,
-            provider_state: providerState,
-            thinking_signature: thinkingSignature ?? null,
-            tool_signature: toolSignature ?? null,
-            text_signature: textSignature ?? null,
-          });
-          // Append-only: never UPDATE an existing message. Duplicate-id
-          // inserts (INSERT OR IGNORE no-op) are silently skipped.
-          if (insertResult.changes > 0) {
-            count++;
-          }
-        } catch (insertErr) {
-          logger.error('Insert message failed in appendMessages', insertErr instanceof Error ? insertErr : new Error(String(insertErr)), { msgId: msg.id, role: msg.role, sessionId }, 'DB');
-        }
-      }
-    });
-
-    txn();
-
-    // Extract and store image attachments
-    try {
-      extractAndStoreAttachments(sessionId, messages);
-    } catch (err) {
-      logger.error('Failed to extract attachments in appendMessages', undefined, { sessionId }, 'DB');
-    }
-
-    return { success: true, count };
-  } catch (error) {
-    logger.error(
-      'appendMessages failed',
-      error instanceof Error ? error : new Error(String(error)),
-      { sessionId },
-      'DB',
-    );
-    return { success: false, count: 0 };
-  }
+  return { success: false, count: 0 };
 }
 
 /**
@@ -3474,145 +2530,83 @@ const KIND_PRIORITY: Record<MailboxKind, number> = {
   background_notification: 100,
 };
 
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function mailboxSend(data: CreateMailboxData): MailboxRow {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.mailboxDb.send(data) as unknown as MailboxRow;
   }
 
-  const db = getDb();
-  const now = Date.now();
-  const priority = KIND_PRIORITY[data.kind] ?? 100;
-
-  // Idempotency check: if client_msg_id exists, return existing row
-  if (data.clientMsgId) {
-    const existing = db.prepare(
-      'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
-    ).get(data.sessionId, data.clientMsgId) as MailboxRow | undefined;
-    if (existing) return existing;
-  }
-
-  db.prepare(`
-    INSERT INTO agent_mailbox (
-      id, session_id, submitted_during_run_id, content, kind, status,
-      priority, constraints_json, attachments_json, source,
-      client_msg_id, created_at
-    ) VALUES (
-      @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
-      @priority, @constraints_json, @attachments_json, @source,
-      @client_msg_id, @created_at
-    )
-  `).run({
+  return {
     id: data.id,
     session_id: data.sessionId,
     submitted_during_run_id: data.submittedDuringRunId || '',
     content: data.content,
     kind: data.kind,
-    priority,
+    status: 'pending',
+    priority: KIND_PRIORITY[data.kind] ?? 100,
     constraints_json: data.constraintsJson ?? null,
     attachments_json: data.attachments ? JSON.stringify(data.attachments) : null,
     source: data.source ?? 'ui',
     client_msg_id: data.clientMsgId ?? null,
-    created_at: now,
-  });
-
-  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as MailboxRow;
+    created_at: Date.now(),
+    claim_token: null,
+    claim_expires_at: null,
+    observed_at: null,
+    observed_at_checkpoint: null,
+    observed_by_run_id: null,
+    claim_attempts: 0,
+    last_claim_error: null,
+    edit_locked_at: null,
+    apply_mode: null,
+    applied_at: null,
+    applied_at_checkpoint: null,
+    applied_summary: null,
+    resulting_user_msg_id: null,
+    failure_reason: null,
+    edit_history_json: null,
+    cancelled_at: null,
+    cancelled_by: null,
+    cancel_reason: null,
+  };
 }
 
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function mailboxEdit(id: string, patch: EditMailboxPatch): MailboxRow | null {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.mailboxDb.edit(id, patch) as unknown as MailboxRow | null;
   }
 
-  const db = getDb();
-  const existing = db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow | undefined;
-  if (!existing) return null;
-
-  // Only pending rows can be edited
-  if (existing.status !== 'pending') return null;
-
-  // If edit_locked_at is set, reject edits
-  if (existing.edit_locked_at !== null) return null;
-
-  const now = Date.now();
-  const fields: string[] = [];
-  const params: Record<string, unknown> = { id, now };
-
-  // Track edit history
-  const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
-  if (existing.edit_history_json) {
-    try { editHistory.push(...JSON.parse(existing.edit_history_json)); } catch { /* ignore */ }
-  }
-
-  if (patch.content !== undefined) {
-    editHistory.push({ editedAt: now, prevContent: existing.content, prevKind: existing.kind });
-    fields.push('content = @content');
-    params.content = patch.content;
-  }
-  if (patch.kind !== undefined) {
-    if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
-      editHistory.push({ editedAt: now, prevContent: existing.content, prevKind: existing.kind });
-    }
-    fields.push('kind = @kind');
-    fields.push('priority = @priority');
-    params.kind = patch.kind;
-    params.priority = KIND_PRIORITY[patch.kind] ?? 100;
-  }
-
-  if (fields.length === 0) return existing;
-
-  fields.push('edit_history_json = @edit_history_json');
-  params.edit_history_json = JSON.stringify(editHistory);
-
-  db.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
-  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow;
+  return null;
 }
 
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function mailboxCancel(id: string, reason?: string): MailboxRow | null {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.mailboxDb.cancel(id, reason) as unknown as MailboxRow | null;
   }
 
-  const db = getDb();
-  const now = Date.now();
-
-  const result = db.prepare(`
-    UPDATE agent_mailbox
-    SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
-    WHERE id = @id AND status = 'pending'
-  `).run({ id, now, reason: reason ?? null });
-
-  if (result.changes === 0) return null;
-  return db.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(id) as MailboxRow;
+  return null;
 }
 
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function mailboxList(sessionId: string, opts?: { status?: MailboxStatus[]; limit?: number }): MailboxRow[] {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.mailboxDb.list(sessionId, opts) as unknown as MailboxRow[];
   }
 
-  const db = getDb();
-  const limit = opts?.limit ?? 50;
-  const statuses = opts?.status;
-
-  if (statuses && statuses.length > 0) {
-    const placeholders = statuses.map(() => '?').join(',');
-    return db.prepare(
-      `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
-    ).all(sessionId, ...statuses, limit) as MailboxRow[];
-  }
-
-  return db.prepare(
-    'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
-  ).all(sessionId, limit) as MailboxRow[];
+  return [];
 }
 
+// Plan 328 decision 9: CLI standalone mode abandons session persistence.
+// The local (non-IPC) branch is removed; writes are no-ops, reads return empty.
 export function mailboxListForSession(sessionId: string): MailboxRow[] {
   if (USE_IPC_MODE && getIpcClient()) {
     return getIpcClient()!.mailboxDb.listForSession(sessionId) as unknown as MailboxRow[];
   }
 
-  const db = getDb();
-  return db.prepare(
-    'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
-  ).all(sessionId) as MailboxRow[];
+  return [];
 }

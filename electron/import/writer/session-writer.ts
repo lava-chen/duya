@@ -1,8 +1,11 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { createInterface } from 'readline';
 import { randomUUID } from 'crypto';
-import { createSession, deleteSession } from '../../db/queries/sessions';
-import { addMessage } from '../../db/queries/messages';
+import { getCoreStores } from '../../db/core-connection';
+import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
+import type { NewEvent } from '../../db/core';
+import { resolveRolloutRoot } from '../../config/boot-config';
 import { getLogger, LogComponent } from '../../logging/logger';
 import type { SessionImportItem } from '../types';
 
@@ -16,42 +19,54 @@ interface ParsedMessage {
   msg_type: string;
   tool_name?: string;
   tool_input?: string;
+  tool_call_id?: string;
   parent_tool_call_id?: string;
   thinking?: string;
   seq_index: number;
   created_at: number;
 }
 
-function parseCodexJsonlLine(line: string): ParsedMessage | null {
+export function parseCodexJsonlLine(line: string): ParsedMessage[] | null {
   try {
     const parsed = JSON.parse(line);
     if (parsed.type !== 'response_item' || !parsed.payload) return null;
 
     const { payload, timestamp } = parsed;
     const ts = timestamp ? new Date(timestamp).getTime() : Date.now();
+    const createdAt = isNaN(ts) ? Date.now() : ts;
 
     if (payload.type === 'message') {
-      return {
+      // Codex `developer`/`system` roles map to the combined `system` role.
+      const role = payload.role === 'developer' || payload.role === 'system' ? 'system' : (payload.role || 'user');
+      // Content may be a plain string or an array of input_text blocks.
+      const rawContent: unknown = payload.content;
+      let content = '';
+      if (typeof rawContent === 'string') content = rawContent;
+      else if (Array.isArray(rawContent)) {
+        content = rawContent.map((b: { text?: string } | string) => typeof b === 'string' ? b : (b.text ?? '')).join('');
+      } else content = JSON.stringify(rawContent);
+      return [{
         id: payload.id || randomUUID(),
-        role: payload.role || 'unknown',
-        content: typeof payload.content === 'string' ? payload.content : JSON.stringify(payload.content),
+        role,
+        content,
         msg_type: 'text',
         seq_index: 0,
-        created_at: isNaN(ts) ? Date.now() : ts,
-      };
+        created_at: createdAt,
+      }];
     }
 
     if (payload.type === 'function_call' || payload.type === 'custom_tool_call') {
-      return {
+      return [{
         id: payload.id || randomUUID(),
         role: 'assistant',
         content: payload.arguments || '',
         msg_type: 'tool_use',
+        tool_call_id: payload.id || '',
         tool_name: payload.name || '',
         tool_input: payload.arguments || '',
         seq_index: 0,
-        created_at: isNaN(ts) ? Date.now() : ts,
-      };
+        created_at: createdAt,
+      }];
     }
 
     if (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') {
@@ -61,15 +76,16 @@ function parseCodexJsonlLine(line: string): ParsedMessage | null {
       const outputText = Array.isArray(rawOutput)
         ? rawOutput.map((block: { text?: string } | string) => typeof block === 'string' ? block : (block.text ?? '')).join('')
         : (typeof rawOutput === 'string' ? rawOutput : '');
-      return {
+      return [{
         id: payload.id || randomUUID(),
         role: 'tool',
         content: outputText || '',
         msg_type: 'tool_result',
+        tool_call_id: payload.call_id || '',
         parent_tool_call_id: payload.call_id || '',
         seq_index: 0,
-        created_at: isNaN(ts) ? Date.now() : ts,
-      };
+        created_at: createdAt,
+      }];
     }
 
     return null;
@@ -88,6 +104,7 @@ interface ClaudeJsonlLine {
     content?: string | Array<{
       type: string;
       text?: string;
+      content?: string | Array<{ type: string; text?: string }>;
       thinking?: string;
       name?: string;
       id?: string;
@@ -97,7 +114,7 @@ interface ClaudeJsonlLine {
   };
 }
 
-function parseClaudeJsonlLine(line: string): ParsedMessage | null {
+export function parseClaudeJsonlLine(line: string): ParsedMessage[] | null {
   try {
     const parsed: ClaudeJsonlLine = JSON.parse(line);
     if (!parsed.type) return null;
@@ -111,40 +128,46 @@ function parseClaudeJsonlLine(line: string): ParsedMessage | null {
     }
 
     const content = parsed.message?.content;
+    const out: ParsedMessage[] = [];
 
     if (parsed.type === 'user') {
       if (typeof content === 'string') {
-        return {
+        out.push({
           id: msgId,
           role: 'user',
           content,
           msg_type: 'text',
           seq_index: 0,
           created_at: createdAt,
-        };
-      }
-      if (Array.isArray(content)) {
+        });
+      } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === 'tool_result') {
-            return {
+            // Tool result output may be a plain string or an array of content
+            // blocks (e.g. [{type:'text', text:'...'}]). Normalize to text.
+            const rawOutput = block.content;
+            const outputText = Array.isArray(rawOutput)
+              ? rawOutput.map((b) => (typeof b === 'string' ? b : (b.text ?? ''))).join('')
+              : (typeof rawOutput === 'string' ? rawOutput : '');
+            out.push({
               id: msgId,
               role: 'tool',
-              content: typeof block.text === 'string' ? block.text : JSON.stringify(block),
+              content: outputText || '',
               msg_type: 'tool_result',
+              tool_call_id: block.tool_use_id || parsed.parentUuid || '',
               parent_tool_call_id: block.tool_use_id || parsed.parentUuid || '',
               seq_index: 0,
               created_at: createdAt,
-            };
-          }
-          if (block.type === 'text') {
-            return {
+            });
+          } else if (block.type === 'text') {
+            out.push({
               id: msgId,
               role: 'user',
               content: block.text || '',
               msg_type: 'text',
               seq_index: 0,
               created_at: createdAt,
-            };
+            });
           }
         }
       }
@@ -152,41 +175,39 @@ function parseClaudeJsonlLine(line: string): ParsedMessage | null {
 
     if (parsed.type === 'assistant') {
       if (typeof content === 'string') {
-        return {
+        out.push({
           id: msgId,
           role: 'assistant',
           content,
           msg_type: 'text',
           seq_index: 0,
           created_at: createdAt,
-        };
-      }
-      if (Array.isArray(content)) {
+        });
+      } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block.type === 'text') {
-            return {
+            out.push({
               id: msgId,
               role: 'assistant',
               content: block.text || '',
               msg_type: 'text',
               seq_index: 0,
               created_at: createdAt,
-            };
-          }
-          if (block.type === 'tool_use') {
-            return {
+            });
+          } else if (block.type === 'tool_use') {
+            out.push({
               id: msgId,
               role: 'assistant',
               content: block.input ? JSON.stringify(block.input) : '',
               msg_type: 'tool_use',
+              tool_call_id: block.id || '',
               tool_name: block.name || '',
               tool_input: block.input ? JSON.stringify(block.input) : '',
               seq_index: 0,
               created_at: createdAt,
-            };
-          }
-          if (block.type === 'thinking') {
-            return {
+            });
+          } else if (block.type === 'thinking') {
+            out.push({
               id: msgId,
               role: 'assistant',
               content: block.thinking || '',
@@ -194,13 +215,13 @@ function parseClaudeJsonlLine(line: string): ParsedMessage | null {
               thinking: block.thinking || '',
               seq_index: 0,
               created_at: createdAt,
-            };
+            });
           }
         }
       }
     }
 
-    return null;
+    return out.length > 0 ? out : null;
   } catch {
     return null;
   }
@@ -229,8 +250,10 @@ async function parseMessages(
 
       const parsed = isCodex ? parseCodexJsonlLine(line) : parseClaudeJsonlLine(line);
       if (parsed) {
-        parsed.seq_index = seqIndex++;
-        messages.push(parsed);
+        for (const msg of parsed) {
+          msg.seq_index = seqIndex++;
+          messages.push(msg);
+        }
       }
     }
 
@@ -264,33 +287,25 @@ export async function writeSessions(
         continue;
       }
 
-      createSession({
+      const { sessions, messageLog } = getCoreStores();
+
+      sessions.create({
         id: item.sessionId,
         title: item.title,
-        working_directory: item.workingDirectory,
-        project_name: item.projectName,
+        workingDirectory: item.workingDirectory,
+        projectName: item.projectName,
         status: 'active',
         mode: 'code',
-        provider_id: 'env',
-        agent_type: 'main',
+        providerId: 'env',
+        agentType: 'main',
       });
 
-      let seqIndex = 0;
-      for (const msg of messages) {
-        addMessage({
-          id: msg.id,
-          session_id: item.sessionId,
-          role: msg.role,
-          content: msg.content,
-          msg_type: msg.msg_type,
-          tool_name: msg.tool_name,
-          tool_input: msg.tool_input,
-          parent_tool_call_id: msg.parent_tool_call_id,
-          thinking: msg.thinking,
-          seq_index: seqIndex++,
-          status: 'done',
-        });
-      }
+      // Batch-append all messages via the core message log. Seq is auto-assigned
+      // by appendBatch (COALESCE(MAX(seq),0)+1) — no manual seqIndex counting.
+      const events: NewEvent[] = messages.map((msg) =>
+        ipcMessageToNewEvent(item.sessionId, { ...msg, session_id: item.sessionId }),
+      );
+      messageLog.appendBatch(events);
 
       results.push({
         sessionId: item.sessionId,
@@ -307,9 +322,25 @@ export async function writeSessions(
 }
 
 export async function rollbackSessions(sessionIds: string[]): Promise<void> {
+  const { sessions, messageLog } = getCoreStores();
+  const rolloutRoot = resolveRolloutRoot();
   for (const sessionId of sessionIds) {
     try {
-      deleteSession(sessionId);
+      // Capture the rollout path before deleting the session row (after delete
+      // the path can no longer be resolved from the sessions table).
+      const relativePath = sessions.getRolloutPath(sessionId);
+      messageLog.deleteBySession(sessionId);
+      sessions.delete(sessionId);
+      // Best-effort rollout file cleanup — orphaned JSONL files are harmless
+      // but accumulate disk space across repeated import/rollback cycles.
+      if (relativePath) {
+        const absolutePath = path.join(rolloutRoot, relativePath);
+        try {
+          if (fs.existsSync(absolutePath)) fs.unlinkSync(absolutePath);
+        } catch {
+          // File cleanup is best-effort — index + session row are already gone.
+        }
+      }
       logger.info('Session rolled back', { sessionId }, COMPONENT);
     } catch (err) {
       logger.warn('Failed to rollback session', { sessionId, error: String(err) }, COMPONENT);

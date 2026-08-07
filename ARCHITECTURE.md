@@ -350,23 +350,30 @@ Main 收到 chat:start
 
 #### Golden Trident 数据架构："物理分离、单一职责、原子防御"
 
-DUYA 的所有本地数据彻底划分为三个独立的物理文件，存放在 `userData` 目录下：
+DUYA 的所有本地数据以 `userData` 目录下的若干物理文件承载，按职责分层：
 
 | 文件类别 | 路径 | 管理者 | 核心内容 | 加密策略 |
 |:---|:---|:---|:---|:---|
 | **引导基建** (指南针) | `/config/boot.json` | Main Process (`boot-config.ts`) | 仅包含 `databasePath` (数据库的绝对路径) | **明文** (必须在应用极早期能被快速读取) |
 | **机密配置** (保险箱) | `/config/settings.json` | `ConfigManager` | `apiProviders` (API 密钥)、`agentSettings` (模型配置)、`uiPreferences` (界面偏好) | **OS 级加密** (依赖 Electron `safeStorage`) |
-| **业务流水** (账本) | `/databases/duya-main.db` | `Database Service` (SQLite 单例) | `sessions` (会话列表)、`messages` (聊天明细)、`permissions` (工具授权记录) | **明文** (依赖系统文件权限保护) |
+| **业务流水·状态与索引** (账本) | `/databases/duya-core.db` | `CoreDatabase` (`electron/db/core/`) | 六大核心聚合的状态与索引：`sessions` (会话元数据)、`message_index` (消息轻量索引)、`mailbox_items`、`tasks`、`permission_requests`、`session_runtime_locks` | **明文** (依赖系统文件权限保护) |
+| **业务流水·消息载体** (账本) | `/databases/sessions/` (rollout 目录) | `MessageLog` (`message-log.ts`) | 每条会话一个 append-only JSONL rollout 文件，逐行存消息/压缩事件的完整 payload | **明文** (依赖系统文件权限保护) |
+| **旧库** (封存) | `/databases/duya-main.db` | 仅 `LegacyImport` 只读 | 六大核心表已冻结 (LEGACY FROZEN)，仅供升级导入 + conductor/research/gateway 等子系统自有表 | **明文** |
+
+核心存储是**两层结构**：`duya-core.db` 仅存状态列与轻量索引（无消息 payload），消息的完整内容落在 `sessions/` 的 rollout JSONL 文件里，`message_index.file_offset`/`byte_len` 指向文件内精确行。首启会将旧库六大核心表只读搬入（`legacy-import.ts`，幂等可重试），此后运行时读写全部走 core store，旧表物理保留作为回滚保险（物理删除留给未来版本）。
+
+写入纪律：单一写者（Main Process DB 层）、稳定边界、消息 append-only（唯一例外是 truncate/edit 依赖 `rewriteSession` 的 rewind 重写）。崩溃恢复靠 `MessageLog.scan()` 对账文件行数与索引行数。搜索无 FTS：会话走参数化 LIKE，正文走 `searchText` 扫 rollout 文件。
 
 #### 主进程生命周期时序
 
-三个文件在主进程启动时的介入时机有严格的先后顺序：
+各文件在主进程启动时的介入时机有严格的先后顺序：
 
 1. **第 0 步：独占锁检查** — `app.requestSingleInstanceLock()`，防止多开引起的文件争抢
 2. **第 1 步：读取引导文件 (Boot)** — 主进程同步读取 `boot.json`，拿到 `databasePath`
 3. **第 2 步：初始化数据库网关 (DB Init)** — 根据拿到的路径，实例化 `better-sqlite3`，持有 SQLite 文件排他锁
-4. **第 3 步：初始化配置中心 (Config Init)** — 实例化 `ConfigManager`，解密读取 `settings.json` 中的 API Keys
-5. **第 4 步：拉起 Daemon 与 UI** — 数据库和配置双双就绪后，启动子系统并加载前端窗口
+4. **第 2.5 步：初始化核心数据库 (Core Init)** — `initCoreDatabase()`：建 `duya-core.db` + rollout 目录，跑全部迁移，并在**任何会话服务接受请求前**执行旧库只读导入（`LegacyImport.needsImport()` → `run()`，失败记 WARN 下次重试；无旧库则写 `none@<ts>` 标记）
+5. **第 3 步：初始化配置中心 (Config Init)** — 实例化 `ConfigManager`，解密读取 `settings.json` 中的 API Keys
+6. **第 4 步：拉起 Daemon 与 UI** — 数据库和配置双双就绪后，启动子系统并加载前端窗口
 
 #### 数据库迁移 (搬家) 工作流
 
@@ -846,8 +853,10 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 
 数据库文件路径由 `/config/boot.json` 中的 `databasePath` 字段决定：
 
-- **默认路径**：`{userData}/databases/duya-main.db`
-- **自定义路径**：用户可通过迁移功能将数据库移至任意位置
+- **旧库**：`{databasePath}`（默认 `{userData}/databases/duya-main.db`）。六大核心表冻结（LEGACY FROZEN），仅由 `LegacyImport` 只读 + conductor/research/gateway 等子系统自有表使用。
+- **核心状态库**：同目录下的 `duya-core.db`（由 `resolveCoreDatabasePath()` 从 `databasePath` 推导），存六大聚合的状态与索引。
+- **rollout 根**：同目录下的 `sessions/`（由 `resolveRolloutRoot()` 推导），每条会话一个 JSONL rollout 文件。
+- **自定义路径**：用户可通过迁移功能将数据库移至任意位置；`duya-core.db` 与 `sessions/` 紧随其目录。
 - **向后兼容**：自动检测并重命名旧版 `duya.db` 为 `duya-main.db`
 - **引导文件**：`boot.json` 仅包含 `{ "_version": 1, "databasePath": "..." }`，明文存储
 
@@ -879,9 +888,21 @@ duya/
 │   ├── performance-monitor.ts  # 性能监控（延迟、吞吐、内存）
 │   ├── net-handlers.ts         # 网络相关 IPC 处理器
 │   ├── port-types.ts           # Port 类型定义
-│   └── ipc/
-│       ├── agent-communicator.ts  # Agent IPC 处理器 + DB 请求分发
-│       └── gateway-communicator.ts # Gateway IPC 处理器
+│   ├── ipc/
+│   │   ├── agent-communicator.ts  # Agent IPC 处理器 + DB 请求分发
+│   │   └── gateway-communicator.ts # Gateway IPC 处理器
+│   ├── db/
+│   │   ├── core-connection.ts   # CoreDatabase 单例生命周期 + 首启旧库导入 (plan 329)
+│   │   ├── core/                # 核心存储平铺 7 文件 (plan 326 决策 1)
+│   │   │   ├── database.ts      # CoreDatabase / 迁移器 / WAL 提交
+│   │   │   ├── message-log.ts   # MessageLog 两层存储 (rollout + message_index)
+│   │   │   ├── session-store.ts # SessionStore (sessions + extensions)
+│   │   │   ├── mailbox.ts       # Mailbox (mailbox_items 状态机)
+│   │   │   ├── stores.ts        # TaskStore / PermissionLedger / LockStore
+│   │   │   ├── legacy-import.ts # LegacyImport 只读旧库迁移 (plan 329)
+│   │   │   └── index.ts         # core barrel
+│   │   └── schema.ts            # 旧库 monolith schema (LEGACY FROZEN 段 + 子系统表)
+│   │
 │
 ├── packages/agent/src/
 │   ├── index.ts                  # Pure barrel: re-exports public API + `duyaAgent` from `./agent/DuyaAgent.js`
@@ -1015,7 +1036,7 @@ duya/
   不会持久化到普通消息历史。
 
 关键文件：`src/components/chat/ChatView.tsx`、
-`src/lib/stream-session-manager.ts`、`electron/db/mailbox-transitions.ts`、
+`src/lib/stream-session-manager.ts`、`electron/db/core/mailbox.ts`、
 `packages/agent/src/agent/DuyaAgent.ts`。
 
 ## Profile / Mode / Permission 三层正交（Plan 224）

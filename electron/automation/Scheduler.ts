@@ -6,6 +6,7 @@ import { getLogger, LogComponent } from '../logging/logger.js';
 import { CronPersistence, computeNextRunAtMs, rowToSchedule } from './persistence.js';
 import type { AutomationCron, AutomationCronRun } from './types.js';
 import { prepareAutomationWorkspace } from './workspace.js';
+import { getCoreStores } from '../db/core-connection.js';
 
 export { computeNextRunAtMs } from './persistence.js';
 
@@ -191,13 +192,23 @@ export class AutomationScheduler {
     // Older cron rows did not retain their project path. Never initialise an
     // agent with an empty cwd: it can stall project discovery before `ready`.
     const workingDirectory = prepareAutomationWorkspace(cron.working_directory);
-    this.persistence.insertChatSession(
-      sessionId,
-      `[Cron] ${cron.name}`,
+    // Cron sessions are fixed to permission_mode='default' and mode='automation'.
+    // system_prompt / context_summary go to extensions (legacy column mapping).
+    getCoreStores().sessions.create({
+      id: sessionId,
+      title: `[Cron] ${cron.name}`,
       model,
-      activeProvider.id,
+      providerId: activeProvider.id,
       workingDirectory,
-    );
+      status: 'active',
+      mode: 'automation',
+      permissionMode: 'default',
+      extensions: {
+        system_prompt: '',
+        context_summary: '',
+        context_summary_updated_at: 0,
+      },
+    });
     await pool.acquire(sessionId);
     // Subscribe before sending init. A fast child can otherwise emit `ready`
     // between send() and waitForReady(), turning a healthy start into 30s timeout.

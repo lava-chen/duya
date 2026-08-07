@@ -8,7 +8,7 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { getAgentProcessPool } from './process-pool/agent-process-pool';
 import { getConfigManager, toLLMProvider, type ApiProvider } from '../config/manager';
-import { getDatabase } from '../ipc/db-handlers';
+import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
 import { getProviderStore } from '../services/providers/provider-store-electron';
@@ -78,14 +78,14 @@ export function registerAgentHandlers(): void {
   // Handler to get agent provider config for initializing agent subprocess
   ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
     const configManager = getConfigManager();
-    const db = getDatabase();
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
-    const session = db?.prepare('SELECT provider_id, model FROM chat_sessions WHERE id = ?').get(sessionId) as { provider_id: string | null; model: string | null } | undefined;
+    // Read provider_id / model from the core sessions store (plan 328).
+    const session = getCoreStores().sessions.get(sessionId);
 
-    let provider = session?.provider_id
-      ? configManager.getAllProviders()[session.provider_id]
+    let provider = session?.providerId
+      ? configManager.getAllProviders()[session.providerId]
       : null;
 
     if (!provider) {
@@ -133,12 +133,12 @@ export function registerAgentHandlers(): void {
   // Handler to get masked provider config for renderer (no API key exposure)
   ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
     const configManager = getConfigManager();
-    const db = getDatabase();
 
-    const session = db?.prepare('SELECT provider_id, model FROM chat_sessions WHERE id = ?').get(sessionId) as { provider_id: string | null; model: string | null } | undefined;
+    // Read provider_id / model from the core sessions store (plan 328).
+    const session = getCoreStores().sessions.get(sessionId);
 
-    let provider = session?.provider_id
-      ? configManager.getAllProviders()[session.provider_id]
+    let provider = session?.providerId
+      ? configManager.getAllProviders()[session.providerId]
       : null;
 
     if (!provider) {

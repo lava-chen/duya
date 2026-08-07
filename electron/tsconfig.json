@@ -12,7 +12,8 @@
     "typeRoots": ["./types", "./node_modules/@types"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./*"],
+      "@duya/agent/message": ["../packages/agent/dist/message/index"]
     }
   },
   "include": [

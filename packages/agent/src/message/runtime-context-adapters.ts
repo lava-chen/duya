@@ -1,5 +1,5 @@
 import type { FileAttachment, Message } from '../types.js';
-import type { MailboxKind, MailboxRow } from '../mailbox/types.js';
+import type { MailboxKind, MailboxRow } from '../session/db.js';
 import {
   STATUS_TAG,
   TASK_ID_TAG,

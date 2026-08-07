@@ -19,9 +19,5 @@ export {
 export type { DbInitResult, DatabaseStats } from './connection';
 
 // Queries layer
-export * from './queries/sessions';
-export * from './queries/threads';
-export * from './queries/messages';
 export * from './queries/conductors';
-export * from './queries/crons';
 export * from './queries/settings';

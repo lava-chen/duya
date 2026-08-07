@@ -280,6 +280,7 @@ function augmentLegacyColumns<T extends Message>(
   if (durationMs !== undefined) target.duration_ms = durationMs as number;
   if (status !== undefined) target.status = status as string;
   if (message.msg_type !== undefined) target.msg_type = message.msg_type;
+  if (message.thinking !== undefined) target.thinking = message.thinking;
   if (message.tool_name !== undefined) target.tool_name = message.tool_name;
   if (message.tool_input !== undefined) target.tool_input = message.tool_input;
   if (message.parent_tool_call_id !== undefined) {

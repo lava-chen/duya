@@ -309,15 +309,16 @@ function parseStoredTurnFiles(value: unknown): GitReviewFile[] | null {
 function readLatestTurnReview(sessionId: string, cwd: string): GitLatestTurnReviewResult {
   const db = getDatabase();
   if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  // Plan 328: chat_turn_reviews no longer joins chat_sessions (FK dropped in
+  // migration 47). working_directory is stored on chat_turn_reviews directly.
   const row = db.prepare(`
-    SELECT r.id, r.session_id, r.turn_id, r.working_directory, r.files_json,
-           r.patch, r.additions, r.removals, r.truncated, r.binary, r.captured_at
-    FROM chat_turn_reviews r
-    JOIN chat_sessions s ON s.id = r.session_id
-    WHERE r.session_id = ? AND r.working_directory = ? AND s.working_directory = ?
-    ORDER BY r.captured_at DESC
+    SELECT id, session_id, turn_id, working_directory, files_json,
+           patch, additions, removals, truncated, binary, captured_at
+    FROM chat_turn_reviews
+    WHERE session_id = ? AND working_directory = ?
+    ORDER BY captured_at DESC
     LIMIT 1
-  `).get(sessionId, cwd, cwd) as {
+  `).get(sessionId, cwd) as {
     id: string;
     session_id: string;
     turn_id: string;

@@ -6,7 +6,7 @@
  * IMPORTANT: this module is a thin HTTP adapter. The CLI-visible filter
  * (top-level / not-deleted / not-automation / not-gateway) and the safe
  * field projection are applied inside the SQL of
- * `listSessionSummaries` / `getSessionSummary`. The handler must NOT
+ * `SessionStore.listSummaries` / `SessionStore.getSummary`. The handler must NOT
  * re-filter or re-strip fields on the returned rows.
  *
  * Stable JSON contract (Phase 1, see phase-1-audit.md §8):
@@ -21,12 +21,10 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
-  listSessionSummaries,
-  getSessionSummary,
   InvalidPaginationParam,
   SESSION_LIST_DEFAULT_LIMIT,
   type SessionSummary,
-} from '../../db/queries/sessions';
+} from '../../db/core/session-store';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
@@ -148,7 +146,7 @@ export function handleListSessions(
 ): void {
   void _req;
   try {
-    const rows = listSessionSummaries({
+    const rows = getCoreStores().sessions.listSummaries({
       limit: query.limit ?? SESSION_LIST_DEFAULT_LIMIT,
       offset: query.offset ?? 0,
     });
@@ -181,7 +179,7 @@ export function handleGetSession(
     return;
   }
   try {
-    const row = getSessionSummary(id);
+    const row = getCoreStores().sessions.getSummary(id);
     if (!row) {
       sendError(res, 404, 'session_not_found', `Session not found: ${id}`);
       return;
@@ -197,8 +195,13 @@ export function handleGetSession(
 // Phase 4.2: search / export / import (Plan 200 P4)
 // ============================================================================
 
-import { listMessages, searchMessagesByContent } from '../../db/queries/messages';
-import { getDatabase } from '../../db/connection';
+import { getCoreStores } from '../../db/core-connection';
+import {
+  ipcMessageToNewEvent,
+  storedEventToIpcMessage,
+  type MessageRow,
+} from '../../ipc/core-db-adapters';
+import type { NewEvent } from '../../db/core';
 
 function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -271,7 +274,7 @@ export function handleSearchSessions(
     return;
   }
   try {
-    const rows = listSessionSummaries({ limit: 100, offset: 0 });
+    const rows = getCoreStores().sessions.listSummaries({ limit: 100, offset: 0 });
     const needle = q.toLowerCase();
     if (!needle) {
       sendJson(res, 200, { sessions: [] });
@@ -280,7 +283,47 @@ export function handleSearchSessions(
     const titleHits = rows.filter((r) => r.title.toLowerCase().includes(needle));
     const titleHitIds = new Set(titleHits.map((r) => r.id));
     const remainingIds = rows.filter((r) => !titleHitIds.has(r.id)).map((r) => r.id);
-    const contentHits = searchMessagesByContent(remainingIds, needle, 3);
+
+    // searchText only returns { sessionId, messageId, snippet }. The legacy
+    // search also carried role / msgType / preview, so derive the role and
+    // msg_type by reading the matching message from the session's message log.
+    const messageLog = getCoreStores().messageLog;
+    const rawHits = messageLog.searchText(needle, {
+      sessionIds: remainingIds,
+      limit: remainingIds.length * 3,
+    });
+    const msgBySession = new Map<string, MessageRow[]>();
+    function roleForHit(sessionId: string, messageId: string): { role: string; msgType: string } | null {
+      let rowsBySession = msgBySession.get(sessionId);
+      if (!rowsBySession) {
+        rowsBySession = messageLog
+          .listBySession(sessionId)
+          .map(storedEventToIpcMessage)
+          .filter((m): m is MessageRow => m !== null);
+        msgBySession.set(sessionId, rowsBySession);
+      }
+      const msg = rowsBySession.find((m) => m.id === messageId);
+      return msg ? { role: msg.role, msgType: msg.msg_type } : null;
+    }
+
+    const contentHits: Array<{
+      sessionId: string;
+      messageId: string;
+      role: string;
+      msgType: string;
+      preview: string;
+    }> = [];
+    for (const hit of rawHits) {
+      const meta = roleForHit(hit.sessionId, hit.messageId);
+      if (!meta) continue;
+      contentHits.push({
+        sessionId: hit.sessionId,
+        messageId: hit.messageId,
+        role: meta.role,
+        msgType: meta.msgType,
+        preview: hit.snippet,
+      });
+    }
     const byId = new Map<string, typeof contentHits>();
     for (const hit of contentHits) {
       const bucket = byId.get(hit.sessionId);
@@ -341,12 +384,15 @@ export async function handleExportSession(
   }
   const format = asString(body.format) === 'md' ? 'md' : 'json';
   try {
-    const summary = getSessionSummary(id);
+    const summary = getCoreStores().sessions.getSummary(id);
     if (!summary) {
       sendError(res, 404, 'session_not_found', `Session not found: ${id}`);
       return;
     }
-    const messages = listMessages(id);
+    const messages = getCoreStores().messageLog
+      .listBySession(id)
+      .map(storedEventToIpcMessage)
+      .filter((m): m is MessageRow => m !== null);
     if (format === 'md') {
       const md = renderSessionMarkdown(summary, messages);
       sendJson(res, 200, { format: 'md', id, body: md });
@@ -407,25 +453,37 @@ export async function handleImportSession(
     return;
   }
   try {
-    const db = getDatabase();
-    if (!db) {
-      sendError(res, 503, 'db_unavailable', 'database is not ready');
-      return;
-    }
+    const { sessions, messageLog } = getCoreStores();
     const { randomUUID } = require('node:crypto') as typeof import('node:crypto');
     const newId = randomUUID();
     const now = Date.now();
     const title = typeof session.title === 'string' ? session.title : 'Imported chat';
     const model = typeof session.model === 'string' ? session.model : '';
     const createdAt = asNumber(session.created_at, now);
-    db.prepare(
-      `INSERT INTO chat_sessions (id, title, created_at, updated_at, model, working_directory, project_name, status, mode, permission_profile, provider_id, context_summary, context_summary_updated_at, is_deleted, generation, agent_type, agent_name)
-       VALUES (?, ?, ?, ?, ?, '', '', 'active', 'code', 'default', 'env', '', 0, 0, 0, 'main', '')`
-    ).run(newId, title, createdAt, now, model);
 
-    const insertMsg = db.prepare(
-      `INSERT INTO messages (id, session_id, role, content, msg_type, status, created_at) VALUES (?, ?, ?, ?, ?, 'done', ?)`
-    );
+    sessions.create({
+      id: newId,
+      title,
+      model,
+      workingDirectory: '',
+      projectName: '',
+      status: 'active',
+      mode: 'code',
+      permissionMode: 'default',
+      providerId: 'env',
+      agentType: 'main',
+      agentName: '',
+      createdAt,
+      updatedAt: now,
+      extensions: {
+        context_summary: '',
+        context_summary_updated_at: 0,
+      },
+    });
+
+    // Batch-append all messages via the core message log. Seq is auto-assigned
+    // by appendBatch — no manual seq counting.
+    const events: NewEvent[] = [];
     for (const m of messages) {
       if (!m || typeof m !== 'object') continue;
       const mm = m as Record<string, unknown>;
@@ -434,8 +492,19 @@ export async function handleImportSession(
       const msgType = typeof mm.msg_type === 'string' ? mm.msg_type : 'text';
       const msgId = typeof mm.id === 'string' ? mm.id : randomUUID();
       const createdAtMsg = asNumber(mm.created_at, now);
-      insertMsg.run(msgId, newId, role, content, msgType, createdAtMsg);
+      events.push(
+        ipcMessageToNewEvent(newId, {
+          id: msgId,
+          session_id: newId,
+          role,
+          content,
+          msg_type: msgType,
+          created_at: createdAtMsg,
+        }),
+      );
     }
+    messageLog.appendBatch(events);
+
     sendJson(res, 200, { ok: true, id: newId, title });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

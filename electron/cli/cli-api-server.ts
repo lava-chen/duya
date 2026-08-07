@@ -112,7 +112,7 @@ import {
   handleGatewayReloadSecrets,
   handleGatewayRpc,
 } from './handlers/extra2.js';
-import { InvalidPaginationParam } from '../db/queries/sessions';
+import { InvalidPaginationParam } from '../db/core/session-store';
 import { getLogger } from '../logging/logger';
 
 const COMPONENT = 'CliApiServer' as const;

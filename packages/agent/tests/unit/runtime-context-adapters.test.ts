@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileAttachment } from '../../src/types.js';
-import type { MailboxRow } from '../../src/mailbox/types.js';
+import type { MailboxRow } from '../../src/session/db.js';
 import { buildTaskNotificationXml } from '../../src/lifecycle/buildTaskNotification.js';
 import type { AgentMessage } from '../../src/message/message-framework.js';
 import { projectPersistenceMessages } from '../../src/message/message-projectors.js';

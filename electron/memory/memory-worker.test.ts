@@ -40,6 +40,35 @@ import { migration0003 } from '../memory-state/migrations/0003_outbox.sql';
 import { migration0005 } from '../memory-state/migrations/0005_phase2.sql';
 
 // ---------------------------------------------------------------------------
+// Mock agent db-client IPC
+// ---------------------------------------------------------------------------
+// Plan 328 Phase 6: the Stage1Extractor reads messages via messageDb.getBySession
+// IPC instead of opening the core database. In this Electron test there is no
+// IPC bridge, so mock the agent db-client to route the read to the fixture's
+// local mainDb (hoisted state shares the reference between the mock factory
+// and the test bodies).
+const dbMockState = vi.hoisted(() => ({
+  mainDb: null as BetterSqlite3Database | null,
+}));
+
+vi.mock('../../packages/agent/src/ipc/db-client.js', () => ({
+  messageDb: {
+    getBySession: vi.fn(async (sessionId: string) => {
+      if (!dbMockState.mainDb) return [];
+      return dbMockState.mainDb
+        .prepare(
+          `SELECT id, role, content, tool_call_id, tool_name, tool_input,
+                  msg_type, seq_index, created_at, status
+           FROM messages
+           WHERE session_id = ?
+           ORDER BY seq_index ASC`,
+        )
+        .all(sessionId);
+    }),
+  },
+}));
+
+// ---------------------------------------------------------------------------
 // Fixture
 // ---------------------------------------------------------------------------
 
@@ -68,6 +97,7 @@ function createWorkerFixture(): WorkerFixture {
   // readMessages path, and a `chat_sessions` table for catalog sync.
   // Most tests never hit either.
   const mainDb = new Database(path.join(dbDir, 'main.db'));
+  dbMockState.mainDb = mainDb;
   mainDb.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,

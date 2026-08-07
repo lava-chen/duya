@@ -7,7 +7,6 @@
  */
 
 import { randomUUID } from 'crypto';
-import { isDeepStrictEqual } from 'node:util';
 import { getDatabase } from '../connection';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
@@ -241,10 +240,6 @@ export function updateCanvas(id: string, data: {
   };
 }
 
-export function deleteCanvas(id: string): void {
-  db().prepare('DELETE FROM conductor_canvases WHERE id = ?').run(id);
-}
-
 // ============================================================
 // Snapshot
 // ============================================================
@@ -347,115 +342,10 @@ export function writeActionLog(params: WriteActionLogParams): number {
   return Number(result.lastInsertRowid);
 }
 
-export function getActionLog(actionId: number): ConductorAction | undefined {
-  const row = db().prepare('SELECT * FROM conductor_actions WHERE id = ?').get(actionId) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    widgetId: row.widget_id,
-    actor: row.actor,
-    actionType: row.action_type,
-    payload: row.payload,
-    resultPatch: row.result_patch,
-    mergedFrom: row.merged_from,
-    reversible: row.reversible,
-    undoneAt: row.undone_at,
-    ts: row.ts,
-  };
-}
-
 // ============================================================
-// Widget CRUD
+// Widget CRUD — removed (zero external references; conductor:action/undo/redo
+// in db-handlers.ts inline their own SQL). Only element CRUD below is live.
 // ============================================================
-
-export function getWidget(widgetId: string, canvasId: string): ConductorWidget | undefined {
-  const row = db().prepare('SELECT * FROM conductor_widgets WHERE id = ? AND canvas_id = ?').get(widgetId, canvasId) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    kind: row.kind,
-    type: row.type,
-    position: safeParseJson<Record<string, unknown>>(row.position, {}),
-    config: safeParseJson<Record<string, unknown>>(row.config, {}),
-    data: safeParseJson<Record<string, unknown>>(row.data, {}),
-    dataVersion: row.data_version,
-    sourceCode: row.source_code,
-    state: row.state,
-    permissions: safeParseJson<Record<string, unknown>>(row.permissions, {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function insertWidget(widgetId: string, canvasId: string, kind: string, type: string, position: Record<string, unknown>, config: Record<string, unknown>, data: Record<string, unknown>, permissions: Record<string, unknown>, now: number): void {
-  db().prepare(
-    `INSERT INTO conductor_widgets (id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL, 'idle', ?, ?, ?)`
-  ).run(widgetId, canvasId, kind, type, JSON.stringify(position), JSON.stringify(config), JSON.stringify(data), JSON.stringify(permissions), now, now);
-}
-
-export function insertWidgetElement(widgetId: string, canvasId: string, elementKind: string, canvasPosition: Record<string, unknown>, mergedConfig: Record<string, unknown>, permissions: Record<string, unknown>, metadata: Record<string, unknown>, now: number): void {
-  db().prepare(
-    `INSERT OR IGNORE INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, NULL, NULL, 'idle', 1, ?, ?, ?, ?)`
-  ).run(widgetId, canvasId, elementKind, JSON.stringify(canvasPosition), JSON.stringify(mergedConfig), JSON.stringify(permissions), JSON.stringify(metadata), now, now);
-}
-
-export function insertRestoredWidget(widgetId: string, canvasId: string, kind: string, type: string, position: Record<string, unknown>, config: Record<string, unknown>, data: Record<string, unknown>, dataVersion: number, permissions: Record<string, unknown>, now: number): void {
-  db().prepare(
-    `INSERT INTO conductor_widgets (id, canvas_id, kind, type, position, config, data, data_version, source_code, state, permissions, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'idle', ?, ?, ?)`
-  ).run(widgetId, canvasId, kind, type, JSON.stringify(position), JSON.stringify(config), JSON.stringify(data), dataVersion, JSON.stringify(permissions), now, now);
-}
-
-export function updateWidgetPosition(widgetId: string, position: Record<string, unknown>, canvasPosition: Record<string, unknown>, now: number): void {
-  db().prepare('UPDATE conductor_widgets SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(position), now, widgetId);
-  db().prepare('UPDATE conductor_elements SET position = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(canvasPosition), now, widgetId);
-}
-
-export function updateWidgetConfig(widgetId: string, config: Record<string, unknown>, now: number): void {
-  db().prepare('UPDATE conductor_widgets SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(config), now, widgetId);
-  db().prepare('UPDATE conductor_elements SET config = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(config), now, widgetId);
-}
-
-export function getWidgetData(widgetId: string, canvasId: string) {
-  return db().prepare('SELECT data, data_version FROM conductor_widgets WHERE id = ? AND canvas_id = ?').get(widgetId, canvasId) as { data: string; data_version: number } | undefined;
-}
-
-export function updateWidgetData(widgetId: string, data: Record<string, unknown>, newVersion: number, now: number): void {
-  db().prepare('UPDATE conductor_widgets SET data = ?, data_version = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(data), newVersion, now, widgetId);
-}
-
-export function syncElementConfigFromWidget(widgetId: string, canvasId: string, mergedConfig: Record<string, unknown>, newVersion: number, now: number): void {
-  db().prepare('UPDATE conductor_elements SET config = ?, data_version = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(mergedConfig), newVersion, now, widgetId);
-}
-
-export function deleteWidget(widgetId: string): void {
-  db().prepare('DELETE FROM conductor_widgets WHERE id = ?').run(widgetId);
-  db().prepare('DELETE FROM conductor_elements WHERE id = ?').run(widgetId);
-}
-
-export function findLastDeleteAction(widgetId: string, canvasId: string): ConductorAction | undefined {
-  const row = db().prepare(
-    "SELECT * FROM conductor_actions WHERE widget_id = ? AND canvas_id = ? AND action_type = 'widget.delete' AND undone_at IS NULL ORDER BY ts DESC LIMIT 1"
-  ).get(widgetId, canvasId) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    widgetId: row.widget_id,
-    actor: row.actor,
-    actionType: row.action_type,
-    payload: row.payload,
-    resultPatch: row.result_patch,
-    mergedFrom: row.merged_from,
-    reversible: row.reversible,
-    undoneAt: row.undone_at,
-    ts: row.ts,
-  };
-}
 
 // ============================================================
 // Element CRUD
@@ -491,13 +381,6 @@ export function insertElement(elementId: string, canvasId: string, elementKind: 
     `INSERT INTO conductor_elements (id, canvas_id, element_kind, native_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'idle', 1, ?, ?, ?, ?)`
   ).run(elementId, canvasId, elementKind, nativeKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, sourceCode, JSON.stringify(permissions), JSON.stringify(metadata), now, now);
-}
-
-export function insertRestoredElement(elementId: string, canvasId: string, elementKind: string, position: Record<string, unknown>, config: Record<string, unknown>, vizSpec: Record<string, unknown> | null, state: string, dataVersion: number, permissions: Record<string, unknown>, metadata: Record<string, unknown>, createdAt: number, now: number): void {
-  db().prepare(
-    `INSERT INTO conductor_elements (id, canvas_id, element_kind, position, config, viz_spec, source_code, state, data_version, permissions, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`
-  ).run(elementId, canvasId, elementKind, JSON.stringify(position), JSON.stringify(config), vizSpec ? JSON.stringify(vizSpec) : null, state, dataVersion, JSON.stringify(permissions), JSON.stringify(metadata), createdAt, now);
 }
 
 export function updateElementPosition(elementId: string, position: Record<string, unknown>, now: number): void {
@@ -577,175 +460,6 @@ export function getMaxZIndex(canvasId: string): number {
   return row?.maxZ ?? 0;
 }
 
-// ============================================================
-// Undo / Redo
-// ============================================================
-
-export function findLastReversibleAction(canvasId: string): ConductorAction | undefined {
-  const row = db().prepare(
-    'SELECT * FROM conductor_actions WHERE canvas_id = ? AND reversible = 1 AND undone_at IS NULL ORDER BY ts DESC LIMIT 1'
-  ).get(canvasId) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    widgetId: row.widget_id,
-    actor: row.actor,
-    actionType: row.action_type,
-    payload: row.payload,
-    resultPatch: row.result_patch,
-    mergedFrom: row.merged_from,
-    reversible: row.reversible,
-    undoneAt: row.undone_at,
-    ts: row.ts,
-  };
-}
-
-export function markActionUndone(actionId: number, now: number): void {
-  db().prepare('UPDATE conductor_actions SET undone_at = ? WHERE id = ?').run(now, actionId);
-}
-
-export function findLastUndoneAction(canvasId: string): ConductorAction | undefined {
-  const row = db().prepare(
-    'SELECT * FROM conductor_actions WHERE canvas_id = ? AND undone_at IS NOT NULL ORDER BY undone_at DESC LIMIT 1'
-  ).get(canvasId) as any;
-  if (!row) return undefined;
-  return {
-    id: row.id,
-    canvasId: row.canvas_id,
-    widgetId: row.widget_id,
-    actor: row.actor,
-    actionType: row.action_type,
-    payload: row.payload,
-    resultPatch: row.result_patch,
-    mergedFrom: row.merged_from,
-    reversible: row.reversible,
-    undoneAt: row.undone_at,
-    ts: row.ts,
-  };
-}
-
-export function markActionRedone(actionId: number): void {
-  db().prepare('UPDATE conductor_actions SET undone_at = NULL WHERE id = ?').run(actionId);
-}
-
-// ============================================================
-// OT Merge Utilities
-// ============================================================
-
-export interface MergeContext {
-  actor: string;
-  clientTs?: number;
-  serverVersion: number;
-}
-
-export interface MergeResult {
-  data: Record<string, unknown>;
-  mergedFrom: string | null;
-}
-
-export function mergeWidgetData(server: Record<string, unknown>, patch: Record<string, unknown>, context: MergeContext): MergeResult {
-  if (context.actor === 'user') {
-    return { data: deepMerge(server, patch, 'user'), mergedFrom: null };
-  }
-
-  // Field-level last-writer-wins merge. Previously a patch older than 30s
-  // triggered a full replace (`{ data: patch }`) that discarded all
-  // concurrent server-side edits. Now we always merge field-by-field (server
-  // wins scalar conflicts, matching the non-stale agent path) and only
-  // annotate staleness via mergedFrom for observability — no data loss.
-  const merged = deepMerge(server, patch, 'server');
-  const isStale = context.clientTs !== undefined && Date.now() - context.clientTs > 30000;
-  const hasConflict = !isDeepStrictEqual(merged, patch);
-
-  let mergedFrom: string | null = null;
-  if (isStale && hasConflict) {
-    mergedFrom = 'stale_field_merge';
-  } else if (hasConflict) {
-    mergedFrom = 'agent_conflict';
-  }
-
-  return { data: merged, mergedFrom };
-}
-
-export function deepMerge(server: Record<string, unknown>, patch: Record<string, unknown>, priority: 'user' | 'server'): Record<string, unknown> {
-  const result = { ...server };
-
-  for (const key of Object.keys(patch)) {
-    const patchVal = patch[key];
-    const serverVal = server[key];
-
-    if (patchVal === undefined) continue;
-
-    if (serverVal === undefined) {
-      result[key] = patchVal;
-      continue;
-    }
-
-    if (Array.isArray(patchVal) && Array.isArray(serverVal)) {
-      result[key] = mergeArrays(serverVal as Record<string, unknown>[], patchVal as Record<string, unknown>[]);
-    } else if (isPlainObject(patchVal) && isPlainObject(serverVal)) {
-      result[key] = deepMerge(serverVal as Record<string, unknown>, patchVal as Record<string, unknown>, priority);
-    } else if (serverVal !== patchVal) {
-      result[key] = priority === 'user' ? patchVal : serverVal;
-    }
-  }
-
-  return result;
-}
-
-export function mergeArrays(server: Record<string, unknown>[], patch: Record<string, unknown>[]): Record<string, unknown>[] {
-  const idMap = new Map<string, Record<string, unknown>>();
-  for (const item of server) {
-    const id = item.id as string;
-    if (id) idMap.set(id, { ...item });
-  }
-  for (const item of patch) {
-    const id = item.id as string;
-    if (id) {
-      const existing = idMap.get(id);
-      if (existing) {
-        idMap.set(id, deepMerge(existing, item, 'server'));
-      } else {
-        idMap.set(id, { ...item });
-      }
-    }
-  }
-  return Array.from(idMap.values());
-}
-
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function invertPatch(patch: Record<string, unknown>, actionType: string): Record<string, unknown> {
-  switch (actionType) {
-    case 'canvas.rename':
-      return { name: patch.prevName || 'Untitled' };
-    case 'widget.create':
-    case 'widget.delete':
-    case 'widget.restore':
-    case 'element.create':
-    case 'element.delete':
-      return {};
-    case 'widget.move':
-    case 'widget.resize':
-      return { position: (patch as any).prevPosition || patch.position };
-    case 'widget.update_config':
-      return { config: (patch as any).prevConfig || patch.config };
-    case 'widget.update_data':
-      return { data: (patch as any).prevData || patch.data };
-    case 'element.move':
-      return { position: (patch as any).prevPosition || patch.position };
-    case 'element.update':
-      return {
-        config: (patch as any).prevConfig || patch.config,
-        vizSpec: (patch as any).prevVizSpec ?? patch.vizSpec,
-        position: (patch as any).prevPosition || patch.position,
-        metadata: (patch as any).prevMetadata || patch.metadata,
-      };
-    case 'element.arrange':
-      return {};
-  }
-  return {};
-}
+// OT Merge Utilities (mergeWidgetData/deepMerge/mergeArrays/isPlainObject/invertPatch)
+// removed: these were duplicated inline in electron/ipc/db-handlers.ts and had
+// zero external references. Plan 326-329 conductor IPC stays on the inline path.

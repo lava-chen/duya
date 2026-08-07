@@ -3,7 +3,7 @@
  */
 
 import { handleDbRequest } from '../db-bridge.js';
-import { getDatabase } from '../../ipc/db-handlers.js';
+import { getCoreStores } from '../../db/core-connection.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
 import { getLogger, LogComponent } from '../../logging/logger.js';
 import type { RunningProcess } from './process-manager.js';
@@ -73,10 +73,7 @@ export class MessageRouter {
     if (msg.type === 'chat:title_generated') {
       const titleMsg = msg as unknown as { sessionId: string; title: string };
       try {
-        const db = getDatabase();
-        if (db) {
-          db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ?').run(titleMsg.title, titleMsg.sessionId);
-        }
+        getCoreStores().sessions.update(titleMsg.sessionId, { title: titleMsg.title });
       } catch {
         // Best-effort; logger not available in this module
       }

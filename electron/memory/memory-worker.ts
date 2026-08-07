@@ -32,7 +32,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 import type { AIClient } from '@duya/ai';
-import { Stage1Extractor } from '../../packages/agent/src/memory-rollout/extractor.js';
+import { Stage1Extractor, type MessageRowShape } from '../../packages/agent/src/memory-rollout/extractor.js';
 import {
   selectEligible,
   DEFAULT_IDLE_MS,
@@ -46,6 +46,7 @@ import { runCurationCycle, recoverAllPublications } from './curation_publish_orc
 import { scanAdHocChanges } from './ad_hoc_watcher';
 import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import type { ProviderConfig } from './curation_publish_orchestrator';
+import type { CoreDatabase, SessionStore } from '../db/core';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -54,8 +55,32 @@ import type { ProviderConfig } from './curation_publish_orchestrator';
 export interface MemoryWorkerDeps {
   /** Memory-state DB (must be bootstrapped + migrated before start). */
   memoryDb: Database;
-  /** Main DUYA DB (read-only — used for catalog sync + message reads). */
+  /**
+   * Main DUYA DB (read-only — used for message reads by the Stage 1
+   * extractor, which still imports `readMessages` from the legacy
+   * `messages` table until plan 328 Phase 6 migrates it).
+   */
   mainDb: Database;
+  /**
+   * Core database (`duya-core.db`) handle — passed to `catalogSync`
+   * for `message_index` reads (plan 328 decision 10). Optional for
+   * backwards compat with tests that have not been migrated yet.
+   */
+  coreDb?: CoreDatabase;
+  /**
+   * Core `SessionStore` — `catalogSync` reads session rows (including
+   * deleted tombstones) via `SessionStore.list({ includeDeleted: true })`.
+   * Optional for backwards compat with tests that have not been migrated.
+   */
+  sessions?: SessionStore;
+  /**
+   * Override the Stage 1 extractor's message source. The Main-process
+   * MemoryWorker has no `process.send` IPC, so it supplies a reader that
+   * pulls flat rows from the core store MessageLog via
+   * `storedEventsToIpcMessages`. When absent, the extractor falls back to
+   * the agent `messageDb.getBySession` IPC path (tests mock this).
+   */
+  readMessageRows?: (sessionId: string) => Promise<MessageRowShape[]>;
   /** LLM client for Stage 1 extraction. */
   llmClient: AIClient;
   /** Projection root; default `~/.duya/memory`. */
@@ -329,6 +354,12 @@ function createWorker(
   const workerId = `memory-worker-${crypto.randomUUID()}`;
   const extractor = new Stage1Extractor(deps.memoryDb, deps.mainDb, deps.llmClient, {
     rootDir: deps.rootDir,
+    // Live policy file managed by the curation loop (missing file = default
+    // empty policy, so unwired deployments behave exactly as before).
+    policyPath: deps.curation ? path.join(deps.curation.configRoot, 'stage1_policy.md') : undefined,
+    // Main process has no `process.send` IPC — read messages from the core
+    // store MessageLog directly instead of the agent db-client bridge.
+    readMessageRows: deps.readMessageRows,
   });
 
   const state: WorkerState = {
@@ -428,7 +459,7 @@ function createWorker(
     force: boolean;
   }): Promise<ForceSweepResult> => {
     const start = Date.now();
-    const { memoryDb, mainDb, rootDir } = deps;
+    const { memoryDb, rootDir } = deps;
     const now = Date.now();
 
     // Reconcile on first non-paused tick (or any forceSweep when not yet done).
@@ -488,15 +519,30 @@ function createWorker(
       }
     }
 
-    // Catalog sync: materialize chat_sessions from the main DB into
+    // Catalog sync: materialize sessions from the core DB into
     // rollout_catalog. Throttled to catalogSyncIntervalMs on regular
     // ticks; always runs on forceSweep. Without this step, the catalog
     // stays empty and selectEligible returns nothing forever.
+    //
+    // Plan 328 Phase 5: the source switched from the legacy
+    // `chat_sessions`/`messages` tables to the core `sessions` store +
+    // `message_index` rows. The coreDb handle is required for the
+    // `message_index` fingerprint reads (decision 10).
     let catalogSynced: ForceSweepResult['catalogSynced'] = null;
     const syncStale = now - state.lastCatalogSyncAt >= cfg.catalogSyncIntervalMs;
     if (options.force || syncStale) {
       try {
-        const syncResult = syncAllFromMainDb({ mainDb, memoryDb });
+        if (!deps.coreDb || !deps.sessions) {
+          throw new Error(
+            'catalogSync requires coreDb + sessions store (plan 328 Phase 5); ' +
+              'pass them via MemoryWorkerDeps',
+          );
+        }
+        const syncResult = syncAllFromMainDb({
+          coreDb: deps.coreDb.db,
+          sessions: deps.sessions,
+          memoryDb,
+        });
         state.lastCatalogSyncAt = now;
         catalogSynced = {
           inserted: syncResult.inserted,
