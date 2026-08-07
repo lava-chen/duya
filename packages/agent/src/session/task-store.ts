@@ -1,5 +1,4 @@
 import * as ipcDbClient from '../ipc/db-client.js';
-import { getDb } from './db.js';
 
 // =============================================================================
 // IPC Mode Detection
@@ -65,7 +64,7 @@ export interface TaskStore {
 }
 
 // =============================================================================
-// Row-to-Task conversion
+// Row-to-Task conversion (shared by IPC store)
 // =============================================================================
 
 interface DbRow {
@@ -189,196 +188,49 @@ class IPCTaskStore implements TaskStore {
 }
 
 // =============================================================================
-// Direct Task Store Implementation (uses shared getDb from session/db.ts)
+// No-op Task Store (CLI standalone mode)
 // =============================================================================
+// Plan 328 decision 9: CLI standalone mode abandons session persistence. The
+// legacy `tasks` table lives in duya-core.db; the agent must not open it via a
+// hidden second connection. Non-IPC writes are no-ops and reads return empty.
 
-class DirectTaskStore implements TaskStore {
+class NoopTaskStore implements TaskStore {
   constructor(private sessionId: string) {}
 
   async getTask(taskId: string): Promise<Task | null> {
-    const db = getDb();
-    const row = db.prepare(
-      'SELECT * FROM tasks WHERE id = ? AND session_id = ?'
-    ).get(taskId, this.sessionId) as DbRow | undefined;
-    if (!row) return null;
-    return rowToTask(row);
+    return null;
   }
 
   async listTasks(): Promise<Task[]> {
-    const db = getDb();
-    const rows = db.prepare(
-      'SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC'
-    ).all(this.sessionId) as DbRow[];
-    return rows.map(rowToTask);
+    return [];
   }
 
   async createTask(task: Omit<Task, 'id'>): Promise<Task> {
-    const db = getDb();
-    const now = Date.now();
-    const countResult = db.prepare(
-      'SELECT COUNT(*) as count FROM tasks WHERE session_id = ?'
-    ).get(this.sessionId) as { count: number };
-    const id = String(countResult.count + 1);
-
-    db.prepare(`
-      INSERT INTO tasks (id, session_id, subject, description, status, active_form, owner, blocks, blocked_by, metadata, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      id, this.sessionId, task.subject, task.description,
-      task.status || 'pending', task.activeForm || null, task.owner || null,
-      JSON.stringify(task.blocks || []), JSON.stringify(task.blockedBy || []),
-      JSON.stringify(task.metadata || {}), now, now
-    );
-
-    const result = await this.getTask(id);
-    if (!result) throw new Error('Failed to create task');
-    return result;
+    return { id: 'unpersisted', ...task };
   }
 
   async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
-    const db = getDb();
-    const now = Date.now();
-
-    // First, get existing task to build the result
-    const existingRow = db.prepare(
-      'SELECT * FROM tasks WHERE id = ? AND session_id = ?'
-    ).get(taskId, this.sessionId) as DbRow | undefined;
-    if (!existingRow) return null;
-
-    // Build the updated task object
-    const updatedTask: Task = {
-      id: existingRow.id,
-      subject: updates.subject ?? existingRow.subject,
-      description: updates.description ?? existingRow.description,
-      status: updates.status ?? (existingRow.status as TaskStatus),
-      activeForm: updates.activeForm ?? existingRow.active_form ?? undefined,
-      owner: updates.owner ?? existingRow.owner ?? undefined,
-      blocks: updates.blocks ?? JSON.parse(existingRow.blocks || '[]'),
-      blockedBy: updates.blockedBy ?? JSON.parse(existingRow.blocked_by || '[]'),
-      metadata: updates.metadata ?? JSON.parse(existingRow.metadata || '{}'),
-    };
-
-    db.prepare(`
-      UPDATE tasks SET
-        subject = COALESCE(?, subject),
-        description = COALESCE(?, description),
-        status = COALESCE(?, status),
-        active_form = COALESCE(?, active_form),
-        owner = COALESCE(?, owner),
-        blocks = COALESCE(?, blocks),
-        blocked_by = COALESCE(?, blocked_by),
-        metadata = COALESCE(?, metadata),
-        updated_at = ?
-      WHERE id = ? AND session_id = ?
-    `).run(
-      updates.subject ?? null, updates.description ?? null,
-      updates.status ?? null, updates.activeForm ?? null, updates.owner ?? null,
-      updates.blocks ? JSON.stringify(updates.blocks) : null,
-      updates.blockedBy ? JSON.stringify(updates.blockedBy) : null,
-      updates.metadata ? JSON.stringify(updates.metadata) : null,
-      now, taskId, this.sessionId
-    );
-
-    return updatedTask;
+    return null;
   }
 
   async deleteTask(taskId: string): Promise<boolean> {
-    const db = getDb();
-    const result = db.prepare(
-      'DELETE FROM tasks WHERE id = ? AND session_id = ?'
-    ).run(taskId, this.sessionId);
-    return result.changes > 0;
+    return false;
   }
 
   async claimTask(taskId: string, owner: string): Promise<ClaimTaskResult> {
-    const db = getDb();
-    const now = Date.now();
-
-    const existingTask = await this.getTask(taskId);
-    if (!existingTask) return { success: false, reason: 'task_not_found' };
-    if (existingTask.owner && existingTask.owner !== owner) {
-      return { success: false, reason: 'already_claimed', task: existingTask };
-    }
-    if (existingTask.status === 'completed') {
-      return { success: false, reason: 'already_resolved', task: existingTask };
-    }
-
-    if (existingTask.blockedBy.length > 0) {
-      const unresolvedIds = db.prepare(
-        `SELECT id FROM tasks WHERE id IN (${existingTask.blockedBy.map(() => '?').join(',')}) AND status != 'completed'`
-      ).all(...existingTask.blockedBy) as { id: string }[];
-      if (unresolvedIds.length > 0) {
-        return {
-          success: false,
-          reason: 'blocked',
-          task: existingTask,
-          blockedByTasks: unresolvedIds.map(r => r.id),
-        };
-      }
-    }
-
-    db.prepare(
-      `UPDATE tasks SET owner = ?, status = 'in_progress', updated_at = ? WHERE id = ? AND session_id = ?`
-    ).run(owner, now, taskId, this.sessionId);
-
-    const updated = await this.getTask(taskId);
-    return { success: true, task: updated! };
+    return { success: false, reason: 'task_not_found' };
   }
 
   async blockTask(fromTaskId: string, toTaskId: string): Promise<boolean> {
-    const db = getDb();
-    const now = Date.now();
-
-    const [fromTask, toTask] = await Promise.all([this.getTask(fromTaskId), this.getTask(toTaskId)]);
-    if (!fromTask || !toTask) return false;
-
-    if (!fromTask.blocks.includes(toTaskId)) {
-      db.prepare('UPDATE tasks SET blocks = ?, updated_at = ? WHERE id = ? AND session_id = ?')
-        .run(JSON.stringify([...fromTask.blocks, toTaskId]), now, fromTaskId, this.sessionId);
-    }
-    if (!toTask.blockedBy.includes(fromTaskId)) {
-      db.prepare('UPDATE tasks SET blocked_by = ?, updated_at = ? WHERE id = ? AND session_id = ?')
-        .run(JSON.stringify([...toTask.blockedBy, fromTaskId]), now, toTaskId, this.sessionId);
-    }
-    return true;
+    return false;
   }
 
   async getAgentStatuses(): Promise<AgentStatus[]> {
-    const allTasks = await this.listTasks();
-    const unresolvedByOwner = new Map<string, string[]>();
-    for (const task of allTasks) {
-      if (task.status !== 'completed' && task.owner) {
-        const existing = unresolvedByOwner.get(task.owner) || [];
-        existing.push(task.id);
-        unresolvedByOwner.set(task.owner, existing);
-      }
-    }
-    return Array.from(unresolvedByOwner.entries()).map(([ownerId, tasks]) => ({
-      agentId: ownerId,
-      status: 'busy' as const,
-      currentTasks: tasks,
-    }));
+    return [];
   }
 
   async unassignTeammateTasks(owner: string): Promise<UnassignTasksResult> {
-    const db = getDb();
-    const now = Date.now();
-
-    const tasks = db.prepare(
-      `SELECT id, subject FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
-    ).all(this.sessionId, owner) as { id: string; subject: string }[];
-
-    if (tasks.length === 0) return { unassignedTasks: [], notificationMessage: '' };
-
-    db.prepare(
-      `UPDATE tasks SET owner = NULL, status = 'pending', updated_at = ? WHERE session_id = ? AND status != 'completed' AND owner = ?`
-    ).run(now, this.sessionId, owner);
-
-    const taskList = tasks.map(t => `#${t.id} "${t.subject}"`).join(', ');
-    return {
-      unassignedTasks: tasks.map(t => ({ id: t.id, subject: t.subject })),
-      notificationMessage: `${owner} was terminated. ${tasks.length} task(s) were unassigned: ${taskList}.`,
-    };
+    return { unassignedTasks: [], notificationMessage: '' };
   }
 }
 
@@ -393,7 +245,7 @@ export function getDatabaseTaskStore(sessionId: string): TaskStore {
     return new IPCTaskStore(sessionId);
   }
   if (!storeCache.has(sessionId)) {
-    storeCache.set(sessionId, new DirectTaskStore(sessionId));
+    storeCache.set(sessionId, new NoopTaskStore(sessionId));
   }
   return storeCache.get(sessionId)!;
 }

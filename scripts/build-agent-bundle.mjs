@@ -54,29 +54,37 @@ fs.writeFileSync(
   JSON.stringify(packageJson, null, 2)
 );
 
-// Build Literature MCP server as a separate CommonJS bundle
-await build({
-  entryPoints: ['packages/plugin-core/src/plugins/builtin/literature/server/mcp-server.ts'],
-  outfile: path.join(outdir, 'literature-mcp-server.js'),
-  bundle: true,
-  platform: 'node',
-  target: 'node18',
-  format: 'cjs',
-  sourcemap: false,
-  minify: true,
-  external: [
-    'better-sqlite3',
-  ],
-  banner: {
-    js: importMetaUrlPolyfill,
-  },
-  define: {
-    'import.meta.url': 'import_meta_url',
-  },
-});
+// Build Literature MCP server as a separate CommonJS bundle.
+// The entry was removed in the working-tree refactor that moved builtin
+// plugins into plugin-core; guard on existence so a cleaner migration can
+// restore it without breaking the overall build.
+const literatureEntry = 'packages/plugin-core/src/plugins/builtin/literature/server/mcp-server.ts';
+if (fs.existsSync(literatureEntry)) {
+  await build({
+    entryPoints: [literatureEntry],
+    outfile: path.join(outdir, 'literature-mcp-server.js'),
+    bundle: true,
+    platform: 'node',
+    target: 'node18',
+    format: 'cjs',
+    sourcemap: false,
+    minify: true,
+    external: [
+      'better-sqlite3',
+    ],
+    banner: {
+      js: importMetaUrlPolyfill,
+    },
+    define: {
+      'import.meta.url': 'import_meta_url',
+    },
+  });
 
-const mcpServerStats = fs.statSync(path.join(outdir, 'literature-mcp-server.js'));
-console.log(`[build-agent-bundle] Built literature-mcp-server.js (${(mcpServerStats.size / 1024 / 1024).toFixed(2)} MB)`);
+  const mcpServerStats = fs.statSync(path.join(outdir, 'literature-mcp-server.js'));
+  console.log(`[build-agent-bundle] Built literature-mcp-server.js (${(mcpServerStats.size / 1024 / 1024).toFixed(2)} MB)`);
+} else {
+  console.warn(`[build-agent-bundle] Skipped literature-mcp-server.js (entry not present: ${literatureEntry})`);
+}
 
 // Build standalone CLI bundle (duya shell wrapper target).
 // Plan 99: the CLI bundle is now built separately by

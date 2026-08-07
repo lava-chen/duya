@@ -11,8 +11,8 @@
  * No write ops. Message create/update is the agent process's job
  * during streaming; exposing it would bypass the stream-chat pipeline.
  *
- * Data source: `electron/db/queries/messages.ts` (paginated read added
- * in plan 98) and `electron/cli/handlers/messages.ts`.
+ * Data source: `electron/cli/handlers/messages.ts` (reads the core
+ * `duya-core.db` message store via the CLI API server).
  *
  * DTOs frozen in `docs/design-docs/cli-control-plane/roadmap.md §3.4`.
  * Internal columns (`viz_spec`, `sub_agent_id`, `seq_index`, `status`)

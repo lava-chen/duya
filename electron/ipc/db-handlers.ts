@@ -13,11 +13,6 @@ import { randomUUID } from 'crypto';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getLogger, LogComponent } from '../logging/logger';
-import { createSession } from '../db/queries/sessions';
-import {
-  truncateMessagesAfter,
-  truncateMessagesFromInclusive,
-} from '../db/queries/messages';
 import {
   createCanvas as createConductorCanvas,
   getMaxZIndex,
@@ -42,7 +37,26 @@ import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } f
 import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUploadProjectAsset } from '../conductor/asset-service';
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
-import { markMailboxForGuidance, promoteQueuedMailbox } from '../db/mailbox-transitions';
+import { getCoreStores } from '../db/core-connection';
+import { resolvePermissionProfile } from '../db/permission-resolver';
+import {
+  ipcSessionToCoreCreate,
+  ipcSessionToUpdate,
+  coreSessionToIpcRow,
+  ipcMessageToNewEvent,
+  storedEventToIpcMessage,
+  storedEventsToIpcMessages,
+  serializeMessageContent,
+  serializeDisplayContent,
+  ipcTaskToCoreCreate,
+  ipcTaskToUpdate,
+  coreTaskToIpcRow,
+  ipcPermissionToCoreCreate,
+  ipcPermissionToResolve,
+  corePermissionToIpcRow,
+  coreMailboxToIpcRow,
+} from './core-db-adapters';
+import type { NewEvent, MailboxKind, MailboxStatus } from '../db/core';
 
 // Re-export lifecycle functions for backward compatibility
 export {
@@ -56,25 +70,6 @@ export {
   checkDatabaseSizeWarning,
 } from '../db/index';
 export type { DbInitResult, DatabaseStats } from '../db/index';
-
-function serializeMessageContent(value: unknown, role?: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === null || value === undefined) return '';
-  if (Array.isArray(value) && role === 'user') {
-    const textBlocks = value.filter(
-      (b: unknown) => (b as Record<string, unknown>).type === 'text'
-    );
-    return textBlocks.length > 0
-      ? textBlocks.map((b: unknown) => (b as Record<string, string>).text || '').join('\n')
-      : JSON.stringify(value);
-  }
-  return JSON.stringify(value);
-}
-
-function serializeDisplayContent(value: unknown, role?: unknown): string | null {
-  if (value === null || value === undefined || value === '') return null;
-  return serializeMessageContent(value, role);
-}
 
 // ============================================================
 // IPC Handlers Registration
@@ -167,107 +162,106 @@ export function registerDbHandlers(): void {
     return { success: updated, newPath: defaultPath };
   });
 
-  // ==================== Session Handlers ====================
+  // ==================== Session Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2: all session IPC handlers forward to SessionStore via
+  // core-db-adapters. DTO shape (snake_case flat row) is preserved so the
+  // renderer and Worker code have zero changes.
 
-  ipcMain.handle('db:session:create', (_event, data) => {
-    // 委托 query 层, 自动走 permission-resolver 完成 settings → profile 派生 / 父继承逻辑.
-    return createSession(data);
+  ipcMain.handle('db:session:create', (_event, data: Record<string, unknown>) => {
+    const { sessions } = getCoreStores();
+    // Resolve permission profile BEFORE insert (single-phase write, see
+    // permission-resolver.ts). Trusted override only for internal callers.
+    const parentSessionId =
+      (data.parent_session_id as string | undefined) ?? (data.parent_id as string | undefined) ?? null;
+    const permissionMode = resolvePermissionProfile(
+      data.permission_profile as string | null | undefined,
+      parentSessionId,
+      { isTrustedOverride: data.is_trusted_permission_override === true },
+    );
+    // Upsert semantics: if the session already exists, update it.
+    const existing = sessions.get(data.id as string);
+    if (existing) {
+      const patch = ipcSessionToUpdate(data);
+      sessions.update(data.id as string, patch);
+      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'source'] as const;
+      for (const key of extKeys) {
+        if (data[key] !== undefined) {
+          sessions.setExtension(data.id as string, key, data[key]);
+        }
+      }
+      return coreSessionToIpcRow(sessions.get(data.id as string)!);
+    }
+    const input = ipcSessionToCoreCreate(data, permissionMode);
+    const session = sessions.create(input);
+    return coreSessionToIpcRow(session);
   });
 
   ipcMain.handle('db:session:get', (_event, sessionId: string) => {
-    return getDb().prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    const { sessions } = getCoreStores();
+    const session = sessions.get(sessionId);
+    return session ? coreSessionToIpcRow(session) : undefined;
   });
 
   ipcMain.handle('db:session:update', (_event, sessionId: string, data: Record<string, unknown>) => {
-    const now = Date.now();
-    const fields: string[] = ['updated_at = @updated_at'];
-    const params: Record<string, unknown> = { sessionId, updated_at: now };
-
-    const fieldMap: Record<string, string> = {
-      title: 'title',
-      model: 'model',
-      system_prompt: 'system_prompt',
-      working_directory: 'working_directory',
-      project_name: 'project_name',
-      status: 'status',
-      mode: 'mode',
-      permission_profile: 'permission_profile',
-      provider_id: 'provider_id',
-      context_summary: 'context_summary',
-      parent_id: 'parent_id',
-      agent_profile_id: 'agent_profile_id',
-      agent_type: 'agent_type',
-      agent_name: 'agent_name',
-      conductor_mode_enabled: 'conductor_mode_enabled',
-      conductor_canvas_id: 'conductor_canvas_id',
-    };
-
-    for (const [key, dbField] of Object.entries(fieldMap)) {
+    const { sessions } = getCoreStores();
+    const patch = ipcSessionToUpdate(data);
+    sessions.update(sessionId, patch);
+    // Extension-bound fields — write via setExtension.
+    const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'source'] as const;
+    for (const key of extKeys) {
       if (data[key] !== undefined) {
-        fields.push(`${dbField} = @${key}`);
-        params[key] = data[key];
+        sessions.setExtension(sessionId, key, data[key]);
       }
     }
-
-    const database = getDb();
-    database.prepare(`UPDATE chat_sessions SET ${fields.join(', ')} WHERE id = @sessionId`).run(params);
-    return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    const updated = sessions.get(sessionId);
+    return updated ? coreSessionToIpcRow(updated) : undefined;
   });
 
+  // Decision 5: session:delete is now soft delete (status='deleted'), no cascade.
+  // Old behavior was hard DELETE with cascade to messages/tasks/etc.
   ipcMain.handle('db:session:delete', (_event, sessionId: string) => {
-    const database = getDb();
-    const txn = database.transaction(() => {
-      // Break parent-child relationships first so the self-referencing FK on
-      // chat_sessions.parent_id does not block deletion. Newer schemas use
-      // ON DELETE SET NULL plus a trigger, but we keep this for compatibility.
-      database.prepare('UPDATE chat_sessions SET parent_id = NULL WHERE parent_id = ?').run(sessionId);
-      // Explicitly clean up dependent rows. Most of these tables declare
-      // ON DELETE CASCADE, but being explicit makes the deletion order safe
-      // and protects against future schema changes that might drop CASCADE.
-      database.prepare('DELETE FROM message_attachments WHERE session_id = ?').run(sessionId);
-      database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-      database.prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
-      database.prepare('DELETE FROM research_sessions WHERE session_id = ?').run(sessionId);
-      const result = database.prepare('DELETE FROM chat_sessions WHERE id = ?').run(sessionId);
-      return result.changes > 0;
-    });
-    return txn();
+    const { sessions } = getCoreStores();
+    const existing = sessions.get(sessionId);
+    if (!existing) return false;
+    sessions.update(sessionId, { status: 'deleted' });
+    return true;
   });
 
   ipcMain.handle('db:session:list', () => {
-    return getDb().prepare("SELECT * FROM chat_sessions WHERE is_deleted = 0 AND mode != 'automation' ORDER BY updated_at DESC").all();
+    const { sessions } = getCoreStores();
+    // Decision 5: preserve renderer's mode != 'automation' filter.
+    const list = sessions.list({ excludeModes: ['automation'] });
+    return list.map(coreSessionToIpcRow);
   });
 
   ipcMain.handle('db:session:listByWorkingDirectory', (_event, workingDirectory: string) => {
-    const database = getDb();
-    if (!workingDirectory) {
-      return database.prepare(
-        "SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = '' ORDER BY updated_at DESC"
-      ).all();
-    }
-    return database.prepare(
-      'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND working_directory = ? ORDER BY updated_at DESC'
-    ).all(workingDirectory);
+    const { sessions } = getCoreStores();
+    const list = sessions.list({ workingDirectory: workingDirectory || '' });
+    return list.map(coreSessionToIpcRow);
   });
 
   ipcMain.handle('db:session:listByParentId', (_event, parentId: string) => {
-    return getDb().prepare(
-      'SELECT * FROM chat_sessions WHERE is_deleted = 0 AND parent_id = ? ORDER BY created_at ASC'
-    ).all(parentId);
+    const { sessions } = getCoreStores();
+    const list = sessions.list({ parentSessionId: parentId });
+    return list.map(coreSessionToIpcRow);
   });
 
   ipcMain.handle('db:session:saveDraft', (_event, sessionId: string, draft: string) => {
-    getDb().prepare('UPDATE chat_sessions SET draft_message = ?, updated_at = ? WHERE id = ?')
-      .run(draft, Date.now(), sessionId);
+    const { sessions } = getCoreStores();
+    sessions.saveDraft(sessionId, draft);
   });
 
   ipcMain.handle('db:session:getDraft', (_event, sessionId: string) => {
-    const row = getDb().prepare('SELECT draft_message FROM chat_sessions WHERE id = ?')
-      .get(sessionId) as { draft_message: string } | undefined;
-    return row?.draft_message ?? '';
+    const { sessions } = getCoreStores();
+    return sessions.getDraft(sessionId);
   });
 
-  // ==================== Message Handlers ====================
+  // ==================== Message Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2: all message IPC handlers forward to MessageLog via
+  // core-db-adapters. Decision 3: message:replace → appendBatch (INSERT OR
+  // IGNORE idempotency); truncate* → rewriteSession (only append-only
+  // exception). Decision 5: message:add changed from INSERT OR REPLACE to
+  // INSERT OR IGNORE (same-id re-send no longer overwrites).
 
   ipcMain.handle('db:message:add', (_event, data: {
     id: string;
@@ -291,272 +285,131 @@ export function registerDbHandlers(): void {
     sub_agent_id?: string;
     attachments?: unknown[];
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, data.role);
-    const seqIndex = data.seq_index ?? (database.prepare(
-      'SELECT COALESCE(MAX(seq_index), -1) + 1 AS next_seq_index FROM messages WHERE session_id = ?',
-    ).get(data.session_id) as { next_seq_index: number }).next_seq_index;
-    database.prepare(`
-      INSERT OR REPLACE INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-      VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
-    `).run({
-      id: data.id,
-      session_id: data.session_id,
-      role: data.role,
-      content: data.content,
-      display_content: displayContent,
-      name: data.name ?? null,
-      tool_call_id: data.tool_call_id ?? null,
-      token_usage: data.token_usage ?? null,
-      msg_type: data.role === 'tool' ? 'tool_result' : (data.msg_type ?? 'text'),
-      thinking: data.thinking ?? null,
-      tool_name: data.tool_name ?? null,
-      tool_input: data.tool_input ?? null,
-      parent_tool_call_id: data.role === 'tool' ? (data.tool_call_id ?? null) : (data.parent_tool_call_id ?? null),
-      viz_spec: data.viz_spec ?? null,
-      status: data.status ?? 'done',
-      seq_index: seqIndex,
-      duration_ms: data.duration_ms ?? null,
-      sub_agent_id: data.sub_agent_id ?? null,
-      attachments: data.attachments ? JSON.stringify(data.attachments) : null,
-      created_at: now,
-    });
-
-    database.prepare('UPDATE chat_sessions SET updated_at = ? WHERE id = ?').run(now, data.session_id);
-
-    return database.prepare('SELECT * FROM messages WHERE id = ?').get(data.id);
+    const { messageLog } = getCoreStores();
+    // Decision 5: INSERT OR IGNORE semantics via appendBatch — same-id re-send
+    // is a no-op instead of overwriting (append-only discipline).
+    const event = ipcMessageToNewEvent(data.session_id, data);
+    messageLog.appendBatch([event]);
+    // Read back through the adapter to return the canonical row shape.
+    const events = messageLog.listBySession(data.session_id);
+    const stored = events.find((e) => e.id === data.id);
+    return stored ? storedEventToIpcMessage(stored) : null;
   });
 
   ipcMain.handle('db:message:getBySession', (_event, sessionId: string) => {
-    const result = getDb().prepare(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY seq_index ASC, created_at ASC, rowid ASC'
-    ).all(sessionId);
-    return result;
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    return storedEventsToIpcMessages(events);
   });
 
   ipcMain.handle('db:message:getCount', (_event, sessionId: string) => {
-    const result = getDb().prepare(
-      'SELECT COUNT(*) as count FROM messages WHERE session_id = ?'
-    ).get(sessionId) as { count: number };
-    return result.count;
+    const { messageLog } = getCoreStores();
+    return messageLog.getCount(sessionId);
   });
 
   ipcMain.handle('db:message:deleteBySession', (_event, sessionId: string) => {
-    const result = getDb().prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-    return result.changes;
+    const { messageLog } = getCoreStores();
+    const before = messageLog.getCount(sessionId);
+    messageLog.deleteBySession(sessionId);
+    return before;
   });
 
-  ipcMain.handle('db:message:replace', (_event, sessionId: string, messages: unknown[], generation: number) => {
-    const now = Date.now();
-    const database = getDb();
+  // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
+  // idempotency). Generation optimistic lock is deprecated (append-only store).
+  // If the session does not exist, auto-create it (matches old behavior).
+  ipcMain.handle('db:message:replace', (_event, sessionId: string, messages: unknown[], _generation: number) => {
+    const { sessions, messageLog } = getCoreStores();
 
-    let sessionGen = database.prepare(
-      'SELECT generation FROM chat_sessions WHERE id = ?'
-    ).get(sessionId) as { generation: number } | undefined;
-
-    if (!sessionGen) {
-      // Auto-create session if it doesn't exist (happens when frontend creates session without DB entry)
-      dbLogger.info('Session not found, auto-creating', { sessionId });
-      database.prepare(`
-        INSERT INTO chat_sessions (
-          id, title, model, system_prompt, working_directory,
-          project_name, status, mode, provider_id, generation,
-          parent_id, agent_type, agent_name,
-          created_at, updated_at, is_deleted
-        ) VALUES (
-          @id, @title, @model, @system_prompt, @working_directory,
-          @project_name, @status, @mode, @provider_id, @generation,
-          @parent_id, @agent_type, @agent_name,
-          @created_at, @updated_at, 0
-        )
-      `).run({
-        id: sessionId,
-        title: 'New Chat',
-        model: '',
-        system_prompt: '',
-        working_directory: '',
-        project_name: '',
-        status: 'active',
-        mode: 'code',
-        provider_id: 'env',
-        generation: 0,
-        parent_id: null,
-        agent_type: 'main',
-        agent_name: '',
-        created_at: now,
-        updated_at: now,
-      });
-      // Re-fetch to get the created session
-      sessionGen = database.prepare('SELECT generation FROM chat_sessions WHERE id = ?').get(sessionId) as { generation: number } | undefined;
-      if (!sessionGen) {
-        return { success: false, reason: 'session_not_found' };
-      }
+    // Auto-create session if missing (old behavior: happens when frontend
+    // creates a session without a DB entry first).
+    if (!sessions.get(sessionId)) {
+      dbLogger.info('Session not found, auto-creating', { sessionId }, LogComponent.DB);
+      sessions.create({ id: sessionId, createdAt: Date.now(), updatedAt: Date.now() });
     }
-
-    if (generation < sessionGen.generation) {
-      return { success: false, reason: 'stale_generation' };
-    }
-
-    const newGeneration = Math.max(generation, sessionGen.generation + 1);
 
     try {
-      database.transaction(() => {
-        database.prepare('UPDATE chat_sessions SET generation = ?, updated_at = ? WHERE id = ?')
-          .run(newGeneration, now, sessionId);
-
-        database.prepare('DELETE FROM messages WHERE session_id = ?').run(sessionId);
-
-        const stmt = database.prepare(`
-          INSERT INTO messages (id, session_id, role, content, display_content, name, tool_call_id, token_usage, msg_type, thinking, tool_name, tool_input, parent_tool_call_id, viz_spec, status, seq_index, duration_ms, sub_agent_id, attachments, created_at)
-          VALUES (@id, @session_id, @role, @content, @display_content, @name, @tool_call_id, @token_usage, @msg_type, @thinking, @tool_name, @tool_input, @parent_tool_call_id, @viz_spec, @status, @seq_index, @duration_ms, @sub_agent_id, @attachments, @created_at)
-        `);
-
-        for (const [index, rawMsg] of messages.entries()) {
-          const msg = rawMsg as Record<string, unknown>;
-          let msgType = msg.role === 'tool' ? 'tool_result' : ((msg.msg_type as string) || 'text');
-          let thinking: string | null = (msg.thinking as string) || null;
-          let toolName: string | null = (msg.tool_name as string) || null;
-          let toolInput: string | null = (msg.tool_input as string) || null;
-          let parentToolCallId: string | null = msg.role === 'tool'
-            ? ((msg.tool_call_id as string) || null)
-            : ((msg.parent_tool_call_id as string) || null);
-          let contentStr = serializeMessageContent(msg.content, msg.role);
-          const displayContentStr = serializeDisplayContent(msg.displayContent ?? msg.display_content, msg.role);
-
-          // For user messages with image content blocks,
-          // extract only the text blocks for DB storage. Image data lives in
-          // message_attachments table and should not be stored in content.
-          // Assistant messages (thinking, tool_use) keep their full structure.
-          if (msg.role === 'user' && Array.isArray(msg.content)) {
-            const textBlocks = msg.content.filter(
-              (b: unknown) => (b as Record<string, unknown>).type === 'text'
-            );
-            if (textBlocks.length > 0) {
-              contentStr = textBlocks
-                .map((b: unknown) => (b as Record<string, string>).text || '')
-                .join('\n');
-            }
-          }
-
-          if (!msg.msg_type && Array.isArray(msg.content)) {
-            const blocks = msg.content as Array<{ type: string; thinking?: string; name?: string; input?: unknown; tool_use_id?: string }>;
-            const types = blocks.map(b => b.type);
-            if (types.includes('thinking') && types.length === 1) {
-              msgType = 'thinking';
-              thinking = blocks[0].thinking || null;
-              contentStr = thinking || '';
-            } else if (types.includes('tool_use') && types.length === 1) {
-              msgType = 'tool_use';
-              toolName = blocks[0].name || null;
-              toolInput = blocks[0].input ? JSON.stringify(blocks[0].input) : null;
-              contentStr = toolInput || '';
-            } else if (msg.role === 'tool') {
-              msgType = 'tool_result';
-              parentToolCallId = (msg.tool_call_id as string) || null;
-            } else {
-              const thinkingBlock = blocks.find(b => b.type === 'thinking');
-              if (thinkingBlock) thinking = thinkingBlock.thinking || null;
-            }
-          } else if (!msg.msg_type && typeof msg.content === 'string') {
-            if (msg.role === 'tool') {
-              msgType = 'tool_result';
-              parentToolCallId = (msg.tool_call_id as string) || null;
-            }
-          }
-
-          const attachments = msg.attachments
-            ? (typeof msg.attachments === 'string' ? msg.attachments : JSON.stringify(msg.attachments))
-            : null;
-
-          stmt.run({
-            id: (msg.id as string) || randomUUID(),
-            session_id: sessionId,
-            role: msg.role as string,
-            content: contentStr,
-            display_content: displayContentStr,
-            name: (msg.name as string) || null,
-            tool_call_id: (msg.tool_call_id as string) || null,
-            token_usage: (msg.token_usage as string) || null,
-            msg_type: msgType,
-            thinking,
-            tool_name: toolName,
-            tool_input: toolInput,
-            parent_tool_call_id: parentToolCallId,
-            viz_spec: (msg.viz_spec as string) || null,
-            status: (msg.status as string) || 'done',
-            seq_index: (msg.seq_index as number) ?? index,
-            duration_ms: (msg.duration_ms as number) ?? null,
-            sub_agent_id: (msg.sub_agent_id as string) || null,
-            attachments,
-            created_at: (msg.timestamp as number) || now,
-          });
-        }
-      })();
-
-      return { success: true, newGeneration, messageCount: (messages as unknown[]).length };
+      // Build NewEvents via the adapter. Deterministic IDs are preserved
+      // (no randomUUID fallback) so re-sending the same batch is idempotent.
+      const events: NewEvent[] = (messages as Record<string, unknown>[]).map((msg) => {
+        const id = (msg.id as string) || randomUUID();
+        msg.id = id;
+        return ipcMessageToNewEvent(sessionId, msg as unknown as Parameters<typeof ipcMessageToNewEvent>[1]);
+      });
+      messageLog.appendBatch(events);
+      return { success: true, newGeneration: 0, messageCount: events.length };
     } catch (error) {
       dbLogger.error('replaceMessages failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.DB);
       return { success: false, reason: error instanceof Error ? error.message : String(error) };
     }
   });
 
+  // Decision 3: truncate* maps to rewriteSession (the only append-only
+  // exception). The adapter computes the kept events via project() and
+  // rewrites the whole rollout file + index.
   ipcMain.handle('db:message:truncateAfter', (_event, sessionId: string, messageId: string) => {
-    return { deletedCount: truncateMessagesAfter(sessionId, messageId) };
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    const cutIdx = events.findIndex((e) => e.id === messageId);
+    if (cutIdx < 0) return { deletedCount: 0 };
+    // Keep [0, cutIdx] (inclusive of the target — truncateAfter keeps target).
+    const keptEvents: NewEvent[] = events.slice(0, cutIdx + 1).map((e) => ({
+      id: e.id,
+      sessionId: e.sessionId,
+      turnId: e.turnId,
+      payload: JSON.parse(e.payload),
+      createdAt: e.createdAt,
+    }));
+    const deletedCount = events.length - keptEvents.length;
+    messageLog.rewriteSession(sessionId, keptEvents);
+    return { deletedCount };
   });
 
   // Edit-and-resend: supersede the target message and everything after it
   // (inclusive), so the edited version can be appended as a fresh message.
   ipcMain.handle('db:message:truncateFromInclusive', (_event, sessionId: string, messageId: string) => {
-    return { deletedCount: truncateMessagesFromInclusive(sessionId, messageId) };
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    const cutIdx = events.findIndex((e) => e.id === messageId);
+    if (cutIdx < 0) return { deletedCount: 0 };
+    // Keep [0, cutIdx) (exclusive of the target — truncateFromInclusive removes target).
+    const keptEvents: NewEvent[] = events.slice(0, cutIdx).map((e) => ({
+      id: e.id,
+      sessionId: e.sessionId,
+      turnId: e.turnId,
+      payload: JSON.parse(e.payload),
+      createdAt: e.createdAt,
+    }));
+    const deletedCount = events.length - keptEvents.length;
+    messageLog.rewriteSession(sessionId, keptEvents);
+    return { deletedCount };
   });
 
-  // ==================== Lock Handlers ====================
+  // ==================== Lock Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2: all lock IPC handlers forward to LockStore.
 
   ipcMain.handle('db:lock:acquire', (_event, sessionId: string, lockId: string, owner: string, ttlSec = 300) => {
-    const now = Date.now();
-    const expiresAt = now + ttlSec * 1000;
-    const database = getDb();
-
-    const txn = database.transaction(() => {
-      database.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-      try {
-        database.prepare(
-          'INSERT INTO session_runtime_locks (session_id, lock_id, owner, expires_at) VALUES (?, ?, ?, ?)'
-        ).run(sessionId, lockId, owner, expiresAt);
-        return true;
-      } catch {
-        return false;
-      }
-    });
-    return txn();
+    const { locks } = getCoreStores();
+    return locks.acquire(sessionId, lockId, owner, ttlSec);
   });
 
   ipcMain.handle('db:lock:renew', (_event, sessionId: string, lockId: string, ttlSec = 300) => {
-    const now = Date.now();
-    const expiresAt = now + ttlSec * 1000;
-    const result = getDb().prepare(
-      'UPDATE session_runtime_locks SET expires_at = ? WHERE session_id = ? AND lock_id = ?'
-    ).run(expiresAt, sessionId, lockId);
-    return result.changes > 0;
+    const { locks } = getCoreStores();
+    return locks.renew(sessionId, lockId, ttlSec);
   });
 
   ipcMain.handle('db:lock:release', (_event, sessionId: string, lockId: string) => {
-    const result = getDb().prepare(
-      'DELETE FROM session_runtime_locks WHERE session_id = ? AND lock_id = ?'
-    ).run(sessionId, lockId);
-    return result.changes > 0;
+    const { locks } = getCoreStores();
+    return locks.release(sessionId, lockId);
   });
 
   ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare('DELETE FROM session_runtime_locks WHERE expires_at < ?').run(now);
-    const stmt = database.prepare('SELECT 1 FROM session_runtime_locks WHERE session_id = ?');
-    return stmt.get(sessionId) !== undefined;
+    const { locks } = getCoreStores();
+    return locks.isLocked(sessionId);
   });
 
-  // ==================== Task Handlers ====================
+  // ==================== Task Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2: all task IPC handlers forward to TaskStore via
+  // core-db-adapters. DTO shape (snake_case flat row) is preserved.
 
   ipcMain.handle('db:task:create', (_event, data: {
     id: string;
@@ -566,136 +419,60 @@ export function registerDbHandlers(): void {
     active_form?: string;
     owner?: string;
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO tasks (id, session_id, subject, description, active_form, owner, status, blocks, blocked_by, metadata, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'pending', '[]', '[]', '{}', ?, ?)
-    `).run(data.id, data.session_id, data.subject, data.description, data.active_form ?? null, data.owner ?? null, now, now);
-    return database.prepare('SELECT * FROM tasks WHERE id = ?').get(data.id);
+    const { tasks } = getCoreStores();
+    const task = tasks.create(ipcTaskToCoreCreate(data));
+    return coreTaskToIpcRow(task);
   });
 
   ipcMain.handle('db:task:get', (_event, id: string) => {
-    return getDb().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    const { tasks } = getCoreStores();
+    const task = tasks.get(id);
+    return task ? coreTaskToIpcRow(task) : undefined;
   });
 
   ipcMain.handle('db:task:getBySession', (_event, sessionId: string) => {
-    return getDb().prepare('SELECT * FROM tasks WHERE session_id = ? ORDER BY created_at ASC').all(sessionId);
+    const { tasks } = getCoreStores();
+    return tasks.getBySession(sessionId).map(coreTaskToIpcRow);
   });
 
   ipcMain.handle('db:task:update', (_event, id: string, data: Record<string, unknown>) => {
-    const now = Date.now();
-    const fields: string[] = ['updated_at = ?'];
-    const values: unknown[] = [now];
-
-    const fieldMap: Record<string, string> = {
-      subject: 'subject',
-      description: 'description',
-      status: 'status',
-      active_form: 'active_form',
-      owner: 'owner',
-    };
-
-    for (const [key, dbField] of Object.entries(fieldMap)) {
-      if (data[key] !== undefined) {
-        fields.push(`${dbField} = ?`);
-        values.push(data[key]);
-      }
-    }
-
-    if (data.blocks !== undefined) {
-      fields.push('blocks = ?');
-      values.push(JSON.stringify(data.blocks));
-    }
-    if (data.blocked_by !== undefined) {
-      fields.push('blocked_by = ?');
-      values.push(JSON.stringify(data.blocked_by));
-    }
-    if (data.metadata !== undefined) {
-      fields.push('metadata = ?');
-      values.push(JSON.stringify(data.metadata));
-    }
-
-    const database = getDb();
-    values.push(id);
-    database.prepare(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-    return database.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    const { tasks } = getCoreStores();
+    const task = tasks.update(id, ipcTaskToUpdate(data));
+    return task ? coreTaskToIpcRow(task) : undefined;
   });
 
   ipcMain.handle('db:task:delete', (_event, id: string) => {
-    const result = getDb().prepare('DELETE FROM tasks WHERE id = ?').run(id);
-    return result.changes > 0;
+    const { tasks } = getCoreStores();
+    return tasks.delete(id);
   });
 
   ipcMain.handle('db:task:deleteBySession', (_event, sessionId: string) => {
-    getDb().prepare('DELETE FROM tasks WHERE session_id = ?').run(sessionId);
+    const { tasks } = getCoreStores();
+    tasks.deleteBySession(sessionId);
   });
 
   ipcMain.handle('db:task:claim', (_event, id: string, owner: string) => {
-    const now = Date.now();
-    const database = getDb();
-    const row = database.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined;
-    if (!row) return { success: false, reason: 'task_not_found' };
-    if (row.owner && row.owner !== owner) return { success: false, reason: 'already_claimed' };
-    if (row.status === 'completed') return { success: false, reason: 'already_resolved' };
-
-    const blockedBy = JSON.parse((row.blocked_by as string) || '[]') as string[];
-    if (blockedBy.length > 0) {
-      const unresolvedIds = database.prepare(
-        `SELECT id FROM tasks WHERE id IN (${blockedBy.map(() => '?').join(',')}) AND status != 'completed'`
-      ).all(...blockedBy) as { id: string }[];
-      if (unresolvedIds.length > 0) {
-        return { success: false, reason: 'blocked', blockedByTasks: unresolvedIds.map(r => r.id) };
-      }
+    const { tasks } = getCoreStores();
+    const result = tasks.claim(id, owner);
+    if (result.success && result.task) {
+      return { success: true, task: coreTaskToIpcRow(result.task) };
     }
-
-    database.prepare(`UPDATE tasks SET owner = ?, status = 'in_progress', updated_at = ? WHERE id = ?`).run(owner, now, id);
-    return { success: true, task: database.prepare('SELECT * FROM tasks WHERE id = ?').get(id) };
+    return result;
   });
 
   ipcMain.handle('db:task:block', (_event, fromId: string, toId: string) => {
-    const database = getDb();
-    const from = database.prepare('SELECT * FROM tasks WHERE id = ?').get(fromId) as Record<string, unknown> | undefined;
-    const to = database.prepare('SELECT * FROM tasks WHERE id = ?').get(toId) as Record<string, unknown> | undefined;
-    if (!from || !to) return false;
-
-    const fromBlocks: string[] = JSON.parse((from.blocks as string) || '[]');
-    const toBlockedBy: string[] = JSON.parse((to.blocked_by as string) || '[]');
-
-    if (!fromBlocks.includes(toId)) {
-      fromBlocks.push(toId);
-      database.prepare('UPDATE tasks SET blocks = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(fromBlocks), Date.now(), fromId);
-    }
-    if (!toBlockedBy.includes(fromId)) {
-      toBlockedBy.push(fromId);
-      database.prepare('UPDATE tasks SET blocked_by = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(toBlockedBy), Date.now(), toId);
-    }
-    return true;
+    const { tasks } = getCoreStores();
+    return tasks.block(fromId, toId);
   });
 
   ipcMain.handle('db:task:unassignTeammate', (_event, sessionId: string, owner: string) => {
-    const now = Date.now();
-    const database = getDb();
-    const tasks = database.prepare(
-      `SELECT id, subject FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
-    ).all(sessionId, owner) as { id: string; subject: string }[];
-    if (tasks.length === 0) return { unassignedTasks: [], notificationMessage: '' };
-
-    database.prepare(
-      `UPDATE tasks SET owner = NULL, status = 'pending', updated_at = ? WHERE session_id = ? AND status != 'completed' AND owner = ?`
-    ).run(now, sessionId, owner);
-
-    const taskList = tasks.map(t => `#${t.id} "${t.subject}"`).join(', ');
-    return {
-      unassignedTasks: tasks.map(t => ({ id: t.id, subject: t.subject })),
-      notificationMessage: `${owner} was terminated. ${tasks.length} task(s) were unassigned: ${taskList}.`,
-    };
+    const { tasks } = getCoreStores();
+    return tasks.unassignTeammate(sessionId, owner);
   });
 
   ipcMain.handle('db:task:getByOwner', (_event, sessionId: string, owner: string) => {
-    return getDb().prepare(
-      `SELECT * FROM tasks WHERE session_id = ? AND status != 'completed' AND owner = ?`
-    ).all(sessionId, owner);
+    const { tasks } = getCoreStores();
+    return tasks.getByOwner(sessionId, owner).map(coreTaskToIpcRow);
   });
 
   // ==================== Automation Handlers ====================
@@ -840,7 +617,9 @@ export function registerDbHandlers(): void {
     }
   });
 
-  // ==================== Permission Handlers ====================
+  // ==================== Permission Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2: all permission IPC handlers forward to PermissionLedger
+  // via core-db-adapters. DTO shape (snake_case flat row) is preserved.
 
   ipcMain.handle('db:permission:create', (_event, data: {
     id: string;
@@ -848,23 +627,15 @@ export function registerDbHandlers(): void {
     toolName: string;
     toolInput?: Record<string, unknown>;
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO permission_requests (id, session_id, tool_name, tool_input, status, created_at)
-      VALUES (?, ?, ?, ?, 'pending', ?)
-    `).run(
-      data.id,
-      data.sessionId || null,
-      data.toolName,
-      data.toolInput ? JSON.stringify(data.toolInput) : null,
-      now
-    );
-    return database.prepare('SELECT * FROM permission_requests WHERE id = ?').get(data.id);
+    const { permissions } = getCoreStores();
+    const perm = permissions.create(ipcPermissionToCoreCreate(data));
+    return corePermissionToIpcRow(perm);
   });
 
   ipcMain.handle('db:permission:get', (_event, id: string) => {
-    return getDb().prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
+    const { permissions } = getCoreStores();
+    const perm = permissions.get(id);
+    return perm ? corePermissionToIpcRow(perm) : undefined;
   });
 
   ipcMain.handle('db:permission:resolve', (_event, id: string, status: string, extra?: {
@@ -873,26 +644,12 @@ export function registerDbHandlers(): void {
     updatedInput?: Record<string, unknown>;
     sessionId?: string;
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      UPDATE permission_requests SET
-        status = ?,
-        decision = ?,
-        message = ?,
-        updated_permissions = ?,
-        updated_input = ?,
-        resolved_at = ?
-      WHERE id = ?
-    `).run(
-      status,
-      status,
-      extra?.message || null,
-      extra?.updatedPermissions ? JSON.stringify(extra.updatedPermissions) : null,
-      extra?.updatedInput ? JSON.stringify(extra.updatedInput) : null,
-      now,
-      id
-    );
+    const { permissions } = getCoreStores();
+    permissions.resolve(id, {
+      status: status as 'pending' | 'allow' | 'deny' | 'timeout' | 'aborted',
+      decision: status,
+      ...ipcPermissionToResolve(extra),
+    });
 
     // Forward permission resolution to agent process so it can continue tool execution
     const agentPool = getAgentProcessPool();
@@ -912,37 +669,53 @@ export function registerDbHandlers(): void {
       dbLogger.warn('Agent process not available for permission:resolve forwarding', { sessionId, isRunning: sessionId ? agentPool.isRunning(sessionId) : false }, LogComponent.DB);
     }
 
-    return database.prepare('SELECT * FROM permission_requests WHERE id = ?').get(id);
+    const resolved = permissions.get(id);
+    return resolved ? corePermissionToIpcRow(resolved) : undefined;
   });
 
-  // ==================== Search Handlers ====================
+  // ==================== Search Handlers (core store thin forward) ====================
+  // Plan 328 Phase 2 decision 7: combine SessionStore.search (metadata LIKE)
+  // with MessageLog.searchText (rollout content scan). Returns the old
+  // `s.* + snippet` shape so the renderer has zero changes. LIKE on CJK
+  // titles beats unicode61 FTS (326 decision 3); messages_fts/sessions_fts
+  // virtual tables are no longer referenced.
 
   ipcMain.handle('db:search:sessions', (_event, query: string, limit = 10) => {
-    const database = getDb();
-    try {
-      const ftsAvailable = database.prepare(
-        "SELECT 1 FROM pragma_compile_options WHERE compile_options = 'ENABLE_FTS5'"
-      ).get();
-      if (ftsAvailable) {
-        return database.prepare(`
-          SELECT s.*, substr(m.content, 1, 300) as snippet
-          FROM messages_fts f
-          JOIN messages m ON f.rowid = m.rowid
-          JOIN chat_sessions s ON m.session_id = s.id
-          WHERE messages_fts MATCH ? AND s.is_deleted = 0
-          GROUP BY s.id
-          ORDER BY s.updated_at DESC LIMIT ?
-        `).all(query, limit);
+    const { sessions, messageLog } = getCoreStores();
+    // 1. Metadata matches (title / project_name / agent_name) — snippet empty.
+    const metaHits = sessions.search(query, limit);
+    const seenIds = new Set(metaHits.map((s) => s.id));
+    const rows: Record<string, unknown>[] = metaHits.map((s) => ({
+      ...coreSessionToIpcRow(s),
+      snippet: '',
+    }));
+
+    // 2. Content matches (rollout scan) — fill in snippet for sessions not
+    //    already in the metadata set, up to `limit` total.
+    if (rows.length < limit) {
+      const remaining = limit - rows.length;
+      const contentHits = messageLog.searchText(query, { limit: remaining + 5 });
+      for (const hit of contentHits) {
+        if (rows.length >= limit) break;
+        if (seenIds.has(hit.sessionId)) {
+          // Attach snippet to existing metadata hit if not already set.
+          const row = rows.find((r) => r.id === hit.sessionId);
+          if (row && !row.snippet) row.snippet = hit.snippet;
+          continue;
+        }
+        const session = sessions.get(hit.sessionId);
+        if (!session || session.status === 'deleted') continue;
+        seenIds.add(hit.sessionId);
+        rows.push({
+          ...coreSessionToIpcRow(session),
+          snippet: hit.snippet,
+        });
       }
-    } catch {}
-    return database.prepare(`
-      SELECT s.*, substr(m.content, 1, 300) as snippet
-      FROM messages m
-      JOIN chat_sessions s ON m.session_id = s.id
-      WHERE m.content LIKE ? AND s.is_deleted = 0
-      GROUP BY s.id
-      ORDER BY s.updated_at DESC LIMIT ?
-    `).all(`%${query}%`, limit);
+    }
+
+    // Sort by updated_at DESC (matches old ORDER BY).
+    rows.sort((a, b) => ((b.updated_at as number) ?? 0) - ((a.updated_at as number) ?? 0));
+    return rows.slice(0, limit);
   });
 
   // ==================== Channel Binding Handlers ====================
@@ -1021,17 +794,27 @@ export function registerDbHandlers(): void {
   // ==================== Project Group Handlers ====================
 
   ipcMain.handle('db:project:getGroups', () => {
-    return getDb().prepare(`
-      SELECT
-        working_directory,
-        project_name,
-        COUNT(*) as thread_count,
-        MAX(updated_at) as last_activity
-      FROM chat_sessions
-      WHERE is_deleted = 0 AND working_directory != ''
-      GROUP BY working_directory
-      ORDER BY last_activity DESC
-    `).all();
+    // Plan 328 Phase 5: aggregate from core SessionStore instead of legacy
+    // chat_sessions table. Group by working_directory in JS (small N).
+    const { sessions } = getCoreStores();
+    const all = sessions.list(); // excludes status='deleted' by default
+    const groups = new Map<string, { working_directory: string; project_name: string; thread_count: number; last_activity: number }>();
+    for (const s of all) {
+      if (!s.workingDirectory) continue;
+      const existing = groups.get(s.workingDirectory);
+      if (existing) {
+        existing.thread_count += 1;
+        if (s.updatedAt > existing.last_activity) existing.last_activity = s.updatedAt;
+      } else {
+        groups.set(s.workingDirectory, {
+          working_directory: s.workingDirectory,
+          project_name: s.projectName,
+          thread_count: 1,
+          last_activity: s.updatedAt,
+        });
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => b.last_activity - a.last_activity);
   });
 
   // ==================== Database Migration Handlers ====================
@@ -1290,23 +1073,24 @@ export function registerDbHandlers(): void {
     return result.changes > 0;
   });
 
-  // ==================== Session Agent Profile Binding ====================
+  // ==================== Session Agent Profile Binding (core store thin forward) ====================
 
   ipcMain.handle('db:session:setAgentProfile', (_event, sessionId: string, agentProfileId: string | null) => {
-    const database = getDb();
-    database.prepare('UPDATE chat_sessions SET agent_profile_id = ?, updated_at = ? WHERE id = ?')
-      .run(agentProfileId, Date.now(), sessionId);
-    return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sessionId);
+    const { sessions } = getCoreStores();
+    sessions.update(sessionId, { agentProfileId });
+    const updated = sessions.get(sessionId);
+    return updated ? coreSessionToIpcRow(updated) : undefined;
   });
 
   ipcMain.handle(
     'db:session:set_conductor_mode',
     (_event, payload: { sessionId: string; enabled: boolean; canvasId?: string | null }) => {
-      const database = getDb();
-      database.prepare(
-        'UPDATE chat_sessions SET conductor_mode_enabled = ?, conductor_canvas_id = ?, updated_at = ? WHERE id = ?',
-      ).run(payload.enabled ? 1 : 0, payload.canvasId ?? null, Date.now(), payload.sessionId);
-      return database.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(payload.sessionId);
+      const { sessions } = getCoreStores();
+      // conductor_mode_enabled / conductor_canvas_id live in extensions.
+      sessions.setExtension(payload.sessionId, 'conductor_mode_enabled', payload.enabled ? 1 : 0);
+      sessions.setExtension(payload.sessionId, 'conductor_canvas_id', payload.canvasId ?? null);
+      const updated = sessions.get(payload.sessionId);
+      return updated ? coreSessionToIpcRow(updated) : undefined;
     },
   );
 
@@ -2498,7 +2282,11 @@ function invertPatch(patch: Record<string, unknown>, actionType: string): Record
   }
 }
 
-// ==================== Mailbox Handlers (Plan 202 — PR1) ====================
+// ==================== Mailbox Handlers (core store thin forward) ====================
+// Plan 328 Phase 3: all mailbox IPC handlers forward to the Mailbox core store
+// via core-db-adapters. DTO shape (snake_case flat row) is preserved so the
+// renderer has zero changes. The apply matrix is enforced by Mailbox.assertApplyAllowed
+// (single source of truth, Plan 202 §5.2).
 
 export function registerMailboxHandlers(): void {
   ipcMain.handle('mailbox:send', (_event, data: {
@@ -2512,143 +2300,87 @@ export function registerMailboxHandlers(): void {
     source?: string;
     constraintsJson?: string;
   }) => {
-    const database = getDb();
-    const now = Date.now();
-    const priority = 100;
-
-    // Idempotency check
-    if (data.clientMsgId) {
-      const existing = database.prepare(
-        'SELECT * FROM agent_mailbox WHERE session_id = ? AND client_msg_id = ?'
-      ).get(data.sessionId, data.clientMsgId);
-      if (existing) return existing;
-    }
-
-    database.prepare(`
-      INSERT INTO agent_mailbox (
-        id, session_id, submitted_during_run_id, content, kind, status,
-        priority, constraints_json, attachments_json, source,
-        client_msg_id, created_at
-      ) VALUES (
-        @id, @session_id, @submitted_during_run_id, @content, @kind, 'pending',
-        @priority, @constraints_json, @attachments_json, @source,
-        @client_msg_id, @created_at
-      )
-    `).run({
+    const { mailbox } = getCoreStores();
+    const item = mailbox.enqueue({
       id: data.id,
-      session_id: data.sessionId,
-      submitted_during_run_id: data.submittedDuringRunId || '',
+      sessionId: data.sessionId,
+      submittedRunId: data.submittedDuringRunId || '',
       content: data.content,
-      kind: data.kind,
-      priority,
-      constraints_json: data.constraintsJson ?? null,
-      attachments_json: data.attachments ? JSON.stringify(data.attachments) : null,
+      kind: data.kind as MailboxKind,
+      attachments: data.attachments,
+      clientMsgId: data.clientMsgId ?? null,
       source: data.source ?? 'ui',
-      client_msg_id: data.clientMsgId ?? null,
-      created_at: now,
+      meta: data.constraintsJson ? { constraints: JSON.parse(data.constraintsJson) } : undefined,
     });
-
-    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
-    emitMailCreated(row as Record<string, unknown>);
+    const row = coreMailboxToIpcRow(item);
+    emitMailCreated(row);
     return row;
   });
 
   ipcMain.handle('mailbox:edit', (_event, data: { id: string; content?: string; kind?: string }) => {
-    const database = getDb();
-    const existing = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id) as Record<string, unknown> | undefined;
+    const { mailbox } = getCoreStores();
+    const existing = mailbox.get(data.id);
     if (!existing) return null;
     // A previous renderer may have committed the row before its IPC response
     // failed. Returning the same row makes a retry enqueue it exactly once.
-    if (existing.status === 'applied' && existing.applied_summary === 'queued_for_next_agent_turn') {
-      return existing;
+    if (existing.status === 'applied' && existing.appliedSummary === 'queued_for_next_agent_turn') {
+      return coreMailboxToIpcRow(existing);
     }
-    if (existing.status !== 'pending') return null;
-    if (existing.edit_locked_at !== null) return null;
-
-    const now = Date.now();
-    const fields: string[] = [];
-    const params: Record<string, unknown> = { id: data.id };
-
-    const editHistory: Array<{ editedAt: number; prevContent: string; prevKind: string }> = [];
-    if (existing.edit_history_json) {
-      try { editHistory.push(...JSON.parse(existing.edit_history_json as string)); } catch { /* ignore */ }
-    }
-
-    if (data.content !== undefined) {
-      editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
-      fields.push('content = @content');
-      params.content = data.content;
-    }
-    if (data.kind !== undefined) {
-      if (!editHistory.some(e => e.prevKind === existing.kind && e.editedAt === now)) {
-        editHistory.push({ editedAt: now, prevContent: existing.content as string, prevKind: existing.kind as string });
-      }
-      fields.push('kind = @kind');
-      fields.push('priority = @priority');
-      params.kind = data.kind;
-      params.priority = KIND_PRIORITY[data.kind] ?? 100;
-    }
-
-    if (fields.length === 0) return existing;
-
-    fields.push('edit_history_json = @edit_history_json');
-    params.edit_history_json = JSON.stringify(editHistory);
-
-    database.prepare(`UPDATE agent_mailbox SET ${fields.join(', ')} WHERE id = @id`).run(params);
-    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
-    emitMailEdited(row as Record<string, unknown>, existing.content as string);
+    const previousContent = existing.content;
+    const edited = mailbox.edit(data.id, {
+      content: data.content,
+      kind: data.kind as MailboxKind | undefined,
+    });
+    if (!edited) return null;
+    const row = coreMailboxToIpcRow(edited);
+    emitMailEdited(row, previousContent);
     return row;
   });
 
   ipcMain.handle('mailbox:guide', (_event, data: { id: string }) => {
-    const database = getDb();
-    const guided = markMailboxForGuidance(database, data.id);
+    const { mailbox } = getCoreStores();
+    const existing = mailbox.get(data.id);
+    if (!existing) return null;
+    const previousContent = existing.content;
+    const guided = mailbox.guide(data.id);
     if (!guided) return null;
-    emitMailEdited(guided.row, guided.previousContent);
-    return guided.row;
+    const row = coreMailboxToIpcRow(guided);
+    emitMailEdited(row, previousContent);
+    return row;
   });
 
   ipcMain.handle('mailbox:promoteQueued', (_event, data: { id: string }) => {
-    const database = getDb();
-    const row = promoteQueuedMailbox(database, data.id);
-    if (!row) return null;
+    const { mailbox } = getCoreStores();
+    // promoteQueued requires sessionId — fetch the item first to get it.
+    const existing = mailbox.get(data.id);
+    if (!existing) return null;
+    const item = mailbox.promoteQueued(existing.sessionId, data.id);
+    if (!item) return null;
+    const row = coreMailboxToIpcRow(item);
     emitMailApplied(row);
     return row;
   });
 
   ipcMain.handle('mailbox:cancel', (_event, data: { id: string; reason?: string }) => {
-    const database = getDb();
-    const now = Date.now();
-    const result = database.prepare(`
-      UPDATE agent_mailbox
-      SET status = 'cancelled', cancelled_at = @now, cancelled_by = 'user', cancel_reason = @reason
-      WHERE id = @id AND status = 'pending'
-    `).run({ id: data.id, now, reason: data.reason ?? null });
-
-    if (result.changes === 0) return null;
-    const row = database.prepare('SELECT * FROM agent_mailbox WHERE id = ?').get(data.id);
-    emitMailCancelled(row as Record<string, unknown>, data.reason);
+    const { mailbox } = getCoreStores();
+    const cancelled = mailbox.cancel(data.id, data.reason, 'user');
+    if (!cancelled) return null;
+    const row = coreMailboxToIpcRow(cancelled);
+    emitMailCancelled(row, data.reason);
     return row;
   });
 
   ipcMain.handle('mailbox:list', (_event, data: { sessionId: string; status?: string[]; limit?: number }) => {
-    const database = getDb();
+    const { mailbox } = getCoreStores();
     const limit = data.limit ?? 50;
-    const statuses = data.status;
-    if (statuses && statuses.length > 0) {
-      const placeholders = statuses.map(() => '?').join(',');
-      return database.prepare(
-        `SELECT * FROM agent_mailbox WHERE session_id = ? AND status IN (${placeholders}) ORDER BY created_at DESC LIMIT ?`
-      ).all(data.sessionId, ...statuses, limit);
-    }
-    return database.prepare(
-      'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at DESC LIMIT ?'
-    ).all(data.sessionId, limit);
+    const statuses = data.status as MailboxStatus[] | undefined;
+    return mailbox
+      .list(data.sessionId, { status: statuses, limit })
+      .map(coreMailboxToIpcRow);
   });
 
   ipcMain.handle('mailbox:listForSession', (_event, data: { sessionId: string }) => {
-    return getDb().prepare(
-      'SELECT * FROM agent_mailbox WHERE session_id = ? ORDER BY created_at ASC'
-    ).all(data.sessionId);
+    const { mailbox } = getCoreStores();
+    return mailbox.listForSession(data.sessionId).map(coreMailboxToIpcRow);
   });
 }

@@ -9,16 +9,6 @@ vi.mock('../../logging/logger', () => ({
   }),
 }));
 
-vi.mock('../../db/queries/sessions', () => ({
-  createSession: vi.fn(),
-  deleteSession: vi.fn(),
-  getSession: vi.fn(),
-}));
-
-vi.mock('../../db/queries/messages', () => ({
-  addMessage: vi.fn(),
-}));
-
 let parseCodexJsonlLine: typeof import('./session-writer').parseCodexJsonlLine;
 let parseClaudeJsonlLine: typeof import('./session-writer').parseClaudeJsonlLine;
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { runMigrations } from '../migrations';
 import { syncAllFromMainDb, syncSessionFromMainDb, markSourceMissing } from '../catalogSync';
+import { SessionStore, MessageLog } from '../../db/core';
 import { createTempDbDir, type TempDbDir } from './fixture';
 
 // Stub the Phase B project resolver. The real resolver is owned by
@@ -101,60 +102,16 @@ vi.mock('../../logging/logger', () => ({
 }));
 
 /**
- * Create the main DB (duya-main.db shape) with chat_sessions + messages.
- * Mirrors electron/db/schema.ts.
+ * Create the core DB (duya-core.db shape) with the real `sessions` +
+ * `message_index` tables and a live SessionStore. Mirrors
+ * electron/db/core (plan 328 Phase 5).
  */
-function createMainDb(dbPath: string): Database.Database {
+function createCoreDb(dbPath: string): { db: Database.Database; sessions: SessionStore } {
   const db = new Database(dbPath);
-  db.exec(`
-    CREATE TABLE chat_sessions (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL DEFAULT 'New Chat',
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      model TEXT NOT NULL DEFAULT '',
-      system_prompt TEXT NOT NULL DEFAULT '',
-      working_directory TEXT NOT NULL DEFAULT '',
-      project_name TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      mode TEXT NOT NULL DEFAULT 'code',
-      permission_profile TEXT NOT NULL DEFAULT 'default',
-      provider_id TEXT NOT NULL DEFAULT 'env',
-      context_summary TEXT NOT NULL DEFAULT '',
-      context_summary_updated_at INTEGER NOT NULL DEFAULT 0,
-      is_deleted INTEGER NOT NULL DEFAULT 0,
-      generation INTEGER NOT NULL DEFAULT 0,
-      agent_profile_id TEXT DEFAULT NULL,
-      parent_id TEXT REFERENCES chat_sessions(id) ON DELETE SET NULL,
-      agent_type TEXT NOT NULL DEFAULT 'main',
-      agent_name TEXT NOT NULL DEFAULT '',
-      conductor_mode_enabled INTEGER NOT NULL DEFAULT 0,
-      conductor_canvas_id TEXT DEFAULT NULL
-    );
-    CREATE TABLE messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      display_content TEXT,
-      name TEXT,
-      tool_call_id TEXT,
-      token_usage TEXT,
-      msg_type TEXT NOT NULL DEFAULT 'text',
-      thinking TEXT,
-      tool_name TEXT,
-      tool_input TEXT,
-      parent_tool_call_id TEXT,
-      viz_spec TEXT,
-      status TEXT NOT NULL DEFAULT 'done',
-      seq_index INTEGER,
-      duration_ms INTEGER,
-      sub_agent_id TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-    );
-  `);
-  return db;
+  for (const m of [...SessionStore.migrations, ...MessageLog.migrations].sort((a, b) => a.id - b.id)) {
+    m.up(db);
+  }
+  return { db, sessions: new SessionStore(db) };
 }
 
 /**
@@ -177,67 +134,44 @@ interface InsertSessionOpts {
   working_directory?: string;
   status?: string;
   mode?: string;
-  is_deleted?: number;
   agent_profile_id?: string | null;
   parent_id?: string | null;
   agent_type?: string;
   permission_profile?: string;
 }
 
-function insertSession(db: Database.Database, opts: InsertSessionOpts): void {
+function insertSession(sessions: SessionStore, opts: InsertSessionOpts): void {
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO chat_sessions (id, title, created_at, updated_at, working_directory,
-                                 status, mode, is_deleted, agent_profile_id, parent_id,
-                                 agent_type, permission_profile)
-     VALUES (@id, @title, @created_at, @updated_at, @working_directory,
-             @status, @mode, @is_deleted, @agent_profile_id, @parent_id,
-             @agent_type, @permission_profile)`
-  ).run({
+  sessions.create({
     id: opts.id,
     title: opts.title ?? 'Test',
-    created_at: opts.created_at ?? now,
-    updated_at: opts.updated_at ?? now,
-    working_directory: opts.working_directory ?? '',
+    workingDirectory: opts.working_directory ?? '',
     status: opts.status ?? 'active',
     mode: opts.mode ?? 'code',
-    is_deleted: opts.is_deleted ?? 0,
-    agent_profile_id: opts.agent_profile_id ?? null,
-    parent_id: opts.parent_id ?? null,
-    agent_type: opts.agent_type ?? 'main',
-    permission_profile: opts.permission_profile ?? 'default',
+    permissionMode: opts.permission_profile ?? 'default',
+    agentProfileId: opts.agent_profile_id ?? null,
+    parentSessionId: opts.parent_id ?? null,
+    agentType: opts.agent_type ?? 'main',
+    createdAt: opts.created_at ?? now,
+    updatedAt: opts.updated_at ?? opts.created_at ?? now,
   });
 }
 
 interface InsertMessageOpts {
   id: string;
   session_id: string;
-  role?: string;
-  content?: string;
-  msg_type?: string;
-  thinking?: string | null;
-  status?: string;
-  seq_index?: number | null;
   created_at?: number;
 }
 
-function insertMessage(db: Database.Database, opts: InsertMessageOpts): void {
+function insertMessageIndex(db: Database.Database, opts: InsertMessageOpts): void {
+  const row = db
+    .prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM message_index WHERE session_id = ?')
+    .get(opts.session_id) as { m: number };
+  const seq = row.m + 1;
   db.prepare(
-    `INSERT INTO messages (id, session_id, role, content, msg_type, thinking, status,
-                           seq_index, created_at)
-     VALUES (@id, @session_id, @role, @content, @msg_type, @thinking, @status,
-             @seq_index, @created_at)`
-  ).run({
-    id: opts.id,
-    session_id: opts.session_id,
-    role: opts.role ?? 'user',
-    content: opts.content ?? '',
-    msg_type: opts.msg_type ?? 'text',
-    thinking: opts.thinking ?? null,
-    status: opts.status ?? 'done',
-    seq_index: opts.seq_index ?? null,
-    created_at: opts.created_at ?? Date.now(),
-  });
+    `INSERT INTO message_index (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+     VALUES (?, ?, ?, NULL, 'text', ?, 0, 0)`
+  ).run(opts.id, opts.session_id, seq, opts.created_at ?? Date.now());
 }
 
 function getRollout(db: Database.Database, rolloutId: string): Record<string, unknown> | undefined {
@@ -248,12 +182,15 @@ function getRollout(db: Database.Database, rolloutId: string): Record<string, un
 
 describe('memory-state catalogSync', () => {
   let temp: TempDbDir;
-  let mainDb: Database.Database;
+  let coreDb: Database.Database;
+  let sessions: SessionStore;
   let memoryDb: Database.Database;
 
   beforeEach(() => {
     temp = createTempDbDir();
-    mainDb = createMainDb(`${temp.dir}/main.db`);
+    const core = createCoreDb(`${temp.dir}/core.db`);
+    coreDb = core.db;
+    sessions = core.sessions;
     memoryDb = createMemoryDb(`${temp.dir}/memory.db`);
     resolverCalls.length = 0;
     mocks.logger.info.mockClear();
@@ -263,12 +200,17 @@ describe('memory-state catalogSync', () => {
 
   afterEach(() => {
     memoryDb.close();
-    mainDb.close();
+    coreDb.close();
     temp.cleanup();
   });
 
-  it('1. empty main DB, empty memory DB → sync returns all-zero metrics', () => {
-    const result = syncAllFromMainDb({ mainDb, memoryDb });
+  const syncAll = (extra: Record<string, unknown> = {}) =>
+    syncAllFromMainDb({ coreDb, sessions, memoryDb, ...extra } as Parameters<typeof syncAllFromMainDb>[0]);
+  const syncOne = (sessionId: string) =>
+    syncSessionFromMainDb({ coreDb, sessions, memoryDb, sessionId });
+
+  it('1. empty core DB, empty memory DB → sync returns all-zero metrics', () => {
+    const result = syncAll();
     expect(result).toEqual({
       inserted: 0,
       updated: 0,
@@ -279,21 +221,20 @@ describe('memory-state catalogSync', () => {
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('2. one new session in main DB → inserted into memory DB', () => {
-    insertSession(mainDb, {
+  it('2. one new session in core DB → inserted into memory DB', () => {
+    insertSession(sessions, {
       id: 'sess-1',
       working_directory: 'D:/projects/alpha',
       created_at: 1000,
       updated_at: 2000,
     });
-    insertMessage(mainDb, {
+    insertMessageIndex(coreDb, {
       id: 'msg-1',
       session_id: 'sess-1',
-      content: 'hello',
       created_at: 1500,
     });
 
-    const result = syncAllFromMainDb({ mainDb, memoryDb });
+    const result = syncAll();
     expect(result.inserted).toBe(1);
     expect(result.updated).toBe(0);
 
@@ -313,18 +254,18 @@ describe('memory-state catalogSync', () => {
   });
 
   it('3. same session with new message → generation increments; new fingerprint', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'msg-1', session_id: 'sess-1', created_at: 1000 });
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'msg-1', session_id: 'sess-1', created_at: 1000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
     const before = getRollout(memoryDb, 'sess-1');
     const fingerprintBefore = before?.['source_fingerprint'];
     const generationBefore = before?.['generation'];
 
     // Add a new message → fingerprint must change, generation must bump.
-    insertMessage(mainDb, { id: 'msg-2', session_id: 'sess-1', created_at: 2000 });
+    insertMessageIndex(coreDb, { id: 'msg-2', session_id: 'sess-1', created_at: 2000 });
 
-    const result = syncSessionFromMainDb({ mainDb, memoryDb, sessionId: 'sess-1' });
+    const result = syncOne('sess-1');
     expect(result.status).toBe('updated');
 
     const after = getRollout(memoryDb, 'sess-1');
@@ -337,22 +278,22 @@ describe('memory-state catalogSync', () => {
     expect(after?.['first_seen_at']).toBe(before?.['first_seen_at']);
   });
 
-  it('4. session is_deleted=1 in main DB → source_status=deleted, source_deleted_at set; NOT row-deleted', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'msg-1', session_id: 'sess-1', created_at: 1000 });
+  it('4. session status=deleted in core DB → source_status=deleted, source_deleted_at set; NOT row-deleted', () => {
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'msg-1', session_id: 'sess-1', created_at: 1000 });
 
     // First sync to materialize the row with source_status='active'.
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
     const before = getRollout(memoryDb, 'sess-1');
     expect(before?.['source_status']).toBe('active');
     const fingerprintBefore = before?.['source_fingerprint'];
     const generationBefore = before?.['generation'];
     const firstSeenBefore = before?.['first_seen_at'];
 
-    // Mark the session as deleted.
-    mainDb.prepare('UPDATE chat_sessions SET is_deleted = 1 WHERE id = ?').run('sess-1');
+    // Soft-delete the session (status='deleted').
+    sessions.update('sess-1', { status: 'deleted' });
 
-    const result = syncSessionFromMainDb({ mainDb, memoryDb, sessionId: 'sess-1' });
+    const result = syncOne('sess-1');
     expect(result.status).toBe('tombstoned');
 
     const after = getRollout(memoryDb, 'sess-1');
@@ -366,19 +307,18 @@ describe('memory-state catalogSync', () => {
     expect(after?.['first_seen_at']).toBe(firstSeenBefore);
   });
 
-  it('5. session with parent_id set → agent_type copied VERBATIM from chat_sessions.agent_type (sub-agent)', () => {
-    // Parent session first (FK constraint).
-    insertSession(mainDb, { id: 'parent-1', working_directory: 'D:/projects/alpha' });
-    insertSession(mainDb, {
+  it('5. session with parent_id set → agent_type copied VERBATIM from core sessions.agent_type (sub-agent)', () => {
+    insertSession(sessions, { id: 'parent-1', working_directory: 'D:/projects/alpha' });
+    insertSession(sessions, {
       id: 'child-1',
       working_directory: 'D:/projects/alpha',
       parent_id: 'parent-1',
-      agent_type: 'sub-agent', // live value from SubagentTool.ts:275
+      agent_type: 'sub-agent',
     });
-    insertMessage(mainDb, { id: 'm-parent', session_id: 'parent-1', created_at: 1000 });
-    insertMessage(mainDb, { id: 'm-child', session_id: 'child-1', created_at: 2000 });
+    insertMessageIndex(coreDb, { id: 'm-parent', session_id: 'parent-1', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'm-child', session_id: 'child-1', created_at: 2000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const child = getRollout(memoryDb, 'child-1');
     // Verbatim copy — NO derivation from parent_id to 'subagent' or similar.
@@ -387,17 +327,15 @@ describe('memory-state catalogSync', () => {
   });
 
   it('6. session with mode=automation and default agent_type=main → catalog keeps both verbatim', () => {
-    // The live automation persistence writes agent_type='main' with mode='automation'.
-    // Sync must copy both verbatim — eligibility filtering is Plan 302's job.
-    insertSession(mainDb, {
+    insertSession(sessions, {
       id: 'sess-auto',
       working_directory: 'D:/projects/alpha',
       mode: 'automation',
       agent_type: 'main',
     });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-auto', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-auto', created_at: 1000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const rollout = getRollout(memoryDb, 'sess-auto');
     expect(rollout?.['agent_type']).toBe('main');
@@ -405,12 +343,12 @@ describe('memory-state catalogSync', () => {
     expect(rollout?.['source_status']).toBe('active');
   });
 
-  it('7. working_directory empty in main DB → scope_kind=global, project_id=NULL; no cwd substitution', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: '' });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+  it('7. working_directory empty in core DB → scope_kind=global, project_id=NULL; no cwd substitution', () => {
+    insertSession(sessions, { id: 'sess-1', working_directory: '' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
 
     // Pass a cwd to verify it is NOT substituted for the empty working_directory.
-    syncAllFromMainDb({ mainDb, memoryDb, cwd: 'D:/electron-process-cwd' });
+    syncAllFromMainDb({ coreDb, sessions, memoryDb, cwd: 'D:/electron-process-cwd' });
 
     const rollout = getRollout(memoryDb, 'sess-1');
     expect(rollout?.['scope_kind']).toBe('global');
@@ -422,20 +360,20 @@ describe('memory-state catalogSync', () => {
   });
 
   it('8. two sessions from different Agent Profiles with same working_directory → same project_id; profile IDs are provenance only', () => {
-    insertSession(mainDb, {
+    insertSession(sessions, {
       id: 'sess-A',
       working_directory: 'D:/projects/alpha',
       agent_profile_id: 'profile-A',
     });
-    insertSession(mainDb, {
+    insertSession(sessions, {
       id: 'sess-B',
       working_directory: 'D:/projects/alpha',
       agent_profile_id: 'profile-B',
     });
-    insertMessage(mainDb, { id: 'mA1', session_id: 'sess-A', created_at: 1000 });
-    insertMessage(mainDb, { id: 'mB1', session_id: 'sess-B', created_at: 2000 });
+    insertMessageIndex(coreDb, { id: 'mA1', session_id: 'sess-A', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'mB1', session_id: 'sess-B', created_at: 2000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const a = getRollout(memoryDb, 'sess-A');
     const b = getRollout(memoryDb, 'sess-B');
@@ -447,12 +385,12 @@ describe('memory-state catalogSync', () => {
   });
 
   it('9. two sessions with same valid working_directory → same project_id; two distinct catalog rows', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertSession(mainDb, { id: 'sess-2', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
-    insertMessage(mainDb, { id: 'm2', session_id: 'sess-2', created_at: 2000 });
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertSession(sessions, { id: 'sess-2', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'm2', session_id: 'sess-2', created_at: 2000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const r1 = getRollout(memoryDb, 'sess-1');
     const r2 = getRollout(memoryDb, 'sess-2');
@@ -468,12 +406,12 @@ describe('memory-state catalogSync', () => {
   });
 
   it('10. global and project sessions coexist → scope CHECK and nullable FK remain valid', () => {
-    insertSession(mainDb, { id: 'sess-global', working_directory: '' });
-    insertSession(mainDb, { id: 'sess-project', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'mg', session_id: 'sess-global', created_at: 1000 });
-    insertMessage(mainDb, { id: 'mp', session_id: 'sess-project', created_at: 2000 });
+    insertSession(sessions, { id: 'sess-global', working_directory: '' });
+    insertSession(sessions, { id: 'sess-project', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'mg', session_id: 'sess-global', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'mp', session_id: 'sess-project', created_at: 2000 });
 
-    const result = syncAllFromMainDb({ mainDb, memoryDb });
+    const result = syncAll();
     expect(result.inserted).toBe(2);
     expect(result.errors).toBe(0);
 
@@ -491,17 +429,17 @@ describe('memory-state catalogSync', () => {
   });
 
   it('11. syncSessionFromMainDb re-runs unchanged → returns unchanged, no fingerprint/generation change', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
 
     // First sync materializes the row.
-    syncSessionFromMainDb({ mainDb, memoryDb, sessionId: 'sess-1' });
+    syncOne('sess-1');
     const before = getRollout(memoryDb, 'sess-1');
     const fingerprintBefore = before?.['source_fingerprint'];
     const generationBefore = before?.['generation'];
 
     // Re-run with no changes.
-    const result = syncSessionFromMainDb({ mainDb, memoryDb, sessionId: 'sess-1' });
+    const result = syncOne('sess-1');
     expect(result.status).toBe('unchanged');
 
     const after = getRollout(memoryDb, 'sess-1');
@@ -513,16 +451,16 @@ describe('memory-state catalogSync', () => {
     );
   });
 
-  it('12. syncSessionFromMainDb on a session missing from main DB → tombstones existing rollout', () => {
+  it('12. syncSessionFromMainDb on a session missing from core DB → tombstones existing rollout', () => {
     // Materialize a row first.
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
-    syncAllFromMainDb({ mainDb, memoryDb });
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    syncAll();
 
-    // Hard-delete the session from main DB (not just is_deleted=1).
-    mainDb.prepare('DELETE FROM chat_sessions WHERE id = ?').run('sess-1');
+    // Hard-delete the session from core DB (not just status='deleted').
+    coreDb.prepare('DELETE FROM sessions WHERE id = ?').run('sess-1');
 
-    const result = syncSessionFromMainDb({ mainDb, memoryDb, sessionId: 'sess-1' });
+    const result = syncOne('sess-1');
     expect(result.status).toBe('tombstoned');
 
     const rollout = getRollout(memoryDb, 'sess-1');
@@ -532,9 +470,9 @@ describe('memory-state catalogSync', () => {
   });
 
   it('13. markSourceMissing flips source_status to missing and sets source_missing_at', () => {
-    insertSession(mainDb, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
-    syncAllFromMainDb({ mainDb, memoryDb });
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    syncAll();
 
     markSourceMissing({ memoryDb, sessionId: 'sess-1' });
 
@@ -545,14 +483,14 @@ describe('memory-state catalogSync', () => {
   });
 
   it('14. session with status=archived → tombstoned (not row-deleted)', () => {
-    insertSession(mainDb, {
+    insertSession(sessions, {
       id: 'sess-archived',
       working_directory: 'D:/projects/alpha',
       status: 'archived',
     });
-    insertMessage(mainDb, { id: 'm1', session_id: 'sess-archived', created_at: 1000 });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-archived', created_at: 1000 });
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const rollout = getRollout(memoryDb, 'sess-archived');
     expect(rollout).toBeDefined();
@@ -561,10 +499,10 @@ describe('memory-state catalogSync', () => {
   });
 
   it('15. session with empty messages → fingerprint is sha256 of "[]", generation=0', () => {
-    insertSession(mainDb, { id: 'sess-empty', working_directory: 'D:/projects/alpha' });
+    insertSession(sessions, { id: 'sess-empty', working_directory: 'D:/projects/alpha' });
     // No messages inserted.
 
-    syncAllFromMainDb({ mainDb, memoryDb });
+    syncAll();
 
     const rollout = getRollout(memoryDb, 'sess-empty');
     expect(rollout?.['message_count']).toBe(0);

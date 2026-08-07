@@ -20,6 +20,7 @@ import {
   setOnAutoApprovedExtensionId,
 } from '../services/browser/daemon';
 import { getDatabase } from './db-handlers';
+import { getCoreStoresOrNull } from '../db/core-connection';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
 import {
   getGatewayProxyConfig,
@@ -208,10 +209,16 @@ export function registerSettingsHandlers(): void {
         }
       } catch {}
 
+      const stores = getCoreStoresOrNull();
       for (const proc of status.processes) {
-        const sessionRow = db?.prepare('SELECT working_directory, system_prompt FROM chat_sessions WHERE id = ?').get(proc.sessionId) as { working_directory: string; system_prompt: string } | undefined;
-        const workingDirectory = sessionRow?.working_directory ?? '';
-        const systemPrompt = sessionRow?.system_prompt || '';
+        // Plan 328 Phase 5: replaced the legacy
+        // `SELECT working_directory, system_prompt FROM chat_sessions`
+        // with SessionStore reads. `system_prompt` lives in the
+        // `extensions` JSON column (see core-db-adapters.ts).
+        const session = stores?.sessions.get(proc.sessionId);
+        const workingDirectory = session?.workingDirectory ?? '';
+        const systemPrompt =
+          (stores?.sessions.getExtension(proc.sessionId, 'system_prompt') as string) || '';
 
         const providerModel = (activeProvider.options?.defaultModel as string) ||
           (activeProvider.options?.model as string) ||

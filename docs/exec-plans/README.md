@@ -40,6 +40,13 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like runtime instruction injection (`agent_mailbox` + checkpoints + soft interrupt) | P0 | Planning |
 | [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive memory — RealTimeCapture hook + scoring + dual-path Recall + decay archival | P1 | Planning |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
+| [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
+| [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
+| [324-core-db-electron-wiring](./completed/324-core-db-electron-wiring.md) | ~~core-db 接线~~ 已作废 → 328 | — | OBSOLETE → 328 |
+| [325-core-db-legacy-import](./completed/325-core-db-legacy-import.md) | ~~core-db 旧库导入~~ 已作废 → 329 | — | OBSOLETE → 329 |
+| [326-core-db-rollout-foundation](./active/326-core-db-rollout-foundation.md) | core-db 地基：CoreDatabase + MessageLog（rollout 文件 + message_index 单类）+ SessionStore（LIKE 搜索，无 FTS）；7 文件平铺 | P0 | Phase 1-3 ✅ |
+| [328-core-db-electron-wiring](./active/328-core-db-electron-wiring.md) | core-db 全量接线：Main 双库 + IPC/Worker 薄转发 + 全部直连消费方收编（无保留清单）+ 旧查询层删除（CLI 独立模式不接入） | P0 | Phase 1-7 接线完成 ✅（e2e smoke + grep 零引用 + db-handlers 转发测试通过）；手动 LLM 链路验证待办 |
+| [329-core-db-legacy-import](./active/329-core-db-legacy-import.md) | core-db 旧库导入（单文件 LegacyImport）+ 首启自动执行 + 对账与文档收口 | P0 | Planning |
 
 ### Conductor / Canvas
 
@@ -145,6 +152,11 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 |------|-------------|-----------|
 | [241-on-demand-tool-discovery](./completed/241-on-demand-tool-discovery.md) | `tool_search` meta-entry + schema summary + builtin tiering + dynamic dispatch (3 phases) | — |
 | [317-message-persistence-simplification](./completed/317-message-persistence-simplification.md) | 单一写者 + 单一 append-only `messages` 表 + 稳定边界批量落库；封存 `conversation_entries`；废弃前端写库旁路；统一 IPC 传输 | 2026-08-05 |
+| [327-core-db-state-aggregates](./completed/327-core-db-state-aggregates.md) | core-db 状态聚合：Mailbox（状态机 + apply 矩阵唯一实现）+ stores.ts（TaskStore/PermissionLedger/LockStore 合并）+ mailbox 死代码清理 | 2026-08-07 |
+| [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | 旧 core-db 地基方案（事件表 + FTS）——**作废**，由 326 取代 | 2026-08-06 |
+| [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | 旧 core-db 状态聚合——**作废**，由 327 取代 | 2026-08-06 |
+| [324-core-db-electron-wiring](./completed/324-core-db-electron-wiring.md) | 旧 core-db 接线方案——**作废**，由 328 取代 | 2026-08-06 |
+| [325-core-db-legacy-import](./completed/325-core-db-legacy-import.md) | 旧 core-db 导入方案——**作废**，由 329 取代 | 2026-08-06 |
 | [318-plugin-management-unification](./completed/318-plugin-management-unification.md) | Plugin management unification — converge MCP collectors into plugin-core, rm orphaned BundledPluginRegistry, clarify permission vs plugin-security boundary | 2026-08-05 |
 | [224-mode-architecture-unification](./completed/224-mode-architecture-unification.md) | 声明式 ModeModifier 统一 Plan/Research/Conductor 三种 mode | 2026-07-07 |
 | [222-interagent-message-session](./completed/222-interagent-message-session.md) | MessageSession tool for cross-session agent Q&A + cycle detection | — |

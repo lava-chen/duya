@@ -33,6 +33,7 @@ import { compactMessages, type MessageEvent } from './compactMessages.js';
 import { STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
+import { messageDb } from '../ipc/db-client.js';
 import { parseCanonicalFile } from '../memory-state/memory_entries_rebuild.js';
 import {
   TASK_OUTCOMES,
@@ -100,6 +101,36 @@ const EXTERNAL_SOURCE_TYPES = new Set(['browser_page', 'mcp_response']);
 export type { ParsedExtraction } from './types.js';
 
 export type ValidationResult = { valid: true; result: ParsedExtractionV2 } | { valid: false; error: string };
+
+/**
+ * Flat message row shape returned by `message:getBySession` (and by the
+ * `readMessageRows` override). The extractor maps these to `MessageEvent`.
+ */
+export interface MessageRowShape {
+  id: string;
+  role: string;
+  content: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+  tool_input: string | null;
+  msg_type: string | null;
+  seq_index: number | null;
+  created_at: number | null;
+  status: string | null;
+}
+
+/**
+ * Extractor options. `readMessageRows` overrides the IPC-backed message read
+ * for in-process callers (Electron Main process MemoryWorker) where
+ * `process.send` is unavailable. When absent, the extractor falls back to
+ * `messageDb.getBySession` IPC.
+ */
+export interface Stage1ExtractorOpts {
+  rootDir?: string;
+  policyPath?: string;
+  memoryRoot?: string;
+  readMessageRows?: (sessionId: string) => Promise<MessageRowShape[]>;
+}
 
 function validateSlug(value: unknown): string | null {
   if (typeof value !== 'string') return null;
@@ -424,7 +455,7 @@ export class Stage1Extractor {
     private readonly memoryDb: Database,
     private readonly mainDb: Database,
     private readonly llmClient: AIClient,
-    private readonly opts?: { rootDir?: string; policyPath?: string; memoryRoot?: string },
+    private readonly opts?: Stage1ExtractorOpts,
   ) {
     if (typeof llmClient.streamChat !== 'function') {
       throw new Error('AIClient.streamChat is required for Stage1Extractor');
@@ -520,7 +551,7 @@ export class Stage1Extractor {
     const { source_updated_at, source_content_hash } = leaseRow;
 
     // 4. Read + compact messages.
-    const messages = this.readMessages(rolloutId);
+    const messages = await this.readMessages(rolloutId);
     const compacted = compactMessages(messages, {
       sourceUpdatedAt: source_updated_at,
       sourceContentHash: source_content_hash,
@@ -705,27 +736,14 @@ export class Stage1Extractor {
     }
   }
 
-  private readMessages(sessionId: string): MessageEvent[] {
-    const rows = this.mainDb
-      .prepare(
-        `SELECT id, role, content, tool_call_id, tool_name, tool_input,
-                msg_type, seq_index, created_at, status
-         FROM messages
-         WHERE session_id = ?
-         ORDER BY seq_index ASC`,
-      )
-      .all(sessionId) as Array<{
-        id: string;
-        role: string;
-        content: string;
-        tool_call_id: string | null;
-        tool_name: string | null;
-        tool_input: string | null;
-        msg_type: string | null;
-        seq_index: number | null;
-        created_at: number | null;
-        status: string | null;
-      }>;
+  private async readMessages(sessionId: string): Promise<MessageEvent[]> {
+    // Plan 328 Phase 6: read messages via IPC when running in a forked agent
+    // process (process.send available). In-process callers (Electron Main
+    // process MemoryWorker) have no `process.send`, so they supply a
+    // `readMessageRows` override wired to the core store directly.
+    const rows = this.opts?.readMessageRows
+      ? await this.opts.readMessageRows(sessionId)
+      : ((await messageDb.getBySession(sessionId)) as MessageRowShape[]);
 
     return rows.map((row): MessageEvent => {
       const role = row.role as MessageEvent['role'];

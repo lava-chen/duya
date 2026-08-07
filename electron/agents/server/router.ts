@@ -812,15 +812,22 @@ function handlePostChatSSE(
           httpLogger.info('Chat flow: done', { sessionId, seqNum });
           res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
           // H7: Don't set doneReceived=true here — title_generated event may
-          // still come after done. But if title_generated never arrives within
-          // 5s, force-close the SSE connection so the client doesn't hang.
+          // still come after done. Title generation is a separate async LLM
+          // call in the worker that is not awaited before `chat:done`, so it
+          // can legitimately take longer than a few seconds. Give it a
+          // generous, configurable window (default 15s) before force-closing
+          // the SSE connection; otherwise the client never receives the title.
+          const titleTimeoutMs = parseInt(
+            process.env.DUYA_TITLE_GENERATED_TIMEOUT_MS || '15000',
+            10,
+          );
           setTimeout(() => {
             if (!doneReceived && !res.writableEnded) {
-              httpLogger.warn('SSE: title_generated not received within 5s after done, closing', { sessionId });
+              httpLogger.warn('SSE: title_generated not received after done, closing', { sessionId, titleTimeoutMs });
               doneReceived = true;
               res.end();
             }
-          }, 5000);
+          }, titleTimeoutMs);
           return;
         }
 

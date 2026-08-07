@@ -13,6 +13,7 @@
  */
 
 import { getDatabase } from './connection';
+import { getCoreStoresOrNull } from './core-connection';
 import {
   isValidProfile,
   settingsModeToProfile,
@@ -57,16 +58,14 @@ export function resolvePermissionProfile(
 }
 
 function readParentProfileOrDefault(parentSessionId: string): PermissionProfile {
-  const db = getDatabase();
-  if (!db) return DEFAULT_PROFILE;
-  // A SELECT that finds no row returns undefined (no throw). Only genuine
-  // SQL errors (missing table, corrupted DB) land in the catch — those must
-  // NOT be silently swallowed into a permissive default (fail-open risk).
+  // Plan 328 Phase 5: read parent permission_profile from core SessionStore
+  // instead of legacy chat_sessions table. Falls back to DEFAULT_PROFILE when
+  // core stores are unavailable (safe mode) or parent row is missing.
+  const stores = getCoreStoresOrNull();
+  if (!stores) return DEFAULT_PROFILE;
   try {
-    const row = db
-      .prepare('SELECT permission_profile FROM chat_sessions WHERE id = ?')
-      .get(parentSessionId) as { permission_profile?: string | null } | undefined;
-    const parentProfile = row?.permission_profile;
+    const parent = stores.sessions.get(parentSessionId);
+    const parentProfile = parent?.permissionMode;
     if (isValidProfile(parentProfile)) return parentProfile;
     return DEFAULT_PROFILE;
   } catch (err) {

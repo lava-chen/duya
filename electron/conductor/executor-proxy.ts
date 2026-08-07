@@ -22,7 +22,7 @@ import {
   updateCanvas,
   type ConductorCanvas,
 } from '../db/queries/conductors';
-import { getSession, updateSession } from '../db/queries/sessions';
+import { getCoreStores } from '../db/core-connection';
 import { getProjectDatabaseService, ProjectDatabaseServiceError } from '../project-database/service';
 
 export type { ExecutorRpcRequest, ExecutorRpcResponse } from './executor-types';
@@ -89,7 +89,10 @@ export class ConductorExecutorProxy {
 
   private resolveCurrentCanvas(sessionId: string | undefined, fallbackCanvasId?: string): ConductorCanvas | null {
     const canvases = listCanvases();
-    const persistedCanvasId = sessionId ? getSession(sessionId)?.conductor_canvas_id : null;
+    // conductor_canvas_id lives in the session's extensions JSON (plan 328).
+    const persistedCanvasId = sessionId
+      ? (getCoreStores().sessions.getExtension(sessionId, 'conductor_canvas_id') as string | null | undefined) ?? null
+      : null;
     const currentCanvasId = persistedCanvasId ?? fallbackCanvasId;
     return currentCanvasId ? canvases.find((canvas) => canvas.id === currentCanvasId) ?? null : null;
   }
@@ -101,16 +104,17 @@ export class ConductorExecutorProxy {
         error: { code: 'NO_SESSION', message: 'A chat session is required to switch canvases' },
       };
     }
-    const updated = updateSession(sessionId, {
-      conductor_mode_enabled: 1,
-      conductor_canvas_id: canvas.id,
-    });
-    if (!updated) {
+    const { sessions } = getCoreStores();
+    // Existence check via sessions.get — null means the session row is gone.
+    if (!sessions.get(sessionId)) {
       return {
         success: false,
         error: { code: 'SESSION_NOT_FOUND', message: `Session ${sessionId} not found` },
       };
     }
+    // conductor_mode_enabled + conductor_canvas_id are extension keys.
+    sessions.setExtension(sessionId, 'conductor_mode_enabled', 1);
+    sessions.setExtension(sessionId, 'conductor_canvas_id', canvas.id);
     return null;
   }
 
@@ -121,8 +125,8 @@ export class ConductorExecutorProxy {
     const currentCanvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
     // Resolve the session's working directory once so every branch below
     // (list / create / switch / rename) agrees on the project scope.
-    const session = request.sessionId ? getSession(request.sessionId) : null;
-    const sessionProjectPath = session?.working_directory ?? null;
+    const session = request.sessionId ? getCoreStores().sessions.get(request.sessionId) : null;
+    const sessionProjectPath = session?.workingDirectory ?? null;
 
     if (action === 'get_current') {
       return { success: true, result: { action, currentCanvas } };
@@ -147,7 +151,7 @@ export class ConductorExecutorProxy {
         return { success: false, error: { code: 'INVALID_INPUT', message: 'Canvas name is required' } };
       }
       const shouldSwitch = payload.switchTo !== false;
-      if (shouldSwitch && (!request.sessionId || !getSession(request.sessionId))) {
+      if (shouldSwitch && (!request.sessionId || !getCoreStores().sessions.get(request.sessionId))) {
         return {
           success: false,
           error: { code: 'SESSION_NOT_FOUND', message: 'A valid chat session is required to create and switch canvases' },
@@ -264,8 +268,8 @@ export class ConductorExecutorProxy {
         case 'database.execute': {
           const fallbackCanvasId = payload.canvasId as string | undefined;
           const canvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
-          const session = request.sessionId ? getSession(request.sessionId) : null;
-          const projectPath = canvas?.projectPath ?? session?.working_directory ?? null;
+          const session = request.sessionId ? getCoreStores().sessions.get(request.sessionId) : null;
+          const projectPath = canvas?.projectPath ?? session?.workingDirectory ?? null;
           if (!projectPath) {
             return {
               success: false,

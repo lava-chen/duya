@@ -141,6 +141,9 @@ export const sessionDb = {
 
   listByWorkingDirectory: (workingDirectory: string) =>
     sendDbRequest('session:listByWorkingDirectory', { workingDirectory }),
+
+  search: (query: string, opts?: { limit?: number }) =>
+    sendDbRequest('session:search', { query, opts }),
 };
 
 // ==================== Message Operations ====================
@@ -178,8 +181,8 @@ export const messageDb = {
   replace: (sessionId: string, messages: unknown[], generation: number) =>
     sendDbRequest('message:replace', { sessionId, messages, generation }),
 
-  append: (sessionId: string, messages: unknown[]) =>
-    sendDbRequest('message:append', { sessionId, messages }),
+  append: (sessionId: string, messages: unknown[], turnId?: string | null) =>
+    sendDbRequest('message:append', { sessionId, messages, turnId }),
 
   loadMessages: (sessionId: string) =>
     sendDbRequest('session:loadMessages', { sessionId }),

@@ -22,7 +22,8 @@ import { promises as fs } from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { app } from 'electron';
-import { addMessage } from '../../db/queries/messages';
+import { getCoreStores } from '../../db/core-connection';
+import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { syncBundledSkills } from '../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 
@@ -153,7 +154,9 @@ export async function handleSendMessage(
   try {
     const { randomUUID } = await import('node:crypto');
     const id = randomUUID();
-    addMessage({ id, session_id: sessionId, role: 'user', content });
+    getCoreStores().messageLog.appendBatch([
+      ipcMessageToNewEvent(sessionId, { id, session_id: sessionId, role: 'user', content }),
+    ]);
     sendJson(res, 200, { ok: true, id, sessionId });
   } catch (err) {
     sendJson(res, 500, { error: { code: 'insert_failed', message: err instanceof Error ? err.message : String(err) } });

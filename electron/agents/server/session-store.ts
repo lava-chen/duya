@@ -33,6 +33,15 @@ export class SessionManager {
       throw new Error(`Session ${id} not found`);
     }
 
+    // Idempotent same-state transition — a no-op. The renderer SSE client
+    // auto-reconnects by re-POSTing chat while the session is already
+    // STREAMING; treating that as a re-attach (rather than throwing
+    // "STREAMING → STREAMING") keeps reconnects robust. The router reuses the
+    // live worker in this case, so no duplicate stream is spawned.
+    if (session.state === newState) {
+      return session;
+    }
+
     if (!isValidTransition(session.state, newState)) {
       throw new Error(
         `Invalid state transition for session ${id}: ${session.state} → ${newState}`

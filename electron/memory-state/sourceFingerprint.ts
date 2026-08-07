@@ -10,33 +10,26 @@ import type { Database } from 'better-sqlite3';
  * the fingerprint signals that the session has new content and the
  * `generation` counter on `rollout_catalog` should be bumped.
  *
+ * Plan 328 decision 10: the fingerprint input changed from full message
+ * rows (12 columns from the legacy `messages` table) to `message_index`
+ * rows (id + seq + created_at) from the core database. Any append or
+ * rewrite changes this sequence, so change detection is semantically
+ * equivalent without reading payload bytes. The switch invalidates all
+ * previously-computed fingerprints once (memory catalog rebuilds on
+ * first sync after upgrade).
+ *
  * Determinism contract:
  *   - Stable key order: alphabetic (a-z) per message object.
  *   - No whitespace in JSON output (compact serialization).
  *   - UTF-8 bytes are hashed.
- *   - Excluded fields (UI-only or internal-only): `token_usage`,
- *     `viz_spec`, `sub_agent_id`, `display_content`.
- *   - Order of messages matters: `ORDER BY created_at ASC, rowid ASC`
- *     matches the canonical read path used everywhere else in the
- *     codebase (`electron/db/queries/messages.ts:getMessagesBySession`).
- *   - Message status filter: `NOT IN ('superseded', 'purged')` — same
- *     as the live read path. The plan originally said
- *     `IN ('done','in_progress')` but the actual codebase uses the
- *     negative filter; we match the codebase.
+ *   - Order of messages matters: `ORDER BY seq ASC` matches the
+ *     canonical rollout file order (message_index.seq is the 1-based
+ *     line number in the rollout file).
  */
 
 export interface MessageForHash {
   id: string;
-  role: string;
-  content: string;
-  msg_type: string;
-  tool_call_id: string | null;
-  tool_name: string | null;
-  tool_input: string | null;
-  thinking: string | null;
-  parent_tool_call_id: string | null;
-  name: string | null;
-  seq_index: number | null;
+  seq: number;
   created_at: number;
 }
 
@@ -49,34 +42,23 @@ export interface MessageForHash {
  * null/number serialization match canonical JSON exactly.
  */
 const MESSAGE_KEYS_IN_ORDER: ReadonlyArray<keyof MessageForHash> = [
-  'content',
   'created_at',
   'id',
-  'msg_type',
-  'name',
-  'parent_tool_call_id',
-  'role',
-  'seq_index',
-  'thinking',
-  'tool_call_id',
-  'tool_input',
-  'tool_name',
+  'seq',
 ];
 
 function serializeMessage(msg: MessageForHash): string {
   const parts: string[] = [];
   for (const key of MESSAGE_KEYS_IN_ORDER) {
     const value = msg[key];
-    // JSON.stringify(string) -> "..." (escaped)
-    // JSON.stringify(number) -> "123"
-    // JSON.stringify(null)   -> "null"
     parts.push(`"${key}":${JSON.stringify(value)}`);
   }
   return `{${parts.join(',')}}`;
 }
 
 /**
- * Compute the canonical SHA-256 fingerprint for a list of messages.
+ * Compute the canonical SHA-256 fingerprint for a list of message index
+ * rows.
  *
  * Empty input returns SHA-256 of the UTF-8 bytes of `[]` (the empty
  * JSON array) — i.e. a fixed, deterministic hash.
@@ -87,24 +69,23 @@ export function computeSourceFingerprint(messages: MessageForHash[]): string {
 }
 
 /**
- * Read messages from the main DB and project them into the
- * `MessageForHash` shape for fingerprinting.
+ * Read message index rows from the core database and project them into
+ * the `MessageForHash` shape for fingerprinting.
  *
- * Excludes the columns the fingerprint must NOT depend on:
- * `token_usage`, `viz_spec`, `sub_agent_id`, `display_content`.
- *
- * Uses the same status filter and ORDER BY as the canonical read path
- * in `electron/db/queries/messages.ts:getMessagesBySession` so the
- * fingerprint matches what users actually see.
+ * Plan 328 decision 10: reads from `message_index` (id, seq, created_at)
+ * instead of the legacy `messages` table. The `message_index` table
+ * contains only live rows (no `status` column — superseded/purged
+ * messages are physically removed by `rewriteSession`), so no status
+ * filter is needed. Order is `seq ASC` (deterministic rollout line
+ * order).
  */
-export function readMessagesForFingerprint(mainDb: Database, sessionId: string): MessageForHash[] {
-  const rows = mainDb
+export function readMessagesForFingerprint(coreDb: Database, sessionId: string): MessageForHash[] {
+  const rows = coreDb
     .prepare(
-      `SELECT id, role, content, msg_type, tool_call_id, tool_name, tool_input,
-              thinking, parent_tool_call_id, name, seq_index, created_at
-       FROM messages
-       WHERE session_id = ? AND status NOT IN ('superseded', 'purged')
-       ORDER BY created_at ASC, rowid ASC`
+      `SELECT id, seq, created_at
+       FROM message_index
+       WHERE session_id = ?
+       ORDER BY seq ASC`
     )
     .all(sessionId) as MessageForHash[];
   return rows;

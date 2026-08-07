@@ -25,12 +25,12 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { getCoreStores } from '../../db/core-connection';
 import {
-  listMessagesBySession,
-  getMessageById,
-  getMessageCount,
+  storedEventsToIpcMessages,
+  storedEventToIpcMessage,
   type MessageRow,
-} from '../../db/queries/messages';
+} from '../../ipc/core-db-adapters';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
@@ -189,10 +189,16 @@ export function handleListMessages(
     return;
   }
   try {
-    const messages = listMessagesBySession(sessionId, {
-      limit: query.limit,
-      offset: query.offset,
-    });
+    // Plan 328 Phase 5: reads from MessageLog (core `message_index` +
+    // rollout files) via the DTO adapter. The legacy `messages` table
+    // path is retired. Pagination is applied in JS since `listBySession`
+    // returns the full session timeline (bounded by rollout size).
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    const allRows = storedEventsToIpcMessages(events);
+    const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
+    const offset = Math.max(query.offset ?? 0, 0);
+    const messages = allRows.slice(offset, offset + limit);
     sendJson(res, 200, { messages: messages.map(toListItem) });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -216,7 +222,19 @@ export function handleGetMessage(
     return;
   }
   try {
-    const row = getMessageById(sessionId, messageId);
+    // Plan 328 Phase 5: MessageLog has no getById helper; scan the
+    // session's events for the matching id. Session timelines are
+    // bounded, so this is acceptable for the CLI control plane.
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    const row: MessageRow | null = (() => {
+      for (const ev of events) {
+        if (ev.id === messageId) {
+          return storedEventToIpcMessage(ev);
+        }
+      }
+      return null;
+    })();
     if (!row) {
       sendError(res, 404, 'message_not_found', `Message not found: ${messageId}`);
       return;
@@ -243,7 +261,12 @@ export function handleMessageCount(
     return;
   }
   try {
-    const count = getMessageCount(sessionId);
+    // Plan 328 Phase 5: `message_index` contains only live rows
+    // (superseded/purged entries are physically removed by
+    // `rewriteSession`), so `getCount` is equivalent to the legacy
+    // `WHERE status NOT IN ('superseded','purged')` filter.
+    const { messageLog } = getCoreStores();
+    const count = messageLog.getCount(sessionId);
     sendJson(res, 200, { count });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

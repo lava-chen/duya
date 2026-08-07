@@ -2,7 +2,8 @@ import { BrowserWindow } from 'electron';
 import type BetterSqlite3 from 'better-sqlite3';
 import type { ConfigManager } from '../../config/manager';
 import type { SessionManager } from '../../agents/session-manager';
-import { getMessagesBySession } from '../../db/queries/messages';
+import { getCoreStoresOrNull } from '../../db/core-connection';
+import { storedEventsToIpcMessages, type MessageRow } from '../../ipc/core-db-adapters';
 import { buildRecapPrompt } from './recap-prompt';
 import { callLLMForRecap } from './recap-llm';
 import { getProviderStore } from '../providers/provider-store-electron';
@@ -170,13 +171,17 @@ export class RecapService {
   }
 
   private async generateRecap(sessionId: string): Promise<string | null> {
-    const db = this.getDb();
-    if (!db) {
+    // Plan 328 Phase 5: messages now live in the core store (rollout
+    // files + message_index). Read via MessageLog.listBySession and
+    // project back to the flat MessageRow shape the recap prompt expects.
+    const stores = getCoreStoresOrNull();
+    if (!stores) {
       return null;
     }
 
-    const messages = getMessagesBySession(sessionId);
-    if (!messages || messages.length === 0) {
+    const events = stores.messageLog.listBySession(sessionId);
+    const messages: MessageRow[] = storedEventsToIpcMessages(events);
+    if (messages.length === 0) {
       return null;
     }
 
@@ -208,15 +213,15 @@ export class RecapService {
   }
 
   private getTurnCount(sessionId: string): number {
-    const db = this.getDb();
-    if (!db) {
+    // Plan 328 Phase 5: replaced the legacy
+    // `SELECT COUNT(*) FROM messages WHERE session_id=? AND role='user'`
+    // with `MessageLog.getCountByKind`. The `kind` column is derived
+    // from the payload's `message.role`, so 'user' matches user
+    // messages without reading payload bytes.
+    const stores = getCoreStoresOrNull();
+    if (!stores) {
       return 0;
     }
-
-    const rows = db
-      .prepare('SELECT COUNT(*) as count FROM messages WHERE session_id = ? AND role = ?')
-      .get(sessionId, 'user') as { count: number } | undefined;
-
-    return rows?.count || 0;
+    return stores.messageLog.getCountByKind(sessionId, 'user');
   }
 }

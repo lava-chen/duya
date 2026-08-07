@@ -7,6 +7,7 @@ import { startGatewayProcess, stopGatewayProcess, waitForGatewayReady, isGateway
 import { GatewaySessionState } from './types';
 import { dispatchGatewayDbAction } from './db-bridge';
 import { gatewayConfigEvents } from './config-events';
+import { createGatewaySessionRecord, updateGatewaySessionMeta } from './session-helpers';
 
 /**
  * Gateway (IM 通道: 飞书/微信/Telegram 等) 创建的 session 固定 permission_profile='default'.
@@ -213,7 +214,7 @@ function maybeUpdateGatewaySessionTitle(sessionId: string, prompt: string, platf
       VALUES (?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
     `).run(sessionId, title, 'gateway', '', now, now);
-    db.prepare(`UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?`).run(title, now, sessionId);
+    updateGatewaySessionMeta(sessionId, { title });
 
     const state = getSessionState(sessionId);
     if (state) state.titleGenerated = true;
@@ -468,23 +469,21 @@ export function handleGatewayMessage(
       let sseBuffer = '';
 
       const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
-      const db = getDatabase();
-      if (db) {
-        try {
-          // Repair sessions created before the gateway workspace contract was
-          // introduced. More importantly, keep UI metadata aligned with the
-          // top-level cwd passed to the worker below and restore the fixed
-          // channel permission profile for legacy rows.
-          db.prepare(
-            'UPDATE chat_sessions SET working_directory = ?, permission_profile = ?, updated_at = ? WHERE id = ?',
-          ).run(workingDirectory, GATEWAY_PERMISSION_PROFILE, Date.now(), sessionId);
-        } catch (err) {
-          getLogger().warn(
-            'Failed to synchronize gateway session workspace',
-            { sessionId, error: err instanceof Error ? err.message : String(err) },
-            LogComponent.Gateway,
-          );
-        }
+      try {
+        // Repair sessions created before the gateway workspace contract was
+        // introduced. More importantly, keep UI metadata aligned with the
+        // top-level cwd passed to the worker below and restore the fixed
+        // channel permission profile for legacy rows.
+        updateGatewaySessionMeta(sessionId, {
+          working_directory: workingDirectory,
+          permission_profile: GATEWAY_PERMISSION_PROFILE,
+        });
+      } catch (err) {
+        getLogger().warn(
+          'Failed to synchronize gateway session workspace',
+          { sessionId, error: err instanceof Error ? err.message : String(err) },
+          LogComponent.Gateway,
+        );
       }
 
       const body = JSON.stringify(buildGatewayInboundChatRequest({
@@ -663,14 +662,7 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
-          db.prepare(`
-            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(id) DO UPDATE SET
-              working_directory = excluded.working_directory,
-              permission_profile = excluded.permission_profile,
-              updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
 
           // Create user mapping atomically (saves one IPC round-trip from Gateway)
           db.prepare(`
@@ -748,15 +740,8 @@ export function handleGatewayMessage(
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET title = excluded.title, updated_at = excluded.updated_at
           `).run(sessionId, title, 'gateway', '', now, now);
-          // Also insert into chat_sessions so messages can be persisted via replaceMessages
-          db.prepare(`
-            INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(id) DO UPDATE SET
-              working_directory = excluded.working_directory,
-              permission_profile = excluded.permission_profile,
-              updated_at = excluded.updated_at
-          `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+          // Also create the core-store session so messages can be persisted via replaceMessages
+          createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
           // Update the user mapping to point at the new session. Without
           // this, getOrCreateSession would return the old session id and
           // the reset would be invisible — the next inbound message would
@@ -1323,15 +1308,8 @@ export function registerGatewayIpcHandlers(): void {
           VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
         `).run(sessionId, title, 'gateway', '', now, now);
-        // Also insert into chat_sessions so messages can be persisted via replaceMessages
-        db.prepare(`
-          INSERT INTO chat_sessions (id, title, model, system_prompt, working_directory, project_name, status, mode, permission_profile, provider_id, generation, created_at, updated_at, is_deleted)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-          ON CONFLICT(id) DO UPDATE SET
-            working_directory = excluded.working_directory,
-            permission_profile = excluded.permission_profile,
-            updated_at = excluded.updated_at
-        `).run(sessionId, title, '', '', workingDirectory, '', 'active', 'chat', GATEWAY_PERMISSION_PROFILE, 'env', 0, now, now);
+        // Also create the core-store session so messages can be persisted via replaceMessages
+        createGatewaySessionRecord(sessionId, title, workingDirectory, data.platform);
       } catch (err) {
         getLogger().error('Failed to save gateway session to threads', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.Gateway);
       }

@@ -11,6 +11,7 @@ import { getDocumentParser } from '../services/document-parser/index';
 import { getConfigManager } from '../config/manager';
 import { getDatabase } from '../ipc/db-handlers';
 import { stopWalCheckpoint } from '../db/connection';
+import { closeCoreDatabase } from '../db/core-connection';
 import { cleanupUpdater } from '../services/updater';
 import { shutdownProjectDatabaseService } from '../project-database/service';
 
@@ -144,6 +145,13 @@ export async function performGracefulShutdown(): Promise<void> {
     stopWalCheckpoint();
   } catch (err) {
     logger.error('Error stopping WAL checkpoint scheduler', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
+  }
+
+  // 7.5b Close core database (duya-core.db + rollout)
+  try {
+    closeCoreDatabase();
+  } catch (err) {
+    logger.error('Error closing core database', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.DB);
   }
 
   // 7.6 Checkpoint and close project-local database connections.

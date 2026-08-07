@@ -1,4 +1,4 @@
-import type { MessageRow } from '../../db/queries/messages';
+import type { MessageRow } from '../../ipc/core-db-adapters';
 
 interface RecapMessages {
   role: string;

@@ -8,68 +8,41 @@
  *   - handleGetMessage returns 404 for missing message id.
  *   - handleGetMessage rejects empty sessionId / messageId with 400.
  *
- * Uses an in-memory better-sqlite3 injected via `setDb()` from
- * `electron/db/connection.ts`. The handler module pulls the db from
- * `getDatabase()` at call time, so injecting before the test runs is
- * sufficient.
+ * Plan 328 Phase 5: the handler now reads from the core `MessageLog`
+ * (rollout files + `message_index`), not the legacy `messages` table.
+ * Tests inject core stores via `_setCoreStoresForTesting` with a real
+ * `CoreDatabase` instance backed by a temp directory (rollout files
+ * require a real filesystem path, not `:memory:`).
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import Database from 'better-sqlite3';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import {
+  CoreDatabase,
+  MessageLog,
+  SessionStore,
+  type Migration,
+} from '../../db/core';
+import { _setCoreStoresForTesting } from '../../db/core-connection';
+import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 
-let db: Database.Database;
+let tmpDir: string;
+let coreDb: CoreDatabase;
 let handleGetMessage: typeof import('./messages.js').handleGetMessage;
-let setDb: typeof import('../../db/connection.js').setDb;
-let addMessage: typeof import('../../db/queries/messages.js').addMessage;
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS chat_sessions (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL DEFAULT 'New Chat',
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  model TEXT NOT NULL DEFAULT '',
-  system_prompt TEXT NOT NULL DEFAULT '',
-  working_directory TEXT NOT NULL DEFAULT '',
-  project_name TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'active',
-  mode TEXT NOT NULL DEFAULT 'code',
-  permission_profile TEXT NOT NULL DEFAULT 'default',
-  provider_id TEXT NOT NULL DEFAULT 'env',
-  context_summary TEXT NOT NULL DEFAULT '',
-  context_summary_updated_at INTEGER NOT NULL DEFAULT 0,
-  is_deleted INTEGER NOT NULL DEFAULT 0,
-  generation INTEGER NOT NULL DEFAULT 0,
-  agent_profile_id TEXT DEFAULT NULL,
-  parent_id TEXT REFERENCES chat_sessions(id),
-  agent_type TEXT NOT NULL DEFAULT 'main',
-  agent_name TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  name TEXT,
-  tool_call_id TEXT,
-  token_usage TEXT,
-  msg_type TEXT NOT NULL DEFAULT 'text',
-  thinking TEXT,
-  tool_name TEXT,
-  tool_input TEXT,
-  parent_tool_call_id TEXT,
-  viz_spec TEXT,
-  status TEXT NOT NULL DEFAULT 'done',
-  seq_index INTEGER,
-  duration_ms INTEGER,
-  sub_agent_id TEXT,
-  attachments TEXT,
-  created_at INTEGER NOT NULL,
-  display_content TEXT,
-  FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
-);
-`;
+// Core store migrations: only MessageLog (id=1) + SessionStore (id=2)
+// are needed for these tests.
+const MIGRATIONS: Migration[] = [
+  ...MessageLog.migrations,
+  ...SessionStore.migrations,
+].sort((a, b) => a.id - b.id);
+
+const SESSION_ID = 'sess-1';
+const MSG_ID = 'msg-1';
 
 interface CapturedResponse {
   status: number;
@@ -99,42 +72,55 @@ function makeReq(headers: Record<string, string> = {}): IncomingMessage {
   return { headers } as unknown as IncomingMessage;
 }
 
-const SESSION_ID = 'sess-1';
-const MSG_ID = 'msg-1';
-
 beforeEach(async () => {
-  try {
-    db = new Database(':memory:');
-    db.exec(SCHEMA);
-  } catch (err) {
-    throw new Error(
-      `better-sqlite3 unavailable in this Node: ${err instanceof Error ? err.message : String(err)}. ` +
-        'Run `npm rebuild better-sqlite3` to enable these tests.',
-    );
-  }
-  // Seed a session + a message so handleGetMessage has something to find.
-  db.prepare(
-    'INSERT INTO chat_sessions (id, created_at, updated_at) VALUES (?, ?, ?)',
-  ).run(SESSION_ID, Date.now(), Date.now());
-  const conn = await import('../../db/connection.js');
-  setDb = conn.setDb;
-  setDb(db);
-  const queries = await import('../../db/queries/messages.js');
-  addMessage = queries.addMessage;
-  addMessage({
-    id: MSG_ID,
-    session_id: SESSION_ID,
-    role: 'assistant',
-    content: 'hello world',
-    msg_type: 'text',
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cli-messages-test-'));
+  const dbPath = path.join(tmpDir, 'core.db');
+  const rolloutRoot = path.join(tmpDir, 'sessions');
+
+  // Construct a CoreDatabase with the bundled better-sqlite3.
+  // `CoreDatabase` accepts an injected sqlite constructor; fall back to
+  // the default require if not provided (same as production).
+  const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3');
+  coreDb = new CoreDatabase({
+    filename: dbPath,
+    sqlite: BetterSqlite3,
+    migrations: MIGRATIONS,
   });
+
+  const db = coreDb.db;
+  const messageLog = new MessageLog(db, rolloutRoot);
+  const sessions = new SessionStore(db);
+  _setCoreStoresForTesting({ coreDb, messageLog, sessions } as Parameters<typeof _setCoreStoresForTesting>[0]);
+
+  // Seed a session + a message so handleGetMessage has something to find.
+  sessions.create({
+    id: SESSION_ID,
+    title: 'Test',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  });
+  const now = Date.now();
+  messageLog.appendBatch([
+    ipcMessageToNewEvent(SESSION_ID, {
+      id: MSG_ID,
+      session_id: SESSION_ID,
+      role: 'assistant',
+      content: 'hello world',
+      msg_type: 'text',
+      created_at: now,
+    }),
+  ]);
+
   const handlers = await import('./messages.js');
   handleGetMessage = handlers.handleGetMessage;
 });
 
 afterEach(() => {
-  try { setDb(null); } catch { /* setDb may be undefined if setup failed */ }
-  try { db?.close(); } catch { /* db may be undefined if setup failed */ }
+  _setCoreStoresForTesting(null);
+  try { coreDb?.close(); } catch { /* already closed */ }
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch { /* best-effort */ }
 });
 
 describe('handleGetMessage', () => {
@@ -168,3 +154,8 @@ describe('handleGetMessage', () => {
     expect(capture.status).toBe(400);
   });
 });
+
+// Keep Database import referenced for type-only usage; the actual
+// constructor comes from require() in beforeEach so the test can fall
+// back to the agent workspace's better-sqlite3 if needed.
+void Database;

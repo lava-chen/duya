@@ -22,46 +22,31 @@ import {
 } from '../config/boot-config';
 import { getLogger, LogComponent } from '../logging/logger';
 import { initializeSchema, selfCheckAndRepairSchema } from './schema';
+import { startWalCheckpoint as startSharedWalCheckpoint } from './core/database';
+import { getCoreStoresOrNull } from './core-connection';
 
 type BetterSqlite3 = InstanceType<typeof import('better-sqlite3')>;
 
 let BetterSqlite3Ctor: typeof import('better-sqlite3');
 let db: BetterSqlite3 | null = null;
 let safeModeReason: string | null = null;
-let walCheckpointer: ReturnType<typeof setInterval> | null = null;
+// Stop function returned by the shared `startWalCheckpoint` helper. Null when
+// no scheduler is currently active. Kept as module state so the public
+// `stopWalCheckpoint()` export retains its no-arg signature.
+let stopWalCheckpointFn: (() => void) | null = null;
 
 // Module-level logger instance for database operations
 const dbLogger = getLogger();
 
-function startWalCheckpoint(): void {
-  if (walCheckpointer) return;
-
-  const CHECKPOINT_INTERVAL_MS = 60000;
-
-  walCheckpointer = setInterval(() => {
-    if (!db) return;
-    try {
-      db.pragma('wal_checkpoint(PASSIVE)');
-    } catch {
-      // best-effort
-    }
-  }, CHECKPOINT_INTERVAL_MS);
-
-  dbLogger.info('WAL checkpoint scheduler started', { intervalMs: CHECKPOINT_INTERVAL_MS }, LogComponent.DB);
-}
-
+/**
+ * Stop the WAL checkpoint scheduler started by the shared helper and run a
+ * final TRUNCATE checkpoint. No-op if no scheduler is active. Public API
+ * kept stable for `electron/core/graceful-shutdown.ts`.
+ */
 export function stopWalCheckpoint(): void {
-  if (walCheckpointer) {
-    clearInterval(walCheckpointer);
-    walCheckpointer = null;
-
-    if (db) {
-      try {
-        db.pragma('wal_checkpoint(TRUNCATE)');
-      } catch {
-        // best-effort
-      }
-    }
+  if (stopWalCheckpointFn) {
+    stopWalCheckpointFn();
+    stopWalCheckpointFn = null;
   }
 }
 
@@ -174,7 +159,7 @@ export function initDatabaseFromBoot(): DbInitResult {
     initializeSchema(db);
     selfCheckAndRepairSchema(db);
 
-    startWalCheckpoint();
+    stopWalCheckpointFn = startSharedWalCheckpoint(db);
 
     safeModeReason = null;
     return { success: true, dbPath };
@@ -235,7 +220,7 @@ export function initDatabase(dbDir: string): BetterSqlite3 {
   initializeSchema(db);
   selfCheckAndRepairSchema(db);
 
-  startWalCheckpoint();
+  stopWalCheckpointFn = startSharedWalCheckpoint(db);
 
   return db;
 }
@@ -305,18 +290,24 @@ export function getDatabaseStats(): DatabaseStats | null {
   let messageCount = 0;
   let sessionCount = 0;
 
-  try {
-    const messageRow = db.prepare('SELECT COUNT(*) as count FROM messages').get() as { count: number };
-    messageCount = messageRow?.count ?? 0;
-  } catch {
-    // Table may not exist yet
-  }
-
-  try {
-    const sessionRow = db.prepare('SELECT COUNT(*) as count FROM chat_sessions').get() as { count: number };
-    sessionCount = sessionRow?.count ?? 0;
-  } catch {
-    // Table may not exist yet
+  // Plan 328 Phase 5: count from core stores instead of legacy tables.
+  // Falls back to 0 when core stores are unavailable (safe mode / pre-init).
+  const stores = getCoreStoresOrNull();
+  if (stores) {
+    try {
+      sessionCount = stores.sessions.list({ includeDeleted: true }).length;
+    } catch {
+      // best-effort
+    }
+    try {
+      // messageLog has no global count; sum per-session counts would be
+      // expensive. Use the message_index table directly via the core db.
+      const coreDb = stores.coreDb.db;
+      const row = coreDb.prepare('SELECT COUNT(*) as count FROM message_index').get() as { count: number };
+      messageCount = row?.count ?? 0;
+    } catch {
+      // best-effort
+    }
   }
 
   const totalSize = sizeBytes + walSizeBytes;
@@ -364,6 +355,15 @@ export { db, safeModeReason };
 
 export function getDb(): BetterSqlite3 | null {
   return db;
+}
+
+/**
+ * Get the loaded better-sqlite3 constructor. Returns null if not yet loaded
+ * (call `initDatabaseFromBoot()` first). Used by `initCoreDatabase()` to
+ * share the same native binding between the legacy and core databases.
+ */
+export function getSqliteCtor(): typeof import('better-sqlite3') | null {
+  return BetterSqlite3Ctor;
 }
 
 export function setDb(d: BetterSqlite3 | null): void {

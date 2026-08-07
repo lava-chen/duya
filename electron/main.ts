@@ -5,7 +5,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemoryWakeupHandlers } from './ipc/index';
-import { initDatabaseFromBoot, getDatabase } from './db/connection';
+import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
+import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
 import { registerNetHandlers } from './ipc/net-handlers';
@@ -33,6 +34,7 @@ import { registerSkillsHandlers } from './ipc/skills-handlers';
 import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerReferencesHandlers } from './ipc/references-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
+import { syncBuiltinPlugins } from './plugins/cache/builtin-sync.js';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
@@ -165,6 +167,16 @@ if (gotTheLock) {
       registerNetHandlers();
       createSafeModeWindow(dbResult.error || 'Unknown error', dbResult.dbPath || dbPath, getIconPath);
       return;
+    }
+
+    // Initialize the core database (duya-core.db + rollout files) for the
+    // six core aggregates. Shares the same better-sqlite3 native binding as
+    // the legacy database. See plan 328 Phase 1.
+    const sqliteCtor = getSqliteCtor();
+    if (sqliteCtor) {
+      initCoreDatabase(sqliteCtor);
+    } else {
+      logger.warn('Skipping core database init — better-sqlite3 not loaded', undefined, 'Main');
     }
 
     registerDbHandlers();
@@ -351,6 +363,18 @@ if (gotTheLock) {
         }
         const memoryDb = bootstrap({ bootJsonDatabaseDir: path.dirname(getDatabasePath()) });
 
+        // Plan 328 Phase 5: catalogSync now reads from the core DB
+        // (`duya-core.db` sessions + message_index tables). Pull the
+        // singleton CoreStores so the worker's catalogSync uses the
+        // same handle the rest of the main process uses.
+        const { getCoreStoresOrNull } = await import('./db/core-connection');
+        const coreStores = getCoreStoresOrNull();
+        if (!coreStores) {
+          throw new Error(
+            'Core stores not initialized — memory worker requires core DB (plan 328)',
+          );
+        }
+
         // Construct LLM client from the memory worker provider. When
         // memoryProviderId is unset, getMemoryProvider() falls back to
         // the default provider. Falls back gracefully if no provider is
@@ -416,7 +440,21 @@ if (gotTheLock) {
               }
             : undefined;
           startMemoryWorker(
-            { memoryDb, mainDb, llmClient, curation },
+            {
+              memoryDb,
+              mainDb,
+              coreDb: coreStores.coreDb,
+              sessions: coreStores.sessions,
+              // Main process has no `process.send` — read messages from the
+              // core store MessageLog directly (mirror of the db-bridge
+              // `message:getBySession` case).
+              readMessageRows: async (sessionId: string) => {
+                const { storedEventsToIpcMessages } = await import('./ipc/core-db-adapters');
+                return storedEventsToIpcMessages(coreStores.messageLog.listBySession(sessionId));
+              },
+              llmClient,
+              curation,
+            },
             { instancesPerMinute: 60, concurrency: 2 },
           );
           logger.info('Memory worker started (shadow mode)', { curation: curation ? 'wired' : 'disabled' }, LogComponent.DB);
@@ -704,7 +742,6 @@ registerAgentServerHandlers();
 // an empty builtin set.
 // ============================================================
 try {
-  const { syncBuiltinPlugins } = await import('./plugins/cache/builtin-sync.js');
   syncBuiltinPlugins();
 } catch (err) {
   logger.warn(

@@ -287,3 +287,31 @@ export function updateDatabasePath(newDbPath: string): boolean {
 
   return writeBootConfig({ databasePath: newDbPath });
 }
+
+// ============================================================
+// Core database path resolution (plan 326-328)
+// ============================================================
+
+/**
+ * Resolve the core database path (`duya-core.db`).
+ * Same directory as the legacy `duya-main.db`; namespace isolation is
+ * inherited from the userData path (test mode sets a per-namespace
+ * userData, so no explicit suffix is needed on the filename).
+ */
+export function resolveCoreDatabasePath(): string {
+  const { dbPath } = resolveDatabasePath();
+  return path.join(path.dirname(dbPath), 'duya-core.db');
+}
+
+/**
+ * Resolve the rollout root directory for MessageLog JSONL files.
+ * This is the directory that holds the database file; MessageLog.resolvePath
+ * appends a `sessions/<YYYY>/<MM>/<DD>/...` subpath on top of it. It must NOT
+ * include `sessions` itself, or the rollout path would duplicate the folder
+ * (`<dir>/sessions/sessions/...`). Namespace isolation is inherited from the
+ * userData path.
+ */
+export function resolveRolloutRoot(): string {
+  const { dbPath } = resolveDatabasePath();
+  return path.dirname(dbPath);
+}
