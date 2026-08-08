@@ -544,10 +544,12 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
       // Runtime notifications are contributors, never ledger entries.
       const internal = (agent as unknown as {
-        timeline: {
-          snapshot: () => Array<{ message?: { metadata?: Record<string, unknown> } }>;
+        history: {
+          getTimeline: () => {
+            snapshot: () => Array<{ message?: { metadata?: Record<string, unknown> } }>;
+          };
         };
-      }).timeline.snapshot();
+      }).history.getTimeline().snapshot();
       const hasNotification = internal.some(
         (entry) => entry.message?.metadata?.taskId === 'child-1',
       );
@@ -737,10 +739,10 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
     it('still invokes the provider after a proactive compaction entry is appended', async () => {
       const agent = newAgent();
 
-      // Force the compaction controller to report that compaction is needed
-      // for the first turn only. The controller is private, so we cast.
+      // Force the compaction store to report that compaction is needed
+      // for the first turn only. The store is private, so we cast.
       const controller = agent as unknown as {
-        compactionController: {
+        compactionStore: {
           shouldCompact: () => boolean;
           compactProactive: () => Promise<{
             strategy: string;
@@ -749,11 +751,12 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           } | null>;
         };
       };
-      const realShould = controller.compactionController.shouldCompact;
-      const realCompact = controller.compactionController.compactProactive;
+      const store = controller.compactionStore;
+      const realShould = store.shouldCompact;
+      const realCompact = store.compactProactive;
       let compactCalled = false;
-      controller.compactionController.shouldCompact = () => !compactCalled;
-      controller.compactionController.compactProactive = async () => {
+      store.shouldCompact = () => !compactCalled;
+      store.compactProactive = async () => {
         compactCalled = true;
         return { strategy: 'snip', tokensBefore: 1000, tokensAfter: 500 };
       };
@@ -777,8 +780,8 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(eventTypes).toContain('done');
 
       // Restore the originals so other tests are unaffected.
-      controller.compactionController.shouldCompact = realShould;
-      controller.compactionController.compactProactive = realCompact;
+      store.shouldCompact = realShould;
+      store.compactProactive = realCompact;
     });
   });
 
@@ -790,10 +793,10 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
     it('routes context_length_exceeded through compactionController.compactReactive and appends an entry', async () => {
       const agent = newAgent();
 
-      // Stub the controller so we can observe the call without depending
+      // Stub the store so we can observe the call without depending
       // on the real CompactionManager strategy selection.
       const controller = agent as unknown as {
-        compactionController: {
+        compactionStore: {
           compactReactive: (trigger?: string) => Promise<{
             strategy: string;
             tokensBefore: number;
@@ -801,12 +804,11 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           } | null>;
         };
       };
-      const realCompactReactive = controller.compactionController.compactReactive.bind(
-        controller.compactionController,
-      );
+      const store = controller.compactionStore;
+      const realCompactReactive = store.compactReactive.bind(store);
       let reactiveTrigger: string | undefined;
       let reactiveCalls = 0;
-      controller.compactionController.compactReactive = async (trigger?: string) => {
+      store.compactReactive = async (trigger?: string) => {
         reactiveCalls += 1;
         reactiveTrigger = trigger;
         return { strategy: 'snip', tokensBefore: 2000, tokensAfter: 800 };
@@ -842,7 +844,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(eventTypes).toContain('done');
 
       // Restore the original method so other tests are unaffected.
-      controller.compactionController.compactReactive = realCompactReactive;
+      store.compactReactive = realCompactReactive;
     });
   });
 });
