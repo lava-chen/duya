@@ -1,7 +1,7 @@
 export function getEvidencePolicyPromptSection(): string {
   return [
     'Evidence policy:',
-    'A research claim is source-backed only if it is supported by Literature Plugin evidence spans, Research Memory evidence links, or user-provided materials.',
+    'A research claim is source-backed only if it is supported by Research Memory evidence links or user-provided materials.',
     '',
     'When evidence is insufficient:',
     '- say that evidence is insufficient',

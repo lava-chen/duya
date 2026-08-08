@@ -1,6 +1,5 @@
 import type { AIClient } from '@duya/ai';
 import type { SSEEvent, Tool } from '../types.js';
-import type { ResearchMemoryRuntime } from '../research-memory/types.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import type { ToolRegistry } from '../tool/registry.js';
 
@@ -134,7 +133,6 @@ export interface OrchestratorDeps {
   abortController: AbortController;
   sessionId?: string;
   workingDirectory?: string;
-  researchMemory?: ResearchMemoryRuntime;
   /**
    * Pre-built tool registry (profile + plugin + MCP tools). The
    * orchestrator may further filter/augment; it is responsible for
