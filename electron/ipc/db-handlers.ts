@@ -143,7 +143,7 @@ export function registerDbHandlers(): void {
       const bootUpdated = updateDatabasePath(newDbPath);
       if (!bootUpdated) {
         fs.unlinkSync(newDbPath);
-        return { success: false, error: 'Failed to update boot.json' };
+        return { success: false, error: 'Failed to update config.toml' };
       }
 
       return { success: true, newPath: newDbPath };
@@ -969,7 +969,7 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:migration:updateBootAndRestart', (_event, newDbPath: string) => {
     const updated = updateDatabasePath(newDbPath);
     if (!updated) {
-      return { success: false, error: 'Failed to update boot.json' };
+      return { success: false, error: 'Failed to update config.toml' };
     }
 
     setTimeout(() => {
