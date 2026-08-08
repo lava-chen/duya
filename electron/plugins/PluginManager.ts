@@ -118,13 +118,79 @@ export class PluginManager {
 
   listInstalled(): PluginViewItem[] {
     const registry = this.store.listPlugins();
-    return registry.map((entry) => {
-      const catalogEntry = getPluginCatalogEntry(entry.id);
-      return {
-        ...entry,
-        capabilityKinds: catalogEntry ? listCapabilityKinds(catalogEntry.manifest) : [],
-      };
-    });
+    return registry.map((entry) => this.hydrateViewItem(entry));
+  }
+
+  /**
+   * Merge a (possibly minimal) registry entry into a full `PluginViewItem`.
+   *
+   * Plan 334 decision 11: config persists only the user intent field
+   * (`enabled`); everything else must be derived. So this method fills any
+   * missing field from the best available source, in priority order:
+   *
+   *  - `name`/`version`/`source`/`trustLevel`  -> marketplace catalog entry
+   *  - `installPath`                           -> catalog `builtinCacheDir`, else resolved installed symlink
+   *  - `dataPath`                              -> `plugins-data/<id>` (derived from store layout)
+   *  - `grantedPermissions`                    -> catalog manifest permissions
+   *  - `setupState`                            -> recomputed from manifest + setup store
+   *  - `health`                                -> derived from `enabled`/`setupState`
+   *  - `capabilityKinds`                       -> catalog manifest
+   *
+   * Fields already present on the persisted entry are kept as-is (so today's
+   * full `registry.json` round-trips unchanged; the derivation only kicks in
+   * once config shrinks to `enabled`-only).
+   */
+  private hydrateViewItem(entry: PluginRegistryEntry): PluginViewItem {
+    const catalogEntry = getPluginCatalogEntry(entry.id);
+    let manifest = catalogEntry?.manifest;
+    if (!manifest && entry.installPath) {
+      try {
+        manifest = readPluginManifest(entry.installPath);
+      } catch {
+        manifest = undefined;
+      }
+    }
+
+    const name = entry.name ?? catalogEntry?.name ?? entry.id;
+    const version = entry.version ?? catalogEntry?.version ?? '0.1.0';
+    const source = entry.source ?? catalogEntry?.source ?? 'local';
+    const trustLevel = entry.trustLevel ?? catalogEntry?.trustLevel ?? 'local';
+    const scope = entry.scope ?? 'user';
+
+    const installPath =
+      entry.installPath ??
+      catalogEntry?.builtinCacheDir ??
+      resolveInstalledSymlink(entry.id) ??
+      '';
+    const dataPath = entry.dataPath ?? path.join(this.store.getPaths().dataDir, entry.id);
+
+    const grantedPermissions =
+      entry.grantedPermissions ??
+      manifest?.permissions ??
+      [];
+
+    const setupState = entry.setupState ?? (manifest ? this.computeSetupState(entry.id, manifest) : 'complete');
+
+    const health: PluginRuntimeHealth = entry.health ?? {
+      status: !entry.enabled ? 'disabled' : setupState === 'needs_setup' ? 'needs_setup' : 'ready',
+      reasons: [],
+      checkedAt: new Date().toISOString(),
+    };
+
+    return {
+      ...entry,
+      name,
+      version,
+      source,
+      trustLevel,
+      scope,
+      installPath,
+      dataPath,
+      grantedPermissions,
+      setupState,
+      health,
+      capabilityKinds: manifest ? listCapabilityKinds(manifest) : [],
+    };
   }
 
   getDetail(pluginId: string): { entry: PluginRegistryEntry | null; catalog: PluginCatalogEntry | null } {
