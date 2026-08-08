@@ -131,7 +131,7 @@ export const PluginSkillCapabilitySchema = z.object({
 
 export const PluginMcpServerSchema = z.object({
   name: z.string().min(1),
-  transport: z.enum(['stdio', 'streamable-http']).optional(),
+  transport: z.enum(['stdio', 'streamable-http', 'sse']).optional(),
   command: z.string().min(1).optional(),
   args: z.array(z.string()).default([]),
   env: z.record(z.string(), z.string()).optional(),
@@ -142,10 +142,10 @@ export const PluginMcpServerSchema = z.object({
   if (transport === 'stdio' && !server.command) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'stdio MCP servers require command', path: ['command'] });
   }
-  if (transport === 'streamable-http') {
+  if (transport === 'streamable-http' || transport === 'sse') {
     if (!server.url) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'streamable-http MCP servers require url', path: ['url'] });
-    } else if (!server.url.startsWith('https://')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${transport} MCP servers require url`, path: ['url'] });
+    } else if (transport === 'streamable-http' && !server.url.startsWith('https://')) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'streamable-http MCP URLs must use https', path: ['url'] });
     }
   }
@@ -268,6 +268,12 @@ const PluginManifestV2Schema = z.object({
   components: PluginComponentsSchema,
   permissionPolicy: PermissionPolicySchema.optional(),
   publisher: PluginPublisherSchema.optional(),
+  /**
+   * Agent Plugins 1.0.0 — client-specific manifest data keyed by
+   * reverse-domain namespace. Passed through without runtime semantics.
+   * Each namespace value is an object (spec `additionalProperties`).
+   */
+  extensions: z.record(z.string(), z.record(z.string(), z.unknown())).default({}).optional(),
   permissions: z.array(PluginPermissionSchema).default([]),
   dependencies: z.record(z.string(), z.string()).optional(),
   engines: PluginEnginesSchema,

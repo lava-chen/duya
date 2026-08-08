@@ -131,9 +131,9 @@ describe('buildInventoryId', () => {
     ).toBe('settings:agentSettings:literature');
   });
 
-  it('defaults the sub-origin to agentSettings when missing', () => {
+  it('defaults the sub-origin to tomlFile when missing', () => {
     expect(buildInventoryId({ source: 'settings', serverName: 'x' })).toBe(
-      'settings:agentSettings:x',
+      'settings:tomlFile:x',
     );
   });
 

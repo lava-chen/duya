@@ -1,4 +1,4 @@
-// packages/plugin-core/src/mcp/collect.ts
+﻿// packages/plugin-core/src/mcp/collect.ts
 // Environment-agnostic MCP candidate collector.
 //
 // Pure transforms + a single `buildMCPCandidates(input)` assembly.
@@ -37,7 +37,7 @@ export interface MCPCollectorPluginEntry {
     capabilities?: {
       mcpServers?: Array<{
         name: string;
-        transport?: 'stdio' | 'streamable-http';
+        transport?: 'stdio' | 'streamable-http' | 'sse';
         command?: string;
         args?: string[];
         env?: Record<string, string>;
@@ -68,6 +68,10 @@ export function buildCandidatesFromPluginEntry(
   const mcpServers = entry.manifest?.capabilities?.mcpServers ?? [];
   const out: MCPCandidate[] = [];
   for (const server of mcpServers) {
+    // Agent Plugins `sse` servers are recognized at the manifest/discovery
+    // layer only (plan 335). The MCP runtime pipeline does not support
+    // `sse` transport, so they are filtered out here and never connect.
+    if (server.transport === 'sse') continue;
     if (!server.name || (!server.command && !server.url)) continue;
     out.push({
       source: 'plugin',

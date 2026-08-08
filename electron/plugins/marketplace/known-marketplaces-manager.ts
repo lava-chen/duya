@@ -1,112 +1,78 @@
-import fs from 'fs';
-import path from 'path';
-import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
 import type { MarketplaceEntry, KnownMarketplacesFile } from './types';
+import { getConfigStore } from '../../config/store-instance';
 
 const COMPONENT = 'KnownMarketplaces' as LogComponent;
 
-const DEFAULT_MARKETPLACES: KnownMarketplacesFile = {
-  version: 1,
-  marketplaces: {
-    'duya-official': {
-      name: 'DUYA Official Marketplace',
-      url: 'https://raw.githubusercontent.com/lava-chen/duya-marketplace/main/marketplace.json',
-      description: 'Official DUYA plugin marketplace',
-      autoUpdate: true,
-      trusted: true,
-    },
+// Plan 334 decision 12: marketplace sources are migrged from
+// `known_marketplaces.json` into the ConfigStore `marketplaces` block.
+// The legacy file is deleted by Phase 3 migration; there is no file
+// fallback.
+
+const DEFAULT_MARKETPLACES: Record<string, MarketplaceEntry> = {
+  'duya-official': {
+    name: 'DUYA Official Marketplace',
+    url: 'https://raw.githubusercontent.com/lava-chen/duya-marketplace/main/marketplace.json',
+    description: 'Official DUYA plugin marketplace',
+    autoUpdate: true,
+    trusted: true,
   },
 };
 
-function ensureDir(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-}
-
-function atomicWriteJson(targetPath: string, payload: unknown): void {
-  const tempPath = `${targetPath}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), 'utf8');
-  fs.renameSync(tempPath, targetPath);
-}
-
 export class KnownMarketplacesManager {
   private readonly logger = getLogger();
-  private readonly filePath: string;
 
-  constructor() {
-    const userData = app.getPath('userData');
-    const marketDir = path.join(userData, 'marketplaces');
-    ensureDir(marketDir);
-    this.filePath = path.join(marketDir, 'known_marketplaces.json');
-
-    if (!fs.existsSync(this.filePath)) {
-      this.writeFile(DEFAULT_MARKETPLACES);
-      this.logger.info('Created default known_marketplaces.json', undefined, COMPONENT);
+  private readMarketplaces(): Record<string, MarketplaceEntry> {
+    const marketplaces = getConfigStore().getByPath('marketplaces');
+    if (marketplaces && typeof marketplaces === 'object') {
+      return marketplaces as Record<string, MarketplaceEntry>;
     }
+    return {};
   }
 
-  private readFile(): KnownMarketplacesFile {
-    try {
-      const raw = fs.readFileSync(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as KnownMarketplacesFile;
-      if (parsed.version !== 1 || typeof parsed.marketplaces !== 'object') {
-        return this.resetToDefaults();
-      }
-      return parsed;
-    } catch {
-      return this.resetToDefaults();
-    }
-  }
-
-  private writeFile(file: KnownMarketplacesFile): void {
-    atomicWriteJson(this.filePath, file);
-  }
-
-  private resetToDefaults(): KnownMarketplacesFile {
-    this.writeFile(DEFAULT_MARKETPLACES);
-    return { ...DEFAULT_MARKETPLACES, marketplaces: { ...DEFAULT_MARKETPLACES.marketplaces } };
+  private writeMarketplaces(marketplaces: Record<string, MarketplaceEntry>): void {
+    getConfigStore().set('marketplaces', marketplaces);
   }
 
   getAll(): Record<string, MarketplaceEntry> {
-    return this.readFile().marketplaces;
+    const marketplaces = this.readMarketplaces();
+    return Object.keys(marketplaces).length > 0 ? marketplaces : { ...DEFAULT_MARKETPLACES };
   }
 
   get(key: string): MarketplaceEntry | null {
-    return this.readFile().marketplaces[key] ?? null;
+    return this.getAll()[key] ?? null;
   }
 
   add(key: string, entry: MarketplaceEntry): boolean {
-    const file = this.readFile();
-    if (file.marketplaces[key]) {
+    const marketplaces = this.readMarketplaces();
+    if (marketplaces[key]) {
       return false;
     }
-    file.marketplaces[key] = entry;
-    this.writeFile(file);
+    marketplaces[key] = entry;
+    this.writeMarketplaces(marketplaces);
     this.logger.info('Marketplace added', { key, url: entry.url }, COMPONENT);
     return true;
   }
 
   update(key: string, entry: Partial<MarketplaceEntry>): boolean {
-    const file = this.readFile();
-    const existing = file.marketplaces[key];
+    const marketplaces = this.readMarketplaces();
+    const existing = marketplaces[key];
     if (!existing) {
       return false;
     }
-    file.marketplaces[key] = { ...existing, ...entry };
-    this.writeFile(file);
+    marketplaces[key] = { ...existing, ...entry };
+    this.writeMarketplaces(marketplaces);
     this.logger.info('Marketplace updated', { key }, COMPONENT);
     return true;
   }
 
   remove(key: string): boolean {
-    const file = this.readFile();
-    if (!file.marketplaces[key]) {
+    const marketplaces = this.readMarketplaces();
+    if (!marketplaces[key]) {
       return false;
     }
-    delete file.marketplaces[key];
-    this.writeFile(file);
+    delete marketplaces[key];
+    this.writeMarketplaces(marketplaces);
     this.logger.info('Marketplace removed', { key }, COMPONENT);
     return true;
   }
@@ -116,9 +82,9 @@ export class KnownMarketplacesManager {
   }
 
   reset(): KnownMarketplacesFile {
-    this.writeFile(DEFAULT_MARKETPLACES);
+    this.writeMarketplaces({ ...DEFAULT_MARKETPLACES });
     this.logger.info('Marketplaces reset to defaults', undefined, COMPONENT);
-    return this.readFile();
+    return { version: 1, marketplaces: { ...DEFAULT_MARKETPLACES } };
   }
 }
 
