@@ -1,13 +1,14 @@
 /**
  * boot-config.ts - Boot Configuration Manager (The Compass)
  *
- * Manages /config/boot.json - the single source of truth for database path.
- * This file is read FIRST during app startup, before any other initialization.
+ * Reads/writes `~/.duya/config.toml` (the `[storage]` block) as the single
+ * source of truth for the database path. boot.json is gone (plan 334,
+ * decision 6): `storage.database_path` now lives in config.toml.
  *
  * Design principles:
- * - Plaintext (must be readable at the earliest stage of app startup)
+ * - Plaintext config.toml (must be readable at the earliest stage of startup)
  * - Atomic writes (prevent corruption on power loss)
- * - Minimal content (only databasePath)
+ * - Minimal content (only the storage block when writing)
  * - Backward compatible (migrates from old duya-config.json format)
  */
 
@@ -15,27 +16,15 @@ import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { parse, stringify } from '@iarna/toml';
 import writeFileAtomic from 'write-file-atomic';
 import { getLogger, LogComponent } from '../logging/logger';
+import { resolveConfigTomlPath, resolveDatabasePathFromConfigToml } from './compass';
 
 const logger = getLogger();
 
 export interface BootConfig {
   databasePath: string;
-}
-
-const BOOT_CONFIG_VERSION = 1;
-
-interface BootConfigFile extends BootConfig {
-  _version: number;
-}
-
-function getConfigDir(): string {
-  return path.join(app.getPath('userData'), 'config');
-}
-
-function getBootConfigPath(): string {
-  return path.join(getConfigDir(), 'boot.json');
 }
 
 function getDefaultDatabaseDir(): string {
@@ -46,13 +35,6 @@ function getDefaultDatabasePath(): string {
   return path.join(getDefaultDatabaseDir(), 'duya-main.db');
 }
 
-function ensureConfigDir(): void {
-  const configDir = getConfigDir();
-  if (!fs.existsSync(configDir)) {
-    fs.mkdirSync(configDir, { recursive: true });
-  }
-}
-
 function ensureDatabaseDir(dbPath: string): void {
   const dbDir = path.dirname(dbPath);
   if (!fs.existsSync(dbDir)) {
@@ -61,7 +43,7 @@ function ensureDatabaseDir(dbPath: string): void {
 }
 
 /**
- * Migrate from old duya-config.json format to new boot.json.
+ * Migrate from old duya-config.json format to config.toml.
  * The old format stored databasePath in a different file location.
  */
 function migrateFromLegacyConfig(): string | undefined {
@@ -93,64 +75,64 @@ function migrateFromLegacyConfig(): string | undefined {
 }
 
 /**
- * Read boot.json synchronously.
+ * Read the database path from config.toml synchronously.
  * This is called at the very start of app lifecycle - must be fast and reliable.
- * Returns the databasePath, or undefined if boot.json doesn't exist yet.
+ * Returns the databasePath, or undefined if not configured in config.toml.
  */
 export function readBootConfig(): BootConfig | undefined {
-  const bootPath = getBootConfigPath();
-
-  try {
-    if (fs.existsSync(bootPath)) {
-      const content = fs.readFileSync(bootPath, 'utf-8');
-      const config = JSON.parse(content) as BootConfigFile;
-
-      if (config.databasePath && typeof config.databasePath === 'string') {
-        return { databasePath: config.databasePath };
-      }
-    }
-  } catch (error) {
-    logger.error('Failed to read boot.json', error instanceof Error ? error : new Error(String(error)), { bootPath }, LogComponent.ConfigManager);
-  }
-
-  return undefined;
+  const dbPath = resolveDatabasePathFromConfigToml();
+  return dbPath && dbPath.trim() ? { databasePath: dbPath } : undefined;
 }
 
 /**
- * Write boot.json atomically.
- * Uses write-file-atomic to prevent corruption on power loss.
+ * Write `storage.database_path` into config.toml atomically.
+ * Preserves any existing keys; only the storage block is touched.
  */
 export function writeBootConfig(config: BootConfig): boolean {
   try {
-    ensureConfigDir();
+    const cfgPath = resolveConfigTomlPath();
+    const dir = path.dirname(cfgPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
 
-    const data: BootConfigFile = {
-      _version: BOOT_CONFIG_VERSION,
-      databasePath: config.databasePath,
-    };
+    let doc: Record<string, unknown> = {};
+    if (fs.existsSync(cfgPath)) {
+      try {
+        doc = parse(fs.readFileSync(cfgPath, 'utf-8')) as Record<string, unknown>;
+      } catch {
+        doc = {};
+      }
+    }
 
-    writeFileAtomic.sync(getBootConfigPath(), JSON.stringify(data, null, 2));
-    logger.info('boot.json updated', { databasePath: config.databasePath }, LogComponent.ConfigManager);
+    const storage =
+      doc.storage && typeof doc.storage === 'object'
+        ? (doc.storage as Record<string, unknown>)
+        : ((doc.storage = {}) as Record<string, unknown>);
+    storage.database_path = config.databasePath;
+
+    writeFileAtomic.sync(cfgPath, stringify(doc as Parameters<typeof stringify>[0]), { mode: 0o600 });
+    logger.info('config.toml storage.database_path updated', { databasePath: config.databasePath }, LogComponent.ConfigManager);
     return true;
   } catch (error) {
-    logger.error('Failed to write boot.json', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.ConfigManager);
+    logger.error('Failed to write database path to config.toml', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.ConfigManager);
     return false;
   }
 }
 
 /**
  * Resolve the database path with full fallback chain:
- * 1. boot.json (if exists and valid)
+ * 1. config.toml `storage.database_path` (if set and valid)
  * 2. Legacy duya-config.json (migration)
  * 3. Default path (userData/databases/duya-main.db)
  *
  * Also handles backward compatibility for old duya.db filename.
  */
 export function resolveDatabasePath(): { dbPath: string; needsBootWrite: boolean; needsDbRename: boolean } {
-  // Step 1: Check boot.json
-  const bootConfig = readBootConfig();
-  if (bootConfig?.databasePath) {
-    const dbPath = bootConfig.databasePath;
+  // Step 1: Check config.toml storage.database_path
+  const configured = resolveDatabasePathFromConfigToml();
+  if (configured && configured.trim()) {
+    const dbPath = configured;
 
     // Handle backward compatibility: if path ends with old filename, check for rename
     const oldDbPath = dbPath.replace('duya-main.db', 'duya.db');
@@ -253,7 +235,7 @@ export function renameLegacyDatabase(dbPath: string): boolean {
 }
 
 /**
- * Initialize boot.json if needed (first run or after migration).
+ * Initialize config.toml if needed (first run or after migration).
  * Ensures the database directory exists.
  */
 export function initBootConfig(dbPath: string): void {
@@ -266,8 +248,8 @@ export function initBootConfig(dbPath: string): void {
 }
 
 /**
- * Get the current database path from boot.json.
- * If boot.json doesn't exist, returns the default path.
+ * Get the current database path from config.toml.
+ * If not configured, returns the default path.
  * Used by other modules that need to know the DB location.
  */
 export function getDatabasePath(): string {
@@ -276,7 +258,7 @@ export function getDatabasePath(): string {
 }
 
 /**
- * Update the database path in boot.json (used during migration workflow).
+ * Update the database path in config.toml (used during migration workflow).
  * This is the ONLY way to change where the database is stored.
  */
 export function updateDatabasePath(newDbPath: string): boolean {
@@ -305,14 +287,32 @@ export function resolveCoreDatabasePath(): string {
 }
 
 /**
+ * Read a single `[storage]` root key from config.toml. Empty string = unset.
+ * Kept local (rather than going through ConfigStore) so this early "compass"
+ * module stays lightweight and never introduces a dependency cycle.
+ */
+function readStorageRoot(key: 'rollout_root' | 'attachments_root'): string {
+  const cfgPath = resolveConfigTomlPath();
+  try {
+    if (!fs.existsSync(cfgPath)) return '';
+    const raw = fs.readFileSync(cfgPath, 'utf-8');
+    const doc = parse(raw) as { storage?: Record<string, string> };
+    return doc?.storage?.[key] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Resolve the rollout root directory for MessageLog JSONL files.
  *
  * Mirrors Codex's `~/.codex/sessions/` layout: rollout files live under
  * `~/.duya/sessions/<YYYY>/<MM>/<DD>/...` (MessageLog.resolvePath appends the
  * `sessions/<YYYY>/<MM>/<DD>/...` subpath on top of this root, so this root
  * must NOT include `sessions` itself, or the rollout path would duplicate the
- * folder). In test mode (`DUYA_TEST=1`), a `test-namespaces/<ns>` suffix keeps
- * each Playwright namespace fully isolated from the real user data.
+ * folder). The `[storage] rollout_root` config overrides the default. In test
+ * mode (`DUYA_TEST=1`), a `test-namespaces/<ns>` suffix keeps each Playwright
+ * namespace fully isolated from the real user data.
  *
  * Test-mode detection is inlined (rather than importing `../core/bootstrap`)
  * so this early "compass" module stays dependency-free and never pulls in the
@@ -324,7 +324,8 @@ export function resolveRolloutRoot(): string {
     const ns = readTestNamespace();
     if (ns) return path.join(base, 'test-namespaces', ns);
   }
-  return base;
+  const configured = readStorageRoot('rollout_root');
+  return configured && configured.trim() ? configured : base;
 }
 
 /**
@@ -351,9 +352,10 @@ function readTestNamespace(): string | null {
  * Resolve the root directory for file-backed attachments (plan 332 Phase 2).
  *
  * Mirrors Codex's `~/.codex/attachments/<uuid>/` layout: payload files live
- * under `~/.duya/attachments/<id>/<filename>`. In test mode a
- * `test-namespaces/<ns>` suffix keeps each Playwright namespace isolated from
- * the real user data — the same policy as `resolveRolloutRoot`.
+ * under `~/.duya/attachments/<id>/<filename>`. The `[storage] attachments_root`
+ * config overrides the default root. In test mode a `test-namespaces/<ns>`
+ * suffix keeps each Playwright namespace isolated from the real user data —
+ * the same policy as `resolveRolloutRoot`.
  */
 export function resolveAttachmentsRoot(): string {
   const base = path.join(os.homedir(), '.duya');
@@ -361,5 +363,6 @@ export function resolveAttachmentsRoot(): string {
     const ns = readTestNamespace();
     if (ns) return path.join(base, 'test-namespaces', ns, 'attachments');
   }
-  return path.join(base, 'attachments');
+  const configured = readStorageRoot('attachments_root');
+  return configured && configured.trim() ? configured : path.join(base, 'attachments');
 }
