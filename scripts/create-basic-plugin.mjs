@@ -34,6 +34,7 @@ function parseArgs(args) {
     withCli: false,
     withUi: false,
     withMarketplace: false,
+    standard: false,
     devMode: false,
     parentDir: null,
     pluginName: null,
@@ -61,6 +62,9 @@ function parseArgs(args) {
       case '--with-marketplace':
         flags.withMarketplace = true;
         break;
+      case '--standard':
+        flags.standard = true;
+        break;
       case '--dev':
         flags.devMode = true;
         break;
@@ -79,7 +83,45 @@ function parseArgs(args) {
   return flags;
 }
 
+const AGENT_PLUGINS_PLUGIN_SCHEMA =
+  'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+const AGENT_PLUGINS_MCP_SCHEMA =
+  'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+
+function generateStandardPluginJson(pluginName, flags) {
+  const author = process.env.USER || process.env.USERNAME || 'Unknown';
+
+  // duya-specific fields go in the reverse-domain namespace. The standard
+  // schema forbids them at the root (additionalProperties: false) and
+  // assigns no semantics to namespace objects, so duya reads them back from
+  // `extensions["com.duya.client"]`.
+  const duya = {};
+  duya.engines = { duya: '>=0.9.0' };
+  duya.permissions = [];
+  if (flags.withCli) duya.cli = [];
+  if (flags.withUi) duya.ui = [];
+
+  const manifest = {
+    $schema: AGENT_PLUGINS_PLUGIN_SCHEMA,
+    name: pluginName,
+    version: '0.1.0',
+    description: `Plugin: ${pluginName}`,
+    author: { name: author },
+    license: 'MIT',
+  };
+
+  if (Object.keys(duya).length > 0) {
+    manifest.extensions = { 'com.duya.client': duya };
+  }
+
+  return manifest;
+}
+
 function generatePluginJson(pluginName, flags) {
+  if (flags.standard) {
+    return generateStandardPluginJson(pluginName, flags);
+  }
+
   const author = process.env.USER || process.env.USERNAME || 'Unknown';
   const capabilities = {};
 
@@ -164,7 +206,17 @@ function createHooksTemplate(pluginDir) {
   console.log('  Created hooks/hooks.json');
 }
 
-function createMcpTemplate(pluginDir) {
+function createMcpTemplate(pluginDir, standard = false) {
+  if (standard) {
+    const mcpJson = {
+      $schema: AGENT_PLUGINS_MCP_SCHEMA,
+      mcpServers: {},
+    };
+    fs.writeFileSync(path.join(pluginDir, 'mcp.json'), JSON.stringify(mcpJson, null, 2), 'utf8');
+    console.log('  Created mcp.json (Agent Plugins standard)');
+    return;
+  }
+
   const mcpJson = {
     mcpServers: {},
   };
@@ -278,6 +330,7 @@ function main() {
     console.error('  --with-cli           Create commands/ directory');
     console.error('  --with-ui            Create ui/ directory');
     console.error('  --with-marketplace   Add entry to marketplace.json in DUYA userData');
+    console.error('  --standard           Emit a standard Agent Plugins plugin.json ($schema + extensions)');
     console.error('  --dev                Target DUYA dev-mode userData directory');
     console.error('  --parent-dir <path>  Parent directory for plugin (default: DUYA userData/plugins)');
     console.error('');

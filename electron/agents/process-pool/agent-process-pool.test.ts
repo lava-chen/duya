@@ -25,15 +25,25 @@ vi.mock('../../logging/logger', () => ({
   LogComponent: { AgentProcessPool: 'AgentProcessPool' },
 }));
 
-const configManagerMock = {
-  getAllProviders: () => ({}),
-  getConfig: () => ({ defaultProviderId: null, securityBypassSkills: [] }),
-  getDefaultProvider: () => undefined,
-  onConfigChange: () => () => {},
+const configStoreMock = {
+  getByPath: (key: string) => {
+    if (key === 'model.provider') return null;
+    if (key === 'agent.security_bypass_skills') return [];
+    return undefined;
+  },
+  subscribe: () => () => {},
 };
-vi.mock('../../config/manager', () => ({
-  getConfigManager: () => configManagerMock,
-  toLLMProvider: (t: string) => (t === 'anthropic' ? 'anthropic' : 'openai'),
+vi.mock('../../config/store-instance', () => ({
+  getConfigStore: () => configStoreMock,
+}));
+
+const providerStoreMock = {
+  listLlmProviders: () => [],
+  getLlmProvider: () => undefined,
+  getDefaultLlmProvider: () => undefined,
+};
+vi.mock('../../services/providers/provider-store-electron', () => ({
+  getProviderStore: () => providerStoreMock,
 }));
 
 vi.mock('../../ipc/db-handlers', () => ({

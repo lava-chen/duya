@@ -1,7 +1,9 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool.js';
-import { getConfigManager, toLLMProvider } from '../config/manager.js';
+import { toLLMProvider } from '../config/provider-types.js';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import { getLogger, LogComponent } from '../logging/logger.js';
 import { CronPersistence, computeNextRunAtMs, rowToSchedule } from './persistence.js';
 import type { AutomationCron, AutomationCronRun } from './types.js';
@@ -184,7 +186,8 @@ export class AutomationScheduler {
 
   private async runInSession(cron: AutomationCron, sessionId: string): Promise<string> {
     const pool = getAgentProcessPool();
-    const activeProvider = getConfigManager().getActiveProvider();
+    const p = getProviderStore().getDefaultLlmProvider();
+    const activeProvider = p ? toLegacyApiProvider(p) : undefined;
     if (!activeProvider) throw new Error('no active provider configured');
     const model = cron.model?.trim();
     if (!model) throw new Error('cron model is not configured');

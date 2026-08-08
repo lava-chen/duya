@@ -1,4 +1,4 @@
-﻿/**
+/**
  * migrate.ts — one-way migration of the legacy config sources into
  * `~/.duya/config.toml` + `~/.duya/secrets.json` (plan 334, Phase 3).
  *
@@ -132,6 +132,7 @@ function migrateSettingsJson(store: ConfigStore, settingsPath: string): boolean 
 
   // apiProviders -> providers.<id>.* (apiKey split to secrets.json)
   const apiProviders = settings.apiProviders;
+  const activeProviderIds: string[] = [];
   if (apiProviders && typeof apiProviders === 'object') {
     for (const [id, p] of Object.entries(apiProviders as Record<string, Record<string, unknown>>)) {
       if (!p || typeof p !== 'object') continue;
@@ -141,12 +142,18 @@ function migrateSettingsJson(store: ConfigStore, settingsPath: string): boolean 
       if (p.options !== undefined) store.set(`providers.${id}.options`, p.options);
       if (p.enabled_models !== undefined) store.set(`providers.${id}.enabled_models`, p.enabled_models);
       if (typeof p.apiKey === 'string' && p.apiKey) store.set(`providers.${id}.apiKey`, p.apiKey);
+      if (p.isActive === true) activeProviderIds.push(id);
     }
   }
 
   // pointers -> model / memory
   if (typeof settings.defaultProviderId === 'string' && settings.defaultProviderId) {
     store.set('model.provider', settings.defaultProviderId);
+  } else if (activeProviderIds.length === 1) {
+    // Legacy single-active-provider model (old `migrateMultiProviderV1`): when
+    // no explicit default exists but exactly one provider is flagged active,
+    // promote it to the default so the soft-default model stays whole.
+    store.set('model.provider', activeProviderIds[0]!);
   }
   if (typeof settings.memoryProviderId === 'string' && settings.memoryProviderId) {
     store.set('memory.provider', settings.memoryProviderId);

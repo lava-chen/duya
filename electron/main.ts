@@ -9,9 +9,10 @@ import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connectio
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
+import { getProviderStore } from './services/providers/provider-store-electron';
 import { registerNetHandlers } from './ipc/net-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
-import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath, updateDatabasePath, migrateMultiProviderV1 } from './config/index';
+import { resolveDatabasePath, updateDatabasePath } from './config/index';
 import { getConfigStore } from './config/store-instance';
 import { migrateConfig } from './config/migrate';
 import { resolveConfigTomlPath } from './config/compass';
@@ -29,6 +30,7 @@ import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdater
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
 import { initDocumentParser, getDocumentParser } from './services/document-parser/index';
 import { resolveMemoryModel } from './services/providers/memory-model-resolution';
+import { toLegacyApiProvider } from '../src/lib/providers/legacy';
 
 // IPC handlers (extracted from main.ts)
 import { registerSystemHandlers } from './ipc/system-handlers';
@@ -185,12 +187,12 @@ if (gotTheLock) {
     registerConductorHandlers();
 
     // ============================================================
-    // Step 3: Initialize ConfigManager
+    // Step 3: ConfigStore (in-memory snapshot + TOML persistence)
     // ============================================================
-    const configManager = initConfigManager();
-    // One-shot boot migrations. Each migration is idempotent (guarded by
-    // a marker in `AppConfig.migrations`), so it's safe to call on every boot.
-    migrateMultiProviderV1(configManager);
+    // Legacy single-active-provider migration (`migrateMultiProviderV1`) and
+    // `initConfigManager` are gone: the isActive -> defaultProviderId promotion
+    // is folded into `migrateConfig` (migrateSettingsJson), which runs below.
+    // Provider reads go through `getProviderStore()`/`getConfigStore()`.
 
     // One-time migration of user-managed MCPs. Runtime collection reads only
     // mcp.toml afterwards; plugin and bundled declarations remain separate.
@@ -214,9 +216,7 @@ if (gotTheLock) {
       } catch {
         legacyFile = [];
       }
-      const agentSettings = configManager.getAgentSettings() as unknown as { mcpServers?: unknown[] };
       await migrateLegacyMcpServers([
-        Array.isArray(agentSettings.mcpServers) ? agentSettings.mcpServers as never[] : [],
         settingsKv as never[],
         legacyFile as never[],
       ]);
@@ -225,48 +225,6 @@ if (gotTheLock) {
       logger.warn('MCP TOML migration or watcher startup failed', {
         error: error instanceof Error ? error.message : String(error),
       }, LogComponent.AgentProcess);
-    }
-
-    // Migrate provider data from database to ConfigManager (one-time migration)
-    try {
-      const db = getDatabase();
-      if (db) {
-        const tableInfo = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='api_providers'").get();
-        if (tableInfo) {
-          const providers = db.prepare('SELECT * FROM api_providers').all() as Array<{
-            id: string;
-            name: string;
-            provider_type: string;
-            base_url: string;
-            api_key: string;
-            is_active: number;
-            sort_order: number;
-            extra_env: string;
-            headers_json: string;
-            options_json: string;
-            notes: string;
-          }>;
-          if (providers.length > 0) {
-            for (const p of providers) {
-              configManager.upsertProvider({
-                id: p.id,
-                name: p.name,
-                providerType: (p.provider_type || 'anthropic') as 'anthropic' | 'openai' | 'ollama',
-                baseUrl: p.base_url || '',
-                apiKey: p.api_key || '',
-                isActive: p.is_active === 1,
-                sortOrder: p.sort_order || 0,
-                extraEnv: p.extra_env ? JSON.parse(p.extra_env) : undefined,
-                headers: p.headers_json ? JSON.parse(p.headers_json) : undefined,
-                options: p.options_json ? JSON.parse(p.options_json) : undefined,
-                notes: p.notes || '',
-              });
-            }
-          }
-        }
-      }
-    } catch (error) {
-      logger.error('Provider migration failed', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     // ============================================================
@@ -284,7 +242,7 @@ if (gotTheLock) {
     initSessionManager();
 
     // Recap service for session context recovery
-    const recapService = new RecapService(getDatabase, getConfigManager, getSessionManager);
+    const recapService = new RecapService(getDatabase, getSessionManager);
     registerRecapHandlers(recapService);
 
     registerAgentHandlers();
@@ -372,7 +330,7 @@ if (gotTheLock) {
         const { startMemoryWorker } = await import('./memory/memory-worker');
         const { createAIClientWithRetry } = await import('@duya/ai');
         const { getDatabasePath } = await import('./config/boot-config');
-        const { toLLMProvider } = await import('./config/index');
+        const { toLLMProvider } = await import('./config/provider-types');
         const { toRuntimeConfigFromLegacy } = await import('@duya/ai');
 
         const mainDb = getDatabase();
@@ -401,18 +359,20 @@ if (gotTheLock) {
         let llmClient = null;
         let curationProviderConfig = null;
         try {
-          const cm = getConfigManager();
-          const provider = cm.getMemoryProvider();
+          const providerStore = getProviderStore();
+          const activeLlm = providerStore.getMemoryLlmProvider();
+          const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
           if (provider) {
+            const memoryModel = providerStore.getMemoryModel();
             const llmProvider = toLLMProvider(provider.providerType, provider.baseUrl);
             const model = resolveMemoryModel(
               provider,
-              cm.getMemoryModel(),
+              memoryModel,
               llmProvider === 'anthropic' || llmProvider === 'openai' || llmProvider === 'ollama'
                 ? llmProvider
                 : 'ollama',
             );
-            logger.info('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: cm.getMemoryModel() }, LogComponent.DB);
+            logger.info('Memory worker: model resolved', { model, providerId: provider.id, memoryModelId: memoryModel }, LogComponent.DB);
             // Build a ProviderRuntimeConfig from the legacy ApiProvider so
             // domestic providers (MiniMax, DeepSeek, Qwen, GLM, Kimi) get
             // the correct apiFormat + modelCompat flags. Without these,

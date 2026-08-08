@@ -75,17 +75,6 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
       baseURL = provider.endpoints?.baseUrl;
       modelFromProvider = (provider.options?.defaultModel as string | undefined) || (provider.options?.model as string | undefined) || '';
       providerType = toLegacyApiProvider(provider).providerType;
-    } else {
-      // SQLite fallback: legacy ConfigManager read.
-      const { getConfigManager } = require('../config/manager');
-      const configManager = getConfigManager();
-      const activeProvider = configManager?.getActiveProvider();
-      if (activeProvider) {
-        apiKey = activeProvider.apiKey;
-        baseURL = activeProvider.baseUrl || undefined;
-        modelFromProvider = activeProvider.options?.defaultModel || activeProvider.options?.model || '';
-        providerType = activeProvider.providerType;
-      }
     }
 
     const resolvedModel = gatewayModelSetting || fallbackGetSetting('gatewayModel') || modelFromProvider;

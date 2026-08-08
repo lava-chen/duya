@@ -7,17 +7,72 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 import { getAgentProcessPool } from './process-pool/agent-process-pool';
-import { getConfigManager, toLLMProvider, type ApiProvider } from '../config/manager';
+import { toLLMProvider, type ApiProvider } from '../config/provider-types';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
 import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, type DbResponse } from './db-bridge';
 import { getProviderStore } from '../services/providers/provider-store-electron';
+import { getConfigStore } from '../config/store-instance';
+import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
 import {
   toRuntimeConfig as buildRuntimeConfig,
   normalizeBaseUrl,
   inferApiFormatFromLegacyProviderType,
   redactSecrets,
 } from '../../src/lib/providers';
+
+// Defaults preserved from the legacy ConfigManager so the new
+// ConfigStore-backed path returns the same shapes on a fresh store.
+const DEFAULT_VISION_SETTINGS: Record<string, string | boolean> = {
+  provider: '',
+  model: '',
+  baseUrl: '',
+  apiKey: '',
+  enabled: false,
+};
+
+const DEFAULT_OUTPUT_STYLES: Record<string, unknown> = {
+  normal: {
+    id: 'normal',
+    name: 'Normal',
+    description: 'Default response style',
+    prompt: 'Respond in a balanced, natural tone. Provide clear and helpful information without being overly verbose or too terse.',
+    keepCodingInstructions: true,
+    isBuiltin: true,
+  },
+  learning: {
+    id: 'learning',
+    name: 'Learning',
+    description: 'Educational and explanatory',
+    prompt: 'Adopt an educational tone. Explain concepts thoroughly, break down complex ideas into understandable pieces, and provide examples where helpful. Encourage deep understanding.',
+    keepCodingInstructions: true,
+    isBuiltin: true,
+  },
+  concise: {
+    id: 'concise',
+    name: 'Concise',
+    description: 'Brief and to the point',
+    prompt: 'Be extremely concise. Give direct answers with minimal exposition. Skip pleasantries and get straight to the point. Only elaborate when explicitly asked.',
+    keepCodingInstructions: true,
+    isBuiltin: true,
+  },
+  explanatory: {
+    id: 'explanatory',
+    name: 'Explanatory',
+    description: 'Detailed explanations',
+    prompt: 'Provide thorough, detailed explanations for everything. Walk through your reasoning step by step. Include context, alternatives, and trade-offs. Leave no question unanswered.',
+    keepCodingInstructions: true,
+    isBuiltin: true,
+  },
+  formal: {
+    id: 'formal',
+    name: 'Formal',
+    description: 'Professional tone',
+    prompt: 'Maintain a formal, professional tone. Use precise language, avoid colloquialisms, and structure responses with proper organization. Address the user with respect and professionalism.',
+    keepCodingInstructions: true,
+    isBuiltin: true,
+  },
+};
 
 // Re-export for backward compatibility
 export { dispatchDbAction, handleDbRequest as handleDbRequest, type DbRequest, type DbResponse } from './db-bridge';
@@ -77,19 +132,21 @@ export function registerAgentHandlers(): void {
 
   // Handler to get agent provider config for initializing agent subprocess
   ipcMain.handle('agent:getProviderConfig', (_event, sessionId: string) => {
-    const configManager = getConfigManager();
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
     // Read provider_id / model from the core sessions store (plan 328).
     const session = getCoreStores().sessions.get(sessionId);
 
-    let provider = session?.providerId
-      ? configManager.getAllProviders()[session.providerId]
-      : null;
+    let provider: ApiProvider | null = null;
+    if (session?.providerId) {
+      const llm = store.getLlmProvider(session.providerId);
+      provider = llm ? toLegacyApiProvider(llm) : null;
+    }
 
     if (!provider) {
-      provider = configManager.getActiveProvider() || null;
+      const activeLlm = store.getDefaultLlmProvider();
+      provider = activeLlm ? toLegacyApiProvider(activeLlm) : null;
     }
 
     if (!provider) return null;
@@ -132,17 +189,21 @@ export function registerAgentHandlers(): void {
 
   // Handler to get masked provider config for renderer (no API key exposure)
   ipcMain.handle('agent:getMaskedProviderConfig', (_event, sessionId: string) => {
-    const configManager = getConfigManager();
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
 
     // Read provider_id / model from the core sessions store (plan 328).
     const session = getCoreStores().sessions.get(sessionId);
 
-    let provider = session?.providerId
-      ? configManager.getAllProviders()[session.providerId]
-      : null;
+    let provider: ApiProvider | null = null;
+    if (session?.providerId) {
+      const llm = store.getLlmProvider(session.providerId);
+      provider = llm ? toLegacyApiProvider(llm) : null;
+    }
 
     if (!provider) {
-      provider = configManager.getActiveProvider() || null;
+      const activeLlm = store.getDefaultLlmProvider();
+      provider = activeLlm ? toLegacyApiProvider(activeLlm) : null;
     }
 
     if (!provider) return null;
@@ -184,24 +245,27 @@ export function registerAgentHandlers(): void {
 
   // Get all providers (masked)
   ipcMain.handle('config:provider:getAll', () => {
-    const configManager = getConfigManager();
-    const providers = configManager.getAllProviders();
-    const masked = Object.values(providers).map(maskProvider);
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const masked = store.listLlmProviders().map((llm) => maskProvider(toLegacyApiProvider(llm)));
     getLogger().info('config:provider:getAll', { count: masked.length }, LogComponent.AgentCommunicator);
     return masked;
   });
 
   // Get provider by ID (masked)
   ipcMain.handle('config:provider:get', (_event, id: string) => {
-    const configManager = getConfigManager();
-    const provider = configManager.getAllProviders()[id];
-    return provider ? maskProvider(provider) : null;
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const llm = store.getLlmProvider(id);
+    return llm ? maskProvider(toLegacyApiProvider(llm)) : null;
   });
 
   // Get active provider (masked)
   ipcMain.handle('config:provider:getActive', () => {
-    const configManager = getConfigManager();
-    const provider = configManager.getActiveProvider();
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const activeLlm = store.getDefaultLlmProvider();
+    const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
     return provider ? maskProvider(provider) : null;
   });
 
@@ -213,11 +277,11 @@ export function registerAgentHandlers(): void {
   // the existing agent runtime keeps working. New agent code should
   // prefer the `runtimeConfig` field.
   ipcMain.handle('config:provider:getActiveProviderConfig', () => {
-    const configManager = getConfigManager();
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
-    const provider = configManager.getActiveProvider();
+    const activeLlm = store.getDefaultLlmProvider();
+    const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
     if (!provider) return null;
 
     // Plan 209 P4-prime: the original implementation only read
@@ -276,8 +340,10 @@ export function registerAgentHandlers(): void {
 
   // Get provider config by ID with unmasked API key (for title generation model resolution)
   ipcMain.handle('config:provider:getConfig', (_event, providerId: string, model: string) => {
-    const configManager = getConfigManager();
-    const provider = configManager.getAllProviders()[providerId];
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const providerLlm = store.getLlmProvider(providerId);
+    const provider = providerLlm ? toLegacyApiProvider(providerLlm) : undefined;
     if (!provider) return null;
 
     // Plan 209 P4-prime: prefer the requested `model`, then fall
@@ -294,8 +360,6 @@ export function registerAgentHandlers(): void {
       getDefaultModelForProvider(provider.providerType, provider.options);
 
     // Build the same runtime config shape on this path too.
-    const store = getProviderStore();
-    store.migrateAllLegacyProviders();
     const llm = store.getLlmProvider(providerId);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
@@ -330,84 +394,97 @@ export function registerAgentHandlers(): void {
 
   // Upsert provider
   ipcMain.handle('config:provider:upsert', (_event, data: ApiProvider) => {
-    const configManager = getConfigManager();
-    configManager.upsertProvider(data);
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    store.upsertLlmProvider(migrateLegacyApiProvider(data));
     return maskProvider(data);
   });
 
   // Update provider (partial update)
   ipcMain.handle('config:provider:update', (_event, id: string, data: Partial<ApiProvider>) => {
-    const configManager = getConfigManager();
-    const existing = configManager.getAllProviders()[id];
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    const existingLlm = store.getLlmProvider(id);
+    const existing = existingLlm ? toLegacyApiProvider(existingLlm) : undefined;
     if (!existing) return null;
     const updated = { ...existing, ...data, id };
-    configManager.upsertProvider(updated);
+    store.upsertLlmProvider(migrateLegacyApiProvider(updated));
     return maskProvider(updated);
   });
 
   // Delete provider
   ipcMain.handle('config:provider:delete', (_event, id: string) => {
-    const configManager = getConfigManager();
-    return configManager.deleteProvider(id);
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    return store.deleteLlmProvider(id);
   });
 
   // Activate provider
   ipcMain.handle('config:provider:activate', (_event, id: string) => {
-    const configManager = getConfigManager();
-    configManager.activateProvider(id);
-    const provider = configManager.getAllProviders()[id];
-    return provider ? maskProvider(provider) : null;
+    const store = getProviderStore();
+    store.migrateAllLegacyProviders();
+    store.setDefaultLlmProvider(id);
+    const providerLlm = store.getLlmProvider(id);
+    return providerLlm ? maskProvider(toLegacyApiProvider(providerLlm)) : null;
   });
 
   // ==================== Output Style handlers ====================
   ipcMain.handle('config:style:getAll', () => {
-    const configManager = getConfigManager();
-    const styles = configManager.getOutputStyles();
+    const styles = (getConfigStore().getByPath('auxiliary.output_styles') as Record<string, unknown> | undefined) ?? DEFAULT_OUTPUT_STYLES;
     return Object.values(styles);
   });
 
   ipcMain.handle('config:style:get', (_event, id: string) => {
-    const configManager = getConfigManager();
-    const styles = configManager.getOutputStyles();
+    const styles = (getConfigStore().getByPath('auxiliary.output_styles') as Record<string, unknown> | undefined) ?? DEFAULT_OUTPUT_STYLES;
     return styles[id] || null;
   });
 
   ipcMain.handle('config:style:upsert', (_event, data: { id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean }) => {
-    const configManager = getConfigManager();
-    const result = configManager.upsertOutputStyle({
+    const store = getConfigStore();
+    const styles = (store.getByPath('auxiliary.output_styles') as Record<string, unknown> | undefined) ?? {};
+    const style = {
       id: data.id,
       name: data.name,
       description: data.description,
       prompt: data.prompt,
       keepCodingInstructions: data.keepCodingInstructions,
-    });
-    return result ? configManager.getOutputStyles()[data.id] : null;
+    };
+    const next = { ...styles, [data.id]: style };
+    store.set('auxiliary.output_styles', next);
+    return next[data.id] || null;
   });
 
   ipcMain.handle('config:style:delete', (_event, id: string) => {
-    const configManager = getConfigManager();
-    return configManager.deleteOutputStyle(id);
+    const store = getConfigStore();
+    const styles = (store.getByPath('auxiliary.output_styles') as Record<string, unknown> | undefined) ?? {};
+    const style = styles[id] as { isBuiltin?: boolean } | undefined;
+    if (!style) return false;
+    if (style.isBuiltin) return false;
+    const next = { ...styles };
+    delete next[id];
+    store.set('auxiliary.output_styles', next);
+    return true;
   });
 
   // ==================== Vision handlers ====================
   ipcMain.handle('config:vision:get', () => {
-    const configManager = getConfigManager();
-    return configManager.getVisionSettings();
+    const store = getConfigStore();
+    return (store.getByPath('auxiliary.vision') as Record<string, unknown> | undefined) ?? DEFAULT_VISION_SETTINGS;
   });
 
   ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseUrl?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
-    const configManager = getConfigManager();
-    const current = configManager.getVisionSettings();
+    const store = getConfigStore();
+    const current = (store.getByPath('auxiliary.vision') as Record<string, string | boolean> | undefined) ?? DEFAULT_VISION_SETTINGS;
     const merged = {
       ...current,
       ...data,
-      // Normalize baseURL/baseUrl -> baseUrl for ConfigManager
-      baseUrl: data.baseUrl || data.baseURL || current.baseUrl,
+      // Normalize baseURL/baseUrl -> baseUrl for ConfigStore
+      baseUrl: data.baseUrl || data.baseURL || (current.baseUrl as string),
     };
-    // Remove baseURL from merged since ConfigManager uses baseUrl
+    // Remove baseURL from merged since ConfigStore uses baseUrl
     delete (merged as Record<string, unknown>).baseURL;
-    configManager.setConfig('visionSettings', merged, 'renderer');
-    return configManager.getVisionSettings();
+    store.set('auxiliary.vision', merged);
+    return (store.getByPath('auxiliary.vision') as Record<string, string | boolean> | undefined) ?? merged;
   });
 
   getLogger().info('Agent handlers registered', undefined, LogComponent.AgentCommunicator);

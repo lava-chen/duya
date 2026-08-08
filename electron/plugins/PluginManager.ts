@@ -38,6 +38,7 @@ import type {
   PluginViewItem,
   PluginScope,
   PluginSetupState,
+  PluginRuntimeHealth,
 } from './types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 

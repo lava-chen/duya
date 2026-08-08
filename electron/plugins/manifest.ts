@@ -81,6 +81,14 @@ const VALID_DEFAULT_MODES = ['read', 'draft', 'write', 'modify', 'dangerous'] as
 type DefaultMode = (typeof VALID_DEFAULT_MODES)[number];
 
 /**
+ * Reverse-domain namespace a standard Agent Plugins package uses to carry
+ * duya-specific fields that the standard `plugin.json` schema forbids at
+ * the root (`additionalProperties: false`). The standard schema assigns no
+ * semantics to namespace objects, so duya is free to read this one.
+ */
+const DUYA_EXTENSION_NAMESPACE = 'com.duya.client';
+
+/**
  * Read `permissions/policy.json` and split it into the two manifest fields
  * it backs: `permissionPolicy` (the tier defaults) and `permissions` (the
  * capability request list). Absent file → no policy, no permissions. This
@@ -458,10 +466,119 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
 // ----------------------------------------------------------------------------
 
 /**
+ * Read the duya-specific fields carried in a standard package's
+ * `extensions["com.duya.client"]` block. These fields (engines, permissions,
+ * permission policy, setup, cli, ui, interface) have no portable meaning, so
+ * the standard schema forbids them at the root; duya namespaces them instead.
+ * Absent or malformed block → lenient defaults so a third-party standard
+ * package never fails to load.
+ */
+function parseDuyaClientExtension(raw: unknown): {
+  permissions: PluginManifest['permissions'];
+  setup: PluginManifest['setup'];
+  engines: PluginManifest['engines'];
+  permissionPolicy: PluginManifest['permissionPolicy'];
+  interface: PluginInterface | undefined;
+  cli: PluginManifest['capabilities']['cli'];
+  ui: PluginManifest['capabilities']['ui'];
+} {
+  const empty: ReturnType<typeof parseDuyaClientExtension> = {
+    permissions: [],
+    setup: undefined,
+    engines: { duya: '>=0.1.0' },
+    permissionPolicy: undefined,
+    interface: undefined,
+    cli: undefined,
+    ui: undefined,
+  };
+  if (!isObject(raw)) return empty;
+
+  const permissions: PluginManifest['permissions'] = Array.isArray(raw.permissions)
+    ? raw.permissions
+        .filter((e): e is Record<string, unknown> => isObject(e))
+        .map((e) => ({
+          name: typeof e.name === 'string' ? e.name : '',
+          scope: typeof e.scope === 'string' ? e.scope : undefined,
+          domains: Array.isArray(e.domains)
+            ? e.domains.filter((d): d is string => typeof d === 'string')
+            : undefined,
+        }))
+        .filter((p) => p.name.length > 0)
+    : [];
+
+  const setup: PluginManifest['setup'] = Array.isArray(raw.setup)
+    ? raw.setup.map((item, index) => parseSetupField(item, index))
+    : undefined;
+
+  const enginesRaw = isObject(raw.engines) ? (raw.engines as Record<string, unknown>) : undefined;
+  const engines: PluginManifest['engines'] = {
+    duya:
+      typeof enginesRaw?.duya === 'string' && enginesRaw.duya.length > 0
+        ? enginesRaw.duya
+        : '>=0.1.0',
+    node: typeof enginesRaw?.node === 'string' ? enginesRaw.node : undefined,
+  };
+
+  const policyRaw = isObject(raw.permissionPolicy)
+    ? (raw.permissionPolicy as Record<string, unknown>)
+    : undefined;
+  const permissionPolicy: PluginManifest['permissionPolicy'] = policyRaw
+    ? {
+        defaultMode:
+          typeof policyRaw.defaultMode === 'string' &&
+          (VALID_DEFAULT_MODES as readonly string[]).includes(policyRaw.defaultMode)
+            ? (policyRaw.defaultMode as DefaultMode)
+            : undefined,
+        writeActionsRequireApproval:
+          typeof policyRaw.writeActionsRequireApproval === 'boolean'
+            ? policyRaw.writeActionsRequireApproval
+            : undefined,
+        destructiveActionsRequireApproval:
+          typeof policyRaw.destructiveActionsRequireApproval === 'boolean'
+            ? policyRaw.destructiveActionsRequireApproval
+            : undefined,
+      }
+    : undefined;
+
+  const cli: PluginManifest['capabilities']['cli'] = Array.isArray(raw.cli)
+    ? raw.cli
+        .filter((e): e is Record<string, unknown> => isObject(e))
+        .map((e, index) => ({
+          name: asString(e.name, `extensions.duya.cli[${index}].name`),
+          command: asString(e.command, `extensions.duya.cli[${index}].command`),
+          args: Array.isArray(e.args)
+            ? e.args.filter((a): a is string => typeof a === 'string')
+            : undefined,
+        }))
+    : undefined;
+
+  const ui: PluginManifest['capabilities']['ui'] = Array.isArray(raw.ui)
+    ? raw.ui
+        .filter((e): e is Record<string, unknown> => isObject(e))
+        .map((e, index) => ({
+          id: asString(e.id, `extensions.duya.ui[${index}].id`),
+          type: asString(e.type, `extensions.duya.ui[${index}].type`),
+          entry: asString(e.entry, `extensions.duya.ui[${index}].entry`),
+        }))
+    : undefined;
+
+  return {
+    permissions,
+    setup,
+    engines,
+    permissionPolicy,
+    interface: parseInterfaceBlock(raw.interface),
+    cli,
+    ui,
+  };
+}
+
+/**
  * Read a standard Agent Plugins 1.0.0 package (root `plugin.json` whose
  * `$schema` equals `AGENT_PLUGINS_PLUGIN_SCHEMA`). Skills and MCP servers
  * are resolved from disk via `discoverAllCapabilities` (the standard
- * `mcp.json` fallback applies), and `extensions` is passed through. The
+ * `mcp.json` fallback applies), `extensions` is passed through, and
+ * duya-specific fields are read from `extensions["com.duya.client"]`. The
  * package is projected onto the duya v2 runtime view; it has no duya id, so
  * one is derived from the package name.
  */
@@ -493,6 +610,10 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
   const mcpServers = caps.mcpServers;
   const workflowNames = caps.workflows.map((w) => w.name);
 
+  const duyaExt = parseDuyaClientExtension(
+    isObject(raw.extensions) ? (raw.extensions as Record<string, unknown>)[DUYA_EXTENSION_NAMESPACE] : undefined,
+  );
+
   return {
     schemaVersion: 'duya.plugin.v2',
     id,
@@ -504,19 +625,23 @@ function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): Plu
     repository: asOptionalString(raw.repository) ?? undefined,
     license: asOptionalString(raw.license) ?? undefined,
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
-    interface: parseInterfaceBlock(raw.interface),
+    interface: duyaExt.interface,
     extensions: parseExtensions(raw.extensions),
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
+      cli: duyaExt.cli,
+      ui: duyaExt.ui,
     },
     components: {
       mcpServers: mcpServers.map((s) => s.name),
       skills: skillNames,
       workflows: workflowNames,
     },
-    permissions: [],
-    engines: { duya: '>=0.1.0' },
+    permissionPolicy: duyaExt.permissionPolicy,
+    permissions: duyaExt.permissions,
+    setup: duyaExt.setup,
+    engines: duyaExt.engines,
   };
 }
 

@@ -9,7 +9,6 @@
  */
 
 import * as http from 'http';
-import { getConfigManager } from '../../config/manager';
 import { getJsonSetting, setJsonSetting } from '../../db/index';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { join } from 'node:path';

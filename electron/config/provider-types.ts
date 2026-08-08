@@ -12,32 +12,13 @@
  * `src/lib/providers/legacy.ts#toLegacyApiProvider` at the IPC boundary.
  */
 
-export type ApiProviderType =
-  | 'anthropic'
-  | 'openai'
-  | 'ollama'
-  | 'openai-compatible'
-  | 'openrouter'
-  | 'bedrock'
-  | 'vertex'
-  | 'gemini-image'
-  | 'google';
+import type { ApiProvider } from '../../src/lib/providers/types';
+
+export type { ApiProvider } from '../../src/lib/providers/types';
+
+export type ApiProviderType = ApiProvider['providerType'];
 
 export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
-
-export interface ApiProvider {
-  id: string;
-  name: string;
-  providerType: ApiProviderType;
-  baseUrl: string;
-  apiKey: string;
-  isActive: boolean;
-  extraEnv?: Record<string, string>;
-  headers?: Record<string, string>;
-  options?: Record<string, unknown>;
-  notes?: string;
-  sortOrder?: number;
-}
 
 /**
  * Convert provider type to LLM provider for agent process.

@@ -66,11 +66,11 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
 | 组件 | 职责 | 文件 |
 |------|------|------|
 | **Main Process** | SQLite 单例（唯一写入方）、持久化消息队列、会话管理、配置管理、生命周期协调 | `electron/main.ts` |
-| **BootConfig** | 引导配置（指南针），管理 boot.json 中的数据库路径 | `electron/boot-config.ts` |
+| **ConfigStore** | 统一配置中心（指南针 + 保险箱），维护 `~/.duya/config.toml` + `~/.duya/secrets.json` 的内存快照、原子 TOML 持久化、MessagePort 广播 | `electron/config/store.ts` |
 | **AgentProcessPool** | 并发 Agent 上限（CPU核数/2）、spawn/kill 管理、心跳监控（杀僵尸进程）、排队队列、每条消息落库 | `electron/agent-process-pool.ts` |
 | **Session Manager** | Session 状态跟踪与会话生命周期管理 | `electron/session-manager.ts` |
 | **Channel Manager** | MessagePort 通道管理（用于持久化连接）；invoke 通道用于主动查询（session 列表、历史加载）。注意：MessagePort 不可重连（窗口关闭即端口销毁） | `electron/message-port-manager.ts` |
-| **Config Manager** | 加密配置存储、权限控制、实时广播 | `electron/config-manager.ts` |
+| **ProviderStore** | Provider 配置读取（经 `ConfigStoreReader`），为 Agent/渲染层提供服务商与密钥 | `electron/services/providers/provider-store-config.ts` |
 | **DB Handlers** | 数据库 IPC 处理器、Schema 管理、迁移、Safe Mode | `electron/db-handlers.ts` |
 | **Agent Communicator** | Agent IPC 处理器、DB 请求分发 | `electron/ipc/agent-communicator.ts` |
 | **Gateway Communicator** | Gateway/Bridge 进程管理、IPC 转发 | `electron/ipc/gateway-communicator.ts` |
@@ -264,7 +264,7 @@ stable-boundary batch writes.
 | `db:task:*` | Task CRUD 操作 |
 | `db:permission:*` | Permission 操作 |
 | `db:setting:*` | Settings 操作 |
-| `config:provider:*` | Provider 操作 (ConfigManager 管理) |
+| `config:provider:*` | Provider 操作 (ProviderStore 管理) |
 | `db:search:*` | 搜索操作 |
 | `db:channel:*` | Channel 操作 |
 | `db:project:*` | Project 操作 |
@@ -354,8 +354,8 @@ DUYA 的所有本地数据以 `userData` 目录下的若干物理文件承载，
 
 | 文件类别 | 路径 | 管理者 | 核心内容 | 加密策略 |
 |:---|:---|:---|:---|:---|
-| **引导基建** (指南针) | `/config/boot.json` | Main Process (`boot-config.ts`) | 仅包含 `databasePath` (数据库的绝对路径) | **明文** (必须在应用极早期能被快速读取) |
-| **机密配置** (保险箱) | `/config/settings.json` | `ConfigManager` | `apiProviders` (API 密钥)、`agentSettings` (模型配置)、`uiPreferences` (界面偏好) | **OS 级加密** (依赖 Electron `safeStorage`) |
+| **统一配置·明文** (指南针 + 保险箱) | `~/.duya/config.toml` | `ConfigStore` (`electron/config/store.ts`) | `storage.database_path`、`providers` (服务商元数据)、`agentSettings`、`uiPreferences`、`migrations` 等 | **明文** (不含任何密钥) |
+| **统一配置·机密** (保险箱) | `~/.duya/secrets.json` (0600) | `ConfigStore` | `apiKeys`/`tokens` 等服务商密钥 | **文件权限 0600** (密钥与 config.toml 物理分离) |
 | **业务流水·状态与索引** (账本) | `/databases/duya-core.db` | `CoreDatabase` (`electron/db/core/`) | 六大核心聚合的状态与索引：`sessions` (会话元数据)、`message_index` (消息轻量索引)、`mailbox_items`、`tasks`、`permission_requests`、`session_runtime_locks` | **明文** (依赖系统文件权限保护) |
 | **业务流水·消息载体** (账本) | `/databases/sessions/` (rollout 目录) | `MessageLog` (`message-log.ts`) | 每条会话一个 append-only JSONL rollout 文件，逐行存消息/压缩事件的完整 payload | **明文** (依赖系统文件权限保护) |
 | **旧库** (封存) | `/databases/duya-main.db` | 仅 `LegacyImport` 只读 | 六大核心表已冻结 (LEGACY FROZEN)，仅供升级导入 + conductor/research/gateway 等子系统自有表 | **明文** |
@@ -369,10 +369,10 @@ DUYA 的所有本地数据以 `userData` 目录下的若干物理文件承载，
 各文件在主进程启动时的介入时机有严格的先后顺序：
 
 1. **第 0 步：独占锁检查** — `app.requestSingleInstanceLock()`，防止多开引起的文件争抢
-2. **第 1 步：读取引导文件 (Boot)** — 主进程同步读取 `boot.json`，拿到 `databasePath`
+2. **第 1 步：读取引导文件 (Boot)** — 通过 `electron/config/compass.ts` 同步读取 `~/.duya/config.toml` 的 `storage.database_path`（空则用默认路径），拿到 `databasePath`
 3. **第 2 步：初始化数据库网关 (DB Init)** — 根据拿到的路径，实例化 `better-sqlite3`，持有 SQLite 文件排他锁
 4. **第 2.5 步：初始化核心数据库 (Core Init)** — `initCoreDatabase()`：建 `duya-core.db` + rollout 目录，跑全部迁移，并在**任何会话服务接受请求前**执行旧库只读导入（`LegacyImport.needsImport()` → `run()`，失败记 WARN 下次重试；无旧库则写 `none@<ts>` 标记）
-5. **第 3 步：初始化配置中心 (Config Init)** — 实例化 `ConfigManager`，解密读取 `settings.json` 中的 API Keys
+5. **第 3 步：初始化配置中心 (Config Init)** — 实例化 `ConfigStore`（加载 `~/.duya/config.toml` + `~/.duya/secrets.json`）、`ProviderStore`（经 `ConfigStoreReader` 读取服务商与密钥）
 6. **第 4 步：拉起 Daemon 与 UI** — 数据库和配置双双就绪后，启动子系统并加载前端窗口
 
 #### 数据库迁移 (搬家) 工作流
@@ -381,18 +381,18 @@ DUYA 的所有本地数据以 `userData` 目录下的若干物理文件承载，
 
 1. **暂停 I/O**：通知 Daemon 暂停所有后台流式写入任务
 2. **安全复制**：主进程获取用户选择的新路径，将 `.db`、`.db-wal`、`.db-shm` 三个文件完整复制到新位置
-3. **更新指南针**：修改 `boot.json`，将 `databasePath` 覆写为新路径（原子写入）
+3. **更新指南针**：将 `~/.duya/config.toml` 的 `storage.database_path` 覆写为新路径（`ConfigStore` 原子写入）
 4. **强制重启**：主进程调用 `app.relaunch()` + `app.exit(0)` 释放旧锁并接管新库
 
 #### Bulletproof 防御策略
 
 * **防御 1：原子写入 (防断电损坏)** — 使用 `write-file-atomic` 库，先写入临时文件 `.tmp`，落盘成功后由 OS 执行原子级 Rename 覆盖原文件
 * **防御 2：Safe Mode 回退 UI (防幽灵磁盘)** — 数据库寻址失败时不退出应用，渲染极简的"安全恢复模式"页面，提供"重新定位文件"或"重置到默认路径"按钮
-* **防御 3：防止 API 密钥裸奔 (防黑客拖库)** — Provider 数据必须且只能由 `ConfigManager` 掌管，确保高价值数据永远处于 `safeStorage` 的加密保护伞下
+* **防御 3：防止 API 密钥裸奔 (防黑客拖库)** — 服务商密钥必须且只能由 `ConfigStore` 掌管，写入权限 0600 的 `~/.duya/secrets.json`，与明文 `config.toml` 物理分离
 
 #### API Key 保护
 
-- **Provider 存储**：API Provider 配置统一由 ConfigManager 管理，使用 Electron `safeStorage` 加密存储在 `config/settings.json`
+- **Provider 存储**：API Provider 配置统一由 ConfigStore 管理，密钥写入权限 0600 的 `~/.duya/secrets.json`，服务商元数据存于 `config.toml`
 - Provider 查询结果返回给 Renderer 时，API Key 自动脱敏（`sk-xxxx***xxxx`）
 - Agent Process 获取完整 API Key 用于实际 API 调用（Main 在 `init` 消息中传递）
 
@@ -427,7 +427,7 @@ Renderer 通过 `agent:disconnected` 感知 Agent 崩溃，已落库的消息不
 
 ### Provider 模型（多服务商并存）
 
-DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `settings.json` 中配置任意数量的 LLM 服务商，每位服务商都**可独立选用**。系统不再强制全局"唯一活跃服务商"约束。
+DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `~/.duya/config.toml` 中配置任意数量的 LLM 服务商，每位服务商都**可独立选用**。系统不再强制全局"唯一活跃服务商"约束。
 
 > **服务商目录单一数据源**：`@duya/ai` 现为 provider 的单一数据源（`ProviderCatalog`，见 `packages/ai/src/providers/catalog.ts` + `catalog-data.ts`）。前端"服务商设置"快速添加目录（`VENDOR_PRESETS`）与模型预设元数据统一从 `@duya/ai` 派生，不再在 `src/lib/provider-presets.tsx` 各自硬编码维护。
 
@@ -449,7 +449,7 @@ DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `s
 
 #### 迁移
 
-`multi-provider-v1` 迁移在 `ConfigManager` 加载时执行一次：
+`multi-provider-v1` 迁移已折叠进 `electron/config/migrate.ts` 的 `migrateSettingsJson`，在配置加载时执行一次：
 
 - 若 `defaultProviderId` 未设置且**有且仅有一个** `isActive=true` 的服务商，则将该 id 写入 `defaultProviderId`。
 - 清除所有 `isActive` 标志（让 `isDefault` 成为唯一权威状态）。
@@ -728,10 +728,10 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
    - **Agent Process → Main**：通过 child_process IPC `db:request`/`db:response`（稳定边界批量落库）
    - **Renderer → Main**：通过 IPC invoke（主动查询，如切换 session 时加载历史）
 5. **API Key 脱敏**：返回给 Renderer 的 Provider 数据自动遮蔽 API Key
-6. **Provider 存储**：Provider 配置由 ConfigManager 管理（加密存储在 `config/settings.json`），不存储在数据库
+6. **Provider 存储**：Provider 配置由 ConfigStore 管理（密钥在 `~/.duya/secrets.json`，元数据在 `config.toml`），不存储在数据库
 7. **Generation 冲突解决**：使用 generation 编号避免并发写入冲突（用于最终快照替换）
-8. **数据库路径由 boot.json 管理**：数据库文件路径由 `/config/boot.json` 中的 `databasePath` 字段决定，支持迁移到自定义位置
-9. **原子写入**：boot.json 和 settings.json 均使用 `write-file-atomic` 写入，防止断电损坏
+8. **数据库路径由 config.toml 管理**：数据库文件路径由 `~/.duya/config.toml` 的 `storage.database_path` 字段决定（经 `compass.ts` 读取），支持迁移到自定义位置
+9. **原子写入**：config.toml 和 secrets.json 均使用原子写入，防止断电损坏
 
 #### 数据库表结构
 
@@ -755,7 +755,7 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 | `conductor_actions` | Conductor 操作日志（可审计、可回放） | Main Process (唯一写入) / Renderer (只读) |
 | `_schema_migrations` | Schema 迁移记录 | Main Process |
 
-> **Provider 配置说明**：API Provider 配置不再存储在数据库，统一由 **ConfigManager** 管理（加密存储在 `config/settings.json`）。
+> **Provider 配置说明**：API Provider 配置不再存储在数据库，统一由 **ConfigStore** 管理（服务商元数据在 `config.toml`，密钥在 `~/.duya/secrets.json`）。
 
 #### 自动化定时任务表
 
@@ -851,14 +851,14 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 
 #### 数据库文件位置
 
-数据库文件路径由 `/config/boot.json` 中的 `databasePath` 字段决定：
+数据库文件路径由 `~/.duya/config.toml` 的 `storage.database_path` 字段决定（经 `electron/config/compass.ts` 读取，空则用默认路径 `%APPDATA%/DUYA/databases/duya-main.db`）：
 
 - **旧库**：`{databasePath}`（默认 `{userData}/databases/duya-main.db`）。六大核心表冻结（LEGACY FROZEN），仅由 `LegacyImport` 只读 + conductor/research/gateway 等子系统自有表使用。
 - **核心状态库**：`duya-core.db`（由 `resolveCoreDatabasePath()` 从 `databasePath` 推导，位于库同目录），存六大聚合的状态与索引。
 - **rollout 根**：`~/.duya/sessions/`（由 `resolveRolloutRoot()` 推导，对齐 Codex 的 `~/.codex/sessions/`），每条会话一个 JSONL rollout 文件。测试模式（`DUYA_TEST=1`）下追加 `test-namespaces/<ns>` 前缀隔离。
 - **自定义路径**：用户可通过迁移功能将数据库移至任意位置；`duya-core.db` 紧随其目录，`sessions/` 固定于 `~/.duya/`。
 - **向后兼容**：自动检测并重命名旧版 `duya.db` 为 `duya-main.db`
-- **引导文件**：`boot.json` 仅包含 `{ "_version": 1, "databasePath": "..." }`，明文存储
+- **引导文件**：`~/.duya/config.toml` 的 `storage` 块仅含 `database_path`（明文，compass.ts 极早期读取）；密钥在 `~/.duya/secrets.json`（0600）
 
 #### 日志存储策略
 
@@ -892,7 +892,7 @@ duya 采用 **3 个 SQLite 库**（core / legacy / memory-state），而非 Code
 | 旧库 | `duya-main.db`（LEGACY FROZEN，仅 LegacyImport 只读 + 子系统表） | — |
 | 内存状态库 | `memory-state`（memory-state.db） | — |
 | rollout JSONL | `~/.duya/sessions/<Y>/<M>/<D>/<sessionId>_rollout.jsonl` | `~/.codex/sessions/` |
-| JSON 文件 | `config/settings.json` + `boot.json` | 对应配置 JSON |
+| 配置文件 | `~/.duya/config.toml` + `~/.duya/secrets.json` | 对应配置 JSON |
 | 附件文件目录 | `~/.duya/attachments/<id>/<filename>` | `attachments/<uuid>/` |
 
 > **无新 SQLite 库文件**：spawn edges 与 attachments 都汇入核心库 `duya-core.db`，不新增独立库。
@@ -906,7 +906,7 @@ duya 采用 **3 个 SQLite 库**（core / legacy / memory-state），而非 Code
 3. 停止性能监控（PerformanceMonitor.shutdown）
 4. 停止 Bridge 进程（stopBridgeProcess）
 5. 清理会话管理器（SessionManager.shutdown）— 不涉及写库
-6. 刷新配置到磁盘（ConfigManager.shutdown）
+6. 刷新配置到磁盘（ConfigStore 持久化 config.toml + secrets.json）
 7. 关闭数据库连接（Database.close）— **最后一步**，确保前面所有写操作完成后再关闭
 
 ## 目录结构
@@ -916,11 +916,17 @@ duya/
 ├── electron/                    # Electron 主进程
 │   ├── main.ts                 # 入口、窗口管理、IPC、生命周期 (lock → boot → db → config → UI)
 │   ├── preload.ts              # contextBridge API (含 SafeMode/Migration API)
-│   ├── boot-config.ts          # 引导配置管理 (指南针) - boot.json 读写、路径解析、原子写入
+│   ├── config/                 # 统一配置中心 (指南针 + 保险箱)
+│   │   ├── store.ts            # ConfigStore - config.toml + secrets.json 内存快照、原子持久化、广播
+│   │   ├── compass.ts          # 极早期引导 - 读取 config.toml storage.database_path (替代 boot.json)
+│   │   ├── migrate.ts          # 旧配置迁移 (settings.json/boot.json/mcp.toml 等 → config.toml)
+│   │   ├── provider-types.ts   # Provider 类型定义
+│   │   └── schema.ts           # config.toml 结构定义
 │   ├── agent-process-pool.ts   # AgentProcessPool（并发上限 + 心跳 + 排队 + 消息落库）
 │   ├── session-manager.ts      # Session 状态跟踪与生命周期管理
-│   ├── db-handlers.ts          # 数据库 IPC 处理器 (账本) - boot.json 路径解析、Safe Mode
-│   ├── config-manager.ts       # 配置管理 (保险箱) - safeStorage 加密、原子写入、实时广播
+│   ├── db-handlers.ts          # 数据库 IPC 处理器 (账本) - config.toml 路径解析、Safe Mode
+│   ├── services/providers/
+│   │   └── provider-store-config.ts  # ProviderStore / ConfigStoreReader - 服务商与密钥读取
 │   ├── message-port-manager.ts # MessagePort 通道管理（自动重连）
 │   ├── performance-monitor.ts  # 性能监控（延迟、吞吐、内存）
 │   ├── net-handlers.ts         # 网络相关 IPC 处理器
@@ -1022,10 +1028,9 @@ duya/
 ### userData 目录结构
 
 ```
-{AppData/Roaming/DUYA}/
-├── config/
-│   ├── boot.json              # 引导基建 (指南针) - databasePath，明文，原子写入
-│   └── settings.json          # 机密配置 (保险箱) - API Keys + 设置，safeStorage 加密，原子写入
+~/.duya/                          # 统一配置根目录 (ConfigStore)
+├── config.toml              # 统一配置·明文 (指南针 + 保险箱) - storage.database_path、providers、agentSettings、uiPreferences，原子写入
+├── secrets.json             # 统一配置·机密 (保险箱) - API Keys / tokens，权限 0600，原子写入
 ├── databases/
 │   ├── duya-main.db           # 业务流水 (账本) - 会话/消息/权限，SQLite WAL 模式
 │   ├── duya-main.db-wal       # WAL 日志
@@ -1035,7 +1040,6 @@ duya/
 │   ├── app.log.1              # 轮转日志
 │   └── ...
 ├── recent-folders.json        # 最近打开的文件夹
-├── settings.json              # (旧版，自动迁移到 config/settings.json)
 └── crash-reports/             # 崩溃报告（如启用）
 ```
 
@@ -1051,11 +1055,11 @@ duya/
 | **SQLite 单例写入 + WAL 模式** | Main 进程唯一写入方，WAL 支持读写并发，`busy_timeout = 5000` | ✅ 已实现 |
 | **Main 中转消息** | Renderer ↔ Agent 通信经 Main 转发，延迟在可接受范围 | ✅ 已实现 |
 | **Generation 冲突解决** | 使用 generation 编号避免并发写入冲突 | ✅ 已实现 |
-| **Provider 加密存储** | API Key 由 ConfigManager 管理，safeStorage 加密，不存数据库 | ✅ 已实现 |
-| **Golden Trident 数据架构** | boot.json (引导) + settings.json (机密) + duya-main.db (业务)，物理分离 | ✅ 已实现 |
-| **原子写入 (write-file-atomic)** | boot.json 和 settings.json 使用原子写入，防止断电损坏 | ✅ 已实现 |
+| **Provider 加密存储** | API Key 由 ConfigStore 管理，写入 `~/.duya/secrets.json` (0600)，不存数据库 | ✅ 已实现 |
+| **Golden Trident 数据架构** | config.toml (明文) + secrets.json (机密) + duya-main.db (业务)，物理分离 | ✅ 已实现 |
+| **原子写入 (write-file-atomic)** | config.toml 和 secrets.json 使用原子写入，防止断电损坏 | ✅ 已实现 |
 | **Safe Mode 回退 UI** | 数据库寻址失败时渲染安全恢复模式，提供重新定位/重置按钮 | ✅ 已实现 |
-| **数据库路径可迁移** | boot.json 管理 databasePath，支持迁移到自定义位置 + app.relaunch() | ✅ 已实现 |
+| **数据库路径可迁移** | config.toml 的 storage.database_path 管理路径，支持迁移到自定义位置 + app.relaunch() | ✅ 已实现 |
 | **安全扫描系统** | ContextScanner + SkillScanner + BashClassifier，多层防护 | ✅ 已实现 |
 | **提示词系统工程** | 模块化 Section 架构 + PromptManager + 缓存优化 | ✅ 已实现 |
 | **静态/动态 Section 分离** | cachedPromptSection + volatilePromptSection + BOUNDARY 标记 | ✅ 已实现 |
