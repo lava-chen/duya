@@ -22,6 +22,10 @@ import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getGatewayProxyConfig } from '../db/queries/settings';
 import { getDefaultGatewayWorkspace, prepareGatewayWorkspace } from './config';
 import { buildGatewayInboundChatRequest } from './inbound-request';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import { getConfigStore } from '../config/store-instance';
+import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
+import type { ChannelAdapterEntry } from '../config/schema';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -44,11 +48,16 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
   }
 
   try {
-    const { getConfigManager } = require('../config/manager');
-    const configManager = getConfigManager();
-    const activeProvider = configManager?.getActiveProvider();
+    // New path: read the active provider from ProviderStore (backed by
+    // ConfigStore). ConfigStore merges secrets back into its snapshot, so
+    // the returned LlmProvider already carries apiKey.
+    const configStore = getConfigStore();
+    const gatewayModelSetting = configStore.getByPath('channels.gateway_model') as string | undefined;
+    const provider = getProviderStore().getActiveLlmProvider();
 
-    const getSetting = (key: string): string | undefined => {
+    // Fallback to the legacy ConfigManager read when ConfigStore has no
+    // active provider (Phase 3 pre-migration transition period).
+    const fallbackGetSetting = (key: string): string | undefined => {
       const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
       if (row) {
         try { return JSON.parse(row.value); } catch { return row.value; }
@@ -56,16 +65,37 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
       return undefined;
     };
 
-    const gatewayModelSetting = getSetting('gatewayModel');
-    const modelFromProvider = activeProvider?.options?.defaultModel || activeProvider?.options?.model || '';
-    const resolvedModel = gatewayModelSetting || modelFromProvider;
+    let apiKey: string | undefined;
+    let baseURL: string | undefined;
+    let modelFromProvider = '';
+    let providerType: string | undefined;
 
-    if (activeProvider) {
+    if (provider) {
+      apiKey = provider.auth?.apiKey;
+      baseURL = provider.endpoints?.baseUrl;
+      modelFromProvider = (provider.options?.defaultModel as string | undefined) || (provider.options?.model as string | undefined) || '';
+      providerType = toLegacyApiProvider(provider).providerType;
+    } else {
+      // SQLite fallback: legacy ConfigManager read.
+      const { getConfigManager } = require('../config/manager');
+      const configManager = getConfigManager();
+      const activeProvider = configManager?.getActiveProvider();
+      if (activeProvider) {
+        apiKey = activeProvider.apiKey;
+        baseURL = activeProvider.baseUrl || undefined;
+        modelFromProvider = activeProvider.options?.defaultModel || activeProvider.options?.model || '';
+        providerType = activeProvider.providerType;
+      }
+    }
+
+    const resolvedModel = gatewayModelSetting || fallbackGetSetting('gatewayModel') || modelFromProvider;
+
+    if (providerType) {
       _cachedProviderConfig = {
-        apiKey: activeProvider.apiKey,
-        baseURL: activeProvider.baseUrl || undefined,
+        apiKey,
+        baseURL: baseURL || undefined,
         model: resolvedModel,
-        provider: activeProvider.providerType,
+        provider: providerType,
         authStyle: 'api_key',
       };
     } else {
@@ -890,92 +920,177 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
   const db = getDatabase();
   const platforms: Array<{ platform: string; enabled: boolean; credentials: Record<string, string>; options?: Record<string, unknown> }> = [];
 
-  if (db) {
-    // Load WeChat/iLink accounts from weixin_accounts table
-    const weixinAccounts = db.prepare(
-      'SELECT account_id, user_id, token, base_url, cdn_base_url FROM weixin_accounts WHERE enabled = 1'
-    ).all() as Array<{ account_id: string; user_id: string; token: string; base_url: string; cdn_base_url: string }>;
+  // New path: read channel adapters from ConfigStore. ConfigStore merges
+  // secrets (tokens) back into its snapshot, so credentials are present.
+  const configStore = getConfigStore();
+  const adapters = configStore.getByPath('channels.adapters') as Record<string, ChannelAdapterEntry> | undefined;
 
+  // Track which platforms were already produced from ConfigStore so the
+  // SQLite fallback below only fills in the ones ConfigStore did not cover.
+  const producedPlatforms = new Set<string>();
+
+  // ---- WeChat / iLink accounts (ConfigStore path) ----
+  const weixinAdapter = adapters?.weixin;
+  const weixinAccounts = (weixinAdapter?.accounts as Array<Record<string, unknown>> | undefined) ?? [];
+  if (weixinAccounts.length > 0) {
     for (const account of weixinAccounts) {
-      if (!account.token?.trim()) {
-        console.warn('[Gateway] Skipping weixin account with empty token:', account.account_id);
+      const accountId = String(account.account_id ?? '');
+      const token =
+        (account.token as string | undefined) ||
+        (configStore.getByPath(`channels.adapters.weixin.credentials.${accountId}.token`) as string | undefined);
+      if (!token?.trim()) {
+        console.warn('[Gateway] Skipping weixin account with empty token:', accountId);
         continue;
       }
       platforms.push({
         platform: 'weixin',
         enabled: true,
         credentials: {
-          botToken: account.token,
-          ilinkBotId: account.account_id,
-          baseUrl: account.base_url || 'https://ilinkai.weixin.qq.com',
-          cdnBaseUrl: account.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c',
+          botToken: token,
+          ilinkBotId: accountId,
+          baseUrl: (account.base_url as string) || 'https://ilinkai.weixin.qq.com',
+          cdnBaseUrl: (account.cdn_base_url as string) || 'https://novac2c.cdn.weixin.qq.com/c2c',
         },
       });
     }
+    if (platforms.some((p) => p.platform === 'weixin')) producedPlatforms.add('weixin');
+  }
 
-    // Load legacy settings-based WeChat config if no accounts exist
-    if (weixinAccounts.length === 0) {
-      const weixinEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_weixin_enabled'").get() as { value: string } | undefined;
-      const weixinToken = db.prepare("SELECT value FROM settings WHERE key = 'weixin_bot_token'").get() as { value: string } | undefined;
-      const weixinAccountId = db.prepare("SELECT value FROM settings WHERE key = 'weixin_account_id'").get() as { value: string } | undefined;
-      const weixinBaseUrl = db.prepare("SELECT value FROM settings WHERE key = 'weixin_base_url'").get() as { value: string } | undefined;
+  // ---- Telegram (ConfigStore path) ----
+  const telegramCredentials = adapters?.telegram?.credentials as Record<string, unknown> | undefined;
+  const telegramToken = telegramCredentials?.token as string | undefined;
+  if (adapters?.telegram?.enabled && telegramToken) {
+    platforms.push({
+      platform: 'telegram',
+      enabled: true,
+      credentials: { token: telegramToken },
+    });
+    producedPlatforms.add('telegram');
+  }
 
-      if (weixinEnabled?.value === 'true' && weixinToken?.value) {
+  // ---- QQ (ConfigStore path) ----
+  const qq = adapters?.qq as Record<string, unknown> | undefined;
+  const qqCredentials = qq?.credentials as Record<string, unknown> | undefined;
+  const qqAppId = qq?.app_id as string | undefined;
+  const qqAppSecret = qqCredentials?.app_secret as string | undefined;
+  if (qq?.enabled && qqAppId && qqAppSecret) {
+    platforms.push({
+      platform: 'qq',
+      enabled: true,
+      credentials: { appId: qqAppId, appSecret: qqAppSecret },
+    });
+    producedPlatforms.add('qq');
+  }
+
+  // ---- Feishu (ConfigStore path) ----
+  const feishu = adapters?.feishu as Record<string, unknown> | undefined;
+  const feishuCredentials = feishu?.credentials as Record<string, unknown> | undefined;
+  const feishuAppId = feishu?.app_id as string | undefined;
+  const feishuAppSecret = feishuCredentials?.app_secret as string | undefined;
+  if (feishu?.enabled && feishuAppId && feishuAppSecret) {
+    platforms.push({
+      platform: 'feishu',
+      enabled: true,
+      credentials: { appId: feishuAppId, appSecret: feishuAppSecret },
+    });
+    producedPlatforms.add('feishu');
+  }
+
+  // ---- SQLite fallback (Phase 3 pre-migration transition period) ----
+  if (db) {
+    // WeChat/iLink accounts from weixin_accounts table
+    if (!producedPlatforms.has('weixin')) {
+      const weixinAccountsRows = db.prepare(
+        'SELECT account_id, user_id, token, base_url, cdn_base_url FROM weixin_accounts WHERE enabled = 1'
+      ).all() as Array<{ account_id: string; user_id: string; token: string; base_url: string; cdn_base_url: string }>;
+
+      for (const account of weixinAccountsRows) {
+        if (!account.token?.trim()) {
+          console.warn('[Gateway] Skipping weixin account with empty token:', account.account_id);
+          continue;
+        }
         platforms.push({
           platform: 'weixin',
           enabled: true,
           credentials: {
-            botToken: weixinToken.value,
-            ilinkBotId: weixinAccountId?.value || '',
-            baseUrl: weixinBaseUrl?.value || 'https://ilinkai.weixin.qq.com',
-            cdnBaseUrl: 'https://novac2c.cdn.weixin.qq.com/c2c',
+            botToken: account.token,
+            ilinkBotId: account.account_id,
+            baseUrl: account.base_url || 'https://ilinkai.weixin.qq.com',
+            cdnBaseUrl: account.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c',
+          },
+        });
+      }
+
+      // Load legacy settings-based WeChat config if no accounts exist
+      if (weixinAccountsRows.length === 0) {
+        const weixinEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_weixin_enabled'").get() as { value: string } | undefined;
+        const weixinToken = db.prepare("SELECT value FROM settings WHERE key = 'weixin_bot_token'").get() as { value: string } | undefined;
+        const weixinAccountId = db.prepare("SELECT value FROM settings WHERE key = 'weixin_account_id'").get() as { value: string } | undefined;
+        const weixinBaseUrl = db.prepare("SELECT value FROM settings WHERE key = 'weixin_base_url'").get() as { value: string } | undefined;
+
+        if (weixinEnabled?.value === 'true' && weixinToken?.value) {
+          platforms.push({
+            platform: 'weixin',
+            enabled: true,
+            credentials: {
+              botToken: weixinToken.value,
+              ilinkBotId: weixinAccountId?.value || '',
+              baseUrl: weixinBaseUrl?.value || 'https://ilinkai.weixin.qq.com',
+              cdnBaseUrl: 'https://novac2c.cdn.weixin.qq.com/c2c',
+            },
+          });
+        }
+      }
+    }
+
+    // Telegram config
+    if (!producedPlatforms.has('telegram')) {
+      const telegramEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_telegram_enabled'").get() as { value: string } | undefined;
+      const telegramTokenFallback = db.prepare("SELECT value FROM settings WHERE key = 'telegram_bot_token'").get() as { value: string } | undefined;
+
+      if (telegramEnabled?.value === 'true' && telegramTokenFallback?.value) {
+        platforms.push({
+          platform: 'telegram',
+          enabled: true,
+          credentials: { token: telegramTokenFallback.value },
+        });
+      }
+    }
+
+    // QQ config
+    if (!producedPlatforms.has('qq')) {
+      const qqEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_enabled'").get() as { value: string } | undefined;
+      const qqAppIdFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_id'").get() as { value: string } | undefined;
+      const qqAppSecretFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_secret'").get() as { value: string } | undefined;
+
+      if (qqEnabled?.value === 'true' && qqAppIdFallback?.value && qqAppSecretFallback?.value) {
+        platforms.push({
+          platform: 'qq',
+          enabled: true,
+          credentials: {
+            appId: qqAppIdFallback.value,
+            appSecret: qqAppSecretFallback.value,
           },
         });
       }
     }
 
-    // Load Telegram config
-    const telegramEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_telegram_enabled'").get() as { value: string } | undefined;
-    const telegramToken = db.prepare("SELECT value FROM settings WHERE key = 'telegram_bot_token'").get() as { value: string } | undefined;
+    // Feishu config
+    if (!producedPlatforms.has('feishu')) {
+      const feishuEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_enabled'").get() as { value: string } | undefined;
+      const feishuAppIdFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_id'").get() as { value: string } | undefined;
+      const feishuAppSecretFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_secret'").get() as { value: string } | undefined;
 
-    if (telegramEnabled?.value === 'true' && telegramToken?.value) {
-      platforms.push({
-        platform: 'telegram',
-        enabled: true,
-        credentials: { token: telegramToken.value },
-      });
-    }
-
-    // Load QQ config
-    const qqEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_enabled'").get() as { value: string } | undefined;
-    const qqAppId = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_id'").get() as { value: string } | undefined;
-    const qqAppSecret = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_secret'").get() as { value: string } | undefined;
-
-    if (qqEnabled?.value === 'true' && qqAppId?.value && qqAppSecret?.value) {
-      platforms.push({
-        platform: 'qq',
-        enabled: true,
-        credentials: {
-          appId: qqAppId.value,
-          appSecret: qqAppSecret.value,
-        },
-      });
-    }
-
-    // Load Feishu config
-    const feishuEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_enabled'").get() as { value: string } | undefined;
-    const feishuAppId = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_id'").get() as { value: string } | undefined;
-    const feishuAppSecret = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_secret'").get() as { value: string } | undefined;
-
-    if (feishuEnabled?.value === 'true' && feishuAppId?.value && feishuAppSecret?.value) {
-      platforms.push({
-        platform: 'feishu',
-        enabled: true,
-        credentials: {
-          appId: feishuAppId.value,
-          appSecret: feishuAppSecret.value,
-        },
-      });
+      if (feishuEnabled?.value === 'true' && feishuAppIdFallback?.value && feishuAppSecretFallback?.value) {
+        platforms.push({
+          platform: 'feishu',
+          enabled: true,
+          credentials: {
+            appId: feishuAppIdFallback.value,
+            appSecret: feishuAppSecretFallback.value,
+          },
+        });
+      }
     }
   }
 
