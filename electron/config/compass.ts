@@ -1,7 +1,7 @@
 /**
  * compass.ts — early-boot config resolver (replaces boot.json).
  *
- * Reads a FIXED path `~/.duya/config.yaml` (or the test-namespace root)
+ * Reads a FIXED path `~/.duya/config.toml` (or the test-namespace root)
  * for `storage.database_path` at the earliest stage of startup, before
  * the DB or logger are initialized. Because the config path is fixed and
  * does not depend on the DB path, there is no dependency cycle.
@@ -13,7 +13,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { parse } from 'yaml';
+import { parse } from '@iarna/toml';
 
 function readTestNamespace(): string | null {
   for (const arg of process.argv) {
@@ -40,13 +40,13 @@ export function resolveConfigRoot(): string {
   return base;
 }
 
-export function resolveConfigYamlPath(): string {
-  return path.join(resolveConfigRoot(), 'config.yaml');
+export function resolveConfigTomlPath(): string {
+  return path.join(resolveConfigRoot(), 'config.toml');
 }
 
 /** Read `storage.database_path`. Empty string = default. */
-export function resolveDatabasePathFromConfigYaml(cfgPath?: string): string {
-  const target = cfgPath ?? resolveConfigYamlPath();
+export function resolveDatabasePathFromConfigToml(cfgPath?: string): string {
+  const target = cfgPath ?? resolveConfigTomlPath();
   try {
     if (!fs.existsSync(target)) return '';
     const raw = fs.readFileSync(target, 'utf-8');

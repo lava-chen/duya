@@ -1,5 +1,5 @@
 /**
- * DuyaConfig — the complete `~/.duya/config.yaml` document shape.
+ * DuyaConfig — the complete `~/.duya/config.toml` document shape.
  * Single source of truth for the config surface. Secrets live in
  * `~/.duya/secrets.json`, never here.
  */
@@ -108,6 +108,24 @@ export interface PluginEntry {
   marketplace?: string;
 }
 
+/** [[skills.config]] entry — per-skill enabled override (decision 15). */
+export interface SkillConfigEntry {
+  name: string;
+  enabled: boolean;
+}
+
+/** [projects] entry — reserved per-project trust (decision 16, not wired). */
+export interface ProjectEntry {
+  trust_level: 'trusted' | 'untrusted';
+  permission_mode?: string;
+  sandbox?: string;
+}
+
+/** [apps] entry — reserved app/connector toggle (decision 17, not wired). */
+export interface AppEntry {
+  enabled: boolean;
+}
+
 export interface DuyaConfig {
   _config_version: number;
 
@@ -141,6 +159,11 @@ export interface DuyaConfig {
   mcp_servers: Record<string, McpServerEntry>;
   marketplaces: Record<string, unknown>;
   plugins: Record<string, PluginEntry>;
+
+  skills: SkillConfigEntry[]; // [[skills.config]] (decision 15)
+  projects: Record<string, ProjectEntry>; // reserved (decision 16)
+  features: Record<string, boolean>; // reserved (decision 17)
+  apps: Record<string, AppEntry>; // reserved (decision 17)
 
   logging: Record<string, unknown>;
   code_execution: Record<string, unknown>;
@@ -189,6 +212,10 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   mcp_servers: {},
   marketplaces: {},
   plugins: {},
+  skills: [], // [[skills.config]] (decision 15)
+  projects: {}, // reserved (decision 16)
+  features: {}, // reserved (decision 17)
+  apps: {}, // reserved (decision 17)
   logging: {},
   code_execution: {},
   timezone: '',
