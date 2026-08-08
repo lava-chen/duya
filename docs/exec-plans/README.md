@@ -47,6 +47,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [326-core-db-rollout-foundation](./active/326-core-db-rollout-foundation.md) | core-db 地基：CoreDatabase + MessageLog（rollout 文件 + message_index 单类）+ SessionStore（LIKE 搜索，无 FTS）；7 文件平铺 | P0 | Phase 1-3 ✅ |
 | [328-core-db-electron-wiring](./active/328-core-db-electron-wiring.md) | core-db 全量接线：Main 双库 + IPC/Worker 薄转发 + 全部直连消费方收编（无保留清单）+ 旧查询层删除（CLI 独立模式不接入） | P0 | Phase 1-7 接线完成 ✅（e2e smoke + grep 零引用 + db-handlers 转发测试通过）；手动 LLM 链路验证待办 |
 | [329-core-db-legacy-import](./active/329-core-db-legacy-import.md) | core-db 旧库导入（单文件 LegacyImport）+ 首启自动执行 + 对账与文档收口 | P0 | Planning |
+| [330-electron-cleanup-repair](./active/330-electron-cleanup-repair.md) | Electron 主进程清理修复：IPC 统一注册、agents barrel、services 分类、main.ts 启动编排下沉、上帝文件拆分、命名/shim 收口（六 Phase） | P1 | Planning |
 
 ### Conductor / Canvas
 
@@ -153,6 +154,9 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [241-on-demand-tool-discovery](./completed/241-on-demand-tool-discovery.md) | `tool_search` meta-entry + schema summary + builtin tiering + dynamic dispatch (3 phases) | — |
 | [317-message-persistence-simplification](./completed/317-message-persistence-simplification.md) | 单一写者 + 单一 append-only `messages` 表 + 稳定边界批量落库；封存 `conversation_entries`；废弃前端写库旁路；统一 IPC 传输 | 2026-08-05 |
 | [327-core-db-state-aggregates](./completed/327-core-db-state-aggregates.md) | core-db 状态聚合：Mailbox（状态机 + apply 矩阵唯一实现）+ stores.ts（TaskStore/PermissionLedger/LockStore 合并）+ mailbox 死代码清理 | 2026-08-07 |
+| [332-storage-alignment-improvements](./completed/332-storage-alignment-improvements.md) | 存储对齐改进：session_spawn_edges 血缘表 + 附件 DB TEXT→文件目录迁移 + 日志/分库策略决策记录到 ARCHITECTURE.md | 2026-08-07 |
+| [333-core-db-rollout-process-events](./active/333-core-db-rollout-process-events.md) | rollout 升级为会话轨迹：过程事件（reasoning/tool_call/turn_started/system_context）落盘 + turn_id 自包含 + 系统上下文落盘（对齐 codex developer 角色） | P1 | Planning |
+| [331-session-goals-ui-state-persistence](./completed/331-session-goals-ui-state-persistence.md) | 会话目标/预算持久化（session_goals 表 + TokenBudget 镜像）+ 窗口状态记忆 + pinned threads | 2026-08-07 |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | 旧 core-db 地基方案（事件表 + FTS）——**作废**，由 326 取代 | 2026-08-06 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | 旧 core-db 状态聚合——**作废**，由 327 取代 | 2026-08-06 |
 | [324-core-db-electron-wiring](./completed/324-core-db-electron-wiring.md) | 旧 core-db 接线方案——**作废**，由 328 取代 | 2026-08-06 |

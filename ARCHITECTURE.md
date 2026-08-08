@@ -854,11 +854,48 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 数据库文件路径由 `/config/boot.json` 中的 `databasePath` 字段决定：
 
 - **旧库**：`{databasePath}`（默认 `{userData}/databases/duya-main.db`）。六大核心表冻结（LEGACY FROZEN），仅由 `LegacyImport` 只读 + conductor/research/gateway 等子系统自有表使用。
-- **核心状态库**：同目录下的 `duya-core.db`（由 `resolveCoreDatabasePath()` 从 `databasePath` 推导），存六大聚合的状态与索引。
-- **rollout 根**：同目录下的 `sessions/`（由 `resolveRolloutRoot()` 推导），每条会话一个 JSONL rollout 文件。
-- **自定义路径**：用户可通过迁移功能将数据库移至任意位置；`duya-core.db` 与 `sessions/` 紧随其目录。
+- **核心状态库**：`duya-core.db`（由 `resolveCoreDatabasePath()` 从 `databasePath` 推导，位于库同目录），存六大聚合的状态与索引。
+- **rollout 根**：`~/.duya/sessions/`（由 `resolveRolloutRoot()` 推导，对齐 Codex 的 `~/.codex/sessions/`），每条会话一个 JSONL rollout 文件。测试模式（`DUYA_TEST=1`）下追加 `test-namespaces/<ns>` 前缀隔离。
+- **自定义路径**：用户可通过迁移功能将数据库移至任意位置；`duya-core.db` 紧随其目录，`sessions/` 固定于 `~/.duya/`。
 - **向后兼容**：自动检测并重命名旧版 `duya.db` 为 `duya-main.db`
 - **引导文件**：`boot.json` 仅包含 `{ "_version": 1, "databasePath": "..." }`，明文存储
+
+#### 日志存储策略
+
+duya 的应用日志采用**纯文件**方案（`{userData}/logs/app.log`），而非独立 SQLite 日志库。这是与 Codex（`logs_2.sqlite`）的刻意差异，理由如下：
+
+- **Node 生态的文件日志更成熟**：duya 使用结构化 logger（`electron/logging/logger.ts`），按 `WARN` 默认级别写入文件，日期 + 50MB 双触发轮转，7 天保留。Codex 用 SQLite 日志是因为其 Rust 生态的 `tracing-subscriber` 原生支持 SQLite sink，而 Electron 的 Node 文件日志方案更简单直接。
+- **日志是操作型而非查询型**：排查问题靠 `tail -f` / `grep` 即可，无需 SQL 按字段查询。纯文件日志支持 `tail -f` 实时跟进，grep 跨会话检索，足够覆盖诊断场景。
+- **避免额外 WAL / busy_timeout 管理成本**：独立 SQLite 日志库需要引入 WAL、busy_timeout、独立连接等额外的并发与生命周期管理，且日志高频写入会与业务库竞争资源，收益不抵成本。
+
+| 维度 | Codex `logs_2.sqlite` | duya `app.log` |
+|------|----------------------|----------------|
+| 存储介质 | 独立 SQLite | 纯文件 |
+| 轮转 | 数据库内部 | 日期 + 50MB 双触发 |
+| 保留期 | 按查询语义 | 7 天 |
+| 索引 | level / target / thread_id | 无（grep） |
+| 查询 | SQL | `tail -f` / `grep` |
+
+**未来触发条件**：若需要按 `thread_id`/`level` 跨会话查询日志，或日志量级超过 100MB/天导致 grep 性能不足，再考虑引入 SQLite 日志 sink（对齐 Codex）。
+
+#### 分库策略
+
+duya 采用 **3 个 SQLite 库**（core / legacy / memory-state），而非 Codex 的 6 库拆分。差异源于进程模型不同：
+
+- **Codex 的 6 库**是因它的 Rust 进程模型有多个独立 binary（CLI / desktop / agent worker），每个 binary 需要独立 DB 连接。
+- **duya 是 Electron 单进程 + agent child_process**，所有 SQLite 连接集中在 Main 进程（唯一写入点），3 库已足够隔离，无需按 binary 拆库。
+- 日志走文件（见上节）、goals 汇入 core DB、无需独立桌面状态库——这些决策已由 331 和本 plan 落地。
+
+| 存储 | duya | Codex |
+|------|------|-------|
+| 核心库 | `duya-core.db`（messages 索引 + sessions + mailbox + tasks + permissions + locks + goals + spawn_edges + attachments） | 多个状态库 |
+| 旧库 | `duya-main.db`（LEGACY FROZEN，仅 LegacyImport 只读 + 子系统表） | — |
+| 内存状态库 | `memory-state`（memory-state.db） | — |
+| rollout JSONL | `~/.duya/sessions/<Y>/<M>/<D>/<sessionId>_rollout.jsonl` | `~/.codex/sessions/` |
+| JSON 文件 | `config/settings.json` + `boot.json` | 对应配置 JSON |
+| 附件文件目录 | `~/.duya/attachments/<id>/<filename>` | `attachments/<uuid>/` |
+
+> **无新 SQLite 库文件**：spawn edges 与 attachments 都汇入核心库 `duya-core.db`，不新增独立库。
 
 ### 优雅关闭
 
@@ -906,9 +943,18 @@ duya/
 │
 ├── packages/agent/src/
 │   ├── index.ts                  # Pure barrel: re-exports public API + `duyaAgent` from `./agent/DuyaAgent.js`
-│   ├── agent/                    # duyaAgent class implementation home
-│   │   ├── DuyaAgent.ts          # `duyaAgent` class (~1900 LoC) + module-level helpers used only by it
-│   │   └── helpers.ts            # `extractTextFromContent`, `collectRecentImageAttachments`
+│   ├── agent/                    # duyaAgent class implementation home (plan 334 四层)
+│   │   ├── DuyaAgent.ts          # `duyaAgent` 薄状态壳 (~740 LoC) + public surface
+│   │   ├── types.ts              # 循环层类型契约: LoopState / AgentLoopConfig / AgentDeps / LoopEvent
+│   │   ├── agent-loop.ts         # 无状态核心循环 runAgentLoop (plan 334)
+│   │   ├── session/
+│   │   │   ├── agent-shell.ts    # streamChat 装配纯函数 + LoopEvent→SSEEvent 适配
+│   │   │   ├── history.ts        # HistoryStore (timeline 写入/重建/清空)
+│   │   │   ├── compaction.ts     # CompactionStore
+│   │   │   ├── mailbox.ts        # MailboxClaimer
+│   │   │   └── model.ts          # ModelRuntime (模型/思维级热换)
+│   │   ├── utils/                # `extractTextFromContent`, `collectRecentImageAttachments` 等
+│   │   └── visual-analysis.ts    # VisualAnalysisService
 │   ├── process/
 │   │   └── agent-process-entry.ts  # Agent Process 入口（ChildProcess 模式）
 │   ├── ipc/

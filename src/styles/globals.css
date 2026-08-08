@@ -1495,6 +1495,37 @@ a {
   color: var(--text);
 }
 
+/* Plan 331 Phase 4: pin toggle button (shown on hover) and the always-on
+   pinned indicator. The pin button sits just left of the three-dots menu
+   button; the indicator replaces the timestamp on pinned threads. */
+.thread-item-pin-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0.15rem;
+}
+
+.thread-item-pin-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.thread-item-pinned-indicator {
+  color: var(--accent);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+}
+
 /* Thread rename input */
 .thread-item-rename-input {
   flex: 1;

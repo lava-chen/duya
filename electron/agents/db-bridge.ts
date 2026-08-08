@@ -18,7 +18,7 @@ import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
-import type { NewEvent } from '../db/core';
+import type { NewEvent, AttachmentWithData } from '../db/core';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
@@ -44,6 +44,32 @@ function debugLog(...args: unknown[]): void {
     const message = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
     getLogger().debug(message, undefined, LogComponent.AgentCommunicator);
   }
+}
+
+/**
+ * Map a file-backed parsed_document attachment to the legacy `message_attachments`
+ * row shape so the Agent / renderer contract stays unchanged. The payload `data`
+ * string is the JSON body written by `attachment:store` (plan 332 Phase 2).
+ */
+function parsedDocToRow(att: AttachmentWithData): Record<string, unknown> {
+  let parsed: { filename?: string; filePath?: string; charCount?: number; extractMethod?: string | null; text?: string; imageChunks?: unknown[] } = {};
+  try {
+    parsed = JSON.parse(att.data) as typeof parsed;
+  } catch {
+    // unparseable payload — return empty fields
+  }
+  return {
+    id: att.id,
+    message_id: att.messageId,
+    session_id: att.sessionId,
+    filename: parsed.filename || '',
+    filePath: parsed.filePath || att.originalUrl || '',
+    charCount: parsed.charCount || 0,
+    extractMethod: parsed.extractMethod || null,
+    text: parsed.text || '',
+    imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
+    created_at: att.createdAt,
+  };
 }
 
 function emitMailboxEvent(
@@ -904,13 +930,15 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     // ==================== Attachment actions (parsed_document) ====================
+    // Plan 332 Phase 2: payloads moved from the legacy `message_attachments.data`
+    // TEXT column to file-backed `AttachmentStore` (core DB index + ~/.duya/attachments).
     case 'attachment:store': {
       const messageId = p.messageId as string;
       const sessionId = p.sessionId as string;
 
       // Guard against null/undefined messageId
       if (!messageId) {
-        log(`[DB-Bridge] attachment:store skipped - messageId is empty`);
+        getLogger().info(`[DB-Bridge] attachment:store skipped - messageId is empty`, undefined, LogComponent.AgentCommunicator);
         return { success: false, error: 'messageId is required' };
       }
 
@@ -922,17 +950,14 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const imageChunks = p.imageChunks as Array<{ base64: string; mediaType: string }> | undefined;
 
       const id = `${messageId}-parsed-doc`;
-      const imageChunksJson = imageChunks ? JSON.stringify(imageChunks) : null;
-
-      db.prepare(`
-        INSERT OR REPLACE INTO message_attachments (id, message_id, session_id, attachment_type, mime_type, data, original_url, created_at)
-        VALUES (@id, @message_id, @session_id, @attachment_type, @mime_type, @data, @original_url, @created_at)
-      `).run({
+      getCoreStores().attachments.save({
         id,
-        message_id: messageId,
-        session_id: sessionId,
-        attachment_type: 'parsed_document',
-        mime_type: 'application/pdf',
+        messageId,
+        sessionId,
+        type: 'parsed_document',
+        mimeType: 'application/pdf',
+        filename,
+        originalUrl: filePath,
         data: JSON.stringify({
           filename,
           filePath,
@@ -941,74 +966,24 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           extractMethod: extractMethod || null,
           imageChunks: imageChunks || [],
         }),
-        original_url: filePath,
-        created_at: now,
       });
       return { success: true };
     }
 
     case 'attachment:getForSession': {
       const sessionId = p.sessionId as string;
-      const rows = db.prepare(`
-        SELECT * FROM message_attachments
-        WHERE session_id = ? AND attachment_type = 'parsed_document'
-        ORDER BY created_at ASC
-      `).all(sessionId) as Array<{
-        id: string;
-        message_id: string;
-        session_id: string;
-        data: string;
-        original_url: string | null;
-        created_at: number;
-      }>;
-
-      return rows.map((row) => {
-        const parsed = JSON.parse(row.data);
-        return {
-          id: row.id,
-          message_id: row.message_id,
-          session_id: row.session_id,
-          filename: parsed.filename || '',
-          filePath: parsed.filePath || row.original_url || '',
-          charCount: parsed.charCount || 0,
-          extractMethod: parsed.extractMethod || null,
-          text: parsed.text || '',
-          imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
-          created_at: row.created_at,
-        };
-      });
+      return getCoreStores()
+        .attachments.getForSession(sessionId)
+        .filter((a) => a.attachmentType === 'parsed_document')
+        .map(parsedDocToRow);
     }
 
     case 'attachment:getForMessage': {
       const messageId = p.messageId as string;
-      const rows = db.prepare(`
-        SELECT * FROM message_attachments
-        WHERE message_id = ? AND attachment_type = 'parsed_document'
-        ORDER BY created_at ASC
-      `).all(messageId) as Array<{
-        id: string;
-        message_id: string;
-        session_id: string;
-        data: string;
-        original_url: string | null;
-        created_at: number;
-      }>;
-
-      return rows.map((row) => {
-        const parsed = JSON.parse(row.data);
-        return {
-          id: row.id,
-          message_id: row.message_id,
-          session_id: row.session_id,
-          filename: parsed.filename || '',
-          filePath: parsed.filePath || row.original_url || '',
-          charCount: parsed.charCount || 0,
-          extractMethod: parsed.extractMethod || null,
-          text: parsed.text || '',
-          imageChunks: parsed.imageChunks ? JSON.stringify(parsed.imageChunks) : null,
-          created_at: row.created_at,
-        };
-      });
+      return getCoreStores()
+        .attachments.getForMessage(messageId)
+        .filter((a) => a.attachmentType === 'parsed_document')
+        .map(parsedDocToRow);
     }
 
     // ==================== Research Session actions (Plan 60 - Research Mode) ====================
@@ -1324,189 +1299,6 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return db.prepare(
         'SELECT * FROM research_reports WHERE run_id = ? ORDER BY updated_at DESC LIMIT 1'
       ).get(p.runId);
-    }
-
-    // ==================== Literature Plugin actions ====================
-
-    case 'literature:source:create': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO literature_sources (
-          id, kind, title, authors_json, year, venue, doi, arxiv_id,
-          url, file_path, citation_key, bibtex, project_ids_json, tags_json,
-          created_at, updated_at
-        ) VALUES (
-          @id, @kind, @title, @authors_json, @year, @venue, @doi, @arxiv_id,
-          @url, @file_path, @citation_key, @bibtex, @project_ids_json, @tags_json,
-          @created_at, @updated_at
-        )
-      `).run({
-        id: p.id,
-        kind: p.kind,
-        title: p.title,
-        authors_json: JSON.stringify(p.authors ?? []),
-        year: p.year ?? null,
-        venue: p.venue ?? null,
-        doi: p.doi ?? null,
-        arxiv_id: p.arxivId ?? null,
-        url: p.url ?? null,
-        file_path: p.filePath ?? null,
-        citation_key: p.citationKey ?? null,
-        bibtex: p.bibtex ?? null,
-        project_ids_json: JSON.stringify(p.projectIds ?? []),
-        tags_json: JSON.stringify(p.tags ?? []),
-        created_at: now,
-        updated_at: now,
-      });
-      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(p.id);
-    }
-
-    case 'literature:source:get':
-      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(p.id);
-
-    case 'literature:source:list': {
-      const conditions: string[] = [];
-      const params: unknown[] = [];
-
-      if (p.kind) { conditions.push('kind = ?'); params.push(p.kind); }
-      if (p.yearFrom) { conditions.push('year >= ?'); params.push(p.yearFrom); }
-      if (p.yearTo) { conditions.push('year <= ?'); params.push(p.yearTo); }
-      if (p.search) {
-        conditions.push('(title LIKE ? OR doi LIKE ?)');
-        const searchTerm = `%${p.search}%`;
-        params.push(searchTerm, searchTerm);
-      }
-
-      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-      const limit = (p.limit as number) || 100;
-      return db.prepare(`SELECT * FROM literature_sources ${where} ORDER BY updated_at DESC LIMIT ?`).all(...params, limit);
-    }
-
-    case 'literature:source:update': {
-      const id = p.id as string;
-      const now = Date.now();
-      const fields: string[] = ['updated_at = ?'];
-      const params: unknown[] = [now];
-
-      const stringFields = ['kind', 'title', 'venue', 'doi', 'url', 'citation_key', 'bibtex'];
-      for (const field of stringFields) {
-        if (p[field] !== undefined) {
-          const dbField = field === 'citation_key' ? 'citation_key' : field === 'doi' ? 'doi' : field;
-          fields.push(`${dbField} = ?`);
-          params.push(p[field]);
-        }
-      }
-
-      if (p.authors !== undefined) {
-        fields.push('authors_json = ?');
-        params.push(JSON.stringify(p.authors));
-      }
-      if (p.year !== undefined) {
-        fields.push('year = ?');
-        params.push(p.year);
-      }
-      if (p.filePath !== undefined) {
-        fields.push('file_path = ?');
-        params.push(p.filePath);
-      }
-      if (p.arxivId !== undefined) {
-        fields.push('arxiv_id = ?');
-        params.push(p.arxivId);
-      }
-      if (p.projectIds !== undefined) {
-        fields.push('project_ids_json = ?');
-        params.push(JSON.stringify(p.projectIds));
-      }
-      if (p.tags !== undefined) {
-        fields.push('tags_json = ?');
-        params.push(JSON.stringify(p.tags));
-      }
-
-      params.push(id);
-      db.prepare(`UPDATE literature_sources SET ${fields.join(', ')} WHERE id = ?`).run(...params);
-      return db.prepare('SELECT * FROM literature_sources WHERE id = ?').get(id);
-    }
-
-    case 'literature:source:delete': {
-      const result = db.prepare('DELETE FROM literature_sources WHERE id = ?').run(p.id);
-      return { success: result.changes > 0 };
-    }
-
-    case 'literature:evidence:createMany': {
-      const spans = p.spans as Array<Record<string, unknown>>;
-      const now = Date.now();
-      const insert = db.prepare(`
-        INSERT INTO literature_evidence_spans (id, source_id, page, section, text, quote, bbox_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const txn = db.transaction(() => {
-        for (const span of spans) {
-          insert.run(
-            span.id,
-            span.sourceId,
-            span.page ?? null,
-            span.section ?? null,
-            span.text,
-            span.quote ?? null,
-            span.bbox ? JSON.stringify(span.bbox) : null,
-            now,
-          );
-        }
-      });
-      txn();
-      return { success: true, count: spans.length };
-    }
-
-    case 'literature:evidence:search': {
-      const conditions: string[] = ['text LIKE ?'];
-      const params: unknown[] = [`%${p.query}%`];
-
-      if (p.sourceId) {
-        conditions.push('source_id = ?');
-        params.push(p.sourceId);
-      }
-      if (p.page !== undefined) {
-        conditions.push('page = ?');
-        params.push(p.page);
-      }
-      if (p.section) {
-        conditions.push('section = ?');
-        params.push(p.section);
-      }
-
-      return db.prepare(`SELECT * FROM literature_evidence_spans WHERE ${conditions.join(' AND ')} ORDER BY page ASC`).all(...params);
-    }
-
-    case 'literature:evidence:deleteBySource':
-      db.prepare('DELETE FROM literature_evidence_spans WHERE source_id = ?').run(p.sourceId);
-      return { success: true };
-
-    case 'literature:paperCard:upsert': {
-      const now = Date.now();
-      db.prepare(`
-        INSERT INTO literature_paper_cards (id, source_id, card_json, evidence_span_ids_json, created_at, updated_at)
-        VALUES (@id, @source_id, @card_json, @evidence_span_ids_json, @created_at, @updated_at)
-        ON CONFLICT(source_id) DO UPDATE SET
-          card_json = @card_json,
-          evidence_span_ids_json = @evidence_span_ids_json,
-          updated_at = @updated_at
-      `).run({
-        id: p.id,
-        source_id: p.sourceId,
-        card_json: JSON.stringify(p.card),
-        evidence_span_ids_json: JSON.stringify(p.evidenceSpanIds ?? []),
-        created_at: now,
-        updated_at: now,
-      });
-      return db.prepare('SELECT * FROM literature_paper_cards WHERE source_id = ?').get(p.sourceId);
-    }
-
-    case 'literature:paperCard:get':
-      return db.prepare('SELECT * FROM literature_paper_cards WHERE source_id = ?').get(p.sourceId);
-
-    case 'literature:paperCard:delete': {
-      const result = db.prepare('DELETE FROM literature_paper_cards WHERE source_id = ?').run(p.sourceId);
-      return { success: result.changes > 0 };
     }
 
     // ==================== Research Memory actions ====================

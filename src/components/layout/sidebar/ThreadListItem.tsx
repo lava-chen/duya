@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
-import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@/components/icons";
+import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, CheckIcon, CaretDownIcon, CaretRightIcon, PinIcon, PinFilledIcon } from "@/components/icons";
 import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
@@ -65,7 +65,7 @@ function getThreadDisplayTitle(t: TFunc, thread: Thread): string {
 
 export function ThreadListItem({ thread, isActive, childrenThreads = [] }: ThreadListItemProps) {
   const { t } = useTranslation();
-  const { setActiveThread, deleteThread, updateThreadTitle, expandedThreads, toggleThreadExpanded } = useConversationStore();
+  const { setActiveThread, deleteThread, updateThreadTitle, expandedThreads, toggleThreadExpanded, setThreadPinned } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
@@ -187,6 +187,13 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
     deleteThread(thread.id);
   }, [deleteThread, thread.id]);
 
+  const isPinned = thread.pinned === 1;
+
+  const handleTogglePin = useCallback(() => {
+    setShowMenu(false);
+    setThreadPinned(thread.id, !isPinned);
+  }, [setThreadPinned, thread.id, isPinned]);
+
   // Close menu on click outside
   useEffect(() => {
     if (!showMenu) return;
@@ -269,15 +276,35 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
             <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
           </span>
         ) : isHovered || showMenu ? (
-          <button
-            ref={buttonRef}
-            type="button"
-            className="thread-item-menu-btn"
-            onClick={handleMenuClick}
-            aria-label={t('thread.options')}
-          >
-            <DotsThreeIcon size={16} stroke={2.5} />
-          </button>
+          <>
+            {/* Plan 331 Phase 4: quick pin toggle on hover. Pinned threads
+             * show a filled icon; unpinned show an outline icon. */}
+            <button
+              type="button"
+              className="thread-item-pin-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleTogglePin();
+              }}
+              aria-label={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
+              title={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
+            >
+              {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
+            </button>
+            <button
+              ref={buttonRef}
+              type="button"
+              className="thread-item-menu-btn"
+              onClick={handleMenuClick}
+              aria-label={t('thread.options')}
+            >
+              <DotsThreeIcon size={16} stroke={2.5} />
+            </button>
+          </>
+        ) : isPinned ? (
+          /* Pinned threads show a filled pin icon even when not hovered, so
+           * the user can see at a glance which threads are pinned. */
+          <PinFilledIcon size={12} className="thread-item-pinned-indicator" />
         ) : (
           <span className="thread-item-time">
             {formatTimeAgo(t, thread.updatedAt)}
@@ -323,6 +350,16 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           >
             <CopyIcon size={14} />
             <span>{t("thread.copyThreadId")}</span>
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="thread-dropdown-item"
+            onClick={handleTogglePin}
+          >
+            {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
+            <span>{isPinned ? t("thread.unpinThread") : t("thread.pinThread")}</span>
           </Button>
           <div className="thread-dropdown-divider" />
           <Button

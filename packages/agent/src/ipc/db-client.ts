@@ -221,6 +221,33 @@ export const lockDb = {
   isLocked: (sessionId: string) => sendDbRequest('lock:isLocked', { sessionId }),
 };
 
+// ==================== Goal Operations ====================
+// Plan 331 Phase 2: per-session goal + token budget mirror. The agent
+// reports token/time deltas after each turn; on session resume the
+// persisted counters are read back into the in-memory TokenBudgetManager.
+
+export const goalDb = {
+  get: (sessionId: string) => sendDbRequest('goal:get', { sessionId }),
+
+  create: (data: {
+    id: string;
+    session_id: string;
+    goal_text?: string | null;
+    token_budget?: number | null;
+  }) => sendDbRequest('goal:create', data),
+
+  updateBudget: (sessionId: string, delta: {
+    tokensUsedDelta?: number;
+    timeUsedDelta?: number;
+  }) => sendDbRequest('goal:updateBudget', { sessionId, ...delta }),
+
+  setStatus: (sessionId: string, status: 'active' | 'paused' | 'usage_limited' | 'complete') =>
+    sendDbRequest('goal:setStatus', { sessionId, status }),
+
+  listByStatus: (status: 'active' | 'paused' | 'usage_limited' | 'complete') =>
+    sendDbRequest('goal:listByStatus', { status }),
+};
+
 // ==================== Task Operations ====================
 
 export const taskDb = {
@@ -555,76 +582,6 @@ export const researchReportDb = {
   getLatest: (runId: string) =>
     sendDbRequest('researchReport:getLatest', { runId }),
 };
-
-// ==================== Literature Plugin Operations ====================
-
-export const literatureDb = {
-  sourceCreate: (data: {
-    id: string
-    kind: string
-    title: string
-    authors: string[]
-    year?: number
-    venue?: string
-    doi?: string
-    arxivId?: string
-    url?: string
-    filePath?: string
-    citationKey?: string
-    bibtex?: string
-    projectIds?: string[]
-    tags?: string[]
-  }) => sendDbRequest('literature:source:create', data),
-
-  sourceGet: (id: string) => sendDbRequest('literature:source:get', { id }),
-
-  sourceList: (options?: {
-    kind?: string
-    projectId?: string
-    tags?: string[]
-    yearFrom?: number
-    yearTo?: number
-    search?: string
-    limit?: number
-  }) => sendDbRequest('literature:source:list', options || {}),
-
-  sourceUpdate: (id: string, data: Record<string, unknown>) =>
-    sendDbRequest('literature:source:update', { id, ...data }),
-
-  sourceDelete: (id: string) => sendDbRequest('literature:source:delete', { id }),
-
-  evidenceCreateMany: (spans: Array<{
-    id: string
-    sourceId: string
-    page?: number
-    section?: string
-    text: string
-    quote?: string
-    bbox?: { page: number; x: number; y: number; width: number; height: number }
-  }>) => sendDbRequest('literature:evidence:createMany', { spans }),
-
-  evidenceSearch: (query: string, options?: {
-    sourceId?: string
-    page?: number
-    section?: string
-  }) => sendDbRequest('literature:evidence:search', { query, ...options }),
-
-  evidenceDeleteBySource: (sourceId: string) =>
-    sendDbRequest('literature:evidence:deleteBySource', { sourceId }),
-
-  paperCardUpsert: (data: {
-    id: string
-    sourceId: string
-    card: Record<string, unknown>
-    evidenceSpanIds: string[]
-  }) => sendDbRequest('literature:paperCard:upsert', data),
-
-  paperCardGet: (sourceId: string) =>
-    sendDbRequest('literature:paperCard:get', { sourceId }),
-
-  paperCardDelete: (sourceId: string) =>
-    sendDbRequest('literature:paperCard:delete', { sourceId }),
-}
 
 // ==================== Research Memory Operations ====================
 

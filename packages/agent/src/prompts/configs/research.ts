@@ -23,7 +23,6 @@ import { resolveResearchIntent } from '../research/intentRouter.js'
 import { getResearchProfileSection } from '../research/sections/profile.js'
 import { getTaskIntentPromptSection } from '../research/sections/taskIntent.js'
 import { getLiteraturePluginToolPromptSection } from '../research/sections/literatureTool.js'
-import { getResearchMemoryContextPromptSection } from '../research/sections/researchMemoryContext.js'
 import { getEvidencePolicyPromptSection } from '../research/sections/evidencePolicy.js'
 import { getOutputFormatPromptSection } from '../research/sections/outputFormat.js'
 import { getMemoryWriteProposalPromptSection } from '../research/sections/memoryWriteProposal.js'
@@ -44,11 +43,6 @@ export const researchConfig: PromptSystemConfig = {
     { name: 'toneAndStyle', compute: getToneAndStylePromptSection },
   ],
   dynamicSections: [
-    {
-      name: 'researchMemoryContext',
-      compute: getResearchMemoryContextPromptSection,
-      description: 'Intent-scoped research memory context',
-    },
     {
       name: 'outputFormat',
       // Compute intent inline — resolveResearchIntent is a cheap context fallback.

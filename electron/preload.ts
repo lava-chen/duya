@@ -94,6 +94,7 @@ export interface SessionAPI {
   saveDraft: (sessionId: string, draft: string) => Promise<void>
   getDraft: (sessionId: string) => Promise<string>
   setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) => Promise<unknown>
+  setPinned: (sessionId: string, pinned: boolean) => Promise<unknown>
 }
 
 export interface MessageAPI {
@@ -581,102 +582,6 @@ export interface DocumentParserAPI {
   isReady: () => Promise<boolean>
 }
 
-export type LiteratureCitationStyle = 'bibtex' | 'apa' | 'gbt7714'
-
-export interface LiteratureSourceSummary {
-  id: string
-  kind: string
-  title: string
-  authors: string[]
-  year?: number
-  venue?: string
-  doi?: string
-  arxivId?: string
-  url?: string
-  filePath?: string
-  fileHash?: string
-  citationKey?: string
-  bibtex?: string
-  projectIds: string[]
-  tags: string[]
-  parseStatus: string
-  parseError?: string
-  parseMetadata: Record<string, unknown>
-  chunkCount: number
-  createdAt: number
-  updatedAt: number
-}
-
-export interface LiteratureDocumentChunk {
-  id: string
-  sourceId: string
-  chunkIndex: number
-  pageNumber: number | null
-  sectionLabel: string | null
-  text: string
-  charCount: number
-  createdAt: number
-}
-
-export interface LiteratureEvidenceSummary {
-  id: string
-  sourceId: string
-  chunkId?: string
-  chunkIndex?: number
-  pageNumber: number | null
-  sectionLabel: string | null
-  text: string
-  quote?: string
-  createdAt: number
-}
-
-export interface LiteraturePaperCardSummary {
-  id: string
-  sourceId: string
-  card: {
-    researchProblem: string
-    methodSummary: string
-    datasets: string[]
-    metrics: string[]
-    keyFindings: string[]
-    limitations: string[]
-    reusableIdeas: string[]
-    analysisMeta?: {
-      scope: 'partial_context' | 'full_context'
-      truncated: boolean
-      generatedBy: 'agent'
-      verificationStatus: 'unverified' | 'user_verified'
-      analyzedChunkCount: number
-      totalChunkCount: number
-    }
-  }
-  evidenceSpanIds: string[]
-  createdAt: number
-  updatedAt: number
-}
-
-export interface LiteratureAPI {
-  ingestParsedDocument: (input: {
-    filePath: string
-    parseResult: Awaited<ReturnType<DocumentParserAPI['parse']>>
-  }) => Promise<{ action: 'created' | 'updated'; source: LiteratureSourceSummary }>
-  listSources: () => Promise<LiteratureSourceSummary[]>
-  getSource: (sourceId: string) => Promise<LiteratureSourceSummary | null>
-  listChunks: (sourceId: string, limit?: number) => Promise<LiteratureDocumentChunk[]>
-  getPaperCard: (sourceId: string) => Promise<LiteraturePaperCardSummary | null>
-  listEvidence: (sourceId: string) => Promise<LiteratureEvidenceSummary[]>
-  saveEvidence: (input: {
-    sourceId: string
-    chunkId?: string
-    chunkIndex?: number
-    pageNumber?: number | null
-    sectionLabel?: string | null
-    text: string
-    quote: string
-  }) => Promise<{ action: 'created' | 'existing'; evidence: LiteratureEvidenceSummary }>
-  getCitation: (sourceId: string, style: LiteratureCitationStyle) => Promise<string>
-}
-
 export interface MailboxAPI {
   send: (params: {
     sessionId: string;
@@ -1052,7 +957,6 @@ export interface ElectronAPI {
   browserCookie: BrowserCookieAPI
   browserBackend: BrowserBackendAPI
   parser: DocumentParserAPI
-  literature: LiteratureAPI
   agentProfile: AgentProfileAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
@@ -1554,6 +1458,8 @@ const electronAPI: ElectronAPI = {
     getDraft: (sessionId: string) => ipcRenderer.invoke('db:session:getDraft', sessionId),
     setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) =>
       ipcRenderer.invoke('db:session:set_conductor_mode', { sessionId, enabled, canvasId }),
+    setPinned: (sessionId: string, pinned: boolean) =>
+      ipcRenderer.invoke('db:session:set_pinned', { sessionId, pinned }),
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
@@ -1779,16 +1685,6 @@ const electronAPI: ElectronAPI = {
     parse: (filePath, options) => ipcRenderer.invoke('parser:parse', filePath, options),
     getCapabilities: () => ipcRenderer.invoke('parser:getCapabilities'),
     isReady: () => ipcRenderer.invoke('parser:isReady'),
-  },
-  literature: {
-    ingestParsedDocument: (input) => ipcRenderer.invoke('literature:ingestParsedDocument', input),
-    listSources: () => ipcRenderer.invoke('literature:listSources'),
-    getSource: (sourceId: string) => ipcRenderer.invoke('literature:getSource', sourceId),
-    listChunks: (sourceId: string, limit?: number) => ipcRenderer.invoke('literature:listChunks', sourceId, limit),
-    getPaperCard: (sourceId: string) => ipcRenderer.invoke('literature:getPaperCard', sourceId),
-    listEvidence: (sourceId: string) => ipcRenderer.invoke('literature:listEvidence', sourceId),
-    saveEvidence: (input) => ipcRenderer.invoke('literature:saveEvidence', input),
-    getCitation: (sourceId: string, style: LiteratureCitationStyle) => ipcRenderer.invoke('literature:getCitation', sourceId, style),
   },
   agentProfile: {
     list: () => ipcRenderer.invoke('db:agentProfile:list'),

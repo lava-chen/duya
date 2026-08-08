@@ -196,6 +196,9 @@ import {
   IconAlignRight,
   IconLetterT,
   IconTriangle,
+  // Plan 331 Phase 4: pin/unpin icon for thread list
+  IconPin,
+  IconPinFilled,
 } from "@tabler/icons-react";
 
 // Thin wrapper around tabler icons. Defaults stroke to 1.25 for a lighter
@@ -422,6 +425,11 @@ export const TextAlignLeftIcon = wrapIcon(IconAlignLeft);
 export const TextAlignRightIcon = wrapIcon(IconAlignRight);
 export const TextTIcon = wrapIcon(IconLetterT);
 export const TriangleIcon = wrapIcon(IconTriangle);
+// Plan 331 Phase 4: pin icons for thread list. `PinIcon` is the outline
+// variant (unpinned state / hover action), `PinFilledIcon` is the solid
+// variant (currently pinned).
+export const PinIcon = wrapIcon(IconPin);
+export const PinFilledIcon = wrapIcon(IconPinFilled);
 export const ImageSquareIcon = wrapIcon(IconPhoto);
 export const FilePlusIcon = wrapIcon(TablerIconFilePlus);
 export const GridFourIcon = wrapIcon(IconLayoutGrid);

@@ -47,6 +47,8 @@ export interface Thread {
   conductorModeEnabled?: number;
   /** Conductor canvas ID bound to this session (when conductor mode is on) */
   conductorCanvasId?: string | null;
+  /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
+  pinned?: number;
 }
 
 // Project group for sidebar display
@@ -146,6 +148,9 @@ interface ConversationState {
   setThreadModel: (id: string, model: string, providerId?: string) => void;
   /** Update conductor mode binding on the thread (local + DB IPC). */
   setThreadConductorBinding: (id: string, enabled: boolean, canvasId: string | null) => void;
+  /** Plan 331 Phase 4: pin/unpin a thread (local + DB IPC). Pinned threads
+   *  surface to the top of the sidebar across restarts. */
+  setThreadPinned: (id: string, pinned: boolean) => void;
   addProjectFolder: (workingDirectory: string) => Promise<ProjectGroup | null>;
   toggleProjectExpanded: (workingDirectory: string) => void;
   collapseAllProjects: () => void;
@@ -660,6 +665,29 @@ export const useConversationStore = create<ConversationState>()(
           ),
         }));
         // DB persistence is handled by the caller via session.setConductorMode IPC.
+      },
+
+      setThreadPinned: (id, pinned) => {
+        set((state) => ({
+          threads: state.threads.map((t) =>
+            t.id === id ? { ...t, pinned: pinned ? 1 : 0 } : t
+          ),
+        }));
+        // Persist to sessions.extensions.pinned via the dedicated IPC.
+        // Fire-and-forget — the local state update is optimistic; a failure
+        // here only means the pin won't survive a restart, which is an
+        // acceptable degradation for a UI convenience feature.
+        if (window.electronAPI?.session?.setPinned) {
+          window.electronAPI.session.setPinned(id, pinned).catch((err) => {
+            console.error('[Store] Failed to persist pinned state:', err);
+            // Revert local state on failure so the UI stays truthful.
+            set((state) => ({
+              threads: state.threads.map((t) =>
+                t.id === id ? { ...t, pinned: pinned ? 0 : 1 } : t
+              ),
+            }));
+          });
+        }
       },
 
       addProjectFolder: async (workingDirectory) => {

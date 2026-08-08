@@ -1,13 +1,18 @@
 /**
- * stores.ts — three small aggregates in one file:
+ * stores.ts — six small aggregates in one file:
  *   - TaskStore          (tasks: CRUD + claim + block + unassign)
  *   - PermissionLedger   (permission_requests: create + resolve + list)
  *   - LockStore          (session_runtime_locks: acquire + renew + release + isLocked)
+ *   - GoalStore          (session_goals: per-session goal + token budget mirror)
+ *   - SpawnEdgeStore     (session_spawn_edges: sub-agent lineage, plan 332)
+ *   - AttachmentStore    (attachments: file-backed payloads, plan 332)
  *
- * Plan 327 decision 8: these three classes are each under 100 lines of single-table
- * CRUD. Splitting them into 6 files would buy no boundary value, so they share
- * one module and one test file (`stores.test.ts`). Aggregate boundaries are
- * expressed by the class, not the directory. Types are inline-exported.
+ * Plan 327 decision 8: TaskStore / PermissionLedger / LockStore are each under
+ * 100 lines of single-table CRUD. Splitting them into 6 files would buy no
+ * boundary value, so they share one module and one test file
+ * (`stores.test.ts`). Plan 331 extends the same grouping to GoalStore:
+ * single-table CRUD, under 150 lines, no cross-aggregate invariants. Plan 332
+ * adds SpawnEdgeStore (lineage) and AttachmentStore (file-backed payloads).
  *
  * DDL is near-ported from the legacy tables in `electron/db/schema.ts` (only
  * index names and CHECK defaults cleaned up). Method surface is a 1:1 cover of
@@ -15,12 +20,16 @@
  *  - `taskDb`     (`packages/agent/src/ipc/db-client.ts:223-250`)
  *  - `permissionDb` (same file, lines 296-315)
  *  - `lockDb`      (same file, lines 208-218)
+ *  - `goalDb`      (Plan 331 Phase 2 — see db-client.ts)
  * plus the renderer-side IPC handlers in `electron/ipc/db-handlers.ts`.
  *
  * See `docs/design-docs/2026-08-06-core-database-architecture.md` for the
  * aggregate-grouping rationale.
  */
 
+import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { Migration, SqliteDatabase } from './database';
 
 // ─── TaskStore ───
@@ -505,6 +514,437 @@ export class LockStore {
   }
 }
 
+// ─── GoalStore ───
+
+/**
+ * Goal status state machine (Plan 331 decision 2). Simplified from Codex's
+ * 6-state model to 4 states — duya has no external blocking source, so
+ * `blocked` and `budget_limited` collapse into `usage_limited`.
+ */
+export type GoalStatus = 'active' | 'paused' | 'usage_limited' | 'complete';
+
+export interface SessionGoal {
+  id: string;
+  sessionId: string;
+  goalText: string | null;
+  status: GoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+  completedAt: number | null;
+}
+
+export interface GoalCreateInput {
+  id: string;
+  sessionId: string;
+  goalText?: string | null;
+  tokenBudget?: number | null;
+}
+
+export interface GoalBudgetDelta {
+  tokensUsedDelta?: number;
+  timeUsedDelta?: number;
+}
+
+export class GoalStore {
+  /** Migration id=8: create session_goals table (Plan 331 Phase 1). */
+  static readonly migrations: Migration[] = [
+    {
+      id: 8,
+      name: 'create_session_goals',
+      up: (db) => {
+        db.exec(`
+          CREATE TABLE session_goals (
+            id               TEXT PRIMARY KEY,
+            session_id       TEXT NOT NULL,
+            goal_text        TEXT,
+            status           TEXT NOT NULL DEFAULT 'active'
+                             CHECK(status IN('active','paused','usage_limited','complete')),
+            token_budget     INTEGER,
+            tokens_used      INTEGER NOT NULL DEFAULT 0,
+            time_used_seconds INTEGER NOT NULL DEFAULT 0,
+            created_at       INTEGER NOT NULL,
+            updated_at       INTEGER NOT NULL,
+            completed_at     INTEGER,
+            UNIQUE(session_id)
+          );
+          CREATE INDEX idx_goals_session ON session_goals(session_id);
+        `);
+      },
+    },
+  ];
+
+  private readonly db: SqliteDatabase;
+
+  constructor(db: SqliteDatabase) { this.db = db; }
+
+  /**
+   * Insert a new goal. Defaults: status='active', tokens_used=0,
+   * time_used_seconds=0. The UNIQUE(session_id) constraint means each
+   * session can have at most one goal — callers should upsert via
+   * `get` + `create` if they need idempotent semantics.
+   */
+  create(input: GoalCreateInput): SessionGoal {
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO session_goals (
+          id, session_id, goal_text, token_budget, status,
+          tokens_used, time_used_seconds, created_at, updated_at
+        ) VALUES (
+          @id, @session_id, @goal_text, @token_budget, 'active',
+          0, 0, @created_at, @updated_at
+        )`,
+      )
+      .run({
+        id: input.id,
+        session_id: input.sessionId,
+        goal_text: input.goalText ?? null,
+        token_budget: input.tokenBudget ?? null,
+        created_at: now,
+        updated_at: now,
+      });
+    return this.get(input.sessionId)!;
+  }
+
+  /** Get the goal for a session (null if no row or session missing). */
+  get(sessionId: string): SessionGoal | null {
+    const row = this.db
+      .prepare('SELECT * FROM session_goals WHERE session_id = ?')
+      .get(sessionId) as GoalRow | undefined;
+    return row ? rowToGoal(row) : null;
+  }
+
+  /**
+   * Apply a delta to the token/time accumulators. Uses `MAX(0, ...)` to
+   * guard against negative underflow (a stale delta from a crashed turn
+   * should never drive the counter below zero). Returns the updated row or
+   * null if the session has no goal.
+   */
+  updateBudget(sessionId: string, delta: GoalBudgetDelta): SessionGoal | null {
+    const sets: string[] = [];
+    const params: Record<string, unknown> = { session_id: sessionId };
+    if (delta.tokensUsedDelta !== undefined && delta.tokensUsedDelta !== 0) {
+      sets.push('tokens_used = MAX(0, tokens_used + @tokens_delta)');
+      params.tokens_delta = delta.tokensUsedDelta;
+    }
+    if (delta.timeUsedDelta !== undefined && delta.timeUsedDelta !== 0) {
+      sets.push('time_used_seconds = MAX(0, time_used_seconds + @time_delta)');
+      params.time_delta = delta.timeUsedDelta;
+    }
+    if (sets.length === 0) return this.get(sessionId);
+    sets.push('updated_at = @updated_at');
+    params.updated_at = Date.now();
+    this.db
+      .prepare(`UPDATE session_goals SET ${sets.join(', ')} WHERE session_id = @session_id`)
+      .run(params);
+    return this.get(sessionId);
+  }
+
+  /**
+   * Transition the goal to a new status. Stamps `completed_at` when
+   * transitioning to 'complete' (idempotent — already-complete goals keep
+   * their original `completed_at`). Returns the updated row or null.
+   */
+  setStatus(sessionId: string, status: GoalStatus): SessionGoal | null {
+    const now = Date.now();
+    const sets: string[] = ['status = @status', 'updated_at = @updated_at'];
+    const params: Record<string, unknown> = { session_id: sessionId, status, updated_at: now };
+    if (status === 'complete') {
+      // Only stamp completed_at if it's currently null (idempotent).
+      sets.push("completed_at = COALESCE(completed_at, @completed_at)");
+      params.completed_at = now;
+    }
+    this.db
+      .prepare(`UPDATE session_goals SET ${sets.join(', ')} WHERE session_id = @session_id`)
+      .run(params);
+    return this.get(sessionId);
+  }
+
+  /** List all goals in a given status (e.g. all `usage_limited` sessions). */
+  listByStatus(status: GoalStatus): SessionGoal[] {
+    const rows = this.db
+      .prepare('SELECT * FROM session_goals WHERE status = ? ORDER BY updated_at DESC')
+      .all(status) as GoalRow[];
+    return rows.map(rowToGoal);
+  }
+
+  /** Delete the goal for a session. Returns true if a row was removed. */
+  delete(sessionId: string): boolean {
+    const r = this.db.prepare('DELETE FROM session_goals WHERE session_id = ?').run(sessionId);
+    return r.changes > 0;
+  }
+}
+
+// ─── SpawnEdgeStore ───
+
+export interface SpawnEdge {
+  id: string;
+  parentSessionId: string;
+  childSessionId: string;
+  spawnTurnId: string | null;
+  spawnReason: string | null;
+  spawnType: string;
+  spawnedAt: number;
+}
+
+export interface SpawnEdgeRecordInput {
+  parentSessionId: string;
+  childSessionId: string;
+  spawnTurnId?: string | null;
+  spawnReason?: string | null;
+  spawnType?: string;
+}
+
+/**
+ * Record the parent→child lineage of sub-agent sessions (plan 332 Phase 1).
+ *
+ * The `sessions.parent_session_id` column only captures the direct parent.
+ * This edge table is the complete lineage truth source: it records *which*
+ * turn spawned the child, *why*, and *what kind* of spawn it was. The CTE-based
+ * `getTree` walks the full spawn tree so a UI/tool can render a lineage view.
+ *
+ * The edge id is `parentSessionId->childSessionId`, so recording the same
+ * child twice is an idempotent no-op (INSERT OR IGNORE).
+ */
+export class SpawnEdgeStore {
+  /** Migration id=9: create session_spawn_edges. */
+  static readonly migrations: Migration[] = [
+    {
+      id: 9,
+      name: 'create_session_spawn_edges',
+      up: (db) => {
+        db.exec(`
+          CREATE TABLE session_spawn_edges (
+            id                TEXT PRIMARY KEY,
+            parent_session_id TEXT NOT NULL,
+            child_session_id  TEXT NOT NULL,
+            spawn_turn_id     TEXT,
+            spawn_reason      TEXT,
+            spawn_type        TEXT NOT NULL DEFAULT 'subagent',
+            spawned_at        INTEGER NOT NULL
+          );
+          CREATE INDEX idx_spawn_parent ON session_spawn_edges(parent_session_id);
+          CREATE INDEX idx_spawn_child ON session_spawn_edges(child_session_id);
+        `);
+      },
+    },
+  ];
+
+  private readonly db: SqliteDatabase;
+
+  constructor(db: SqliteDatabase) { this.db = db; }
+
+  /** Record a spawn edge. Idempotent — re-recording the same child is a no-op. */
+  record(input: SpawnEdgeRecordInput): SpawnEdge {
+    const id = `${input.parentSessionId}->${input.childSessionId}`;
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO session_spawn_edges (
+          id, parent_session_id, child_session_id, spawn_turn_id, spawn_reason,
+          spawn_type, spawned_at
+        ) VALUES (
+          @id, @parent_session_id, @child_session_id, @spawn_turn_id, @spawn_reason,
+          @spawn_type, @spawned_at
+        )`,
+      )
+      .run({
+        id,
+        parent_session_id: input.parentSessionId,
+        child_session_id: input.childSessionId,
+        spawn_turn_id: input.spawnTurnId ?? null,
+        spawn_reason: input.spawnReason ?? null,
+        spawn_type: input.spawnType ?? 'subagent',
+        spawned_at: Date.now(),
+      });
+    return this.get(id)!;
+  }
+
+  get(id: string): SpawnEdge | null {
+    const row = this.db.prepare('SELECT * FROM session_spawn_edges WHERE id = ?').get(id) as SpawnEdgeRow | undefined;
+    return row ? rowToSpawnEdge(row) : null;
+  }
+
+  /** All direct children of a parent, oldest spawn first. */
+  listChildren(parentSessionId: string): SpawnEdge[] {
+    const rows = this.db
+      .prepare('SELECT * FROM session_spawn_edges WHERE parent_session_id = ? ORDER BY spawned_at ASC')
+      .all(parentSessionId) as SpawnEdgeRow[];
+    return rows.map(rowToSpawnEdge);
+  }
+
+  /** The edge that spawned a child, or null if `childSessionId` is a root. */
+  getParent(childSessionId: string): SpawnEdge | null {
+    const row = this.db
+      .prepare('SELECT * FROM session_spawn_edges WHERE child_session_id = ?')
+      .get(childSessionId) as SpawnEdgeRow | undefined;
+    return row ? rowToSpawnEdge(row) : null;
+  }
+
+  /**
+   * Walk the full descendant spawn tree rooted at `sessionId` via a recursive
+   * CTE. Returns every edge reachable from `sessionId` (children, grandchildren,
+   * ...). Helper edges are deduped by the UNION semantics of the CTE.
+   */
+  getTree(sessionId: string): SpawnEdge[] {
+    const rows = this.db
+      .prepare(
+        `WITH RECURSIVE tree AS (
+           SELECT * FROM session_spawn_edges WHERE parent_session_id = ?
+           UNION ALL
+           SELECT e.* FROM session_spawn_edges e
+             JOIN tree t ON e.parent_session_id = t.child_session_id
+         )
+         SELECT * FROM tree`,
+      )
+      .all(sessionId) as SpawnEdgeRow[];
+    return rows.map(rowToSpawnEdge);
+  }
+}
+
+// ─── AttachmentStore ───
+
+export interface CoreAttachment {
+  id: string;
+  messageId: string | null;
+  sessionId: string;
+  attachmentType: string;
+  mimeType: string | null;
+  filePath: string;
+  originalUrl: string | null;
+  createdAt: number;
+}
+
+/** An attachment index row plus its payload read back from the file. */
+export interface AttachmentWithData extends CoreAttachment {
+  data: string;
+}
+
+export interface AttachmentSaveInput {
+  /** Stable id — when omitted a UUID is generated. Used for idempotent imports. */
+  id?: string;
+  messageId?: string | null;
+  sessionId: string;
+  /** Attachment kind, e.g. 'parsed_document'. */
+  type: string;
+  mimeType?: string | null;
+  /** Payload written to disk verbatim. */
+  data: string;
+  filename?: string;
+  originalUrl?: string | null;
+}
+
+/**
+ * File-based attachment storage (plan 332 Phase 2).
+ *
+ * The legacy `message_attachments.data` TEXT column held large payloads
+ * (parsed document full text, base64 image chunks) inline, bloating the DB.
+ * This store keeps only an index row in the core DB and writes the payload to
+ * `{~/.duya}/attachments/<id>/<filename>`, mirroring Codex's
+ * `attachments/<uuid>/` layout. `save` is idempotent: re-saving an existing id
+ * returns the existing row and skips the file write.
+ */
+export class AttachmentStore {
+  /** Migration id=10: create attachments. */
+  static readonly migrations: Migration[] = [
+    {
+      id: 10,
+      name: 'create_attachments',
+      up: (db) => {
+        db.exec(`
+          CREATE TABLE attachments (
+            id              TEXT PRIMARY KEY,
+            message_id      TEXT,
+            session_id      TEXT NOT NULL,
+            attachment_type TEXT NOT NULL,
+            mime_type       TEXT,
+            file_path       TEXT NOT NULL,
+            original_url    TEXT,
+            created_at      INTEGER NOT NULL
+          );
+          CREATE INDEX idx_attach_session ON attachments(session_id);
+          CREATE INDEX idx_attach_message ON attachments(message_id);
+        `);
+      },
+    },
+  ];
+
+  private readonly db: SqliteDatabase;
+  private readonly rootDir: string;
+
+  constructor(db: SqliteDatabase, rootDir: string) {
+    this.db = db;
+    this.rootDir = rootDir;
+  }
+
+  save(input: AttachmentSaveInput): CoreAttachment {
+    const id = input.id ?? randomUUID();
+    const existing = this.get(id);
+    if (existing) return existing;
+
+    const dir = path.join(this.rootDir, id);
+    const filename = sanitizeFilename(input.filename ?? 'attachment');
+    const filePath = path.join(dir, filename);
+    fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, input.data, 'utf-8');
+    }
+
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO attachments (
+          id, message_id, session_id, attachment_type, mime_type, file_path,
+          original_url, created_at
+        ) VALUES (
+          @id, @message_id, @session_id, @attachment_type, @mime_type, @file_path,
+          @original_url, @created_at
+        )`,
+      )
+      .run({
+        id,
+        message_id: input.messageId ?? null,
+        session_id: input.sessionId,
+        attachment_type: input.type,
+        mime_type: input.mimeType ?? null,
+        file_path: filePath,
+        original_url: input.originalUrl ?? null,
+        created_at: Date.now(),
+      });
+    return this.get(id)!;
+  }
+
+  get(id: string): CoreAttachment | null {
+    const row = this.db.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as AttachmentRow | undefined;
+    return row ? rowToAttachment(row) : null;
+  }
+
+  /** All attachments for a session, oldest first, with payload read from file. */
+  getForSession(sessionId: string): AttachmentWithData[] {
+    const rows = this.db
+      .prepare('SELECT * FROM attachments WHERE session_id = ? ORDER BY created_at ASC')
+      .all(sessionId) as AttachmentRow[];
+    return rows.map(readAttachment);
+  }
+
+  /** All attachments for a message, oldest first, with payload read from file. */
+  getForMessage(messageId: string): AttachmentWithData[] {
+    const rows = this.db
+      .prepare('SELECT * FROM attachments WHERE message_id = ? ORDER BY created_at ASC')
+      .all(messageId) as AttachmentRow[];
+    return rows.map(readAttachment);
+  }
+
+  /** Delete an attachment (optional — used by rollback/cleanup). */
+  delete(id: string): boolean {
+    const att = this.get(id);
+    if (!att) return false;
+    try { fs.rmSync(path.dirname(att.filePath), { recursive: true, force: true }); } catch { /* best-effort */ }
+    return this.db.prepare('DELETE FROM attachments WHERE id = ?').run(id).changes > 0;
+  }
+}
+
 // ─── Helpers ───
 
 interface TaskRow {
@@ -534,6 +974,19 @@ interface PermissionRow {
   updated_input: string | null;
   created_at: number;
   resolved_at: number | null;
+}
+
+interface GoalRow {
+  id: string;
+  session_id: string;
+  goal_text: string | null;
+  status: GoalStatus;
+  token_budget: number | null;
+  tokens_used: number;
+  time_used_seconds: number;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
 }
 
 function rowToTask(row: TaskRow): CoreTask {
@@ -567,6 +1020,84 @@ function rowToPermission(row: PermissionRow): PermissionRequest {
     createdAt: row.created_at,
     resolvedAt: row.resolved_at,
   };
+}
+
+function rowToGoal(row: GoalRow): SessionGoal {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    goalText: row.goal_text,
+    status: row.status,
+    tokenBudget: row.token_budget,
+    tokensUsed: row.tokens_used,
+    timeUsedSeconds: row.time_used_seconds,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    completedAt: row.completed_at,
+  };
+}
+
+interface SpawnEdgeRow {
+  id: string;
+  parent_session_id: string;
+  child_session_id: string;
+  spawn_turn_id: string | null;
+  spawn_reason: string | null;
+  spawn_type: string;
+  spawned_at: number;
+}
+
+function rowToSpawnEdge(row: SpawnEdgeRow): SpawnEdge {
+  return {
+    id: row.id,
+    parentSessionId: row.parent_session_id,
+    childSessionId: row.child_session_id,
+    spawnTurnId: row.spawn_turn_id,
+    spawnReason: row.spawn_reason,
+    spawnType: row.spawn_type,
+    spawnedAt: row.spawned_at,
+  };
+}
+
+interface AttachmentRow {
+  id: string;
+  message_id: string | null;
+  session_id: string;
+  attachment_type: string;
+  mime_type: string | null;
+  file_path: string;
+  original_url: string | null;
+  created_at: number;
+}
+
+function rowToAttachment(row: AttachmentRow): CoreAttachment {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    sessionId: row.session_id,
+    attachmentType: row.attachment_type,
+    mimeType: row.mime_type,
+    filePath: row.file_path,
+    originalUrl: row.original_url,
+    createdAt: row.created_at,
+  };
+}
+
+/** Read the payload file back into `data`. Missing file → empty-string fallback. */
+function readAttachment(row: AttachmentRow): AttachmentWithData {
+  let data = '';
+  try {
+    data = fs.readFileSync(row.file_path, 'utf-8');
+  } catch {
+    // graceful fallback — payload file missing (e.g. deleted by user)
+  }
+  return { ...rowToAttachment(row), data };
+}
+
+/** Strip path separators / traversal so a filename can never escape its dir. */
+function sanitizeFilename(filename: string): string {
+  const base = path.basename(filename).replace(/[/\\]/g, '_');
+  return base || 'attachment';
 }
 
 function safeParseStringArray(json: string): string[] {

@@ -35,6 +35,8 @@ export interface Thread {
   agentName: string
   conductorModeEnabled?: number
   conductorCanvasId?: string | null
+  /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
+  pinned?: number
 }
 
 export interface Message {
@@ -154,6 +156,7 @@ interface DbThread {
   agent_name: string
   conductor_mode_enabled: number
   conductor_canvas_id: string | null
+  pinned: number
 }
 
 interface DbMessage {
@@ -253,6 +256,7 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
     agentName: db.agent_name || '',
     conductorModeEnabled: db.conductor_mode_enabled,
     conductorCanvasId: db.conductor_canvas_id,
+    pinned: db.pinned,
   }
 }
 

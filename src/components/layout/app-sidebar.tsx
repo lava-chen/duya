@@ -312,10 +312,15 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     };
 
     // Group threads by project (only main threads, sub-agents are nested under parents)
-    const { projectGroups, noProjectThreads, flatThreads, threadChildren } = useMemo(() => {
+    const { projectGroups, noProjectThreads, flatThreads, pinnedThreads, threadChildren } = useMemo(() => {
       const groups = new Map<string, Thread[]>();
       const childrenMap = new Map<string, Thread[]>();
       const mainThreads: Thread[] = [];
+      // Plan 331 Phase 4: pinned threads are pulled out of the normal
+      // project/no-project groupings and rendered in a dedicated section
+      // at the top of the sidebar. They still participate in `threadChildren`
+      // so sub-agent nesting works the same as unpinned threads.
+      const pinned: Thread[] = [];
 
       for (const thread of threads) {
         // Sub-agent sessions without a parent are malformed/orphaned. Do not
@@ -328,6 +333,14 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         // Sub-agent threads are nested under their parent, not shown independently
         if (thread.parentId) {
           addChildThread(childrenMap, thread);
+          continue;
+        }
+
+        // Pinned threads are routed to the pinned section regardless of their
+        // working directory — the whole point of pinning is to escape the
+        // project grouping and stay visible at the top.
+        if (thread.pinned === 1) {
+          pinned.push(thread);
           continue;
         }
 
@@ -377,6 +390,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         projectGroups,
         noProjectThreads: sortThreads(noProjectThreads),
         flatThreads: sortThreads(mainThreads),
+        pinnedThreads: sortThreads(pinned),
         threadChildren: childrenMap,
       };
     }, [threads, projectSortBy, collapsedProjects, noProjectWorkspace]);
@@ -473,7 +487,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           })}
         </nav>
 
-        {flatThreads.length > 0 && (
+        {(flatThreads.length > 0 || pinnedThreads.length > 0) && (
           <SidebarProjectHeader
             onNewBlankProject={handleNewBlankProject}
             onUseExistingFolder={handleOpenExistingFolder}
@@ -488,11 +502,30 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         )}
 
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
+          {/* Plan 331 Phase 4: pinned threads surface at the very top of the
+              sidebar, above project groups and the no-project list. Shown in
+              both `byProject` and `singleList` modes. */}
+          {pinnedThreads.length > 0 && (
+            <>
+              <div className="sidebar-section-label">{t('thread.pinnedSection')}</div>
+              <div className="thread-list">
+                {pinnedThreads.map((thread) => (
+                  <ThreadListItem
+                    key={thread.id}
+                    thread={thread}
+                    isActive={thread.id === activeThreadId}
+                    childrenThreads={threadChildren.get(thread.id) || []}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
           {projectGroupBy === 'byProject' && projectGroups.length > 0 && (
             <div className="project-list">
               {projectGroups.map((project) => {
                 const projectThreads = threads.filter(
-                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t)
+                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t) && t.pinned !== 1
                 );
                 return (
                   <ProjectGroupItem
@@ -536,7 +569,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             </>
           )}
 
-          {flatThreads.length === 0 && (
+          {flatThreads.length === 0 && pinnedThreads.length === 0 && (
             <div className="empty-state">
               <p>{t('common.noProjectsYet')}</p>
               <div className="flex flex-col gap-2 mt-3">

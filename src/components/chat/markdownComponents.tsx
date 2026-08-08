@@ -32,6 +32,12 @@ function isUnixAbsolutePath(value: string): boolean {
  * Electron main process; agents never have to write `duya-file://`
  * themselves.
  */
+// The finalAnswer prompt teaches the LLM to reference absolute paths with a
+// `/abs/path` placeholder prefix. On Windows the agent sometimes prepends that
+// placeholder to a real path (e.g. `/abs/path/C:/...`), which would otherwise
+// resolve to a nonexistent file. Strip it and re-evaluate so the real path wins.
+const ABS_PATH_PLACEHOLDER = '/abs/path';
+
 function rewriteMediaSrc(src: string): string {
   if (!src) return src;
   // Windows absolute paths look like `C:/...` or `C:\...` — the `C:`
@@ -43,7 +49,13 @@ function rewriteMediaSrc(src: string): string {
   // through. Anything else that begins with `/` is a Unix absolute path.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;
   if (isUnixAbsolutePath(src)) {
-    return `duya-file://${src}`;
+    const stripped = src.startsWith(`${ABS_PATH_PLACEHOLDER}/`)
+      ? src.slice(ABS_PATH_PLACEHOLDER.length)
+      : src;
+    if (isWindowsAbsolutePath(stripped)) {
+      return `duya-file:///${stripped.replace(/\\/g, '/')}`;
+    }
+    return `duya-file://${stripped}`;
   }
   return src;
 }

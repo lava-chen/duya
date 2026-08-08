@@ -11,8 +11,10 @@
  * `docs/exec-plans/active/328-core-db-electron-wiring.md` Phase 1.
  */
 
-import { resolveCoreDatabasePath, resolveDatabasePath, resolveRolloutRoot } from '../config/boot-config';
+import { resolveCoreDatabasePath, resolveDatabasePath, resolveRolloutRoot, resolveAttachmentsRoot } from '../config/boot-config';
 import { getLogger, LogComponent } from '../logging/logger';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   CoreDatabase,
   MessageLog,
@@ -21,6 +23,9 @@ import {
   TaskStore,
   PermissionLedger,
   LockStore,
+  GoalStore,
+  SpawnEdgeStore,
+  AttachmentStore,
   LegacyImport,
   type SqliteCtor,
   type Migration,
@@ -35,11 +40,62 @@ export interface CoreStores {
   tasks: TaskStore;
   permissions: PermissionLedger;
   locks: LockStore;
+  goals: GoalStore;
+  spawnEdges: SpawnEdgeStore;
+  attachments: AttachmentStore;
 }
 
 let stores: CoreStores | null = null;
 
-/** All migrations from the six aggregates, sorted by id. */
+/**
+ * Migrate rollout JSONL files from the previous location (`<databases>/sessions/`,
+ * where the rollout root was `dirname(dbPath)`) to the Codex-style `~/.duya/sessions/`
+ * layout. Idempotent: files already present at the destination are left untouched
+ * and the source is only removed when the copy succeeded. A no-op when the old
+ * and new roots coincide (e.g. a fresh install or already-migrated data).
+ */
+function migrateRolloutRoots(): void {
+  const { dbPath } = resolveDatabasePath();
+  const oldRoot = path.dirname(dbPath);
+  const newRoot = resolveRolloutRoot();
+  if (oldRoot === newRoot) return;
+
+  const oldSessions = path.join(oldRoot, 'sessions');
+  const newSessions = path.join(newRoot, 'sessions');
+  if (!fs.existsSync(oldSessions)) return;
+
+  const logger = getLogger();
+  let moved = 0;
+  let skipped = 0;
+  const walk = (from: string, to: string): void => {
+    for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+      const src = path.join(from, entry.name);
+      const dst = path.join(to, entry.name);
+      if (entry.isDirectory()) {
+        walk(src, dst);
+        // Remove now-empty source dirs after their children are moved.
+        try { fs.rmdirSync(src); } catch { /* best-effort */ }
+      } else if (entry.isFile()) {
+        if (fs.existsSync(dst)) {
+          skipped += 1;
+          continue;
+        }
+        fs.mkdirSync(path.dirname(dst), { recursive: true });
+        fs.copyFileSync(src, dst);
+        moved += 1;
+        try { fs.unlinkSync(src); } catch { /* best-effort */ }
+      }
+    }
+  };
+  walk(oldSessions, newSessions);
+  logger.info(
+    'Migrated rollout files to ~/.duya/sessions',
+    { oldRoot, newRoot, moved, skipped },
+    LogComponent.DB,
+  );
+}
+
+/** All migrations from the aggregates, sorted by id. */
 function collectMigrations(): Migration[] {
   return [
     ...MessageLog.migrations,
@@ -48,6 +104,9 @@ function collectMigrations(): Migration[] {
     ...TaskStore.migrations,
     ...PermissionLedger.migrations,
     ...LockStore.migrations,
+    ...GoalStore.migrations,
+    ...SpawnEdgeStore.migrations,
+    ...AttachmentStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -70,8 +129,9 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
   const logger = getLogger();
   const filename = resolveCoreDatabasePath();
   const rolloutRoot = resolveRolloutRoot();
+  const attachmentsRoot = resolveAttachmentsRoot();
 
-  logger.info('Initializing core database', { filename, rolloutRoot }, LogComponent.DB);
+  logger.info('Initializing core database', { filename, rolloutRoot, attachmentsRoot }, LogComponent.DB);
 
   try {
     const coreDb = new CoreDatabase({
@@ -89,6 +149,9 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       tasks: new TaskStore(db),
       permissions: new PermissionLedger(db),
       locks: new LockStore(db),
+      goals: new GoalStore(db),
+      spawnEdges: new SpawnEdgeStore(db),
+      attachments: new AttachmentStore(db, attachmentsRoot),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any
@@ -98,6 +161,10 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
     // naturally retried on the next startup. A fresh user (no legacy file)
     // writes a `none@<ts>` marker so startup stops probing.
     try {
+      // First relocate any rollout files written under the old
+      // `<databases>/sessions/` layout to `~/.duya/sessions/` (Codex-style).
+      migrateRolloutRoots();
+
       const impl = new LegacyImport(stores, resolveDatabasePath().dbPath, sqlite);
       if (impl.needsImport()) {
         const report = impl.run();
@@ -119,7 +186,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
     } catch (error) {
       logger.warn(
         'Legacy import failed (will retry on next startup)',
-        error instanceof Error ? error : new Error(String(error)),
+        { error: error instanceof Error ? error.message : String(error) },
         LogComponent.DB,
       );
     }
