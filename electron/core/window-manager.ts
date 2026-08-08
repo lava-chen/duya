@@ -5,7 +5,7 @@ import * as http from 'http';
 import { isDev, isPreviewMode, isTestMode } from './bootstrap';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getChannelManager } from '../messaging/port-manager';
-import { getConfigManager } from '../config/manager';
+import { getConfigStore } from '../config/store-instance';
 import { initUpdater } from '../services/updater';
 import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
@@ -252,9 +252,9 @@ export async function createWindow(): Promise<void> {
       const configChannel = new MessageChannelMain();
       channelManager.registerChannel('config', configChannel.port1);
 
-      const configManager = getConfigManager();
-      if (configManager) {
-        configManager.addSubscriber(configChannel.port1, 'renderer');
+      const configStore = getConfigStore();
+      if (configStore) {
+        configStore.addSubscriber(configChannel.port1, 'renderer');
       }
 
       mainWindow?.webContents.postMessage('config-port', null, [configChannel.port2]);
