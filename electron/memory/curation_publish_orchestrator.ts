@@ -342,7 +342,17 @@ export async function recoverAllPublications(opts: RecoverAllOpts): Promise<Reco
     const stagingDir = path.join(opts.stagingRoot, entry.name);
     const journalPath = path.join(stagingDir, 'publication.journal.json');
 
-    if (!fs.existsSync(journalPath)) continue;
+    // A staging dir with no journal is a leftover skeleton from a failed
+    // createStaging (post-fix, createStaging self-cleans, but dirs created
+    // before the fix may linger). When it contains no files at all, remove
+    // it so empty dirs don't accumulate. A dir that HAS files but no journal
+    // is a mid-creation workspace — leave it for createStaging to handle.
+    if (!fs.existsSync(journalPath)) {
+      if (await dirHasNoFiles(stagingDir)) {
+        await fs.promises.rm(stagingDir, { recursive: true, force: true });
+      }
+      continue;
+    }
 
     const recovery = await recoverPublication(journalPath, opts.liveMemoryRoot);
 
@@ -353,6 +363,25 @@ export async function recoverAllPublications(opts: RecoverAllOpts): Promise<Reco
   }
 
   return results;
+}
+
+/**
+ * Recursively determine whether a directory tree contains zero files.
+ * Empty directories (or directory trees containing only empty directories)
+ * return true. Does not follow symlinks.
+ */
+async function dirHasNoFiles(dir: string): Promise<boolean> {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) continue;
+    if (entry.isDirectory()) {
+      if (!(await dirHasNoFiles(full))) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------

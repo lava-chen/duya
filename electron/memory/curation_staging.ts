@@ -63,47 +63,54 @@ export async function createStaging(
 ): Promise<CreateStagingResult> {
   const stagingDir = path.join(stagingRoot, runId);
 
-  // 1. Create directory structure.
-  await fsp.mkdir(stagingDir, { recursive: true });
-  await fsp.mkdir(path.join(stagingDir, 'memory'), { recursive: true });
-  await fsp.mkdir(path.join(stagingDir, 'memory-config'), { recursive: true });
-  await fsp.mkdir(path.join(stagingDir, 'inputs', 'rollout'), { recursive: true });
-  await fsp.mkdir(path.join(stagingDir, 'inputs', 'ad_hoc'), { recursive: true });
-  await fsp.mkdir(path.join(stagingDir, 'backup'), { recursive: true });
+  try {
+    // 1. Create directory structure.
+    await fsp.mkdir(stagingDir, { recursive: true });
+    await fsp.mkdir(path.join(stagingDir, 'memory'), { recursive: true });
+    await fsp.mkdir(path.join(stagingDir, 'memory-config'), { recursive: true });
+    await fsp.mkdir(path.join(stagingDir, 'inputs', 'rollout'), { recursive: true });
+    await fsp.mkdir(path.join(stagingDir, 'inputs', 'ad_hoc'), { recursive: true });
+    await fsp.mkdir(path.join(stagingDir, 'backup'), { recursive: true });
 
-  // 2. Copy managed memory files (items/ + entities/ + .manifest.json).
-  for (const name of ['items', 'entities']) {
-    const src = path.join(opts.memoryRoot, name);
-    if (await pathExists(src)) {
-      await copyDirSkippingSymlinks(src, path.join(stagingDir, 'memory', name));
+    // 2. Copy managed memory files (items/ + entities/ + .manifest.json).
+    for (const name of ['items', 'entities']) {
+      const src = path.join(opts.memoryRoot, name);
+      if (await pathExists(src)) {
+        await copyDirSkippingSymlinks(src, path.join(stagingDir, 'memory', name));
+      }
     }
+    const manifestSrc = path.join(opts.memoryRoot, '.manifest.json');
+    if (await pathExists(manifestSrc)) {
+      await fsp.copyFile(manifestSrc, path.join(stagingDir, 'memory', '.manifest.json'));
+    }
+
+    // 3. Copy config root (stage1_policy.md + memory_layout.json + any
+    //    policy_proposals/ or .canary/ that may exist).
+    await copyDirSkippingSymlinks(opts.configRoot, path.join(stagingDir, 'memory-config'));
+
+    // 4. Freeze input evidence files.
+    for (const inp of opts.inputs) {
+      const destDir = inp.inputKind === 'rollout'
+        ? path.join(stagingDir, 'inputs', 'rollout')
+        : path.join(stagingDir, 'inputs', 'ad_hoc');
+      // Preserve the source file's basename (including extension) so the
+      // frozen evidence keeps its original filename.
+      const destName = path.basename(inp.sourcePath);
+      const dest = path.join(destDir, destName);
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      await fsp.copyFile(inp.sourcePath, dest);
+    }
+
+    // 5. Compute manifest hash over all files (excluding backup/).
+    const manifestHash = await computeManifestHash(stagingDir);
+
+    return { stagingDir, manifestHash };
+  } catch (err) {
+    // A failed create must not leave a partial workspace (empty directory
+    // skeleton) behind — otherwise empty dirs accumulate under stagingRoot.
+    await deleteStaging(stagingDir);
+    throw err;
   }
-  const manifestSrc = path.join(opts.memoryRoot, '.manifest.json');
-  if (await pathExists(manifestSrc)) {
-    await fsp.copyFile(manifestSrc, path.join(stagingDir, 'memory', '.manifest.json'));
-  }
-
-  // 3. Copy config root (stage1_policy.md + memory_layout.json + any
-  //    policy_proposals/ or .canary/ that may exist).
-  await copyDirSkippingSymlinks(opts.configRoot, path.join(stagingDir, 'memory-config'));
-
-  // 4. Freeze input evidence files.
-  for (const inp of opts.inputs) {
-    const destDir = inp.inputKind === 'rollout'
-      ? path.join(stagingDir, 'inputs', 'rollout')
-      : path.join(stagingDir, 'inputs', 'ad_hoc');
-    // Preserve the source file's basename (including extension) so the
-    // frozen evidence keeps its original filename.
-    const destName = path.basename(inp.sourcePath);
-    const dest = path.join(destDir, destName);
-    await fsp.mkdir(path.dirname(dest), { recursive: true });
-    await fsp.copyFile(inp.sourcePath, dest);
-  }
-
-  // 5. Compute manifest hash over all files (excluding backup/).
-  const manifestHash = await computeManifestHash(stagingDir);
-
-  return { stagingDir, manifestHash };
 }
 
 // ---------------------------------------------------------------------------
