@@ -32,12 +32,11 @@ import {
   settingDb,
   sessionDb,
   turnReviewDb,
+  goalDb,
 } from '../ipc/db-client.js';
 import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
 
 import { sendMemoryWakeup } from '../memory-rollout/wakeup.js';
-import { getRolloutLogger, type ProviderToolSnapshot, type RolloutTurn } from '../session/rollout-logger.js';
-import { getAgentsMdManager } from '../agentsmd/manager.js';
 import {
   enqueue,
   dequeue,
@@ -1433,8 +1432,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   // resolve immediately since the promise stays settled.
   await agent.waitForMcpReady(3000);
 
-  let rolloutLogger: ReturnType<typeof getRolloutLogger> = null;
-  let rolloutTurn: RolloutTurn | null = null;
   const workingDirectory = typeof agent.workingDirectory === 'string' ? agent.workingDirectory : '';
   const turnReviewBaseline = captureTurnReviewBaseline(workingDirectory);
 
@@ -1929,38 +1926,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // vision_analyze tool remains registered so the LLM can request
     // re-analysis of previously analyzed or newly referenced images.
 
-    rolloutLogger = getRolloutLogger(msg.sessionId);
-    const recordRolloutProviderRequest = (snapshot: {
-      systemPrompt: string;
-      tools: ProviderToolSnapshot[];
-      turn: number;
-    }): void => {
-      if (!rolloutLogger) return;
-      const cwd = agent.workingDirectory || process.cwd();
-      const agentsMdManager = getAgentsMdManager();
-      const agentsMdText = agentsMdManager.buildAgentsMdPrompt();
-      const agentsMd = agentsMdText
-        ? { directory: cwd, text: agentsMdText }
-        : undefined;
-      const input = {
-        cwd,
-        provider: agent.provider || 'unknown',
-        model: agent.model || 'unknown',
-        systemPrompt: snapshot.systemPrompt,
-        userContent: messageContent,
-        permissionMode: resolved.agentMode,
-        mode: msg.options?.mode,
-        language: msg.options?.language,
-        tools: snapshot.tools,
-        agentsMd,
-      };
-      if (!rolloutTurn) {
-        rolloutTurn = rolloutLogger.startTurn(input);
-      } else {
-        rolloutLogger.recordProviderRequest(rolloutTurn, input);
-      }
-    };
-
     // Defensive sync: ensure agent's in-memory messages match the DB state.
     // During long-running sessions, the agent accumulates messages in memory.
     // If an out-of-band modification occurs (e.g., concurrent process, crash
@@ -2019,13 +1984,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
       allowedTools: msg.options?.allowedTools,
-      onSystemPromptReady: (snapshot: {
-        systemPrompt: string;
-        tools: ProviderToolSnapshot[];
-        turn: number;
-      }) => {
-        recordRolloutProviderRequest(snapshot);
-      },
       conductorMode: msg.options?.conductorMode ? true : undefined,
       conductorCanvasId: msg.options?.conductorCanvasId,
       // Plan 312: always inject ipcRequest so App Connection tools work
@@ -2045,19 +2003,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     for await (const event of eventGen) {
       eventCount++;
-      if (rolloutLogger && rolloutTurn) {
-        if (event.type === 'text') {
-          rolloutLogger.recordText(rolloutTurn, event.data as string);
-        } else if (event.type === 'thinking') {
-          rolloutLogger.recordReasoning(rolloutTurn, event.data as string);
-        } else if (event.type === 'tool_use') {
-          rolloutLogger.recordToolUse(rolloutTurn, event.data as { id: string; name: string; input?: unknown });
-        } else if (event.type === 'tool_result') {
-          rolloutLogger.recordToolResult(rolloutTurn, event.data as { id: string; result: string; error?: boolean; duration_ms?: number });
-        } else if (event.type === 'result' && event.data && typeof event.data === 'object') {
-          rolloutLogger.recordUsage(rolloutTurn, event.data as Record<string, unknown>);
-        }
-      }
       if (eventCount <= 5) {
         log(`[Agent-Process] Event ${eventCount}:`, event.type, event.data ? String((event as {data?: unknown}).data).substring(0, 100) : '');
       }
@@ -2166,6 +2111,35 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         const result = await appendMessages(msg.sessionId, newMessages);
         log(`[Agent-Process] DB persist result: success=${result.success}, count=${result.count}`);
 
+        // Plan 331 Phase 2.3: persist token-budget delta after each turn.
+        // The LLM-returned tokenUsage is the authoritative token cost for
+        // this turn; we write it as an increment to session_goals.tokens_used.
+        // Phase 2.5: if the in-memory budget is exhausted (context window
+        // full), transition the goal status to 'usage_limited' so the state
+        // survives a restart. On any non-exhausted turn, restore to 'active'
+        // (covers the case where compaction freed space after a previous
+        // usage_limited state).
+        try {
+          if (tokenUsage) {
+            const turnTokens = tokenUsage.total_tokens ?? (tokenUsage.input_tokens + tokenUsage.output_tokens);
+            if (turnTokens > 0) {
+              await goalDb.updateBudget(msg.sessionId, { tokensUsedDelta: turnTokens });
+              log(`[Agent-Process] Persisted token budget delta: +${turnTokens} for session ${msg.sessionId}`);
+            }
+          }
+          const stats = agent.getContextStats();
+          if (stats.totalTokens >= stats.maxTokens) {
+            await goalDb.setStatus(msg.sessionId, 'usage_limited');
+            log(`[Agent-Process] Session ${msg.sessionId} marked usage_limited (context exhausted: ${stats.totalTokens}/${stats.maxTokens})`);
+          } else {
+            await goalDb.setStatus(msg.sessionId, 'active');
+          }
+        } catch (err) {
+          warn('[Agent-Process] Failed to persist token budget delta:', err);
+          // Non-fatal — the in-memory budget still works for this session;
+          // only the cross-restart mirror is stale.
+        }
+
         // Store parsed document content to DB for rehydration on restart.
         // Each user message with attachments gets its document text stored separately.
         for (const msgItem of newMessages) {
@@ -2236,10 +2210,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         finalContent: '',
         conversationText: '',
       });
-    }
-
-    if (rolloutLogger && rolloutTurn) {
-      rolloutLogger.completeTurn(rolloutTurn);
     }
 
     // Background title generation: generate if never generated before (no message limit)
@@ -2362,9 +2332,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   } catch (err) {
     log('[Agent-Process] Chat error:', err);
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (rolloutLogger && rolloutTurn) {
-      rolloutLogger.completeTurn(rolloutTurn, errMsg);
-    }
     const errType = classifyError(err);
     let code: string | undefined;
     if (errType === APIErrorType.RATE_LIMIT) {
@@ -2734,8 +2701,47 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 existingMessageCount = existingMessages.length;
                 log(`[Agent-Process] Loaded ${existingMessages.length} messages from DB for session ${sessionId}`);
                 debugLog('loaded message roles', existingMessages.map(m => ({ role: m.role, type: m.msg_type || (Array.isArray(m.content) ? m.content.map((c: { type: string }) => c.type).join(',') : 'string') })));
+
+                // Plan 331 Phase 2.4: restore (or create) the session_goals row
+                // so token-budget deltas persist across restarts. The in-memory
+                // TokenBudgetManager is rebuilt from the message history above
+                // (updateContextTokens is called lazily on first
+                // shouldCompact / getContextStats), so we only need to ensure
+                // the DB row exists — the accumulators (tokens_used,
+                // time_used_seconds) are read back on the next turn report.
+                try {
+                  const existingGoal = await goalDb.get(sessionId!) as Record<string, unknown> | undefined;
+                  if (!existingGoal) {
+                    const { randomUUID } = await import('node:crypto');
+                    await goalDb.create({
+                      id: randomUUID(),
+                      session_id: sessionId!,
+                    });
+                    log(`[Agent-Process] Created new session_goals row for ${sessionId}`);
+                  } else {
+                    log(`[Agent-Process] Restored session_goals for ${sessionId}: tokens_used=${existingGoal.tokens_used}, status=${existingGoal.status}`);
+                  }
+                } catch (err) {
+                  warn('[Agent-Process] Failed to restore/create session goal:', err);
+                }
               } else {
                 log(`[Agent-Process] No existing messages found in DB for session ${sessionId}`);
+                // Plan 331 Phase 2.4: even for a brand-new session, create
+                // the session_goals row so the first turn report has a row
+                // to increment. Safe to call unconditionally — if a row
+                // already exists (e.g. re-init), the UNIQUE(session_id)
+                // constraint will reject the duplicate and we log + ignore.
+                try {
+                  const { randomUUID } = await import('node:crypto');
+                  await goalDb.create({
+                    id: randomUUID(),
+                    session_id: sessionId!,
+                  });
+                  log(`[Agent-Process] Created new session_goals row for ${sessionId} (new session)`);
+                } catch (err) {
+                  // Likely UNIQUE constraint violation if re-init; not fatal.
+                  warn('[Agent-Process] session_goals create (new session):', err);
+                }
               }
             } catch (err) {
               warn('[Agent-Process] Failed to load messages from DB:', err);

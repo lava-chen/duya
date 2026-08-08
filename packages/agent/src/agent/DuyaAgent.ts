@@ -51,7 +51,6 @@ import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
 import type { AgentProfile } from '../agent-profile/types.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
-import { ResearchMemory } from '../research-memory/index.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
@@ -162,7 +161,6 @@ export class duyaAgent {
   private visualAnalysis: VisualAnalysisService;
   private blockedDomains: string[] = [];
   private browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
-  private researchMemoryRuntime: ResearchMemory;
   private mcpManager: MCPManager | null = null;
   /**
    * Plan 314: mcpReady gate. First chat:start awaits this promise
@@ -427,7 +425,6 @@ export class duyaAgent {
     // Store blocked domains for browser tool
     this.blockedDomains = options.blockedDomains ?? [];
     this.browserBackendMode = options.browserBackendMode ?? 'auto';
-    this.researchMemoryRuntime = new ResearchMemory();
 
     // Plan 315: bridge the legacy CompactionManager to the append-only
     // timeline so compaction appends a checkpoint entry instead of mutating
@@ -2088,7 +2085,6 @@ export class duyaAgent {
       abortController: this.abortController!,
       sessionId: this.sessionId,
       workingDirectory: this.workingDirectory,
-      researchMemory: this.researchMemoryRuntime,
       toolRegistry,
       chatOptions: options as Record<string, unknown> | undefined,
       blockedDomains: this.blockedDomains,

@@ -8,7 +8,7 @@ import { CoreDatabase, type SqliteDatabase, type SqliteCtor } from '../database'
 import { MessageLog } from '../message-log';
 import { SessionStore } from '../session-store';
 import { Mailbox } from '../mailbox';
-import { TaskStore, PermissionLedger, LockStore } from '../stores';
+import { TaskStore, PermissionLedger, LockStore, GoalStore, SpawnEdgeStore, AttachmentStore } from '../stores';
 import {
   LegacyImport,
   readLegacyRows,
@@ -28,6 +28,9 @@ const ALL_MIGRATIONS = [
   ...TaskStore.migrations,
   ...PermissionLedger.migrations,
   ...LockStore.migrations,
+  ...GoalStore.migrations,
+  ...SpawnEdgeStore.migrations,
+  ...AttachmentStore.migrations,
 ].sort((a, b) => a.id - b.id);
 
 function makeCoreStores(dbPath: string, rootDir: string): CoreStores {
@@ -41,6 +44,9 @@ function makeCoreStores(dbPath: string, rootDir: string): CoreStores {
     tasks: new TaskStore(db),
     permissions: new PermissionLedger(db),
     locks: new LockStore(db),
+    goals: new GoalStore(db),
+    spawnEdges: new SpawnEdgeStore(db),
+    attachments: new AttachmentStore(db, path.join(path.dirname(dbPath), 'attachments')),
   };
 }
 

@@ -41,6 +41,7 @@ import type {
   PermissionCreateInput,
   PermissionResolveInput,
   MailboxItem,
+  SessionGoal,
 } from '../db/core';
 
 // ─── Legacy flat message row type (re-exported for consumers that
@@ -224,6 +225,7 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     conductor_canvas_id: ext.conductor_canvas_id ?? null,
     draft_message: session.draft ?? '',
     source: ext.source ?? 'local',
+    pinned: ext.pinned ? 1 : 0,
     created_at: session.createdAt,
     updated_at: session.updatedAt,
   };
@@ -520,6 +522,28 @@ export function coreTaskToIpcRow(task: CoreTask): Record<string, unknown> {
     metadata: JSON.stringify(task.metadata),
     created_at: task.createdAt,
     updated_at: task.updatedAt,
+  };
+}
+
+// ─── Goal adapters (Plan 331 Phase 2) ───
+
+/**
+ * Map a SessionGoal back to the `session_goals` row shape (snake_case).
+ * The agent reads this on session resume to restore the in-memory
+ * TokenBudgetManager's accumulated counters.
+ */
+export function coreGoalToIpcRow(goal: SessionGoal): Record<string, unknown> {
+  return {
+    id: goal.id,
+    session_id: goal.sessionId,
+    goal_text: goal.goalText,
+    status: goal.status,
+    token_budget: goal.tokenBudget,
+    tokens_used: goal.tokensUsed,
+    time_used_seconds: goal.timeUsedSeconds,
+    created_at: goal.createdAt,
+    updated_at: goal.updatedAt,
+    completed_at: goal.completedAt,
   };
 }
 

@@ -156,6 +156,17 @@ export interface LegacyLockRow {
   expires_at: number;
 }
 
+export interface LegacyAttachmentRow {
+  id: string;
+  message_id: string;
+  session_id: string;
+  attachment_type: string;
+  mime_type: string | null;
+  data: string;
+  original_url: string | null;
+  created_at: number;
+}
+
 export interface LegacyRows {
   sessions: LegacySessionRow[];
   messages: LegacyMessageRow[];
@@ -163,6 +174,7 @@ export interface LegacyRows {
   tasks: LegacyTaskRow[];
   permissions: LegacyPermissionRow[];
   locks: LegacyLockRow[];
+  attachments: LegacyAttachmentRow[];
 }
 
 export interface ImportReport {
@@ -172,6 +184,8 @@ export interface ImportReport {
   tasks: number;
   permissions: number;
   locks: number;
+  /** Attachments migrated to file-backed storage (plan 332 Phase 2). */
+  attachments: number;
   /** Session ids whose messages were re-sequenced (missing/duplicate seq_index). */
   renumberedSessions: string[];
   durationMs: number;
@@ -218,6 +232,7 @@ export function readLegacyRows(db: SqliteDatabase): LegacyRows {
     tasks: readTable<LegacyTaskRow>('tasks'),
     permissions: readTable<LegacyPermissionRow>('permission_requests'),
     locks: readTable<LegacyLockRow>('session_runtime_locks'),
+    attachments: readTable<LegacyAttachmentRow>('message_attachments'),
   };
 }
 
@@ -423,6 +438,7 @@ export class LegacyImport {
       const rows = readLegacyRows(db);
       const metadata = this.importMetadata(rows);
       const messages = this.importMessages(rows.messages);
+      const attachments = this.importAttachments(rows.attachments);
       this.setMarker(`v${LEGACY_MAX_MIGRATION}@${new Date().toISOString()}`);
       return {
         sessions: metadata.sessions,
@@ -431,6 +447,7 @@ export class LegacyImport {
         tasks: metadata.tasks,
         permissions: metadata.permissions,
         locks: metadata.locks,
+        attachments,
         renumberedSessions: messages.renumberedSessions,
         durationMs: Date.now() - started,
       };
@@ -588,6 +605,34 @@ export class LegacyImport {
     };
   }
 
+  // ─── Attachments (plan 332 Phase 2: DB TEXT column → file-backed store) ───
+
+  /**
+   * Migrate `message_attachments` rows to the file-backed `AttachmentStore`.
+   * Each legacy `data` TEXT payload is written verbatim to
+   * `~/.duya/attachments/<id>/`, and an index row is inserted into the core
+   * `attachments` table. Idempotent: `AttachmentStore.save` returns the existing
+   * row (INSERT OR IGNORE) and skips the file write when the file already exists,
+   * so an interrupted run is safely retried on the next startup.
+   */
+  private importAttachments(rows: LegacyAttachmentRow[]): number {
+    // The legacy payload is a JSON body (not a literal file), so the on-disk
+    // filename is cosmetic — consumers re-parse the payload via `data`.
+    for (const row of rows) {
+      this.stores.attachments.save({
+        id: row.id,
+        messageId: row.message_id,
+        sessionId: row.session_id,
+        type: row.attachment_type,
+        mimeType: row.mime_type,
+        data: row.data,
+        originalUrl: row.original_url,
+        filename: 'attachment',
+      });
+    }
+    return rows.length;
+  }
+
   // ─── Messages (resumable per-session carry through MessageLog) ───
 
   private importMessages(rows: LegacyMessageRow[]): {
@@ -703,6 +748,7 @@ function emptyReport(started: number): ImportReport {
     tasks: 0,
     permissions: 0,
     locks: 0,
+    attachments: 0,
     renumberedSessions: [],
     durationMs: Date.now() - started,
   };

@@ -49,8 +49,9 @@ import {
   serializeMessageContent,
   serializeDisplayContent,
   ipcTaskToCoreCreate,
-  ipcTaskToUpdate,
+  ipcToUpdate,
   coreTaskToIpcRow,
+  coreGoalToIpcRow,
   ipcPermissionToCoreCreate,
   ipcPermissionToResolve,
   corePermissionToIpcRow,
@@ -193,6 +194,32 @@ export function registerDbHandlers(): void {
     }
     const input = ipcSessionToCoreCreate(data, permissionMode);
     const session = sessions.create(input);
+    // Plan 332 Phase 1: record the sub-agent lineage edge. Only fires when a
+    // NEW session is created with a parent (a spawn). `sessions.parent_session_id`
+    // is the fast direct-parent shortcut; the spawn edge is the full lineage truth
+    // source (turn / reason / type). Idempotent — re-create is a no-op.
+    if (input.parentSessionId) {
+      try {
+        getCoreStores().spawnEdges.record({
+          parentSessionId: input.parentSessionId,
+          childSessionId: input.id,
+          spawnType: (data.spawn_type as string | undefined) ?? 'subagent',
+          spawnReason: data.spawn_reason as string | undefined,
+          spawnTurnId: data.spawn_turn_id as string | undefined,
+        });
+      } catch (error) {
+        // Spawn edge is best-effort — parent_session_id still preserves lineage.
+        getLogger().warn(
+          'Failed to record spawn edge',
+          {
+            error: error instanceof Error ? error.message : String(error),
+            parent: input.parentSessionId,
+            child: input.id,
+          },
+          LogComponent.DB,
+        );
+      }
+    }
     return coreSessionToIpcRow(session);
   });
 
@@ -405,6 +432,61 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:lock:isLocked', (_event, sessionId: string) => {
     const { locks } = getCoreStores();
     return locks.isLocked(sessionId);
+  });
+
+  // ==================== Goal Handlers (core store thin forward) ====================
+  // Plan 331 Phase 2: session_goals table — per-session goal + token budget
+  // mirror. The agent calls these to persist token/time deltas after each
+  // turn and to transition the goal status. On session resume the persisted
+  // counters are read back into the in-memory TokenBudgetManager.
+
+  ipcMain.handle('db:goal:get', (_event, payload: { sessionId: string }) => {
+    const { goals } = getCoreStores();
+    const goal = goals.get(payload.sessionId);
+    return goal ? coreGoalToIpcRow(goal) : undefined;
+  });
+
+  ipcMain.handle('db:goal:create', (_event, data: {
+    id: string;
+    session_id: string;
+    goal_text?: string | null;
+    token_budget?: number | null;
+  }) => {
+    const { goals } = getCoreStores();
+    const goal = goals.create({
+      id: data.id,
+      sessionId: data.session_id,
+      goalText: data.goal_text ?? null,
+      tokenBudget: data.token_budget ?? null,
+    });
+    return coreGoalToIpcRow(goal);
+  });
+
+  ipcMain.handle('db:goal:updateBudget', (_event, payload: {
+    sessionId: string;
+    tokensUsedDelta?: number;
+    timeUsedDelta?: number;
+  }) => {
+    const { goals } = getCoreStores();
+    const goal = goals.updateBudget(payload.sessionId, {
+      tokensUsedDelta: payload.tokensUsedDelta,
+      timeUsedDelta: payload.timeUsedDelta,
+    });
+    return goal ? coreGoalToIpcRow(goal) : undefined;
+  });
+
+  ipcMain.handle('db:goal:setStatus', (_event, payload: {
+    sessionId: string;
+    status: 'active' | 'paused' | 'usage_limited' | 'complete';
+  }) => {
+    const { goals } = getCoreStores();
+    const goal = goals.setStatus(payload.sessionId, payload.status);
+    return goal ? coreGoalToIpcRow(goal) : undefined;
+  });
+
+  ipcMain.handle('db:goal:listByStatus', (_event, status: 'active' | 'paused' | 'usage_limited' | 'complete') => {
+    const { goals } = getCoreStores();
+    return goals.listByStatus(status).map(coreGoalToIpcRow);
   });
 
   // ==================== Task Handlers (core store thin forward) ====================
@@ -1089,6 +1171,19 @@ export function registerDbHandlers(): void {
       // conductor_mode_enabled / conductor_canvas_id live in extensions.
       sessions.setExtension(payload.sessionId, 'conductor_mode_enabled', payload.enabled ? 1 : 0);
       sessions.setExtension(payload.sessionId, 'conductor_canvas_id', payload.canvasId ?? null);
+      const updated = sessions.get(payload.sessionId);
+      return updated ? coreSessionToIpcRow(updated) : undefined;
+    },
+  );
+
+  // Plan 331 Phase 4: pin/unpin a session via the extensions JSON column.
+  // Mirrors the set_conductor_mode pattern — no schema change, just a
+  // key-level write. Pinned sessions surface to the top of the sidebar.
+  ipcMain.handle(
+    'db:session:set_pinned',
+    (_event, payload: { sessionId: string; pinned: boolean }) => {
+      const { sessions } = getCoreStores();
+      sessions.setExtension(payload.sessionId, 'pinned', payload.pinned ? 1 : 0);
       const updated = sessions.get(payload.sessionId);
       return updated ? coreSessionToIpcRow(updated) : undefined;
     },

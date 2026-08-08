@@ -11,6 +11,7 @@ import { wasLaunchedAsHidden } from '../services/auto-start';
 import { getNodeExecutable } from '../services/dev-detector';
 import { isHttpUrl } from '../ipc/system-handlers';
 import { setMainWindow } from '../services/browser/daemon';
+import { loadWindowState, saveWindowState } from './window-state';
 
 const logger = getLogger();
 
@@ -127,9 +128,16 @@ export async function createWindow(): Promise<void> {
     logger.info('App launched as hidden login item, starting minimized to tray', undefined, LogComponent.Main);
   }
 
+  // Plan 331 Phase 3: restore last window bounds. Falls back to the
+  // 1280×860 default when no state exists or the saved bounds are
+  // off-screen (e.g. external monitor disconnected).
+  const saved = loadWindowState();
+
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
-    width: 1280,
-    height: 860,
+    width: saved?.width ?? 1280,
+    height: saved?.height ?? 860,
+    x: saved?.x,
+    y: saved?.y,
     minWidth: 1024,
     minHeight: 600,
     title: 'DUYA Beta',
@@ -155,6 +163,13 @@ export async function createWindow(): Promise<void> {
   }
 
   mainWindow = new BrowserWindow(windowOptions);
+
+  // Restore maximized state after the window is created — setting
+  // `maximized: true` in the constructor options is not honored on
+  // all platforms, so we call `maximize()` explicitly when needed.
+  if (saved?.maximized) {
+    mainWindow.maximize();
+  }
 
   // Register the main window with the browser daemon so it can forward
   // webview CDP commands to the renderer via IPC.
@@ -273,6 +288,21 @@ export async function createWindow(): Promise<void> {
   }
 
   mainWindow.on('close', (event) => {
+    // Plan 331 Phase 3: persist bounds before the window hides or closes
+    // so the next launch restores the same position. `getNormalBounds()`
+    // returns the un-maximized rect when maximized, which is what we want
+    // to restore — combined with the `maximized` flag above.
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        const bounds = mainWindow.getNormalBounds();
+        saveWindowState({
+          ...bounds,
+          maximized: mainWindow.isMaximized(),
+        });
+      } catch {
+        // Best-effort — skip saving if the window is already torn down.
+      }
+    }
     if (!isQuitting) {
       event.preventDefault();
       mainWindow?.hide();

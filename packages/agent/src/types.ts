@@ -30,6 +30,7 @@ import type {
   AgentProgressEvent,
   StopReason,
   ProviderRuntimeConfig,
+  LLMProvider,
 } from '@duya/ai';
 
 export type {
@@ -108,9 +109,6 @@ export interface Tool {
    */
   mcpInfo?: { serverName: string; toolName: string; source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' };
 }
-
-// LLM Provider 类型
-export type LLMProvider = 'anthropic' | 'openai' | 'ollama';
 
 // Vision model configuration
 export interface VisionConfig {

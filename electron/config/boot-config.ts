@@ -14,6 +14,7 @@
 import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import writeFileAtomic from 'write-file-atomic';
 import { getLogger, LogComponent } from '../logging/logger';
 
@@ -305,13 +306,60 @@ export function resolveCoreDatabasePath(): string {
 
 /**
  * Resolve the rollout root directory for MessageLog JSONL files.
- * This is the directory that holds the database file; MessageLog.resolvePath
- * appends a `sessions/<YYYY>/<MM>/<DD>/...` subpath on top of it. It must NOT
- * include `sessions` itself, or the rollout path would duplicate the folder
- * (`<dir>/sessions/sessions/...`). Namespace isolation is inherited from the
- * userData path.
+ *
+ * Mirrors Codex's `~/.codex/sessions/` layout: rollout files live under
+ * `~/.duya/sessions/<YYYY>/<MM>/<DD>/...` (MessageLog.resolvePath appends the
+ * `sessions/<YYYY>/<MM>/<DD>/...` subpath on top of this root, so this root
+ * must NOT include `sessions` itself, or the rollout path would duplicate the
+ * folder). In test mode (`DUYA_TEST=1`), a `test-namespaces/<ns>` suffix keeps
+ * each Playwright namespace fully isolated from the real user data.
+ *
+ * Test-mode detection is inlined (rather than importing `../core/bootstrap`)
+ * so this early "compass" module stays dependency-free and never pulls in the
+ * logger/bootstrap init chain.
  */
 export function resolveRolloutRoot(): string {
-  const { dbPath } = resolveDatabasePath();
-  return path.dirname(dbPath);
+  const base = path.join(os.homedir(), '.duya');
+  if (process.env.DUYA_TEST === '1') {
+    const ns = readTestNamespace();
+    if (ns) return path.join(base, 'test-namespaces', ns);
+  }
+  return base;
+}
+
+/**
+ * Parse `--duya-namespace=<name>` from argv (mirrors `getTestNamespace` in
+ * `../core/bootstrap`, kept here to avoid a module dependency). Returns null
+ * when absent or invalid.
+ */
+function readTestNamespace(): string | null {
+  for (const arg of process.argv) {
+    if (arg.startsWith('--duya-namespace=')) {
+      const ns = arg.slice('--duya-namespace='.length);
+      return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
+    }
+  }
+  const idx = process.argv.indexOf('--duya-namespace');
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    const ns = process.argv[idx + 1];
+    return ns && /^[a-zA-Z0-9_-]+$/.test(ns) ? ns : null;
+  }
+  return null;
+}
+
+/**
+ * Resolve the root directory for file-backed attachments (plan 332 Phase 2).
+ *
+ * Mirrors Codex's `~/.codex/attachments/<uuid>/` layout: payload files live
+ * under `~/.duya/attachments/<id>/<filename>`. In test mode a
+ * `test-namespaces/<ns>` suffix keeps each Playwright namespace isolated from
+ * the real user data — the same policy as `resolveRolloutRoot`.
+ */
+export function resolveAttachmentsRoot(): string {
+  const base = path.join(os.homedir(), '.duya');
+  if (process.env.DUYA_TEST === '1') {
+    const ns = readTestNamespace();
+    if (ns) return path.join(base, 'test-namespaces', ns, 'attachments');
+  }
+  return path.join(base, 'attachments');
 }

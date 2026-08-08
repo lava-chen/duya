@@ -1,5 +1,6 @@
 /**
- * stores.test.ts — TaskStore + PermissionLedger + LockStore (plan 327 Phase 2).
+ * stores.test.ts — TaskStore + PermissionLedger + LockStore + GoalStore +
+ * SpawnEdgeStore + AttachmentStore.
  *
  * Coverage per plan:
  *  - TaskStore: CRUD, claim idempotency (same owner no error), block bidirectional
@@ -7,6 +8,12 @@
  *  - PermissionLedger: create→pending, resolve writes all fields, repeat resolve
  *    idempotent (resolved not overwritten), listPending returns only pending.
  *  - LockStore: acquire/renew/release/expired-reacquire/wrong-lockId-rejected.
+ *  - GoalStore: create→get, updateBudget deltas, setStatus transitions,
+ *    listByStatus filter, status CHECK constraint rejection.
+ *  - SpawnEdgeStore: record → listChildren → getParent → getTree (3-level),
+ *    idempotent re-record of the same child (plan 332).
+ *  - AttachmentStore: save → getForSession → getForMessage, file-backed payload,
+ *    missing-file fallback, idempotent re-save (plan 332).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
@@ -14,9 +21,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  GoalStore,
   LockStore,
   PermissionLedger,
   TaskStore,
+  SpawnEdgeStore,
+  AttachmentStore,
   type CoreTask,
   type PermissionRequest,
   type PermissionStatus,
@@ -38,6 +48,9 @@ describe.skipIf(!nativeSqliteAvailable)('stores', () => {
   let tasks: TaskStore;
   let permissions: PermissionLedger;
   let locks: LockStore;
+  let goals: GoalStore;
+  let spawnEdges: SpawnEdgeStore;
+  let attachments: AttachmentStore;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'core-stores-test-'));
@@ -47,9 +60,15 @@ describe.skipIf(!nativeSqliteAvailable)('stores', () => {
     for (const m of TaskStore.migrations) m.up(db);
     for (const m of PermissionLedger.migrations) m.up(db);
     for (const m of LockStore.migrations) m.up(db);
+    for (const m of GoalStore.migrations) m.up(db);
+    for (const m of SpawnEdgeStore.migrations) m.up(db);
+    for (const m of AttachmentStore.migrations) m.up(db);
     tasks = new TaskStore(db);
     permissions = new PermissionLedger(db);
     locks = new LockStore(db);
+    goals = new GoalStore(db);
+    spawnEdges = new SpawnEdgeStore(db);
+    attachments = new AttachmentStore(db, path.join(tempDir, 'attachments'));
   });
 
   afterEach(() => {
@@ -448,6 +467,297 @@ describe.skipIf(!nativeSqliteAvailable)('stores', () => {
       expect(locks.acquire('s1', 'lock-1', 'bob')).toBe(true);
       const row = db.prepare('SELECT owner FROM session_runtime_locks WHERE session_id = ?').get('s1') as { owner: string };
       expect(row.owner).toBe('bob');
+    });
+  });
+
+  // ─── GoalStore ───
+
+  describe('GoalStore', () => {
+    function createInput(id: string, overrides: Partial<GoalCreateInput> = {}): GoalCreateInput {
+      return {
+        id,
+        sessionId: `s-${id}`,
+        goalText: `goal-${id}`,
+        ...overrides,
+      };
+    }
+
+    it('create + get round-trips all fields with defaults', () => {
+      const goal = goals.create(createInput('g1'));
+      expect(goal.id).toBe('g1');
+      expect(goal.sessionId).toBe('s-g1');
+      expect(goal.goalText).toBe('goal-g1');
+      expect(goal.status).toBe('active');
+      expect(goal.tokenBudget).toBeNull();
+      expect(goal.tokensUsed).toBe(0);
+      expect(goal.timeUsedSeconds).toBe(0);
+      expect(goal.completedAt).toBeNull();
+      expect(goal.createdAt).toBe(goal.updatedAt);
+
+      const fetched = goals.get('s-g1');
+      expect(fetched).toEqual(goal);
+    });
+
+    it('create accepts null goalText and a tokenBudget override', () => {
+      const goal = goals.create(createInput('g2', { goalText: null, tokenBudget: 100000 }));
+      expect(goal.goalText).toBeNull();
+      expect(goal.tokenBudget).toBe(100000);
+    });
+
+    it('get returns null for a session with no goal', () => {
+      expect(goals.get('missing')).toBeNull();
+    });
+
+    it('UNIQUE(session_id) rejects a second goal for the same session', () => {
+      goals.create(createInput('g1', { sessionId: 'shared' }));
+      expect(() => goals.create(createInput('g2', { sessionId: 'shared' })))
+        .toThrowError(/UNIQUE/i);
+    });
+
+    it('updateBudget applies positive token and time deltas', () => {
+      goals.create(createInput('g3'));
+      const updated = goals.updateBudget('s-g3', { tokensUsedDelta: 1500, timeUsedDelta: 30 })!;
+      expect(updated.tokensUsed).toBe(1500);
+      expect(updated.timeUsedSeconds).toBe(30);
+      expect(updated.updatedAt).toBeGreaterThanOrEqual(updated.createdAt);
+    });
+
+    it('updateBudget accumulates across multiple calls', () => {
+      goals.create(createInput('g4'));
+      goals.updateBudget('s-g4', { tokensUsedDelta: 100 });
+      goals.updateBudget('s-g4', { tokensUsedDelta: 200, timeUsedDelta: 10 });
+      const updated = goals.updateBudget('s-g4', { timeUsedDelta: 5 })!;
+      expect(updated.tokensUsed).toBe(300);
+      expect(updated.timeUsedSeconds).toBe(15);
+    });
+
+    it('updateBudget clamps negative deltas at 0 (no underflow)', () => {
+      goals.create(createInput('g5'));
+      const updated = goals.updateBudget('s-g5', { tokensUsedDelta: -500 })!;
+      expect(updated.tokensUsed).toBe(0);
+    });
+
+    it('updateBudget with no deltas is a no-op read', () => {
+      goals.create(createInput('g6'));
+      const before = goals.get('s-g6');
+      const after = goals.updateBudget('s-g6', {});
+      expect(after).toEqual(before);
+    });
+
+    it('updateBudget returns null for a missing session', () => {
+      expect(goals.updateBudget('missing', { tokensUsedDelta: 100 })).toBeNull();
+    });
+
+    it('setStatus transitions between all valid states', () => {
+      goals.create(createInput('g7'));
+      for (const status of ['paused', 'active', 'usage_limited', 'complete'] as const) {
+        const updated = goals.setStatus('s-g7', status)!;
+        expect(updated.status).toBe(status);
+      }
+    });
+
+    it('setStatus stamps completed_at on first transition to complete', () => {
+      goals.create(createInput('g8'));
+      const completed = goals.setStatus('s-g8', 'complete')!;
+      expect(completed.completedAt).toBeTypeOf('number');
+      expect(completed.completedAt).toBeGreaterThanOrEqual(completed.createdAt);
+
+      // Re-setting to complete is idempotent — completed_at stays.
+      const again = goals.setStatus('s-g8', 'complete')!;
+      expect(again.completedAt).toBe(completed.completedAt);
+    });
+
+    it('setStatus returns null for a missing session', () => {
+      expect(goals.setStatus('missing', 'complete')).toBeNull();
+    });
+
+    it('listByStatus returns only goals in the requested status, newest first', () => {
+      goals.create(createInput('a'));
+      goals.create(createInput('b'));
+      goals.create(createInput('c'));
+      goals.setStatus('s-a', 'paused');
+      goals.setStatus('s-b', 'paused');
+      goals.setStatus('s-c', 'complete');
+      // Bump s-a's updated_at above s-b to verify ordering.
+      db.prepare('UPDATE session_goals SET updated_at = ? WHERE session_id = ?')
+        .run(Date.now() + 1000, 's-a');
+
+      const paused = goals.listByStatus('paused');
+      expect(paused.map((g) => g.sessionId)).toEqual(['s-a', 's-b']);
+      expect(goals.listByStatus('complete').map((g) => g.sessionId)).toEqual(['s-c']);
+      expect(goals.listByStatus('active')).toEqual([]);
+    });
+
+    it('delete removes the goal and returns true', () => {
+      goals.create(createInput('g9'));
+      expect(goals.delete('s-g9')).toBe(true);
+      expect(goals.get('s-g9')).toBeNull();
+      expect(goals.delete('s-g9')).toBe(false);
+    });
+
+    it('status CHECK constraint rejects an invalid status value', () => {
+      // Direct SQL bypasses the typed API to verify the schema guard.
+      expect(() =>
+        db.prepare(
+          `INSERT INTO session_goals (id, session_id, status, created_at, updated_at)
+           VALUES ('x', 's-x', 'blocked', 0, 0)`,
+        ).run(),
+      ).toThrowError(/CHECK.*status/i);
+    });
+  });
+
+  // ─── SpawnEdgeStore ───
+
+  describe('SpawnEdgeStore', () => {
+    it('record + listChildren + getParent + getTree round trip (3-level tree)', () => {
+      // root -> a -> b
+      spawnEdges.record({ parentSessionId: 'root', childSessionId: 'a', spawnReason: 'first' });
+      const edgeA = spawnEdges.record({
+        parentSessionId: 'a',
+        childSessionId: 'b',
+        spawnReason: 'subtask',
+        spawnType: 'task',
+        spawnTurnId: 'turn-1',
+      });
+
+      // Edge id is deterministic (parent->child).
+      expect(edgeA.id).toBe('a->b');
+      expect(edgeA.spawnReason).toBe('subtask');
+      expect(edgeA.spawnType).toBe('task');
+      expect(edgeA.spawnTurnId).toBe('turn-1');
+      expect(edgeA.spawnedAt).toBeTypeOf('number');
+
+      // Direct children.
+      expect(spawnEdges.listChildren('root').map((e) => e.childSessionId)).toEqual(['a']);
+      expect(spawnEdges.listChildren('a').map((e) => e.childSessionId)).toEqual(['b']);
+      expect(spawnEdges.listChildren('b')).toEqual([]);
+
+      // Parent lookup.
+      expect(spawnEdges.getParent('a')?.parentSessionId).toBe('root');
+      expect(spawnEdges.getParent('b')?.parentSessionId).toBe('a');
+      expect(spawnEdges.getParent('root')).toBeNull();
+
+      // Full descendant tree via recursive CTE.
+      const tree = spawnEdges.getTree('root');
+      expect(tree.map((e) => e.childSessionId).sort()).toEqual(['a', 'b']);
+    });
+
+    it('get() returns the edge by id and null for a missing id', () => {
+      spawnEdges.record({ parentSessionId: 'p', childSessionId: 'c' });
+      expect(spawnEdges.get('p->c')?.childSessionId).toBe('c');
+      expect(spawnEdges.get('missing')).toBeNull();
+    });
+
+    it('record defaults spawn_type to subagent and spawn_reason/turn to null', () => {
+      const edge = spawnEdges.record({ parentSessionId: 'p', childSessionId: 'c' });
+      expect(edge.spawnType).toBe('subagent');
+      expect(edge.spawnReason).toBeNull();
+      expect(edge.spawnTurnId).toBeNull();
+    });
+
+    it('re-record of the same child is idempotent (INSERT OR IGNORE)', () => {
+      spawnEdges.record({ parentSessionId: 'p', childSessionId: 'c', spawnReason: 'first' });
+      const second = spawnEdges.record({ parentSessionId: 'p', childSessionId: 'c', spawnReason: 'second' });
+      // Same edge row, first reason preserved.
+      expect(second.id).toBe('p->c');
+      expect(second.spawnReason).toBe('first');
+      expect(spawnEdges.listChildren('p')).toHaveLength(1);
+    });
+
+    it('getParent returns null for a root session even when it has children', () => {
+      spawnEdges.record({ parentSessionId: 'root', childSessionId: 'a' });
+      expect(spawnEdges.getParent('root')).toBeNull();
+    });
+  });
+
+  // ─── AttachmentStore ───
+
+  describe('AttachmentStore', () => {
+    it('save + getForSession + getForMessage round trips a file-backed payload', () => {
+      const input = {
+        id: 'att1',
+        sessionId: 's1',
+        messageId: 'm1',
+        type: 'parsed_document',
+        mimeType: 'application/pdf',
+        data: '{"filename":"a.pdf","text":"hello"}',
+        filename: 'a.pdf',
+      };
+      const saved = attachments.save(input);
+      expect(saved.id).toBe('att1');
+      expect(saved.sessionId).toBe('s1');
+      expect(saved.messageId).toBe('m1');
+      expect(saved.attachmentType).toBe('parsed_document');
+      expect(saved.mimeType).toBe('application/pdf');
+      expect(saved.filePath).toContain('attachments');
+      expect(saved.filePath).toContain('a.pdf');
+
+      // Index row + payload file both exist.
+      const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get('att1') as { file_path: string } | undefined;
+      expect(row).toBeDefined();
+      expect(fs.existsSync(row!.file_path)).toBe(true);
+
+      // getForSession returns the attachment with payload read back from file.
+      const sessionAtts = attachments.getForSession('s1');
+      expect(sessionAtts).toHaveLength(1);
+      expect(sessionAtts[0].data).toBe('{"filename":"a.pdf","text":"hello"}');
+
+      // getForMessage returns the same.
+      const messageAtts = attachments.getForMessage('m1');
+      expect(messageAtts).toHaveLength(1);
+      expect(messageAtts[0].id).toBe('att1');
+    });
+
+    it('re-save with the same id is idempotent (existing row + file skipped)', () => {
+      const first = attachments.save({ id: 'att2', sessionId: 's1', type: 'test', data: 'v1' });
+      const second = attachments.save({ id: 'att2', sessionId: 's1', type: 'test', data: 'v2' });
+      expect(second.id).toBe(first.id);
+      expect(attachments.get('att2')!.createdAt).toBe(first.createdAt);
+      // Original payload preserved (file write skipped).
+      expect(attachments.getForMessage('att2').length).toBe(0);
+      expect(attachments.getForSession('s1').find((a) => a.id === 'att2')!.data).toBe('v1');
+    });
+
+    it('missing payload file falls back gracefully to an empty string', () => {
+      const saved = attachments.save({ id: 'att3', sessionId: 's1', type: 'test', data: 'payload' });
+      // Delete the payload file behind the store's back.
+      fs.rmSync(saved.filePath, { force: true });
+      const atts = attachments.getForSession('s1');
+      const found = atts.find((a) => a.id === 'att3')!;
+      expect(found.data).toBe('');
+      // Index row still returned.
+      expect(found.attachmentType).toBe('test');
+    });
+
+    it('omitting id generates a UUID and omitting fields uses defaults', () => {
+      const saved = attachments.save({ sessionId: 's2', type: 'test', data: 'x' });
+      expect(saved.id).toBeTruthy();
+      expect(saved.messageId).toBeNull();
+      expect(saved.mimeType).toBeNull();
+      expect(saved.originalUrl).toBeNull();
+      expect(saved.filePath).toContain('attachment'); // default filename
+    });
+
+    it('delete removes the index row and the payload directory', () => {
+      const saved = attachments.save({ id: 'att5', sessionId: 's1', type: 'test', data: 'payload' });
+      expect(attachments.delete('att5')).toBe(true);
+      expect(attachments.get('att5')).toBeNull();
+      expect(fs.existsSync(path.dirname(saved.filePath))).toBe(false);
+      expect(attachments.delete('att5')).toBe(false);
+    });
+
+    it('sanitizes filenames that would escape the attachment directory', () => {
+      const saved = attachments.save({
+        id: 'att6',
+        sessionId: 's1',
+        type: 'test',
+        data: 'x',
+        filename: '../../evil.txt',
+      });
+      // basename strips traversal; separators replaced.
+      expect(saved.filePath).toContain('attachment');
+      expect(saved.filePath).not.toContain('..');
+      expect(fs.existsSync(saved.filePath)).toBe(true);
     });
   });
 });
