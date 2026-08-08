@@ -2,7 +2,7 @@
  * electron/services/providers/provider-store-electron.ts
  *
  * Electron-only bridge: wires `ProviderStore` to the live
- * `ConfigManager` and the SQLite-backed `CapabilityDao`. Importing
+ * `ConfigStore` and the SQLite-backed `CapabilityDao`. Importing
  * this file pulls in `electron` (via `config/manager.ts`), so it
  * must NOT be imported by unit tests.
  *
@@ -11,51 +11,16 @@
  * and a no-op DAO.
  */
 
-import { getConfigManager } from '../../config/manager';
-import type { ConfigManager } from '../../config/manager';
+import { getConfigStore } from '../../config/store-instance';
 import { getDatabase } from '../../db/connection';
-import type { ApiProvider } from '../../../src/lib/providers/types';
 import { ProviderStore, type ProviderStoreReader } from './provider-store';
+import { ConfigStoreReader } from './provider-store-config';
 import { CapabilityDao } from './capability-dao';
-
-class ConfigManagerReader implements ProviderStoreReader {
-  private cm: ConfigManager;
-  constructor(cm: ConfigManager) {
-    this.cm = cm;
-  }
-  readAll() {
-    return this.cm.getAllProviders();
-  }
-  readOne(id: string) {
-    return this.cm.getAllProviders()[id];
-  }
-  readDefault() {
-    return this.cm.getDefaultProvider();
-  }
-  readMemory() {
-    return this.cm.getMemoryProvider();
-  }
-  writeMemory(id: string | null): boolean {
-    return this.cm.setMemoryProvider(id);
-  }
-  readMemoryModel(): string | null {
-    return this.cm.getMemoryModel();
-  }
-  writeMemoryModel(model: string | null): boolean {
-    return this.cm.setMemoryModel(model);
-  }
-  writeAll(map: Record<string, ApiProvider>): boolean {
-    return this.cm.setConfig('apiProviders', map, 'renderer');
-  }
-  onChange(cb: () => void): () => void {
-    return this.cm.onConfigChange(cb);
-  }
-}
 
 let store: ProviderStore | undefined;
 
 export function createDefaultReader(): ProviderStoreReader {
-  return new ConfigManagerReader(getConfigManager());
+  return new ConfigStoreReader(getConfigStore());
 }
 
 /** Lazily construct a real DAO. Tests should pass a fake. */
