@@ -22,7 +22,6 @@ import { getProjectInstructionsSection } from '../general/sections/project.js'
 import { resolveResearchIntent } from '../research/intentRouter.js'
 import { getResearchProfileSection } from '../research/sections/profile.js'
 import { getTaskIntentPromptSection } from '../research/sections/taskIntent.js'
-import { getLiteraturePluginToolPromptSection } from '../research/sections/literatureTool.js'
 import { getEvidencePolicyPromptSection } from '../research/sections/evidencePolicy.js'
 import { getOutputFormatPromptSection } from '../research/sections/outputFormat.js'
 import { getMemoryWriteProposalPromptSection } from '../research/sections/memoryWriteProposal.js'
@@ -36,7 +35,6 @@ export const researchConfig: PromptSystemConfig = {
     // Research-specific sections — bypass profile gating (always render).
     { name: 'researchProfile', compute: getResearchProfileSection, bypassProfile: true },
     { name: 'taskIntent', compute: getTaskIntentPromptSection, bypassProfile: true },
-    { name: 'literaturePluginToolPolicy', compute: getLiteraturePluginToolPromptSection, bypassProfile: true },
     { name: 'evidencePolicy', compute: getEvidencePolicyPromptSection, bypassProfile: true },
     { name: 'memoryWriteProposal', compute: getMemoryWriteProposalPromptSection, bypassProfile: true },
     // toneAndStyle IS a generic section name; respect the profile gate.
