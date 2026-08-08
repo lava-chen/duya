@@ -9,8 +9,9 @@
 
 import { ipcMain, app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getConfigManager, toLLMProvider } from '../config/manager';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import { resolveLlmClientDiscriminator } from '@duya/ai';
 import {
   getBrowserExtensionStatus,
   setAllowedExtensionIds,
@@ -163,17 +164,28 @@ export function registerSettingsHandlers(): void {
   // Agent re-initialization with new provider
   ipcMain.handle('agent:reinit-provider', async () => {
     try {
-      const configManager = getConfigManager();
-      const activeProvider = configManager.getActiveProvider();
+      const store = getProviderStore();
+      const activeLlm = store.getActiveLlmProvider();
 
-      if (!activeProvider) {
+      if (!activeLlm) {
         const logger = getLogger();
         logger.info('agent:reinit-provider: No active provider found', undefined, LogComponent.Main);
         return { success: false, reason: 'no_active_provider' };
       }
 
+      const modelId =
+        (activeLlm.options?.defaultModel as string) ||
+        (activeLlm.options?.model as string) ||
+        '';
+      const cfg = store.getActiveProviderRuntimeConfig(modelId);
+      if ('error' in cfg) {
+        const logger = getLogger();
+        logger.info('agent:reinit-provider: active provider runtime config unavailable', { code: cfg.code }, LogComponent.Main);
+        return { success: false, reason: cfg.code };
+      }
+
       const logger = getLogger();
-      logger.info('Re-initializing agent with provider', { providerType: activeProvider.providerType, baseUrl: activeProvider.baseUrl }, LogComponent.Main);
+      logger.info('Re-initializing agent with provider', { providerId: cfg.providerId, apiFormat: cfg.apiFormat, baseUrl: cfg.baseUrl }, LogComponent.Main);
 
       const agentPool = getAgentProcessPool();
       const status = agentPool.getStatus();
@@ -220,19 +232,16 @@ export function registerSettingsHandlers(): void {
         const systemPrompt =
           (stores?.sessions.getExtension(proc.sessionId, 'system_prompt') as string) || '';
 
-        const providerModel = (activeProvider.options?.defaultModel as string) ||
-          (activeProvider.options?.model as string) ||
-          '';
-
         agentPool.send(proc.sessionId, {
           type: 'init',
           sessionId: proc.sessionId,
           providerConfig: {
-            provider: toLLMProvider(activeProvider.providerType),
-            apiKey: activeProvider.apiKey,
-            baseURL: activeProvider.baseUrl,
-            model: providerModel,
-            authStyle: 'api_key',
+            provider: resolveLlmClientDiscriminator(cfg.apiFormat),
+            apiKey: cfg.apiKey ?? '',
+            baseURL: cfg.baseUrl,
+            model: cfg.model,
+            authStyle: cfg.accessToken ? 'auth_token' : 'api_key',
+            runtimeConfig: cfg,
           },
           workingDirectory,
           systemPrompt,
