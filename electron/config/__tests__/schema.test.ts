@@ -17,6 +17,13 @@ describe('DuyaConfig schema', () => {
     expect(merged.agent.max_turns).toBe(90);
   });
 
+  it('DEFAULT_CONFIG reserves Codex-aligned blocks (skills/projects/features/apps)', () => {
+    expect(DEFAULT_CONFIG.skills).toEqual([]);
+    expect(DEFAULT_CONFIG.projects).toEqual({});
+    expect(DEFAULT_CONFIG.features).toEqual({});
+    expect(DEFAULT_CONFIG.apps).toEqual({});
+  });
+
   it('mergeConfig does not mutate DEFAULT_CONFIG', () => {
     const before = JSON.stringify(DEFAULT_CONFIG);
     mergeConfig({ agent: { max_turns: 5 } } as Partial<DuyaConfig>);
