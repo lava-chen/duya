@@ -128,7 +128,8 @@ describe('MessageLog', () => {
     const entry = makeUserMessage('m-1', 'hello', createdAt);
     log.appendBatch([makeEvent(sessionId, entry)]);
 
-    const expectedRel = path.join('sessions', '2026', '08', '06', `${sessionId}-${createdAt}_rollout.jsonl`);
+    const expectedFileName = `rollout-${new Date(createdAt).toISOString().replace(/[:.]/g, '-')}-${sessionId}.jsonl`;
+    const expectedRel = path.join('sessions', '2026', '08', '06', expectedFileName);
     const row = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
     expect(row.rollout_path).toBe(expectedRel);
     expect(fs.existsSync(path.join(rootDir, expectedRel))).toBe(true);
@@ -288,6 +289,23 @@ describe('MessageLog', () => {
     expect(payload1.message.content).toEqual([{ type: 'text', text: 'second message' }]);
   });
 
+  it('listBySession tolerates a missing rollout file and clears stale index', () => {
+    const sessionId = 'sess-1';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'hello', t))]);
+    expect(log.getCount(sessionId)).toBe(1);
+
+    // Simulate the file being gone externally (orphaned/legacy path), while the
+    // session's rollout_path + index rows still exist.
+    const rel = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    fs.rmSync(path.join(rootDir, rel.rollout_path));
+
+    // Must NOT throw ENOENT — returns empty and drops the stale index rows.
+    expect(log.listBySession(sessionId)).toEqual([]);
+    expect(log.getCount(sessionId)).toBe(0);
+  });
+
   // ─── searchText ───
 
   it('searchText hits content and returns snippet', () => {
@@ -362,6 +380,35 @@ describe('MessageLog', () => {
     // After append: rollout_path is set
     const after = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string | null };
     expect(after.rollout_path).not.toBeNull();
-    expect(after.rollout_path).toContain(`${sessionId}-${t}_rollout.jsonl`);
+    expect(after.rollout_path).toContain(`rollout-${new Date(t).toISOString().replace(/[:.]/g, '-')}-${sessionId}.jsonl`);
+  });
+
+  // ─── cross-midnight date-bucket move ───
+
+  it('moves the rollout file to the new date bucket on a cross-midnight session', () => {
+    const sessionId = 'sess-1';
+    const t1 = Date.UTC(2026, 7, 7, 13, 47, 42); // 2026-08-07 UTC
+    const t2 = Date.UTC(2026, 7, 8, 4, 6, 44); // 2026-08-08 UTC
+    insertSessionFixture(db, sessionId, t1);
+
+    // First append on 08-07 sets the initial bucket.
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'first', t1))]);
+    const firstPath = (db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string }).rollout_path;
+    expect(firstPath).toContain(path.join('sessions', '2026', '08', '07'));
+    expect(fs.existsSync(path.join(rootDir, firstPath))).toBe(true);
+
+    // Session stays active into 08-08 — the rollout must move buckets.
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-2', 'second', t2))]);
+    const movedPath = (db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string }).rollout_path;
+    expect(movedPath).toContain(path.join('sessions', '2026', '08', '08'));
+    expect(movedPath).not.toBe(firstPath);
+    // Old file is gone, new file exists with all messages.
+    expect(fs.existsSync(path.join(rootDir, firstPath))).toBe(false);
+    expect(fs.existsSync(path.join(rootDir, movedPath))).toBe(true);
+
+    // Both events remain readable via the new path.
+    const events = log.listBySession(sessionId);
+    expect(events.map((e) => e.id)).toEqual(['m-1', 'm-2']);
+    expect(log.project(sessionId).map((r) => r.entry.id)).toEqual(['m-1', 'm-2']);
   });
 });

@@ -551,7 +551,18 @@ export class Stage1Extractor {
     const { source_updated_at, source_content_hash } = leaseRow;
 
     // 4. Read + compact messages.
-    const messages = await this.readMessages(rolloutId);
+    let messages: MessageEvent[];
+    try {
+      messages = await this.readMessages(rolloutId);
+    } catch (err) {
+      // A read failure (e.g. missing rollout file, IPC unavailable) must NOT
+      // leave the lease in 'running' state — that would block a concurrency
+      // slot forever. Record the failure so the rollout can be retried or
+      // retired by the lease backoff/retirement machinery.
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      fail(this.memoryDb, { rolloutId, token, error: `read-messages:${errorMsg.slice(0, 200)}` });
+      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: errorMsg.slice(0, 200) };
+    }
     const compacted = compactMessages(messages, {
       sourceUpdatedAt: source_updated_at,
       sourceContentHash: source_content_hash,

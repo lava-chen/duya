@@ -2,7 +2,7 @@
  * MessageLog — single-class two-layer message storage.
  *
  * Layer 1 (payload): append-only JSONL rollout files, one per session, under
- * `sessions/<YYYY>/<MM>/<DD>/<sessionId>-<createdAt>_rollout.jsonl`. Each line
+ * `sessions/<YYYY>/<MM>/<DD>/rollout-<stamp>-<sessionId>.jsonl`. Each line
  * is a JSON-serialized `MessageEntry | CompactionEntry`. Line order = seq order.
  *
  * Layer 2 (index): `message_index` SQLite table. Stores id/session/seq/kind/
@@ -125,8 +125,11 @@ export class MessageLog {
     }
 
     for (const [sessionId, sessionEvents] of bySession) {
-      const relativePath = this.getOrCreateRolloutPath(sessionId, sessionEvents[0].createdAt);
-      const absolutePath = path.join(this.rootDir, relativePath);
+      // Bucket by the session's last activity (newest event in this batch) so a
+      // cross-midnight session's rollout lives under the day it was last active.
+      const lastActivity = sessionEvents.reduce((max, ev) => (ev.createdAt > max ? ev.createdAt : max), 0);
+      const relativePath = this.getOrCreateRolloutPath(sessionId, lastActivity);
+      const absolutePath = this.resolvePathOnDisk(relativePath);
 
       // Append all payload lines to the rollout file, recording per-line offset/len.
       const payloads = sessionEvents.map((ev) => ev.payload);
@@ -163,7 +166,17 @@ export class MessageLog {
   listBySession(sessionId: string): StoredEvent[] {
     const relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
-    const absolutePath = path.join(this.rootDir, relativePath);
+    const absolutePath = this.resolvePathOnDisk(relativePath);
+
+    // A session may reference a rollout file that is missing on disk (e.g. a
+    // legacy/orphaned path, or a file cleaned up externally). The index rows
+    // are then stale garbage — drop them and report the session as empty
+    // rather than throwing ENOENT and crashing the whole read path.
+    if (!fs.existsSync(absolutePath)) {
+      this.db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId);
+      this.pathCache.delete(sessionId);
+      return [];
+    }
 
     const rows = this.db
       .prepare(
@@ -199,7 +212,7 @@ export class MessageLog {
   project(sessionId: string): TimelineEntryRow[] {
     const relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
-    const absolutePath = path.join(this.rootDir, relativePath);
+    const absolutePath = this.resolvePathOnDisk(relativePath);
     const lines = this.readAll(absolutePath);
     const result: TimelineEntryRow[] = [];
     for (let i = 0; i < lines.length; i++) {
@@ -248,7 +261,7 @@ export class MessageLog {
   scan(sessionId: string): void {
     const relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return;
-    const absolutePath = path.join(this.rootDir, relativePath);
+    const absolutePath = this.resolvePathOnDisk(relativePath);
     const lines = this.readAll(absolutePath);
 
     const indexedIds = new Set(
@@ -323,7 +336,7 @@ export class MessageLog {
 
     const hits: SearchHit[] = [];
     outer: for (const candidate of candidates) {
-      const absolutePath = path.join(this.rootDir, candidate.rolloutPath);
+      const absolutePath = this.resolvePathOnDisk(candidate.rolloutPath);
       const lines = this.readAll(absolutePath);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -390,7 +403,8 @@ export class MessageLog {
       return 0;
     }
 
-    const relativePath = this.getOrCreateRolloutPath(sessionId, events[0].createdAt);
+    const maxCreatedAt = events.reduce((max, ev) => (ev.createdAt > max ? ev.createdAt : max), events[0].createdAt);
+    const relativePath = this.getOrCreateRolloutPath(sessionId, maxCreatedAt);
     const absolutePath = path.join(this.rootDir, relativePath);
     this.ensureFile(absolutePath);
 
@@ -445,15 +459,18 @@ export class MessageLog {
 
   /**
    * Resolve the rollout file relative path for a session.
-   * Layout: `sessions/<YYYY>/<MM>/<DD>/<sessionId>-<createdAt>_rollout.jsonl`
-   * Uses UTC for consistent date bucketing across timezones.
+   * Layout: `sessions/<YYYY>/<MM>/<DD>/rollout-<stamp>-<sessionId>.jsonl`,
+   * where `<stamp>` is the session's `createdAt` as an ISO timestamp with
+   * `:` and `.` replaced by `-` (e.g. `2026-08-06T12-00-00-000Z`). Uses UTC
+   * for consistent date bucketing across timezones.
    */
   private resolvePath(sessionId: string, createdAt: number): string {
     const date = new Date(createdAt);
     const yyyy = String(date.getUTCFullYear()).padStart(4, '0');
     const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(date.getUTCDate()).padStart(2, '0');
-    return path.join('sessions', yyyy, mm, dd, `${sessionId}-${createdAt}_rollout.jsonl`);
+    const stamp = date.toISOString().replace(/[:.]/g, '-');
+    return path.join('sessions', yyyy, mm, dd, `rollout-${stamp}-${sessionId}.jsonl`);
   }
 
   /** Create the file (and parent directories) if it does not exist. */
@@ -509,6 +526,23 @@ export class MessageLog {
     }
   }
 
+  /**
+   * Resolve the absolute path for a rollout file. Prefers the canonical
+   * `<rootDir>/<relativePath>` location; when absent, falls back to the legacy
+   * doubled-tree layout `<rootDir>/sessions/<relativePath>` written by an
+   * earlier dev build (plan 328). Reads and appends both use it so a legacy
+   * session keeps reading and writing the same physical file until it is
+   * migrated to the canonical location. `rootDir` is the Codex-style
+   * `~/.duya` (see `resolveRolloutRoot`), so the canonical tree is
+   * `~/.duya/sessions/<YYYY>/<MM>/<DD>/...`.
+   */
+  private resolvePathOnDisk(relativePath: string): string {
+    const canonical = path.join(this.rootDir, relativePath);
+    if (fs.existsSync(canonical)) return canonical;
+    const legacy = path.join(this.rootDir, 'sessions', relativePath);
+    return fs.existsSync(legacy) ? legacy : canonical;
+  }
+
   // ─── Private session helpers ───
 
   /** Read rollout_path from the sessions table. Returns null if not set or table missing. */
@@ -530,24 +564,45 @@ export class MessageLog {
 
   /** Get the cached rollout path, or resolve + write back + cache on first access. */
   private getOrCreateRolloutPath(sessionId: string, createdAt: number): string {
+    const desired = this.resolvePath(sessionId, createdAt);
     const existing = this.getRolloutPath(sessionId);
+    if (existing && existing !== desired) {
+      // Date bucket changed (cross-midnight session) — move the file.
+      this.moveRollout(sessionId, existing, desired);
+      return desired;
+    }
     if (existing) return existing;
 
-    const relativePath = this.resolvePath(sessionId, createdAt);
-    const absolutePath = path.join(this.rootDir, relativePath);
+    const absolutePath = path.join(this.rootDir, desired);
     this.ensureFile(absolutePath);
 
     // Write back to sessions table (only if not already set — races are safe).
     try {
       this.db
         .prepare('UPDATE sessions SET rollout_path = ? WHERE id = ? AND rollout_path IS NULL')
-        .run(relativePath, sessionId);
+        .run(desired, sessionId);
     } catch {
       // sessions table might not exist in isolated tests — file still works.
     }
 
-    this.pathCache.set(sessionId, relativePath);
-    return relativePath;
+    this.pathCache.set(sessionId, desired);
+    return desired;
+  }
+
+  /** Move a session's rollout file to a new date bucket and update rollout_path. */
+  private moveRollout(sessionId: string, fromRel: string, toRel: string): void {
+    const src = this.resolvePathOnDisk(fromRel);
+    const dst = this.resolvePathOnDisk(toRel);
+    if (src !== dst && fs.existsSync(src)) {
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.renameSync(src, dst);
+    }
+    try {
+      this.db.prepare('UPDATE sessions SET rollout_path = ? WHERE id = ?').run(toRel, sessionId);
+    } catch {
+      // sessions table might not exist in isolated tests — file still works.
+    }
+    this.pathCache.set(sessionId, toRel);
   }
 }
 
