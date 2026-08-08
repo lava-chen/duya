@@ -7,68 +7,23 @@
 // exercised separately with a minimal mock of the db-client shape.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import {
-  buildBundledLiteratureBundlePath,
-  buildBundledLiteratureCandidate,
   buildCandidatesFromPluginEntry,
   buildCandidatesFromSettingsEntries,
   buildMCPCandidates,
-  readLegacyFileMcpServers,
   type MCPCollectorPluginEntry,
   type MCPCollectorInput,
 } from '@duya/plugin-core/src/mcp/collect.js';
 import { collectWorkerMCPCandidates } from '../../src/mcp/collect-worker.js';
 import type { MCPConfigItem } from '../../src/mcp/config.js';
 
-const baseEnv: Record<string, string> = {};
-
 const emptyWorkerInput: MCPCollectorInput = {
   installedPlugins: [],
-  agentSettingsMcpServers: [],
-  settingsKvMcpServers: [],
-  legacyFileItems: [],
-  environment: {},
-  cwd: '/nonexistent/cwd',
 };
 
 // ============================================================================
 // Per-source pure helpers (shared engine)
 // ============================================================================
-
-describe('buildBundledLiteratureBundlePath', () => {
-  it('returns packaged path when packaged with resourcesPath', () => {
-    const p = buildBundledLiteratureBundlePath('/cwd', true, '/resources');
-    expect(p).toContain('resources');
-    expect(p).toContain('agent-bundle');
-    expect(p).toContain('literature-mcp-server.js');
-  });
-
-  it('returns dev path when not packaged', () => {
-    const p = buildBundledLiteratureBundlePath('/cwd', false, undefined);
-    expect(p).toContain('cwd');
-    expect(p).toContain('packages');
-    expect(p).toContain('agent');
-    expect(p).toContain('bundle');
-    expect(p).toContain('literature-mcp-server.js');
-  });
-});
-
-describe('buildBundledLiteratureCandidate', () => {
-  it('ALWAYS returns a candidate, even when the bundled script does not exist', () => {
-    const result = buildBundledLiteratureCandidate(
-      '/nonexistent/path/for/tests',
-      baseEnv,
-    );
-    expect(result.source).toBe('bundled');
-    expect(result.rawConfig.name).toBe('literature');
-    expect(result.rawConfig.command).toBe(process.execPath);
-    expect(result.rawConfig.args[0]).toContain('literature-mcp-server.js');
-    expect(result.rawConfig.env?.ELECTRON_RUN_AS_NODE).toBe('1');
-  });
-});
 
 describe('buildCandidatesFromPluginEntry', () => {
   it('returns an empty array for a disabled plugin', () => {
@@ -142,7 +97,7 @@ describe('buildCandidatesFromSettingsEntries', () => {
     const items: MCPConfigItem[] = [
       { name: 'search', command: 'node', args: [], allowedAgentIds: ['agent-a', 'agent-b'] },
     ];
-    const result = buildCandidatesFromSettingsEntries('agentSettings', items);
+    const result = buildCandidatesFromSettingsEntries('tomlFile', items);
     expect(result).toHaveLength(1);
     expect(result[0].rawConfig.allowedAgentIds).toEqual(['agent-a', 'agent-b']);
   });
@@ -152,166 +107,17 @@ describe('buildCandidatesFromSettingsEntries', () => {
       { name: 'a', command: 'node', args: [], enabled: true },
       { name: 'b', command: 'node', args: [], enabled: false },
     ];
-    const result = buildCandidatesFromSettingsEntries('agentSettings', items);
+    const result = buildCandidatesFromSettingsEntries('tomlFile', items);
     expect(result).toHaveLength(1);
     expect(result[0].rawConfig.name).toBe('a');
   });
 
-  it('preserves the sourceSubOrigin on every candidate', () => {
+  it('tags each candidate with the tomlFile sourceSubOrigin', () => {
     const items: MCPConfigItem[] = [
       { name: 'a', command: 'node', args: [] },
     ];
-    const agent = buildCandidatesFromSettingsEntries('agentSettings', items);
-    const kv = buildCandidatesFromSettingsEntries('settingsKv', items);
-    const legacy = buildCandidatesFromSettingsEntries('legacyFile', items);
-    expect(agent.every((c) => c.sourceSubOrigin === 'agentSettings')).toBe(true);
-    expect(kv.every((c) => c.sourceSubOrigin === 'settingsKv')).toBe(true);
-    expect(legacy.every((c) => c.sourceSubOrigin === 'legacyFile')).toBe(true);
-  });
-});
-
-// ============================================================================
-// Legacy reader (typed issues, Phase 1B contract)
-// ============================================================================
-
-describe('readLegacyFileMcpServers — file existence', () => {
-  it('returns no items and no issues when settingsPath is null', async () => {
-    const r = await readLegacyFileMcpServers(null);
-    expect(r.items).toEqual([]);
-    expect(r.issues).toEqual([]);
-  });
-
-  it('returns no items and no issues when the file does not exist (ENOENT)', async () => {
-    const r = await readLegacyFileMcpServers('/no/such/file.json');
-    expect(r.items).toEqual([]);
-    expect(r.issues).toEqual([]);
-  });
-});
-
-describe('readLegacyFileMcpServers — malformed JSON', () => {
-  it('emits a phase: discovery mcp-settings-invalid issue when the file is not valid JSON', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, 'this is not json');
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      const err = r.issues[0].error as { type: string; reason: string };
-      expect(err.type).toBe('mcp-settings-invalid');
-      expect(r.issues[0].phase).toBe('discovery');
-      expect(err.reason).toMatch(/not valid JSON/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits a mcp-settings-invalid issue when the root is not an object', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify(['not', 'an', 'object']));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      const err = r.issues[0].error as { type: string };
-      expect(err.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits a mcp-settings-invalid issue when mcpServers is present but not an array', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify({ mcpServers: 'oops' }));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      const err = r.issues[0].error as { type: string };
-      expect(err.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns no items and no issues when mcpServers is absent (not a failure)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify({ unrelated: true }));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('readLegacyFileMcpServers — per-entry validation', () => {
-  it('returns the mcpServers array when the file is well-formed', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(
-        p,
-        JSON.stringify({
-          mcpServers: [
-            { name: 'worker-legacy-lit', command: 'node', args: [] },
-            { name: 'worker-legacy-search', command: 'node', args: ['./server.js'] },
-          ],
-        }),
-      );
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toHaveLength(2);
-      expect(r.issues).toEqual([]);
-      expect(r.items[0].name).toBe('worker-legacy-lit');
-      expect(r.items[1].name).toBe('worker-legacy-search');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits per-entry issues for invalid entries WITHOUT dropping valid ones', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(
-        p,
-        JSON.stringify({
-          mcpServers: [
-            { name: 'good', command: 'node', args: [] },
-            { name: '', command: 'node' },                 // empty name
-            { name: 'no-cmd' },                            // no command
-            { name: 'good-2', command: 'node', args: [] },
-          ],
-        }),
-      );
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items.map((i) => i.name)).toEqual(['good', 'good-2']);
-      expect(r.issues).toHaveLength(2);
-      expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
-      expect(r.issues[0].phase).toBe('discovery');
-      expect(r.issues[1].error.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits a per-entry issue when the entry is not an object', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-worker-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify({ mcpServers: ['not an object'] }));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const result = buildCandidatesFromSettingsEntries('tomlFile', items);
+    expect(result.every((c) => c.sourceSubOrigin === 'tomlFile')).toBe(true);
   });
 });
 
@@ -320,16 +126,13 @@ describe('readLegacyFileMcpServers — per-entry validation', () => {
 // ============================================================================
 
 describe('buildMCPCandidates (pure) — source coverage', () => {
-  it('returns MCPCollectionResult with bundled always present', () => {
-    const r = buildMCPCandidates({
-      ...emptyWorkerInput,
-      cwd: '/nonexistent/cwd',
-    });
-    expect(r.candidates.find((c) => c.source === 'bundled')).toBeDefined();
+  it('returns an empty candidate set from an empty input', () => {
+    const r = buildMCPCandidates(emptyWorkerInput);
+    expect(r.candidates).toEqual([]);
     expect(r.issues).toEqual([]);
   });
 
-  it('emits bundled + plugin + one user TOML source', () => {
+  it('emits plugin + one user TOML source', () => {
     const r = buildMCPCandidates({
       ...emptyWorkerInput,
       installedPlugins: [
@@ -341,7 +144,6 @@ describe('buildMCPCandidates (pure) — source coverage', () => {
       userTomlItems: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
     });
     const sources = new Set(r.candidates.map((c) => c.source));
-    expect(sources.has('bundled')).toBe(true);
     expect(sources.has('plugin')).toBe(true);
     expect(sources.has('settings')).toBe(true);
     const settingsSubOrigins = new Set(
@@ -364,24 +166,7 @@ describe('buildMCPCandidates (pure) — source coverage', () => {
       userTomlItems: [{ name: 's2', command: 'node', args: [], enabled: true }],
     });
     const sources = r.candidates.map((c) => c.source).sort();
-    expect(sources).toEqual(['bundled', 'settings']);
-  });
-
-  it('bundled literature and official plugin literature both surface (coexistence; engine applies fallback)', () => {
-    const r = buildMCPCandidates({
-      ...emptyWorkerInput,
-      installedPlugins: [
-        {
-          id: 'com.duya.literature', name: 'Literature Plugin',
-          enabled: true, installPath: '/plugins/lit', dataPath: '/data/lit',
-          manifest: { capabilities: { mcpServers: [{ name: 'literature', command: 'node', args: [] }] } },
-        },
-      ],
-    });
-    const plugin = r.candidates.find((c) => c.source === 'plugin' && c.rawConfig.name === 'literature');
-    const bundled = r.candidates.find((c) => c.source === 'bundled' && c.rawConfig.name === 'literature');
-    expect(plugin).toBeDefined();
-    expect(bundled).toBeDefined();
+    expect(sources).toEqual(['settings']);
   });
 });
 
@@ -393,12 +178,6 @@ vi.mock('../../src/ipc/db-client.js', () => ({
   pluginDb: {
     registryList: vi.fn(),
   },
-  configDb: {
-    agentGetSettings: vi.fn(),
-  },
-  settingDb: {
-    getJson: vi.fn(),
-  },
 }));
 
 import * as dbClient from '../../src/ipc/db-client.js';
@@ -406,16 +185,12 @@ import * as dbClient from '../../src/ipc/db-client.js';
 describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
   beforeEach(() => {
     vi.mocked(dbClient.pluginDb.registryList).mockReset();
-    vi.mocked(dbClient.configDb.agentGetSettings).mockReset();
-    vi.mocked(dbClient.settingDb.getJson).mockReset();
   });
 
-  it('returns MCPCollectionResult with bundled even when all IPC calls fail', async () => {
+  it('returns an empty MCPCollectionResult when all IPC calls fail', async () => {
     vi.mocked(dbClient.pluginDb.registryList).mockRejectedValue(new Error('ipc-down'));
-    vi.mocked(dbClient.configDb.agentGetSettings).mockRejectedValue(new Error('ipc-down'));
-    vi.mocked(dbClient.settingDb.getJson).mockRejectedValue(new Error('ipc-down'));
     const r = await collectWorkerMCPCandidates();
-    expect(r.candidates.filter((c) => c.source === 'bundled')).toHaveLength(1);
+    expect(r.candidates).toEqual([]);
     expect(r.issues).toEqual([]);
   });
 
@@ -426,16 +201,9 @@ describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
         manifest: { capabilities: { mcpServers: [{ name: 'lit', command: 'node', args: [] }] } },
       },
     ] as never);
-    vi.mocked(dbClient.configDb.agentGetSettings).mockResolvedValue({
-      mcpServers: [{ name: 'lit', command: 'node', args: [] }],
-    } as never);
-    vi.mocked(dbClient.settingDb.getJson).mockResolvedValue([
-      { name: 'kv-lit', command: 'node', args: [] },
-    ] as never);
     const r = await collectWorkerMCPCandidates();
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('plugin')).toBe(true);
     expect(sources.has('settings')).toBe(false);
-    expect(sources.has('bundled')).toBe(true);
   });
 });
