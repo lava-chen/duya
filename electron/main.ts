@@ -40,7 +40,6 @@ import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerCapabilityManagementHandlers } from './ipc/capability-management-handlers';
-import { registerLiteratureHandlers } from './ipc/literature-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
 import { registerBrowserWebviewHandlers } from './ipc/browser-webview-handlers';
 import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
@@ -439,6 +438,22 @@ if (gotTheLock) {
                 pool: getAgentProcessPool(),
               }
             : undefined;
+
+          // Ensure the curation config root exists with default files. Without
+          // `memory-config/`, createStaging throws when copying the config
+          // root (failing curation and accumulating empty staging dirs).
+          if (curation) {
+            try {
+              await ensureMemoryConfigDir(curation.configRoot);
+            } catch (initErr) {
+              logger.warn(
+                'Memory worker: config root init failed; curation may be skipped',
+                { error: initErr instanceof Error ? initErr.message : String(initErr) },
+                LogComponent.DB,
+              );
+            }
+          }
+
           startMemoryWorker(
             {
               memoryDb,
@@ -753,7 +768,6 @@ try {
 registerPluginHandlers();
 registerAppConnectionHandlers();
 registerCapabilityManagementHandlers();
-registerLiteratureHandlers();
 registerImportHandlers();
 registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
@@ -856,3 +870,35 @@ app.on('before-quit', (event) => {
     });
   }
 });
+
+/**
+ * Ensure the memory curation config root exists with default files.
+ *
+ * The curation staging step copies `<configRoot>` into the staging workspace,
+ * so a missing `memory-config/` dir makes createStaging throw (ENOENT on
+ * readdir) and fail every curation cycle. This creates the directory and
+ * writes default `stage1_policy.md` + `memory_layout.json` when absent.
+ * Idempotent — existing files are never overwritten.
+ */
+async function ensureMemoryConfigDir(configRoot: string): Promise<void> {
+  fs.mkdirSync(configRoot, { recursive: true });
+
+  const policyPath = path.join(configRoot, 'stage1_policy.md');
+  if (!fs.existsSync(policyPath)) {
+    // Empty policy — the full Stage 1 system prompt is just the hard contract.
+    fs.writeFileSync(policyPath, '');
+  }
+
+  const layoutPath = path.join(configRoot, 'memory_layout.json');
+  if (!fs.existsSync(layoutPath)) {
+    const { DEFAULT_LAYOUT } = await import('../packages/agent/src/memory-state/memory_layout.js');
+    const entities: Record<string, unknown> = {};
+    for (const [claimType, cfg] of DEFAULT_LAYOUT.entities) {
+      entities[claimType] = cfg;
+    }
+    fs.writeFileSync(
+      layoutPath,
+      JSON.stringify({ schema_version: DEFAULT_LAYOUT.schema_version, entities }, null, 2),
+    );
+  }
+}

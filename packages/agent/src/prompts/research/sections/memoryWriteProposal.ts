@@ -8,7 +8,7 @@ export function getMemoryWriteProposalPromptSection(): string {
     '### Hypothesis Auto-Update Rule (CRITICAL)',
     '',
     'After EVERY tool invocation that returns substantive content (WebSearch, Browser,',
-    'Literature evidence search, file analysis, Bash command results), you MUST follow',
+    'file analysis, Bash command results), you MUST follow',
     'this procedure before continuing to the next action:',
     '',
     '1. **Check active hypotheses**: Use `research_memory:retrieve` with intent',

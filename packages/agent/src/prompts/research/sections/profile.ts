@@ -15,7 +15,7 @@ export function getResearchProfileSection(context: PromptContext): string {
     '- your own interpretations',
     '- speculative research ideas',
     '',
-    'When answering academic questions, prefer evidence from Literature Plugin and Research Memory.',
+    'When answering academic questions, prefer evidence from Research Memory.',
     'Do not invent citations, paper details, datasets, metrics, author names, or experimental results.',
     'When a claim may affect long-term research direction, propose it as a candidate research memory instead of silently storing it.',
     languageLine,
