@@ -2,6 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
 import type { PluginRegistryEntry, PluginRegistryFile } from './types';
+import { getConfigStore } from '../config/store-instance';
+
+// Plan 334 decision 11: installed-plugins storage is migrged from
+// `registry.json` into the ConfigStore `plugins` block. The TOML key is a
+// composite `<pluginId>@<marketplace>` and only the user-intent field
+// (`enabled`) is persisted; every other field is derived at read time by
+// `PluginManager.listInstalled()`.
 
 function ensureDir(dirPath: string): void {
   if (!fs.existsSync(dirPath)) {
@@ -9,10 +16,18 @@ function ensureDir(dirPath: string): void {
   }
 }
 
-function atomicWriteJson(targetPath: string, payload: unknown): void {
-  const tempPath = `${targetPath}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), 'utf8');
-  fs.renameSync(tempPath, targetPath);
+// Composite key: "<pluginId>@<marketplace>". Marketplace defaults to
+// 'builtin' for entries that predate source attribution.
+function toConfigKey(id: string, marketplace: string): string {
+  return `${id}@${marketplace || 'builtin'}`;
+}
+
+function parseConfigKey(key: string): { id: string; marketplace: string } {
+  const at = key.lastIndexOf('@');
+  if (at <= 0) {
+    return { id: key, marketplace: 'builtin' };
+  }
+  return { id: key.slice(0, at), marketplace: key.slice(at + 1) };
 }
 
 export class PluginRegistryStore {
@@ -49,19 +64,42 @@ export class PluginRegistryStore {
     };
   }
 
+  private readConfigPlugins(): Record<string, { enabled?: boolean }> {
+    const plugins = getConfigStore().getByPath('plugins');
+    if (plugins && typeof plugins === 'object') {
+      return plugins as Record<string, { enabled?: boolean }>;
+    }
+    return {};
+  }
+
+  private writeConfigPlugins(plugins: Record<string, { enabled: boolean }>): void {
+    getConfigStore().set('plugins', plugins);
+  }
+
+  // Build a minimal entry from the composite key. Only `id`/`enabled`/
+  // `marketplace` are known from config; the remaining fields are filled by
+  // the single merge entry point in `PluginManager.hydrateViewItem`.
+  private minimalEntry(id: string, enabled: boolean, marketplace: string): PluginRegistryEntry {
+    return { id, enabled, marketplace } as unknown as PluginRegistryEntry;
+  }
+
   readRegistry(): PluginRegistryFile {
-    if (!fs.existsSync(this.registryPath)) {
-      return { version: 1, plugins: [] };
+    const plugins = this.readConfigPlugins();
+    const entries: PluginRegistryEntry[] = [];
+    for (const [key, val] of Object.entries(plugins)) {
+      const { id, marketplace } = parseConfigKey(key);
+      entries.push(this.minimalEntry(id, val?.enabled ?? true, marketplace));
     }
-    const parsed = JSON.parse(fs.readFileSync(this.registryPath, 'utf8')) as PluginRegistryFile;
-    if (parsed.version !== 1 || !Array.isArray(parsed.plugins)) {
-      return { version: 1, plugins: [] };
-    }
-    return parsed;
+    return { version: 1, plugins: entries };
   }
 
   writeRegistry(file: PluginRegistryFile): void {
-    atomicWriteJson(this.registryPath, file);
+    const plugins: Record<string, { enabled: boolean }> = {};
+    for (const entry of file.plugins) {
+      const key = toConfigKey(entry.id, entry.marketplace);
+      plugins[key] = { enabled: entry.enabled };
+    }
+    this.writeConfigPlugins(plugins);
   }
 
   listPlugins(): PluginRegistryEntry[] {
@@ -69,25 +107,22 @@ export class PluginRegistryStore {
   }
 
   upsertPlugin(entry: PluginRegistryEntry): void {
-    const registry = this.readRegistry();
-    const index = registry.plugins.findIndex((p) => p.id === entry.id);
-    if (index >= 0) {
-      registry.plugins[index] = entry;
-    } else {
-      registry.plugins.push(entry);
-    }
-    this.writeRegistry(registry);
+    const plugins = this.readConfigPlugins();
+    const key = toConfigKey(entry.id, entry.marketplace);
+    plugins[key] = { enabled: entry.enabled };
+    this.writeConfigPlugins(plugins as Record<string, { enabled: boolean }>);
   }
 
   removePlugin(id: string): PluginRegistryEntry | null {
-    const registry = this.readRegistry();
-    const existing = registry.plugins.find((p) => p.id === id) ?? null;
-    if (!existing) {
+    const plugins = this.readConfigPlugins();
+    const key = Object.keys(plugins).find((k) => parseConfigKey(k).id === id);
+    if (!key) {
       return null;
     }
-    registry.plugins = registry.plugins.filter((p) => p.id !== id);
-    this.writeRegistry(registry);
-    return existing;
+    const { marketplace } = parseConfigKey(key);
+    const removed = this.minimalEntry(id, plugins[key]?.enabled ?? true, marketplace);
+    delete plugins[key];
+    this.writeConfigPlugins(plugins as Record<string, { enabled: boolean }>);
+    return removed;
   }
 }
-

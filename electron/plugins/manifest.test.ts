@@ -399,3 +399,145 @@ describe('readPluginManifestLenient — graceful fallback', () => {
     expect(result.agentContext).toBe('');
   });
 });
+
+// ----------------------------------------------------------------------------
+// Plan 335 — Agent Plugins 1.0.0 compatibility
+// ----------------------------------------------------------------------------
+
+describe('readPluginManifest — extensions passthrough (Plan 335)', () => {
+  it('passes through object-valued namespaces from a minimal manifest', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-plugin',
+        version: '1.0.0',
+        description: 'Has extensions.',
+        extensions: {
+          'com.example.client': { hooks: { enabled: true } },
+          'com.another': { nested: { flag: 'x' } },
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.extensions).toEqual({
+      'com.example.client': { hooks: { enabled: true } },
+      'com.another': { nested: { flag: 'x' } },
+    });
+  });
+
+  it('treats a non-object top-level extensions block as empty', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'ext-bad',
+        version: '1.0.0',
+        description: 'Bad extensions.',
+        extensions: 'not-an-object',
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.extensions).toEqual({});
+  });
+
+  it('passes through extensions from a legacy v2 manifest', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        schemaVersion: 'duya.plugin.v2',
+        id: 'com.duya.ext-legacy',
+        name: 'ExtLegacy',
+        version: '2.0.0',
+        description: 'Legacy with extensions.',
+        author: { name: 'DUYA Team' },
+        extensions: { 'com.example.client': { enabled: true } },
+        permissions: [],
+        engines: { duya: '>=0.1.0' },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.extensions).toEqual({ 'com.example.client': { enabled: true } });
+  });
+});
+
+describe('readPluginManifest — standard Agent Plugins package detection (Plan 335)', () => {
+  const AGENT_PLUGINS_PLUGIN_SCHEMA =
+    'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+
+  it('enters the standard package path when $schema matches exactly', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        $schema: AGENT_PLUGINS_PLUGIN_SCHEMA,
+        name: 'standard-plugin',
+        version: '1.0.0',
+        description: 'A standard Agent Plugins package.',
+      }),
+    );
+    // A standard package follows the spec layout: standard mcp.json not
+    // duya's mcp/servers.json.
+    writeFileSync(
+      join(dir, 'mcp.json'),
+      JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
+        mcpServers: {
+          remote: { type: 'streamable-http', url: 'https://mcp.example.com' },
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.schemaVersion).toBe('duya.plugin.v2');
+    expect(manifest.id).toBe('agent.standard-plugin');
+    expect(manifest.name).toBe('standard-plugin');
+    expect(manifest.capabilities.mcpServers).toEqual([
+      { name: 'remote', transport: 'streamable-http', url: 'https://mcp.example.com' },
+    ]);
+    expect(manifest.components?.mcpServers).toEqual(['remote']);
+  });
+
+  it('does not enter the standard path when $schema is absent (legacy path)', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        schemaVersion: 'duya.plugin.v2',
+        id: 'com.duya.plain',
+        name: 'PlainV2',
+        version: '2.0.0',
+        description: 'A legacy v2 manifest without $schema.',
+        author: { name: 'DUYA Team' },
+        permissions: [],
+        engines: { duya: '>=0.1.0' },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.schemaVersion).toBe('duya.plugin.v2');
+    expect(manifest.id).toBe('com.duya.plain');
+  });
+
+  it('does not enter the standard path when $schema is a different URL', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/2.0.0/plugin.schema.json',
+        schemaVersion: 'duya.plugin.v2',
+        id: 'com.duya.other',
+        name: 'OtherSchema',
+        version: '2.0.0',
+        description: 'A non-standard $schema.',
+        author: { name: 'DUYA Team' },
+        permissions: [],
+        engines: { duya: '>=0.1.0' },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.schemaVersion).toBe('duya.plugin.v2');
+    expect(manifest.id).toBe('com.duya.other');
+  });
+});

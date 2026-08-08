@@ -16,6 +16,7 @@ import { getDatabase } from '../../db/connection';
 import { ProviderStore, type ProviderStoreReader } from './provider-store';
 import { ConfigStoreReader } from './provider-store-config';
 import { CapabilityDao } from './capability-dao';
+import { ModelCatalogStore } from './model-catalog-store';
 
 let store: ProviderStore | undefined;
 
@@ -23,9 +24,9 @@ export function createDefaultReader(): ProviderStoreReader {
   return new ConfigStoreReader(getConfigStore());
 }
 
-/** Lazily construct a real DAO. Tests should pass a fake. */
-export function createDefaultDao(): CapabilityDao {
-  return new CapabilityDao(getDatabase());
+/** Lazily construct the DB-backed override layer. Tests should pass a fake. */
+export function createDefaultDao(): ModelCatalogStore {
+  return new ModelCatalogStore(new CapabilityDao(getDatabase()));
 }
 
 export function getProviderStore(): ProviderStore {

@@ -68,6 +68,15 @@ function asOptionalString(value: unknown): string | null {
 const DOT_FOLDER_DIR = '.duya-plugin';
 const DOT_FOLDER_MANIFEST = path.join(DOT_FOLDER_DIR, 'plugin.json');
 
+/**
+ * Agent Plugins 1.0.0 — canonical root `plugin.json` manifest schema
+ * identifier. A root `plugin.json` whose `$schema` equals this exactly
+ * (the schema declares it as a `const`) is treated as a standard Agent
+ * Plugins package rather than a duya v1/v2 manifest.
+ */
+const AGENT_PLUGINS_PLUGIN_SCHEMA =
+  'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+
 const VALID_DEFAULT_MODES = ['read', 'draft', 'write', 'modify', 'dangerous'] as const;
 type DefaultMode = (typeof VALID_DEFAULT_MODES)[number];
 
@@ -174,6 +183,21 @@ function parseSetupField(
   };
 }
 
+/**
+ * Extract the Agent Plugins `extensions` block, keeping only object-valued
+ * namespaces (spec `additionalProperties: { type: "object" }`). Returns `{}`
+ * when absent or non-object at top level (aligned with spec §8.1).
+ */
+function parseExtensions(raw: unknown): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  if (isObject(raw)) {
+    for (const [namespace, value] of Object.entries(raw)) {
+      if (isObject(value)) out[namespace] = value;
+    }
+  }
+  return out;
+}
+
 function parseInterfaceBlock(raw: unknown): PluginInterface | undefined {
   if (!isObject(raw)) return undefined;
   const block: PluginInterface = {};
@@ -244,6 +268,7 @@ function readMinimalManifest(pluginRoot: string, manifestPath: string): PluginMa
     license: asOptionalString(raw.license) ?? undefined,
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: interfaceBlock,
+    extensions: parseExtensions(raw.extensions),
     capabilities: {
       skills: skillNames.length ? skillNames : undefined,
       mcpServers: mcpServers.length ? mcpServers : undefined,
@@ -360,6 +385,7 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
     license: asOptionalString(raw.license) ?? undefined,
     keywords: asOptionalStringArray(raw.keywords) ?? undefined,
     interface: parseInterfaceBlock(raw.interface),
+    extensions: parseExtensions(raw.extensions),
     capabilities: {
       skills: capsRaw.skills ? asStringArray(capsRaw.skills, 'capabilities.skills') : undefined,
       mcpServers: Array.isArray(capsRaw.mcpServers)
@@ -428,6 +454,73 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
 }
 
 // ----------------------------------------------------------------------------
+// Standard Agent Plugins package reader (root `plugin.json` + $schema)
+// ----------------------------------------------------------------------------
+
+/**
+ * Read a standard Agent Plugins 1.0.0 package (root `plugin.json` whose
+ * `$schema` equals `AGENT_PLUGINS_PLUGIN_SCHEMA`). Skills and MCP servers
+ * are resolved from disk via `discoverAllCapabilities` (the standard
+ * `mcp.json` fallback applies), and `extensions` is passed through. The
+ * package is projected onto the duya v2 runtime view; it has no duya id, so
+ * one is derived from the package name.
+ */
+function readAgentPluginsManifest(pluginRoot: string, manifestPath: string): PluginManifest {
+  const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as unknown;
+  if (!isObject(raw)) {
+    throw new Error('Invalid plugin manifest root');
+  }
+
+  const name = asString(raw.name, 'name');
+  const version = asString(raw.version, 'version');
+  const description = asString(raw.description, 'description');
+  const id =
+    typeof raw.id === 'string' && raw.id.trim().length > 0
+      ? raw.id
+      : `agent.${name}`;
+
+  const authorRaw = raw.author;
+  const author: PluginManifest['author'] = isObject(authorRaw)
+    ? {
+        name: asString(authorRaw.name, 'author.name'),
+        url: typeof authorRaw.url === 'string' ? authorRaw.url : undefined,
+        email: typeof authorRaw.email === 'string' ? authorRaw.email : undefined,
+      }
+    : { name: 'Unknown' };
+
+  const caps = discoverAllCapabilities(pluginRoot);
+  const skillNames = caps.skills.map((s) => s.name);
+  const mcpServers = caps.mcpServers;
+  const workflowNames = caps.workflows.map((w) => w.name);
+
+  return {
+    schemaVersion: 'duya.plugin.v2',
+    id,
+    name,
+    version,
+    description,
+    author,
+    homepage: asOptionalString(raw.homepage) ?? undefined,
+    repository: asOptionalString(raw.repository) ?? undefined,
+    license: asOptionalString(raw.license) ?? undefined,
+    keywords: asOptionalStringArray(raw.keywords) ?? undefined,
+    interface: parseInterfaceBlock(raw.interface),
+    extensions: parseExtensions(raw.extensions),
+    capabilities: {
+      skills: skillNames.length ? skillNames : undefined,
+      mcpServers: mcpServers.length ? mcpServers : undefined,
+    },
+    components: {
+      mcpServers: mcpServers.map((s) => s.name),
+      skills: skillNames,
+      workflows: workflowNames,
+    },
+    permissions: [],
+    engines: { duya: '>=0.1.0' },
+  };
+}
+
+// ----------------------------------------------------------------------------
 // Public API
 // ----------------------------------------------------------------------------
 
@@ -453,6 +546,11 @@ export function readPluginManifest(pluginRoot: string): PluginManifest {
     const raw = JSON.parse(fs.readFileSync(rootPath, 'utf8')) as unknown;
     if (!isObject(raw)) {
       throw new Error('Invalid plugin manifest root');
+    }
+    // Standard Agent Plugins package (root `plugin.json` + canonical
+    // `$schema`) → disk-driven reader. Otherwise the legacy v1/v2 path.
+    if (raw.$schema === AGENT_PLUGINS_PLUGIN_SCHEMA) {
+      return readAgentPluginsManifest(pluginRoot, rootPath);
     }
     return parseLegacyV1V2Manifest(raw);
   }

@@ -36,25 +36,18 @@ export default defineConfig({
       'zustand/middleware',
       'clsx',
       'tailwind-merge',
-      'es-toolkit',
       'framer-motion',
       'antd',
-      '@ant-design/icons',
       '@tabler/icons-react',
-      '@lobehub/ui',
       'react-markdown',
       'remark-gfm',
       'react-syntax-highlighter',
       'react-grid-layout',
       'streamdown',
-      '@streamdown/cjk',
-      '@streamdown/math',
-      '@streamdown/mermaid',
       'html2canvas',
       '@xterm/xterm',
       '@xterm/addon-fit',
       '@xterm/addon-web-links',
-      'use-stick-to-bottom',
     ],
     // `node-pty` and `better-sqlite3` are native and only used in the
     // Electron main process — never scan them in the renderer graph.
@@ -76,9 +69,7 @@ export default defineConfig({
           // UI component libraries
           if (
             id.includes('node_modules/antd') ||
-            id.includes('node_modules/@lobehub/ui') ||
-            id.includes('node_modules/@phosphor-icons/react') ||
-            id.includes('node_modules/lucide-react')
+            id.includes('node_modules/@phosphor-icons/react')
           ) {
             return 'vendor-ui';
           }
@@ -99,10 +90,7 @@ export default defineConfig({
             return 'vendor-state';
           }
           // Streamdown and plugins
-          if (
-            id.includes('node_modules/streamdown') ||
-            id.includes('node_modules/@streamdown/')
-          ) {
+          if (id.includes('node_modules/streamdown')) {
             return 'vendor-streamdown';
           }
         },

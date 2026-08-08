@@ -201,9 +201,9 @@ export function registerProviderIpcHandlers(opts?: {
     return store.upsertModelCapability(capability);
   });
 
-  // --- list model capabilities by provider (Phase 3) ---
+  // --- list model capabilities by provider (Phase 3; merged baseline + DB overrides) ---
   ipcMain.handle('provider:listModelCapabilities', (_event, payload: { providerId: string }) => {
-    return store.listModelCapabilities(payload?.providerId);
+    return store.listModelCapabilitiesMerged(payload?.providerId);
   });
 
   // --- get a single capability record (Phase 3) ---

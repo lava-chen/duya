@@ -98,7 +98,7 @@ export interface PluginManifest {
     skills?: string[];
     mcpServers?: Array<{
       name: string;
-      transport?: 'stdio' | 'streamable-http';
+      transport?: 'stdio' | 'streamable-http' | 'sse';
       command?: string;
       args?: string[];
       env?: Record<string, string>;
@@ -143,6 +143,12 @@ export interface PluginManifest {
     url?: string;
     verified?: boolean;
   };
+  /**
+   * Agent Plugins 1.0.0 — client-specific manifest data keyed by
+   * reverse-domain namespace. Passed through without runtime semantics.
+   * Each namespace value is an object (spec `additionalProperties`).
+   */
+  extensions?: Record<string, Record<string, unknown>>;
   permissions: PluginPermissionRequest[];
   setup?: Array<{
     id: string;

@@ -122,23 +122,24 @@ export class PluginManager {
   }
 
   /**
-   * Merge a (possibly minimal) registry entry into a full `PluginViewItem`.
+   * Merge a minimal registry entry into a full `PluginViewItem`.
    *
    * Plan 334 decision 11: config persists only the user intent field
-   * (`enabled`); everything else must be derived. So this method fills any
-   * missing field from the best available source, in priority order:
+   * (`enabled`); everything else is derived. This single merge entry point
+   * fills every field from the best available source, in priority order:
    *
    *  - `name`/`version`/`source`/`trustLevel`  -> marketplace catalog entry
-   *  - `installPath`                           -> catalog `builtinCacheDir`, else resolved installed symlink
+   *  - `marketplace`/`autoUpdate`              -> derived from entry key / default
+   *  - `installPath`                           -> entry, else catalog `builtinCacheDir`, else resolved installed symlink
    *  - `dataPath`                              -> `plugins-data/<id>` (derived from store layout)
    *  - `grantedPermissions`                    -> catalog manifest permissions
-   *  - `setupState`                            -> recomputed from manifest + setup store
+   *  - `setupState`                            -> recomputed from manifest + setup store (SQLite `plugin_setup_values`)
    *  - `health`                                -> derived from `enabled`/`setupState`
    *  - `capabilityKinds`                       -> catalog manifest
    *
-   * Fields already present on the persisted entry are kept as-is (so today's
-   * full `registry.json` round-trips unchanged; the derivation only kicks in
-   * once config shrinks to `enabled`-only).
+   * Because the persisted entry now carries only `enabled` (plus `id` and
+   * `marketplace` parsed from the composite key), the derived sources win
+   * over the entry for every field that config no longer stores.
    */
   private hydrateViewItem(entry: PluginRegistryEntry): PluginViewItem {
     const catalogEntry = getPluginCatalogEntry(entry.id);
@@ -151,23 +152,25 @@ export class PluginManager {
       }
     }
 
-    const name = entry.name ?? catalogEntry?.name ?? entry.id;
-    const version = entry.version ?? catalogEntry?.version ?? '0.1.0';
-    const source = entry.source ?? catalogEntry?.source ?? 'local';
-    const trustLevel = entry.trustLevel ?? catalogEntry?.trustLevel ?? 'local';
+    const name = catalogEntry?.name ?? entry.name ?? entry.id;
+    const version = catalogEntry?.version ?? entry.version ?? '0.1.0';
+    const source = catalogEntry?.source ?? entry.source ?? 'local';
+    const trustLevel = catalogEntry?.trustLevel ?? entry.trustLevel ?? 'local';
     const scope = entry.scope ?? 'user';
+    const marketplace = entry.marketplace || catalogEntry?.source || 'builtin';
+    const autoUpdate = entry.autoUpdate ?? false;
 
     const installPath =
-      entry.installPath ??
-      catalogEntry?.builtinCacheDir ??
-      resolveInstalledSymlink(entry.id) ??
+      entry.installPath ||
+      catalogEntry?.builtinCacheDir ||
+      resolveInstalledSymlink(entry.id) ||
       '';
-    const dataPath = entry.dataPath ?? path.join(this.store.getPaths().dataDir, entry.id);
+    const dataPath = entry.dataPath || path.join(this.store.getPaths().dataDir, entry.id);
 
     const grantedPermissions =
-      entry.grantedPermissions ??
-      manifest?.permissions ??
-      [];
+      entry.grantedPermissions && entry.grantedPermissions.length > 0
+        ? entry.grantedPermissions
+        : manifest?.permissions ?? [];
 
     const setupState = entry.setupState ?? (manifest ? this.computeSetupState(entry.id, manifest) : 'complete');
 
@@ -184,6 +187,8 @@ export class PluginManager {
       source,
       trustLevel,
       scope,
+      marketplace,
+      autoUpdate,
       installPath,
       dataPath,
       grantedPermissions,
@@ -565,10 +570,16 @@ export class PluginManager {
         return { removed: false };
       }
 
-      removeDirSafe(removed.installPath);
+      // Plan 334 decision 11 — config stores only `enabled`, so the removed
+      // entry no longer carries the on-disk paths. Re-derive them from the
+      // cache layout (installed symlink) and the data layout.
+      const installPath = removed.installPath || resolveInstalledSymlink(pluginId) || '';
+      const dataPath = removed.dataPath || path.join(this.store.getPaths().dataDir, pluginId);
+
+      removeDirSafe(installPath);
       removeInstalledSymlink(pluginId);
       if (deleteData) {
-        removeDirSafe(removed.dataPath);
+        removeDirSafe(dataPath);
         // Also purge stored setup values so a reinstall does not resurrect
         // stale secrets from a previous install of the same plugin id.
         try {

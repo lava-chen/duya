@@ -47,9 +47,18 @@ export function emitGatewayConfigChanged(source: string): void {
 
 /**
  * 判断一个 settings key 是否会影响 gateway 启动配置。
+ *
+ * 支持两种 key 形态：
+ *  - ConfigStore 点路径（收敛后）：`channels.*`、`gateway_proxy.*`。
+ *  - 旧 SQLite settings 键（旧写入路径 db:setting:setJson 仍可能触发 reload）。
+ *
  * 用在 db:setting:setJson 这种通用写入 handler 里，避免无关 key 也触发 reload。
  */
 export function isGatewayConfigKey(key: string): boolean {
+  // ConfigStore 点路径（Plan 334 收敛后）
+  if (key === 'channels' || key.startsWith('channels.')) return true;
+  if (key === 'gateway_proxy' || key.startsWith('gateway_proxy.')) return true;
+  // 旧 SQLite settings 键（保留以防旧写入路径 trigger reload）
   if (key === 'bridge_auto_start') return true;
   if (key === 'gatewayModel') return true;
   if (key.startsWith('bridge_')) return true;            // bridge_telegram_enabled, bridge_qq_app_id, ...

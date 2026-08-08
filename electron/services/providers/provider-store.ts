@@ -50,7 +50,10 @@ import type { ApiProvider, LlmProvider, ModelCapability, ProviderRuntimeConfig, 
 import {
   toRuntimeConfig,
   validateRuntimeConfig,
+  allProviderModels,
 } from '@duya/ai';
+import type { ApiFormat, Model } from '@duya/ai';
+import { ModelCatalogStore } from './model-catalog-store';
 import { modelSyncService } from '../../../src/lib/providers/models/ModelSyncService';
 import { providerHealthService } from '../../../src/lib/providers/health/ProviderHealthService';
 import { findPresetByKey } from '../../../src/lib/providers/catalog';
@@ -113,6 +116,9 @@ export class NoopCapabilityStore implements CapabilityStore {
 export class ProviderStore {
   private reader: ProviderStoreReader;
   private capabilityStore: CapabilityStore;
+  /** DB-backed override layer (Plan 334 Phase 4). Wraps `capabilityStore`
+   *  and enforces that only `user` / `models-api` overrides are written. */
+  private catalogStore: ModelCatalogStore;
   private cache: Map<string, LlmProvider> = new Map();
   /**
    * @deprecated The single-active concept is gone. Use `defaultId` instead.
@@ -174,6 +180,10 @@ export class ProviderStore {
         this.capabilityStore = new NoopCapabilityStore();
       }
     }
+    this.catalogStore =
+      this.capabilityStore instanceof ModelCatalogStore
+        ? this.capabilityStore
+        : new ModelCatalogStore(this.capabilityStore);
   }
 
   // ===========================================================================
@@ -409,7 +419,10 @@ export class ProviderStore {
     if (!modelId) {
       return { error: 'modelId required', code: 'runtime.missingModel' };
     }
-    const cfg = toRuntimeConfig(active, { modelId, capabilities });
+    // Plan 334 Phase 4: if the caller did not pass capabilities, pull the
+    // DB override row so user toggles feed into the runtime config.
+    const resolved = capabilities ?? this.catalogStore.getOverrides(active.id, modelId);
+    const cfg = toRuntimeConfig(active, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
       return {
@@ -433,7 +446,10 @@ export class ProviderStore {
     const p = this.getLlmProvider(providerId);
     if (!p) return { error: `provider ${providerId} not found`, code: 'provider.notFound' };
     if (!modelId) return { error: 'modelId required', code: 'runtime.missingModel' };
-    const cfg = toRuntimeConfig(p, { modelId, capabilities });
+    // Plan 334 Phase 4: fall back to the DB override row when the caller
+    // did not pass capabilities explicitly.
+    const resolved = capabilities ?? this.catalogStore.getOverrides(providerId, modelId);
+    const cfg = toRuntimeConfig(p, { modelId, capabilities: resolved });
     const v = validateRuntimeConfig(cfg);
     if (!v.ok) {
       return {
@@ -511,6 +527,19 @@ export class ProviderStore {
       return { ok: false, models: [], source: 'error', message: 'provider not found' };
     }
     const result = await modelSyncService.syncProviderModels(provider, presetKey);
+    // Plan 334 Phase 4: persist runtime-discovered models as `models-api`
+    // override rows so the DB holds the user/runtime-only override layer
+    // (never the built-in preset baseline). Skip when empty or no DB.
+    if (result.ok && result.models.length > 0) {
+      for (const m of result.models) {
+        this.catalogStore.upsertOverride({
+          ...m,
+          providerId,
+          source: 'models-api',
+          updatedAt: Date.now(),
+        });
+      }
+    }
     return {
       ok: result.ok,
       models: result.models,
@@ -534,12 +563,51 @@ export class ProviderStore {
   upsertModelCapability(
     capability: ModelCapability,
   ): { ok: true; capability: ModelCapability } {
-    const stored = this.capabilityStore.upsert(capability);
+    // Route through the override layer so a `preset` source is coerced to
+    // `user` (the built-in baseline lives in @duya/ai, never in the DB).
+    const stored = this.catalogStore.upsertOverride(capability);
     return { ok: true, capability: stored };
   }
 
   listModelCapabilities(providerId: string): ModelCapability[] {
     return this.capabilityStore.listByProvider(providerId);
+  }
+
+  /**
+   * Plan 334 Phase 4: merge the built-in baseline (from `@duya/ai`
+   * `allProviderModels`) with the DB override rows for a provider. DB
+   * rows (user / models-api) win over the built-in baseline on a per-model
+   * basis. The merged result is display-only — it is never persisted.
+   *
+   * The baseline is matched by `model.providerId === provider.id` first
+   * (built-in providers), falling back to a `apiFormat` match for custom
+   * providers that share a protocol with a built-in family.
+   */
+  listModelCapabilitiesMerged(providerId: string): ModelCapability[] {
+    this.ensureInitialized();
+    const provider = this.getLlmProvider(providerId);
+    const overrides = this.capabilityStore.listByProvider(providerId);
+    if (!provider) return overrides;
+
+    const apiFormat = provider.apiFormat;
+    let baselineModels = allProviderModels.filter(
+      (m) => m.providerId === provider.id,
+    );
+    if (baselineModels.length === 0) {
+      baselineModels = allProviderModels.filter((m) => m.api === apiFormat);
+    }
+
+    const merged = new Map<string, ModelCapability>();
+    for (const m of baselineModels) {
+      merged.set(m.id, modelToCapability(providerId, m, apiFormat));
+    }
+    // DB override rows win over the built-in baseline.
+    for (const o of overrides) {
+      merged.set(o.modelId, o);
+    }
+    return Array.from(merged.values()).sort((a, b) =>
+      a.modelId.localeCompare(b.modelId),
+    );
   }
 
   getModelCapability(
@@ -578,6 +646,42 @@ export class ProviderStore {
       logError('ProviderStore.persist failed', err);
     }
   }
+}
+
+/**
+ * Convert a built-in `@duya/ai` `Model` into a display-only
+ * `ModelCapability` row (source `preset`). Never persisted — it is only
+ * used to build the merged view in `listModelCapabilitiesMerged`.
+ */
+function modelToCapability(
+  providerId: string,
+  model: Model,
+  apiFormat: ApiFormat,
+): ModelCapability {
+  const c: ModelCapability = {
+    providerId,
+    modelId: model.id,
+    displayName: model.name,
+    contextWindow: model.contextWindow,
+    maxOutputTokens: model.maxTokens,
+    supportsVision: model.input.includes('image'),
+    supportsReasoning: model.reasoning,
+    source: 'preset',
+    updatedAt: 0,
+  };
+  if (model.cost) {
+    c.pricing = {
+      inputPerMillion: model.cost.input,
+      outputPerMillion: model.cost.output,
+      ...(model.cost.cacheRead != null
+        ? { cacheReadPerMillion: model.cost.cacheRead }
+        : {}),
+      ...(model.cost.cacheWrite != null
+        ? { cacheWritePerMillion: model.cost.cacheWrite }
+        : {}),
+    };
+  }
+  return c;
 }
 
 // =============================================================================
