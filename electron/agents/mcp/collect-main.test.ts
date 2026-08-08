@@ -5,9 +5,8 @@
 // readPluginManifest) are mocked so the tests run in isolation. The
 // pure transforms now live in @duya/plugin-core/src/mcp/collect.ts and
 // are exercised here against the shared engine (`buildMCPCandidates`
-// and friends). The main-process-specific pieces that remain in
-// collect-main.ts (`getMainLegacySettingsPath`, and the async
-// `collectMainMCPCandidates` accessor wrapper) are tested directly.
+// and friends). The main-process-specific async wrapper
+// `collectMainMCPCandidates` is tested directly.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
@@ -69,15 +68,11 @@ import {
   buildMCPCandidates,
   buildCandidatesFromPluginEntry,
   buildCandidatesFromSettingsEntries,
-  buildBundledLiteratureCandidate,
-  buildBundledLiteratureBundlePath,
-  readLegacyFileMcpServers,
   type MCPCollectorPluginEntry,
   type MCPCollectorSettingsItem,
   type MCPCollectorInput,
 } from '@duya/plugin-core/src/mcp/collect.js';
 import {
-  getMainLegacySettingsPath,
   collectMainMCPCandidates,
 } from './collect-main.js';
 
@@ -87,11 +82,6 @@ const mockedGetDatabase = vi.mocked(getDatabase);
 
 const emptyInput: MCPCollectorInput = {
   installedPlugins: [],
-  legacyFileItems: [],
-  agentSettingsMcpServers: [],
-  settingsKvMcpServers: [],
-  environment: {},
-  cwd: '/nonexistent/cwd',
 };
 
 // ============================================================================
@@ -163,261 +153,17 @@ describe('buildCandidatesFromSettingsEntries', () => {
     const items: MCPCollectorSettingsItem[] = [
       { name: 'search', command: 'node', args: [], allowedAgentIds: ['agent-a'] },
     ];
-    const result = buildCandidatesFromSettingsEntries('agentSettings', items);
+    const result = buildCandidatesFromSettingsEntries('tomlFile', items);
     expect(result).toHaveLength(1);
     expect(result[0].rawConfig.allowedAgentIds).toEqual(['agent-a']);
   });
 
-  it('preserves the sourceSubOrigin on every candidate', () => {
+  it('tags each candidate with the tomlFile sourceSubOrigin', () => {
     const items: MCPCollectorSettingsItem[] = [
       { name: 'a', command: 'node', args: [] },
     ];
-    const agent = buildCandidatesFromSettingsEntries('agentSettings', items);
-    const kv = buildCandidatesFromSettingsEntries('settingsKv', items);
-    const legacy = buildCandidatesFromSettingsEntries('legacyFile', items);
-    expect(agent.every((c) => c.sourceSubOrigin === 'agentSettings')).toBe(true);
-    expect(kv.every((c) => c.sourceSubOrigin === 'settingsKv')).toBe(true);
-    expect(legacy.every((c) => c.sourceSubOrigin === 'legacyFile')).toBe(true);
-  });
-});
-
-describe('buildBundledLiteratureCandidate', () => {
-  it('ALWAYS returns a candidate, even when the bundled script does not exist', () => {
-    const result = buildBundledLiteratureCandidate(
-      '/nonexistent/path/for/main/tests',
-      {},
-    );
-    expect(result).not.toBeNull();
-    expect(result!.source).toBe('bundled');
-    expect(result!.rawConfig.name).toBe('literature');
-    expect(result!.rawConfig.command).toBe(process.execPath);
-    expect(result!.rawConfig.args?.[0]).toContain('literature-mcp-server.js');
-    expect(result!.rawConfig.env?.ELECTRON_RUN_AS_NODE).toBe('1');
-  });
-
-  it('uses the packaged bundle path when isPackaged is true', () => {
-    const result = buildBundledLiteratureCandidate(
-      '/should/not/be/used', {}, true, '/resources',
-    );
-    expect(result.rawConfig.args?.[0]).toContain('resources');
-    expect(result.rawConfig.args?.[0]).toContain('agent-bundle');
-    expect(result.rawConfig.args?.[0]).toContain('literature-mcp-server.js');
-    expect(result.rawConfig.args?.[0]).not.toContain('should');
-  });
-
-  it('uses the dev bundle path when isPackaged is false', () => {
-    const result = buildBundledLiteratureCandidate(
-      '/repo', {}, false, '/resources',
-    );
-    expect(result.rawConfig.args?.[0]).toContain('repo');
-    expect(result.rawConfig.args?.[0]).toContain('packages');
-    expect(result.rawConfig.args?.[0]).toContain('agent');
-    expect(result.rawConfig.args?.[0]).toContain('bundle');
-    expect(result.rawConfig.args?.[0]).toContain('literature-mcp-server.js');
-  });
-});
-
-describe('buildBundledLiteratureBundlePath', () => {
-  it('returns packaged path when packaged with resourcesPath', () => {
-    const p = buildBundledLiteratureBundlePath('/cwd', true, '/resources');
-    expect(p).toContain('resources');
-    expect(p).toContain('agent-bundle');
-    expect(p).toContain('literature-mcp-server.js');
-    expect(p).not.toContain('cwd');
-  });
-
-  it('returns dev path when not packaged', () => {
-    const p = buildBundledLiteratureBundlePath('/cwd', false, '/resources');
-    expect(p).toContain('cwd');
-    expect(p).toContain('packages');
-    expect(p).toContain('agent');
-    expect(p).toContain('bundle');
-    expect(p).toContain('literature-mcp-server.js');
-  });
-
-  it('returns dev path when packaged but resourcesPath missing', () => {
-    const p = buildBundledLiteratureBundlePath('/cwd', true, undefined);
-    expect(p).toContain('cwd');
-    expect(p).toContain('packages');
-    expect(p).toContain('bundle');
-    expect(p).toContain('literature-mcp-server.js');
-  });
-});
-
-// ============================================================================
-// getMainLegacySettingsPath — signature contract
-// ============================================================================
-//
-// Signature: (duyaAppDataPath: string | undefined, env?: NodeJS.ProcessEnv) => string | null
-// First arg is the absolute app-data directory (typically
-// `app.getPath('userData')` in production; bootstrap mirrors it into
-// process.env.DUYA_APP_DATA_PATH). env is the fallback source.
-
-describe('getMainLegacySettingsPath', () => {
-  it('returns null when no duyaAppDataPath and no DUYA_APP_DATA_PATH env', () => {
-    expect(getMainLegacySettingsPath(undefined, {})).toBeNull();
-  });
-
-  it('uses the explicit duyaAppDataPath when provided', () => {
-    const p = getMainLegacySettingsPath('/app/data', {});
-    expect(p).toContain('app');
-    expect(p).toContain('data');
-    expect(p).toContain('settings.json');
-  });
-
-  it('falls back to DUYA_APP_DATA_PATH env when duyaAppDataPath is undefined', () => {
-    const p = getMainLegacySettingsPath(undefined, { DUYA_APP_DATA_PATH: '/env/path' });
-    expect(p).toContain('env');
-    expect(p).toContain('path');
-    expect(p).toContain('settings.json');
-  });
-
-  it('prefers duyaAppDataPath over env when both are present', () => {
-    const p = getMainLegacySettingsPath('/primary', { DUYA_APP_DATA_PATH: '/env/path' });
-    expect(p).toContain('primary');
-    expect(p).not.toContain('env');
-  });
-
-  it('defaults env to process.env when not provided', () => {
-    const prev = process.env.DUYA_APP_DATA_PATH;
-    process.env.DUYA_APP_DATA_PATH = '/from-process-env';
-    try {
-      const p = getMainLegacySettingsPath(undefined);
-      expect(p).toContain('from-process-env');
-    } finally {
-      if (prev === undefined) {
-        delete process.env.DUYA_APP_DATA_PATH;
-      } else {
-        process.env.DUYA_APP_DATA_PATH = prev;
-      }
-    }
-  });
-});
-
-// ============================================================================
-// readLegacyFileMcpServers — typed issues
-// ============================================================================
-
-describe('readLegacyFileMcpServers — file existence', () => {
-  it('returns no items and no issues when settingsPath is null', async () => {
-    const r = await readLegacyFileMcpServers(null);
-    expect(r.items).toEqual([]);
-    expect(r.issues).toEqual([]);
-  });
-
-  it('returns no items and no issues when the file does not exist (ENOENT)', async () => {
-    const r = await readLegacyFileMcpServers('/no/such/file.json');
-    expect(r.items).toEqual([]);
-    expect(r.issues).toEqual([]);
-  });
-});
-
-describe('readLegacyFileMcpServers — malformed JSON', () => {
-  it('emits a phase: discovery mcp-settings-invalid issue when the file is not valid JSON', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, 'this is not json');
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      const err = r.issues[0].error as { type: string; reason: string };
-      expect(err.type).toBe('mcp-settings-invalid');
-      expect(r.issues[0].phase).toBe('discovery');
-      expect(err.reason).toMatch(/not valid JSON/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits a mcp-settings-invalid issue when the root is not an object', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify(['not', 'an', 'object']));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits a mcp-settings-invalid issue when mcpServers is present but not an array', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify({ mcpServers: 'oops' }));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toHaveLength(1);
-      expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns no items and no issues when mcpServers is absent (not a failure)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(p, JSON.stringify({ unrelated: true }));
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toEqual([]);
-      expect(r.issues).toEqual([]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('readLegacyFileMcpServers — per-entry validation', () => {
-  it('returns the mcpServers array when the file is well-formed', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(
-        p,
-        JSON.stringify({
-          mcpServers: [
-            { name: 'main-legacy-lit', command: 'node', args: [] },
-            { name: 'main-legacy-search', command: 'node', args: ['./server.js'] },
-          ],
-        }),
-      );
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items).toHaveLength(2);
-      expect(r.issues).toEqual([]);
-      expect(r.items[0].name).toBe('main-legacy-lit');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('emits per-entry issues for invalid entries WITHOUT dropping valid ones', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
-    try {
-      const p = join(dir, 'settings.json');
-      writeFileSync(
-        p,
-        JSON.stringify({
-          mcpServers: [
-            { name: 'good', command: 'node', args: [] },
-            { name: '', command: 'node' },
-            { name: 'no-cmd' },
-            { name: 'good-2', command: 'node', args: [] },
-          ],
-        }),
-      );
-      const r = await readLegacyFileMcpServers(p);
-      expect(r.items.map((i) => i.name)).toEqual(['good', 'good-2']);
-      expect(r.issues).toHaveLength(2);
-      expect(r.issues[0].error.type).toBe('mcp-settings-invalid');
-      expect(r.issues[0].phase).toBe('discovery');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    const result = buildCandidatesFromSettingsEntries('tomlFile', items);
+    expect(result.every((c) => c.sourceSubOrigin === 'tomlFile')).toBe(true);
   });
 });
 
@@ -426,13 +172,13 @@ describe('readLegacyFileMcpServers — per-entry validation', () => {
 // ============================================================================
 
 describe('buildMCPCandidates (pure) — source coverage', () => {
-  it('returns MCPCollectionResult with bundled always present', () => {
-    const r = buildMCPCandidates({ ...emptyInput, cwd: '/nonexistent/cwd' });
-    expect(r.candidates.find((c) => c.source === 'bundled')).toBeDefined();
+  it('returns an empty candidate set from an empty input', () => {
+    const r = buildMCPCandidates(emptyInput);
+    expect(r.candidates).toEqual([]);
     expect(r.issues).toEqual([]);
   });
 
-  it('emits bundled + plugin + one user TOML source', () => {
+  it('emits plugin + one user TOML source', () => {
     const r = buildMCPCandidates({
       ...emptyInput,
       installedPlugins: [
@@ -444,7 +190,6 @@ describe('buildMCPCandidates (pure) — source coverage', () => {
       userTomlItems: [{ name: 'factory-mcp', command: 'node', args: [], enabled: true }],
     });
     const sources = new Set(r.candidates.map((c) => c.source));
-    expect(sources.has('bundled')).toBe(true);
     expect(sources.has('plugin')).toBe(true);
     expect(sources.has('settings')).toBe(true);
     const settingsSubOrigins = new Set(
@@ -465,41 +210,60 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
     mockedGetDatabase.mockReset();
   });
 
-  it('returns MCPCollectionResult with bundled even when all accessors fail', async () => {
-    mockedGetPluginManager.mockImplementation((() => { throw new Error('plugin-mgr-down'); }) as never);
-    mockedGetConfigManager.mockImplementation((() => { throw new Error('cm-down'); }) as never);
-    mockedGetDatabase.mockImplementation((() => { throw new Error('db-down'); }) as never);
-    const r = await collectMainMCPCandidates();
-    expect(r.candidates.filter((c) => c.source === 'bundled')).toHaveLength(1);
-    expect(r.issues).toEqual([]);
+  it('returns an empty MCPCollectionResult when all accessors fail', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
+    try {
+      const prev = process.env.DUYA_APP_DATA_PATH;
+      process.env.DUYA_APP_DATA_PATH = dir;
+      try {
+        mockedGetPluginManager.mockImplementation((() => { throw new Error('plugin-mgr-down'); }) as never);
+        const r = await collectMainMCPCandidates();
+        expect(r.candidates).toEqual([]);
+        expect(r.issues).toEqual([]);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.DUYA_APP_DATA_PATH;
+        } else {
+          process.env.DUYA_APP_DATA_PATH = prev;
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('does not re-import user MCPs from deprecated stores', async () => {
-    mockedGetPluginManager.mockReturnValue({
-      listInstalled: () => [
-        {
-          id: 'p1', name: 'P1', enabled: true, installPath: '/p1', dataPath: '/d1',
-          manifest: { capabilities: { mcpServers: [{ name: 'lit', command: 'node', args: [] }] } },
-        },
-      ],
-    } as unknown as ReturnType<typeof getPluginManager>);
-    mockedGetConfigManager.mockReturnValue({
-      getAgentSettings: () => ({ mcpServers: [{ name: 'agent-lit', command: 'node', args: [] }] }),
-    } as unknown as ReturnType<typeof getConfigManager>);
-    mockedGetDatabase.mockReturnValue({
-      prepare: () => ({
-        get: () => ({ value: JSON.stringify([{ name: 'kv-lit', command: 'node', args: [] }]) }),
-      }),
-    } as unknown as ReturnType<typeof getDatabase>);
-    const r = await collectMainMCPCandidates();
-    const sources = new Set(r.candidates.map((c) => c.source));
-    expect(sources.has('plugin')).toBe(true);
-    expect(sources.has('settings')).toBe(false);
-    expect(sources.has('bundled')).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
+    try {
+      const prev = process.env.DUYA_APP_DATA_PATH;
+      process.env.DUYA_APP_DATA_PATH = dir;
+      try {
+        mockedGetPluginManager.mockReturnValue({
+          listInstalled: () => [
+            {
+              id: 'p1', name: 'P1', enabled: true, installPath: '/p1', dataPath: '/d1',
+              manifest: { capabilities: { mcpServers: [{ name: 'lit', command: 'node', args: [] }] } },
+            },
+          ],
+        } as unknown as ReturnType<typeof getPluginManager>);
+        const r = await collectMainMCPCandidates();
+        const sources = new Set(r.candidates.map((c) => c.source));
+        expect(sources.has('plugin')).toBe(true);
+        expect(sources.has('settings')).toBe(false);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.DUYA_APP_DATA_PATH;
+        } else {
+          process.env.DUYA_APP_DATA_PATH = prev;
+        }
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('reads mcp.toml when DUYA_APP_DATA_PATH is set', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
+    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
     try {
       const settingsPath = join(dir, 'mcp.toml');
       writeFileSync(
@@ -510,16 +274,12 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
       process.env.DUYA_APP_DATA_PATH = dir;
       try {
         mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
-        mockedGetConfigManager.mockReturnValue({ getAgentSettings: () => ({}) } as unknown as ReturnType<typeof getConfigManager>);
-        mockedGetDatabase.mockReturnValue({
-          prepare: () => ({ get: () => undefined }),
-        } as unknown as ReturnType<typeof getDatabase>);
         const r = await collectMainMCPCandidates();
-        const legacy = r.candidates.find(
+        const fromToml = r.candidates.find(
           (c) => c.source === 'settings' && c.sourceSubOrigin === 'tomlFile',
         );
-        expect(legacy).toBeDefined();
-        expect(legacy!.rawConfig.name).toBe('factory-from-disk');
+        expect(fromToml).toBeDefined();
+        expect(fromToml!.rawConfig.name).toBe('factory-from-disk');
       } finally {
         if (prev === undefined) {
           delete process.env.DUYA_APP_DATA_PATH;
@@ -533,7 +293,7 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
   });
 
   it('emits a mcp-settings-invalid issue when mcp.toml is malformed', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-legacy-'));
+    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
     try {
       const settingsPath = join(dir, 'mcp.toml');
       writeFileSync(settingsPath, 'this is not toml = [');
@@ -541,10 +301,6 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
       process.env.DUYA_APP_DATA_PATH = dir;
       try {
         mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
-        mockedGetConfigManager.mockReturnValue({ getAgentSettings: () => ({}) } as unknown as ReturnType<typeof getConfigManager>);
-        mockedGetDatabase.mockReturnValue({
-          prepare: () => ({ get: () => undefined }),
-        } as unknown as ReturnType<typeof getDatabase>);
         const r = await collectMainMCPCandidates();
         const settingsInvalid = r.issues.filter((i) => i.error.type === 'mcp-settings-invalid');
         expect(settingsInvalid.length).toBeGreaterThan(0);
@@ -559,26 +315,5 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it('collects bundled literature AND official plugin literature (engine applies fallback)', async () => {
-    mockedGetPluginManager.mockReturnValue({
-      listInstalled: () => [
-        {
-          id: 'com.duya.literature', name: 'Literature Plugin',
-          enabled: true, installPath: '/plugins/lit', dataPath: '/data/lit',
-          manifest: { capabilities: { mcpServers: [{ name: 'literature', command: 'node', args: [] }] } },
-        },
-      ],
-    } as unknown as ReturnType<typeof getPluginManager>);
-    mockedGetConfigManager.mockReturnValue({ getAgentSettings: () => ({}) } as unknown as ReturnType<typeof getConfigManager>);
-    mockedGetDatabase.mockReturnValue({
-      prepare: () => ({ get: () => undefined }),
-    } as unknown as ReturnType<typeof getDatabase>);
-    const r = await collectMainMCPCandidates();
-    const bundled = r.candidates.find((c) => c.source === 'bundled' && c.rawConfig.name === 'literature');
-    const plugin = r.candidates.find((c) => c.source === 'plugin' && c.rawConfig.name === 'literature');
-    expect(bundled).toBeDefined();
-    expect(plugin).toBeDefined();
   });
 });

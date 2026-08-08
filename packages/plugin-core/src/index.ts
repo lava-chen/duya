@@ -82,16 +82,14 @@ export {
   //   import { parseUserMcpToml } from '@duya/plugin-core/src/mcp/user-config'
 } from './mcp';
 // MCP collector input types — type-only re-export. The FUNCTIONS
-// (buildMCPCandidates, readLegacyFileMcpServers, etc.) live in
-// './mcp/collect' which imports Node builtins ('fs', 'path') and are
-// therefore NOT re-exported here (same policy as './mcp/resolve').
-// Node-side consumers import them directly:
+// (buildMCPCandidates, etc.) live in './mcp/collect' which imports Node
+// builtins ('fs', 'path') and are therefore NOT re-exported here (same
+// policy as './mcp/resolve'). Node-side consumers import them directly:
 //   import { buildMCPCandidates } from '@duya/plugin-core/src/mcp/collect'
 export type {
   MCPCollectorSettingsItem,
   MCPCollectorPluginEntry,
   MCPCollectorInput,
-  ReadLegacyResult,
 } from './mcp/collect';
 
 export type {

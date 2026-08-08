@@ -25,8 +25,6 @@
 // legacy settings.json reader, assembly) all live in
 // @duya/plugin-core/src/mcp/collect.ts. This module only fetches data.
 
-import { join } from 'path';
-
 import { getLogger } from '../../logging/logger.js';
 import { getPluginManager } from '../../plugins/PluginManager.js';
 import { readPluginManifest } from '../../plugins/manifest.js';
@@ -45,44 +43,6 @@ import {
   type MCPIssue,
   type MCPSourceContext,
 } from '@duya/plugin-core';
-
-// ============================================================================
-// Legacy settings.json PATH (main side, no agent runtime import)
-// ============================================================================
-
-/**
- * Compute the path to the legacy on-disk `settings.json` for the main
- * process. Mirrors the worker-side `getSettingsPath()` in
- * `packages/agent/src/mcp/config.ts` but is a self-contained
- * implementation in main — no import from `@duya/agent`.
- *
- * Signature: `(duyaAppDataPath?, env?) => string | null`
- *
- * - `duyaAppDataPath` is the absolute directory the main process
- *   uses for app data. In the production main process this is
- *   `app.getPath('userData')`, which the bootstrap script mirrors
- *   into `process.env.DUYA_APP_DATA_PATH` (so this module does not
- *   need to import `electron`). When provided, it is the source of
- *   truth and the function returns `<duyaAppDataPath>/settings.json`.
- * - `env` defaults to `process.env` and is used as a fallback to look
- *   for `DUYA_APP_DATA_PATH` when the first argument is undefined.
- *
- * Returns the absolute path to `settings.json`, or `null` when no
- * app data directory is resolvable.
- */
-export function getMainLegacySettingsPath(
-  duyaAppDataPath: string | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  if (duyaAppDataPath) {
-    return join(duyaAppDataPath, 'settings.json');
-  }
-  const fallback = env.DUYA_APP_DATA_PATH;
-  if (fallback) {
-    return join(fallback, 'settings.json');
-  }
-  return null;
-}
 
 // ============================================================================
 // Issue factory for source-read problems (Phase 1B contract)
@@ -121,12 +81,7 @@ export async function collectMainMCPCandidates(): Promise<MCPCollectionResult> {
 
   const input: MCPCollectorInput = {
     installedPlugins: [],
-    legacyFileItems: [],
-    agentSettingsMcpServers: [],
-    settingsKvMcpServers: [],
     userTomlItems: [],
-    environment: { ...process.env } as Record<string, string>,
-    cwd: process.cwd(),
   };
 
   // 1. Plugin manager. The main-process plugin manager returns
