@@ -21,10 +21,27 @@ import { isDev } from '../core/bootstrap';
 import { getMainWindow } from '../core/window-manager';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
-import { getConfigManager } from '../config/manager';
+import { getConfigStore } from '../config/store-instance';
 import { isHttpUrl } from './url-safety';
 export { isHttpUrl } from './url-safety';
 import { getNoProjectWorkspace } from '../automation/workspace';
+
+/** Shape of the `auxiliary.vision` config section exposed via the vision IPC. */
+interface VisionSettings {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  enabled: boolean;
+}
+
+const DEFAULT_VISION_SETTINGS: VisionSettings = {
+  provider: '',
+  model: '',
+  baseUrl: '',
+  apiKey: '',
+  enabled: false,
+};
 
 export function registerSystemHandlers(): void {
   // Public predicate — kept exported for unit tests.
@@ -367,8 +384,7 @@ export function registerSystemHandlers(): void {
 
   // Vision settings handlers
   ipcMain.handle('vision:get', async () => {
-    const configManager = getConfigManager();
-    const settings = configManager.getVisionSettings();
+    const settings = (getConfigStore().getByPath('auxiliary.vision') ?? DEFAULT_VISION_SETTINGS) as VisionSettings;
     return {
       provider: settings.provider,
       model: settings.model,
@@ -379,8 +395,8 @@ export function registerSystemHandlers(): void {
   });
 
   ipcMain.handle('vision:set', async (_event, data: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) => {
-    const configManager = getConfigManager();
-    const currentSettings = configManager.getVisionSettings();
+    const store = getConfigStore();
+    const currentSettings = (store.getByPath('auxiliary.vision') ?? DEFAULT_VISION_SETTINGS) as VisionSettings;
     const newSettings = {
       ...currentSettings,
       provider: data.provider ?? currentSettings.provider,
@@ -389,7 +405,7 @@ export function registerSystemHandlers(): void {
       apiKey: data.apiKey ?? currentSettings.apiKey,
       enabled: data.enabled ?? currentSettings.enabled,
     };
-    configManager.setConfig('visionSettings', newSettings);
+    store.set('auxiliary.vision', newSettings);
   });
 
   // Session management handlers

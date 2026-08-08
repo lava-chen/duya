@@ -7,7 +7,10 @@
 
 import { randomUUID } from 'crypto';
 import { getDatabase } from '../ipc/db-handlers';
-import { getConfigManager, type ApiProvider } from '../config/manager';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import { getConfigStore } from '../config/store-instance';
+import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
+import type { ApiProvider } from '../config/provider-types';
 import { getAutomationScheduler } from '../automation/Scheduler.js';
 import { getLogger, LogComponent } from '../logging/logger';
 import { testProviderConnection } from '../ipc/net-handlers';
@@ -149,8 +152,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       let defaultModel: string | undefined;
 
       if (p.provider_id) {
-        const configManager = getConfigManager();
-        const provider = configManager.getAllProviders()[p.provider_id as string];
+        const providerLlm = getProviderStore().getLlmProvider(p.provider_id as string);
+        const provider = providerLlm ? toLegacyApiProvider(providerLlm) : undefined;
         if (provider) {
           providerType = provider.providerType;
           if (provider.options) {
@@ -746,48 +749,46 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'config:provider:getAll': {
-      const cm = getConfigManager();
-      return cm.getAllProviders();
+      return Object.fromEntries(
+        getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]),
+      );
     }
 
     case 'config:provider:get': {
-      const cm = getConfigManager();
       const id = p.id as string;
       if (!id) return null;
-      return cm.getAllProviders()[id] || null;
+      const llm = getProviderStore().getLlmProvider(id);
+      return llm ? toLegacyApiProvider(llm) : null;
     }
 
     case 'config:provider:getActive': {
-      const cm = getConfigManager();
-      return cm.getActiveProvider() || null;
+      const activeLlm = getProviderStore().getDefaultLlmProvider();
+      return activeLlm ? toLegacyApiProvider(activeLlm) : null;
     }
 
     case 'config:provider:upsert': {
-      const cm = getConfigManager();
-      cm.upsertProvider(p as unknown as ApiProvider);
+      getProviderStore().upsertLlmProvider(migrateLegacyApiProvider(p as unknown as ApiProvider));
       return { ok: true };
     }
 
     case 'config:provider:delete': {
-      const cm = getConfigManager();
-      const ok = cm.deleteProvider(p.id as string);
+      const ok = getProviderStore().deleteLlmProvider(p.id as string);
       return { ok };
     }
 
     case 'config:provider:activate': {
-      const cm = getConfigManager();
-      const ok = cm.activateProvider(p.id as string);
+      const ok = getProviderStore().setDefaultLlmProvider(p.id as string);
       return { ok };
     }
 
     case 'config:agent:getSettings': {
-      const cm = getConfigManager();
-      const settings = cm.getAgentSettings();
+      const settings = getConfigStore().getByPath('agent') as Record<string, unknown>;
 
       // If defaultModel is not set, resolve from active provider so duya_info
       // always reports the model that will actually be used.
       if (!settings.defaultModel || settings.defaultModel === '') {
-        const activeProvider = cm.getActiveProvider();
+        const activeLlm = getProviderStore().getDefaultLlmProvider();
+        const activeProvider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
         if (activeProvider) {
           const resolvedModel = getDefaultModelForProvider(
             activeProvider.providerType,
@@ -803,21 +804,18 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'config:agent:setSettings': {
-      const cm = getConfigManager();
-      const current = cm.getAgentSettings();
+      const current = getConfigStore().getByPath('agent') as Record<string, unknown>;
       const merged = { ...current, ...p as Record<string, unknown> };
-      cm.setConfig('agentSettings', merged, 'agent');
+      getConfigStore().set('agent', merged);
       return { ok: true };
     }
 
     case 'config:vision:get': {
-      const cm = getConfigManager();
-      return cm.getVisionSettings();
+      return getConfigStore().getByPath('auxiliary.vision');
     }
 
     case 'config:vision:set': {
-      const cm = getConfigManager();
-      const current = cm.getVisionSettings();
+      const current = getConfigStore().getByPath('auxiliary.vision') as Record<string, unknown>;
       const pObj = p as Record<string, unknown>;
       const merged = {
         ...current,
@@ -825,18 +823,16 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         baseUrl: (pObj.baseUrl || pObj.baseURL) ?? current.baseUrl,
       };
       delete merged.baseURL;
-      cm.setConfig('visionSettings', merged, 'agent');
+      getConfigStore().set('auxiliary.vision', merged);
       return { ok: true };
     }
 
     case 'config:outputStyles:get': {
-      const cm = getConfigManager();
-      return cm.getOutputStyles();
+      return getConfigStore().getByPath('auxiliary.output_styles');
     }
 
     case 'config:outputStyles:set': {
-      const cm = getConfigManager();
-      const styles = cm.getOutputStyles();
+      const styles = getConfigStore().getByPath('auxiliary.output_styles') as Record<string, Record<string, unknown>>;
       const styleId = p.styleId as string;
       if (!styles[styleId]) {
         throw new Error(`Output style not found: ${styleId}`);
@@ -847,8 +843,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
           (updated as Record<string, unknown>)[key] = (p as Record<string, unknown>)[key];
         }
       }
-      styles[styleId] = updated as typeof styles[string];
-      cm.setConfig('outputStyles', styles, 'agent');
+      styles[styleId] = updated;
+      getConfigStore().set('auxiliary.output_styles', styles);
       return { ok: true, styleId };
     }
 
@@ -869,10 +865,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // ==================== Health check actions ====================
     case 'health:testProvider': {
       const providerId = p.providerId as string | undefined;
-      const cm = getConfigManager();
 
       if (providerId) {
-        const provider = cm.getAllProviders()[providerId];
+        const llm = getProviderStore().getLlmProvider(providerId);
+        const provider = llm ? toLegacyApiProvider(llm) : undefined;
         if (!provider) {
           throw new Error(`Provider not found: ${providerId}`);
         }
@@ -883,7 +879,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         });
       }
 
-      const activeProvider = cm.getActiveProvider();
+      const activeLlm = getProviderStore().getDefaultLlmProvider();
+      const activeProvider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
       if (activeProvider) {
         return await testProviderConnection({
           provider_type: activeProvider.providerType,

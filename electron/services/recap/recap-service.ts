@@ -1,6 +1,5 @@
 import { BrowserWindow } from 'electron';
 import type BetterSqlite3 from 'better-sqlite3';
-import type { ConfigManager } from '../../config/manager';
 import type { SessionManager } from '../../agents/session-manager';
 import { getCoreStoresOrNull } from '../../db/core-connection';
 import { storedEventsToIpcMessages, type MessageRow } from '../../ipc/core-db-adapters';
@@ -30,7 +29,6 @@ export class RecapService {
 
   constructor(
     private getDb: () => BetterSqlite3 | null,
-    private getConfigManager: () => ConfigManager,
     private getSessionManager: () => SessionManager,
   ) {}
 
@@ -185,8 +183,7 @@ export class RecapService {
       return null;
     }
 
-    const configManager = this.getConfigManager();
-    const provider = configManager.getActiveProvider();
+    const provider = getProviderStore().getDefaultLlmProvider();
     if (!provider) {
       return null;
     }

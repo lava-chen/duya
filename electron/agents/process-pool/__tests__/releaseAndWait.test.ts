@@ -13,11 +13,18 @@ const mocks = vi.hoisted(() => ({
     error: vi.fn(),
   },
   killProcessTree: vi.fn().mockResolvedValue(undefined),
-  configManager: {
-    getConfig: vi.fn().mockReturnValue({ securityBypassSkills: [] }),
-    getAllProviders: vi.fn().mockReturnValue({}),
-    getDefaultProvider: vi.fn().mockReturnValue(null),
-    onConfigChange: vi.fn().mockReturnValue(() => {}),
+  configStore: {
+    getByPath: vi.fn().mockImplementation((key: string) => {
+      if (key === 'model.provider') return null;
+      if (key === 'agent.security_bypass_skills') return [];
+      return undefined;
+    }),
+    subscribe: vi.fn().mockReturnValue(() => {}),
+  },
+  providerStore: {
+    listLlmProviders: vi.fn().mockReturnValue([]),
+    getLlmProvider: vi.fn().mockReturnValue(undefined),
+    getDefaultLlmProvider: vi.fn().mockReturnValue(null),
   },
   performanceMonitor: {
     recordProcessStart: vi.fn(),
@@ -35,9 +42,12 @@ vi.mock('../../../logging/logger', () => ({
   },
 }));
 
-vi.mock('../../../config/manager', () => ({
-  getConfigManager: () => mocks.configManager,
-  toLLMProvider: vi.fn(),
+vi.mock('../../../config/store-instance', () => ({
+  getConfigStore: () => mocks.configStore,
+}));
+
+vi.mock('../../../services/providers/provider-store-electron', () => ({
+  getProviderStore: () => mocks.providerStore,
 }));
 
 vi.mock('../../../ipc/db-handlers', () => ({

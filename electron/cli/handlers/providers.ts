@@ -6,7 +6,8 @@
  */
 
 import * as http from 'http';
-import { getConfigManager } from '../../config/manager';
+import { getProviderStore } from '../../services/providers/provider-store-electron';
+import { toLegacyApiProvider } from '../../../src/lib/providers/legacy';
 import {
   toProviderListDTO,
   toProviderInfoDTO,
@@ -25,8 +26,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 
 export function handleListProviders(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const all = cm.getAllProviders();
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
     const list: ProviderListItem[] = toProviderListDTO(Object.values(all));
     sendJson(res, 200, { providers: list });
   } catch (err) {
@@ -41,8 +41,7 @@ export function handleListProviders(req: http.IncomingMessage, res: http.ServerR
 
 export function handleGetProvider(req: http.IncomingMessage, res: http.ServerResponse, id: string): void {
   try {
-    const cm = getConfigManager();
-    const all = cm.getAllProviders();
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
     const found = all[id];
     if (!found) {
       sendJson(res, 404, {
@@ -67,8 +66,8 @@ export function handleGetProvider(req: http.IncomingMessage, res: http.ServerRes
 
 export function handleGetActiveProvider(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const active = cm.getActiveProvider();
+    const act = getProviderStore().getDefaultLlmProvider();
+    const active = act ? toLegacyApiProvider(act) : undefined;
     if (!active) {
       sendJson(res, 200, { provider: null });
       return;

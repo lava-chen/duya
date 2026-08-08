@@ -50,7 +50,8 @@ import { promises as fs } from 'node:fs';
 import { existsSync, statSync, chmodSync } from 'node:fs';
 import { join, isAbsolute, resolve } from 'node:path';
 import { app } from 'electron';
-import { getConfigManager } from '../config/manager';
+import { getProviderStore } from '../services/providers/provider-store-electron';
+import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import { getLogger } from '../logging/logger';
 
 const COMPONENT = 'SecurityService' as const;
@@ -164,7 +165,7 @@ const checks: Check[] = [
     run(ctx) {
       const out: Finding[] = [];
       try {
-        const providers = getConfigManager().getAllProviders();
+        const providers = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
         for (const [id, p] of Object.entries(providers)) {
           if (!p.apiKey || placeholderKey(p.apiKey)) {
             out.push({
@@ -193,7 +194,7 @@ const checks: Check[] = [
     run() {
       const out: Finding[] = [];
       try {
-        const providers = getConfigManager().getAllProviders();
+        const providers = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
         for (const [id, p] of Object.entries(providers)) {
           if (isInsecureBaseUrl(p.baseUrl)) {
             out.push({

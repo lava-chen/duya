@@ -13,7 +13,6 @@ import * as http from 'http';
 import { homedir, platform as getPlatform, tmpdir } from 'os';
 import extractZip from 'extract-zip';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getConfigManager } from '../config/manager';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
 import { getConfigStore } from '../config/store-instance';
@@ -436,8 +435,7 @@ export function registerSkillsHandlers(): void {
       }
 
       // Load custom skills from configured skill_path
-      const configManager = getConfigManager();
-      const customSkillPath = configManager.getConfig().skill_path;
+      const customSkillPath = getConfigStore().getByPath('agent.skill_path') as string | undefined;
       if (customSkillPath && fs.existsSync(customSkillPath)) {
         const normalizedCustomPath = path.normalize(customSkillPath);
         const normalizedUserDir = path.normalize(userSkillsDir);
@@ -525,8 +523,7 @@ export function registerSkillsHandlers(): void {
   // Get security bypass list
   ipcMain.handle('skills:getSecurityBypass', async () => {
     try {
-      const configManager = getConfigManager();
-      const bypassSkills = configManager.getConfig().securityBypassSkills || [];
+      const bypassSkills = (getConfigStore().getByPath('agent.security_bypass_skills') as string[] | undefined) || [];
       return { success: true, skills: bypassSkills };
     } catch (error) {
       const logger = getLogger();
@@ -538,9 +535,7 @@ export function registerSkillsHandlers(): void {
   // Update security bypass list
   ipcMain.handle('skills:setSecurityBypass', async (_event, skillName: string, bypass: boolean) => {
     try {
-      const configManager = getConfigManager();
-      const config = configManager.getConfig();
-      const currentList = config.securityBypassSkills || [];
+      const currentList = (getConfigStore().getByPath('agent.security_bypass_skills') as string[] | undefined) || [];
 
       let newList: string[];
       if (bypass) {
@@ -552,7 +547,7 @@ export function registerSkillsHandlers(): void {
         newList = currentList.filter(s => s !== skillName);
       }
 
-      configManager.setConfig('securityBypassSkills', newList);
+      getConfigStore().set('agent.security_bypass_skills', newList);
       const logger = getLogger();
       logger.info(`Updated security bypass list: ${bypass ? 'added' : 'removed'} '${skillName}'`, undefined, LogComponent.Skills);
       return { success: true, skills: newList };

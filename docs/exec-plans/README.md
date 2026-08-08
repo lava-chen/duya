@@ -201,6 +201,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | Plan | Description | Completed |
 |------|-------------|-----------|
 | [203-provider-ui-interaction-architecture](./completed/203-provider-ui-interaction-architecture.md) | Provider UI 4-layer architecture — 不改 UX 减 1900 行 | — |
+| [334-config-toml-unification](./completed/334-config-toml-unification.md) | 配置收敛为单一 `~/.duya/config.toml` + `secrets.json`(0600)：旧源(settings.json/boot.json/mcp.toml/registry.json/known_marketplaces.json)迁移后全删；`ConfigManager` 类物理删除；模型兼容解析 DB 化(方案 ii) | 2026-08-08 |
 | [204-provider-card-redesign](./completed/204-provider-card-redesign.md) | Provider Card UX — `ProvidersSection` 1066→246 LoC | 2026-06-10 |
 | [205-provider-inline-edit-page](./completed/205-provider-inline-edit-page.md) | Provider inline edit page + two-step add flow | — |
 | [200-cli-surface-expansion](./completed/200-cli-surface-expansion.md) | CLI `update/backup/security` + polish existing commands | — |

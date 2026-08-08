@@ -11,7 +11,10 @@ import type { ChildProcess } from 'child_process';
 import { spawn } from 'child_process';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger.js';
-import { getConfigManager, toLLMProvider } from '../../config/manager.js';
+import { getProviderStore } from '../../services/providers/provider-store-electron.js';
+import { getConfigStore } from '../../config/store-instance.js';
+import { toLegacyApiProvider } from '../../../src/lib/providers/legacy.js';
+import { toLLMProvider } from '../../config/provider-types.js';
 import { getDatabase } from '../../ipc/db-handlers.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
@@ -65,11 +68,10 @@ export class AgentProcessPool {
   }
 
   private subscribeToProviderChanges(): void {
-    const configManager = getConfigManager();
     // L1: Only reinit sessions when provider configuration actually changes.
     // Other config changes (e.g. UI settings) should not trigger a full restart.
     this.lastProviderSnapshot = JSON.stringify(this.snapshotProviders());
-    this.unsubConfigChange = configManager.onConfigChange(() => {
+    this.unsubConfigChange = getConfigStore().subscribe(() => {
       const current = JSON.stringify(this.snapshotProviders());
       if (current === this.lastProviderSnapshot) {
         // Provider config unchanged — skip reinit
@@ -83,10 +85,9 @@ export class AgentProcessPool {
   }
 
   private snapshotProviders(): unknown {
-    const configManager = getConfigManager();
     return {
-      defaultProviderId: configManager.getConfig().defaultProviderId ?? null,
-      providers: configManager.getAllProviders(),
+      defaultProviderId: (getConfigStore().getByPath('model.provider') as string | undefined) ?? null,
+      providers: getProviderStore().listLlmProviders(),
     };
   }
 
@@ -184,8 +185,7 @@ export class AgentProcessPool {
 
   private async startProcess(sessionId: string): Promise<void> {
     const agentPath = getAgentProcessPath();
-    const configManager = getConfigManager();
-    const securityBypassSkills = configManager.getConfig().securityBypassSkills || [];
+    const securityBypassSkills = (getConfigStore().getByPath('agent.security_bypass_skills') as string[] | undefined) || [];
     const runtime = getAgentRuntimeCommand(sessionId, securityBypassSkills);
 
     return new Promise((resolve, reject) => {
@@ -597,7 +597,6 @@ export class AgentProcessPool {
   }
 
   private sendProviderInit(sessionId: string): void {
-    const configManager = getConfigManager();
     const db = getDatabase();
 
     let browserBackendMode: 'auto' | 'extension' | 'built-in' | 'human-like' = 'auto';
@@ -610,18 +609,19 @@ export class AgentProcessPool {
 
     const proc = this.running.get(sessionId);
     const pinnedId = proc?.providerId ?? null;
-    const pinned = pinnedId ? configManager.getAllProviders()[pinnedId] : undefined;
-    const target = pinned ?? configManager.getDefaultProvider();
-    if (!target) {
+    const pinned = pinnedId ? getProviderStore().getLlmProvider(pinnedId) : undefined;
+    const targetLlm = pinned ?? getProviderStore().getDefaultLlmProvider();
+    if (!targetLlm) {
       this.logger.warn(
         `sendProviderInit: no provider for session ${sessionId} ` +
-          `(pinnedId=${pinnedId}, defaultId=${configManager.getConfig().defaultProviderId ?? 'null'})`,
+          `(pinnedId=${pinnedId}, defaultId=${(getConfigStore().getByPath('model.provider') as string | undefined) ?? 'null'})`,
         undefined,
         LogComponent.AgentProcessPool,
       );
       return;
     }
 
+    const target = toLegacyApiProvider(targetLlm);
     const providerConfig = {
       apiKey: target.apiKey,
       baseURL: target.baseUrl,

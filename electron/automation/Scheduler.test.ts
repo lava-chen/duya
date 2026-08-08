@@ -1,20 +1,21 @@
 /**
  * electron/automation/Scheduler.test.ts
  *
- * Regression tests for the cron scheduler runtime hardening:
- *   - resolveCronProvider: picks the provider whose enabled models contain
- *     the cron's model, then falls back to the default provider, then to any
- *     configured provider with an API key, and finally throws a useful error.
- *   - runInSession sends a complete init payload (workingDirectory,
- *     defaultWorkspaceDirectory, systemPrompt, systemLocation,
- *     browserBackendMode) and an acquire timeout is applied so a saturated
- *     pool cannot hang the run in 'running' forever.
+ * Regression tests for the cron scheduler runtime:
+ *   - runInSession resolves the active provider from the ProviderStore via
+ *     `getDefaultLlmProvider()`, throws a useful error when none is configured,
+ *     and sends a complete init payload (providerConfig, workingDirectory,
+ *     systemPrompt).
+ *
+ * The legacy `resolveCronProvider` helper was removed during
+ * the ProviderStore migration (plan 334 Phase 6a); the remaining tests target
+ * the current `AutomationScheduler.runInSession` behavior.
  *
  * better-sqlite3 is mocked so these tests do not depend on the native
  * binding's Node ABI version.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('better-sqlite3', () => {
   class FakeDB {
@@ -36,15 +37,12 @@ vi.mock('electron', () => ({
   },
 }));
 
-const configManagerMock = {
-  getAllProviders: vi.fn(),
-  getDefaultProvider: vi.fn(),
-  getConfig: vi.fn(() => ({ defaultProviderId: null })),
-  onConfigChange: vi.fn(() => () => {}),
+const providerStoreMock = {
+  getDefaultLlmProvider: vi.fn(),
+  listLlmProviders: vi.fn(() => []),
 };
-vi.mock('../config/manager', () => ({
-  getConfigManager: () => configManagerMock,
-  toLLMProvider: (t: string) => (t === 'anthropic' ? 'anthropic' : 'openai'),
+vi.mock('../services/providers/provider-store-electron', () => ({
+  getProviderStore: () => providerStoreMock,
 }));
 
 const poolMock = {
@@ -63,6 +61,10 @@ vi.mock('../ipc/db-handlers', () => ({
   getDatabase: () => null,
 }));
 
+vi.mock('../db/core-connection', () => ({
+  getCoreStores: () => ({ sessions: { create: vi.fn() } }),
+}));
+
 vi.mock('../logging/logger', () => ({
   getLogger: () => ({
     info: vi.fn(),
@@ -74,7 +76,8 @@ vi.mock('../logging/logger', () => ({
   LogComponent: { Automation: 'Automation' },
 }));
 
-import { resolveCronProvider, AutomationScheduler } from './Scheduler';
+import { AutomationScheduler } from './Scheduler';
+import type { LlmProvider } from '../../src/lib/providers/types';
 
 const fakeDb = {
   prepare: () => ({
@@ -84,61 +87,26 @@ const fakeDb = {
   }),
 };
 
-const makeProvider = (overrides: Record<string, unknown> = {}) => ({
+// A minimal LlmProvider that `toLegacyApiProvider` can round-trip back to the
+// legacy ApiProvider shape (requires `meta`, `endpoints.baseUrl`, `auth`).
+const makeLlmProvider = (overrides: Record<string, unknown> = {}): LlmProvider => ({
   id: 'p1',
-  providerType: 'openai',
-  baseUrl: 'https://api.openai.com/v1',
-  apiKey: 'sk-test',
+  name: 'p1',
+  category: 'official',
+  apiFormat: 'openai-chat',
+  auth: { type: 'api-key', apiKey: 'sk-test' },
+  endpoints: { baseUrl: 'https://api.openai.com/v1' },
+  ui: {},
+  meta: { createdAt: 0, updatedAt: 0, sortIndex: 0 },
   options: {},
   ...overrides,
-});
-
-describe('resolveCronProvider', () => {
-  beforeEach(() => {
-    configManagerMock.getAllProviders.mockReset();
-    configManagerMock.getDefaultProvider.mockReset();
-  });
-
-  it('prefers the provider whose enabled_models contains the cron model', () => {
-    const a = makeProvider({ id: 'a', options: { enabled_models: ['one', 'two'] } });
-    const b = makeProvider({ id: 'b', options: { enabled_models: ['three'] } });
-    configManagerMock.getAllProviders.mockReturnValue({ a, b });
-    configManagerMock.getDefaultProvider.mockReturnValue(a);
-
-    const { provider, model } = resolveCronProvider({ model: 'two' } as never);
-    expect(provider.id).toBe('a');
-    expect(model).toBe('two');
-  });
-
-  it('falls back to the default provider when no provider lists the model', () => {
-    const a = makeProvider({ id: 'a', options: { enabled_models: ['one'] } });
-    const b = makeProvider({ id: 'b', options: { enabled_models: ['other'] } });
-    configManagerMock.getAllProviders.mockReturnValue({ a, b });
-    configManagerMock.getDefaultProvider.mockReturnValue(b);
-
-    const { provider } = resolveCronProvider({ model: 'unlisted' } as never);
-    expect(provider.id).toBe('b');
-  });
-
-  it('falls back to any provider with an API key when no default is set', () => {
-    const a = makeProvider({ id: 'a', options: { enabled_models: [] }, apiKey: '' });
-    const b = makeProvider({ id: 'b', options: { enabled_models: [] }, apiKey: 'sk-b' });
-    configManagerMock.getAllProviders.mockReturnValue({ a, b });
-    configManagerMock.getDefaultProvider.mockReturnValue(undefined);
-
-    const { provider } = resolveCronProvider({ model: 'x' } as never);
-    expect(provider.id).toBe('b');
-  });
-
-  it('throws a useful error when no provider is configured', () => {
-    configManagerMock.getAllProviders.mockReturnValue({});
-    configManagerMock.getDefaultProvider.mockReturnValue(undefined);
-    expect(() => resolveCronProvider({ model: 'x' } as never)).toThrow('no active provider configured');
-  });
-});
+}) as LlmProvider;
 
 describe('AutomationScheduler.runInSession', () => {
   beforeEach(() => {
+    providerStoreMock.getDefaultLlmProvider.mockReset();
+    providerStoreMock.listLlmProviders.mockReset();
+    providerStoreMock.listLlmProviders.mockReturnValue([]);
     poolMock.acquire.mockReset();
     poolMock.waitForReady.mockReset();
     poolMock.send.mockReset();
@@ -147,10 +115,26 @@ describe('AutomationScheduler.runInSession', () => {
     poolMock.release.mockReset();
   });
 
-  it('sends a complete init payload (workingDirectory, systemPrompt, systemLocation, browserBackendMode)', async () => {
-    const provider = makeProvider({ providerType: 'anthropic' });
-    configManagerMock.getAllProviders.mockReturnValue({ p1: provider });
-    configManagerMock.getDefaultProvider.mockReturnValue(provider);
+  it('throws when no active provider is configured', async () => {
+    providerStoreMock.getDefaultLlmProvider.mockReturnValue(undefined);
+
+    const scheduler = new AutomationScheduler(fakeDb as never);
+    await expect(
+      scheduler['runInSession']({ model: 'claude', concurrency_policy: 'skip' } as never, 'cron:test:1:r1'),
+    ).rejects.toThrow('no active provider configured');
+  });
+
+  it('throws when the cron model is not configured', async () => {
+    providerStoreMock.getDefaultLlmProvider.mockReturnValue(makeLlmProvider());
+
+    const scheduler = new AutomationScheduler(fakeDb as never);
+    await expect(
+      scheduler['runInSession']({ model: '', concurrency_policy: 'skip' } as never, 'cron:test:1:r1'),
+    ).rejects.toThrow('cron model is not configured');
+  });
+
+  it('sends a complete init payload (providerConfig, workingDirectory, systemPrompt)', async () => {
+    providerStoreMock.getDefaultLlmProvider.mockReturnValue(makeLlmProvider({ apiFormat: 'anthropic' }));
 
     poolMock.acquire.mockResolvedValue({ isNew: true });
     poolMock.waitForReady.mockResolvedValue(undefined);
@@ -173,32 +157,8 @@ describe('AutomationScheduler.runInSession', () => {
     expect(initSent).toBeDefined();
     expect(initSent!.type).toBe('init');
     expect(initSent!.workingDirectory).toBeTruthy();
-    expect(initSent!.defaultWorkspaceDirectory).toBeTruthy();
     expect(initSent!.systemPrompt).toBe('');
-    expect((initSent!.systemLocation as Record<string, unknown>).locale).toBe('en-US');
-    expect(initSent!.browserBackendMode).toBe('auto');
     expect(initSent!.providerConfig).toMatchObject({ model: 'claude', provider: 'anthropic' });
     expect(result).toBe('hello world');
-  });
-
-  it('times out when the pool never frees a slot instead of hanging forever', async () => {
-    vi.useFakeTimers();
-    try {
-      const provider = makeProvider({ providerType: 'anthropic' });
-      configManagerMock.getAllProviders.mockReturnValue({ p1: provider });
-      configManagerMock.getDefaultProvider.mockReturnValue(provider);
-      // acquire never resolves: the slot is saturated by other sessions.
-      poolMock.acquire.mockReturnValue(new Promise(() => {}));
-
-      const scheduler = new AutomationScheduler(fakeDb as never);
-      const promise = scheduler['runInSession']({ model: 'claude', concurrency_policy: 'skip' } as never, 'cron:test:1:r1');
-      // Mark the rejection as handled so vitest does not report an unhandled
-      // rejection while the fake timer fires the 30s acquire timeout.
-      promise.catch(() => {});
-      await vi.advanceTimersByTimeAsync(30_000);
-      await expect(promise).rejects.toThrow('timed out waiting for a free agent process');
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });

@@ -8,7 +8,6 @@ import { getSessionManager } from '../agents/session-manager';
 import { stopBrowserDaemon } from '../services/browser/daemon';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import { getDocumentParser } from '../services/document-parser/index';
-import { getConfigManager } from '../config/manager';
 import { getDatabase } from '../ipc/db-handlers';
 import { stopWalCheckpoint } from '../db/connection';
 import { closeCoreDatabase } from '../db/core-connection';
@@ -133,12 +132,9 @@ export async function performGracefulShutdown(): Promise<void> {
     logger.error('Error shutting down memory worker', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
   }
 
-  // 7. Shutdown config manager
-  try {
-    getConfigManager().shutdown();
-  } catch (err) {
-    logger.error('Error shutting down config manager', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Main);
-  }
+  // 7. ConfigStore needs no explicit shutdown — set() persists atomically
+  // and there is no auto-save timer to stop. (The legacy ConfigManager's
+  // shutdown() closed its subscription ports; that code path is gone.)
 
   // 7.5 Stop WAL checkpoint scheduler
   try {

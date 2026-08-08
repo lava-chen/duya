@@ -17,9 +17,6 @@ import { join } from 'path';
 vi.mock('../../plugins/PluginManager.js', () => ({
   getPluginManager: vi.fn(),
 }));
-vi.mock('../../config/manager.js', () => ({
-  getConfigManager: vi.fn(),
-}));
 vi.mock('../../db/connection.js', () => ({
   getDatabase: vi.fn(),
 }));
@@ -62,7 +59,6 @@ vi.mock('../../logging/logger.js', () => ({
 }));
 
 import { getPluginManager } from '../../plugins/PluginManager.js';
-import { getConfigManager } from '../../config/manager.js';
 import { getDatabase } from '../../db/connection.js';
 import {
   buildMCPCandidates,
@@ -77,7 +73,6 @@ import {
 } from './collect-main.js';
 
 const mockedGetPluginManager = vi.mocked(getPluginManager);
-const mockedGetConfigManager = vi.mocked(getConfigManager);
 const mockedGetDatabase = vi.mocked(getDatabase);
 
 const emptyInput: MCPCollectorInput = {
@@ -206,7 +201,6 @@ describe('buildMCPCandidates (pure) — source coverage', () => {
 describe('collectMainMCPCandidates (accessor wrapper)', () => {
   beforeEach(() => {
     mockedGetPluginManager.mockReset();
-    mockedGetConfigManager.mockReset();
     mockedGetDatabase.mockReset();
   });
 

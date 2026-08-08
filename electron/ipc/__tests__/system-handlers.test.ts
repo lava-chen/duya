@@ -23,9 +23,9 @@ const mocks = vi.hoisted(() => ({
     showOpenDialog: vi.fn(),
   },
   mainWindow: { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, show: vi.fn(), restore: vi.fn(), focus: vi.fn(), webContents: { send: vi.fn() } } as { isDestroyed: () => boolean; isVisible: () => boolean; isMinimized: () => boolean; show: () => void; restore: () => void; focus: () => void; webContents: { send: (channel: string, payload: unknown) => void } } | null,
-  configManager: {
-    getVisionSettings: vi.fn(() => ({ provider: 'anthropic', model: 'claude', baseUrl: '', apiKey: '', enabled: false })),
-    setConfig: vi.fn(),
+  configStore: {
+    getByPath: vi.fn(() => ({ provider: 'anthropic', model: 'claude', baseUrl: '', apiKey: '', enabled: false })),
+    set: vi.fn(),
   },
   agentPool: {
     getInterruptedSessions: vi.fn(() => []),
@@ -105,8 +105,8 @@ vi.mock('../../agents/process-pool/agent-process-pool', () => ({
   getAgentProcessPool: () => mocks.agentPool,
 }));
 
-vi.mock('../../config/manager', () => ({
-  getConfigManager: () => mocks.configManager,
+vi.mock('../../config/store-instance', () => ({
+  getConfigStore: () => mocks.configStore,
 }));
 
 vi.mock('../../services/document-parser/index', () => ({

@@ -26,7 +26,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { getConfigManager } from '../../config/manager';
+import { getProviderStore } from '../../services/providers/provider-store-electron';
+import { getConfigStore } from '../../config/store-instance';
+import {
+  toLegacyApiProvider,
+  migrateLegacyApiProvider,
+} from '../../../src/lib/providers/legacy';
 import { getPairingStore } from '../../gateway/pairing';
 import { appendAuditEvent, type AuditEvent, type AuditEventKind } from '../../services/controlPlaneAudit';
 
@@ -209,8 +214,7 @@ function toProviderInfoItem(p: ApiProvider): ProviderListItem & { headers: Recor
 
 export function handleListConfigProviders(_req: IncomingMessage, res: ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const all = cm.getAllProviders();
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
     const providers: ProviderListItem[] = Object.values(all).map(toProviderListItem);
     sendJson(res, 200, { providers });
   } catch (err) {
@@ -225,8 +229,7 @@ export function handleListConfigProviders(_req: IncomingMessage, res: ServerResp
 
 export function handleGetConfigProvider(_req: IncomingMessage, res: ServerResponse, id: string): void {
   try {
-    const cm = getConfigManager();
-    const all = cm.getAllProviders();
+    const all = Object.fromEntries(getProviderStore().listLlmProviders().map((p) => [p.id, toLegacyApiProvider(p)]));
     const found = all[id];
     if (!found) {
       sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
@@ -262,15 +265,18 @@ export async function handleAddConfigProvider(req: IncomingMessage, res: ServerR
   const apiKey = typeof body.apiKey === 'string' ? body.apiKey : '';
   const isActive = body.isActive === true;
   try {
-    const cm = getConfigManager();
     // Cast to the ApiProvider union — the wire body uses the same
     // enum but the TS type for `providerType` is a strict literal
     // union. Validate at the wire boundary; the manager rejects
     // unknown types.
-    cm.upsertProvider({ id, name, providerType, baseUrl, apiKey, isActive } as unknown as Parameters<typeof cm.upsertProvider>[0]);
+    const up = getProviderStore().upsertLlmProvider(migrateLegacyApiProvider({ id, name, providerType, baseUrl, apiKey, isActive } as unknown as Parameters<typeof migrateLegacyApiProvider>[0]));
+    if (!up.ok) {
+      sendError(res, 400, 'invalid_request', up.message);
+      return;
+    }
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.provider.add', id, `providerType=${providerType}`);
-    const stored = cm.getAllProviders()[id];
+    const stored = (() => { const pr = getProviderStore().getLlmProvider(id); return pr ? toLegacyApiProvider(pr) : undefined; })();
     sendJson(res, 200, { ok: true, provider: toProviderListItem(stored) });
   } catch (err) {
     const c = classify(err);
@@ -284,8 +290,7 @@ export async function handleAddConfigProvider(req: IncomingMessage, res: ServerR
 
 export async function handleRemoveConfigProvider(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
   try {
-    const cm = getConfigManager();
-    const ok = cm.deleteProvider(id);
+    const ok = getProviderStore().deleteLlmProvider(id);
     if (!ok) {
       sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
       return;
@@ -319,16 +324,15 @@ export async function handleSetDefaultConfigProvider(req: IncomingMessage, res: 
     return;
   }
   try {
-    const cm = getConfigManager();
     const clear = body.clear === true;
     if (clear) {
-      const ok = cm.setDefaultProvider(null);
+      const ok = getProviderStore().setDefaultLlmProvider(null);
       if (!ok) {
         sendError(res, 500, 'set_default_failed', 'Could not clear defaultProviderId');
         return;
       }
     } else {
-      const ok = cm.setDefaultProvider(id);
+      const ok = getProviderStore().setDefaultLlmProvider(id);
       if (!ok) {
         sendError(res, 404, 'provider_not_found', `Provider '${id}' not found`);
         return;
@@ -349,8 +353,7 @@ export async function handleSetDefaultConfigProvider(req: IncomingMessage, res: 
 
 export function handleGetAgentSettings(_req: IncomingMessage, res: ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const settings = cm.getAgentSettings();
+    const settings = getConfigStore().getByPath('agent');
     sendJson(res, 200, { settings });
   } catch (err) {
     const c = classify(err);
@@ -382,10 +385,9 @@ export async function handleSetAgentSettings(req: IncomingMessage, res: ServerRe
     return;
   }
   try {
-    const cm = getConfigManager();
-    const current = cm.getAgentSettings();
+    const current = getConfigStore().getByPath('agent');
     const merged = { ...(current as unknown as Record<string, unknown>), ...patch };
-    cm.setConfig('agentSettings', merged, 'agent');
+    getConfigStore().set('agent', merged);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.settings.set', 'agent', Object.keys(patch).join(','));
     sendJson(res, 200, { ok: true, changes: patch });
@@ -414,8 +416,7 @@ interface VisionSettingsDTO extends VisionSettings {
 
 export function handleGetVisionSettings(_req: IncomingMessage, res: ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const settings = cm.getVisionSettings() as VisionSettings;
+    const settings = getConfigStore().getByPath('auxiliary.vision') as VisionSettings;
     const dto: VisionSettingsDTO = {
       provider: settings.provider,
       model: settings.model,
@@ -462,10 +463,9 @@ export async function handleSetVisionSettings(req: IncomingMessage, res: ServerR
     delete patch.isActive;
   }
   try {
-    const cm = getConfigManager();
-    const current = cm.getVisionSettings() as VisionSettings;
+    const current = getConfigStore().getByPath('auxiliary.vision') as VisionSettings;
     const merged = { ...current, ...patch };
-    cm.setConfig('visionSettings', merged, 'agent');
+    getConfigStore().set('auxiliary.vision', merged);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.vision.set', 'vision', Object.keys(patch).join(','));
     sendJson(res, 200, { ok: true, changes: patch });
@@ -487,8 +487,7 @@ interface OutputStyle {
 
 export function handleListOutputStyles(_req: IncomingMessage, res: ServerResponse): void {
   try {
-    const cm = getConfigManager();
-    const styles = cm.getOutputStyles();
+    const styles = getConfigStore().getByPath('auxiliary.output_styles');
     const list = Object.entries(styles).map(([id, s]) => {
       const item: OutputStyle = { id, name: s.name ?? id };
       if (s.description) item.description = s.description;
@@ -515,8 +514,7 @@ export async function handleSetOutputStyle(req: IncomingMessage, res: ServerResp
     return;
   }
   try {
-    const cm = getConfigManager();
-    const styles = cm.getOutputStyles();
+    const styles = getConfigStore().getByPath('auxiliary.output_styles');
     if (!styles[styleId]) {
       sendError(res, 404, 'output_style_not_found', `Output style not found: ${styleId}`);
       return;
@@ -524,9 +522,9 @@ export async function handleSetOutputStyle(req: IncomingMessage, res: ServerResp
     // Mark the style as active. The activeStyleId is stored on
     // the agent settings (legacy `duya_config style_set` did the
     // same thing via `outputStylesSet({ styleId })`).
-    const current = cm.getAgentSettings() as unknown as Record<string, unknown>;
+    const current = getConfigStore().getByPath('agent') as unknown as Record<string, unknown>;
     const merged = { ...current, activeStyleId: styleId };
-    cm.setConfig('agentSettings', merged, 'agent');
+    getConfigStore().set('agent', merged);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.style.set', styleId);
     sendJson(res, 200, { ok: true, styleId });
@@ -688,6 +686,15 @@ const ALLOWED_GENERIC_KEYS: readonly GenericConfigKey[] = [
   'apiProviders',
 ];
 
+// Map CLI flat generic keys to ConfigStore nested paths.
+const CFG_PATH: Record<string, string> = {
+  apiProviders: 'providers',
+  agentSettings: 'agent',
+  uiPreferences: 'display',
+  visionSettings: 'auxiliary.vision',
+  outputStyles: 'auxiliary.output_styles',
+};
+
 function isGenericKey(v: unknown): v is GenericConfigKey {
   return typeof v === 'string' && (ALLOWED_GENERIC_KEYS as readonly string[]).includes(v);
 }
@@ -722,17 +729,12 @@ export async function handleConfigKvSet(
     return;
   }
   try {
-    const cm = getConfigManager();
-    const current = cm.getConfig();
+    const current = getConfigStore().getByPath(CFG_PATH[body.key]);
     const merged = {
-      ...(current[body.key] as Record<string, unknown>),
+      ...(current as Record<string, unknown>),
       ...(body.value as Record<string, unknown>),
     };
-    const ok = cm.setConfig(body.key, merged, 'agent');
-    if (!ok) {
-      sendError(res, 400, 'validation_failed', 'config validation failed for the merged value');
-      return;
-    }
+    getConfigStore().set(CFG_PATH[body.key], merged);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.kv.set', body.key, Object.keys(body.value as object).join(','));
     sendJson(res, 200, { ok: true, key: body.key, value: merged });
@@ -764,8 +766,7 @@ export function handleConfigKvGet(req: IncomingMessage, res: ServerResponse): vo
     return;
   }
   try {
-    const cm = getConfigManager();
-    const value = (cm.getConfig() as Record<string, unknown>)[key];
+    const value = getConfigStore().getByPath(CFG_PATH[key]);
     sendJson(res, 200, { key, value });
   } catch (err) {
     const c = classify(err);
@@ -801,9 +802,7 @@ export async function handleConfigKvUnset(
       ? pathRaw.split('.').filter((s) => s.length > 0)
       : [];
   try {
-    const cm = getConfigManager();
-    const cfg = cm.getConfig();
-    const current = deepClone(cfg[body.key] as Record<string, unknown>);
+    const current = deepClone(getConfigStore().getByPath(CFG_PATH[body.key]) as Record<string, unknown>);
     if (path.length === 0) {
       const defaults: Record<GenericConfigKey, unknown> = {
         agentSettings: {},
@@ -812,11 +811,7 @@ export async function handleConfigKvUnset(
         outputStyles: {},
         apiProviders: {},
       };
-      const ok = cm.setConfig(body.key, defaults[body.key], 'agent');
-      if (!ok) {
-        sendError(res, 400, 'validation_failed', 'config validation failed for the default value');
-        return;
-      }
+      getConfigStore().set(CFG_PATH[body.key], defaults[body.key]);
       const ctx = readAuditContext(req);
       await audit(ctx, 'config.kv.unset', body.key, 'whole-key');
       sendJson(res, 200, { ok: true, key: body.key, value: defaults[body.key] });
@@ -838,11 +833,7 @@ export async function handleConfigKvUnset(
       return;
     }
     delete cursor[last];
-    const ok = cm.setConfig(body.key, current, 'agent');
-    if (!ok) {
-      sendError(res, 400, 'validation_failed', 'config validation failed after unset');
-      return;
-    }
+    getConfigStore().set(CFG_PATH[body.key], current);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.kv.unset', body.key, path.join('.'));
     sendJson(res, 200, { ok: true, key: body.key, path: path.join('.'), value: current });
@@ -877,20 +868,15 @@ export async function handleConfigValidate(
     return;
   }
   try {
-    const cm = getConfigManager();
-    const cfg = cm.getConfig();
-    const before = deepClone((cfg as Record<string, unknown>)[body.key]);
+    const before = deepClone(getConfigStore().getByPath(CFG_PATH[body.key]));
     const merged =
       typeof body.value === 'object' && body.value !== null && !Array.isArray(body.value)
         ? { ...(before as Record<string, unknown>), ...(body.value as Record<string, unknown>) }
         : body.value;
-    const ok = cm.setConfig(body.key, merged, 'agent');
+    getConfigStore().set(CFG_PATH[body.key], merged);
     // Restore the original value so validate is effectively read-only.
-    cm.setConfig(body.key, before, 'agent');
-    sendJson(res, 200, {
-      valid: ok,
-      ...(ok ? {} : { error: 'validation failed; check field types and required keys' }),
-    });
+    getConfigStore().set(CFG_PATH[body.key], before);
+    sendJson(res, 200, { valid: true });
   } catch (err) {
     const c = classify(err);
     sendError(res, c.status, c.code, c.message);

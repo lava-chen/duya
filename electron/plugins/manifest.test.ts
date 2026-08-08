@@ -500,6 +500,51 @@ describe('readPluginManifest — standard Agent Plugins package detection (Plan 
     expect(manifest.components?.mcpServers).toEqual(['remote']);
   });
 
+  it('reads duya-specific fields from the com.duya.client extension', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        $schema: AGENT_PLUGINS_PLUGIN_SCHEMA,
+        name: 'duya-plugin',
+        version: '0.1.0',
+        description: 'A standard package carrying duya-specific fields.',
+        extensions: {
+          'com.duya.client': {
+            engines: { duya: '>=0.9.0', node: '>=18' },
+            permissions: [{ name: 'file-read', scope: 'project' }],
+            setup: [{ id: 'api-key', label: 'API Key', type: 'secret', required: true }],
+            permissionPolicy: { defaultMode: 'write' },
+          },
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.engines).toEqual({ duya: '>=0.9.0', node: '>=18' });
+    expect(manifest.permissions).toEqual([{ name: 'file-read', scope: 'project' }]);
+    expect(manifest.setup).toEqual([
+      { id: 'api-key', label: 'API Key', type: 'secret', required: true },
+    ]);
+    expect(manifest.permissionPolicy).toEqual({ defaultMode: 'write' });
+  });
+
+  it('defaults duya-specific fields when the com.duya.client extension is absent', () => {
+    writeFileSync(
+      join(dir, 'plugin.json'),
+      JSON.stringify({
+        $schema: AGENT_PLUGINS_PLUGIN_SCHEMA,
+        name: 'plain-standard',
+        version: '1.0.0',
+        description: 'A bare standard package.',
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.permissions).toEqual([]);
+    expect(manifest.engines).toEqual({ duya: '>=0.1.0' });
+    expect(manifest.setup).toBeUndefined();
+  });
+
   it('does not enter the standard path when $schema is absent (legacy path)', () => {
     writeFileSync(
       join(dir, 'plugin.json'),
