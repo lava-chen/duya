@@ -12,6 +12,9 @@ import { registerProviderIpcHandlers } from './services/providers/provider-ipc-h
 import { registerNetHandlers } from './ipc/net-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
 import { initConfigManager, getConfigManager, toLLMProvider, resolveDatabasePath, updateDatabasePath, migrateMultiProviderV1 } from './config/index';
+import { getConfigStore } from './config/store-instance';
+import { migrateConfig } from './config/migrate';
+import { resolveConfigTomlPath } from './config/compass';
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
@@ -315,6 +318,22 @@ if (gotTheLock) {
       initAgentProcessPool();
     } catch (error) {
       logger.error('Failed to initialize agent process pool', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    // One-time migration of legacy config sources into config.toml
+    // (plan 334, Phase 3). Idempotent: skips once config.toml exists.
+    try {
+      const configPath = resolveConfigTomlPath();
+      const db = getDatabase();
+      if (db) {
+        migrateConfig(db, {
+          store: getConfigStore(),
+          configPath,
+          secretsPath: path.join(path.dirname(configPath), 'secrets.json'),
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to migrate legacy config to config.toml', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     try {

@@ -16,13 +16,24 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { getConfigManager } from '../config/manager';
 import { parseSkillFrontmatter, parseAllowedTools } from '../utils/skill-parser';
 import { scanSkillFile, type SkillFinding } from '../../packages/agent/src/security/skillScanner.js';
-import { getDatabase, getJsonSetting, setJsonSetting } from '../db/index';
+import { getConfigStore } from '../config/store-instance';
+import type { SkillConfigEntry } from '../config/schema';
 import { getPluginManager } from '../plugins/PluginManager';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import * as crypto from 'crypto';
 
-const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
+
+function readSkillOverrides(): SkillEnabledOverrides {
+  const config = getConfigStore().get();
+  const overrides: SkillEnabledOverrides = {};
+  for (const entry of config.skills ?? []) {
+    if (entry && entry.enabled === false) {
+      overrides[entry.name] = false;
+    }
+  }
+  return overrides;
+}
 
 const PROVENANCE_MARKER_FILENAME = '.duya-origin.json';
 const MANIFEST_FILENAME = '.bundled_manifest.json';
@@ -466,12 +477,7 @@ export function registerSkillsHandlers(): void {
         logger.warn('Failed to scan builtin plugin skills', { error: String(e) }, LogComponent.Skills);
       }
 
-      let skillOverrides: SkillEnabledOverrides = {};
-      try {
-        skillOverrides = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
-      } catch {
-        skillOverrides = {};
-      }
+      const skillOverrides = readSkillOverrides();
       const skillsWithState = skills.map(skill => ({
         ...skill,
         enabled: skillOverrides[skill.name] !== false,
@@ -488,12 +494,7 @@ export function registerSkillsHandlers(): void {
 
   ipcMain.handle('skills:getEnabledOverrides', async () => {
     try {
-      let overrides: SkillEnabledOverrides = {};
-      try {
-        overrides = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
-      } catch {
-        overrides = {};
-      }
+      const overrides = readSkillOverrides();
       return { success: true, overrides };
     } catch (error) {
       const logger = getLogger();
@@ -504,19 +505,14 @@ export function registerSkillsHandlers(): void {
 
   ipcMain.handle('skills:setEnabled', async (_event, skillName: string, enabled: boolean) => {
     try {
-      let current: SkillEnabledOverrides = {};
-      try {
-        current = getJsonSetting<SkillEnabledOverrides>(SKILL_ENABLED_OVERRIDES_KEY, {});
-      } catch {
-        current = {};
-      }
-      const next = { ...current };
+      const store = getConfigStore();
+      const without = (store.get().skills ?? []).filter((e) => e.name !== skillName);
       if (enabled) {
-        delete next[skillName];
+        store.set('skills', without);
       } else {
-        next[skillName] = false;
+        store.set('skills', [...without, { name: skillName, enabled: false }]);
       }
-      setJsonSetting(SKILL_ENABLED_OVERRIDES_KEY, next);
+      const next = readSkillOverrides();
       await notifyAgentServerSkillsReload();
       return { success: true, overrides: next };
     } catch (error) {
