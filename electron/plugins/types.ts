@@ -219,9 +219,9 @@ export interface PluginCatalogEntry {
   kind?: 'plugin' | 'skill';
   /**
    * For `kind === 'skill'` entries: absolute path to the bundled skill
-   * source directory (e.g. `packages/agent/skills/office/pdf`). Used by
-   * `PluginManager.installFromCatalog` to copy skill files into the
-   * installed plugin's `skills/<name>/` directory. Undefined for
+   * source directory (e.g. `packages/agent/skills/development/docker-deploy`).
+   * Used by `PluginManager.installFromCatalog` to copy skill files into
+   * the installed plugin's `skills/<name>/` directory. Undefined for
    * regular plugin entries.
    */
   skillSourceDir?: string;
