@@ -1,6 +1,8 @@
 import { getDatabase } from '../../ipc/db-handlers';
 import { proxyRequest } from '../proxy';
 import { getLogger, LogComponent } from '../../logging/logger';
+import { getConfigStore } from '../../config/store-instance';
+import { readGatewaySettingFromStore } from '../../config/gateway-setting-adapter';
 
 export async function testBridgeChannel(channel: string): Promise<{ success: boolean; message: string; details?: string }> {
   const db = getDatabase();
@@ -10,13 +12,15 @@ export async function testBridgeChannel(channel: string): Promise<{ success: boo
 
   switch (channel) {
     case 'telegram': {
-      const token = db.prepare("SELECT value FROM settings WHERE key = 'telegram_bot_token'").get() as { value: string } | undefined;
-      if (!token?.value) {
+      // Read from ConfigStore (single source of truth since plan 334/335);
+      // the SQLite settings table no longer holds the token.
+      const token = readGatewaySettingFromStore(getConfigStore(), 'telegram_bot_token');
+      if (!token) {
         return { success: false, message: 'Bot token not configured', details: 'Please enter your Telegram bot token' };
       }
       try {
         const { status, data } = await proxyRequest(
-          `https://api.telegram.org/bot${token.value}/getMe`,
+          `https://api.telegram.org/bot${token}/getMe`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -39,16 +43,16 @@ export async function testBridgeChannel(channel: string): Promise<{ success: boo
     }
 
     case 'qq': {
-      const appId = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_id'").get() as { value: string } | undefined;
-      const appSecret = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_secret'").get() as { value: string } | undefined;
-      if (!appId?.value || !appSecret?.value) {
+      const appId = readGatewaySettingFromStore(getConfigStore(), 'bridge_qq_app_id');
+      const appSecret = readGatewaySettingFromStore(getConfigStore(), 'bridge_qq_app_secret');
+      if (!appId || !appSecret) {
         return { success: false, message: 'App ID or Secret not configured', details: 'Please enter both App ID and App Secret' };
       }
       try {
         const response = await fetch('https://api.sgroup.qq.com/oauth2/access_token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: `grant_type=client_credentials&client_id=${appId.value}&client_secret=${appSecret.value}`,
+          body: `grant_type=client_credentials&client_id=${appId}&client_secret=${appSecret}`,
           signal: AbortSignal.timeout(5000),
         });
         if (response.ok) {
@@ -64,16 +68,16 @@ export async function testBridgeChannel(channel: string): Promise<{ success: boo
     }
 
     case 'feishu': {
-      const appId = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_id'").get() as { value: string } | undefined;
-      const appSecret = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_secret'").get() as { value: string } | undefined;
-      if (!appId?.value || !appSecret?.value) {
+      const appId = readGatewaySettingFromStore(getConfigStore(), 'bridge_feishu_app_id');
+      const appSecret = readGatewaySettingFromStore(getConfigStore(), 'bridge_feishu_app_secret');
+      if (!appId || !appSecret) {
         return { success: false, message: 'App ID or Secret not configured', details: 'Please enter both App ID and App Secret' };
       }
       try {
         const response = await fetch('https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ app_id: appId.value, app_secret: appSecret.value }),
+          body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
           signal: AbortSignal.timeout(5000),
         });
         if (response.ok) {

@@ -451,12 +451,11 @@ export default function BridgeSection() {
                 testing={testingChannel === 'telegram'}
                 testResult={testResults['telegram']}
               >
-                <SettingsInput
+                <DebouncedTokenInput
                   label="Bot Token"
                   description="Get token from @BotFather"
-                  type="password"
                   value={settings?.['telegram_bot_token'] || ''}
-                  onChange={(v) => updateSetting('telegram_bot_token', v)}
+                  onCommit={(v) => updateSetting('telegram_bot_token', v)}
                   placeholder="123456:ABC-DEF..."
                 />
               </ChannelSettingsPanel>
@@ -1139,6 +1138,58 @@ function WeChatSettingsPanel({
         </details>
       </div>
     </div>
+  );
+}
+
+/**
+ * A SettingsInput that keeps edits in local state and only commits (and thus
+ * triggers a gateway reload) on blur or Enter. Without this, typing a bot
+ * token fires `updateSetting` on every keystroke, causing a gateway reload and
+ * a loading flash per character while the value is still mid-edit.
+ */
+function DebouncedTokenInput({
+  label,
+  description,
+  value,
+  onCommit,
+  placeholder,
+}: {
+  label: string;
+  description?: string;
+  value: string;
+  onCommit: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const dirtyRef = useRef(false);
+
+  // Surface external changes (e.g. after a gateway reload) only when not
+  // mid-edit, so a running fetchSettings never clobbers the user's typing.
+  useEffect(() => {
+    if (!dirtyRef.current) setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    if (dirtyRef.current && draft !== value) onCommit(draft);
+    dirtyRef.current = false;
+  };
+
+  return (
+    <SettingsInput
+      label={label}
+      description={description}
+      type="password"
+      value={draft}
+      onChange={(v) => {
+        dirtyRef.current = true;
+        setDraft(v);
+      }}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+      }}
+      placeholder={placeholder}
+    />
   );
 }
 
