@@ -23,7 +23,6 @@ export interface ProviderEntry {
   providerType: string;
   baseUrl: string;
   options?: Record<string, unknown>;
-  enabled_models?: string[];
   // apiKey intentionally absent — split to secrets.json
 }
 
@@ -52,6 +51,7 @@ export interface CronJob {
   id: string;
   name: string;
   description?: string;
+  tags?: string[];
   schedule_kind: 'at' | 'every' | 'cron';
   schedule_at?: string;
   schedule_every_ms?: number;
@@ -157,7 +157,6 @@ export interface DuyaConfig {
   command_allowlist: unknown[];
 
   mcp_servers: Record<string, McpServerEntry>;
-  marketplaces: Record<string, unknown>;
   plugins: Record<string, PluginEntry>;
 
   skills: SkillConfigEntry[]; // [[skills.config]] (decision 15)
@@ -210,7 +209,6 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   approvals: {},
   command_allowlist: [],
   mcp_servers: {},
-  marketplaces: {},
   plugins: {},
   skills: [], // [[skills.config]] (decision 15)
   projects: {}, // reserved (decision 16)

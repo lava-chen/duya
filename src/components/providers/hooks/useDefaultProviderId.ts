@@ -62,11 +62,3 @@ export function useDefaultProviderId(appId?: AppId): string | null {
   }
   return def[0]!.id;
 }
-
-/**
- * @deprecated Use useDefaultProviderId. The single-active concept is gone;
- * the default is a soft preference, not a lock.
- */
-export function useActiveProviderId(appId?: AppId): string | null {
-  return useDefaultProviderId(appId);
-}

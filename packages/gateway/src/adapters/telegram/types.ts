@@ -67,6 +67,15 @@ export interface TelegramDmTopicsConfig {
   topics: TelegramDmTopic[];
 }
 
+export interface TelegramCommandMenuOptions {
+  /** Maximum number of commands to register (clamped to 1..100). Default 60. */
+  max_commands?: number;
+  /** How priority commands are placed: prepend / append / replace. Default 'prepend'. */
+  priority_mode?: 'prepend' | 'append' | 'replace';
+  /** Command names that get priority placement. */
+  priority?: string[];
+}
+
 export interface TelegramConfigOptions {
   webhook_url?: string;
   webhook_port?: number;
@@ -84,4 +93,45 @@ export interface TelegramConfigOptions {
   disable_link_previews?: boolean;
   http_pool_size?: number;
   http_pool_timeout?: number;
+
+  // Online/offline status indicator
+  status_indicator?: boolean;
+  status_online?: string;
+  status_offline?: string;
+
+  // Command menu priority & limits
+  command_menu?: TelegramCommandMenuOptions;
+
+  // Local Bot API Server base URL (e.g. http://127.0.0.1:8081/bot)
+  bot_api_server?: string;
+
+  // Cron delivery thread targeting
+  cron_thread_id?: number;
+
+  // Speech-to-text toggle
+  stt?: { enabled?: boolean };
+
+  // Group observation mode
+  observe_unmentioned_group_messages?: boolean;
+  allowed_chats?: string[];
+  group_allowed_chats?: string[];
+
+  // Group authorization orthogonal matrix
+  allow_from?: string[];
+  allow_admin_from?: string[];
+  group_allow_from?: string[];
+  group_allow_admin_from?: string[];
+  user_allowed_commands?: string[];
+  group_user_allowed_commands?: string[];
+
+  // Configurable reactions (working / done / error emoji, enabled toggle)
+  reactions?: { enabled?: boolean; working?: string; done?: string; error?: string };
+
+  // Busy-input mode ('queue' | 'steer' | 'interrupt') when the agent is busy
+  busy_input?: 'queue' | 'steer' | 'interrupt';
+
+  // Session auto-reset policy ('daily' | 'idle' | 'both' | 'off')
+  reset_policy?: 'daily' | 'idle' | 'both' | 'off';
+  reset_hour?: number;
+  reset_idle_minutes?: number;
 }

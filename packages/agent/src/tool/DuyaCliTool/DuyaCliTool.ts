@@ -227,12 +227,26 @@ function parseArgv(argv: string[]): CliInvocation {
     if (tok.startsWith('--name=')) { out.configName = tok.slice('--name='.length); continue; }
     if (tok === '--type' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
     if (tok.startsWith('--type=')) { out.configType = tok.slice('--type='.length); continue; }
+    // Plan 102 — `mcp add` exposes `--server` / `--command` to the user
+    // via the descriptor. Map them to the same configId / configType the
+    // structured contract carries so the external CLI and the agent tool
+    // agree on the flag names (the descriptor help is authoritative).
+    if (tok === '--server' && i + 1 < argv.length) { out.configId = argv[++i]; continue; }
+    if (tok.startsWith('--server=')) { out.configId = tok.slice('--server='.length); continue; }
+    if (tok === '--command' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
+    if (tok.startsWith('--command=')) { out.configType = tok.slice('--command='.length); continue; }
     if (tok === '--base-url' && i + 1 < argv.length) { out.configBaseUrl = argv[++i]; continue; }
     if (tok.startsWith('--base-url=')) { out.configBaseUrl = tok.slice('--base-url='.length); continue; }
     if (tok === '--api-key' && i + 1 < argv.length) { out.configApiKey = argv[++i]; continue; }
     if (tok.startsWith('--api-key=')) { out.configApiKey = tok.slice('--api-key='.length); continue; }
     if (tok === '--active') { out.configActive = true; continue; }
-    if (tok === '--enabled') { out.configEnabled = true; continue; }
+    if (tok === '--enabled') { out.configEnabled = true; out.enabled = true; continue; }
+    if (tok === '--verbose') { out.verbose = true; continue; }
+    if (tok === '--delete-data') { out.deleteData = true; continue; }
+    if (tok === '--from-path' && i + 1 < argv.length) { out.fromPath = argv[++i]; continue; }
+    if (tok.startsWith('--from-path=')) { out.fromPath = tok.slice('--from-path='.length); continue; }
+    if (tok === '--scope' && i + 1 < argv.length) { out.scope = argv[++i]; continue; }
+    if (tok.startsWith('--scope=')) { out.scope = tok.slice('--scope='.length); continue; }
     if (tok === '--model' && i + 1 < argv.length) { out.configModel = argv[++i]; continue; }
     if (tok.startsWith('--model=')) { out.configModel = tok.slice('--model='.length); continue; }
     if (tok === '--provider' && i + 1 < argv.length) { out.configProvider = argv[++i]; continue; }
@@ -336,7 +350,10 @@ export class DuyaCliTool implements Tool, ToolExecutor {
     };
   }
 
-  async execute(input: Record<string, unknown>): Promise<ToolResult> {
+  async execute(
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+  ): Promise<ToolResult> {
     const parsed = inputSchema.safeParse(input);
     if (!parsed.success) {
       return toolError(`Invalid input: ${parsed.error.message}`);
@@ -390,6 +407,13 @@ export class DuyaCliTool implements Tool, ToolExecutor {
         format: (data.format ?? 'json') as OutputFormat,
         yes: data.yes,
       };
+    }
+
+    // Thread the session working directory into the invocation so
+    // relative paths (e.g. cron's `--from-file`) resolve against the
+    // session workspace, not the worker process cwd.
+    if (workingDirectory) {
+      invocation.cwd = workingDirectory;
     }
 
     // ---------------------------------------------------------------

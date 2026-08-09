@@ -12,7 +12,11 @@ export type CommandCategory =
   | 'info'
   | 'tools'
   | 'exit'
-  | 'pairing';
+  | 'pairing'
+  | 'model'
+  | 'context'
+  | 'account'
+  | 'voice';
 
 export interface CommandDef {
   name: string;

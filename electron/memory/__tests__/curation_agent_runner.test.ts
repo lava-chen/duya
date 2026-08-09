@@ -33,6 +33,7 @@ function createMockPool(): CurationRunnerPool & { emitDone: () => void; emitErro
       else handlers.delete(sessionId);
     }),
     releaseAndWait: vi.fn().mockResolvedValue(undefined),
+    setSessionHeartbeatTimeout: vi.fn(),
     sent,
     emitDone: () => {
       const set = handlers.get('curator-session');

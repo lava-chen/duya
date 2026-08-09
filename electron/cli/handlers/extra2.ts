@@ -17,6 +17,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getDatabase } from '../../db/connection';
+import { getAutomationScheduler } from '../../automation/Scheduler.js';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { app } from 'electron';
 
@@ -88,32 +89,27 @@ async function setCronStatus(
   correlationId?: string,
 ): Promise<void> {
   try {
-    const db = getDatabase();
-    if (!db) {
-      sendJson(res, 503, { error: { code: 'db_unavailable', message: 'database is not ready' } });
+    const scheduler = getAutomationScheduler();
+    if (!scheduler) {
+      sendJson(res, 503, {
+        error: { code: 'scheduler_unavailable', message: 'automation scheduler is not ready' },
+      });
       return;
     }
-    const row = db.prepare('SELECT id, status FROM automation_crons WHERE id = ?').get(id) as
-      | { id: string; status: string }
-      | undefined;
-    if (!row) {
+    const current = scheduler.listCrons().find((c) => c.id === id);
+    if (!current) {
       sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
       return;
     }
-    const now = Date.now();
-    db.prepare('UPDATE automation_crons SET status = ?, updated_at = ? WHERE id = ?').run(
-      next,
-      now,
-      id,
-    );
+    scheduler.updateCron(id, { status: next });
     await recordAudit(
       req,
       correlationId,
       next === 'enabled' ? 'cron.enable' : 'cron.disable',
       id,
-      `from=${row.status}`,
+      `from=${current.status}`,
     );
-    sendJson(res, 200, { ok: true, id, status: next, previousStatus: row.status });
+    sendJson(res, 200, { ok: true, id, status: next, previousStatus: current.status });
   } catch (err) {
     sendJson(res, 500, {
       error: { code: 'internal_error', message: err instanceof Error ? err.message : String(err) },
@@ -165,10 +161,8 @@ export function handleCronLogs(
       sendJson(res, 503, { error: { code: 'db_unavailable', message: 'database is not ready' } });
       return;
     }
-    const cron = db.prepare('SELECT id FROM automation_crons WHERE id = ?').get(id) as
-      | { id: string }
-      | undefined;
-    if (!cron) {
+    const scheduler = getAutomationScheduler();
+    if (!scheduler || !scheduler.listCrons().some((c) => c.id === id)) {
       sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
       return;
     }

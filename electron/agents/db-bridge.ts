@@ -34,10 +34,11 @@ import {
   ipcTaskToCoreCreate,
   ipcTaskToUpdate,
   coreTaskToIpcRow,
-  ipcPermissionToCoreCreate,
+  ipcPermissionToCreate,
   ipcPermissionToResolve,
   corePermissionToIpcRow,
   coreMailboxToIpcRow,
+  coreGoalToIpcRow,
 } from '../ipc/core-db-adapters';
 
 const DEBUG_IPC = process.env.DUYA_DEBUG_IPC === 'true';
@@ -234,6 +235,46 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     case 'session:listByParentId': {
       const { sessions } = getCoreStores();
       return sessions.list({ parentSessionId: p.parentId as string }).map(coreSessionToIpcRow);
+    }
+
+    // ==================== Goal actions (core store thin forward) ====================
+    // Plan 331: session_goals — per-session goal + token budget mirror. The
+    // Agent persists token/time deltas after each turn via these actions.
+    case 'goal:get': {
+      const { goals } = getCoreStores();
+      const goal = goals.get(p.sessionId as string);
+      return goal ? coreGoalToIpcRow(goal) : undefined;
+    }
+
+    case 'goal:create': {
+      const { goals } = getCoreStores();
+      const goal = goals.create({
+        id: p.id as string,
+        sessionId: p.session_id as string,
+        goalText: (p.goal_text as string | null | undefined) ?? null,
+        tokenBudget: (p.token_budget as number | null | undefined) ?? null,
+      });
+      return coreGoalToIpcRow(goal);
+    }
+
+    case 'goal:updateBudget': {
+      const { goals } = getCoreStores();
+      const goal = goals.updateBudget(p.sessionId as string, {
+        tokensUsedDelta: p.tokensUsedDelta as number | undefined,
+        timeUsedDelta: p.timeUsedDelta as number | undefined,
+      });
+      return goal ? coreGoalToIpcRow(goal) : undefined;
+    }
+
+    case 'goal:setStatus': {
+      const { goals } = getCoreStores();
+      const goal = goals.setStatus(p.sessionId as string, p.status as 'active' | 'paused' | 'usage_limited' | 'complete');
+      return goal ? coreGoalToIpcRow(goal) : undefined;
+    }
+
+    case 'goal:listByStatus': {
+      const { goals } = getCoreStores();
+      return goals.listByStatus(p.status as 'active' | 'paused' | 'usage_limited' | 'complete').map(coreGoalToIpcRow);
     }
 
     // Plan 328 Phase 6: session:search combines SessionStore.search (metadata

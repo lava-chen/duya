@@ -32,30 +32,43 @@ vi.mock('electron', () => ({
   },
 }));
 
+// Mock state lives in vi.hoisted so the vi.mock factory closure (also
+// hoisted) and the test bodies share one singleton. The in-memory
+// ConfigStore holds a shared `cron.jobs` array; getByPath returns it
+// and set replaces its contents (mirrors cron-store.test.ts).
+const mocks = vi.hoisted(() => {
+  const jobs: unknown[] = [];
+  return {
+    jobs,
+    store: {
+      getByPath: vi.fn((key: string): unknown => {
+        if (key === 'cron.jobs') return jobs;
+        return undefined;
+      }),
+      set: vi.fn((key: string, value: unknown): void => {
+        if (key === 'cron.jobs') {
+          jobs.length = 0;
+          jobs.push(...(value as unknown[]));
+        }
+      }),
+      subscribe: vi.fn(() => () => {}),
+    },
+  };
+});
+
+// Test file is at electron/cli/handlers/; the store instance is at
+// electron/config/store-instance.ts — so the path is '../../config/store-instance'.
+vi.mock('../../config/store-instance', () => ({
+  getConfigStore: () => mocks.store,
+}));
+
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS automation_crons (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT,
-  working_directory TEXT NOT NULL DEFAULT '',
-  schedule_kind TEXT NOT NULL,
-  schedule_at TEXT,
-  schedule_every_ms INTEGER,
-  schedule_cron_expr TEXT,
-  schedule_cron_tz TEXT,
-  schedule_end_at TEXT,
-  workflow_id TEXT,
-  prompt TEXT NOT NULL,
-  model TEXT NOT NULL,
-  input_params TEXT,
-  session_target TEXT NOT NULL DEFAULT 'isolated',
-  delivery_mode TEXT NOT NULL DEFAULT 'none',
-  concurrency_policy TEXT NOT NULL,
-  max_retries INTEGER NOT NULL,
-  status TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS automation_cron_state (
+  cron_id TEXT PRIMARY KEY,
+  status TEXT,
+  next_run_at INTEGER,
   last_run_at INTEGER,
   last_error TEXT,
-  next_run_at INTEGER,
   retry_count INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -121,6 +134,9 @@ function makeReq(headers: Record<string, string> = {}, body?: string): IncomingM
 beforeEach(async () => {
   userDataDir = mkdtempSync(join(tmpdir(), 'duya-cron-test-'));
   process.env.DUYA_CLI_USER_DATA_DIR = userDataDir;
+  mocks.jobs.length = 0;
+  mocks.store.getByPath.mockClear();
+  mocks.store.set.mockClear();
   try {
     db = new Database(':memory:');
     db.exec(SCHEMA);
@@ -153,7 +169,15 @@ afterEach(() => {
   }
   resetAutomationSchedulerForTests?.();
   try { db?.close(); } catch { /* db may be undefined if setup failed */ }
-  rmSync(userDataDir, { recursive: true, force: true });
+  // The module-level logger singleton initializes lazily on the first test
+  // and keeps an open write handle to `<userDataDir>/logs/app.log`, so on
+  // Windows rmSync cannot remove the non-empty logs dir. Best-effort — the
+  // leaked temp dir lives in the OS temp area and is harmless.
+  try {
+    rmSync(userDataDir, { recursive: true, force: true });
+  } catch {
+    /* best-effort cleanup */
+  }
   delete process.env.DUYA_CLI_USER_DATA_DIR;
 });
 
@@ -167,6 +191,11 @@ describe('handleGetCron', () => {
       enabled: true,
     });
     const created = activeScheduler!.listCrons()[0];
+
+    // The definition is persisted under cron.jobs in the ConfigStore.
+    const defs = mocks.store.getByPath('cron.jobs') as Array<{ id: string; name: string }>;
+    expect(defs).toHaveLength(1);
+    expect(defs[0].name).toBe('test-cron');
 
     const { res, capture } = makeRes();
     handleGetCron(makeReq(), res, created.id);

@@ -9,7 +9,6 @@
  *   - SQLite `weixin_accounts` -> channels.adapters.weixin.accounts
  *   - SQLite `automation_crons`-> cron.jobs
  *   - plugins/registry.json    -> plugins
- *   - marketplaces/known_marketplaces.json -> marketplaces
  *   - boot.json                -> deleted (storage handled by boot-config)
  *
  * Idempotent: `config.toml` already existing short-circuits to `{ skipped: true }`.
@@ -34,7 +33,6 @@ export interface MigrateOptions {
   settingsPath?: string;
   mcpTomlPath?: string;
   registryPath?: string;
-  marketplacesPath?: string;
 }
 
 export interface MigrateResult {
@@ -79,9 +77,6 @@ export function migrateConfig(db: MigrateDb, opts: MigrateOptions): MigrateResul
 
   const registryPath = opts.registryPath ?? path.join(dir, '..', 'plugins', 'registry.json');
   if (migratePluginRegistry(opts.store, registryPath)) migratedPaths.push(registryPath);
-
-  const marketplacesPath = opts.marketplacesPath ?? path.join(dir, '..', 'marketplaces', 'known_marketplaces.json');
-  if (migrateKnownMarketplaces(opts.store, marketplacesPath)) migratedPaths.push(marketplacesPath);
 
   // Ensure config.toml exists even when nothing was migrated, so the
   // `fs.existsSync(configPath)` guard stays a reliable idempotency check.
@@ -140,7 +135,6 @@ function migrateSettingsJson(store: ConfigStore, settingsPath: string): boolean 
       if (typeof p.providerType === 'string') store.set(`providers.${id}.providerType`, p.providerType);
       if (typeof p.baseUrl === 'string') store.set(`providers.${id}.baseUrl`, p.baseUrl);
       if (p.options !== undefined) store.set(`providers.${id}.options`, p.options);
-      if (p.enabled_models !== undefined) store.set(`providers.${id}.enabled_models`, p.enabled_models);
       if (typeof p.apiKey === 'string' && p.apiKey) store.set(`providers.${id}.apiKey`, p.apiKey);
       if (p.isActive === true) activeProviderIds.push(id);
     }
@@ -347,9 +341,16 @@ export function migrateSqliteRows(store: ConfigStore, db: MigrateDb): void {
   }
 
   // --- automation_crons -> cron.jobs ---
-  const cronRows = db.prepare(
-    'SELECT id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz, schedule_end_at, workflow_id, working_directory, prompt, input_params, model, status, concurrency_policy, max_retries FROM automation_crons',
-  ).all();
+  // New databases no longer create automation_crons (definitions now live in
+  // config.toml cron.jobs), so the legacy read may fail with no such table.
+  let cronRows: Array<Record<string, unknown>> = [];
+  try {
+    cronRows = db.prepare(
+      'SELECT id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz, schedule_end_at, workflow_id, working_directory, prompt, input_params, model, status, concurrency_policy, max_retries FROM automation_crons',
+    ).all() as Array<Record<string, unknown>>;
+  } catch {
+    cronRows = [];
+  }
   if (cronRows.length > 0) {
     const jobs: CronJob[] = cronRows.map((c) => ({
       id: String(c.id ?? ''),
@@ -406,7 +407,7 @@ function migrateSkillOverrides(store: ConfigStore, db: MigrateDb): void {
 }
 
 // =============================================================================
-// plugins / marketplaces
+// plugins
 // =============================================================================
 
 function migratePluginRegistry(store: ConfigStore, registryPath: string): boolean {
@@ -420,17 +421,6 @@ function migratePluginRegistry(store: ConfigStore, registryPath: string): boolea
       // Decision 11: only `enabled` is persisted; the rest is derived.
       store.set(`plugins.${id}@${marketplace}`, { enabled: Boolean(entry.enabled) });
     }
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function migrateKnownMarketplaces(store: ConfigStore, marketplacesPath: string): boolean {
-  if (!fs.existsSync(marketplacesPath)) return false;
-  try {
-    const parsed = JSON.parse(fs.readFileSync(marketplacesPath, 'utf-8'));
-    store.set('marketplaces', parsed);
     return true;
   } catch {
     return false;

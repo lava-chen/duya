@@ -21,6 +21,14 @@ export interface RunningProcess {
    * `null` means "use the global default".
    */
   providerId: string | null;
+  /**
+   * Optional per-session override for the heartbeat health-check timeout
+   * (ms). When unset, the pool's default (120s) applies. Long-running
+   * autonomous sessions (e.g. the headless memory curator, which runs up
+   * to 10 minutes) set this so the pool's health check does not kill the
+   * process mid-run; the runner's own wall-clock deadline governs instead.
+   */
+  heartbeatTimeoutMs?: number;
 }
 
 export function calculateMaxConcurrent(): number {

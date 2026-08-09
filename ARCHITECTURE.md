@@ -746,38 +746,51 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 | `channel_bindings` | Bridge 通道绑定 | Bridge |
 | `channel_offsets` | Bridge 通道偏移 | Bridge |
 | `channel_permission_links` | Bridge 权限链接 | Bridge |
-| `weixin_accounts` | 微信账户 | Bridge |
-| `weixin_context_tokens` | 微信上下文 Token | Bridge |
-| `automation_crons` | 定时任务配置 | Automation Scheduler |
-| `automation_cron_runs` | 定时任务执行历史 | Automation Scheduler |
+| ~~`weixin_accounts`~~ | ~微信账户（已迁移至 ConfigStore `channels.adapters.weixin.accounts`，见下说明）~ | Bridge |
+| `weixin_context_tokens` | 微信上下文 Token（运行时上下文，仍留 SQLite） | Bridge |
+| `automation_cron_state` | 定时任务运行时状态（status 覆盖 / next_run_at / last_run_at / last_error / retry_count） | Automation Scheduler |
+| `automation_cron_runs` | 定时任务执行历史（append-only） | Automation Scheduler |
 | `conductor_canvases` | Conductor 画布 | Renderer / Agent Process (via Main) |
 | `conductor_widgets` | Conductor Widget 实例 | Renderer / Agent Process (via Main) |
 | `conductor_actions` | Conductor 操作日志（可审计、可回放） | Main Process (唯一写入) / Renderer (只读) |
 | `_schema_migrations` | Schema 迁移记录 | Main Process |
 
 > **Provider 配置说明**：API Provider 配置不再存储在数据库，统一由 **ConfigStore** 管理（服务商元数据在 `config.toml`，密钥在 `~/.duya/secrets.json`）。
+>
+> **Channel/Gateway 配置收敛（Plan 335）**：`mcp_servers`、`channels`、`gateway_proxy`、`weixin_accounts` 的读写已全部收敛到 ConfigStore（`config.toml` + `secrets.json`）。`mcp.toml` 与 SQLite `settings`/`weixin_accounts` 直读路径已移除：MCP 用户列表经 `electron/services/mcp-config.ts` 读写 `mcp_servers.*`；channel 键经 `electron/config/gateway-setting-adapter.ts` 与 `electron/services/weixin-account-store.ts` 读写 `channels.*`；gateway 代理经 `gateway_proxy`。SQLite `settings` 表仅保留非 channel 键，`weixin_context_tokens` 作为运行时上下文仍留 SQLite。
 
 #### 自动化定时任务表
 
-**`automation_crons`** - 定时任务配置：
+**`cron.jobs`（ConfigStore，`config.toml`）** - 定时任务**定义**（唯一权威源，Plan 405）：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | TEXT | 主键，UUID |
 | `name` | TEXT | 任务名称 |
 | `description` | TEXT | 任务描述 |
-| `prompt` | TEXT | 执行提示词 |
 | `schedule_kind` | TEXT | 调度类型：`at`/`every`/`cron` |
-| `schedule_expr` | TEXT | 调度表达式 |
-| `timezone` | TEXT | 时区（IANA格式）|
-| `session_target` | TEXT | 会话目标：`isolated`（固定）|
-| `delivery_mode` | TEXT | 投递模式：`none`（固定）|
+| `schedule_at` / `schedule_every_ms` / `schedule_cron_expr` / `schedule_cron_tz` / `schedule_end_at` | TEXT/INT | 调度参数（按 kind 择一） |
+| `working_directory` | TEXT | 执行工作目录 |
+| `prompt` | TEXT | 执行提示词 |
+| `input_params` | OBJECT | 输入参数（TOML 存对象） |
+| `model` | TEXT | 模型 ID |
+| `status` | TEXT | 用户意图：`enabled`/`disabled`/`error`（定义态） |
 | `concurrency_policy` | TEXT | 并发策略：`skip`/`parallel`/`queue`/`replace` |
 | `max_retries` | INTEGER | 最大重试次数 |
-| `retry_backoff` | TEXT | 重试退避策略（JSON数组，秒）|
-| `enabled` | INTEGER | 是否启用 |
-| `created_at` | INTEGER | 创建时间戳 |
-| `updated_at` | INTEGER | 更新时间戳 |
+
+> 生命周期时间戳（`created_at`/`updated_at`）与运行时字段**不**入 TOML，存 `automation_cron_state`。定义由 `CronStore` 门面经 `getConfigStore()` 读写 `cron.jobs`。
+
+**`automation_cron_state`** - 定时任务**运行时状态**（有效 status = `state.status ?? def.status`）：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `cron_id` | TEXT | 主键，关联 cron 定义 ID（字符串关联，无 FK） |
+| `status` | TEXT | 运行时状态覆盖（`error`/自动 `disabled`）；NULL 表示有效状态取自定义 |
+| `next_run_at` | INTEGER | 下次运行时间戳 |
+| `last_run_at` | INTEGER | 上次运行时间戳 |
+| `last_error` | TEXT | 最近错误信息 |
+| `retry_count` | INTEGER | 当前重试计数 |
+| `created_at` / `updated_at` | INTEGER | 生命周期时间戳 |
 
 **`automation_cron_runs`** - 定时任务执行历史：
 
@@ -920,7 +933,9 @@ duya/
 │   │   ├── store.ts            # ConfigStore - config.toml + secrets.json 内存快照、原子持久化、广播
 │   │   ├── compass.ts          # 极早期引导 - 读取 config.toml storage.database_path (替代 boot.json)
 │   │   ├── migrate.ts          # 旧配置迁移 (settings.json/boot.json/mcp.toml 等 → config.toml)
+│   │   ├── gateway-setting-adapter.ts  # 旧 channel 写键 ⇄ ConfigStore 点路径互转 (Plan 335)
 │   │   ├── provider-types.ts   # Provider 类型定义
+│   │   ├── store-instance.ts   # ConfigStore 进程级单例 (指南针固定路径)
 │   │   └── schema.ts           # config.toml 结构定义
 │   ├── agent-process-pool.ts   # AgentProcessPool（并发上限 + 心跳 + 排队 + 消息落库）
 │   ├── session-manager.ts      # Session 状态跟踪与生命周期管理
@@ -1441,7 +1456,7 @@ commits, pushes, or otherwise mutates Git state.
 DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
 
 - **Scheduler location**: `electron/automation/Scheduler.ts`
-- **Storage tables**: `automation_crons`, `automation_cron_runs` (SQLite, main-process single writer)
+- **Storage**: cron definitions in ConfigStore `cron.jobs` (`config.toml`, sole authority); runtime state in `automation_cron_state`; run history in `automation_cron_runs` (SQLite, main-process single writer). Unified behind `CronStore` (`electron/automation/cron-store.ts`).
 - **Execution target**: fixed to **isolated** session (`session_target = 'isolated'`)
 - **Delivery mode**: fixed to **none** (`delivery_mode = 'none'`, run history only)
 - **IPC APIs**:

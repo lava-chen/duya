@@ -21,7 +21,6 @@ import { renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 
 import { useProvidersQuery } from '../useProvidersQuery';
-import { useSetActiveProviderMutation } from '../useSetActiveProviderMutation';
 import { useDeleteProviderMutation } from '../useDeleteProviderMutation';
 import { useUpsertProviderMutation } from '../useUpsertProviderMutation';
 import { providersQueryKey } from '../queryKeys';
@@ -117,33 +116,6 @@ describe('useProvidersQuery', () => {
     const { result } = renderHook(() => useProvidersQuery(), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error).toBe(err);
-  });
-});
-
-describe('useSetActiveProviderMutation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('calls setDefaultLlmProviderIPC with the given id', async () => {
-    vi.mocked(ipcClient.setDefaultLlmProviderIPC).mockResolvedValue(true);
-    const { wrapper } = makeWrapper();
-    const { result } = renderHook(() => useSetActiveProviderMutation(), { wrapper });
-    await result.current.mutateAsync('p-anthropic');
-    expect(ipcClient.setDefaultLlmProviderIPC).toHaveBeenCalledWith('p-anthropic');
-  });
-
-  it('invalidates the providers query key on success', async () => {
-    vi.mocked(ipcClient.setDefaultLlmProviderIPC).mockResolvedValue(true);
-    const { wrapper, qc } = makeWrapper();
-    // Seed the cache with a list.
-    qc.setQueryData(providersQueryKey(), []);
-    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
-    const { result } = renderHook(() => useSetActiveProviderMutation(), { wrapper });
-    await result.current.mutateAsync('p-anthropic');
-    expect(invalidateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: providersQueryKey() }),
-    );
   });
 });
 

@@ -733,15 +733,6 @@ export interface PluginAPI {
   setupSave: (payload: { pluginId: string; values: Record<string, string> }) => Promise<{ success: boolean; data?: { ok: boolean }; error?: string }>
 }
 
-export interface MarketplaceEntry {
-  key: string
-  name: string
-  url: string
-  description?: string
-  autoUpdate: boolean
-  trusted?: boolean
-}
-
 /**
  * App Connection API — Plan 312.
  *
@@ -790,17 +781,6 @@ export interface AppConnectionAPI {
     data?: { disconnected: boolean }
     error?: string
   }>
-}
-
-export interface MarketplaceAPI {
-  list: () => Promise<{ success: boolean; data: MarketplaceEntry[]; error?: string }>
-  add: (payload: { key: string; entry: { name: string; url: string; description?: string; autoUpdate: boolean; trusted?: boolean } }) =>
-    Promise<{ success: boolean; data?: MarketplaceEntry; error?: string }>
-  update: (payload: { key: string; entry: { name?: string; url?: string; description?: string; autoUpdate?: boolean; trusted?: boolean } }) =>
-    Promise<{ success: boolean; data?: MarketplaceEntry; error?: string }>
-  remove: (payload: { key: string }) => Promise<{ success: boolean; data?: { removed: boolean }; error?: string }>
-  reset: () => Promise<{ success: boolean; data: MarketplaceEntry[]; error?: string }>
-  checkName: (name: string) => Promise<{ success: boolean; data?: { name: string; blocked: boolean }; error?: string }>
 }
 
 export interface TerminalAPI {
@@ -960,7 +940,6 @@ export interface ElectronAPI {
   agentProfile: AgentProfileAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
-  marketplace: MarketplaceAPI
   terminal: TerminalAPI
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
@@ -1829,14 +1808,6 @@ const electronAPI: ElectronAPI = {
     configureProvider: (payload: { provider: string; clientId: string; clientSecret?: string }) =>
       ipcRenderer.invoke('appConnection:configureProvider', payload),
     disconnect: (connectionId: string) => ipcRenderer.invoke('appConnection:disconnect', connectionId),
-  },
-  marketplace: {
-    list: () => ipcRenderer.invoke('marketplace:list'),
-    add: (payload) => ipcRenderer.invoke('marketplace:add', payload),
-    update: (payload) => ipcRenderer.invoke('marketplace:update', payload),
-    remove: (payload) => ipcRenderer.invoke('marketplace:remove', payload),
-    reset: () => ipcRenderer.invoke('marketplace:reset'),
-    checkName: (name: string) => ipcRenderer.invoke('marketplace:check-name', name),
   },
   terminal: {
     spawn: (params) => ipcRenderer.invoke('terminal:spawn', params),

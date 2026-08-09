@@ -5,7 +5,7 @@
  * to communicate with the Electron Main Process via child_process IPC.
  */
 
-import type { MainToGatewayMessage, GatewayToMainMessage } from './types.js';
+import type { MainToGatewayMessage, GatewayToMainMessage, PlatformType } from './types.js';
 
 interface PendingRequest {
   type: string;
@@ -92,6 +92,40 @@ export class IpcClient {
    */
   async listPairings(): Promise<{ pending: unknown[]; approved: unknown[] }> {
     return this.request('gateway:pairing:list', {}) as Promise<{ pending: unknown[]; approved: unknown[] }>;
+  }
+
+  /**
+   * Resolve a pending permission request via text command (approve/deny).
+   */
+  resolvePermissionByCommand(decision: 'allow' | 'deny'): void {
+    this.send({ type: 'gateway:permission_resolve', permissionId: 'pending', decision });
+  }
+
+  /**
+   * Request interruption of an active session (kill terminal / cancel tools).
+   */
+  interruptSession(sessionId: string): void {
+    this.send({ type: 'gateway:interrupt', sessionId });
+  }
+
+  /**
+   * Forward a gateway-local command to Main for cross-process handling
+   * (reload-mcp / update / rollback / personality / voice / fast / verbose ...).
+   */
+  forwardCommand(
+    command: string,
+    args: string[],
+    opts: { sessionId?: string; platform: PlatformType; platformChatId: string; options?: Record<string, unknown> },
+  ): void {
+    this.send({
+      type: 'gateway:command',
+      command,
+      args,
+      sessionId: opts.sessionId,
+      platform: opts.platform,
+      platformChatId: opts.platformChatId,
+      options: opts.options,
+    });
   }
 
   /**

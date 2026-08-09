@@ -4,7 +4,7 @@ import { IconButton } from '@/components/ui/IconButton';
 import { cn } from '@/lib/utils';
 
 export type InputSize = 'sm' | 'md' | 'lg';
-export type InputType = 'text' | 'password' | 'email' | 'url' | 'number' | 'search';
+export type InputType = 'text' | 'password' | 'email' | 'url' | 'number' | 'search' | 'time' | 'datetime-local';
 
 export interface InputProps
   extends Omit<

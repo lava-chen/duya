@@ -9,6 +9,7 @@ import {
   claimRun,
   completeRun,
   failRun,
+  abandonExpiredRuns,
   computeInputSetHash,
   type CurationInput,
   type InputDisposition,
@@ -20,6 +21,7 @@ import { preparePublication, executePublication, recoverPublication, type Recove
 import { createSnapshot } from './curation_snapshot';
 import { appendHealthReport, type HealthReport } from '../../packages/agent/src/memory-state/curation_health';
 import { scanAdHocChanges, type AdHocInput } from './ad_hoc_watcher';
+import { deriveRolloutSummaryFilename } from '../../packages/agent/src/memory-state/projectionContent';
 
 /**
  * End-to-end curation cycle orchestrator (design §8.4 + §9.1).
@@ -34,10 +36,10 @@ import { scanAdHocChanges, type AdHocInput } from './ad_hoc_watcher';
  * validation — no live memory writes occur.
  */
 
-const MIN_INPUTS_FOR_RUN = 3;
-const MAX_INPUTS = 8;
+const MIN_INPUTS_FOR_RUN = 2;
+const MAX_INPUTS = 3;
 const MAX_INPUT_BYTES = 512 * 1024;
-const AGENT_TIMEOUT_MS = 600_000; // 10 minutes
+const AGENT_TIMEOUT_MS = 1_200_000; // 20 minutes
 
 export interface ProviderConfig {
   apiKey: string;
@@ -95,6 +97,10 @@ export async function runCurationCycle(
   const startTime = Date.now();
   const now = opts.now ?? Date.now();
 
+  // Recover orphaned runs (expired lease while still 'running') before
+  // claiming, so their pinned inputs become claimable again.
+  abandonExpiredRuns(db, now);
+
   // 1. Query eligible inputs (rollout + ad-hoc), merged and truncated.
   const rolloutEligible = queryEligibleInputs(db, {
     maxInputs: MAX_INPUTS,
@@ -111,7 +117,18 @@ export async function runCurationCycle(
     inputKey: e.inputKey,
     contentHash: e.contentHash,
     outputUpdatedAt: e.outputUpdatedAt,
-    sourcePath: path.join(opts.memoryRoot, 'rollout_summaries', `${e.inputKey}.md`),
+    // The on-disk projection filename is derived (rollout_id + slug +
+    // generated_at), NOT `<rollout_id>.md` — match writer.ts exactly so the
+    // frozen evidence source exists.
+    sourcePath: path.join(
+      opts.memoryRoot,
+      'rollout_summaries',
+      deriveRolloutSummaryFilename({
+        rollout_id: e.inputKey,
+        rollout_slug: e.rolloutSlug,
+        generated_at: e.generatedAt,
+      }),
+    ),
   }));
   const adHocClaimed: ClaimedInput[] = adHocEligible.map((e) => ({
     inputKind: e.inputKind,

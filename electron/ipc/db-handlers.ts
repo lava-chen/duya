@@ -21,7 +21,19 @@ import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
 import { emitGatewayConfigChanged, isGatewayConfigKey } from '../gateway/config-events';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
-import { readUserMcpToml, writeUserMcpToml } from '../services/mcp-toml-config';
+import { readUserMcpToml, writeUserMcpToml } from '../services/mcp-config';
+import {
+  applyGatewaySettingToStore,
+  readAllGatewaySettings,
+  readGatewaySettingFromStore,
+} from '../config/gateway-setting-adapter';
+import { getConfigStore } from '../config/store-instance';
+import {
+  getWeixinAccounts,
+  upsertWeixinAccount,
+  updateWeixinAccount,
+  deleteWeixinAccount,
+} from '../services/weixin-account-store';
 import {
   initDatabaseFromBoot,
   initDatabase,
@@ -640,11 +652,23 @@ export function registerDbHandlers(): void {
   // ==================== Settings Handlers ====================
 
   ipcMain.handle('db:setting:get', (_event, key: string) => {
+    if (isGatewayConfigKey(key)) {
+      const v = readGatewaySettingFromStore(getConfigStore(), key);
+      return v;
+    }
     const row = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     return row?.value ?? null;
   });
 
   ipcMain.handle('db:setting:set', (_event, key: string, value: string) => {
+    if (isGatewayConfigKey(key)) {
+      const store = getConfigStore();
+      if (applyGatewaySettingToStore(store, key, value)) {
+        emitGatewayConfigChanged(`db:setting:set:${key}`);
+        return;
+      }
+      // not a channel-scoped key after all: fall through to SQLite
+    }
     const now = Date.now();
     getDb().prepare(`
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -659,10 +683,23 @@ export function registerDbHandlers(): void {
     const rows = getDb().prepare('SELECT key, value FROM settings').all() as Array<{ key: string; value: string }>;
     const settings: Record<string, string> = {};
     for (const row of rows) settings[row.key] = row.value;
+    // Channel/gateway config now lives in ConfigStore (plan 335). Overlay the
+    // legacy keys the renderer still reads so the SQLite settings table is not a
+    // second source of truth for channels.
+    Object.assign(settings, readAllGatewaySettings(getConfigStore()));
     return settings;
   });
 
   ipcMain.handle('db:setting:getJson', (_event, key: string, defaultValue: unknown) => {
+    if (isGatewayConfigKey(key)) {
+      const v = readGatewaySettingFromStore(getConfigStore(), key);
+      if (v === null) return defaultValue;
+      try {
+        return JSON.parse(v);
+      } catch {
+        return v;
+      }
+    }
     const value = getDb().prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
     if (!value) return defaultValue;
     try {
@@ -681,6 +718,14 @@ export function registerDbHandlers(): void {
   });
 
   ipcMain.handle('db:setting:setJson', (_event, key: string, value: unknown) => {
+    if (isGatewayConfigKey(key)) {
+      const store = getConfigStore();
+      if (applyGatewaySettingToStore(store, key, value)) {
+        emitGatewayConfigChanged(`db:setting:setJson:${key}`);
+        return;
+      }
+      // not a channel-scoped key after all: fall through to SQLite
+    }
     const now = Date.now();
     getDb().prepare(`
       INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -983,7 +1028,7 @@ export function registerDbHandlers(): void {
   // ==================== Weixin Account Handlers ====================
 
   ipcMain.handle('db:weixin:getAccounts', () => {
-    return getDb().prepare('SELECT * FROM weixin_accounts ORDER BY created_at DESC').all();
+    return getWeixinAccounts();
   });
 
   ipcMain.handle('db:weixin:upsertAccount', (_event, data: {
@@ -995,68 +1040,41 @@ export function registerDbHandlers(): void {
     token: string;
     enabled?: boolean;
   }) => {
-    const now = Date.now();
-    const database = getDb();
-    database.prepare(`
-      INSERT INTO weixin_accounts (account_id, user_id, name, base_url, cdn_base_url, token, enabled, last_login_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(account_id) DO UPDATE SET
-        user_id = COALESCE(excluded.user_id, user_id),
-        name = COALESCE(excluded.name, name),
-        base_url = COALESCE(excluded.base_url, base_url),
-        cdn_base_url = COALESCE(excluded.cdn_base_url, cdn_base_url),
-        token = excluded.token,
-        enabled = COALESCE(excluded.enabled, enabled),
-        last_login_at = excluded.last_login_at,
-        created_at = COALESCE(weixin_accounts.created_at, excluded.created_at)
-    `).run(
-      data.accountId,
-      data.userId || '',
-      data.name || data.accountId,
-      data.baseUrl || '',
-      data.cdnBaseUrl || '',
-      data.token,
-      data.enabled !== undefined ? (data.enabled ? 1 : 0) : 1,
-      now,
-      now
-    );
+    const row = upsertWeixinAccount({
+      accountId: data.accountId,
+      userId: data.userId,
+      name: data.name,
+      baseUrl: data.baseUrl,
+      cdnBaseUrl: data.cdnBaseUrl,
+      token: data.token,
+      enabled: data.enabled,
+    });
     emitGatewayConfigChanged(`db:weixin:upsertAccount:${data.accountId}`);
-    return database.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(data.accountId);
+    return row;
   });
 
   ipcMain.handle('db:weixin:updateAccount', (_event, accountId: string, data: {
     enabled?: boolean;
     name?: string;
   }) => {
-    const fields: string[] = [];
-    const values: unknown[] = [];
-
-    if (data.enabled !== undefined) {
-      fields.push('enabled = ?');
-      values.push(data.enabled ? 1 : 0);
+    const row = updateWeixinAccount(accountId, {
+      enabled: data.enabled,
+      name: data.name,
+    });
+    if (row) {
+      emitGatewayConfigChanged(`db:weixin:updateAccount:${accountId}`);
     }
-    if (data.name !== undefined) {
-      fields.push('name = ?');
-      values.push(data.name);
-    }
-
-    if (fields.length === 0) return null;
-
-    const database = getDb();
-    values.push(accountId);
-    database.prepare(`UPDATE weixin_accounts SET ${fields.join(', ')} WHERE account_id = ?`).run(...values);
-    emitGatewayConfigChanged(`db:weixin:updateAccount:${accountId}`);
-    return database.prepare('SELECT * FROM weixin_accounts WHERE account_id = ?').get(accountId);
+    return row;
   });
 
   ipcMain.handle('db:weixin:deleteAccount', (_event, accountId: string) => {
     const database = getDb();
     database.prepare('DELETE FROM weixin_context_tokens WHERE account_id = ?').run(accountId);
-    const result = database.prepare('DELETE FROM weixin_accounts WHERE account_id = ?').run(accountId);
-    if (result.changes > 0) {
+    const deleted = deleteWeixinAccount(accountId);
+    if (deleted) {
       emitGatewayConfigChanged(`db:weixin:deleteAccount:${accountId}`);
     }
-    return result.changes > 0;
+    return deleted;
   });
 
   ipcMain.handle('db:weixin:getContextToken', (_event, accountId: string, peerUserId: string) => {

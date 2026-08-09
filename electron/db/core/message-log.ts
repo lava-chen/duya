@@ -470,7 +470,11 @@ export class MessageLog {
     const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(date.getUTCDate()).padStart(2, '0');
     const stamp = date.toISOString().replace(/[:.]/g, '-');
-    return path.join('sessions', yyyy, mm, dd, `rollout-${stamp}-${sessionId}.jsonl`);
+    // Legacy session IDs can contain Windows-invalid filename chars (e.g.
+    // `cron:<uuid>:<ts>:<uuid>` from the WeChat/cron bridge). Sanitize the
+    // segment so the rollout file can be created on every platform; the
+    // sanitization is deterministic so derived and stored paths stay aligned.
+    return path.join('sessions', yyyy, mm, dd, `rollout-${stamp}-${sanitizeFilenameSegment(sessionId)}.jsonl`);
   }
 
   /** Create the file (and parent directories) if it does not exist. */
@@ -607,6 +611,12 @@ export class MessageLog {
 }
 
 // ─── Helpers ───
+
+/** Replace characters invalid in Windows filenames so session IDs stay safe on disk. */
+function sanitizeFilenameSegment(value: string): string {
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-');
+}
 
 function deriveKind(payload: MessageEntry | CompactionEntry): EventKind {
   if (payload.type === 'compaction') return 'compaction';

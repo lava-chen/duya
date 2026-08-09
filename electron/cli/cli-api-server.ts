@@ -104,6 +104,7 @@ import {
   handleSkillSync,
   handleChannelTest,
   handleChannelSendTest,
+  handleChannelSend,
 } from './handlers/extra.js';
 import {
   handleCronEnable,
@@ -559,6 +560,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'send-test') {
     const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
     void handleChannelSendTest(req, res, correlationId);
+    return;
+  }
+
+  // POST /v1/channels/send
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'send') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleChannelSend(req, res, correlationId);
     return;
   }
 

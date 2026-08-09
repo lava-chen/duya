@@ -51,8 +51,6 @@ import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
-import { getMarketplaceSyncManager } from './plugins/marketplace';
-import { scanDirectoryForPlugins } from './plugins/marketplace/temp-dir-marketplace';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -68,7 +66,7 @@ import { setupApplicationMenu } from './core/menu-manager';
 import { getIsShuttingDown, performGracefulShutdown } from './core/graceful-shutdown';
 import { parseSkillFrontmatter, parseAllowedTools } from './utils/skill-parser';
 import { wasLaunchedAsHidden, setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from './services/auto-start';
-import { getUserMcpTomlPath, migrateLegacyMcpServers, startUserMcpTomlWatcher } from './services/mcp-toml-config';
+
 
 // =============================================================================
 // App Lifecycle: lock -> boot -> db -> config -> daemon/UI
@@ -193,39 +191,6 @@ if (gotTheLock) {
     // `initConfigManager` are gone: the isActive -> defaultProviderId promotion
     // is folded into `migrateConfig` (migrateSettingsJson), which runs below.
     // Provider reads go through `getProviderStore()`/`getConfigStore()`.
-
-    // One-time migration of user-managed MCPs. Runtime collection reads only
-    // mcp.toml afterwards; plugin and bundled declarations remain separate.
-    try {
-      const db = getDatabase();
-      const legacySettings = db
-        ?.prepare("SELECT value FROM settings WHERE key = 'mcpServers'")
-        .get() as { value?: string } | undefined;
-      let settingsKv: unknown[] = [];
-      let legacyFile: unknown[] = [];
-      try {
-        const parsed = legacySettings?.value ? JSON.parse(legacySettings.value) : [];
-        settingsKv = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        settingsKv = [];
-      }
-      try {
-        const legacyPath = path.join(path.dirname(getUserMcpTomlPath()), 'settings.json');
-        const parsed = JSON.parse(fs.readFileSync(legacyPath, 'utf8')) as { mcpServers?: unknown };
-        legacyFile = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
-      } catch {
-        legacyFile = [];
-      }
-      await migrateLegacyMcpServers([
-        settingsKv as never[],
-        legacyFile as never[],
-      ]);
-      startUserMcpTomlWatcher();
-    } catch (error) {
-      logger.warn('MCP TOML migration or watcher startup failed', {
-        error: error instanceof Error ? error.message : String(error),
-      }, LogComponent.AgentProcess);
-    }
 
     // ============================================================
     // Step 4: Initialize subsystems
@@ -777,26 +742,6 @@ void (async () => {
     );
   }
 })();
-
-// Marketplace: handle --add-dir CLI flag
-const addDirIndex = process.argv.indexOf('--add-dir');
-if (addDirIndex >= 0 && process.argv[addDirIndex + 1]) {
-  const dirPath = process.argv[addDirIndex + 1];
-  try {
-    const catalog = scanDirectoryForPlugins(dirPath);
-    const syncManager = getMarketplaceSyncManager();
-    syncManager.addLocalDir(`temp-dir-${Date.now()}`, dirPath);
-    logger.info('Loaded --add-dir marketplace', { dirPath, pluginCount: Object.keys(catalog.plugins).length }, 'Main');
-  } catch (err) {
-    logger.error('Failed to load --add-dir marketplace', err instanceof Error ? err : new Error(String(err)), undefined, 'Main');
-  }
-}
-
-// Marketplace: start auto-sync and preload catalogs
-void getMarketplaceSyncManager().preloadCatalogs().catch((err) => {
-  logger.warn('Marketplace catalog preload failed', { error: err instanceof Error ? err.message : String(err) }, 'Main');
-});
-getMarketplaceSyncManager().startAutoSync();
 
 // =============================================================================
 // Graceful Shutdown

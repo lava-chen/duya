@@ -2,16 +2,13 @@
 // Unit tests for the main-process MCP candidate collector.
 //
 // The IPC / accessors (PluginManager, ConfigManager, better-sqlite3,
-// readPluginManifest) are mocked so the tests run in isolation. The
-// pure transforms now live in @duya/plugin-core/src/mcp/collect.ts and
+// readPluginManifest, mcp-config) are mocked so the tests run in isolation.
+// The pure transforms now live in @duya/plugin-core/src/mcp/collect.ts and
 // are exercised here against the shared engine (`buildMCPCandidates`
 // and friends). The main-process-specific async wrapper
 // `collectMainMCPCandidates` is tested directly.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 
 // Mock the main-process accessors BEFORE importing the collector.
 vi.mock('../../plugins/PluginManager.js', () => ({
@@ -56,6 +53,15 @@ vi.mock('../../logging/logger.js', () => ({
     warn: vi.fn(),
     error: vi.fn(),
   }),
+}));
+
+// Mock the user-managed MCP accessor. It now reads from ConfigStore, so
+// tests drive it directly instead of writing mcp.toml to disk.
+const mcpConfigMocks = vi.hoisted(() => ({
+  readUserMcpToml: vi.fn(),
+}));
+vi.mock('../../services/mcp-config.js', () => ({
+  readUserMcpToml: mcpConfigMocks.readUserMcpToml,
 }));
 
 import { getPluginManager } from '../../plugins/PluginManager.js';
@@ -202,112 +208,51 @@ describe('collectMainMCPCandidates (accessor wrapper)', () => {
   beforeEach(() => {
     mockedGetPluginManager.mockReset();
     mockedGetDatabase.mockReset();
+    mcpConfigMocks.readUserMcpToml.mockReset();
+    mcpConfigMocks.readUserMcpToml.mockResolvedValue([]);
   });
 
   it('returns an empty MCPCollectionResult when all accessors fail', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
-    try {
-      const prev = process.env.DUYA_APP_DATA_PATH;
-      process.env.DUYA_APP_DATA_PATH = dir;
-      try {
-        mockedGetPluginManager.mockImplementation((() => { throw new Error('plugin-mgr-down'); }) as never);
-        const r = await collectMainMCPCandidates();
-        expect(r.candidates).toEqual([]);
-        expect(r.issues).toEqual([]);
-      } finally {
-        if (prev === undefined) {
-          delete process.env.DUYA_APP_DATA_PATH;
-        } else {
-          process.env.DUYA_APP_DATA_PATH = prev;
-        }
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    mockedGetPluginManager.mockImplementation((() => { throw new Error('plugin-mgr-down'); }) as never);
+    const r = await collectMainMCPCandidates();
+    expect(r.candidates).toEqual([]);
+    expect(r.issues).toEqual([]);
   });
 
   it('does not re-import user MCPs from deprecated stores', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
-    try {
-      const prev = process.env.DUYA_APP_DATA_PATH;
-      process.env.DUYA_APP_DATA_PATH = dir;
-      try {
-        mockedGetPluginManager.mockReturnValue({
-          listInstalled: () => [
-            {
-              id: 'p1', name: 'P1', enabled: true, installPath: '/p1', dataPath: '/d1',
-              manifest: { capabilities: { mcpServers: [{ name: 'lit', command: 'node', args: [] }] } },
-            },
-          ],
-        } as unknown as ReturnType<typeof getPluginManager>);
-        const r = await collectMainMCPCandidates();
-        const sources = new Set(r.candidates.map((c) => c.source));
-        expect(sources.has('plugin')).toBe(true);
-        expect(sources.has('settings')).toBe(false);
-      } finally {
-        if (prev === undefined) {
-          delete process.env.DUYA_APP_DATA_PATH;
-        } else {
-          process.env.DUYA_APP_DATA_PATH = prev;
-        }
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    mockedGetPluginManager.mockReturnValue({
+      listInstalled: () => [
+        {
+          id: 'p1', name: 'P1', enabled: true, installPath: '/p1', dataPath: '/d1',
+          manifest: { capabilities: { mcpServers: [{ name: 'lit', command: 'node', args: [] }] } },
+        },
+      ],
+    } as unknown as ReturnType<typeof getPluginManager>);
+    const r = await collectMainMCPCandidates();
+    const sources = new Set(r.candidates.map((c) => c.source));
+    expect(sources.has('plugin')).toBe(true);
+    expect(sources.has('settings')).toBe(false);
   });
 
-  it('reads mcp.toml when DUYA_APP_DATA_PATH is set', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
-    try {
-      const settingsPath = join(dir, 'mcp.toml');
-      writeFileSync(
-        settingsPath,
-        '[mcp_servers.factory-from-disk]\ncommand = "node"\nenabled = true\n',
-      );
-      const prev = process.env.DUYA_APP_DATA_PATH;
-      process.env.DUYA_APP_DATA_PATH = dir;
-      try {
-        mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
-        const r = await collectMainMCPCandidates();
-        const fromToml = r.candidates.find(
-          (c) => c.source === 'settings' && c.sourceSubOrigin === 'tomlFile',
-        );
-        expect(fromToml).toBeDefined();
-        expect(fromToml!.rawConfig.name).toBe('factory-from-disk');
-      } finally {
-        if (prev === undefined) {
-          delete process.env.DUYA_APP_DATA_PATH;
-        } else {
-          process.env.DUYA_APP_DATA_PATH = prev;
-        }
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('reads user MCPs from ConfigStore via mcp-config', async () => {
+    mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
+    mcpConfigMocks.readUserMcpToml.mockResolvedValue([
+      { name: 'factory-from-disk', command: 'node', args: [], enabled: true },
+    ]);
+    const r = await collectMainMCPCandidates();
+    const fromToml = r.candidates.find(
+      (c) => c.source === 'settings' && c.sourceSubOrigin === 'tomlFile',
+    );
+    expect(fromToml).toBeDefined();
+    expect(fromToml!.rawConfig.name).toBe('factory-from-disk');
   });
 
-  it('emits a mcp-settings-invalid issue when mcp.toml is malformed', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'duya-main-mcp-'));
-    try {
-      const settingsPath = join(dir, 'mcp.toml');
-      writeFileSync(settingsPath, 'this is not toml = [');
-      const prev = process.env.DUYA_APP_DATA_PATH;
-      process.env.DUYA_APP_DATA_PATH = dir;
-      try {
-        mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
-        const r = await collectMainMCPCandidates();
-        const settingsInvalid = r.issues.filter((i) => i.error.type === 'mcp-settings-invalid');
-        expect(settingsInvalid.length).toBeGreaterThan(0);
-        expect(settingsInvalid[0].phase).toBe('discovery');
-      } finally {
-        if (prev === undefined) {
-          delete process.env.DUYA_APP_DATA_PATH;
-        } else {
-          process.env.DUYA_APP_DATA_PATH = prev;
-        }
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+  it('emits a mcp-settings-invalid issue when the user MCP source is malformed', async () => {
+    mockedGetPluginManager.mockReturnValue({ listInstalled: () => [] } as unknown as ReturnType<typeof getPluginManager>);
+    mcpConfigMocks.readUserMcpToml.mockRejectedValue(new Error('bad mcp config'));
+    const r = await collectMainMCPCandidates();
+    const settingsInvalid = r.issues.filter((i) => i.error.type === 'mcp-settings-invalid');
+    expect(settingsInvalid.length).toBeGreaterThan(0);
+    expect(settingsInvalid[0].phase).toBe('discovery');
   });
 });

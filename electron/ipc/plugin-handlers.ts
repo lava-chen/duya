@@ -32,9 +32,6 @@ import type {
   PluginSetupLoadResult,
 } from '../../src/lib/plugin-types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
-import { getKnownMarketplacesManager } from '../plugins/marketplace/known-marketplaces-manager';
-import { isBlockedMarketplaceName } from '../plugins/marketplace/impersonation-detector';
-import type { MarketplaceEntry } from '../plugins/marketplace/types';
 // Plan 311 — workflow template discovery & summary projection.
 import { listBuiltinCachePlugins } from '../plugins/cache/builtin-sync.js';
 import { discoverWorkflows, discoverSkills } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
@@ -619,105 +616,6 @@ export function registerPluginHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:cache:cleanup failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, error: message };
-    }
-  });
-
-  // --- marketplace:list ---
-  ipcMain.handle('marketplace:list', async () => {
-    try {
-      const mkManager = getKnownMarketplacesManager();
-      const marketplaces = mkManager.getAll();
-      const entries = Object.entries(marketplaces).map(([key, entry]) => ({
-        key,
-        ...entry,
-      }));
-      return { success: true, data: entries };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, data: [], error: message };
-    }
-  });
-
-  // --- marketplace:add ---
-  ipcMain.handle('marketplace:add', async (_event, payload: { key: string; entry: MarketplaceEntry }) => {
-    try {
-      if (isBlockedMarketplaceName(payload.key)) {
-        return { success: false, error: `Marketplace name "${payload.key}" is blocked (impersonation detected)` };
-      }
-      const mkManager = getKnownMarketplacesManager();
-      const added = mkManager.add(payload.key, payload.entry);
-      if (!added) {
-        return { success: false, error: `Marketplace "${payload.key}" already exists` };
-      }
-      const entry = mkManager.get(payload.key);
-      return { success: true, data: { key: payload.key, ...entry } };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:add failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, error: message };
-    }
-  });
-
-  // --- marketplace:update ---
-  ipcMain.handle('marketplace:update', async (_event, payload: { key: string; entry: Partial<MarketplaceEntry> }) => {
-    try {
-      const mkManager = getKnownMarketplacesManager();
-      const updated = mkManager.update(payload.key, payload.entry);
-      if (!updated) {
-        return { success: false, error: `Marketplace "${payload.key}" not found` };
-      }
-      const entry = mkManager.get(payload.key);
-      return { success: true, data: { key: payload.key, ...entry } };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:update failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, error: message };
-    }
-  });
-
-  // --- marketplace:remove ---
-  ipcMain.handle('marketplace:remove', async (_event, payload: { key: string }) => {
-    try {
-      const mkManager = getKnownMarketplacesManager();
-      const removed = mkManager.remove(payload.key);
-      if (!removed) {
-        return { success: false, error: `Marketplace "${payload.key}" not found` };
-      }
-      return { success: true, data: { removed: true } };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, error: message };
-    }
-  });
-
-  // --- marketplace:reset ---
-  ipcMain.handle('marketplace:reset', async () => {
-    try {
-      const mkManager = getKnownMarketplacesManager();
-      const file = mkManager.reset();
-      const entries = Object.entries(file.marketplaces).map(([key, entry]) => ({
-        key,
-        ...entry,
-      }));
-      return { success: true, data: entries };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:reset failed', err instanceof Error ? err : new Error(message), COMPONENT);
-      return { success: false, data: [], error: message };
-    }
-  });
-
-  // --- marketplace:check-name ---
-  ipcMain.handle('marketplace:check-name', async (_event, name: string) => {
-    try {
-      const blocked = isBlockedMarketplaceName(name);
-      return { success: true, data: { name, blocked } };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('marketplace:check-name failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, error: message };
     }
   });

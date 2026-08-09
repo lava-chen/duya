@@ -5,7 +5,7 @@
  */
 
 import type { CommandCategory } from './types.js';
-import { COMMAND_REGISTRY } from './registry.js';
+import { getAllCommands } from './registry.js';
 
 // ============================================================================
 // Category Labels
@@ -18,6 +18,10 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
   tools: 'Tools & Skills',
   exit: 'Exit',
   pairing: 'Pairing',
+  model: 'Model',
+  context: 'Context & Usage',
+  account: 'Account',
+  voice: 'Voice',
 };
 
 // ============================================================================
@@ -28,25 +32,26 @@ const CATEGORY_LABELS: Record<CommandCategory, string> = {
  * Generate help text for gateway commands.
  */
 export function generateHelpText(platform: 'app' | 'gateway' = 'gateway'): string {
-  // Filter commands by platform if specified
+  // Filter commands by platform if specified. Includes dynamic commands.
   const commands = platform === 'gateway'
-    ? COMMAND_REGISTRY
-    : COMMAND_REGISTRY;
+    ? getAllCommands()
+    : getAllCommands();
 
   // Group by category
-  const sections = new Map<CommandCategory, { name: string; description: string; aliases?: readonly string[] }[]>();
+  const sections = new Map<CommandCategory, { name: string; description: string; argsHint?: string; aliases?: readonly string[] }[]>();
   for (const cmd of commands) {
     const entries = sections.get(cmd.category) ?? [];
     entries.push({
       name: cmd.name,
       description: cmd.description,
+      argsHint: cmd.argsHint,
       aliases: cmd.aliases,
     });
     sections.set(cmd.category, entries);
   }
 
   // Format sections in order
-  const order: CommandCategory[] = ['session', 'config', 'info', 'tools', 'exit'];
+  const order: CommandCategory[] = ['session', 'config', 'info', 'tools', 'exit', 'pairing', 'model', 'context', 'account', 'voice'];
   const lines: string[] = ['*Available Commands:*\n'];
 
   for (const cat of order) {
@@ -56,10 +61,11 @@ export function generateHelpText(platform: 'app' | 'gateway' = 'gateway'): strin
 
     const header = `**${CATEGORY_LABELS[cat]}**`;
     const entryLines = entries.map((entry) => {
+      const usage = entry.argsHint ? ` ${entry.argsHint}` : '';
       const aliasPart = entry.aliases?.length
         ? ` (alias: ${entry.aliases.map((a) => `/${a}`).join(', ')})`
         : '';
-      return `\`/${entry.name}\` - ${entry.description}${aliasPart}`;
+      return `\`/${entry.name}${usage}\` - ${entry.description}${aliasPart}`;
     });
 
     lines.push(header);
@@ -73,7 +79,7 @@ export function generateHelpText(platform: 'app' | 'gateway' = 'gateway'): strin
  * Get help for a specific command.
  */
 export function getCommandHelp(name: string): string | null {
-  const cmd = COMMAND_REGISTRY.find(
+  const cmd = getAllCommands().find(
     (c) => c.name === name || c.aliases?.includes(name)
   );
   if (!cmd) return null;

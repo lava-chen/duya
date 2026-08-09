@@ -312,9 +312,10 @@ export const useConversationStore = create<ConversationState>()(
           return null;
         }
 
-        // Use provided providerId and model, or fall back to active provider
-        let providerId = options?.providerId;
-        let model = options?.model;
+        // Use provided providerId and model, or fall back to active provider.
+        // Treat empty strings as "not provided" so the fallback triggers.
+        let providerId = options?.providerId || undefined;
+        let model = options?.model || undefined;
 
         // If not provided, get from active provider
         if (!providerId) {
@@ -322,11 +323,16 @@ export const useConversationStore = create<ConversationState>()(
             const activeProvider = await getActiveProviderIPC();
             if (activeProvider) {
               providerId = activeProvider.id;
-              // Try to get default model from provider options
+              // Try to get default model from provider options.
+              // Plan 209: prefer enabled_models[0], then defaultModel, then model.
               if (!model && activeProvider.options) {
                 try {
                   const providerOptions = JSON.parse(activeProvider.options);
-                  model = providerOptions.defaultModel || providerOptions.model;
+                  if (Array.isArray(providerOptions.enabled_models) && providerOptions.enabled_models.length > 0) {
+                    model = providerOptions.enabled_models[0];
+                  } else {
+                    model = providerOptions.defaultModel || providerOptions.model;
+                  }
                 } catch {
                   // Ignore parse error
                 }

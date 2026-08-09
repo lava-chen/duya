@@ -24,12 +24,11 @@ import { getDatabase } from './db-handlers';
 import { getCoreStoresOrNull } from '../db/core-connection';
 import { setAutoStart, getAutoStartFromSettings, setAutoStartToSettings } from '../services/auto-start';
 import {
-  getGatewayProxyConfig,
-  setGatewayProxyConfig,
-  GatewayProxyConfig,
   getJsonSetting,
   setJsonSetting,
 } from '../db/queries/settings';
+import { getConfigStore } from '../config/store-instance';
+import { GatewayProxyConfig } from '../gateway/types';
 import { emitGatewayConfigChanged } from '../gateway/config-events';
 
 const BROWSER_EXTENSION_ALLOWED_IDS_KEY = 'browserExtensionAllowedIds';
@@ -275,7 +274,11 @@ export function registerSettingsHandlers(): void {
   // Gateway per-channel proxy configuration
   ipcMain.handle('settings:get-gateway-proxy-config', async () => {
     try {
-      const config = getGatewayProxyConfig();
+      const raw = getConfigStore().getByPath('gateway_proxy') as { global_enabled?: boolean; channels?: Record<string, boolean> } | undefined;
+      const config: GatewayProxyConfig = {
+        globalEnabled: raw?.global_enabled ?? true,
+        channels: raw?.channels ?? {},
+      };
       return { success: true, config };
     } catch (error) {
       const logger = getLogger();
@@ -286,7 +289,10 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle('settings:set-gateway-proxy-config', async (_event, config: GatewayProxyConfig) => {
     try {
-      setGatewayProxyConfig(config);
+      getConfigStore().set('gateway_proxy', {
+        global_enabled: config.globalEnabled === true,
+        channels: config.channels ?? {},
+      });
       emitGatewayConfigChanged('settings:set-gateway-proxy-config');
       return { success: true };
     } catch (error) {

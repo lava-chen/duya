@@ -35,7 +35,7 @@ import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig } from '@duya/ai';
-import { resolveLlmClientDiscriminator } from '@duya/ai';
+import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
@@ -272,7 +272,7 @@ export class duyaAgent {
       );
     }
 
-    const baseURL = options.baseURL || this.getDefaultBaseURL(provider);
+    const baseURL = options.baseURL || resolveDefaultBaseURL(provider);
     const model = options.model;
 
     // Use retryable client if enabled (default: true)
@@ -336,7 +336,7 @@ export class duyaAgent {
     // Initialize vision model client if configured
     this.visualAnalysis = new VisualAnalysisService(
       options.visionConfig,
-      (provider) => this.getDefaultBaseURL(provider),
+      resolveDefaultBaseURL,
     );
 
     // AGENTS.md is loaded eagerly in streamChat via refreshForTask so it is
@@ -433,19 +433,6 @@ export class duyaAgent {
       timeline: this.timeline,
       compactionManager: this.compactionManager,
     });
-  }
-
-  private getDefaultBaseURL(provider: 'anthropic' | 'openai' | 'ollama'): string {
-    switch (provider) {
-      case 'anthropic':
-        return 'https://api.anthropic.com';
-      case 'openai':
-        return 'https://api.openai.com/v1';
-      case 'ollama':
-        return 'http://localhost:11434';
-      default:
-        return 'https://api.openai.com/v1';
-    }
   }
 
   private _model!: string;
@@ -942,6 +929,30 @@ export class duyaAgent {
       // hard_replace: the replacement runtime_context was already pushed by
       // _claimMailboxAtCheckpoint; fall through to the LLM call with it in
       // the message history.
+
+      // Optional per-request wall-clock timeout (curator + callers that opt
+      // in via llmRequestTimeoutMs). Aborts a single LLM call that overruns
+      // even while the stream is still producing data (e.g. a MiniMax
+      // thinking stream that never converges), so a hung turn fails fast
+      // instead of consuming the whole run budget. Cleaned up on both the
+      // normal-completion and error paths.
+      let requestController: (AbortController & { dispose?: () => void }) | null = null;
+      let requestTimer: ReturnType<typeof setTimeout> | undefined;
+      let requestTimedOut = false;
+      let requestSignal: AbortSignal = this.abortController.signal;
+      if (options?.llmRequestTimeoutMs && options.llmRequestTimeoutMs > 0) {
+        requestController = createChildAbortController(this.abortController);
+        requestSignal = requestController.signal;
+        requestTimer = setTimeout(() => {
+          requestTimedOut = true;
+          requestController?.abort(new Error(`LLM request timed out after ${options.llmRequestTimeoutMs}ms`));
+        }, options.llmRequestTimeoutMs);
+      }
+      const disposeRequestController = () => {
+        if (requestTimer !== undefined) clearTimeout(requestTimer);
+        requestController?.dispose?.();
+        requestController = null;
+      };
 
       try {
         // Stream from LLM with FULL message history
@@ -1467,6 +1478,13 @@ export class duyaAgent {
    */
   private _appendMessageToTimeline(message: Message): void {
     if (!message.id || this.syncedMessageIds.has(message.id)) return;
+    // Tool-result messages are built without a timestamp (see
+    // StreamingToolExecutor). Backfill with the current time so persisted
+    // history (the timeline-derived `messages` projection) never carries a
+    // 0 epoch timestamp that breaks time ordering / display.
+    if (message.timestamp == null) {
+      message.timestamp = Date.now();
+    }
     const index = this.timeline.snapshot().length;
     const adapted = ingestMessage(message, { index });
     this.timeline.appendMessage({

@@ -254,6 +254,57 @@ async function platformStatus(
   }
 }
 
+export interface ChannelSendResultDTO {
+  ok: boolean;
+  platform: string;
+  platformChatId: string;
+  platformMsgId?: string;
+  error?: string;
+}
+
+async function sendChannel(
+  format: OutputFormat,
+  channelId: string,
+  text: string,
+  platform?: string,
+  chatId?: string,
+): Promise<ExitCode> {
+  if (!text) {
+    process.stderr.write('usage: duya channel send <channelId> <text> [--platform <p> --chat <id>]\n');
+    return 64;
+  }
+  const body: Record<string, unknown> = { text };
+  if (platform && chatId) {
+    body.platform = platform;
+    body.chatId = chatId;
+  } else if (channelId) {
+    body.channelId = channelId;
+  } else {
+    process.stderr.write('usage: duya channel send <channelId> <text>, or --platform <p> --chat <id> <text>\n');
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<ChannelSendResultDTO>('/v1/channels/send', body);
+    if (format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else if (result.ok) {
+      process.stdout.write(
+        `Sent to ${result.platform}:${result.platformChatId}` +
+          (result.platformMsgId ? ` (msg_id=${result.platformMsgId})` : '') +
+          '\n',
+      );
+    } else {
+      process.stderr.write(
+        `Send failed: ${result.error ?? 'unknown error'}\n`,
+      );
+    }
+    return result.ok ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public surface (consumed by descriptors.ts)
 // ---------------------------------------------------------------------------
@@ -274,5 +325,21 @@ export const runChannelCommand = {
     const platform =
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
     return platformStatus(ctx.format, platform);
+  },
+  send: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const platform =
+      typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
+    const chatId =
+      typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
+    // Positional form: `channel send <channelId> <text>`.
+    let channelId = ctx.args[0] ?? '';
+    let text = ctx.args[1] ?? '';
+    // Flag form: `channel send --platform <p> --chat <id> <text>` (or --text).
+    if (platform && chatId) {
+      if (!text) text = ctx.args[0] ?? '';
+      channelId = '';
+    }
+    if (!text) text = typeof ctx.options.text === 'string' ? ctx.options.text : '';
+    return sendChannel(ctx.format, channelId, text, platform, chatId);
   },
 };

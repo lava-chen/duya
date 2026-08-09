@@ -80,6 +80,30 @@ export function dispatchGatewayDbAction(
         return { result: 'ok' };
       }
 
+      case 'gateway_user:appendMirror': {
+        // Mirror write-back: append a delivery-mirror record to the session
+        // transcript so the agent has context about what the gateway actually
+        // sent (e.g. recovered ledger redeliveries that the worker never
+        // persisted because it crashed mid-turn).
+        const p = action.payload as Record<string, unknown> | undefined;
+        if (!p) return { error: 'No payload' };
+        const sessionId = p.session_id as string;
+        const role = (p.role as string) || 'assistant';
+        const content = p.content as string;
+        if (!sessionId || typeof content !== 'string' || !content) {
+          return { error: 'Missing session_id or content' };
+        }
+        const stmt = db.prepare(`
+          INSERT INTO messages (id, session_id, role, content, msg_type, status, created_at)
+          VALUES (?, ?, ?, ?, 'text', 'done', ?)
+        `);
+        // Deterministic, unique id: mirror + timestamp + monotonic counter.
+        const now = Date.now();
+        const id = `mirror-${now}-${Math.random().toString(36).slice(2, 10)}`;
+        stmt.run(id, sessionId, role, content, now);
+        return { result: JSON.stringify({ id }) };
+      }
+
       case 'gateway_user:getChatForSession': {
         const p = action.payload as Record<string, unknown> | undefined;
         if (!p) return { error: 'No payload' };

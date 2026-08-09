@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
+import { getActiveProviderIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { SessionSelector } from "./SessionSelector";
@@ -22,6 +23,14 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+
+  // Refs to always read the latest values inside useCallback closures.
+  // Without these, handleSend captures the initial '' and never sees
+  // the model resolved by the async useEffect or handleModelChange.
+  const sessionModelRef = useRef(sessionModel);
+  sessionModelRef.current = sessionModel;
+  const providerIdRef = useRef(providerId);
+  providerIdRef.current = providerId;
 
   const onSendMessageRef = useRef(onSendMessage);
   onSendMessageRef.current = onSendMessage;
@@ -90,6 +99,36 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     return { providerName: null, modelName: model.replace(/^"|"$/g, '') };
   }, []);
 
+  // Synchronous fallback: resolve the default provider model when
+  // sessionModel is still empty (e.g. user sends before the async
+  // useEffect has finished). Returns { modelName, providerId } or null.
+  const resolveDefaultModelSync = useCallback(async (): Promise<{ modelName: string; providerId: string } | null> => {
+    try {
+      const provider = await getActiveProviderIPC();
+      if (!provider) return null;
+      const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+      if (!isUsable) return null;
+
+      let modelId = '';
+      try {
+        const opts = JSON.parse(provider.options || '{}');
+        if (Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
+          modelId = opts.enabled_models[0];
+        } else if (typeof opts.defaultModel === 'string' && opts.defaultModel) {
+          modelId = opts.defaultModel;
+        }
+      } catch { /* ignore */ }
+      if (!modelId && provider.defaultModel) modelId = provider.defaultModel;
+      if (!modelId) return null;
+
+      const cleanId = modelId.startsWith('"') && modelId.endsWith('"') ? modelId.slice(1, -1) : modelId;
+      const providerName = provider.name || provider.providerType || provider.id;
+      return { modelName: `[${providerName}] ${cleanId}`, providerId: provider.id };
+    } catch {
+      return null;
+    }
+  }, []);
+
   const handleSend = useCallback(
     async (
       content: string,
@@ -98,12 +137,29 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     ) => {
       if (!selectedProject) return;
 
-      const { modelName: actualModel } = parseModelName(sessionModel || '');
+      // Read from refs to always get the latest values, even if the
+      // async useEffect hasn't updated state yet. Without this, the
+      // useCallback closure captures the initial '' and the backend
+      // receives an empty model → "No provider or model configured".
+      let effectiveModel = sessionModelRef.current;
+      let effectiveProviderId = providerIdRef.current;
+      if (!effectiveModel) {
+        const resolved = await resolveDefaultModelSync();
+        if (resolved) {
+          effectiveModel = resolved.modelName;
+          effectiveProviderId = resolved.providerId;
+          // Sync to state so the UI reflects the resolved model
+          setSessionModel(effectiveModel);
+          setProviderId(effectiveProviderId);
+        }
+      }
+
+      const { modelName: actualModel } = parseModelName(effectiveModel || '');
 
       const thread = await createThread({
         workingDirectory: selectedProject.workingDirectory,
         projectName: selectedProject.projectName,
-        providerId: providerId || undefined,
+        providerId: effectiveProviderId || undefined,
         model: actualModel || undefined,
       });
 
@@ -121,7 +177,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
         });
       }
     },
-    [selectedProject, createThread, onSelectThread, permissionMode, sessionModel, providerId, parseModelName]
+    [selectedProject, createThread, onSelectThread, permissionMode, parseModelName, resolveDefaultModelSync]
   );
 
   const handleNewNoProjectSession = useCallback(async () => {
@@ -130,6 +186,52 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       onSelectThread(thread.id);
     }
   }, [createThread, onSelectThread]);
+
+  // Auto-select the default provider's model so a brand-new session can
+  // chat immediately without the user manually picking a model first.
+  // Without this, `sessionModel` stays empty, the send path passes an
+  // empty model, and the backend reports "no provider configured".
+  useEffect(() => {
+    let cancelled = false;
+    const resolveDefaultModel = async () => {
+      if (sessionModel) return;
+      try {
+        const provider = await getActiveProviderIPC();
+        if (cancelled || !provider) return;
+        const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+        if (!isUsable) return;
+
+        let modelId = '';
+        try {
+          const opts = JSON.parse(provider.options || '{}');
+          if (Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
+            modelId = opts.enabled_models[0];
+          } else if (typeof opts.defaultModel === 'string' && opts.defaultModel) {
+            modelId = opts.defaultModel;
+          }
+        } catch {
+          // Ignore malformed options; fall through to provider.defaultModel.
+        }
+        if (!modelId && provider.defaultModel) modelId = provider.defaultModel;
+        if (!modelId) return;
+
+        const cleanId = modelId.startsWith('"') && modelId.endsWith('"') ? modelId.slice(1, -1) : modelId;
+        const providerName = provider.name || provider.providerType || provider.id;
+        setSessionModel(`[${providerName}] ${cleanId}`);
+        setProviderId(provider.id);
+      } catch (err) {
+        console.error('[WelcomeView] Failed to resolve default model:', err);
+      }
+    };
+
+    void resolveDefaultModel();
+    // Retry once in case the provider store is still loading on boot.
+    const retryTimer = setTimeout(() => void resolveDefaultModel(), 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(retryTimer);
+    };
+  }, [sessionModel]);
 
   const handleModelChange = useCallback((model: string, nextProviderId?: string) => {
     setSessionModel(model);

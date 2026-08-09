@@ -23,6 +23,9 @@ import { PlatformAdapter, createAdapter, getRegisteredPlatforms } from './adapte
 import { IpcClient } from './ipc-client.js';
 import { UserMapper } from './user-mapper.js';
 import { StreamHandler } from './stream-handler.js';
+import { DeliveryLedger } from './delivery-ledger.js';
+import { DeliveryMirror } from './delivery-mirror.js';
+import { matchProfileRoute, parseProfileRoutes, type ProfileRoute } from './profile-routing.js';
 import { PermissionBroker } from './permission-broker.js';
 import { setProxyUrl, initProxy } from './proxy-fetch.js';
 import { buildAttachments } from './attachment-builder.js';
@@ -39,19 +42,51 @@ export class GatewayManager {
   private userMapper: UserMapper;
   private streamHandler: StreamHandler;
   private permissionBroker: PermissionBroker;
+  private ledger: DeliveryLedger;
+  private mirror: DeliveryMirror;
+  private profileRoutes: ProfileRoute[] = [];
   private autoStart = false;
   private proxyConfig?: GatewayProxyConfig;
+  /** Last activity timestamp per (platform:chatId) for idle-based session reset. */
+  private lastActivityByChat = new Map<string, number>();
+  /** Queued inbound text per busy session (merged into a single prompt). */
+  private busyQueue = new Map<string, string[]>();
 
   constructor() {
     this.ipc = new IpcClient();
     this.userMapper = new UserMapper(this.ipc);
-    this.streamHandler = new StreamHandler();
+    this.ledger = new DeliveryLedger();
+    this.ledger.load();
+    this.mirror = new DeliveryMirror(this.ipc);
+    this.streamHandler = new StreamHandler(undefined, this.ledger, this.mirror);
     this.permissionBroker = new PermissionBroker();
 
     // Wire up chatId resolver for stream handler
     this.streamHandler.setChatIdResolver(async (sessionId) => {
       const mapping = await this.userMapper.getChatIdForSession(sessionId);
       return mapping?.platformChatId ?? null;
+    });
+
+    // Wire up per-platform display config for the stream handler.
+    this.streamHandler.setDisplayConfigResolver((platform) => {
+      const cfg = resolveDisplayConfig(platform);
+      return {
+        showReasoning: cfg.showReasoning,
+        toolProgress: cfg.toolProgress,
+        toolPreviewLength: cfg.toolPreviewLength,
+      };
+    });
+
+    // Wire up per-platform reaction emoji resolver for the stream handler.
+    this.streamHandler.setReactionConfigResolver((platform) => {
+      const opts = this.adapterConfigs.get(platform)?.options ?? {};
+      const r = (opts as { reactions?: { enabled?: boolean; working?: string; done?: string; error?: string } }).reactions;
+      return {
+        enabled: r?.enabled ?? true,
+        working: r?.working ?? '🔨',
+        done: r?.done ?? '✅',
+        error: r?.error ?? '❌',
+      };
     });
   }
 
@@ -75,6 +110,7 @@ export class GatewayManager {
     initProxy();
 
     this.adapterConfigs.clear();
+    this.profileRoutes = parseProfileRoutes(config.profileRoutes);
     for (const platformConfig of config.platforms) {
       if (platformConfig.enabled) {
         // Determine if this platform should use proxy based on per-channel config
@@ -172,6 +208,39 @@ export class GatewayManager {
     }
 
     console.log(`[GatewayManager] Started ${startedCount}/${this.adapterConfigs.size} adapter(s)` + (failedCount > 0 ? `, ${failedCount} failed` : ''));
+
+    // After adapters are up, redeliver any obligations recovered from a
+    // previous crash. Best-effort: failures stay in the ledger for a later
+    // retry boundary.
+    const redelivered = await this.streamHandler.redeliverRecoverable(
+      (platform) => this.adapters.get(platform as PlatformType),
+    );
+    if (redelivered > 0) {
+      console.log(`[GatewayManager] Redelivered ${redelivered} recoverable message(s) from delivery ledger`);
+    }
+
+    // Broadcast gateway-online to the home channel (Hermes parity).
+    await this.broadcastHome('🟢 Gateway online');
+  }
+
+  /**
+   * Best-effort broadcast of a status text to the configured home channel.
+   * Reads `telegram_home_channel` from settings; failures are silent.
+   */
+  private async broadcastHome(text: string): Promise<void> {
+    try {
+      const result = await this.ipc.request('db:request', {
+        action: 'settings:get',
+        payload: { key: 'telegram_home_channel' },
+      });
+      const homeChat = typeof result === 'string' && result ? result : (result as { result?: string })?.result;
+      if (!homeChat) return;
+      const adapter = this.adapters.get('telegram');
+      if (!adapter) return;
+      await adapter.sendReply(homeChat, { type: 'text', text });
+    } catch {
+      // Silent: home channel may not be configured or reachable.
+    }
   }
 
   /**
@@ -180,6 +249,24 @@ export class GatewayManager {
    */
   async stop(): Promise<void> {
     console.log('[GatewayManager] Stopping adapters in parallel...');
+
+    // Broadcast gateway-offline to the home channel before adapters go down
+    // (Hermes parity). Best-effort and silent on failure.
+    await this.broadcastHome('🔴 Gateway offline');
+
+    // Graceful shutdown flush: attempt one final delivery of any recoverable
+    // obligations while adapters are still online. Anything still failing is
+    // durable in the ledger and will be re-attempted on the next boot.
+    try {
+      const flushed = await this.streamHandler.redeliverRecoverable(
+        (platform) => this.adapters.get(platform as PlatformType),
+      );
+      if (flushed > 0) {
+        console.log(`[GatewayManager] Shutdown flush delivered ${flushed} pending message(s)`);
+      }
+    } catch (err) {
+      console.error('[GatewayManager] Shutdown flush failed:', err);
+    }
 
     const stopTasks = Array.from(this.adapters).map(
       async ([platform, adapter]) => {
@@ -338,10 +425,52 @@ export class GatewayManager {
   }
 
   /**
+   * Proactively send a plain text message to a channel, independent of any
+   * inbound message or active stream. This is the CLI-driven path (openclaw /
+   * hermes-style) for pushing a message to an IM channel without a trigger.
+   * Returns `{ ok, error?, platformMsgId? }` so the caller can surface the
+   * outcome synchronously.
+   */
+  async sendMessage(
+    platform: string,
+    platformChatId: string,
+    text: string,
+  ): Promise<{ ok: boolean; error?: string; platformMsgId?: string }> {
+    const adapter = this.adapters.get(platform as PlatformType);
+    if (!adapter) {
+      return { ok: false, error: `No running adapter for platform: ${platform}` };
+    }
+    if (!text.trim()) {
+      return { ok: false, error: 'Message text must not be empty' };
+    }
+    try {
+      const result = await adapter.sendReply(platformChatId, { type: 'text', text });
+      return {
+        ok: result?.ok !== false,
+        ...(result?.platformMsgId ? { platformMsgId: result.platformMsgId } : {}),
+        ...(result?.ok === false && result?.error ? { error: result.error } : {}),
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
    * Get the IpcClient instance (for subprocess message handler)
    */
   getIpcClient(): IpcClient {
     return this.ipc;
+  }
+
+  /**
+   * Register dynamically-provided commands (e.g. installed skills surfaced as
+   * slash commands). Wired here so callers can add commands at runtime and
+   * `resolveCommand` / `generateHelpText` pick them up immediately.
+   */
+  registerDynamicCommands(list: Array<{ name: string; aliases?: readonly string[]; description: string; category: string }>): void {
+    void import('./commands/registry.js').then((mod) => {
+      mod.registerDynamicCommands(list as Parameters<typeof mod.registerDynamicCommands>[0]);
+    });
   }
 
   /**
@@ -375,6 +504,73 @@ export class GatewayManager {
     return this.userMapper.resetSession(msg);
   }
 
+  /**
+   * Whether the given session currently has an active stream (agent busy).
+   */
+  private isSessionBusy(sessionId: string): boolean {
+    return this.streamHandler.hasActiveStream(sessionId);
+  }
+
+  /**
+   * Read the busy-input mode for a platform ('queue' | 'steer' | 'interrupt').
+   * Defaults to 'queue' (Hermes default: acknowledge and enqueue).
+   */
+  private getBusyMode(platform: PlatformType): 'queue' | 'steer' | 'interrupt' {
+    const opts = this.adapterConfigs.get(platform)?.options;
+    const mode = (opts as { busy_input?: 'queue' | 'steer' | 'interrupt' } | undefined)?.busy_input;
+    return mode ?? 'queue';
+  }
+
+  /**
+   * Check whether the (platform:chatId) requires a session reset based on the
+   * configured reset policy (daily / idle / both / off). Returns true when a
+   * reset should happen before processing the next message.
+   */
+  private shouldResetSession(platform: PlatformType, chatId: string): boolean {
+    const opts = this.adapterConfigs.get(platform)?.options;
+    const o = opts as {
+      reset_policy?: 'daily' | 'idle' | 'both' | 'off';
+      reset_hour?: number;
+      reset_idle_minutes?: number;
+    } | undefined;
+
+    const policy = o?.reset_policy ?? 'off';
+    if (policy === 'off') return false;
+
+    const now = Date.now();
+    const key = `${platform}:${chatId}`;
+
+    // Idle-based reset: no activity for reset_idle_minutes (default 30).
+    if (policy === 'idle' || policy === 'both') {
+      const idleMinutes = o?.reset_idle_minutes ?? 30;
+      const last = this.lastActivityByChat.get(key);
+      if (last !== undefined) {
+        const elapsedMin = (now - last) / 60_000;
+        if (elapsedMin >= idleMinutes) {
+          this.lastActivityByChat.delete(key);
+          return true;
+        }
+      }
+      if (policy === 'idle') return false;
+    }
+
+    // Daily reset: wall-clock hour crossed reset_hour (default 0).
+    if (policy === 'daily' || policy === 'both') {
+      const hour = new Date(now).getHours();
+      const resetHour = o?.reset_hour ?? 0;
+      const last = this.lastActivityByChat.get(key);
+      if (last !== undefined) {
+        const lastHour = new Date(last).getHours();
+        if (hour === resetHour && lastHour !== resetHour) {
+          this.lastActivityByChat.set(key, now);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   // ---------------------------------------------------------------------------
   // Private: Inbound message handling
   // ---------------------------------------------------------------------------
@@ -397,6 +593,79 @@ export class GatewayManager {
       // Normal inbound message: resolve session and forward to Main
       const sessionId = await this.userMapper.getOrCreateSession(msg);
 
+      // Track activity for idle/daily session auto-reset.
+      const actKey = `${msg.platform}:${msg.platformChatId}`;
+      this.lastActivityByChat.set(actKey, Date.now());
+
+      // Session auto-reset policy: if the configured window has elapsed, start
+      // a fresh session before processing this message (Hermes daily/idle reset).
+      if (this.shouldResetSession(msg.platform, msg.platformChatId)) {
+        await this.resetSession(msg);
+        return;
+      }
+
+      // Busy-input handling: when the agent is already streaming for this
+      // session, honor the configured mode (queue / steer / interrupt) and
+      // return a busy-ack instead of blindly enqueueing a duplicate turn.
+      if (this.isSessionBusy(sessionId)) {
+        const busyMode = this.getBusyMode(msg.platform);
+        const busyText = msg.text ?? '';
+
+        if (busyMode === 'interrupt') {
+          this.ipc.interruptSession(sessionId);
+          this.streamHandler.cleanupStream(sessionId);
+          await this.forwardInbound(msg, sessionId, {});
+          await this.adapters.get(msg.platform)?.sendReply?.(msg.platformChatId, {
+            type: 'text',
+            text: '⏸️ 已中断当前运行，正在处理你的消息…',
+          });
+          return;
+        }
+
+        if (busyMode === 'steer') {
+          // Inject the message into the current run (no new turn).
+          await this.forwardInbound(msg, sessionId, { steer: true });
+          await this.adapters.get(msg.platform)?.sendReply?.(msg.platformChatId, {
+            type: 'text',
+            text: '⏩ 已注入当前运行。',
+          });
+          return;
+        }
+
+        // queue (default): merge text into the busy session buffer and
+        // acknowledge. The merged prompt is flushed once the stream is idle.
+        const queue = this.busyQueue.get(sessionId) ?? [];
+        queue.push(busyText);
+        this.busyQueue.set(sessionId, queue);
+        await this.adapters.get(msg.platform)?.sendReply?.(msg.platformChatId, {
+          type: 'text',
+          text: '⏳ 正在处理上一条消息，已排队。',
+        });
+        return;
+      }
+
+      // Flush any queued messages from a previous busy window into one prompt.
+      const queued = this.busyQueue.get(sessionId);
+      if (queued && queued.length > 0) {
+        this.busyQueue.delete(sessionId);
+        const merged = [...queued, msg.text ?? ''].filter(Boolean).join('\n');
+        await this.forwardInbound(msg, sessionId, { mergedPrompt: true });
+        return;
+      }
+
+      // Remember the user's message ID so outbound replies quote it (hermes-style).
+      this.streamHandler.setReplyTarget(sessionId, msg.platformMsgId);
+
+      // Signal "working" on the user's message via a reaction (hermes-style).
+      const adapter = this.adapters.get(msg.platform);
+      const reactionOpts = (this.adapterConfigs.get(msg.platform)?.options ?? {}) as
+        { reactions?: { enabled?: boolean; working?: string } };
+      const reactionsEnabled = reactionOpts.reactions?.enabled ?? true;
+      const workingEmoji = reactionOpts.reactions?.working ?? '🔨';
+      if (reactionsEnabled) {
+        adapter?.setMessageReaction?.(msg.platformChatId, msg.platformMsgId, workingEmoji);
+      }
+
       // Build attachments from all attachment fields (images/files/voice/video)
       const options: Record<string, unknown> = {};
       const attachments = await buildAttachments({
@@ -411,18 +680,23 @@ export class GatewayManager {
         options.files = attachments;
       }
 
-      this.ipc.send({
-        type: 'gateway:inbound',
-        sessionId,
-        prompt: msg.text ?? '',
+      // Profile routing (basic version): if a route matches this (platform,
+      // chatId), carry the resolved profile so the worker can use it. When no
+      // route matches, options.profile stays undefined and the default
+      // gateway profile is used.
+      const route = matchProfileRoute(this.profileRoutes, {
         platform: msg.platform,
-        platformMsgId: msg.platformMsgId,
-        platformChatId: msg.platformChatId,
-        options,
+        chatId: msg.platformChatId,
+        threadId: msg.threadId,
       });
+      if (route) {
+        options.profile = route.profile;
+      }
 
-      const adapter = this.adapters.get(msg.platform);
-      adapter?.sendTyping?.(msg.platformChatId);
+      await this.forwardInbound(msg, sessionId, options);
+
+      const typingAdapter = this.adapters.get(msg.platform);
+      typingAdapter?.sendTyping?.(msg.platformChatId);
     } catch (err) {
       console.error('[GatewayManager] Error handling inbound message:', err);
       this.ipc.send({
@@ -430,6 +704,51 @@ export class GatewayManager {
         error: String(err),
       });
     }
+  }
+
+  /**
+   * Forward a normalized inbound message to Main as a gateway:inbound event,
+   * carrying optional extra options (background / steer / mergedPrompt / ...).
+   */
+  private async forwardInbound(
+    msg: NormalizedMessage,
+    sessionId: string,
+    extraOptions: Record<string, unknown>,
+  ): Promise<void> {
+    const options: Record<string, unknown> = { ...extraOptions };
+
+    // Build attachments from all attachment fields (images/files/voice/video).
+    const attachments = await buildAttachments({
+      images: msg.images,
+      imagePaths: msg.imagePaths,
+      files: msg.files,
+      filePaths: msg.filePaths,
+      voicePaths: msg.voicePaths,
+      videoPaths: msg.videoPaths,
+    });
+    if (attachments.length > 0) {
+      options.files = attachments;
+    }
+
+    // Profile routing: carry the resolved profile so the worker can use it.
+    const route = matchProfileRoute(this.profileRoutes, {
+      platform: msg.platform,
+      chatId: msg.platformChatId,
+      threadId: msg.threadId,
+    });
+    if (route) {
+      options.profile = route.profile;
+    }
+
+    this.ipc.send({
+      type: 'gateway:inbound',
+      sessionId,
+      prompt: msg.text ?? '',
+      platform: msg.platform,
+      platformMsgId: msg.platformMsgId,
+      platformChatId: msg.platformChatId,
+      options,
+    });
   }
 
   /**
@@ -445,6 +764,41 @@ export class GatewayManager {
       return { model: model as string | undefined };
     } catch {
       return {};
+    }
+  }
+
+  /**
+   * Resolve the current session id for a platform+chat (best-effort).
+   */
+  private async getSessionId(msg: NormalizedMessage): Promise<string | null> {
+    try {
+      const existing = await this.ipc.request('db:request', {
+        action: 'gateway_user:getMapping',
+        payload: {
+          platform: msg.platform,
+          platformChatId: msg.platformChatId,
+        },
+      });
+      return typeof existing === 'string' && existing ? existing : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Attempt to persist a settings key via the gateway IPC surface. The main
+   * process db-bridge currently only exposes `settings:get`; if `settings:set`
+   * is unavailable the call fails gracefully and returns false.
+   */
+  private async updateSetting(key: string, value: unknown): Promise<boolean> {
+    try {
+      const result = await this.ipc.request('db:request', {
+        action: 'settings:set',
+        payload: { key, value },
+      });
+      return result !== undefined && result !== null;
+    } catch {
+      return false;
     }
   }
 
@@ -465,7 +819,7 @@ export class GatewayManager {
 
     try {
       // Use shared command registry
-      const { resolveCommand } = await import('./commands/registry.js');
+      const { resolveCommand, getAllCommands } = await import('./commands/registry.js');
       const { generateHelpText } = await import('./commands/help.js');
       const cmd = resolveCommand(text);
 
@@ -552,6 +906,547 @@ export class GatewayManager {
               parseMode: 'Markdown',
             });
           }
+          return true;
+        }
+
+        case 'model': {
+          const { model } = await this.getModelInfo();
+          const arg = args.join(' ').trim();
+          if (arg) {
+            const ok = await this.updateSetting('gatewayModel', arg);
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: ok
+                ? `✅ Model set to \`${arg}\``
+                : `🔄 Requested switching model to \`${arg}\`.\n\n*Note:* the gateway does not expose a persisted model-write endpoint yet — please update the model in settings.`,
+              parseMode: 'Markdown',
+            });
+          } else {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: `*Current Model*\n\n\`${model ?? 'default'}\`\n\nUsage: \`/model [provider:model]\``,
+              parseMode: 'Markdown',
+            });
+          }
+          return true;
+        }
+
+        case 'provider': {
+          const { model } = await this.getModelInfo();
+          const provider = model && model.includes(':') ? model.split(':')[0] : 'default';
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `*Current Provider*\n\n\`${provider}\``,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'reasoning': {
+          const display = resolveDisplayConfig(msg.platform);
+          const arg = args[0]?.toLowerCase();
+          if (arg === 'on' || arg === 'off' || arg === 'toggle') {
+            const ok = await this.updateSetting('display.reasoning', arg === 'on');
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: ok
+                ? `✅ Reasoning \`${arg === 'on' ? 'enabled' : 'disabled'}\``
+                : `🔄 Toggle requested (\`${arg}\`). *Note:* reasoning display is configured in settings; the gateway cannot persist it directly. Currently \`${display.showReasoning ? 'on' : 'off'}\`.`,
+              parseMode: 'Markdown',
+            });
+          } else {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: `*Reasoning*\n\nCurrently: \`${display.showReasoning ? 'on' : 'off'}\`\n\nUsage: \`/reasoning [on|off|toggle]\``,
+              parseMode: 'Markdown',
+            });
+          }
+          return true;
+        }
+
+        case 'retry': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/retry` 当前未启用 — resending the last message is not wired up in this gateway build.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'undo': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/undo` 当前未启用 — removing the last exchange is not supported by this gateway build.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'stop': {
+          const sessionId = await this.getSessionId(msg);
+          if (sessionId) {
+            this.streamHandler.cleanupStream(sessionId);
+            // Forward an interrupt signal so the worker can kill running
+            // terminal commands / cancel pending tool calls (Hermes semantics).
+            this.ipc.interruptSession(sessionId);
+          }
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: sessionId
+              ? `⏹ Stopped the current stream for session \`${sessionId}\`.`
+              : '⏹ No active session to stop.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'save': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/save` 当前未启用 — no explicit session-save endpoint is wired up in this gateway build.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'sessions': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/sessions` 当前未启用 — session listing is not exposed through the gateway IPC surface.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'resume': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/resume` 当前未启用 — resuming a past session is not exposed through the gateway IPC surface.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'history': {
+          const sessionId = await this.getSessionId(msg);
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: sessionId
+              ? `*Session History*\n\nSession: \`${sessionId}\`\n\nHistory summary is not available — the gateway does not expose message listing.`
+              : 'No active session.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'title': {
+          const name = args.join(' ').trim();
+          const sessionId = await this.getSessionId(msg);
+          if (!name) {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: 'Usage: `/title <name>` — set the session title.',
+              parseMode: 'Markdown',
+            });
+          } else if (!sessionId) {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: 'No active session to title.',
+            });
+          } else {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: '`/title` 当前未启用 — setting the session title is not wired up in this gateway build.',
+              parseMode: 'Markdown',
+            });
+          }
+          return true;
+        }
+
+        case 'sethome': {
+          const ok = await this.updateSetting('telegram_home_channel', msg.platformChatId);
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: ok
+              ? `🏠 Home channel set to \`${msg.platformChatId}\`.`
+              : `🔄 Requested setting home channel to \`${msg.platformChatId}\`. *Note:* the gateway cannot persist it directly; store \`telegram_home_channel\` in settings.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'commands': {
+          const all = getAllCommands();
+          const lines = all.map((c) => {
+            const usage = c.argsHint ? ` ${c.argsHint}` : '';
+            return `- \`/${c.name}${usage}\` — ${c.description}`;
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `*All Commands (${all.length})*\n\n${lines.join('\n')}`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'whoami': {
+          const opts = (this.adapterConfigs.get(msg.platform)?.options ?? {}) as {
+            allow_from?: string[];
+            allow_admin_from?: string[];
+            group_allow_from?: string[];
+            group_allow_admin_from?: string[];
+            free_response_chats?: string[];
+          };
+          const userId = msg.platformUserId;
+          const chatId = msg.platformChatId;
+
+          // Tier resolution (admin / user / unrestricted):
+          //  - admins: explicitly listed in allow_from / allow_admin_from
+          //    (or group_allow_admin_from) may run every command.
+          //  - unrestricted: sender is in free_response_chats, or no allow-list
+          //    is configured at all (default open).
+          //  - user: every other authorized sender.
+          let tier: string;
+          const hasTailored =
+            opts.allow_from?.length ||
+            opts.allow_admin_from?.length ||
+            opts.group_allow_from?.length ||
+            opts.group_allow_admin_from?.length;
+          if (
+            opts.allow_from?.includes(userId) ||
+            opts.allow_admin_from?.includes(userId) ||
+            opts.group_allow_admin_from?.includes(userId)
+          ) {
+            tier = 'admin';
+          } else if (!hasTailored || opts.free_response_chats?.includes(chatId)) {
+            tier = hasTailored ? 'user' : 'unrestricted';
+          } else {
+            tier = 'user';
+          }
+
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: [
+              '*Who am I*',
+              '',
+              `Platform: ${msg.platform}`,
+              `User ID: \`${msg.platformUserId}\``,
+              `Chat ID: \`${msg.platformChatId}\``,
+              `Tier: \`${tier}\``,
+              '',
+              tier === 'admin' || tier === 'unrestricted'
+                ? 'Permission: all commands.'
+                : 'Permission: /help, /whoami, and any user-allowed commands.',
+            ].join('\n'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'usage': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/usage` 当前未启用 — context/usage accounting is not exposed by this gateway build.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'compress': {
+          // Hermes semantics: /compress here [N] — compress last N turns;
+          // /compress focus <topic> — compress focusing on a topic.
+          const target = args.join(' ');
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('compress', args, {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: target
+              ? `🔄 已请求压缩 (target: \`${target}\`) — context compression is forwarded to the worker; results arrive asynchronously.`
+              : `🔄 已请求压缩 — context compression is forwarded to the worker; results arrive asynchronously.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'approve': {
+          this.ipc.resolvePermissionByCommand('allow');
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '✅ 已批准待处理的权限请求。',
+          });
+          return true;
+        }
+
+        case 'deny': {
+          this.ipc.resolvePermissionByCommand('deny');
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '❌ 已拒绝待处理的权限请求。',
+          });
+          return true;
+        }
+
+        case 'personality': {
+          const name = args.join(' ').trim();
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('personality', name ? [name] : [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: name
+              ? `🎭 已请求将 personality 设为 \`${name}\` — forwarded to the worker.`
+              : `🎭 已请求读取当前 personality — forwarded to the worker.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'voice': {
+          const mode = args[0];
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('voice', mode ? [mode] : [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: mode
+              ? `🔊 已请求 voice 模式 \`${mode}\` — forwarded to the worker.`
+              : `🔊 已请求查询 voice 状态 — forwarded to the worker.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'fast': {
+          const mode = args[0];
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('fast', mode ? [mode] : [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: mode
+              ? `⚡ 已请求 fast mode \`${mode}\` — forwarded to the worker.`
+              : `⚡ 已请求查询 fast mode 状态 — forwarded to the worker.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'verbose': {
+          const mode = args[0];
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('verbose', mode ? [mode] : [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: mode
+              ? `🔍 已请求 verbose \`${mode}\` — forwarded to the worker.`
+              : `🔍 已请求查询 verbose 状态 — forwarded to the worker.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'background': {
+          const prompt = args.join(' ').trim();
+          if (!prompt) {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: 'Usage: `/background <prompt>` — run in a separate background session.',
+            });
+            return true;
+          }
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.send({
+            type: 'gateway:inbound',
+            sessionId: sessionId ?? msg.platformUserId,
+            prompt,
+            platform: msg.platform,
+            platformMsgId: msg.platformMsgId,
+            platformChatId: msg.platformChatId,
+            options: { background: true },
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `⏳ 已在后台会话执行：\`${prompt}\` — 完成后会在这里通知你。`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'steer': {
+          const prompt = args.join(' ').trim();
+          if (!prompt) {
+            await adapter.sendReply(msg.platformChatId, {
+              type: 'text',
+              text: 'Usage: `/steer <message>` — inject a message into the current run.',
+            });
+            return true;
+          }
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.send({
+            type: 'gateway:inbound',
+            sessionId: sessionId ?? msg.platformUserId,
+            prompt,
+            platform: msg.platform,
+            platformMsgId: msg.platformMsgId,
+            platformChatId: msg.platformChatId,
+            options: { steer: true },
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `⏩ 已注入当前运行：\`${prompt}\``,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'rollback': {
+          const num = args[0];
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('rollback', num ? [num] : [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: num
+              ? `↩️ 已请求回滚到检查点 \`${num}\` — forwarded to the worker.`
+              : `↩️ 已请求列出文件系统检查点 — forwarded to the worker.`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'reload-mcp': {
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('reload-mcp', [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '🔄 已请求重载 MCP servers — forwarded to the worker.',
+          });
+          return true;
+        }
+
+        case 'update': {
+          const sessionId = await this.getSessionId(msg);
+          this.ipc.forwardCommand('update', args, {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '🔄 已请求检查更新 — forwarded to the worker.',
+          });
+          return true;
+        }
+
+        case 'delete': {
+          const sessionId = await this.getSessionId(msg);
+          if (sessionId) {
+            this.streamHandler.cleanupStream(sessionId);
+          }
+          const { newSessionId } = await this.resetSession(msg);
+          const sessionId2 = sessionId ?? '(none)';
+          this.ipc.forwardCommand('delete', [], {
+            sessionId: sessionId ?? undefined,
+            platform: msg.platform,
+            platformChatId: msg.platformChatId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `🗑️ 已删除会话 \`${sessionId2}\` 并开启新会话 \`${newSessionId}\`。`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'clear': {
+          const { newSessionId } = await this.resetSession(msg);
+          const { model } = await this.getModelInfo();
+          const lines = ['🧹 Screen cleared — new session started.', `Session: \`${newSessionId}\``];
+          if (model) {
+            lines.push(`Model: \`${model}\``);
+          }
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: lines.join('\n\n'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'profile': {
+          const route = matchProfileRoute(this.profileRoutes, {
+            platform: msg.platform,
+            chatId: msg.platformChatId,
+            threadId: msg.threadId,
+          });
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: [
+              '*Profile*',
+              '',
+              `Profile: \`${route?.profile ?? 'default'}\``,
+              `Chat: \`${msg.platformChatId}\``,
+            ].join('\n'),
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'position': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: '`/position` 当前未启用 — context cursor tracking is not exposed by this gateway build.',
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'insights': {
+          const days = args[0] ?? '7';
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: `\`/insights\` 当前未启用 — usage insights have no backing data source in this gateway build (days: \`${days}\`).`,
+            parseMode: 'Markdown',
+          });
+          return true;
+        }
+
+        case 'about': {
+          await adapter.sendReply(msg.platformChatId, {
+            type: 'text',
+            text: [
+              '*DUYA Gateway*',
+              '',
+              'A multi-platform IM gateway connecting Telegram / Feishu / WeChat / QQ and more to a DUYA agent.',
+              '',
+              'Type `/help` to see all available commands.',
+            ].join('\n'),
+            parseMode: 'Markdown',
+          });
           return true;
         }
 

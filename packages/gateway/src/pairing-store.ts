@@ -26,6 +26,8 @@ export interface PairingSession {
   expiresAt: number;
   attempts: number;
   approved: boolean;
+  /** Cross-platform identities tied to this same user (platform:openId pairs). */
+  tiedOpenIds?: string[];
 }
 
 interface PairingState {
@@ -286,14 +288,67 @@ export function revokeUserPairing(platform: string, userId: string): boolean {
 }
 
 /**
- * Verify if a user is approved for a platform+chat
+ * Verify if a user is approved for a platform+chat.
+ * Approval is honored across tied identities: a user approved on one platform
+ * is treated as approved on another they have been linked to (Hermes parity).
  */
 export function verifyPairingApproval(platform: string, userId: string, chatId: string): boolean {
   loadPairingState();
   const now = Date.now();
+  const idKey = `${platform}:${userId}`;
   return Object.values(_pairingState.sessions).some(
-    s => s.platform === platform && s.openId === userId && s.chatId === chatId && s.approved && s.expiresAt > now
+    (s) => s.approved &&
+      s.expiresAt > now &&
+      (s.platform === platform && s.openId === userId && s.chatId === chatId ||
+        s.tiedOpenIds?.includes(idKey))
   );
+}
+
+/**
+ * Link two platform identities to the same user so that approval on either
+ * platform carries over to the other. If a session already exists bearing the
+ * same user on either platform, the other identity is merged into it.
+ */
+export function tieUserIdentity(
+  platformA: string,
+  idA: string,
+  platformB: string,
+  idB: string,
+): void {
+  loadPairingState();
+  const keyA = `${platformA}:${idA}`;
+  const keyB = `${platformB}:${idB}`;
+
+  for (const session of Object.values(_pairingState.sessions)) {
+    const ownKey = `${session.platform}:${session.openId}`;
+    const tied = session.tiedOpenIds ?? [];
+    if (ownKey === keyA || tied.includes(keyA)) {
+      session.tiedOpenIds = Array.from(new Set([...tied, keyA, keyB]));
+      savePairingState();
+      return;
+    }
+    if (ownKey === keyB || tied.includes(keyB)) {
+      session.tiedOpenIds = Array.from(new Set([...tied, keyA, keyB]));
+      savePairingState();
+      return;
+    }
+  }
+
+  // No existing session carries either identity; create a lightweight approved
+  // session for A tied to B so future checks on B pass.
+  const session: PairingSession = {
+    code: generatePairingCode(),
+    openId: idA,
+    chatId: '',
+    platform: platformA,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + SESSION_EXPIRE_MS,
+    attempts: 0,
+    approved: true,
+    tiedOpenIds: [keyB],
+  };
+  _pairingState.sessions[session.code] = session;
+  savePairingState();
 }
 
 /**

@@ -14,6 +14,7 @@ import { dispatchDbAction, handleDbRequest as processDbRequest, type DbRequest, 
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
 import { toLegacyApiProvider, migrateLegacyApiProvider } from '../../src/lib/providers/legacy';
+import type { LlmProvider } from '../../src/lib/providers/types';
 import {
   toRuntimeConfig as buildRuntimeConfig,
   normalizeBaseUrl,
@@ -219,6 +220,17 @@ export function registerAgentHandlers(): void {
     };
   });
 
+  // Resolve the soft-default provider, falling back to the first
+  // configured provider when no default is set. Without this, a user
+  // who has providers configured but no `model.provider` default gets
+  // `getActiveProviderConfig()` === null and the chat is rejected with
+  // "No provider or model configured" until they manually pick a model.
+  function getDefaultOrFirstLlmProvider(store: ReturnType<typeof getProviderStore>): LlmProvider | undefined {
+    const def = store.getDefaultLlmProvider();
+    if (def) return def;
+    return store.listLlmProviders()[0];
+  }
+
   // Helper to mask API key in provider for renderer
   function maskProvider(provider: ApiProvider): Record<string, unknown> {
     const key = provider.apiKey;
@@ -264,7 +276,7 @@ export function registerAgentHandlers(): void {
   ipcMain.handle('config:provider:getActive', () => {
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
-    const activeLlm = store.getDefaultLlmProvider();
+    const activeLlm = getDefaultOrFirstLlmProvider(store);
     const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
     return provider ? maskProvider(provider) : null;
   });
@@ -280,7 +292,7 @@ export function registerAgentHandlers(): void {
     const store = getProviderStore();
     store.migrateAllLegacyProviders();
 
-    const activeLlm = store.getDefaultLlmProvider();
+    const activeLlm = getDefaultOrFirstLlmProvider(store);
     const provider = activeLlm ? toLegacyApiProvider(activeLlm) : undefined;
     if (!provider) return null;
 
@@ -303,7 +315,7 @@ export function registerAgentHandlers(): void {
 
     // Derive the runtime config from the migrated LlmProvider so the
     // new path is exercised on every Chat call.
-    const llm = store.getActiveLlmProvider();
+    const llm = getDefaultOrFirstLlmProvider(store);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
       const capability = store.getModelCapability(llm.id, model);

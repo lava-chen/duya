@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
-import { getDatabase } from '../../ipc/db-handlers';
 import { getLogger, LogComponent } from '../../logging/logger';
+import { upsertWeixinAccount } from '../weixin-account-store';
 
 const QR_LOGIN_BASE_URL = 'https://ilinkai.weixin.qq.com';
 const QR_API_TIMEOUT_MS = 15_000;
@@ -163,57 +163,17 @@ export async function pollWeixinQrStatus(sessionId: string): Promise<QrLoginSess
             LogComponent.NetHandlers
           );
 
-          const db = getDatabase();
-          if (db) {
-            const now = Date.now();
+          upsertWeixinAccount({
+            accountId,
+            userId,
+            name: accountId,
+            baseUrl: resp.baseurl || '',
+            cdnBaseUrl: '',
+            token: resp.bot_token,
+            enabled: true,
+          });
 
-            db.prepare(`
-              INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-            `).run('weixin_bot_token', resp.bot_token, now);
-
-            db.prepare(`
-              INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-            `).run('weixin_account_id', accountId, now);
-
-            if (resp.baseurl) {
-              db.prepare(`
-                INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-              `).run('weixin_base_url', resp.baseurl, now);
-            }
-
-            getLogger().info('[WeixinQrLogin] Saved to settings table', { accountId }, LogComponent.NetHandlers);
-
-            db.prepare(`
-              INSERT INTO weixin_accounts (account_id, user_id, name, base_url, cdn_base_url, token, enabled, last_login_at, created_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(account_id) DO UPDATE SET
-                user_id = COALESCE(excluded.user_id, user_id),
-                name = COALESCE(excluded.name, name),
-                base_url = COALESCE(excluded.base_url, base_url),
-                cdn_base_url = COALESCE(excluded.cdn_base_url, cdn_base_url),
-                token = excluded.token,
-                enabled = COALESCE(excluded.enabled, enabled),
-                last_login_at = excluded.last_login_at,
-                created_at = COALESCE(weixin_accounts.created_at, excluded.created_at)
-            `).run(
-              accountId,
-              userId,
-              accountId,
-              resp.baseurl || '',
-              '',
-              resp.bot_token,
-              1,
-              now,
-              now
-            );
-
-            getLogger().info('[WeixinQrLogin] Saved to weixin_accounts table', { accountId, enabled: true }, LogComponent.NetHandlers);
-          } else {
-            getLogger().warn('[WeixinQrLogin] Database not available, cannot persist account', { accountId }, LogComponent.NetHandlers);
-          }
+          getLogger().info('[WeixinQrLogin] Saved to ConfigStore', { accountId, enabled: true }, LogComponent.NetHandlers);
         } else {
           getLogger().warn(
             '[WeixinQrLogin] Confirmed but missing bot_token or ilink_bot_id',
