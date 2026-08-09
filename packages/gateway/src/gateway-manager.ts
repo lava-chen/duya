@@ -34,6 +34,54 @@ import { resolveDisplayConfig, type DisplayUserConfig } from './display-config.j
 const ADAPTER_START_TIMEOUT_MS = 30_000;
 const ADAPTER_STOP_TIMEOUT_MS = 10_000;
 
+export interface SessionResetDecisionInput {
+  policy?: 'daily' | 'idle' | 'both' | 'off';
+  resetHour?: number;
+  resetIdleMinutes?: number;
+  /** Activity timestamp of the PREVIOUS message, not the current one. */
+  lastActivity?: number;
+  now?: number;
+}
+
+/**
+ * Decide whether a session should reset before the next inbound message.
+ * Pure (side-effect free) so the idle/daily reset policy is unit-testable.
+ *
+ * The caller MUST pass the timestamp of the previous message in `lastActivity`.
+ * Passing the current message's timestamp (as the caller used to do) makes the
+ * elapsed-window comparisons always evaluate to ~0, so the reset never fires.
+ */
+export function shouldResetSessionDecision(input: SessionResetDecisionInput): boolean {
+  const policy = input.policy ?? 'off';
+  if (policy === 'off') return false;
+
+  const now = input.now ?? Date.now();
+
+  // Idle-based reset: no activity for resetIdleMinutes (default 30).
+  if (policy === 'idle' || policy === 'both') {
+    const idleMinutes = input.resetIdleMinutes ?? 30;
+    const last = input.lastActivity;
+    if (last !== undefined) {
+      const elapsedMin = (now - last) / 60_000;
+      if (elapsedMin >= idleMinutes) return true;
+    }
+    if (policy === 'idle') return false;
+  }
+
+  // Daily reset: wall-clock hour crossed resetHour (default 0).
+  if (policy === 'daily' || policy === 'both') {
+    const hour = new Date(now).getHours();
+    const resetHour = input.resetHour ?? 0;
+    const last = input.lastActivity;
+    if (last !== undefined) {
+      const lastHour = new Date(last).getHours();
+      if (hour === resetHour && lastHour !== resetHour) return true;
+    }
+  }
+
+  return false;
+}
+
 export class GatewayManager {
   private running = false;
   private adapters = new Map<PlatformType, PlatformAdapter>();
@@ -534,41 +582,20 @@ export class GatewayManager {
       reset_idle_minutes?: number;
     } | undefined;
 
-    const policy = o?.reset_policy ?? 'off';
-    if (policy === 'off') return false;
-
-    const now = Date.now();
     const key = `${platform}:${chatId}`;
 
-    // Idle-based reset: no activity for reset_idle_minutes (default 30).
-    if (policy === 'idle' || policy === 'both') {
-      const idleMinutes = o?.reset_idle_minutes ?? 30;
-      const last = this.lastActivityByChat.get(key);
-      if (last !== undefined) {
-        const elapsedMin = (now - last) / 60_000;
-        if (elapsedMin >= idleMinutes) {
-          this.lastActivityByChat.delete(key);
-          return true;
-        }
-      }
-      if (policy === 'idle') return false;
-    }
+    // The decision compares against the previous message's activity timestamp.
+    // The caller records the current message's activity only AFTER this check,
+    // so the elapsed-window comparisons are meaningful (otherwise reset never
+    // fires). Activity is reset to the current time on a triggered reset below.
+    const shouldReset = shouldResetSessionDecision({
+      policy: o?.reset_policy,
+      resetHour: o?.reset_hour,
+      resetIdleMinutes: o?.reset_idle_minutes,
+      lastActivity: this.lastActivityByChat.get(key),
+    });
 
-    // Daily reset: wall-clock hour crossed reset_hour (default 0).
-    if (policy === 'daily' || policy === 'both') {
-      const hour = new Date(now).getHours();
-      const resetHour = o?.reset_hour ?? 0;
-      const last = this.lastActivityByChat.get(key);
-      if (last !== undefined) {
-        const lastHour = new Date(last).getHours();
-        if (hour === resetHour && lastHour !== resetHour) {
-          this.lastActivityByChat.set(key, now);
-          return true;
-        }
-      }
-    }
-
-    return false;
+    return shouldReset;
   }
 
   // ---------------------------------------------------------------------------
@@ -593,16 +620,21 @@ export class GatewayManager {
       // Normal inbound message: resolve session and forward to Main
       const sessionId = await this.userMapper.getOrCreateSession(msg);
 
-      // Track activity for idle/daily session auto-reset.
       const actKey = `${msg.platform}:${msg.platformChatId}`;
-      this.lastActivityByChat.set(actKey, Date.now());
 
       // Session auto-reset policy: if the configured window has elapsed, start
       // a fresh session before processing this message (Hermes daily/idle reset).
+      // The activity timestamp must be recorded AFTER the reset decision so the
+      // idle/daily checks compare against the previous message's activity, not
+      // the current instant (otherwise the reset would never fire).
       if (this.shouldResetSession(msg.platform, msg.platformChatId)) {
         await this.resetSession(msg);
+        this.lastActivityByChat.set(actKey, Date.now());
         return;
       }
+
+      // Track activity for idle/daily session auto-reset.
+      this.lastActivityByChat.set(actKey, Date.now());
 
       // Busy-input handling: when the agent is already streaming for this
       // session, honor the configured mode (queue / steer / interrupt) and
