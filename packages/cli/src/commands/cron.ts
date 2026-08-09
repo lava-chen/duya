@@ -230,8 +230,11 @@ async function promptConfirm(message: string): Promise<boolean> {
   });
 }
 
-function readBodyFromFile(path: string): CreateCronBody {
-  const resolved = resolve(process.cwd(), path);
+function readBodyFromFile(path: string, cwd?: string): CreateCronBody {
+  // Resolve against the caller-provided working directory (the agent
+  // threads the session workspace here) so relative paths do not
+  // silently resolve to the worker process cwd.
+  const resolved = resolve(cwd ?? process.cwd(), path);
   if (!existsSync(resolved)) {
     throw new Error(`file not found: ${resolved}`);
   }
@@ -311,7 +314,6 @@ async function createJob(ctx: CliSubcommandContext): Promise<ExitCode> {
   // Plan 99 P3: prefer `--cron <json>` (inline body) over `--from-file`
   const cronJson = (ctx.options as Record<string, unknown>)['cron'] as string | undefined;
   const fromFile = typeof ctx.options.fromFile === 'string' ? ctx.options.fromFile : undefined;
-  const prompt = typeof ctx.options.prompt === 'string' ? ctx.options.prompt : undefined;
 
   if (!cronJson && !fromFile) {
     process.stderr.write(
@@ -325,7 +327,7 @@ async function createJob(ctx: CliSubcommandContext): Promise<ExitCode> {
     if (cronJson) {
       body = JSON.parse(cronJson) as CreateCronBody;
     } else {
-      body = readBodyFromFile(fromFile!);
+      body = readBodyFromFile(fromFile!, ctx.options.cwd);
     }
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
@@ -380,7 +382,7 @@ async function updateJob(ctx: CliSubcommandContext): Promise<ExitCode> {
     } else {
       // --from-file may carry a CreateCronBody shape; we accept either
       // and pass through to PATCH, which ignores unknown server fields.
-      body = readBodyFromFile(fromFile!);
+      body = readBodyFromFile(fromFile!, ctx.options.cwd);
     }
   } catch (err) {
     process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);

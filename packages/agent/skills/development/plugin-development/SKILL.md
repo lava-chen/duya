@@ -7,12 +7,13 @@ description: "Create DUYA plugins with valid `plugin.json` manifests matching th
 
 ## Quick Start
 
-1. **Determine manifest format** — DUYA supports two manifest formats:
+1. **Determine manifest format** — DUYA supports three forms:
 
 | Format | File | Best for | Complexity |
 |--------|------|----------|------------|
+| JSON manifest | `plugin.json` (`--standard`) | Portable packages shared with other Agent Plugins clients | Full |
+| JSON manifest | `plugin.json` (`duya.plugin.v1`) | DUYA-only plugins with hooks, CLI, UI | Full |
 | Markdown manifest | `plugin.md` | Simple skill-only or builtin plugins | Minimal |
-| JSON manifest | `plugin.json` | Plugins with hooks, MCP servers, CLI, UI | Full |
 
 2. **Create the plugin scaffold** — Run the scaffold script from the DUYA project root:
 
@@ -29,6 +30,19 @@ Use `--dev` when running DUYA in development mode (`npm run electron:dev`):
 
 ```bash
 node scripts/create-basic-plugin.mjs my-plugin --dev --with-skills --with-marketplace
+```
+
+Use `--standard` to emit a portable **Agent Plugins 1.0.0** package (a
+`plugin.json` whose `$schema` is the canonical Agent Plugins schema).
+Skills and MCP servers are placed at the standard locations
+(`skills/<name>/SKILL.md`, `mcp.json`); DUYA-only fields (engines,
+permissions, setup, plugin policy, CLI, UI) are namespaced under
+`extensions["com.duya.client"]` and are read back by DUYA's standard-package
+reader. This is the right choice when the plugin should also work in other
+Agent Plugins clients (Cursor, Claude, VS Code, etc.).
+
+```bash
+node scripts/create-basic-plugin.mjs my-plugin --standard --with-skills --with-mcp
 ```
 
 Use `--parent-dir` to override the output directory:
@@ -258,6 +272,56 @@ The Markdown body is used as the `agentContext` — the text the agent reads to 
 
 ---
 
+## Standard Agent Plugins Format (--standard)
+
+Generated with the `--standard` flag. The manifest targets
+[Agent Plugins 1.0.0](https://agent-plugins.org/) so the package's portable
+parts (skills, MCP servers) work in any compatible client.
+
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "my-plugin",
+  "version": "0.1.0",
+  "description": "Plugin: my-plugin",
+  "author": { "name": "Your Name" },
+  "license": "MIT",
+  "extensions": {
+    "com.duya.client": {
+      "engines": { "duya": ">=0.9.0" },
+      "permissions": [],
+      "cli": [],
+      "ui": []
+    }
+  }
+}
+```
+
+### Layout
+
+```
+my-plugin/
+├── plugin.json             # Required: standard $schema manifest
+├── skills/                 # Portable: Agent Skills
+│   └── my-plugin/SKILL.md
+├── mcp.json                # Portable: standard MCP servers ($schema + mcpServers map)
+└── hooks/                  # DUYA-only: hooks/hooks.json (read by DUYA)
+```
+
+### Rules
+
+- The standard schema is `additionalProperties: false` — no `id`, `schemaVersion`,
+  `capabilities`, root `permissions`, or root `engines`. DUYA-only fields live in
+  the `extensions["com.duya.client"]` namespace and are read back by DUYA's
+  standard-package reader (`readPluginManifest`).
+- `name` must match the standard pattern: lowercase, no `--`, no `..`.
+- `mcp.json` uses the standard object-map shape (`mcpServers: { <name>: { type, ... } }`),
+  not DUYA's `mcp/servers.json` array.
+- Portable `skills/` + `mcp.json` are honored by DUYA and other clients; the
+  `com.duya.client` block is honored by DUYA only.
+
+---
+
 ## Skill Manifest Format
 
 Each skill lives in `skills/<skill-name>/SKILL.md`:
@@ -480,6 +544,7 @@ Validator checks against `electron/plugins/manifest.ts` expectations:
 | `--with-mcp` | `.mcp.json` | `"mcpServers": [{ "name": "...", "command": "..." }]` |
 | `--with-cli` | `commands/` or `scripts/` | `"cli": [{ "name": "...", "command": "..." }]` |
 | `--with-ui` | `ui/` directory | `"ui": [{ "id": "...", "type": "...", "entry": "..." }]` |
+| `--standard` | — | Emit a standard Agent Plugins `plugin.json` (`$schema` + `extensions`) |
 
 ### Hook Command Types
 

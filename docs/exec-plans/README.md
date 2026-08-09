@@ -103,6 +103,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [201-cli-packaged-smoke-fixes](./active/201-cli-packaged-smoke-fixes.md) | CLI packaged smoke-test fixes — `adaptIdFirst`, auto-inject `--format`, `channel_directory` table | P0 | Phases 1–5 ✅, Phase 6 ⏳ |
 | [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` — single persistent session per cron, DB-authoritative history | P0 | Planning |
 | [231-skill-learning-inbox](./active/231-skill-learning-inbox.md) | Skill learning inbox | P1 | Planning |
+| [405-cron-definition-configstore](./active/405-cron-definition-configstore.md) | Cron 定义接入 ConfigStore — `cron.jobs`(TOML) 唯一权威源 + `automation_cron_state` 运行时状态 + `CronStore` 门面，读写侧切换，调用面零改动 | P0 | ✅ 验收通过（2026-08-09） |
 
 ### Session / UI / UX
 
@@ -202,6 +203,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 |------|-------------|-----------|
 | [203-provider-ui-interaction-architecture](./completed/203-provider-ui-interaction-architecture.md) | Provider UI 4-layer architecture — 不改 UX 减 1900 行 | — |
 | [334-config-toml-unification](./completed/334-config-toml-unification.md) | 配置收敛为单一 `~/.duya/config.toml` + `secrets.json`(0600)：旧源(settings.json/boot.json/mcp.toml/registry.json/known_marketplaces.json)迁移后全删；`ConfigManager` 类物理删除；模型兼容解析 DB 化(方案 ii) | 2026-08-08 |
+| [335-config-consumer-unification](./completed/335-config-consumer-unification.md) | 配置消费方统一：`mcp_servers`(mcp.toml→ConfigStore) + `channels`/`gateway_proxy`(去 SQLite 直读) 读写全部收敛到 ConfigStore | 2026-08-09 |
 | [204-provider-card-redesign](./completed/204-provider-card-redesign.md) | Provider Card UX — `ProvidersSection` 1066→246 LoC | 2026-06-10 |
 | [205-provider-inline-edit-page](./completed/205-provider-inline-edit-page.md) | Provider inline edit page + two-step add flow | — |
 | [200-cli-surface-expansion](./completed/200-cli-surface-expansion.md) | CLI `update/backup/security` + polish existing commands | — |

@@ -19,7 +19,6 @@ import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
-import { getGatewayProxyConfig } from '../db/queries/settings';
 import { getDefaultGatewayWorkspace, prepareGatewayWorkspace } from './config';
 import { buildGatewayInboundChatRequest } from './inbound-request';
 import { getProviderStore } from '../services/providers/provider-store-electron';
@@ -583,6 +582,46 @@ export function handleGatewayMessage(
                     platformChatId,
                     event: { type: 'chat:error', message },
                   });
+                } else if (event.type === 'turn_start') {
+                  const data = (event.data ?? {}) as { turnCount?: number };
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: {
+                      type: 'chat:status',
+                      status: `Turn ${data.turnCount ?? ''}`,
+                    },
+                  });
+                } else if (event.type === 'tool_use') {
+                  const data = (event.data ?? {}) as { id?: string; name?: string; input?: unknown };
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: {
+                      type: 'chat:tool_use',
+                      toolUseId: data.id,
+                      toolName: data.name,
+                      toolInput: data.input,
+                    },
+                  });
+                } else if (event.type === 'tool_result') {
+                  const data = (event.data ?? {}) as { id?: string; result?: string; duration_ms?: number };
+                  sendToGatewayProcess({
+                    type: 'gateway:outbound',
+                    sessionId,
+                    platform,
+                    platformChatId,
+                    event: {
+                      type: 'chat:tool_result',
+                      toolUseId: data.id,
+                      toolResult: data.result,
+                      toolDurationMs: data.duration_ms,
+                    },
+                  });
                 }
               } catch (e) {
                 // Ignore parse errors for partial SSE data
@@ -618,6 +657,20 @@ export function handleGatewayMessage(
         clearTimeout(request.timeout);
         _gatewayStatusRequests.delete(msg.id as string);
         request.resolve(msg.status);
+      }
+      break;
+    }
+
+    case 'gateway:send:response': {
+      const request = _channelSendRequests.get(msg.id as string);
+      if (request) {
+        clearTimeout(request.timeout);
+        _channelSendRequests.delete(msg.id as string);
+        request.resolve({
+          ok: msg.ok === true,
+          ...(msg.error !== undefined ? { error: msg.error } : {}),
+          ...(msg.platformMsgId !== undefined ? { platformMsgId: msg.platformMsgId } : {}),
+        });
       }
       break;
     }
@@ -854,6 +907,35 @@ function requestGatewayStatus(): Promise<Record<string, unknown>> {
     });
   }
 
+/**
+ * Proactively send a plain text message to an IM channel via the gateway
+ * subprocess. Resolves with the adapter's send outcome (`{ ok, error?,
+ * platformMsgId? }`). Rejects when the gateway is not running or the request
+ * times out.
+ */
+export function requestChannelSend(
+  platform: string,
+  platformChatId: string,
+  text: string,
+): Promise<{ ok: boolean; error?: string; platformMsgId?: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = getGatewayProcess();
+    if (!proc || proc.killed) {
+      reject(new Error('Gateway not running'));
+      return;
+    }
+
+    const id = `send-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timeout = setTimeout(() => {
+      _channelSendRequests.delete(id);
+      reject(new Error('Gateway channel send request timeout'));
+    }, 15_000);
+
+    _channelSendRequests.set(id, { resolve, reject, timeout });
+    proc.send({ type: 'gateway:send', id, platform, platformChatId, text });
+  });
+}
+
 // Outbound functions
 export function sendToGatewayProcess(data: Record<string, unknown>): void {
   const proc = getGatewayProcess();
@@ -901,22 +983,18 @@ export function isGatewaySession(sessionId: string): boolean {
 
 // IPC handlers
 const _gatewayStatusRequests = new Map<string, { resolve: (value: any) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
+const _channelSendRequests = new Map<string, { resolve: (value: { ok: boolean; error?: string; platformMsgId?: string }) => void; reject: (err: Error) => void; timeout: ReturnType<typeof setTimeout> }>();
 
 export function getOrBuildInitConfig(): GatewayInitConfig {
   // 注意：不再缓存。每次调用都从 DB 重读，确保 UI 保存新凭据后下一次 start 拿到最新值。
   // 缓存导致过 "配置完 channel 后必须重启 dev 才能生效" 的 bug。
 
-  const db = getDatabase();
   const platforms: Array<{ platform: string; enabled: boolean; credentials: Record<string, string>; options?: Record<string, unknown> }> = [];
 
   // New path: read channel adapters from ConfigStore. ConfigStore merges
   // secrets (tokens) back into its snapshot, so credentials are present.
   const configStore = getConfigStore();
   const adapters = configStore.getByPath('channels.adapters') as Record<string, ChannelAdapterEntry> | undefined;
-
-  // Track which platforms were already produced from ConfigStore so the
-  // SQLite fallback below only fills in the ones ConfigStore did not cover.
-  const producedPlatforms = new Set<string>();
 
   // ---- WeChat / iLink accounts (ConfigStore path) ----
   const weixinAdapter = adapters?.weixin;
@@ -942,19 +1020,51 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
         },
       });
     }
-    if (platforms.some((p) => p.platform === 'weixin')) producedPlatforms.add('weixin');
   }
 
   // ---- Telegram (ConfigStore path) ----
-  const telegramCredentials = adapters?.telegram?.credentials as Record<string, unknown> | undefined;
+  // Hermes-aligned: one platform entry per bot account. The primary account
+  // comes from `adapters.telegram.credentials.token`; extra accounts come from
+  // the `accounts` array and/or TELEGRAM_BOT_TOKEN_<ACCOUNT> env. Each account
+  // gets an isolated session namespace stamped by the adapter.
+  const telegramAdapter = adapters?.telegram as Record<string, unknown> | undefined;
+  const telegramCredentials = telegramAdapter?.credentials as Record<string, unknown> | undefined;
   const telegramToken = telegramCredentials?.token as string | undefined;
-  if (adapters?.telegram?.enabled && telegramToken) {
+  const telegramOptions = (telegramAdapter?.options as Record<string, unknown> | undefined) ?? {};
+  const telegramAccounts = (telegramAdapter?.accounts as Array<Record<string, unknown>> | undefined) ?? [];
+
+  const telegramEntries: Array<{ token: string; account?: string }> = [];
+  if (telegramAdapter?.enabled && telegramToken) {
+    telegramEntries.push({ token: telegramToken });
+  }
+  // Env-sourced accounts: TELEGRAM_BOT_TOKEN_<ACCOUNT> (uppercase name).
+  for (const [key, val] of Object.entries(process.env)) {
+    const m = /^TELEGRAM_BOT_TOKEN_(.+)$/.exec(key);
+    if (m && typeof val === 'string' && val.trim()) {
+      const account = m[1].toLowerCase();
+      if (!telegramEntries.some((e) => e.token === val)) {
+        telegramEntries.push({ token: val.trim(), account });
+      }
+    }
+  }
+  // Config-sourced accounts: adapters.telegram.accounts[].{name, token}.
+  for (const acc of telegramAccounts) {
+    const accToken = acc.token as string | undefined;
+    const accName = (acc.name as string | undefined) ?? (acc.account as string | undefined);
+    if (accToken?.trim() && !telegramEntries.some((e) => e.token === accToken)) {
+      telegramEntries.push({ token: accToken.trim(), account: accName });
+    }
+  }
+
+  for (const entry of telegramEntries) {
+    const options: Record<string, unknown> = { ...telegramOptions };
+    if (entry.account) options.account = entry.account;
     platforms.push({
       platform: 'telegram',
       enabled: true,
-      credentials: { token: telegramToken },
+      credentials: { token: entry.token },
+      options,
     });
-    producedPlatforms.add('telegram');
   }
 
   // ---- QQ (ConfigStore path) ----
@@ -968,7 +1078,6 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
       enabled: true,
       credentials: { appId: qqAppId, appSecret: qqAppSecret },
     });
-    producedPlatforms.add('qq');
   }
 
   // ---- Feishu (ConfigStore path) ----
@@ -982,134 +1091,29 @@ export function getOrBuildInitConfig(): GatewayInitConfig {
       enabled: true,
       credentials: { appId: feishuAppId, appSecret: feishuAppSecret },
     });
-    producedPlatforms.add('feishu');
-  }
-
-  // ---- SQLite fallback (Phase 3 pre-migration transition period) ----
-  if (db) {
-    // WeChat/iLink accounts from weixin_accounts table
-    if (!producedPlatforms.has('weixin')) {
-      const weixinAccountsRows = db.prepare(
-        'SELECT account_id, user_id, token, base_url, cdn_base_url FROM weixin_accounts WHERE enabled = 1'
-      ).all() as Array<{ account_id: string; user_id: string; token: string; base_url: string; cdn_base_url: string }>;
-
-      for (const account of weixinAccountsRows) {
-        if (!account.token?.trim()) {
-          console.warn('[Gateway] Skipping weixin account with empty token:', account.account_id);
-          continue;
-        }
-        platforms.push({
-          platform: 'weixin',
-          enabled: true,
-          credentials: {
-            botToken: account.token,
-            ilinkBotId: account.account_id,
-            baseUrl: account.base_url || 'https://ilinkai.weixin.qq.com',
-            cdnBaseUrl: account.cdn_base_url || 'https://novac2c.cdn.weixin.qq.com/c2c',
-          },
-        });
-      }
-
-      // Load legacy settings-based WeChat config if no accounts exist
-      if (weixinAccountsRows.length === 0) {
-        const weixinEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_weixin_enabled'").get() as { value: string } | undefined;
-        const weixinToken = db.prepare("SELECT value FROM settings WHERE key = 'weixin_bot_token'").get() as { value: string } | undefined;
-        const weixinAccountId = db.prepare("SELECT value FROM settings WHERE key = 'weixin_account_id'").get() as { value: string } | undefined;
-        const weixinBaseUrl = db.prepare("SELECT value FROM settings WHERE key = 'weixin_base_url'").get() as { value: string } | undefined;
-
-        if (weixinEnabled?.value === 'true' && weixinToken?.value) {
-          platforms.push({
-            platform: 'weixin',
-            enabled: true,
-            credentials: {
-              botToken: weixinToken.value,
-              ilinkBotId: weixinAccountId?.value || '',
-              baseUrl: weixinBaseUrl?.value || 'https://ilinkai.weixin.qq.com',
-              cdnBaseUrl: 'https://novac2c.cdn.weixin.qq.com/c2c',
-            },
-          });
-        }
-      }
-    }
-
-    // Telegram config
-    if (!producedPlatforms.has('telegram')) {
-      const telegramEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_telegram_enabled'").get() as { value: string } | undefined;
-      const telegramTokenFallback = db.prepare("SELECT value FROM settings WHERE key = 'telegram_bot_token'").get() as { value: string } | undefined;
-
-      if (telegramEnabled?.value === 'true' && telegramTokenFallback?.value) {
-        platforms.push({
-          platform: 'telegram',
-          enabled: true,
-          credentials: { token: telegramTokenFallback.value },
-        });
-      }
-    }
-
-    // QQ config
-    if (!producedPlatforms.has('qq')) {
-      const qqEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_enabled'").get() as { value: string } | undefined;
-      const qqAppIdFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_id'").get() as { value: string } | undefined;
-      const qqAppSecretFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_qq_app_secret'").get() as { value: string } | undefined;
-
-      if (qqEnabled?.value === 'true' && qqAppIdFallback?.value && qqAppSecretFallback?.value) {
-        platforms.push({
-          platform: 'qq',
-          enabled: true,
-          credentials: {
-            appId: qqAppIdFallback.value,
-            appSecret: qqAppSecretFallback.value,
-          },
-        });
-      }
-    }
-
-    // Feishu config
-    if (!producedPlatforms.has('feishu')) {
-      const feishuEnabled = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_enabled'").get() as { value: string } | undefined;
-      const feishuAppIdFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_id'").get() as { value: string } | undefined;
-      const feishuAppSecretFallback = db.prepare("SELECT value FROM settings WHERE key = 'bridge_feishu_app_secret'").get() as { value: string } | undefined;
-
-      if (feishuEnabled?.value === 'true' && feishuAppIdFallback?.value && feishuAppSecretFallback?.value) {
-        platforms.push({
-          platform: 'feishu',
-          enabled: true,
-          credentials: {
-            appId: feishuAppIdFallback.value,
-            appSecret: feishuAppSecretFallback.value,
-          },
-        });
-      }
-    }
   }
 
   // Check auto-start setting
-  let autoStart = false;
-  if (db) {
-    const autoStartRow = db.prepare("SELECT value FROM settings WHERE key = 'bridge_auto_start'").get() as { value: string } | undefined;
-    autoStart = autoStartRow?.value === 'true';
-  }
-
-  // Load per-channel proxy configuration
-  const proxyConfig = getGatewayProxyConfig();
-
-  // Read gateway workspace from DB (bridge_workspace setting). Falls back to
-  // ~/.duya/workspace when absent/empty. Never use process.cwd() — that leaks
-  // the Electron app's cwd (e.g. the dev repo path) into agent sessions.
-  const workspaceRow = db.prepare("SELECT value FROM settings WHERE key = 'bridge_workspace'").get() as { value: string } | undefined;
+  // autoStart + workspace now read from ConfigStore (channels.*)
+  const channels = (getConfigStore().getByPath('channels') ?? {}) as {
+    auto_start?: boolean;
+    workspace?: string;
+  };
+  const autoStart = channels.auto_start === true;
+  const workspace = channels.workspace ?? '';
   let workingDirectory: string;
-  if (workspaceRow?.value) {
-    // Settings are stored as JSON strings; plain strings also accepted.
-    try {
-      const parsed = JSON.parse(workspaceRow.value);
-      workingDirectory = typeof parsed === 'string' ? parsed : workspaceRow.value;
-    } catch {
-      workingDirectory = workspaceRow.value;
-    }
-  }
-  if (!workingDirectory || !workingDirectory.trim()) {
+  if (workspace && workspace.trim()) {
+    workingDirectory = workspace;
+  } else {
     workingDirectory = getDefaultGatewayWorkspace();
   }
+
+  // Load per-channel proxy configuration from ConfigStore
+  const proxyRaw = getConfigStore().getByPath('gateway_proxy') as { global_enabled?: boolean; channels?: Record<string, boolean> } | undefined;
+  const proxyConfig: GatewayProxyConfig = {
+    globalEnabled: proxyRaw?.global_enabled ?? true,
+    channels: proxyRaw?.channels ?? {},
+  };
 
   const config: GatewayInitConfig = {
     platforms,

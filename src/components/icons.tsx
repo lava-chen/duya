@@ -38,6 +38,7 @@ import {
   IconLayoutGrid,
   IconMinimize,
   IconMaximize,
+  IconCloud,
   IconSun,
   IconMoon,
   IconMoonStars,
@@ -67,6 +68,7 @@ import {
   IconCopy as TablerIconCopy,
   IconCheck,
   IconMessageCircle,
+  IconMessageCirclePlus,
   IconMessage2,
   IconFile,
   IconTool,
@@ -240,6 +242,7 @@ export const CornersOutIcon = wrapIcon(IconMaximize);
 export const SunIcon = wrapIcon(IconSun);
 export const MoonIcon = wrapIcon(IconMoon);
 export const MoonStarsIcon = wrapIcon(IconMoonStars);
+export const CloudIcon = wrapIcon(IconCloud);
 export const PaperPlaneRightIcon = wrapIcon(IconSend);
 export const PaperPlaneTiltIcon = wrapIcon(IconSend);
 export const StopIcon = wrapIcon(IconPlayerStop);
@@ -299,6 +302,7 @@ export const ProhibitIcon = wrapIcon(IconBan);
 export const HardDrivesIcon = wrapIcon(IconServer);
 export const PowerIcon = wrapIcon(IconPower);
 export const ChatCircleTextIcon = wrapIcon(IconMessage2);
+export const ChatCirclePlusIcon = wrapIcon(IconMessageCirclePlus);
 export const LightbulbIcon = wrapIcon(IconBulb);
 export const ImageIcon = wrapIcon(IconPhoto);
 export const CursorClickIcon = wrapIcon(IconHandClick);

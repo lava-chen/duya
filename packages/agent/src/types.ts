@@ -288,6 +288,14 @@ export interface ChatOptions {
    * empty synthetic user message to the conversation history.
    */
   backgroundTaskResume?: boolean;
+  /**
+   * Wall-clock timeout (ms) for a single LLM request in this chat turn.
+   * When set, each streamChat LLM call is aborted after this duration even
+   * while the stream is still producing data (e.g. a long-running thinking
+   * stream), so a hung call fails the turn fast instead of burning the run
+   * budget. Optional; absent = no per-request cap.
+   */
+  llmRequestTimeoutMs?: number;
 }
 
 // 会话信息

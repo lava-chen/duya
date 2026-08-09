@@ -22,6 +22,7 @@ import {
   PermissionService,
   PolicyEngine,
   withPluginError,
+  withPluginErrorSync,
   type PluginResult,
 } from '../../packages/plugin-core/src';
 import { PathSafetyValidator } from '../../packages/plugin-core/src/security/path-validator';
@@ -304,7 +305,7 @@ export class PluginManager {
 
   async installFromCatalog(
     pluginId: string,
-    scope: PluginScope = 'user',
+    scope: PluginScope = PluginScope.User,
     autoUpdate: boolean = false,
   ): Promise<PluginResult<PluginRegistryEntry>> {
     return withPluginError(pluginId, 'install', async () => {
@@ -439,7 +440,7 @@ export class PluginManager {
 
   async installFromPath(
     pluginPath: string,
-    scope: PluginScope = 'user',
+    scope: PluginScope = PluginScope.User,
     autoUpdate: boolean = false,
   ): Promise<PluginResult<PluginRegistryEntry>> {
     const resolvedPath = path.resolve(pluginPath);
@@ -519,7 +520,7 @@ export class PluginManager {
   }
 
   async setEnabled(pluginId: string, enabled: boolean): Promise<PluginResult<PluginRegistryEntry>> {
-    return withPluginError(pluginId, 'setEnabled', () => {
+    return withPluginErrorSync(pluginId, 'setEnabled', () => {
       const entry = this.store.listPlugins().find((p) => p.id === pluginId);
       if (!entry) {
         const err: PluginError = {
@@ -556,7 +557,7 @@ export class PluginManager {
   }
 
   async remove(pluginId: string, deleteData: boolean): Promise<PluginResult<{ removed: boolean }>> {
-    return withPluginError(pluginId, 'remove', () => {
+    return withPluginErrorSync(pluginId, 'remove', () => {
       if (this.policyEngine.isManagedPluginLocked(pluginId)) {
         const err: PluginError = {
           type: 'generic-error',

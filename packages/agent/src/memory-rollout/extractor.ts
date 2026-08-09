@@ -30,7 +30,7 @@ import {
   DEFAULT_LEASE_TTL_MS,
 } from '../memory-state/lease.js';
 import { compactMessages, type MessageEvent } from './compactMessages.js';
-import { STAGE1_USER_PROMPT_TEMPLATE } from './prompt.js';
+import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import { messageDb } from '../ipc/db-client.js';
@@ -215,6 +215,28 @@ export function parseAndValidate(response: string): ValidationResult {
 
   const obj = data as Record<string, unknown>;
   const jobStatus = obj.job_status;
+
+  // Tolerant-envelope fallback: some reasoning-disabled models (e.g. MiniMax
+  // M3 with effort=off) return ONLY the raw_memory object — a top-level
+  // `{"items":[...]}` — dropping the outer envelope (job_status,
+  // content_outcome, rollout_summary, rollout_slug). Promote `items` to
+  // raw_memory and synthesize a degraded 'succeeded' envelope so the durable
+  // memory items are persisted instead of being discarded. The rollout
+  // narrative degrades to a concatenation of the extracted claims.
+  if (typeof jobStatus !== 'string') {
+    const promotedItems = Array.isArray(obj.items) ? obj.items : undefined;
+    if (promotedItems) {
+      const promoted: Record<string, unknown> = {
+        job_status: 'succeeded',
+        content_outcome: 'uncertain',
+        rollout_summary: synthesizeRolloutSummary(promotedItems),
+        rollout_slug: 'memory-items',
+        raw_memory: { items: promotedItems },
+      };
+      return validateSucceededEnvelope(promoted);
+    }
+  }
+
   if (typeof jobStatus !== 'string' || !VALID_JOB_STATUS.has(jobStatus)) {
     return { valid: false, error: 'bad-job-status' };
   }
@@ -234,6 +256,202 @@ export function parseAndValidate(response: string): ValidationResult {
   }
 
   // succeeded: validate the Markdown rollout_summary + memory items.
+  return validateSucceededEnvelope(obj);
+}
+
+// ---------------------------------------------------------------------------
+// validateSucceededEnvelope / synthesizeRolloutSummary
+// ---------------------------------------------------------------------------
+
+/**
+ * Synthesize a minimal Markdown rollout_summary from a bare items array.
+ * Used by the tolerant-envelope fallback when the model returns only
+ * raw_memory.items (no job_status / rollout_summary envelope). Keeps the
+ * durable memory items persistable while degrading the narrative quality.
+ */
+function synthesizeRolloutSummary(items: unknown[]): string {
+  const claims: string[] = [];
+  for (const item of items) {
+    if (typeof item !== 'object' || item === null) continue;
+    const claim = (item as Record<string, unknown>).claim;
+    if (typeof claim === 'string' && claim.length > 0) {
+      claims.push(`- ${claim}`);
+    }
+  }
+  const body = claims.length > 0 ? claims.join('\n') : '- Memory items extracted.';
+  return `# Memory Items\n\nRollout context: Extracted durable memory; the model did not return a narrative summary.\n\n## Decisions\n${body}`;
+}
+
+/**
+ * Per-item validation outcome. `{ ok: true }` carries the typed item;
+ * `{ ok: false }` carries the reason (a D8 promotion violation vs. a plain
+ * schema violation) so the caller can report the most meaningful error when
+ * nothing survives salvage.
+ */
+type ItemValidation =
+  | { ok: true; item: MemoryItem }
+  | { ok: false; error: string };
+
+/**
+ * Validate a single memory item against the D8 per-item contract. Returns
+ * the typed item, or an error reason when the item is malformed. A failed
+ * item does NOT fail the whole extraction — the caller salvages the
+ * remaining valid items so one bad item cannot discard an entire rollout's
+ * memory.
+ *
+ * The `seenKeys` set is used to reject duplicate canonical_key values.
+ */
+function validateMemoryItem(item: unknown, seenKeys: Set<string>): ItemValidation {
+  const fail = (error: string): ItemValidation => ({ ok: false, error });
+
+  if (typeof item !== 'object' || item === null) {
+    return fail('schema-violation');
+  }
+
+  const itemObj = item as Record<string, unknown>;
+  const claim = itemObj.claim;
+  if (typeof claim !== 'string' || claim.length === 0) {
+    return fail('schema-violation');
+  }
+
+  const claimType = itemObj.claim_type;
+  if (typeof claimType !== 'string' || !VALID_CLAIM_TYPE.has(claimType)) {
+    return fail('schema-violation');
+  }
+
+  const scope = itemObj.scope;
+  if (typeof scope !== 'string' || !VALID_SCOPE.has(scope)) {
+    return fail('schema-violation');
+  }
+
+  // scope_id identifies the scope target. It must be null for personal
+  // and global scopes, and non-null for every other scope.
+  const scopeId = itemObj.scope_id;
+  if (scopeId !== null && typeof scopeId !== 'string') {
+    return fail('schema-violation');
+  }
+  if (scope === 'personal' || scope === 'global') {
+    if (scopeId !== null) {
+      return fail('schema-violation');
+    }
+  } else if (scopeId === null) {
+    return fail('schema-violation');
+  }
+
+  const canonicalKey = itemObj.canonical_key;
+  if (typeof canonicalKey !== 'string' || canonicalKey.length === 0) {
+    return fail('schema-violation');
+  }
+  if (seenKeys.has(canonicalKey)) {
+    return fail('schema-violation');
+  }
+
+  // Enforce canonical_key prefix for person/area claim types.
+  if (claimType === 'person' && !canonicalKey.startsWith('person:')) {
+    return fail('invalid-promotion');
+  }
+  if (claimType === 'area' && !canonicalKey.startsWith('area:')) {
+    return fail('invalid-promotion');
+  }
+  const expectedPrefix = `${claimType}:`;
+  if (!canonicalKey.startsWith(expectedPrefix)) {
+    return fail('invalid-promotion');
+  }
+
+  const evidence = validateEvidence(itemObj.evidence);
+  if (!evidence || evidence.length === 0) {
+    return fail('schema-violation');
+  }
+
+  const externalSourceCount = evidence.filter((ev) => EXTERNAL_SOURCE_TYPES.has(ev.source_type)).length;
+  const unverifiedAssistantCount = evidence.filter(
+    (ev) =>
+      ev.source_type === 'assistant_only' &&
+      (ev.verification === 'none' || ev.verification === undefined),
+  ).length;
+
+  // D8: external-only evidence cannot become preference or procedure.
+  if (
+    externalSourceCount === evidence.length &&
+    (claimType === 'preference' || claimType === 'procedure')
+  ) {
+    return fail('invalid-promotion');
+  }
+
+  // D8: unverified assistant-only claims cannot become preference.
+  if (unverifiedAssistantCount === evidence.length && claimType === 'preference') {
+    return fail('invalid-promotion');
+  }
+
+  const confidence = itemObj.confidence;
+  if (typeof confidence !== 'string' || !VALID_CONFIDENCE.has(confidence)) {
+    return fail('schema-violation');
+  }
+
+  const status = itemObj.status;
+  if (typeof status !== 'string' || !VALID_MEMORY_STATUS.has(status)) {
+    return fail('schema-violation');
+  }
+
+  // Validity window: type-checked only, no date-format enforcement.
+  const validFrom = itemObj.valid_from;
+  if (validFrom !== null && typeof validFrom !== 'string') {
+    return fail('schema-violation');
+  }
+  const validUntil = itemObj.valid_until;
+  if (validUntil !== null && typeof validUntil !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const relationToExisting = itemObj.relation_to_existing;
+  if (relationToExisting !== null && typeof relationToExisting !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const supersedes = validateStringArray(itemObj.supersedes);
+  if (!supersedes) {
+    return fail('schema-violation');
+  }
+
+  const whyFutureAgentNeedsThis = itemObj.why_future_agent_needs_this;
+  if (typeof whyFutureAgentNeedsThis !== 'string') {
+    return fail('schema-violation');
+  }
+
+  const retrievalCues = validateStringArray(itemObj.retrieval_cues);
+  if (!retrievalCues) {
+    return fail('schema-violation');
+  }
+
+  seenKeys.add(canonicalKey);
+
+  return {
+    ok: true,
+    item: {
+      claim,
+      claim_type: claimType as ClaimType,
+      scope: scope as Scope,
+      scope_id: scopeId,
+      evidence,
+      canonical_key: canonicalKey,
+      confidence: confidence as MemoryItem['confidence'],
+      status: status as MemoryItem['status'],
+      valid_from: validFrom,
+      valid_until: validUntil,
+      relation_to_existing: relationToExisting,
+      supersedes,
+      why_future_agent_needs_this: whyFutureAgentNeedsThis,
+      retrieval_cues: retrievalCues,
+    },
+  };
+}
+
+/**
+ * Validate a 'succeeded'-style envelope: content_outcome, rollout_summary,
+ * rollout_slug, and raw_memory.items. Shared by the strict path and the
+ * tolerant-envelope fallback (which promotes a bare items array first).
+ */
+function validateSucceededEnvelope(obj: Record<string, unknown>): ValidationResult {
   const contentOutcome = obj.content_outcome;
   if (typeof contentOutcome !== 'string' || !VALID_CONTENT_OUTCOME.has(contentOutcome)) {
     return { valid: false, error: 'schema-violation' };
@@ -266,143 +484,24 @@ export function parseAndValidate(response: string): ValidationResult {
     return { valid: false, error: 'schema-violation' };
   }
 
+  // Salvage semantics: a single malformed item (e.g. an out-of-enum
+  // claim_type from a reasoning-disabled model) must not discard the whole
+  // rollout's memory. Drop the invalid items and keep the valid subset.
+  let firstError: string | null = null;
   for (const item of items) {
-    if (typeof item !== 'object' || item === null) {
-      return { valid: false, error: 'schema-violation' };
+    const result = validateMemoryItem(item, seenKeys);
+    if (result.ok) {
+      validatedItems.push(result.item);
+    } else if (firstError === null) {
+      firstError = result.error;
     }
+  }
 
-    const itemObj = item as Record<string, unknown>;
-    const claim = itemObj.claim;
-    if (typeof claim !== 'string' || claim.length === 0) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const claimType = itemObj.claim_type;
-    if (typeof claimType !== 'string' || !VALID_CLAIM_TYPE.has(claimType)) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const scope = itemObj.scope;
-    if (typeof scope !== 'string' || !VALID_SCOPE.has(scope)) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    // scope_id identifies the scope target. It must be null for personal
-    // and global scopes, and non-null for every other scope.
-    const scopeId = itemObj.scope_id;
-    if (scopeId !== null && typeof scopeId !== 'string') {
-      return { valid: false, error: 'schema-violation' };
-    }
-    if (scope === 'personal' || scope === 'global') {
-      if (scopeId !== null) {
-        return { valid: false, error: 'schema-violation' };
-      }
-    } else if (scopeId === null) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const canonicalKey = itemObj.canonical_key;
-    if (typeof canonicalKey !== 'string' || canonicalKey.length === 0) {
-      return { valid: false, error: 'schema-violation' };
-    }
-    if (seenKeys.has(canonicalKey)) {
-      return { valid: false, error: 'schema-violation' };
-    }
-    seenKeys.add(canonicalKey);
-
-    // Enforce canonical_key prefix for person/area claim types.
-    if (claimType === 'person' && !canonicalKey.startsWith('person:')) {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-    if (claimType === 'area' && !canonicalKey.startsWith('area:')) {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-    const expectedPrefix = `${claimType}:`;
-    if (!canonicalKey.startsWith(expectedPrefix)) {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-
-    const evidence = validateEvidence(itemObj.evidence);
-    if (!evidence || evidence.length === 0) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const externalSourceCount = evidence.filter((ev) => EXTERNAL_SOURCE_TYPES.has(ev.source_type)).length;
-    const unverifiedAssistantCount = evidence.filter(
-      (ev) =>
-        ev.source_type === 'assistant_only' &&
-        (ev.verification === 'none' || ev.verification === undefined),
-    ).length;
-
-    // D8: external-only evidence cannot become preference or procedure.
-    if (
-      externalSourceCount === evidence.length &&
-      (claimType === 'preference' || claimType === 'procedure')
-    ) {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-
-    // D8: unverified assistant-only claims cannot become preference.
-    if (unverifiedAssistantCount === evidence.length && claimType === 'preference') {
-      return { valid: false, error: 'invalid-promotion' };
-    }
-
-    const confidence = itemObj.confidence;
-    if (typeof confidence !== 'string' || !VALID_CONFIDENCE.has(confidence)) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const status = itemObj.status;
-    if (typeof status !== 'string' || !VALID_MEMORY_STATUS.has(status)) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    // Validity window: type-checked only, no date-format enforcement.
-    const validFrom = itemObj.valid_from;
-    if (validFrom !== null && typeof validFrom !== 'string') {
-      return { valid: false, error: 'schema-violation' };
-    }
-    const validUntil = itemObj.valid_until;
-    if (validUntil !== null && typeof validUntil !== 'string') {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const relationToExisting = itemObj.relation_to_existing;
-    if (relationToExisting !== null && typeof relationToExisting !== 'string') {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const supersedes = validateStringArray(itemObj.supersedes);
-    if (!supersedes) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const whyFutureAgentNeedsThis = itemObj.why_future_agent_needs_this;
-    if (typeof whyFutureAgentNeedsThis !== 'string') {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    const retrievalCues = validateStringArray(itemObj.retrieval_cues);
-    if (!retrievalCues) {
-      return { valid: false, error: 'schema-violation' };
-    }
-
-    validatedItems.push({
-      claim,
-      claim_type: claimType as ClaimType,
-      scope: scope as Scope,
-      scope_id: scopeId,
-      evidence,
-      canonical_key: canonicalKey,
-      confidence: confidence as MemoryItem['confidence'],
-      status: status as MemoryItem['status'],
-      valid_from: validFrom,
-      valid_until: validUntil,
-      relation_to_existing: relationToExisting,
-      supersedes,
-      why_future_agent_needs_this: whyFutureAgentNeedsThis,
-      retrieval_cues: retrievalCues,
-    });
+  // If the envelope was intact but every item was malformed, nothing is
+  // salvageable — report the most meaningful reason so no empty 'succeeded'
+  // extraction is persisted.
+  if (items.length > 0 && validatedItems.length === 0) {
+    return { valid: false, error: firstError ?? 'schema-violation' };
   }
 
   return {
@@ -594,7 +693,15 @@ export class Stage1Extractor {
     const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
 
     const policy = await this.resolvePolicy();
-    const systemPrompt = assembleStage1Prompt(policy.content);
+    // When no policy file is configured the hard contract alone omits the item
+    // schema (claim/confidence/status) and the JSON envelope the validator
+    // requires, so every extraction fails schema-violation. Fall back to the
+    // complete schema-bearing prompt so durable items are produced; a non-empty
+    // policy still overrides via the hard-contract + policy assembly.
+    const systemPrompt =
+      policy.content.trim().length > 0
+        ? assembleStage1Prompt(policy.content)
+        : STAGE1_SYSTEM_PROMPT;
 
     let llmResponse: string;
     try {
@@ -602,6 +709,7 @@ export class Stage1Extractor {
         systemPrompt: systemPrompt,
         maxTokens: LLM_MAX_TOKENS,
         signal: abortController.signal,
+        effort: 'off', // deterministic JSON extraction — skip reasoning budget
       });
       const chunks: string[] = [];
       for await (const event of generator) {
@@ -634,6 +742,11 @@ export class Stage1Extractor {
     // 6. Parse + validate.
     const parsed = parseAndValidate(llmResponse);
     if (!parsed.valid) {
+      // Keep the error code machine-readable in last_error/errorMessage, but
+      // log a truncated raw-response snippet so the cause is diagnosable.
+      console.warn(
+        `[Stage1Extractor] ${rolloutId} validation failed (${parsed.error}): ${llmResponse.slice(0, 500)}`,
+      );
       fail(this.memoryDb, { rolloutId, token, error: parsed.error });
       return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: parsed.error };
     }

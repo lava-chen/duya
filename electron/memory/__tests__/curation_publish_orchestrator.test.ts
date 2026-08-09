@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as os from 'os';
 import type { Database } from 'better-sqlite3';
 import type { AgentProcessPool } from '../../agents/process-pool/agent-process-pool';
+import { deriveRolloutSummaryFilename } from '../../../packages/agent/src/memory-state/projectionContent';
 
 // Hoisted mock state — shared between vi.mock factories and test bodies.
 const mocks = vi.hoisted(() => ({
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   completeRun: vi.fn(),
   failRun: vi.fn(),
   computeInputSetHash: vi.fn(),
+  abandonExpiredRuns: vi.fn(),
   // curation_staging mocks
   createStaging: vi.fn(),
   deleteStaging: vi.fn(),
@@ -39,6 +41,7 @@ vi.mock('../../../packages/agent/src/memory-state/curation_ledger', () => ({
   completeRun: mocks.completeRun,
   failRun: mocks.failRun,
   computeInputSetHash: mocks.computeInputSetHash,
+  abandonExpiredRuns: mocks.abandonExpiredRuns,
 }));
 
 vi.mock('../ad_hoc_watcher', () => ({
@@ -109,15 +112,15 @@ describe('runCurationCycle', () => {
     db = { prepare: vi.fn() } as unknown as Database;
     vi.clearAllMocks();
     mocks.computeInputSetHash.mockReturnValue('input-hash-1');
+    mocks.abandonExpiredRuns.mockReturnValue(0);
     mocks.scanAdHocChanges.mockResolvedValue([]);
   });
 
   afterEach(() => { env.cleanup(); });
 
-  it('1. skips when fewer than 3 eligible inputs and no timeout', async () => {
+  it('1. skips when fewer than 2 eligible inputs and no timeout', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
-      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
     ]);
 
     const result = await runCurationCycle(db, {
@@ -140,9 +143,9 @@ describe('runCurationCycle', () => {
 
   it('2. success flow — claims, stages, runs agent, validates, snapshots, publishes, completes, health', async () => {
     const inputs = [
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', generatedAt: T0, bytes: 100 },
     ];
     mocks.queryEligibleInputs.mockReturnValue(inputs);
     mocks.claimRun.mockReturnValue({ runId: 'run-1', lockToken: 'tok-1' });
@@ -202,11 +205,60 @@ describe('runCurationCycle', () => {
     expect(mocks.deleteStaging).toHaveBeenCalled();
   });
 
+  it('2a. rollout sourcePath resolves to the real derived projection filename', async () => {
+    const inputs = [
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', generatedAt: T0, bytes: 100 },
+    ];
+    // Create the real on-disk projections the way writer.ts does (derived
+    // filename), so the frozen-evidence source must exist.
+    const summariesDir = path.join(env.memoryRoot, 'rollout_summaries');
+    fs.mkdirSync(summariesDir, { recursive: true });
+    const expectedPaths = inputs.map((i) => {
+      const name = deriveRolloutSummaryFilename({
+        rollout_id: i.inputKey,
+        rollout_slug: i.rolloutSlug,
+        generated_at: i.generatedAt,
+      });
+      const p = path.join(summariesDir, name);
+      fs.writeFileSync(p, `# ${i.inputKey}`);
+      return p;
+    });
+
+    mocks.queryEligibleInputs.mockReturnValue(inputs);
+    mocks.claimRun.mockReturnValue({ runId: 'run-2a', lockToken: 'tok-2a' });
+    mocks.createStaging.mockResolvedValue({ stagingDir: path.join(env.stagingRoot, 'run-2a'), manifestHash: 'stg-hash' });
+
+    await runCurationCycle(db, {
+      memoryRoot: env.memoryRoot,
+      configRoot: env.configRoot,
+      stagingRoot: env.stagingRoot,
+      snapshotRoot: env.snapshotRoot,
+      providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
+      systemLocation: 'global',
+      workerId: 'w1',
+      pool: {} as unknown as AgentProcessPool,
+      sessionId: 'session-1',
+      now: T0,
+    });
+
+    expect(mocks.createStaging).toHaveBeenCalledTimes(1);
+    const stagedInputs = (mocks.createStaging.mock.calls[0][2] as { inputs: Array<{ inputKind: string; sourcePath: string }> }).inputs;
+    const rolloutPaths = stagedInputs.filter((i) => i.inputKind === 'rollout').map((i) => i.sourcePath);
+    expect(rolloutPaths).toHaveLength(3);
+    // Every rollout source must point at the derived filename AND exist.
+    for (const p of expectedPaths) {
+      expect(rolloutPaths).toContain(p);
+      expect(fs.existsSync(p)).toBe(true);
+    }
+  });
+
   it('3. validation failure — calls failRun, deletes staging, no publish', async () => {
     const inputs = [
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', generatedAt: T0, bytes: 100 },
     ];
     mocks.queryEligibleInputs.mockReturnValue(inputs);
     mocks.claimRun.mockReturnValue({ runId: 'run-2', lockToken: 'tok-2' });
@@ -250,9 +302,9 @@ describe('runCurationCycle', () => {
 
   it('4. agent timeout — calls failRun, deletes staging, no publish', async () => {
     const inputs = [
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', generatedAt: T0, bytes: 100 },
     ];
     mocks.queryEligibleInputs.mockReturnValue(inputs);
     mocks.claimRun.mockReturnValue({ runId: 'run-3', lockToken: 'tok-3' });
@@ -283,14 +335,15 @@ describe('runCurationCycle', () => {
   });
 
   it('7. merges rollout and ad-hoc inputs into one batch, truncated to MAX_INPUTS', async () => {
-    // 5 rollout + 4 ad-hoc = 9 eligible; truncated to MAX_INPUTS (8).
+    // 2 rollout + 4 ad-hoc = 6 eligible; truncated to MAX_INPUTS (3).
     mocks.queryEligibleInputs.mockReturnValue(
-      Array.from({ length: 5 }, (_, i) => ({
+      Array.from({ length: 2 }, (_, i) => ({
         inputKind: 'rollout' as const,
         inputKey: `r${i}`,
         contentHash: `h${i}`,
         outputUpdatedAt: T0 + i,
         rolloutSlug: `s${i}`,
+        generatedAt: T0,
         bytes: 100,
       })),
     );
@@ -331,13 +384,13 @@ describe('runCurationCycle', () => {
     });
 
     expect(result.success).toBe(true);
-    // 9 eligible, truncated to MAX_INPUTS (8).
+    // 6 eligible, truncated to MAX_INPUTS (3): oldest-first (r0, r1, ad-hoc-0).
     expect(mocks.claimRun).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ inputs: expect.arrayContaining([expect.objectContaining({ inputKind: 'ad_hoc' })]) }),
     );
     const claimedInputs = (mocks.claimRun.mock.calls[0][1] as { inputs: unknown[] }).inputs;
-    expect(claimedInputs).toHaveLength(8);
+    expect(claimedInputs).toHaveLength(3);
     // At least one ad-hoc input reaches staging with its real source path.
     const stagingInputs = (mocks.createStaging.mock.calls[0][2] as { inputs: Array<{ inputKind: string; sourcePath: string }> }).inputs;
     expect(stagingInputs.some((i) => i.inputKind === 'ad_hoc' && i.sourcePath.includes('extensions'))).toBe(true);
@@ -345,9 +398,9 @@ describe('runCurationCycle', () => {
 
   it('8. scans ad-hoc inputs from the extensions/ad_hoc directory', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
-      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: T0, rolloutSlug: 's1', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: T0, rolloutSlug: 's2', generatedAt: T0, bytes: 100 },
+      { inputKind: 'rollout' as const, inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: T0, rolloutSlug: 's3', generatedAt: T0, bytes: 100 },
     ]);
     mocks.scanAdHocChanges.mockResolvedValue([
       {

@@ -77,7 +77,6 @@ npm run typecheck:all         # TypeScript check for both src/ and packages/agen
 npm run test                   # Vitest tests
 npm run test:watch            # Vitest watch mode
 npm run test:coverage         # Tests with coverage
-npm run test:bridge           # Bridge-specific tests
 
 # Packaging
 npm run electron:pack         # Package current platform
@@ -349,8 +348,7 @@ question you're asking.
   - `src/**/*.test.ts` / `*.test.tsx` — colocated with frontend code
   - `packages/*/tests/**/*.test.ts` — colocated with workspace package code
   - `electron/ipc/__tests__/*.test.ts` — IPC handler unit tests
-- **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`,
-  `npm run test:bridge` (scoped to the bridge module).
+- **Run**: `npm run test`, `npm run test:watch`, `npm run test:coverage`.
 - **IPC handler test pattern** (critical): see
   `electron/ipc/__tests__/url-safety.test.ts` (pure function) and
   `electron/ipc/__tests__/logger-handlers.test.ts` (mocked module).

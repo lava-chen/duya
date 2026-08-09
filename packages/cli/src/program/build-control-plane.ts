@@ -99,9 +99,9 @@ export function buildControlPlane(program: Command): void {
             // Plan 102 — `duya config` argv surface. Commander's
             // generic option pass-through means all the new flags
             // are already in `opts`; we just re-type them.
-            configId: typeof opts.id === 'string' ? opts.id : undefined,
+            configId: typeof opts.server === 'string' ? opts.server : (typeof opts.id === 'string' ? opts.id : undefined),
             configName: typeof opts.name === 'string' ? opts.name : undefined,
-            configType: typeof opts.type === 'string' ? opts.type : undefined,
+            configType: typeof opts.command === 'string' ? opts.command : (typeof opts.type === 'string' ? opts.type : undefined),
             configBaseUrl: typeof opts.baseUrl === 'string' ? opts.baseUrl : undefined,
             configApiKey: typeof opts.apiKey === 'string' ? opts.apiKey : undefined,
             configActive: opts.active === true,
@@ -121,6 +121,12 @@ export function buildControlPlane(program: Command): void {
             configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
             configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
             configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,
+            // Plan 200 P4 — plugin list / install / uninstall flags.
+            enabled: opts.enabled === true,
+            verbose: opts.verbose === true,
+            fromPath: typeof opts.fromPath === 'string' ? opts.fromPath : undefined,
+            scope: typeof opts.scope === 'string' ? opts.scope : undefined,
+            deleteData: opts.deleteData === true,
           },
         };
         const code = await sub.run(ctx);

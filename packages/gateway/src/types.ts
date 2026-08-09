@@ -93,6 +93,8 @@ export interface TextReply {
 export interface StreamStartReply {
   type: 'stream_start';
   placeholderText: string;
+  /** Reply-to message ID quoted on the placeholder (editMessageText cannot set this, so it is applied once at creation). */
+  replyToMsgId?: string;
 }
 
 export interface StreamChunkReply {
@@ -215,17 +217,27 @@ export interface GatewayStatus {
 // =============================================================================
 
 export interface StreamEvent {
-  type: 'chat:text' | 'chat:thinking' | 'chat:done' | 'chat:error' | 'chat:permission' | 'chat:tool_result';
+  type: 'chat:text' | 'chat:thinking' | 'chat:done' | 'chat:error' | 'chat:permission' | 'chat:tool_use' | 'chat:tool_result' | 'chat:status';
   sessionId: string;
   content?: string;
   finalContent?: string;
   message?: string;
+  /** Turn/status text (only for chat:status) — e.g. "Turn 2". */
+  status?: string;
   /** Permission request data (only for chat:permission) */
   permission?: {
     id: string;
     toolName: string;
     toolInput: Record<string, unknown>;
   };
+  /** Tool use data (only for chat:tool_use) — used to surface each tool call to the user. */
+  toolUseId?: string;
+  toolName?: string;
+  toolInput?: unknown;
+  /**
+   * Tool use total duration in ms (only for chat:tool_result).
+   */
+  toolDurationMs?: number;
   /**
    * Tool result payload (only for chat:tool_result).
    * Convention-based extraction: any object containing mediaUrl/mediaUrls/
@@ -255,6 +267,8 @@ export type GatewayToMainMessage =
   | { type: 'gateway:init:complete'; success: boolean; error?: string; adapters?: AdapterStatus[] }
   | { type: 'gateway:inbound'; sessionId: string; prompt: string; platform: PlatformType; platformMsgId: string; platformChatId: string; options?: Record<string, unknown> }
   | { type: 'gateway:permission_resolve'; permissionId: string; decision: 'allow' | 'allow_once' | 'deny' }
+  | { type: 'gateway:interrupt'; sessionId: string }
+  | { type: 'gateway:command'; command: string; args: string[]; sessionId?: string; platform: PlatformType; platformChatId: string; options?: Record<string, unknown> }
   | { type: 'db:request'; id: string; action: string; payload: unknown }
   | { type: 'gateway:error'; error: string }
   | { type: 'gateway:start:response'; id?: string; success: boolean; error?: string }
@@ -262,7 +276,8 @@ export type GatewayToMainMessage =
   | { type: 'gateway:getStatus:response'; id?: string; status: GatewayStatus }
   | { type: 'gateway:reset_session'; id?: string; platform: PlatformType; platformChatId: string; platformUserId: string; platformMsgId: string }
   | { type: 'gateway:feishu:qr:begin:response'; id?: string; result: QrRegistrationBegin | null; error?: string }
-  | { type: 'gateway:feishu:qr:poll:response'; id?: string; result: QrRegistrationResult | null; error?: string };
+  | { type: 'gateway:feishu:qr:poll:response'; id?: string; result: QrRegistrationResult | null; error?: string }
+  | { type: 'gateway:send:response'; id?: string; ok: boolean; error?: string; platformMsgId?: string };
 
 /** Main Process → Gateway */
 export type MainToGatewayMessage =
@@ -283,7 +298,8 @@ export type MainToGatewayMessage =
   | { type: 'gateway:pairing:check'; id: string; platform: string; userId: string }
   | { type: 'gateway:pairing:generate'; id: string; platform: string; userId: string }
   | { type: 'gateway:pairing:check:response'; id: string; approved: boolean }
-  | { type: 'gateway:pairing:generate:response'; id: string; code: string; error?: string };
+  | { type: 'gateway:pairing:generate:response'; id: string; code: string; error?: string }
+  | { type: 'gateway:send'; id: string; platform: string; platformChatId: string; text: string };
 
 /** QR Registration types */
 export interface QrRegistrationBegin {
@@ -322,4 +338,6 @@ export interface GatewayInitConfig {
   autoStart: boolean;
   proxyUrl?: string;
   proxyConfig?: GatewayProxyConfig;
+  /** Profile routing rules (most-specific-first). Optional. */
+  profileRoutes?: unknown;
 }

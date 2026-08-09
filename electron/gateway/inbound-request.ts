@@ -24,6 +24,10 @@ export function buildGatewayInboundChatRequest({
   providerConfig,
   workingDirectory,
 }: BuildGatewayInboundChatRequestOptions): Record<string, unknown> {
+  // Profile routing (basic version): when the gateway resolves a profile for
+  // this (platform, chatId), use it as the agent profile instead of the
+  // default gateway profile.
+  const routedProfile = (inbound.options?.profile as string | undefined) || 'gateway';
   return {
     prompt: inbound.prompt,
     options: {
@@ -31,7 +35,7 @@ export function buildGatewayInboundChatRequest({
       platform: inbound.platform,
       platformMsgId: inbound.platformMsgId,
       platformChatId: inbound.platformChatId,
-      agentProfileId: 'gateway',
+      agentProfileId: routedProfile,
     },
     providerConfig,
     workingDirectory,

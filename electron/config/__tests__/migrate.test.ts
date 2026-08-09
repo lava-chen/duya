@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -58,7 +58,6 @@ function optsFor(extra?: Partial<MigrateOptions>): MigrateOptions {
     settingsPath: path.join(dir, 'settings.json'),
     mcpTomlPath: path.join(dir, 'mcp.toml'),
     registryPath: path.join(dir, 'registry.json'),
-    marketplacesPath: path.join(dir, 'known_marketplaces.json'),
     ...extra,
   };
 }
@@ -138,7 +137,6 @@ describe('migrateConfig', () => {
     fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ agentSettings: { defaultModel: 'm' } }));
     fs.writeFileSync(path.join(dir, 'mcp.toml'), '[mcp_servers.x]\nenabled = true\n');
     fs.writeFileSync(path.join(dir, 'registry.json'), JSON.stringify({ installed: {} }));
-    fs.writeFileSync(path.join(dir, 'known_marketplaces.json'), JSON.stringify({ official: { url: 'https://x' } }));
     fs.writeFileSync(path.join(dir, 'boot.json'), JSON.stringify({ databasePath: '/tmp/duya.db' }));
 
     const opts = optsFor();
@@ -146,7 +144,6 @@ describe('migrateConfig', () => {
     expect(fs.existsSync(path.join(dir, 'settings.json'))).toBe(false);
     expect(fs.existsSync(path.join(dir, 'mcp.toml'))).toBe(false);
     expect(fs.existsSync(path.join(dir, 'registry.json'))).toBe(false);
-    expect(fs.existsSync(path.join(dir, 'known_marketplaces.json'))).toBe(false);
     expect(fs.existsSync(path.join(dir, 'boot.json'))).toBe(false);
   });
 });

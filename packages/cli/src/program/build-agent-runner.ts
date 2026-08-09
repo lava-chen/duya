@@ -68,6 +68,13 @@ export interface CliInvocation {
   format?: string;
   yes?: boolean;
   extraArgs?: string[];
+  /**
+   * Working directory for resolving relative paths (e.g. cron's
+   * `--from-file`). Defaults to `process.cwd()` when absent. The
+   * agent tool threads the session workspace here so relative
+   * paths resolve against the session, not the worker process cwd.
+   */
+  cwd?: string;
   fromFile?: string;
   /**
    * Plan 99 P3: inline JSON body for `duya cron create` (avoids the
@@ -105,6 +112,12 @@ export interface CliInvocation {
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];
+  // Plan 200 P4 — plugin list / install / uninstall flags.
+  enabled?: boolean;
+  verbose?: boolean;
+  fromPath?: string;
+  scope?: string;
+  deleteData?: boolean;
 }
 
 export interface CliRunResult {
@@ -177,6 +190,7 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
         yes: inv.yes,
         limit: inv.limit,
         offset: inv.offset,
+        cwd: inv.cwd,
         fromFile: inv.fromFile,
         // Plan 99 P3: pass inline JSON body through to cron command
         cron: inv.cronBodyJson,
@@ -206,6 +220,11 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
         configArgs: inv.configArgs,
         configEnv: inv.configEnv,
         configAgents: inv.configAgents,
+        enabled: inv.enabled,
+        verbose: inv.verbose,
+        fromPath: inv.fromPath,
+        scope: inv.scope,
+        deleteData: inv.deleteData,
       },
     };
 

@@ -160,7 +160,7 @@ export function createBuiltinRegistry(
   registry.register(duyaCliTool.toTool(), duyaCliTool, { exposeMode: 'discoverable' });
 
   // AskUserQuestion tool - prompt the user with multi-choice questions
-  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'discoverable' });
+  registry.register(askUserQuestionTool.toTool(), askUserQuestionTool, { exposeMode: 'always' });
 
   // ModuleTool - load design specification modules on demand
   // Agent calls read_module BEFORE show_widget or canvas tools to get style guides

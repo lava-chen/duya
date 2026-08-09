@@ -362,7 +362,7 @@ function main() {
     createHooksTemplate(pluginDir);
   }
   if (flags.withMcp) {
-    createMcpTemplate(pluginDir);
+    createMcpTemplate(pluginDir, flags.standard);
   }
   if (flags.withCli) {
     createCliTemplate(pluginDir, pluginName);

@@ -24,17 +24,3 @@ export function isMaskedKey(value: string | undefined | null): boolean {
   if (ALL_STARS_PATTERN.test(value)) return true;
   return MASK_PATTERN.test(value);
 }
-
-/**
- * Best-effort "is this plausibly a real key?" heuristic. We keep it
- * conservative: anything containing mask characters is rejected, and
- * the value must reach a minimum length to count as a real secret.
- * The threshold (8) is a stand-in; we deliberately err on the side
- * of "treat short strings as suspicious" because the on-disk keys
- * duya manages are all 20+ chars in practice.
- */
-export function isLikelyRealApiKey(value: string | undefined | null): boolean {
-  if (!value) return false;
-  if (isMaskedKey(value)) return false;
-  return value.length >= 8;
-}

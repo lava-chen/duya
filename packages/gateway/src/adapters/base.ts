@@ -65,6 +65,18 @@ export interface PlatformAdapter {
    * Cancels the "bot is typing..." status
    */
   stopTyping?(chatId: string): Promise<void>;
+
+  /**
+   * Set an emoji reaction on a message (optional, telegram-style).
+   * Used to signal "working" on the user's inbound message.
+   */
+  setMessageReaction?(chatId: string, messageId: string, emoji: string): Promise<void>;
+
+  /**
+   * Clear all reactions on a message (optional, telegram-style).
+   * Called when a stream completes or errors.
+   */
+  removeMessageReaction?(chatId: string, messageId: string): Promise<void>;
 }
 
 /**

@@ -5,12 +5,12 @@ import { toLLMProvider } from '../config/provider-types.js';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { CronPersistence, computeNextRunAtMs, rowToSchedule } from './persistence.js';
+import { CronStore, computeNextRunAtMs, rowToSchedule } from './cron-store.js';
 import type { AutomationCron, AutomationCronRun } from './types.js';
 import { prepareAutomationWorkspace } from './workspace.js';
 import { getCoreStores } from '../db/core-connection.js';
 
-export { computeNextRunAtMs } from './persistence.js';
+export { computeNextRunAtMs } from './cron-store.js';
 
 const RUN_TIMEOUT_MS = 10 * 60_000;
 const MAX_TIMER_DELAY_MS = 2_147_000_000;
@@ -18,7 +18,7 @@ const MAX_TIMER_DELAY_MS = 2_147_000_000;
 type RunningExecution = { runId: string; sessionId: string; startedAt: number };
 
 export class AutomationScheduler {
-  private persistence: CronPersistence;
+  private persistence: CronStore;
   private timers = new Map<string, NodeJS.Timeout>();
   private running = new Map<string, RunningExecution[]>();
   private queued = new Map<string, number>();
@@ -26,7 +26,7 @@ export class AutomationScheduler {
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(db: Database.Database) {
-    this.persistence = new CronPersistence(db);
+    this.persistence = new CronStore(db);
   }
 
   start(): void {

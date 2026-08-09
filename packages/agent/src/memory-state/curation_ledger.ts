@@ -36,6 +36,8 @@ export interface CurationInput {
 
 export interface EligibleInput extends CurationInput {
   rolloutSlug: string;
+  /** `stage1_outputs.generated_at` — needed to derive the on-disk projection filename. */
+  generatedAt: number;
   bytes: number;
 }
 
@@ -244,6 +246,36 @@ export function failRun(db: Database, runId: string, error: string, now?: number
 }
 
 // ---------------------------------------------------------------------------
+// abandonExpiredRuns
+// ---------------------------------------------------------------------------
+
+/**
+ * Recover orphaned curation runs whose lease has expired.
+ *
+ * A run is considered orphaned when it is still 'running' but its
+ * `lease_expires_at` has passed (the holder crashed, hung, or was killed
+ * without settling). Such runs pin their claimed inputs forever, blocking
+ * `claimRun`'s single-flight check and `queryEligibleInputs`.
+ *
+ * Marking the run 'abandoned' does NOT touch its `curation_run_inputs`:
+ * the inputs keep `disposition = null`, so `queryEligibleInputs` continues
+ * to treat them as eligible and a later `claimRun` can pick them up again.
+ *
+ * Returns the number of runs recovered.
+ */
+export function abandonExpiredRuns(db: Database, now?: number): number {
+  const ts = now ?? Date.now();
+  const result = db.prepare(
+    `UPDATE curation_runs
+       SET status = 'abandoned',
+           error = 'lease-expired',
+           finished_at = ?
+     WHERE status = 'running' AND lease_expires_at <= ?`
+  ).run(ts, ts);
+  return result.changes;
+}
+
+// ---------------------------------------------------------------------------
 // renewLease
 // ---------------------------------------------------------------------------
 
@@ -286,6 +318,7 @@ export interface QueryEligibleOpts {
 interface EligibleRow {
   rollout_id: string;
   source_content_hash: string;
+  generated_at: number;
   output_updated_at: number;
   rollout_slug: string;
   bytes: number;
@@ -311,6 +344,7 @@ export function queryEligibleInputs(db: Database, opts: QueryEligibleOpts): Elig
       `SELECT
          s.rollout_id,
          s.source_content_hash,
+         s.generated_at,
          s.output_updated_at,
          s.rollout_slug,
          COALESCE(length(CAST(s.rollout_summary AS BLOB)), 0) AS bytes
@@ -348,6 +382,7 @@ export function queryEligibleInputs(db: Database, opts: QueryEligibleOpts): Elig
       contentHash: row.source_content_hash,
       outputUpdatedAt: row.output_updated_at,
       rolloutSlug: row.rollout_slug,
+      generatedAt: row.generated_at,
       bytes: row.bytes,
     });
     totalBytes += row.bytes;

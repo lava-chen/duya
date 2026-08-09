@@ -265,36 +265,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS automation_crons (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      description TEXT,
-      schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('at', 'every', 'cron')),
-      schedule_at TEXT,
-      schedule_every_ms INTEGER,
-      schedule_cron_expr TEXT,
-      schedule_cron_tz TEXT,
-      schedule_end_at TEXT,
-      workflow_id TEXT,
-      working_directory TEXT NOT NULL DEFAULT '',
-      prompt TEXT NOT NULL DEFAULT '',
-      input_params TEXT NOT NULL DEFAULT '{}',
-      session_target TEXT NOT NULL DEFAULT 'isolated' CHECK(session_target IN ('isolated')),
-      delivery_mode TEXT NOT NULL DEFAULT 'none' CHECK(delivery_mode IN ('none')),
-      status TEXT NOT NULL DEFAULT 'enabled' CHECK(status IN ('enabled', 'disabled', 'error')),
-      model TEXT NOT NULL,
-      last_run_at INTEGER,
-      next_run_at INTEGER,
-      last_error TEXT,
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      concurrency_policy TEXT NOT NULL DEFAULT 'skip' CHECK(concurrency_policy IN ('skip', 'parallel', 'queue', 'replace')),
-      max_retries INTEGER NOT NULL DEFAULT 3,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    )
-  `);
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS automation_cron_runs (
       id TEXT PRIMARY KEY,
       cron_id TEXT NOT NULL,
@@ -304,8 +274,7 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       output TEXT,
       error_message TEXT,
       logs TEXT,
-      created_at INTEGER NOT NULL,
-      FOREIGN KEY (cron_id) REFERENCES automation_crons(id) ON DELETE CASCADE
+      created_at INTEGER NOT NULL
     )
   `);
 
@@ -393,8 +362,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_bindings_active ON channel_bindings(channel_type, active)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_offsets_updated ON channel_offsets(updated_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_crons_status ON automation_crons(status)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_crons_next_run ON automation_crons(next_run_at)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_cron_runs_cron ON automation_cron_runs(cron_id, created_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_widgets_canvas ON conductor_widgets(canvas_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_canvas_ts ON conductor_actions(canvas_id, ts)`);
@@ -1214,32 +1181,6 @@ const migrations: Migration[] = [
     name: 'create_automation_cron_tables',
     migrate: (db) => {
       db.exec(`
-        CREATE TABLE IF NOT EXISTS automation_crons (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          description TEXT,
-          schedule_kind TEXT NOT NULL CHECK(schedule_kind IN ('at', 'every', 'cron')),
-          schedule_at TEXT,
-          schedule_every_ms INTEGER,
-          schedule_cron_expr TEXT,
-          schedule_cron_tz TEXT,
-          workflow_id TEXT,
-          prompt TEXT NOT NULL DEFAULT '',
-          input_params TEXT NOT NULL DEFAULT '{}',
-          session_target TEXT NOT NULL DEFAULT 'isolated' CHECK(session_target IN ('isolated')),
-          delivery_mode TEXT NOT NULL DEFAULT 'none' CHECK(delivery_mode IN ('none')),
-          status TEXT NOT NULL DEFAULT 'enabled' CHECK(status IN ('enabled', 'disabled', 'error')),
-          last_run_at INTEGER,
-          next_run_at INTEGER,
-          last_error TEXT,
-          retry_count INTEGER NOT NULL DEFAULT 0,
-          concurrency_policy TEXT NOT NULL DEFAULT 'skip' CHECK(concurrency_policy IN ('skip', 'parallel', 'queue', 'replace')),
-          max_retries INTEGER NOT NULL DEFAULT 3,
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        )
-      `);
-      db.exec(`
         CREATE TABLE IF NOT EXISTS automation_cron_runs (
           id TEXT PRIMARY KEY,
           cron_id TEXT NOT NULL,
@@ -1249,12 +1190,9 @@ const migrations: Migration[] = [
           output TEXT,
           error_message TEXT,
           logs TEXT,
-          created_at INTEGER NOT NULL,
-          FOREIGN KEY (cron_id) REFERENCES automation_crons(id) ON DELETE CASCADE
+          created_at INTEGER NOT NULL
         )
       `);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_crons_status ON automation_crons(status)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_crons_next_run ON automation_crons(next_run_at)`);
       db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_cron_runs_cron ON automation_cron_runs(cron_id, created_at DESC)`);
     },
   },
@@ -1286,6 +1224,10 @@ const migrations: Migration[] = [
     id: 15,
     name: 'Add model column to automation_crons',
     migrate(db) {
+      // automation_crons no longer exists on fresh databases (plan 405), so
+      // skip when the legacy table is absent.
+      const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='automation_crons'").get();
+      if (!tableExists) return;
       const tableInfo = db.prepare('PRAGMA table_info(automation_crons)').all() as Array<{ name: string }>;
       const columns = tableInfo.map(col => col.name);
 
@@ -2077,6 +2019,10 @@ const migrations: Migration[] = [
     id: 39,
     name: 'add_automation_cron_working_directory',
     migrate(db: BetterSqlite3Db): void {
+      // automation_crons no longer exists on fresh databases (plan 405), so
+      // skip when the legacy table is absent.
+      const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='automation_crons'").get();
+      if (!tableExists) return;
       const tableInfo = db.prepare('PRAGMA table_info(automation_crons)').all() as Array<{ name: string }>;
       if (!tableInfo.some((column) => column.name === 'working_directory')) {
         db.exec(`ALTER TABLE automation_crons ADD COLUMN working_directory TEXT NOT NULL DEFAULT ''`);
@@ -2087,6 +2033,10 @@ const migrations: Migration[] = [
     id: 41,
     name: 'add_automation_cron_schedule_end_at',
     migrate(db: BetterSqlite3Db): void {
+      // automation_crons no longer exists on fresh databases (plan 405), so
+      // skip when the legacy table is absent.
+      const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='automation_crons'").get();
+      if (!tableExists) return;
       const tableInfo = db.prepare('PRAGMA table_info(automation_crons)').all() as Array<{ name: string }>;
       if (!tableInfo.some((column) => column.name === 'schedule_end_at')) {
         db.exec(`ALTER TABLE automation_crons ADD COLUMN schedule_end_at TEXT`);
@@ -2407,6 +2357,71 @@ const migrations: Migration[] = [
 
         CREATE INDEX IF NOT EXISTS idx_chat_turn_reviews_latest
           ON chat_turn_reviews(session_id, captured_at DESC);
+      `);
+    },
+  },
+  {
+    id: 48,
+    name: 'create_automation_cron_state',
+    migrate(db: BetterSqlite3Db): void {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS automation_cron_state (
+          cron_id TEXT PRIMARY KEY,
+          status TEXT,
+          next_run_at INTEGER,
+          last_run_at INTEGER,
+          last_error TEXT,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+    },
+  },
+  {
+    id: 49,
+    name: 'drop_automation_cron_runs_fk_to_automation_crons',
+    migrate(db: BetterSqlite3Db): void {
+      // Plan 405 moved cron definitions from the automation_crons table into the
+      // ConfigStore (cron.jobs), and the automation_crons table is no longer
+      // created. Legacy databases retain a FOREIGN KEY (cron_id) REFERENCES
+      // automation_crons(id) ON DELETE CASCADE on automation_cron_runs, so every
+      // run insert fails with a constraint failure. Rebuild the table without the
+      // stale FK (same pattern as chat_turn_reviews, migration 47). Idempotent: if
+      // the table SQL already lacks the FK reference, skip.
+      const sql = (
+        db.prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='automation_cron_runs'",
+        ).get() as { sql?: string } | undefined
+      )?.sql;
+      if (!sql) return;
+      if (!sql.includes('REFERENCES automation_crons')) return;
+
+      db.exec(`
+        ALTER TABLE automation_cron_runs RENAME TO automation_cron_runs_old;
+
+        CREATE TABLE automation_cron_runs (
+          id TEXT PRIMARY KEY,
+          cron_id TEXT NOT NULL,
+          run_status TEXT NOT NULL CHECK(run_status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
+          started_at INTEGER,
+          ended_at INTEGER,
+          output TEXT,
+          error_message TEXT,
+          logs TEXT,
+          created_at INTEGER NOT NULL,
+          session_id TEXT
+        );
+
+        INSERT INTO automation_cron_runs
+          (id, cron_id, run_status, started_at, ended_at, output, error_message, logs, created_at, session_id)
+          SELECT id, cron_id, run_status, started_at, ended_at, output, error_message, logs, created_at, session_id
+          FROM automation_cron_runs_old;
+
+        DROP TABLE automation_cron_runs_old;
+
+        CREATE INDEX IF NOT EXISTS idx_automation_cron_runs_cron
+          ON automation_cron_runs(cron_id, created_at DESC);
       `);
     },
   },

@@ -16,6 +16,7 @@ export interface AutomationCron {
   id: string;
   name: string;
   description: string | null;
+  tags: string[];
   schedule_kind: CronScheduleKind;
   schedule_at: string | null;
   schedule_every_ms: number | null;
@@ -56,6 +57,7 @@ export interface AutomationCronRun {
 export interface CreateAutomationCronInput {
   name: string;
   description?: string | null;
+  tags?: string[];
   workingDirectory?: string;
   schedule: CronSchedule;
   prompt: string;
@@ -69,6 +71,7 @@ export interface CreateAutomationCronInput {
 export interface UpdateAutomationCronInput {
   name?: string;
   description?: string | null;
+  tags?: string[];
   workingDirectory?: string;
   schedule?: CronSchedule;
   prompt?: string;

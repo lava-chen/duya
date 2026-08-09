@@ -28,7 +28,7 @@
 import { getLogger } from '../../logging/logger.js';
 import { getPluginManager } from '../../plugins/PluginManager.js';
 import { readPluginManifest } from '../../plugins/manifest.js';
-import { readUserMcpToml } from '../../services/mcp-toml-config.js';
+import { readUserMcpToml } from '../../services/mcp-config.js';
 import {
   buildMCPCandidates,
   type MCPCollectorInput,

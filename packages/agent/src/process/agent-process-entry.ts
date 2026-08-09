@@ -174,6 +174,14 @@ interface ChatStartMessage {
     conductorCanvasId?: string;
     /** Internal continuation for a completed background sub-agent. */
     backgroundTaskResume?: boolean;
+    /**
+     * Wall-clock timeout (ms) for a single LLM request within this chat turn.
+     * When set, each streamChat LLM call is aborted after this duration even
+     * if the stream is still producing data (e.g. a MiniMax thinking stream
+     * that never converges), so a hung call fails the run fast instead of
+     * burning the whole run budget. Optional; absent = no per-request cap.
+     */
+    llmRequestTimeoutMs?: number;
   };
 }
 
@@ -1990,6 +1998,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // without conductor mode. The unified dispatcher routes by channel.
       conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
       backgroundTaskResume: msg.options?.backgroundTaskResume,
+      llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');

@@ -126,6 +126,30 @@ export class AgentProcessPool {
   /** Per-session pin queued before the session was started. */
   private pendingProviderPins = new Map<string, string>();
 
+  /**
+   * Override the heartbeat health-check timeout (ms) for a running session,
+   * or clear a previous override by passing `null`. Used by long-running
+   * autonomous sessions (e.g. the memory curator) so the pool's default 120s
+   * kill does not terminate a legitimately long run; those sessions govern
+   * their own deadline. Queued before the session starts if not yet running.
+   */
+  setSessionHeartbeatTimeout(sessionId: string, ms: number | null): void {
+    const proc = this.running.get(sessionId);
+    if (!proc) {
+      if (ms === null) {
+        this.pendingHeartbeatOverrides.delete(sessionId);
+      } else {
+        this.pendingHeartbeatOverrides.set(sessionId, ms);
+      }
+      return;
+    }
+    proc.heartbeatTimeoutMs = ms ?? undefined;
+    this.pendingHeartbeatOverrides.delete(sessionId);
+  }
+
+  /** Per-session heartbeat timeout queued before the session was started. */
+  private pendingHeartbeatOverrides = new Map<string, number>();
+
   async acquire(sessionId: string): Promise<{ isNew: boolean }> {
     if (this.isShuttingDown) {
       throw new Error('Process pool is shutting down');
@@ -204,8 +228,11 @@ export class AgentProcessPool {
           // was actually started; otherwise default to null
           // (i.e. use the global default).
           providerId: this.pendingProviderPins.get(sessionId) ?? null,
+          // Apply any heartbeat override queued before the process started.
+          heartbeatTimeoutMs: this.pendingHeartbeatOverrides.get(sessionId),
         };
         this.pendingProviderPins.delete(sessionId);
+        this.pendingHeartbeatOverrides.delete(sessionId);
 
         this.logger.info(`Agent process started: ${runtime.command} ${runtime.args.join(' ')}`, undefined, LogComponent.AgentProcessPool);
 
@@ -437,8 +464,8 @@ export class AgentProcessPool {
 
   private checkAllProcesses(): void {
     const now = Date.now();
-    const timeout = 120000;
-    const pingThreshold = 60000;
+    const defaultTimeout = 120000;
+    const defaultPingThreshold = 60000;
 
     for (const [sessionId, proc] of this.running) {
       if (proc.child.exitCode !== null) {
@@ -450,6 +477,12 @@ export class AgentProcessPool {
         this.processQueue();
         continue;
       }
+
+      // Long-running autonomous sessions may override the health-check
+      // timeout (see setSessionHeartbeatTimeout). Derive a proportional
+      // ping threshold so we still probe liveness, just less aggressively.
+      const timeout = proc.heartbeatTimeoutMs ?? defaultTimeout;
+      const pingThreshold = Math.min(defaultPingThreshold, timeout / 2);
 
       const elapsed = now - proc.lastPong;
       if (elapsed > timeout) {

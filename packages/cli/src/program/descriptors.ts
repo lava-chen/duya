@@ -408,6 +408,21 @@ const subChannelSendTest: CliSubcommand = {
   run: (ctx) => runChannelSendTest(ctx),
 };
 
+const subChannelSend: CliSubcommand = {
+  description: 'Proactively send a plain text message to a channel via the gateway (no inbound trigger).',
+  write: true,
+  args: [
+    { name: 'channelId', required: false, description: 'Channel id (platform:chatId form); omit when using --platform/--chat' },
+    { name: 'text', required: false, description: 'Message text; may also be passed via --text' },
+  ],
+  options: [
+    { flags: '--platform <platform>', description: 'Platform (telegram/qq/feishu); requires --chat' },
+    { flags: '--chat <chatId>', description: 'Platform chat id; requires --platform' },
+    { flags: '--text <text>', description: 'Message text (alternative to the positional arg)' },
+  ],
+  run: (ctx) => runChannelCommand.send(ctx),
+};
+
 const subCronList: CliSubcommand = {
   description: 'List all scheduled jobs (id / name / schedule / nextRunAt / lastRunAt / lastError)',
   run: (ctx) => runCronCommand.list(ctx),
@@ -425,7 +440,6 @@ const subCronCreate: CliSubcommand = {
   options: [
     { flags: '--from-file <path>', description: 'Path to JSON file containing the cron spec' },
     { flags: '--cron <json>', description: 'Inline JSON body (avoids needing a temp file)' },
-    { flags: '--prompt <text>', description: 'Inline prompt (only valid for simple text-only crons)' },
     { flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' },
   ],
   run: (ctx) => runCronCommand.create(ctx),
@@ -943,6 +957,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       status: subChannelStatus,
       test: subChannelTest,
       'send-test': subChannelSendTest,
+      send: subChannelSend,
     },
   },
   {

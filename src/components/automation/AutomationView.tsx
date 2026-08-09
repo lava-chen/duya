@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import type {
   AutomationCron,
   AutomationCronRun,
@@ -19,38 +19,36 @@ import { CronChatModal } from './CronChatModal';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import {
-  PlusIcon,
   PlayIcon,
-  TrashIcon,
   ClockIcon,
   WarningCircleIcon,
   XCircleIcon,
   SpinnerGapIcon,
   SquaresFourIcon,
-  DotsThreeIcon,
   XIcon,
+  ChatCirclePlusIcon,
+  MonitorIcon,
+  PencilIcon,
+  ClockCounterClockwiseIcon,
+  TrashIcon,
 } from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
 import { TemplateMarketModal } from './TemplateMarketModal';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
-import { CronScheduleCard } from './CronScheduleCard';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Input } from '@/components/ui/Input';
 import { Switch } from '@/components/ui/Switch';
-import {
-  SettingsSection,
-  SettingsCard,
-  SettingsRow,
-} from '@/components/settings/ui';
 import {
   createDefaultScheduleDraft,
   describeScheduleDraft,
   draftToSchedule,
   scheduleToDraft,
   type ScheduleDraft,
+  PRESET_LABELS,
+  WEEKDAYS,
 } from './cron-schedule';
 
 function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
@@ -81,6 +79,15 @@ function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): s
   return sections.join('\n');
 }
 
+type CronTag = 'Work' | 'Code';
+const CRON_TAGS: CronTag[] = ['Work', 'Code'];
+
+function normalizeTags(tags?: string[] | null): CronTag[] {
+  if (!tags || tags.length === 0) return ['Work'];
+  const first = tags[0];
+  return CRON_TAGS.includes(first as CronTag) ? [first as CronTag] : ['Work'];
+}
+
 type EditorState = {
   id?: string;
   name: string;
@@ -93,24 +100,8 @@ type EditorState = {
   model: string;
   workingDirectory: string;
   scheduleDraft: ScheduleDraft;
+  tag: CronTag;
 };
-
-function formatRelativeTime(value: number | null, t: (key: 'automation.timeLaterShort' | 'automation.timeLaterMinutes' | 'automation.timeAgoShort' | 'automation.timeAgoMinutes', params?: Record<string, string | number>) => string): string {
-  if (!value) return '-';
-  const now = Date.now();
-  const diff = value - now;
-  const absDiff = Math.abs(diff);
-  const hours = Math.floor(absDiff / (1000 * 60 * 60));
-  const minutes = Math.floor((absDiff % (1000 * 60 * 60)) / (1000 * 60));
-
-  if (diff > 0) {
-    if (hours > 0) return t('automation.timeLaterShort', { hours, minutes });
-    return t('automation.timeLaterMinutes', { minutes });
-  } else {
-    if (hours > 0) return t('automation.timeAgoShort', { hours, minutes });
-    return t('automation.timeAgoMinutes', { minutes });
-  }
-}
 
 function formatDateShort(value: number | null): string {
   if (!value) return '-';
@@ -159,18 +150,6 @@ function getFriendlySchedule(cron: AutomationCron): string {
   }
 }
 
-function getStatusIcon(status: string) {
-  switch (status) {
-    case 'enabled':
-      return <span className="h-4 w-4 rounded-full border-2 border-muted-foreground" aria-label="已启用" />;
-    case 'error':
-      return <WarningCircleIcon size={14} className="text-destructive" />;
-    case 'disabled':
-    default:
-      return <XCircleIcon size={14} className="text-muted-foreground" />;
-  }
-}
-
 const DEFAULT_EDITOR: EditorState = {
   name: '',
   description: '',
@@ -182,6 +161,7 @@ const DEFAULT_EDITOR: EditorState = {
   model: '',
   workingDirectory: '',
   scheduleDraft: createDefaultScheduleDraft(),
+  tag: 'Work',
 };
 
 function editorStateFromCron(cron: AutomationCron): EditorState {
@@ -197,8 +177,11 @@ function editorStateFromCron(cron: AutomationCron): EditorState {
     model: cron.model,
     workingDirectory: cron.working_directory || '',
     scheduleDraft: scheduleToDraft(cron),
+    tag: normalizeTags(cron.tags)[0] ?? 'Work',
   };
 }
+
+type TabKey = 'configured' | 'history' | 'templates';
 
 export function AutomationView() {
   const { t } = useTranslation();
@@ -207,8 +190,8 @@ export function AutomationView() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [crons, setCrons] = useState<AutomationCron[]>([]);
-  const [selectedCronId, setSelectedCronId] = useState<string | null>(null);
-  const [runs, setRuns] = useState<AutomationCronRun[]>([]);
+  const [runsMap, setRunsMap] = useState<Record<string, AutomationCronRun[]>>({});
+  const [activeTab, setActiveTab] = useState<TabKey>('configured');
 
   // Edit modal state (create & edit)
   const [editModalOpen, setEditModalOpen] = useState(false);
@@ -228,15 +211,11 @@ export function AutomationView() {
   // Cron chat modal state
   const [chatModalOpen, setChatModalOpen] = useState(false);
   const [selectedRun, setSelectedRun] = useState<AutomationCronRun | null>(null);
+  const [selectedCronForRun, setSelectedCronForRun] = useState<AutomationCron | null>(null);
 
   // Models state
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-
-  const selectedCron = useMemo(
-    () => crons.find((item) => item.id === selectedCronId) ?? null,
-    [crons, selectedCronId],
-  );
 
   // Fetch available models from providers
   const fetchModels = useCallback(async () => {
@@ -251,17 +230,12 @@ export function AutomationView() {
             (p as Provider & { hasApiKey: boolean }).hasApiKey = hasKey;
           }
         });
-        // With the multi-provider model, the default provider is
-        // the implicit fallback. Automation scripts can use ANY
-        // configured provider — they no longer gate on a single
-        // active flag. We still surface the default first, but
-        // fall back to the first configured provider.
         const defaultProvider = providers.find((p) => p.isDefault && p.hasApiKey);
-        const activeProvider =
-          defaultProvider ?? providers.find((p) => p.hasApiKey);
+        const activeProvider = defaultProvider ?? providers.find((p) => p.hasApiKey);
 
         if (activeProvider) {
-          const isOllama = activeProvider.providerType === 'ollama' ||
+          const isOllama =
+            activeProvider.providerType === 'ollama' ||
             activeProvider.baseUrl?.includes('11434') ||
             activeProvider.baseUrl?.includes('ollama');
 
@@ -270,10 +244,12 @@ export function AutomationView() {
               const baseUrl = activeProvider.baseUrl || 'http://localhost:11434';
               const result = await getOllamaModelsIPC(baseUrl);
               if (result.success && result.models && result.models.length > 0) {
-                setAvailableModels(result.models.map(m => ({
-                  id: m.id,
-                  display_name: m.name,
-                })));
+                setAvailableModels(
+                  result.models.map((m) => ({
+                    id: m.id,
+                    display_name: m.name,
+                  })),
+                );
                 setModelsLoading(false);
                 return;
               }
@@ -288,13 +264,17 @@ export function AutomationView() {
             if (opts.enabled_models && Array.isArray(opts.enabled_models) && opts.enabled_models.length > 0) {
               enabledModels = opts.enabled_models;
             }
-          } catch { /* ignore */ }
+          } catch {
+            /* ignore */
+          }
 
           if (enabledModels.length > 0) {
-            setAvailableModels(enabledModels.map(id => {
-              const cleanId = id.startsWith('"') && id.endsWith('"') ? id.slice(1, -1) : id;
-              return { id: cleanId, display_name: cleanId };
-            }));
+            setAvailableModels(
+              enabledModels.map((id) => {
+                const cleanId = id.startsWith('"') && id.endsWith('"') ? id.slice(1, -1) : id;
+                return { id: cleanId, display_name: cleanId };
+              }),
+            );
             setModelsLoading(false);
             return;
           }
@@ -328,8 +308,9 @@ export function AutomationView() {
     }
   }, [hasElectronApi]);
 
-  const handleOpenChat = (run: AutomationCronRun) => {
+  const handleOpenChat = (cron: AutomationCron, run: AutomationCronRun) => {
     if (run.session_id) {
+      setSelectedCronForRun(cron);
       setSelectedRun(run);
       setChatModalOpen(true);
     }
@@ -338,23 +319,27 @@ export function AutomationView() {
   const handleCloseChat = () => {
     setChatModalOpen(false);
     setSelectedRun(null);
+    setSelectedCronForRun(null);
   };
 
-  async function reloadCrons(nextSelectedId?: string | null): Promise<void> {
+  async function reloadCrons(): Promise<void> {
     const list = await listAutomationCronsIPC();
     setCrons(list);
-    const candidate = nextSelectedId ?? selectedCronId;
-    const validId = candidate && list.some((item) => item.id === candidate) ? candidate : list[0]?.id ?? null;
-    setSelectedCronId(validId);
   }
 
-  async function reloadRuns(cronId: string | null): Promise<void> {
-    if (!cronId) {
-      setRuns([]);
-      return;
-    }
-    const list = await listAutomationCronRunsIPC(cronId, 50, 0);
-    setRuns(list);
+  async function reloadAllRuns(): Promise<void> {
+    const next: Record<string, AutomationCronRun[]> = {};
+    await Promise.all(
+      crons.map(async (cron) => {
+        try {
+          const list = await listAutomationCronRunsIPC(cron.id, 5, 0);
+          next[cron.id] = list;
+        } catch {
+          next[cron.id] = [];
+        }
+      }),
+    );
+    setRunsMap(next);
   }
 
   useEffect(() => {
@@ -377,9 +362,9 @@ export function AutomationView() {
   }, [hasElectronApi]);
 
   useEffect(() => {
-    if (!hasElectronApi) return;
-    void reloadRuns(selectedCronId);
-  }, [hasElectronApi, selectedCronId]);
+    if (!hasElectronApi || crons.length === 0) return;
+    void reloadAllRuns();
+  }, [hasElectronApi, crons.length]);
 
   function handleCreateNew(): void {
     setSelectedTemplate(null);
@@ -449,17 +434,26 @@ export function AutomationView() {
     }, 200);
   }
 
-  function handleSelectCron(cron: AutomationCron): void {
-    setSelectedCronId(cron.id);
-  }
-
   async function runNow(cron: AutomationCron): Promise<void> {
     if (!hasElectronApi) return;
     try {
       setError(null);
       await runAutomationCronIPC(cron.id);
-      await reloadCrons(cron.id);
-      await reloadRuns(cron.id);
+      await reloadCrons();
+      await reloadAllRuns();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function toggleCronStatus(cron: AutomationCron): Promise<void> {
+    if (!hasElectronApi) return;
+    try {
+      setError(null);
+      await updateAutomationCronIPC(cron.id, {
+        status: cron.status === 'enabled' ? 'disabled' : 'enabled',
+      });
+      await reloadCrons();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -471,10 +465,6 @@ export function AutomationView() {
       setError(null);
       await deleteAutomationCronIPC(cron.id);
       await reloadCrons();
-      if (selectedCronId === cron.id) {
-        setSelectedCronId(null);
-        setRuns([]);
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -494,11 +484,10 @@ export function AutomationView() {
           ...patch,
           status: enabled === false ? 'disabled' : 'enabled',
         });
-        await reloadCrons(cronId);
       } else {
-        const created = await createAutomationCronIPC(data);
-        await reloadCrons(created.id);
+        await createAutomationCronIPC(data);
       }
+      await reloadCrons();
       handleCloseEditModal();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -508,140 +497,232 @@ export function AutomationView() {
     }
   }
 
-  const showEmptyState = !loading && crons.length === 0;
+  const showEmptyState = !loading && crons.length === 0 && activeTab === 'configured';
+
+  const allRuns = useMemo(() => {
+    const runs: Array<{ run: AutomationCronRun; cron: AutomationCron }> = [];
+    Object.entries(runsMap).forEach(([cronId, list]) => {
+      const cron = crons.find((c) => c.id === cronId);
+      if (!cron) return;
+      list.forEach((run) => runs.push({ run, cron }));
+    });
+    return runs.sort((a, b) => (b.run.created_at ?? 0) - (a.run.created_at ?? 0));
+  }, [runsMap, crons]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-8 pt-8 pb-5">
+      <div className="flex items-start justify-between px-8 pt-8 pb-5 gap-4">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-foreground" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>已计划</h2>
-          <p className="mt-2 text-sm text-muted-foreground">让 Duya 帮你安排任务、设置提醒，或定期跟进更新。</p>
+          <h2
+            className="text-3xl font-bold tracking-tight text-foreground"
+            style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}
+          >
+            {t('automation.title')}
+          </h2>
+          <p className="mt-2 text-sm text-muted-foreground">{t('automation.subtitle')}</p>
         </div>
-        {!showEmptyState && (
-          <div className="flex items-center gap-2">
-            <Button
-              className="whitespace-nowrap rounded-full"
-              onClick={handleViewTemplates}
-              type="button"
-              variant="secondary"
-              size="md"
-            >
-              <SquaresFourIcon size={16} />
-              {t('automation.templates')}
-            </Button>
-          </div>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            className="whitespace-nowrap rounded-lg"
+            onClick={handleCreateNew}
+            type="button"
+            variant="secondary"
+            size="md"
+          >
+            {t('automation.manualCreate')}
+          </Button>
+          <Button
+            className="whitespace-nowrap rounded-lg"
+            onClick={handleChatCreate}
+            type="button"
+            variant="primary"
+            size="md"
+          >
+            <ChatCirclePlusIcon size={16} />
+            {t('automation.createInChat')}
+          </Button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="px-8 border-b border-border/50">
+        <div className="flex items-center gap-6">
+          {[
+            { key: 'configured', label: t('automation.configured') },
+            { key: 'history', label: t('automation.executionHistory') },
+            { key: 'templates', label: t('automation.taskTemplates') },
+          ].map((tab) => {
+            const active = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key as TabKey)}
+                className={`relative pb-3 text-sm font-medium transition-colors ${
+                  active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+                {active && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t bg-foreground" />
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Error Banner */}
       {error && (
-        <div className="mx-8 mb-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex items-center gap-2">
+        <div className="mx-8 mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex items-center gap-2">
           <WarningCircleIcon size={16} className="text-destructive" />
           <span className="text-sm text-destructive">{error}</span>
         </div>
       )}
 
       {/* Main Content */}
-      {showEmptyState ? (
-        <div className="flex-1 overflow-hidden">
-          <AutomationEmptyState
-            onManualCreate={handleCreateNew}
-            onChatCreate={handleChatCreate}
-            onViewTemplates={handleViewTemplates}
-          />
-        </div>
-      ) : (
-        <div className="flex-1 overflow-hidden px-8 pb-8 min-h-0">
-          <div className="h-full min-h-0 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(260px,0.75fr)_minmax(440px,1.25fr)]">
-            {/* Cron Jobs List - Left Side */}
-            <section className="flex flex-col h-full min-h-0">
+      <div className="flex-1 overflow-hidden px-8 pb-8 min-h-0">
+        {showEmptyState ? (
+          <div className="h-full flex flex-col items-center justify-center">
+            <AutomationEmptyState
+              onManualCreate={handleCreateNew}
+              onChatCreate={handleChatCreate}
+              onViewTemplates={handleViewTemplates}
+            />
+          </div>
+        ) : activeTab === 'configured' ? (
+          <div className="h-full flex flex-col min-h-0 pt-5">
+            {/* Cron list */}
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
+              {loading ? (
+                <div className="flex items-center justify-center h-32 text-muted-foreground">
+                  <SpinnerGapIcon size={20} className="animate-spin mr-2" />
+                  {t('automation.loading')}
+                </div>
+              ) : crons.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 text-center p-4">
+                  <ClockIcon size={32} className="mb-2 opacity-30 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">{t('automation.noAutomations')}</p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-border/40 bg-[var(--surface)] overflow-hidden">
+                  {/* Header */}
+                  <div
+                    className="grid items-center gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/30"
+                    style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
+                  >
+                    <div>{t('automation.task')}</div>
+                    <div>{t('automation.schedule')}</div>
+                    <div>{t('automation.status')}</div>
+                    <div className="text-right">{t('automation.actions')}</div>
+                  </div>
+                  {/* Rows */}
+                  {crons.map((cron) => (
+                    <CronListItem
+                      key={cron.id}
+                      cron={cron}
+                      onEdit={() => handleEditCron(cron)}
+                      onRun={() => void runNow(cron)}
+                      onDelete={() => void removeCron(cron)}
+                      onToggleStatus={() => void toggleCronStatus(cron)}
+                      onViewRuns={() => setActiveTab('history')}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : activeTab === 'history' ? (
+          <div className="h-full overflow-y-auto scrollbar-thin pt-5">
+            {allRuns.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64 text-center p-4">
+                <ClockIcon size={40} className="mb-3 opacity-30 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">{t('automation.noExecutionHistory')}</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {allRuns.map(({ run, cron }) => (
+                  <button
+                    key={run.id}
+                    type="button"
+                    onClick={() => handleOpenChat(cron, run)}
+                    disabled={!run.session_id}
+                    className="w-full flex items-center justify-between rounded-lg border border-border/50 bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-default"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <RunStatusIndicator status={run.run_status} />
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">{cron.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDateShort(run.started_at)} · {getFriendlySchedule(cron)}
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`text-xs shrink-0 capitalize ${
+                        run.run_status === 'success'
+                          ? 'text-[var(--success)]'
+                          : run.run_status === 'failed'
+                            ? 'text-destructive'
+                            : 'text-muted-foreground'
+                      }`}
+                    >
+                      {run.run_status === 'success'
+                        ? '成功'
+                        : run.run_status === 'failed'
+                          ? '失败'
+                          : run.run_status === 'running'
+                            ? '运行中'
+                            : run.run_status}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="h-full flex flex-col pt-5">
+            <div className="mb-4 flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">{t('automation.createFromTemplateHint')}</p>
               <Button
                 type="button"
                 variant="secondary"
-                size="md"
-                onClick={handleCreateNew}
-                className="mb-7 flex items-center gap-3 rounded-full px-5 py-4 text-left"
+                size="sm"
+                onClick={handleViewTemplates}
               >
-                <PlusIcon size={20} />
-                <span className="text-base">安排任务</span>
+                <SquaresFourIcon size={16} />
+                {t('automation.browseAllTemplates')}
               </Button>
-              <div className="flex-1 overflow-y-auto scrollbar-thin">
-                {loading ? (
-                  <div className="flex items-center justify-center h-32 text-muted-foreground">
-                    <SpinnerGapIcon size={20} className="animate-spin mr-2" />
-                    {t('automation.loading')}
-                  </div>
-                ) : crons.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-32 text-center p-4">
-                    <ClockIcon size={32} className="mb-2 opacity-30 text-muted-foreground" />
-                    <p className="text-sm text-muted-foreground">{t('automation.noAutomations')}</p>
-                  </div>
-                ) : (
-                  <div className="space-y-0">
-                    {crons.map((cron) => {
-                      const isSelected = selectedCronId === cron.id;
-                      return (
-                        <div
-                          key={cron.id}
-                          className={`px-5 py-4 cursor-pointer transition-all duration-200 rounded-2xl border-b hover:bg-[var(--surface-hover)] ${
-                            isSelected
-                              ? 'bg-[var(--surface)] border-foreground'
-                              : 'bg-transparent border-border/50'
-                          }`}
-                          onClick={() => handleSelectCron(cron)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              handleSelectCron(cron);
-                            }
-                          }}
-                          role="button"
-                          tabIndex={0}
-                        >
-                          <div className="flex items-center justify-between mb-1.5">
-                            <div className="flex items-center gap-3 min-w-0">
-                              {isSelected ? (
-                                <span className="h-3 w-3 rounded-full bg-accent" />
-                              ) : (
-                                getStatusIcon(cron.status)
-                              )}
-                              <span className="font-medium text-sm truncate text-foreground">{cron.name}</span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-xs ml-7 text-muted-foreground">
-                            <span>{getFriendlySchedule(cron)}</span>
-                            <span>·</span>
-                            <span>下次运行 {formatRelativeTime(cron.next_run_at, t)}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </section>
-
-          {/* Detail/Editor Panel - Right Side */}
-          <section className="flex flex-col h-full min-h-0 overflow-hidden border-l border-border/50">
-            {selectedCron ? (
-              <CronDetail
-                cron={selectedCron}
-                runs={runs}
-                onRun={() => void runNow(selectedCron)}
-                onDelete={() => void removeCron(selectedCron)}
-                onEdit={() => handleEditCron(selectedCron)}
-                onViewSession={handleOpenChat}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full text-center p-8">
-                <p className="text-base font-medium mb-1 text-foreground">{t('automation.selectAutomation')}</p>
-                <p className="text-sm text-muted-foreground">{t('automation.selectAutomationDesc')}</p>
-              </div>
-            )}
-          </section>
-        </div>
+            </div>
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
+              {templates.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-64 text-center p-4">
+                  <SquaresFourIcon size={40} className="mb-3 opacity-30 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">{t('automation.noTemplates')}</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {templates.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      onClick={() => handleTemplateSelect(template)}
+                      className="flex flex-col items-start rounded-xl border border-border/50 bg-[var(--surface)] p-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
+                    >
+                      <span className="mb-3 text-2xl">{template.icon}</span>
+                      <p className="text-sm font-medium text-foreground">{template.label_zh}</p>
+                      <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                        {template.description_zh}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
-      )}
 
       {/* NL Create Chat Modal */}
       <QuickCronChatModal
@@ -664,11 +745,11 @@ export function AutomationView() {
       />
 
       {/* Cron Chat Modal */}
-      {chatModalOpen && selectedRun && selectedCron && (
+      {chatModalOpen && selectedRun && selectedCronForRun && (
         <CronChatModal
           sessionId={selectedRun.session_id!}
-          sessionTitle={`[Cron] ${selectedCron.name} - ${selectedRun.run_status}`}
-          cronName={selectedCron.name}
+          sessionTitle={`[Cron] ${selectedCronForRun.name} - ${selectedRun.run_status}`}
+          cronName={selectedCronForRun.name}
           runStatus={selectedRun.run_status}
           onClose={handleCloseChat}
         />
@@ -686,6 +767,127 @@ export function AutomationView() {
       />
     </div>
   );
+}
+
+function CronListItem({
+  cron,
+  onEdit,
+  onRun,
+  onDelete,
+  onToggleStatus,
+  onViewRuns,
+}: {
+  cron: AutomationCron;
+  onEdit: () => void;
+  onRun: () => void;
+  onDelete: () => void;
+  onToggleStatus: () => void;
+  onViewRuns: () => void;
+}) {
+  const { t } = useTranslation();
+  const tag = normalizeTags(cron.tags)[0] ?? 'Work';
+
+  return (
+    <div
+      className="grid items-center gap-4 px-4 py-3 text-sm border-b border-border/20 transition-colors last:border-b-0 hover:bg-[var(--surface-hover)]"
+      style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
+    >
+      {/* Task name + tag */}
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="truncate font-medium text-foreground">{cron.name}</span>
+        <span
+          className={`inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            tag === 'Code'
+              ? 'bg-purple-500/10 text-purple-400'
+              : 'bg-blue-500/10 text-blue-400'
+          }`}
+        >
+          {tag}
+        </span>
+      </div>
+
+      {/* Schedule */}
+      <div className="truncate text-muted-foreground">{getFriendlySchedule(cron)}</div>
+
+      {/* Status */}
+      <div className="flex items-center gap-2">
+        <Switch
+          checked={cron.status === 'enabled'}
+          onCheckedChange={onToggleStatus}
+          ariaLabel={t('automation.enabled')}
+        />
+        <span
+          className={`text-xs ${
+            cron.status === 'enabled' ? 'text-[var(--success)]' : 'text-muted-foreground'
+          }`}
+        >
+          {cron.status === 'enabled' ? t('automation.statusSuccess') : t('automation.enabled')}
+        </span>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-1">
+        <IconButton
+          type="button"
+          aria-label={t('automation.runNow')}
+          title={t('automation.runNow')}
+          variant="ghost"
+          shape="square"
+          size="sm"
+          onClick={onRun}
+        >
+          <PlayIcon size={16} />
+        </IconButton>
+        <IconButton
+          type="button"
+          aria-label={t('automation.edit')}
+          title={t('automation.edit')}
+          variant="ghost"
+          shape="square"
+          size="sm"
+          onClick={onEdit}
+        >
+          <PencilIcon size={16} />
+        </IconButton>
+        <IconButton
+          type="button"
+          aria-label={t('automation.viewHistory')}
+          title={t('automation.viewHistory')}
+          variant="ghost"
+          shape="square"
+          size="sm"
+          onClick={onViewRuns}
+        >
+          <ClockCounterClockwiseIcon size={16} />
+        </IconButton>
+        <IconButton
+          type="button"
+          aria-label={t('automation.delete')}
+          title={t('automation.delete')}
+          variant="ghost"
+          shape="square"
+          size="sm"
+          className="text-destructive hover:bg-destructive/10"
+          onClick={onDelete}
+        >
+          <TrashIcon size={16} />
+        </IconButton>
+      </div>
+    </div>
+  );
+}
+
+function RunStatusIndicator({ status }: { status: string }) {
+  switch (status) {
+    case 'success':
+      return <span className="h-3 w-3 flex-shrink-0 rounded-full bg-[var(--success)]" aria-label="成功" />;
+    case 'failed':
+      return <XCircleIcon size={14} className="flex-shrink-0 text-destructive" />;
+    case 'running':
+      return <SpinnerGapIcon size={14} className="flex-shrink-0 animate-spin text-accent" />;
+    default:
+      return <ClockIcon size={14} className="flex-shrink-0 text-muted-foreground" />;
+  }
 }
 
 function CronEditModal({
@@ -759,6 +961,7 @@ function CronEditModal({
       await onSave(cron?.id, {
         name: editor.name.trim(),
         description: editor.description.trim() || null,
+        tags: [editor.tag],
         schedule,
         prompt: editor.prompt.trim(),
         model: editor.model.trim(),
@@ -774,98 +977,211 @@ function CronEditModal({
     }
   };
 
+  const updateDraft = (patch: Partial<ScheduleDraft>) => {
+    setEditor((prev) => ({ ...prev, scheduleDraft: { ...prev.scheduleDraft, ...patch } }));
+  };
+
+  const scheduleOptions: { value: ScheduleDraft['preset']; label: string }[] = [
+    { value: 'daily', label: PRESET_LABELS.daily },
+    { value: 'weekly', label: PRESET_LABELS.weekly },
+    { value: 'weekdays', label: PRESET_LABELS.weekdays },
+    { value: 'hourly', label: PRESET_LABELS.hourly },
+    { value: 'monthly', label: PRESET_LABELS.monthly },
+    { value: 'once', label: PRESET_LABELS.once },
+    { value: 'custom', label: PRESET_LABELS.custom },
+  ];
+
+  const workingDirDisplay = editor.workingDirectory
+    ? editor.workingDirectory.split(/[/\\]/).pop() || editor.workingDirectory
+    : '默认工作目录';
+
   if (!isOpen) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
       onClick={onClose}
+      role="dialog"
+      aria-modal="true"
     >
       <div
-        className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-xl border border-border/50 bg-[var(--sidebar-bg)] shadow-xl"
+        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border/50 bg-[var(--sidebar-bg)] shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-border/50 px-5 py-4">
-          <h3 className="text-lg font-semibold text-foreground">
-            {cron ? t('automation.editAutomation') : t('automation.newAutomation')}
+          <h3 className="text-base font-semibold text-foreground">
+            {cron ? t('automation.editTask') : t('automation.newTask')}
           </h3>
-          <IconButton variant="ghost" size="sm" aria-label="关闭" onClick={onClose}>
-            <XIcon size={18} />
-          </IconButton>
+          <div className="flex items-center gap-1">
+            {cron && (
+              <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+                {t('automation.viewHistory')}
+              </Button>
+            )}
+            <IconButton variant="ghost" size="sm" aria-label={t('automation.close')} onClick={onClose}>
+              <XIcon size={18} />
+            </IconButton>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
-          <div className="space-y-4 pb-4">
-            <SettingsSection title="任务">
-              <SettingsCard>
-                <SettingsRow label="任务名称">
-                  <Input
-                    type="text"
-                    size="sm"
-                    placeholder={t('automation.namePlaceholder')}
-                    value={editor.name}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
-                    className="min-w-40"
-                  />
-                </SettingsRow>
-                <SettingsRow label="提示词" className="flex-col items-stretch gap-2">
-                  <textarea
-                    className="w-full min-h-[120px] rounded-md border border-border/50 bg-chip px-3 py-2 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-y"
-                    placeholder={t('automation.promptPlaceholder')}
-                    value={editor.prompt}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
-                  />
-                </SettingsRow>
-              </SettingsCard>
-            </SettingsSection>
-
-            <SettingsSection title="频率">
-              <CronScheduleCard
-                value={editor.scheduleDraft}
-                onChange={(scheduleDraft) => setEditor((prev) => ({ ...prev, scheduleDraft }))}
+          <div className="space-y-5">
+            {/* Task name */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">{t('automation.name')}</label>
+              <Input
+                type="text"
+                size="md"
+                placeholder={t('automation.namePlaceholder')}
+                value={editor.name}
+                onChange={(event) => setEditor((prev) => ({ ...prev, name: event.target.value }))}
               />
-            </SettingsSection>
+            </div>
 
-            <SettingsSection title="设置">
-              <SettingsCard>
-                <SettingsRow label="模型" description={modelError || undefined}>
-                  <ModelSelector
-                    models={availableModels}
-                    selectedModelId={editor.model}
-                    onSelect={(modelId) => {
-                      setEditor((prev) => ({ ...prev, model: modelId }));
-                      setModelError(null);
-                    }}
-                    loading={modelsLoading}
-                    variant="full"
+            {/* Trigger time */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">{t('automation.triggerTime')}</label>
+              <div className="flex items-center gap-3">
+                <select
+                  className="h-10 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
+                  value={editor.scheduleDraft.preset}
+                  onChange={(event) => updateDraft({ preset: event.target.value as ScheduleDraft['preset'] })}
+                >
+                  {scheduleOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {editor.scheduleDraft.preset !== 'once' && editor.scheduleDraft.preset !== 'custom' && (
+                  <Input
+                    type="time"
+                    size="md"
+                    value={editor.scheduleDraft.time}
+                    onChange={(event) => updateDraft({ time: event.target.value })}
+                    className="w-32"
                   />
-                </SettingsRow>
-                <SettingsRow label="工作目录" description="留空时使用默认目录">
+                )}
+                {editor.scheduleDraft.preset === 'weekly' && (
+                  <select
+                    className="h-10 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
+                    value={editor.scheduleDraft.weekday}
+                    onChange={(event) => updateDraft({ weekday: Number(event.target.value) })}
+                  >
+                    {WEEKDAYS.map((day) => (
+                      <option key={day.value} value={day.value}>
+                        {day.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {editor.scheduleDraft.preset === 'monthly' && (
+                  <Input
+                    type="number"
+                    size="md"
+                    min={1}
+                    max={31}
+                    value={editor.scheduleDraft.monthDay}
+                    onChange={(event) => updateDraft({ monthDay: Number(event.target.value) })}
+                    className="w-20"
+                  />
+                )}
+                {editor.scheduleDraft.preset === 'custom' && (
                   <Input
                     type="text"
-                    size="sm"
-                    placeholder="~/.duya/workspace"
-                    value={editor.workingDirectory}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
-                    className="min-w-40"
+                    size="md"
+                    placeholder="0 9 * * *"
+                    value={editor.scheduleDraft.cronExpr}
+                    onChange={(event) => updateDraft({ cronExpr: event.target.value })}
+                    className="font-mono"
                   />
-                </SettingsRow>
-                <SettingsRow label="输入参数" description='JSON 对象，运行时会传入提示词'>
-                  <textarea
-                    className="w-full min-w-40 min-h-[60px] rounded-md border border-border/50 bg-chip px-3 py-2 text-sm font-mono text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-none"
-                    placeholder='{"key": "value"}'
-                    value={editor.inputParams}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, inputParams: event.target.value }))}
+                )}
+                {editor.scheduleDraft.preset === 'once' && (
+                  <Input
+                    type="datetime-local"
+                    size="md"
+                    value={editor.scheduleDraft.at}
+                    onChange={(event) => updateDraft({ at: event.target.value })}
                   />
-                </SettingsRow>
-              </SettingsCard>
-            </SettingsSection>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">{describeScheduleDraft(editor.scheduleDraft)}</p>
+            </div>
 
-            <SettingsSection title="高级">
-              <SettingsCard>
-                <SettingsRow label="并发策略">
+            {/* Prompt */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-foreground">{t('automation.whatToDo')}</label>
+                <div className="flex items-center gap-1 rounded-lg border border-border/50 bg-chip p-0.5">
+                  {CRON_TAGS.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setEditor((prev) => ({ ...prev, tag }))}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        editor.tag === tag
+                          ? 'bg-accent text-white'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {tag === 'Work' ? t('automation.work') : t('automation.code')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <textarea
+                className="w-full min-h-[180px] rounded-lg border border-border/50 bg-chip px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-y"
+                placeholder={t('automation.promptPlaceholder')}
+                value={editor.prompt}
+                onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
+              />
+            </div>
+
+            {/* Model & working dir */}
+            <div className="space-y-3 rounded-lg border border-border/50 bg-[var(--surface)] p-4">
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">{t('automation.model')}</label>
+                <ModelSelector
+                  models={availableModels}
+                  selectedModelId={editor.model}
+                  onSelect={(modelId) => {
+                    setEditor((prev) => ({ ...prev, model: modelId }));
+                    setModelError(null);
+                  }}
+                  loading={modelsLoading}
+                  variant="full"
+                />
+                {modelError && <p className="text-xs text-destructive">{modelError}</p>}
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">{t('automation.workingDirectory')}</label>
+                <Input
+                  type="text"
+                  size="md"
+                  placeholder="~/.duya/workspace"
+                  value={editor.workingDirectory}
+                  onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-foreground">{t('automation.inputParams')}</label>
+                <textarea
+                  className="w-full min-h-[60px] rounded-lg border border-border/50 bg-chip px-3 py-2 text-sm font-mono text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-none"
+                  placeholder='{"key": "value"}'
+                  value={editor.inputParams}
+                  onChange={(event) => setEditor((prev) => ({ ...prev, inputParams: event.target.value }))}
+                />
+              </div>
+            </div>
+
+            {/* Advanced */}
+            <div className="space-y-3 rounded-lg border border-border/50 bg-[var(--surface)] p-4">
+              <p className="text-sm font-medium text-foreground">{t('automation.advancedSettings')}</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-xs text-muted-foreground">{t('automation.concurrencyPolicy')}</label>
                   <select
-                    className="rounded-md border border-border/50 bg-chip px-3 py-1.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 cursor-pointer"
+                    className="h-9 w-full rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
                     value={editor.concurrencyPolicy}
                     onChange={(event) =>
                       setEditor((prev) => ({ ...prev, concurrencyPolicy: event.target.value as ConcurrencyPolicy }))
@@ -876,31 +1192,29 @@ function CronEditModal({
                     <option value="queue">{t('automation.concurrencyQueue')}</option>
                     <option value="replace">{t('automation.concurrencyReplace')}</option>
                   </select>
-                </SettingsRow>
-                <SettingsRow label="最大重试次数">
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-muted-foreground">{t('automation.maxRetries')}</label>
                   <Input
                     type="number"
-                    size="sm"
+                    size="md"
                     min="0"
                     max="10"
                     value={editor.maxRetries}
                     onChange={(event) => setEditor((prev) => ({ ...prev, maxRetries: event.target.value }))}
-                    className="w-20"
+                    className="w-full"
                   />
-                </SettingsRow>
-                <SettingsRow
-                  label="启用"
-                  description={editor.enabled ? '任务将按计划运行' : '任务已暂停'}
-                  action={
-                    <Switch
-                      checked={editor.enabled}
-                      onCheckedChange={(checked) => setEditor((prev) => ({ ...prev, enabled: checked }))}
-                      ariaLabel={t('automation.enabled')}
-                    />
-                  }
+                </div>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm text-foreground">{t('automation.enableTask')}</span>
+                <Switch
+                  checked={editor.enabled}
+                  onCheckedChange={(checked) => setEditor((prev) => ({ ...prev, enabled: checked }))}
+                  ariaLabel={t('automation.enabled')}
                 />
-              </SettingsCard>
-            </SettingsSection>
+              </div>
+            </div>
 
             {formError && (
               <div
@@ -914,6 +1228,10 @@ function CronEditModal({
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border/50 px-5 py-4">
+          <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
+            <MonitorIcon size={14} />
+            <span className="truncate max-w-[200px]">{workingDirDisplay}</span>
+          </div>
           <Button type="button" variant="ghost" size="md" onClick={onClose}>
             {t('automation.cancel')}
           </Button>
@@ -922,7 +1240,9 @@ function CronEditModal({
             variant="primary"
             size="md"
             disabled={saving}
-            onClick={() => { void handleSubmit(); }}
+            onClick={() => {
+              void handleSubmit();
+            }}
           >
             {saving ? (
               <>
@@ -937,205 +1257,4 @@ function CronEditModal({
       </div>
     </div>
   );
-}
-
-// Cron Detail Component
-interface CronDetailProps {
-  cron: AutomationCron;
-  runs: AutomationCronRun[];
-  onRun: () => void;
-  onDelete: () => void;
-  onEdit: () => void;
-  onViewSession?: (run: AutomationCronRun) => void;
-}
-
-function CronDetail({ cron, runs, onRun, onDelete, onEdit, onViewSession }: CronDetailProps) {
-  const { t } = useTranslation();
-  const [showMoreMenu, setShowMoreMenu] = useState(false);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
-
-  const detailScheduleDraft = useMemo(() => scheduleToDraft(cron), [cron]);
-
-  useEffect(() => {
-    if (!showMoreMenu) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!moreMenuRef.current?.contains(event.target as Node)) {
-        setShowMoreMenu(false);
-      }
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    return () => window.removeEventListener('pointerdown', onPointerDown);
-  }, [showMoreMenu]);
-
-  const concurrencyLabels: Record<ConcurrencyPolicy, string> = {
-    skip: t('automation.concurrencySkip'),
-    parallel: t('automation.concurrencyParallel'),
-    queue: t('automation.concurrencyQueue'),
-    replace: t('automation.concurrencyReplace'),
-  };
-
-  return (
-    <>
-      {/* Header */}
-      <div className="flex items-start justify-between border-b border-border/50 px-8 pt-7 pb-5">
-        <div className="min-w-0">
-          <p className="mb-1 text-xs text-accent">{getFriendlySchedule(cron)}</p>
-          <h3 className="truncate text-lg font-semibold text-foreground">{cron.name}</h3>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button type="button" variant="primary" size="sm" onClick={onRun}>
-            <PlayIcon size={16} />
-            立即运行
-          </Button>
-          <div className="relative" ref={moreMenuRef}>
-            <IconButton
-              type="button"
-              aria-label="更多操作"
-              aria-expanded={showMoreMenu}
-              variant="default"
-              shape="round"
-              size="md"
-              onClick={() => setShowMoreMenu((visible) => !visible)}
-            >
-              <DotsThreeIcon size={22} />
-            </IconButton>
-            {showMoreMenu && (
-              <div className="absolute right-0 top-11 z-20 w-36 overflow-hidden rounded-xl border border-border/50 bg-[var(--surface)] py-1 shadow-lg">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start px-3 py-2 text-left text-sm"
-                  onClick={() => { setShowMoreMenu(false); onEdit(); }}
-                >
-                  编辑计划
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start px-3 py-2 text-left text-sm"
-                  onClick={() => { setShowMoreMenu(false); onRun(); }}
-                >
-                  立即运行
-                </Button>
-                <Button
-                  type="button"
-                  variant="danger"
-                  size="sm"
-                  className="w-full justify-start px-3 py-2 text-left text-sm"
-                  onClick={() => { setShowMoreMenu(false); onDelete(); }}
-                >
-                  删除计划
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto px-8 pb-8 pt-5 scrollbar-thin">
-        <SettingsSection title="任务" description="名称和每次运行执行的提示词">
-          <SettingsCard>
-            <SettingsRow label="名称" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.name}</span>} />
-            <SettingsRow
-              label="提示词"
-              description={cron.prompt}
-              onClick={onEdit}
-              action={<span className="text-sm text-muted-foreground">›</span>}
-            />
-          </SettingsCard>
-        </SettingsSection>
-
-        <SettingsSection title="计划" description="运行频率和下次执行时间">
-          <SettingsCard>
-            <SettingsRow label="频率" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{describeScheduleDraft(detailScheduleDraft)}</span>} />
-            <SettingsRow label="下次运行" action={<span className="text-sm text-muted-foreground">{formatDateShort(cron.next_run_at)}</span>} />
-          </SettingsCard>
-        </SettingsSection>
-
-        <SettingsSection title="设置" description="模型、工作目录和运行参数">
-          <SettingsCard>
-            <SettingsRow label="模型" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.model}</span>} />
-            <SettingsRow label="工作目录" onClick={onEdit} action={<span className="text-sm text-muted-foreground truncate max-w-[200px]">{cron.working_directory || '默认'}</span>} />
-            <SettingsRow
-              label="输入参数"
-              description={cron.input_params || '{ }'}
-              onClick={onEdit}
-              action={<span className="text-sm text-muted-foreground">›</span>}
-            />
-          </SettingsCard>
-        </SettingsSection>
-
-        <SettingsSection title="高级" description="并发策略、重试和开关">
-          <SettingsCard>
-            <SettingsRow label="并发策略" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{concurrencyLabels[cron.concurrency_policy]}</span>} />
-            <SettingsRow label="最大重试次数" onClick={onEdit} action={<span className="text-sm text-muted-foreground">{cron.max_retries}</span>} />
-            <SettingsRow
-              label="状态"
-              description={cron.status === 'enabled' ? '按计划运行' : '已暂停'}
-              onClick={onEdit}
-              action={
-                <span
-                  className={`inline-flex h-2.5 w-2.5 rounded-full ${
-                    cron.status === 'enabled' ? 'bg-[var(--success)]' : 'bg-muted'
-                  }`}
-                />
-              }
-            />
-          </SettingsCard>
-        </SettingsSection>
-
-        <SettingsSection title="运行历史">
-          {runs.length === 0 ? (
-            <SettingsCard divided={false} className="py-8 text-center text-sm text-muted-foreground">
-              {t('automation.statusNoRuns')}
-            </SettingsCard>
-          ) : (
-            <SettingsCard>
-              {runs.slice(0, 5).map((run, index) => {
-                const hasSession = !!run.session_id && !!onViewSession;
-                return (
-                  <SettingsRow
-                    key={run.id}
-                    label={
-                      <div className="flex items-center gap-3">
-                        <RunStatusIndicator status={run.run_status} />
-                        <span>{formatDateShort(run.started_at)}</span>
-                      </div>
-                    }
-                    description={run.error_message || undefined}
-                    className={index > 0 ? 'border-t border-border/20' : undefined}
-                    action={
-                      hasSession ? (
-                        <Button type="button" variant="ghost" size="sm" onClick={() => onViewSession!(run)}>
-                          {t('automation.viewLogs')}
-                        </Button>
-                      ) : (
-                        <span className="text-sm text-muted-foreground capitalize">{run.run_status}</span>
-                      )
-                    }
-                  />
-                );
-              })}
-            </SettingsCard>
-          )}
-        </SettingsSection>
-      </div>
-    </>
-  );
-}
-
-function RunStatusIndicator({ status }: { status: string }) {
-  switch (status) {
-    case 'success':
-      return <span className="h-3 w-3 flex-shrink-0 rounded-full bg-[var(--success)]" aria-label="成功" />;
-    case 'failed':
-      return <XCircleIcon size={14} className="flex-shrink-0 text-destructive" />;
-    case 'running':
-      return <SpinnerGapIcon size={14} className="flex-shrink-0 animate-spin text-accent" />;
-    default:
-      return <ClockIcon size={14} className="flex-shrink-0 text-muted-foreground" />;
-  }
 }

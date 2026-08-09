@@ -65,6 +65,8 @@ export type AuditEventKind =
   | 'cron.disable'
   // `duya channel` test send (Plan 200 P4).
   | 'channel.test_send'
+  // `duya channel send` — live push to an IM channel (Plan 200 R3).
+  | 'channel.send'
   // `duya gateway` secret reload + generic rpc (Plan 200 P4).
   | 'gateway.reload_secrets'
   | 'gateway.rpc';

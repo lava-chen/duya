@@ -4,6 +4,15 @@ import path from 'path';
 const errors = [];
 const warnings = [];
 
+const AGENT_PLUGINS_PLUGIN_SCHEMA =
+  'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
+const AGENT_PLUGINS_MCP_SCHEMA =
+  'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
+
+// Standard Agent Plugins `name` pattern: lowercase, no leading/trailing
+// hyphen, no `--` and no `..` anywhere.
+const AGENT_PLUGINS_NAME_PATTERN = /^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+
 function logError(msg) {
   errors.push(msg);
   console.error(`  ERROR: ${msg}`);
@@ -40,6 +49,10 @@ function validateJsonManifest(pluginRoot, jsonPath) {
   if (typeof raw !== 'object' || raw === null) {
     logError('plugin.json root must be an object');
     return null;
+  }
+
+  if (raw.$schema === AGENT_PLUGINS_PLUGIN_SCHEMA) {
+    return validateStandardManifest(pluginRoot, raw);
   }
 
   if (raw.schemaVersion !== 'duya.plugin.v1') {
@@ -83,6 +96,73 @@ function validateJsonManifest(pluginRoot, jsonPath) {
 
   if (typeof raw.engines !== 'object' || raw.engines === null || !raw.engines.duya) {
     logError('engines.duya is required');
+  }
+
+  if (JSON.stringify(raw).includes('[TODO')) {
+    logError('Found [TODO] placeholder in manifest - replace with actual values');
+  }
+
+  return raw;
+}
+
+function validateStandardManifest(pluginRoot, raw) {
+  if (raw.$schema !== AGENT_PLUGINS_PLUGIN_SCHEMA) {
+    logError(`$schema must equal "${AGENT_PLUGINS_PLUGIN_SCHEMA}"`);
+  }
+
+  if (!raw.name || typeof raw.name !== 'string') {
+    logError('name is required and must be a string');
+  } else if (!AGENT_PLUGINS_NAME_PATTERN.test(raw.name)) {
+    logError(`name "${raw.name}" does not match the Agent Plugins pattern (lowercase, no -- / ..)`);
+  }
+
+  if (!raw.version || typeof raw.version !== 'string') {
+    logError('version is required and must be a string');
+  } else if (!/^\d+\.\d+\.\d+/.test(raw.version)) {
+    logWarning(`version "${raw.version}" should be strict semver (e.g. 0.1.0)`);
+  }
+
+  if (!raw.description || typeof raw.description !== 'string') {
+    logError('description is required and must be a string');
+  }
+
+  if (typeof raw.author !== 'object' || raw.author === null || !raw.author.name) {
+    logError('author.name is required');
+  }
+
+  if (
+    raw.extensions !== undefined &&
+    (typeof raw.extensions !== 'object' || raw.extensions === null || Array.isArray(raw.extensions))
+  ) {
+    logError('extensions must be an object of reverse-domain namespaces');
+  }
+
+  // Portable components live at the standard fixed locations.
+  const skillsDir = path.join(pluginRoot, 'skills');
+  if (fs.existsSync(skillsDir)) {
+    for (const entry of fs.readdirSync(skillsDir)) {
+      const skillEntry = path.join(skillsDir, entry);
+      if (fs.statSync(skillEntry).isDirectory()) {
+        if (!fs.existsSync(path.join(skillEntry, 'SKILL.md'))) {
+          logError(`Skill "${entry}" is missing SKILL.md`);
+        }
+      }
+    }
+  }
+
+  const mcpJson = path.join(pluginRoot, 'mcp.json');
+  if (fs.existsSync(mcpJson)) {
+    try {
+      const mcp = JSON.parse(fs.readFileSync(mcpJson, 'utf8'));
+      if (mcp.$schema !== AGENT_PLUGINS_MCP_SCHEMA) {
+        logWarning('mcp.json $schema is not the standard mcp.schema.json');
+      }
+      if (!mcp.mcpServers || typeof mcp.mcpServers !== 'object') {
+        logError('mcp.json must contain an mcpServers object');
+      }
+    } catch (e) {
+      logError(`Invalid JSON in mcp.json: ${e.message}`);
+    }
   }
 
   if (JSON.stringify(raw).includes('[TODO')) {

@@ -29,7 +29,7 @@ export interface StreamingStrategy {
   /**
    * Finalize stream and send final text to platform
    */
-  finalizeStream(chatId: string, finalText: string): Promise<NormalizedReply[]>;
+  finalizeStream(chatId: string, finalText: string, opts?: { replyToMsgId?: string }): Promise<NormalizedReply[]>;
 
   /**
    * Handle error during streaming
@@ -52,11 +52,12 @@ export class NonStreamingStrategy implements StreamingStrategy {
     return p === this.platform;
   }
 
-  async finalizeStream(chatId: string, finalText: string): Promise<NormalizedReply[]> {
+  async finalizeStream(chatId: string, finalText: string, opts?: { replyToMsgId?: string }): Promise<NormalizedReply[]> {
     return [{
       type: 'text',
       text: stripMarkdown(finalText),
       parseMode: 'plain',
+      replyToMsgId: opts?.replyToMsgId,
     }];
   }
 
@@ -77,7 +78,7 @@ export class WeixinStreamingStrategy implements StreamingStrategy {
     return p === 'weixin';
   }
 
-  async finalizeStream(_chatId: string, finalText: string): Promise<NormalizedReply[]> {
+  async finalizeStream(_chatId: string, finalText: string, _opts?: { replyToMsgId?: string }): Promise<NormalizedReply[]> {
     return [{
       type: 'text',
       text: finalText,
@@ -105,11 +106,12 @@ export class MarkdownStreamingStrategy implements StreamingStrategy {
     return p === this.platform;
   }
 
-  async finalizeStream(chatId: string, finalText: string): Promise<NormalizedReply[]> {
+  async finalizeStream(chatId: string, finalText: string, opts?: { replyToMsgId?: string }): Promise<NormalizedReply[]> {
     return [{
       type: 'text',
       text: finalText,
       parseMode: 'Markdown',
+      replyToMsgId: opts?.replyToMsgId,
     }];
   }
 
@@ -128,10 +130,11 @@ export class FeishuStreamingStrategy implements StreamingStrategy {
     return p === 'feishu';
   }
 
-  async finalizeStream(chatId: string, finalText: string): Promise<NormalizedReply[]> {
+  async finalizeStream(chatId: string, finalText: string, opts?: { replyToMsgId?: string }): Promise<NormalizedReply[]> {
     return [{
       type: 'stream_end',
       finalText,
+      replyToMsgId: opts?.replyToMsgId,
     }];
   }
 

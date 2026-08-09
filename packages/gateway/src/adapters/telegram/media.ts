@@ -5,11 +5,17 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execFile } from 'child_process';
 
 const TELEGRAM_FILE_API = 'https://api.telegram.org/file/bot';
 const MEDIA_CACHE_DIR = path.join(os.tmpdir(), 'duya-telegram-media');
 const MAX_DOC_BYTES = 20 * 1024 * 1024;
 const MAX_TEXT_INJECT_BYTES = 100 * 1024;
+
+// Telegram's Bot API hard download cap is ~20MB for the public cloud; a local
+// Bot API server (bot_api_server option) lifts this to ~2GB. Hermes aligns with
+// this: when a local Bot API server is configured, larger files are allowed.
+const MAX_DOC_BYTES_LOCAL = 2 * 1024 * 1024 * 1024;
 
 export const SUPPORTED_DOCUMENT_TYPES: Record<string, string> = {
   '.md': 'text/markdown',
@@ -102,10 +108,19 @@ export interface DownloadedFile {
   filePath: string;
 }
 
+/**
+ * Effective max download size for a file. When a local Bot API server is set,
+ * the cap is lifted from 20MB to 2GB (Hermes parity).
+ */
+export function allowsLargeFiles(cap: number): boolean {
+  return cap >= MAX_DOC_BYTES_LOCAL;
+}
+
 export async function downloadFileToCache<T>(
   fileId: string,
   token: string,
-  apiCall: <R>(method: string, params: Record<string, unknown>) => Promise<R>
+  apiCall: <R>(method: string, params: Record<string, unknown>) => Promise<R>,
+  opts?: { allowsLargeFiles?: boolean }
 ): Promise<DownloadedFile | null> {
   try {
     const fileInfo = await apiCall<{ file_path?: string; file_size?: number }>('getFile', {
@@ -117,8 +132,9 @@ export async function downloadFileToCache<T>(
       return null;
     }
 
-    if (fileInfo.file_size && fileInfo.file_size > MAX_DOC_BYTES) {
-      console.warn(`[Telegram] File too large: ${fileInfo.file_size} bytes (max ${MAX_DOC_BYTES})`);
+    const maxBytes = opts?.allowsLargeFiles ? MAX_DOC_BYTES_LOCAL : MAX_DOC_BYTES;
+    if (fileInfo.file_size && fileInfo.file_size > maxBytes) {
+      console.warn(`[Telegram] File too large: ${fileInfo.file_size} bytes (max ${maxBytes})`);
       return null;
     }
 
@@ -162,4 +178,37 @@ export function injectTextContent(
     console.warn('[Telegram] Could not decode text file as UTF-8, skipping content injection');
     return null;
   }
+}
+
+/**
+ * Convert an arbitrary audio file to Telegram's native voice format (Ogg Opus)
+ * using ffmpeg. Used so TTS output (typically MP3/Edge-TTS) can be delivered as
+ * a native voice bubble rather than a generic document.
+ *
+ * Returns the converted file path, or the original path when ffmpeg is
+ * unavailable or the conversion fails (best-effort fallback).
+ */
+export function convertToOpus(inputPath: string): Promise<string> {
+  return new Promise((resolve) => {
+    const ext = path.extname(inputPath).toLowerCase();
+    if (ext === '.opus' || ext === '.ogg') {
+      resolve(inputPath);
+      return;
+    }
+
+    const outPath = path.join(MEDIA_CACHE_DIR, `${path.basename(inputPath, ext)}_opus.ogg`);
+
+    execFile(
+      'ffmpeg',
+      ['-y', '-i', inputPath, '-c:a', 'libopus', '-b:a', '64000', '-f', 'ogg', outPath],
+      { timeout: 60_000 },
+      (err) => {
+        if (err || !fs.existsSync(outPath)) {
+          resolve(inputPath);
+          return;
+        }
+        resolve(outPath);
+      },
+    );
+  });
 }

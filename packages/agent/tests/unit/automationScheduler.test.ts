@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNextRunAtMs } from '../../../../electron/automation/persistence';
+import { computeNextRunAtMs } from '../../../../electron/automation/cron-store';
 import type { CronSchedule } from '../../../../electron/automation/types';
 
 describe('computeNextRunAtMs', () => {

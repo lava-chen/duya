@@ -151,9 +151,9 @@ describe('memory-worker curation path (Plan 406)', () => {
 
   it('calls runCurationCycle when Phase 2 enabled and quorum met', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
-      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's1', bytes: 100 },
-      { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's2', bytes: 100 },
-      { inputKind: 'rollout', inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's3', bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's2', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's3', generatedAt: Date.now() - 10_000, bytes: 100 },
     ]);
     mocks.runCurationCycle.mockResolvedValue({ skipped: false, success: true, runId: 'run-1', durationMs: 5 });
 
@@ -161,13 +161,15 @@ describe('memory-worker curation path (Plan 406)', () => {
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
-    expect(result.curated?.ran).toBe(true);
+    // Curation is now fire-and-forget from the tick (Task D decoupling), so
+    // forceSweep no longer carries the curated result — invocation is proof.
+    expect(result.curated).toBeNull();
     expect(mocks.runCurationCycle.mock.calls[0][1].memoryRoot).toBe(f.memoryRoot);
   });
 
   it('does NOT call runCurationCycle when quorum is not met (N<3, age<30min)', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
-      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 60_000, rolloutSlug: 's1', bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 60_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
     ]);
 
     const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
@@ -179,7 +181,7 @@ describe('memory-worker curation path (Plan 406)', () => {
 
   it('fires on a forceSweep even when the quorum is not met (force override)', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
-      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 60_000, rolloutSlug: 's1', bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 60_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
     ]);
     mocks.runCurationCycle.mockResolvedValue({ skipped: false, success: true, runId: 'run-1', durationMs: 5 });
 
@@ -187,7 +189,9 @@ describe('memory-worker curation path (Plan 406)', () => {
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
-    expect(result.curated?.ran).toBe(true);
+    // Curation is now fire-and-forget from the tick (Task D decoupling), so
+    // forceSweep no longer carries the curated result — invocation is proof.
+    expect(result.curated).toBeNull();
   });
 
   it('calls recoverAllPublications on the first tick when Phase 2 enabled', async () => {

@@ -135,6 +135,22 @@ describe('MessageLog', () => {
     expect(fs.existsSync(path.join(rootDir, expectedRel))).toBe(true);
   });
 
+  it('sanitizes Windows-invalid chars in legacy session IDs for the rollout filename', () => {
+    const sessionId = 'cron:e15b518d-88d1-471a-b52a-789467caade9:1785498179603:8deaa464-751f-4a35-9864-64319615ec45';
+    const createdAt = Date.UTC(2026, 6, 31, 11, 48, 12); // 2026-07-31 UTC
+    insertSessionFixture(db, sessionId, createdAt);
+    const entry = makeUserMessage('m-1', 'hello', createdAt);
+    log.appendBatch([makeEvent(sessionId, entry)]);
+
+    const expectedFileName = `rollout-${new Date(createdAt).toISOString().replace(/[:.]/g, '-')}-cron-e15b518d-88d1-471a-b52a-789467caade9-1785498179603-8deaa464-751f-4a35-9864-64319615ec45.jsonl`;
+    const expectedRel = path.join('sessions', '2026', '07', '31', expectedFileName);
+    const row = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    expect(row.rollout_path).toBe(expectedRel);
+    // The file must be created with no colon-bearing name (ENOENT on Windows).
+    expect(fs.existsSync(path.join(rootDir, expectedRel))).toBe(true);
+    expect(log.getCount(sessionId)).toBe(1);
+  });
+
   // ─── append idempotency & file_offset monotonicity ───
 
   it('appends idempotently — same id re-append does not duplicate index rows', () => {

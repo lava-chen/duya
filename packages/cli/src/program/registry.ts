@@ -72,6 +72,8 @@ export interface CliSubcommandOptions {
   yes?: boolean;
   limit?: string;
   offset?: string;
+  /** Working directory for resolving relative paths (defaults to `process.cwd()`). */
+  cwd?: string;
   fromFile?: string;
   /** Plan 99 P3: inline JSON body for cron create/update. */
   cron?: string;

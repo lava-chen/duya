@@ -13,6 +13,10 @@ export { PlatformAdapter, createAdapter, registerAdapterFactory } from './adapte
 export { IpcClient } from './ipc-client.js';
 export { UserMapper } from './user-mapper.js';
 export { StreamHandler } from './stream-handler.js';
+export { DeliveryLedger, defaultLedgerPath } from './delivery-ledger.js';
+export { DeliveryMirror } from './delivery-mirror.js';
+export { matchProfileRoute, parseProfileRoutes, sortRoutes } from './profile-routing.js';
+export type { ProfileRoute, ProfileMatchInput } from './profile-routing.js';
 export { PermissionBroker } from './permission-broker.js';
 export { CatchupBatchProcessor, getCatchupBatchProcessor, runRealtimeCatchupBatch } from './catchup-batch.js';
 export { getProxyStatus } from './proxy-fetch.js';
@@ -136,6 +140,19 @@ function handleMessage(msg: MainToGatewayMessage): void {
       gatewayManager?.handlePermissionRequest(msg.sessionId, msg.permission).catch((err) => {
         console.error('[Gateway] Error handling permission request:', err);
       });
+      break;
+    }
+
+    case 'gateway:send': {
+      const sendMsg = msg as { id: string; platform: string; platformChatId: string; text: string };
+      gatewayManager?.sendMessage(sendMsg.platform, sendMsg.platformChatId, sendMsg.text)
+        .then((result) => {
+          send({ type: 'gateway:send:response', id: sendMsg.id, ...result });
+        })
+        .catch((err) => {
+          console.error('[Gateway] Error handling gateway:send:', err);
+          send({ type: 'gateway:send:response', id: sendMsg.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+        });
       break;
     }
 

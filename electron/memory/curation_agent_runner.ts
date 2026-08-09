@@ -18,6 +18,26 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CURATOR_SYSTEM_PROMPT, buildCuratorInitialMessage, type RunInput } from '@duya/agent';
+import { resolveDefaultBaseURL } from '@duya/ai';
+
+/**
+ * Race `fn` against a hard wall-clock deadline. Guarantees the returned
+ * promise always settles (resolves or rejects) within `timeoutMs`, even
+ * if `fn` itself hangs (e.g. `pool.acquire` blocks before the inner
+ * completion timer is armed). The timer is NOT unref'd so it always fires.
+ */
+function withHardDeadline<T>(fn: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    fn.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
 
 // Local minimal shapes for the IPC messages we send (the runtime messages
 // are plain objects serialized over IPC; we do not need the full
@@ -25,9 +45,30 @@ import { CURATOR_SYSTEM_PROMPT, buildCuratorInitialMessage, type RunInput } from
 // export that subpath).
 interface ProviderConfig {
   apiKey: string;
-  baseURL?: string;
+  baseUrl?: string;
   model: string;
-  provider: 'anthropic' | 'openai' | 'ollama';
+  provider: string;
+  authStyle?: 'api_key' | 'auth_token';
+  visionConfig?: {
+    provider: string;
+    model: string;
+    baseURL: string;
+    apiKey: string;
+    enabled: boolean;
+  };
+}
+
+/**
+ * The provider-config shape the agent subprocess init protocol expects. Note
+ * the field is `baseURL` (uppercase), unlike the runner's input `ProviderConfig`
+ * which uses `baseUrl` (lowercase). The runner normalizes one into the other
+ * before sending init to the agent.
+ */
+interface AgentProviderConfig {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  provider: string;
   authStyle?: 'api_key' | 'auth_token';
   visionConfig?: {
     provider: string;
@@ -41,7 +82,7 @@ interface ProviderConfig {
 interface InitCommand {
   type: 'init';
   sessionId: string;
-  providerConfig: ProviderConfig;
+  providerConfig: AgentProviderConfig;
   workingDirectory?: string;
   browserBackendMode?: 'auto' | 'extension' | 'built-in' | 'human-like';
 }
@@ -57,6 +98,7 @@ interface ChatStartCommand {
     agentProfileId?: string | null;
     mode?: string;
     excludeFromStage1?: boolean;
+    permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
   };
 }
 
@@ -71,6 +113,12 @@ export interface CurationRunnerPool {
   onMessage(sessionId: string, handler: (msg: { type: string; [k: string]: unknown }) => void): void;
   removeMessageHandler(sessionId: string, handler?: (msg: { type: string; [k: string]: unknown }) => void): void;
   releaseAndWait(sessionId: string, opts?: { gracefulMs?: number }): Promise<void>;
+  /**
+   * Override the pool's heartbeat health-check timeout (ms) for this session
+   * (or `null` to clear). The pool's default 120s would otherwise kill a
+   * legitimately long curation run; the runner's own deadline governs instead.
+   */
+  setSessionHeartbeatTimeout(sessionId: string, ms: number | null): void;
 }
 
 /**
@@ -159,6 +207,11 @@ const DEFAULT_GRACEFUL_MS = 10_000; // 10 seconds (design §9.2)
  * `validateStaging` after this returns. The runner only collects.
  */
 export async function runCurationAgent(opts: RunCurationAgentOpts): Promise<RunCurationAgentResult> {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  return withHardDeadline(runInner(opts), timeoutMs + 30_000, 'curation agent');
+}
+
+async function runInner(opts: RunCurationAgentOpts): Promise<RunCurationAgentResult> {
   const {
     pool,
     sessionId,
@@ -176,12 +229,28 @@ export async function runCurationAgent(opts: RunCurationAgentOpts): Promise<RunC
 
   await pool.acquire(sessionId);
 
+  // Extend the pool's heartbeat health-check so a legitimately long curation
+  // run (up to timeoutMs) is not killed by the pool's default 120s timeout.
+  // The runner's own deadline below governs how long the run may take.
+  pool.setSessionHeartbeatTimeout(sessionId, timeoutMs + 120_000);
+
   try {
-    // 1. init
+    // 1. init. The worker protocol's InitCommand.providerConfig expects
+    // `baseURL` (uppercase), but the runner receives `baseUrl` (lowercase)
+    // from main.ts. Normalize here and fall back to the provider default so
+    // the curator subprocess never starts without an endpoint (which caused
+    // 401 "invalid x-api-key" against a misrouted/empty URL).
     const initMsg: InitCommand = {
       type: 'init',
       sessionId,
-      providerConfig,
+      providerConfig: {
+        apiKey: providerConfig.apiKey,
+        baseURL: providerConfig.baseUrl || resolveDefaultBaseURL(providerConfig.provider as Parameters<typeof resolveDefaultBaseURL>[0]),
+        model: providerConfig.model,
+        provider: providerConfig.provider,
+        ...(providerConfig.authStyle ? { authStyle: providerConfig.authStyle } : {}),
+        ...(providerConfig.visionConfig ? { visionConfig: providerConfig.visionConfig } : {}),
+      },
       workingDirectory: systemLocation,
       browserBackendMode,
       // No skillPaths, no AGENTS.md injection — curator runs headless
@@ -202,6 +271,11 @@ export async function runCurationAgent(opts: RunCurationAgentOpts): Promise<RunC
         agentProfileId: 'memory-curator',
         mode: 'automation',
         excludeFromStage1: true,
+        // Headless curator: bypass interactive permissions so tool calls
+        // (read/write/edit/grep/glob) never block on an unanswered `ask`.
+        // The curator session has no permission_profile row, so without
+        // this override the agent defaults to `ask` and hangs.
+        permissionModeOverride: 'bypassPermissions',
       },
     };
     pool.send(sessionId, startMsg as unknown as Record<string, unknown>);
@@ -264,8 +338,6 @@ function waitForAgentCompletion(
       cleanup();
       reject(new Error(`curator agent timed out after ${timeoutMs}ms`));
     }, timeoutMs);
-    // Do not keep the event loop alive just for the timeout.
-    timer.unref?.();
 
     function cleanup(): void {
       clearTimeout(timer);

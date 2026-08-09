@@ -465,6 +465,16 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
 // Standard Agent Plugins package reader (root `plugin.json` + $schema)
 // ----------------------------------------------------------------------------
 
+interface DuyaClientExtension {
+  permissions: PluginManifest['permissions'];
+  setup: PluginManifest['setup'];
+  engines: PluginManifest['engines'];
+  permissionPolicy: PluginManifest['permissionPolicy'];
+  interface: PluginInterface | undefined;
+  cli: PluginManifest['capabilities']['cli'];
+  ui: PluginManifest['capabilities']['ui'];
+}
+
 /**
  * Read the duya-specific fields carried in a standard package's
  * `extensions["com.duya.client"]` block. These fields (engines, permissions,
@@ -473,16 +483,8 @@ function parseLegacyV1V2Manifest(raw: Record<string, unknown>): PluginManifest {
  * Absent or malformed block → lenient defaults so a third-party standard
  * package never fails to load.
  */
-function parseDuyaClientExtension(raw: unknown): {
-  permissions: PluginManifest['permissions'];
-  setup: PluginManifest['setup'];
-  engines: PluginManifest['engines'];
-  permissionPolicy: PluginManifest['permissionPolicy'];
-  interface: PluginInterface | undefined;
-  cli: PluginManifest['capabilities']['cli'];
-  ui: PluginManifest['capabilities']['ui'];
-} {
-  const empty: ReturnType<typeof parseDuyaClientExtension> = {
+function parseDuyaClientExtension(raw: unknown): DuyaClientExtension {
+  const empty: DuyaClientExtension = {
     permissions: [],
     setup: undefined,
     engines: { duya: '>=0.1.0' },

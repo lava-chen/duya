@@ -26,6 +26,8 @@ import { getCoreStores } from '../../db/core-connection';
 import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { syncBundledSkills } from '../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
+import { requestChannelSend } from '../../gateway/message-bus';
+import { listChannelDirectoryWithBindings } from '../../gateway/channel-directory';
 
 // ---------------------------------------------------------------------------
 // Common helpers
@@ -315,4 +317,104 @@ export async function handleChannelSendTest(
     `text=${text.slice(0, 64)}`,
   );
   sendJson(res, 200, { ok: true, channelId, text, sent: false, reason: 'live_send_ships_in_plan_200_r3' });
+}
+
+/**
+ * Resolve a channel reference to a `{ platform, platformChatId }` pair.
+ * Accepts either explicit `platform` + `chatId` fields or a
+ * `channelId` in `platform:chatId` (or `platform:guild:chatId`) form.
+ * The channelId is first matched against the channel directory +
+ * bindings (source of truth for chat ids); if no match, the part
+ * before the first `:` is treated as the platform and the remainder
+ * as the chat id.
+ */
+function resolveChannelTarget(
+  body: Record<string, unknown>,
+): { platform: string; platformChatId: string } | { error: { code: string; message: string } } {
+  const platform = asString(body.platform);
+  const chatId = asString(body.chatId) ?? asString(body.platformChatId);
+  if (platform && chatId) {
+    return { platform, platformChatId: chatId };
+  }
+  const channelId = asString(body.channelId) ?? asString(body.id);
+  if (!channelId) {
+    return { error: { code: 'missing_arg', message: 'channelId (or platform + chatId) and text required' } };
+  }
+  const entries = listChannelDirectoryWithBindings();
+  const match = entries.find(
+    (c) => c.id === channelId || `${c.platform}:${c.id}` === channelId,
+  );
+  if (match) {
+    return { platform: match.platform, platformChatId: match.id };
+  }
+  const sep = channelId.indexOf(':');
+  if (sep <= 0 || sep === channelId.length - 1) {
+    return { error: { code: 'invalid_channel_id', message: `Cannot resolve channel id: ${channelId}` } };
+  }
+  return {
+    platform: channelId.slice(0, sep),
+    platformChatId: channelId.slice(sep + 1),
+  };
+}
+
+/**
+ * Proactively send a plain text message to a channel via the gateway
+ * (openclaw / hermes-style push, no inbound trigger). Body:
+ *
+ *   { channelId: "telegram:123456", text: "hello" }
+ *   // or
+ *   { platform: "telegram", chatId: "123456", text: "hello" }
+ *
+ * Resolves the target through the channel directory when possible,
+ * then calls `requestChannelSend` and returns the gateway's send
+ * outcome. Records an audit event on success.
+ */
+export async function handleChannelSend(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId?: string,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    sendJson(res, 400, { error: { code: 'invalid_request', message: err instanceof Error ? err.message : String(err) } });
+    return;
+  }
+  const text = asString(body.text);
+  if (!text) {
+    sendJson(res, 400, { error: { code: 'missing_arg', message: 'text required' } });
+    return;
+  }
+  const target = resolveChannelTarget(body);
+  if ('error' in target) {
+    sendJson(res, 400, { error: target.error });
+    return;
+  }
+  try {
+    const result = await requestChannelSend(target.platform, target.platformChatId, text);
+    if (result.ok) {
+      await recordAudit(
+        req,
+        correlationId,
+        'channel.send',
+        `${target.platform}:${target.platformChatId}`,
+        `msg_id=${result.platformMsgId ?? ''} text=${text.slice(0, 64)}`,
+      );
+    }
+    sendJson(res, result.ok ? 200 : 502, {
+      ok: result.ok,
+      platform: target.platform,
+      platformChatId: target.platformChatId,
+      ...(result.platformMsgId !== undefined ? { platformMsgId: result.platformMsgId } : {}),
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      platform: target.platform,
+      platformChatId: target.platformChatId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

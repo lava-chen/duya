@@ -13,9 +13,10 @@
 
 import https from 'https';
 import { HttpsProxyAgent } from 'https-proxy-agent';
+import { SocksProxyAgent } from 'socks-proxy-agent';
 import { execSync } from 'child_process';
 
-let proxyAgent: HttpsProxyAgent<string> | undefined;
+let proxyAgent: HttpsProxyAgent<string> | SocksProxyAgent | undefined;
 let proxyDetected = false;
 let configuredProxyUrl: string | undefined;
 
@@ -111,7 +112,9 @@ export function initProxy(): void {
 
   const proxyUrl = detectProxy();
   if (proxyUrl) {
-    proxyAgent = new HttpsProxyAgent(proxyUrl);
+    proxyAgent = proxyUrl.startsWith('socks5://')
+      ? new SocksProxyAgent(proxyUrl)
+      : new HttpsProxyAgent(proxyUrl);
     lastProxyUrl = proxyUrl;
     console.log(`[Proxy] Using proxy: ${proxyUrl}`);
   } else {
@@ -376,7 +379,7 @@ async function proxyFetchWithAgent(
   url: string,
   resolvedHost: string,
   ip: string | undefined,
-  agent: HttpsProxyAgent<string>,
+  agent: HttpsProxyAgent<string> | SocksProxyAgent,
   init?: RequestInit,
   isTelegram = false,
 ): Promise<Response> {

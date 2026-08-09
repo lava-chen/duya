@@ -22,7 +22,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
-import { readUserMcpToml, writeUserMcpToml } from '../../services/mcp-toml-config';
+import { readUserMcpToml, writeUserMcpToml } from '../../services/mcp-config';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 

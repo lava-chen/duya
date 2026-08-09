@@ -228,6 +228,25 @@ function isPhase2Enabled(): boolean {
   return true;
 }
 
+/**
+ * Race a promise against a hard wall-clock deadline so it is guaranteed
+ * to settle (resolve or reject) within `timeoutMs`. Used to bound the
+ * curation cycle so a hung cycle can never permanently occupy the
+ * `consolidatorInFlight` single-flight guard.
+ */
+function withWallClockDeadline<T>(fn: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    fn.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /** Fire the curation cycle when ≥ this many eligible inputs accumulate. */
 const HYBRID_MIN_INPUTS = 3;
 /** Or when the oldest eligible input has sat this long (30 min). */
@@ -413,17 +432,21 @@ function createWorker(
         return { ran: false, runId: null, status: 'skipped_no_curation_deps', durationMs: Date.now() - start };
       }
 
-      const result = await runCurationCycle(deps.memoryDb, {
-        memoryRoot,
-        configRoot: curation.configRoot,
-        stagingRoot: curation.stagingRoot,
-        snapshotRoot: curation.snapshotRoot,
-        providerConfig: curation.providerConfig,
-        systemLocation: curation.systemLocation,
-        workerId: state.workerId,
-        pool: curation.pool,
-        sessionId: `curation-${state.workerId}`,
-      });
+      const result = await withWallClockDeadline(
+        runCurationCycle(deps.memoryDb, {
+          memoryRoot,
+          configRoot: curation.configRoot,
+          stagingRoot: curation.stagingRoot,
+          snapshotRoot: curation.snapshotRoot,
+          providerConfig: curation.providerConfig,
+          systemLocation: curation.systemLocation,
+          workerId: state.workerId,
+          pool: curation.pool,
+          sessionId: `curation-${state.workerId}`,
+        }),
+        10 * 60_000,
+        'curation cycle',
+      );
       logger.warn(
         'MemoryWorkerCurationCycle',
         {
@@ -663,19 +686,12 @@ function createWorker(
     // cycle uses the Hybrid scheduler (design §9.1). After Phase D the
     // legacy consolidator path is removed.
     let curated: CurationTickResult | null = null;
+    // Do NOT await curation inside the tick — a hung curation must never
+    // freeze the phase1 extraction loop. The standalone sweepConsolidator
+    // interval owns the curation cycle (its own consolidatorInFlight guard)
+    // and re-drains the outbox on its own schedule.
     if ((extracted > 0 || (options.force && cfg.consolidatorOnForceSweep)) && deps.curation) {
-      curated = await curationTick({ force: options.force });
-      // Drain again so the projection writes are flushed within the same
-      // forceSweep window (useful for tests + IPC callers that expect files
-      // on disk after forceSweep returns).
-      if (curated?.ran) {
-        try {
-          const allowedRoots = deps.rootDir ? [deps.rootDir] : undefined;
-          drainOutbox(memoryDb, { batchSize: 32, allowedRoots });
-        } catch {
-          // Best-effort; the outbox sweeper will catch up on its own.
-        }
-      }
+      curationTick({ force: options.force }).catch(() => { /* logged inside */ });
     }
 
     const tickSummary = {
