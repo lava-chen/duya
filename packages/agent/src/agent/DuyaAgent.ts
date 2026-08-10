@@ -247,6 +247,8 @@ export class duyaAgent {
   activeMCPRuntimeSnapshot: import('../mcp/apply.js').ActiveMCPRuntimeSnapshot | null = null;
   private providerNameToInternalKey: Map<string, string> = new Map();
   private activeAgentProfileId: string | undefined;
+  /** When true, skip the first-turn AGENTS.md injection (Plan 408 Phase 2). */
+  private readonly omitAgentsMd: boolean = false;
 
   constructor(options: AgentOptions) {
     // Phase 3: prefer the new `runtimeConfig.apiFormat` when present
@@ -263,6 +265,7 @@ export class duyaAgent {
     }
     this.provider = provider;
     this.sessionId = options.sessionId; // Store sessionId
+    this.omitAgentsMd = options.omitAgentsMd === true;
 
     // Model is required - no hardcoded defaults
     if (!options.model) {
@@ -977,7 +980,7 @@ export class duyaAgent {
         // message is ephemeral: it is sent to the LLM but never persisted to the
         // message history, preserving the rule that persisted user messages are
         // written by the frontend.
-        if (turnCount === 1 && !options?.backgroundTaskResume) {
+        if (turnCount === 1 && !options?.backgroundTaskResume && !this.omitAgentsMd) {
           const agentsMdText = getAgentsMdManager().buildAgentsMdPrompt();
           if (agentsMdText) {
             llmMessages.unshift({

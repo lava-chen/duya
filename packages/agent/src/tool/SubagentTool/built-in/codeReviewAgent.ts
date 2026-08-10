@@ -67,7 +67,9 @@ Small things like naming, formatting, or style.
 - **Changes Requested**: Needs fixes before merging
 - **Comments**: Minor suggestions, no blocking issues
 
-Be constructive and specific. Always explain WHY something is an issue, not just WHAT the issue is.`
+Be constructive and specific. Always explain WHY something is an issue, not just WHAT the issue is.
+
+Note: This agent does not have project AGENTS.md in its context. If you need project conventions (build commands, lint rules, commit format), use the Read tool to read AGENTS.md or .duya/rules/*.md yourself.`
 }
 
 const CODE_REVIEW_WHEN_TO_USE =

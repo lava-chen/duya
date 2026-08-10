@@ -23,6 +23,7 @@ import { appendMessages } from '../../session/db.js'
 import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
 import { composeSubagentSystemPrompt } from './promptComposition.js'
+import { isSubagentSlimAgentsMdEnabled } from '../../config/feature-flags.js'
 
 export interface RunAgentParams {
   agentDefinition: AgentDefinition
@@ -234,12 +235,16 @@ export async function* runAgent({
   // to avoid infinite recursion where a sub-agent spawns another sub-agent
   toolsToUse = toolsToUse.filter(t => t.name !== 'Agent')
 
+  const omitAgentsMd =
+    agentDefinition.omitClaudeMd === true &&
+    isSubagentSlimAgentsMdEnabled()
   const context = promptSystem.buildContext({
     sessionId,
     workingDirectory,
     modelId: agentModel,
     modelName: agentModel,
     enabledTools: new Set(toolsToUse.map(tool => tool.name)),
+    omitAgentsMd,
   })
   const systemPromptResult = await promptSystem.buildSystemPrompt(context)
   const harnessPrompt = [...systemPromptResult].join('\n\n')
@@ -256,6 +261,7 @@ export async function* runAgent({
     systemPrompt,
     workingDirectory,
     sessionId,
+    omitAgentsMd,
   })
 
   logger.info('[SubAgent] streamChat starting', {

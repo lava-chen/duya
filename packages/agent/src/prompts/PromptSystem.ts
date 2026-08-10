@@ -178,6 +178,7 @@ export class PromptSystem {
       scratchpadDir: options.scratchpadDir,
       researchIntent: options.researchIntent,
       researchProjectId: options.researchProjectId,
+      omitAgentsMd: options.omitAgentsMd,
     }
 
     if (this.config.contextExtender) {

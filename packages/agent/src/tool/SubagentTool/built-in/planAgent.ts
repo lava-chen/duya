@@ -60,7 +60,9 @@ List 3-5 files most critical for implementing this plan:
 - path/to/file2.ts
 - path/to/file3.ts
 
-REMEMBER: You can ONLY explore and plan. You CANNOT and MUST NOT write, edit, or modify any files. You do NOT have access to file editing tools.`
+REMEMBER: You can ONLY explore and plan. You CANNOT and MUST NOT write, edit, or modify any files. You do NOT have access to file editing tools.
+
+Note: This agent does not have project AGENTS.md in its context. If you need project conventions (build commands, lint rules, commit format), use the Read tool to read AGENTS.md or .duya/rules/*.md yourself.`
 }
 
 export const PLAN_AGENT: BuiltInAgentDefinition = {
