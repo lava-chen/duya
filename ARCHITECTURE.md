@@ -651,6 +651,24 @@ tool guidance, and grounding while leaving long-horizon integration ownership
 with the coordinating agent. `SessionSearch` is tool-aware evidence recovery;
 repository plans and specifications remain the durable source of truth.
 
+#### AGENTS.md 加载与注入防护 (Plan 408)
+
+`AgentsMdManager` 在每次 prompt-build 边界刷新 AGENTS.md 快照（mtime 快路径）。
+自 Plan 408 起：
+
+- **注入位置**：AGENTS.md 以 `<system-reminder>` 包裹内容拼入 **system 字段**
+  （`buildAgentsMdSection()`），不再作为首轮 user message 注入。这样它落在
+  system prefix cache 断点上（配合 Plan 408 Phase 4 的 `applyCacheControlToSystem`），
+  每轮请求命中缓存，省 5-50K input token。`DuyaAgent._buildSystemPrompt` 与
+  `agent-shell.buildSystemPrompt` 两处拼接。
+- **注入防护**：`stripHtmlComments`（marked 块级剥离，保留 fenced/inline code）
+  在加载时剥除 AGENTS.md 内的 HTML 注释；`stripSystemReminder` 在 provider
+  投影（provider-projector）时剥除所有消息文本中的伪造 `<system-reminder>`。
+- **sub-agent 省 token**：read-only 内置 sub-agent（Explore/Plan/CodeReview/
+  Research）定义 `omitClaudeMd: true`，经 `runAgent` 传播为 `omitAgentsMd`，
+  `preBuildHook` 跳过 AGENTS.md 刷新、DuyaAgent 跳过 system 拼接。由
+  `duya_slim_subagent_agentsmd` feature flag（默认开）门控。
+
 #### Recent session directory (Plan 229)
 
 Full, tool-capable prompt profiles can include a volatile directory of recent
