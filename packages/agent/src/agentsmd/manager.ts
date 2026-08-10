@@ -154,6 +154,14 @@ export class AgentsMdManager {
   }
 
   /**
+   * Get the current AGENTS.md section for the system prompt (Plan 408 Phase 5).
+   * The snapshot is already wrapped in <system-reminder> by buildAgentsMdPrompt.
+   */
+  buildAgentsMdSection(): string {
+    return this._snapshotPrompt
+  }
+
+  /**
    * Get all loaded file info.
    */
   getLoadedFiles(): AgentsFileInfo[] {

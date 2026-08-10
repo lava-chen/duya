@@ -975,23 +975,8 @@ export class duyaAgent {
             : messages
         );
 
-        // Codex-compatible: AGENTS.md contents are injected as the first user
-        // message on the first turn, not duplicated in the system prompt. This
-        // message is ephemeral: it is sent to the LLM but never persisted to the
-        // message history, preserving the rule that persisted user messages are
-        // written by the frontend.
-        if (turnCount === 1 && !options?.backgroundTaskResume && !this.omitAgentsMd) {
-          const agentsMdText = getAgentsMdManager().buildAgentsMdPrompt();
-          if (agentsMdText) {
-            llmMessages.unshift({
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: agentsMdText,
-              timestamp: Date.now(),
-              metadata: { isAgentsMdContext: true },
-            });
-          }
-        }
+        // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
+        // not injected as a first-turn user message.
 
         // Inject transient runtime context (attachment text + deferred tool
         // contexts) into the provider payload. These are never persisted to
@@ -1886,6 +1871,18 @@ export class duyaAgent {
     // per-turn refresh loop re-evaluates it against the latest
     // `widgetStyleHistory`. `_buildSystemPrompt` now returns the base
     // prompt only — no mode-specific overlays.
+
+    // Plan 408 Phase 5: AGENTS.md lives in the system field so it sits on
+    // the system-prefix cache breakpoint (Phase 4). Read-only sub-agents
+    // whose definition sets omitClaudeMd: true skip it (Phase 2).
+    if (!this.omitAgentsMd && !options?.disableSystemPrompt) {
+      const agentsMdSection = getAgentsMdManager().buildAgentsMdSection();
+      if (agentsMdSection) {
+        systemPromptContent = systemPromptContent
+          ? `${systemPromptContent}\n\n${agentsMdSection}`
+          : agentsMdSection;
+      }
+    }
 
     return systemPromptContent;
   }
