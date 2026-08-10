@@ -629,7 +629,13 @@ export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
     )
   }
 
-  return `${MEMORY_INSTRUCTION_PROMPT}\n\n${memories.join('\n\n')}`
+  // Wrapped in <system-reminder> tags to align with the claude-code-haha
+  // wrapInSystemReminder convention (Plan 408). Anthropic models gain a
+  // training-distribution slot for project instructions; the wrapper also
+  // gives the prompt-injection guard (stripSystemReminder) a strippable
+  // boundary on the outgoing payload.
+  const inner = `${MEMORY_INSTRUCTION_PROMPT}\n\n${memories.join('\n\n')}`
+  return `<system-reminder>\n${inner}\n</system-reminder>`
 }
 
 // =============================================================================

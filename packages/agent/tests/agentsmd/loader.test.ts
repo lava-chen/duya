@@ -183,6 +183,23 @@ describe('agentsmd loader', () => {
       const prompt = buildAgentsMdPrompt([])
       expect(prompt).toBe('')
     })
+
+    it('should wrap content in <system-reminder> tags', () => {
+      const files = [
+        {
+          path: '/test/AGENTS.md',
+          type: 'Project' as const,
+          content: '# test content',
+        },
+      ]
+
+      const prompt = buildAgentsMdPrompt(files)
+
+      expect(prompt).toMatch(/^<system-reminder>\n/)
+      expect(prompt).toMatch(/\n<\/system-reminder>$/)
+      // The memory instruction prompt stays inside the wrapper.
+      expect(prompt).toContain('Codebase and user instructions')
+    })
   })
 
   describe('AgentsMdManager task refresh', () => {
