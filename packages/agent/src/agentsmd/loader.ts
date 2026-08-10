@@ -14,6 +14,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import { promisify } from 'util'
+import { marked } from 'marked'
 import type {
   AgentsFileInfo,
   AgentsMemoryType,
@@ -223,15 +224,22 @@ export function stripHtmlComments(content: string): {
     return { content, stripped: false }
   }
 
-  // Simple regex to remove HTML comments
-  // This is a simplified version - for production, consider using a proper markdown parser
-  const commentRegex = /<!--[\s\S]*?-->/g
-  const strippedContent = content.replace(commentRegex, '')
-
-  return {
-    content: strippedContent,
-    stripped: strippedContent !== content,
+  // Tokenize with marked and drop only block-level HTML comments. Inline
+  // comments in a paragraph, inside inline code, and inside fenced code are
+  // preserved — a naive /<!--[\s\S]*?-->/g regex would corrupt code samples
+  // that legitimately contain HTML comment syntax. Mirrors
+  // claude-code-haha claudemd.ts:292-334.
+  let stripped = false
+  const tokens = new marked.Lexer({ gfm: false }).lex(content)
+  const out: string[] = []
+  for (const token of tokens) {
+    if (token.type === 'html' && /^\s*<!--[\s\S]*?-->\s*$/.test(token.raw)) {
+      stripped = true
+      continue
+    }
+    out.push(token.raw)
   }
+  return { content: out.join(''), stripped }
 }
 
 // =============================================================================
