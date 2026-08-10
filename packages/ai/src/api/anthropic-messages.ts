@@ -35,7 +35,7 @@ import type {
 import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
-import { checkCacheEligibility, applyCacheControl } from '../utils/prompt-caching.js';
+import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem } from '../utils/prompt-caching.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 
@@ -1631,6 +1631,16 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       }));
 
       const systemPromptForRequest = chatOptions?.systemPrompt || '';
+      // The `system` field is the stable prefix of every request — the most
+      // valuable cache breakpoint. Apply the marker directly (Plan 408 Phase 4);
+      // applyCacheControl above can no longer see it because toAnthropicMessages
+      // lifts system messages out of the messages array.
+      const systemForRequest = applyCacheControlToSystem(
+        systemPromptForRequest,
+        cacheEligibility,
+        'short',
+        options.baseURL,
+      ) as Anthropic.MessageCreateParams['system'];
       // Diagnostic: verify the assembled system prompt actually reaches the
       // wire. This is critical because third-party Anthropic-compatible
       // endpoints (MiniMax) may silently drop the `system` field.
@@ -1645,7 +1655,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         model: options.model,
         max_tokens: maxTokens,
         temperature: chatOptions?.temperature ?? 1,
-        system: systemPromptForRequest,
+        system: systemForRequest,
         messages: anthropicMessages,
         tools: tools.length ? tools : undefined,
         ...(thinking ? { thinking } : {}),
@@ -1691,6 +1701,10 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // retry exactly once.
       let stream: Awaited<ReturnType<typeof client.messages.stream>>;
       try {
+        // MessageStream is an AsyncIterable, not a Promise. Awaiting it returns
+        // it immediately; abort and idle-timeout are enforced by the SDK's
+        // `{ signal }` option and the `withIdleTimeout` drain loop below. Do not
+        // wrap it in a helper that calls `.then` on a non-thenable.
         stream = await client.messages.stream(
           params,
           chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
@@ -1719,7 +1733,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
             ? Math.min(maxTokens, MINIMAX_RECOVERY_MAX_TOKENS)
             : maxTokens,
           temperature: chatOptions?.temperature ?? 1,
-          system: chatOptions?.systemPrompt || '',
+          system: systemForRequest,
           messages: anthropicMessages,
           tools: tools.length ? tools : undefined,
           stream: true,
@@ -1738,7 +1752,11 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // assistant message, executing tools); if `result` arrives after
       // `done`, usage tracking may be attributed to the wrong turn.
       let pendingDone: SSEEvent | null = null;
-      for await (const event of withIdleTimeout<Anthropic.MessageStreamEvent>(stream)) {
+      for await (const event of withIdleTimeout<Anthropic.MessageStreamEvent>(
+        stream,
+        undefined,
+        chatOptions?.signal,
+      )) {
         const internalEvents = parseAnthropicEvent(event, assistantMsg, state);
         const events = Array.isArray(internalEvents) ? internalEvents : [internalEvents];
         for (const internalEvent of events) {
@@ -1808,7 +1826,12 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         model: options.model,
         max_tokens: chatOptions?.maxTokens ?? 1024,
         temperature: chatOptions?.temperature ?? 1,
-        system: chatOptions?.systemPrompt || '',
+        system: applyCacheControlToSystem(
+          chatOptions?.systemPrompt || '',
+          cacheEligibility,
+          'short',
+          options.baseURL,
+        ) as Anthropic.MessageCreateParams['system'],
         messages: toAnthropicMessages(messages, model),
       });
 

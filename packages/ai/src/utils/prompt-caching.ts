@@ -317,6 +317,57 @@ export function applyCacheControl(
 }
 
 /**
+ * Apply a cache_control marker to the `system` field of an Anthropic request.
+ *
+ * The `system` field (string or content-block array) is the stable prefix of
+ * every request, making it the single most valuable cache breakpoint.
+ * Previously the system message lived inside the messages array and
+ * applyCacheControl's `result[0].role === 'system'` branch handled it; since
+ * toAnthropicMessages lifts system out into the `system` param, the marker
+ * must be applied here instead (Plan 408 Phase 4).
+ *
+ * @param systemPrompt - The `system` param (string or content-block array).
+ * @param eligibility - Cache eligibility from checkCacheEligibility.
+ * @param cacheRetention - Cache retention policy.
+ * @param baseUrl - Optional base URL for TTL eligibility.
+ * @returns The system prompt with cache_control applied (string if unchanged).
+ */
+export function applyCacheControlToSystem(
+  systemPrompt: string | unknown[],
+  eligibility: CacheEligibility,
+  cacheRetention: CacheRetention = 'short',
+  baseUrl?: string
+): string | unknown[] {
+  if (!eligibility.eligible || eligibility.maxBreakpoints === 0 || cacheRetention === 'none') {
+    return systemPrompt;
+  }
+
+  const cacheControl = resolveCacheControl(cacheRetention, baseUrl);
+  if (!cacheControl) {
+    return systemPrompt;
+  }
+
+  // A string system prompt becomes a single text block carrying the marker.
+  if (typeof systemPrompt === 'string') {
+    if (!systemPrompt) {
+      return systemPrompt;
+    }
+    return [{ type: 'text', text: systemPrompt, cache_control: cacheControl }];
+  }
+
+  // An array system prompt gets the marker on its first block.
+  if (Array.isArray(systemPrompt) && systemPrompt.length > 0) {
+    const first = systemPrompt[0] as Record<string, unknown>;
+    if (typeof first === 'object' && first !== null) {
+      first.cache_control = cacheControl;
+    }
+    return systemPrompt;
+  }
+
+  return systemPrompt;
+}
+
+/**
  * Strip cache_control markers from messages.
  * Useful when switching providers or disabling caching.
  */
