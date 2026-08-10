@@ -138,6 +138,9 @@ export interface AgentOptions {
   permissionMode?: PermissionMode;
   /** Communication platform type for prompt injection */
   communicationPlatform?: import('./prompts/types.js').CommunicationPlatform;
+  /** Skip the first-turn AGENTS.md user-message injection entirely. Used by
+   *  read-only sub-agents whose agent definition sets omitClaudeMd: true. */
+  omitAgentsMd?: boolean;
   /** Enable automatic retry with exponential backoff for API failures */
   enableRetry?: boolean;
   /** Retry configuration (only used when enableRetry is true) */

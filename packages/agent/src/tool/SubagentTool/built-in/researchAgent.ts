@@ -97,7 +97,9 @@ Suggested next steps or actions based on findings.
 ### Uncertainties
 Note any questions that could not be fully answered and why.
 
-Be thorough but focused. Provide enough context for the caller to understand the findings without needing to read all the source files themselves.`
+Be thorough but focused. Provide enough context for the caller to understand the findings without needing to read all the source files themselves.
+
+Note: This agent does not have project AGENTS.md in its context. If you need project conventions (build commands, lint rules, commit format), use the Read tool to read AGENTS.md or .duya/rules/*.md yourself.`
 }
 
 const RESEARCH_WHEN_TO_USE =

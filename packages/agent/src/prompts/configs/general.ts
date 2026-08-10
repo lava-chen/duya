@@ -81,6 +81,8 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'visualVerification', compute: getVisualVerificationSection, description: 'Visual tasks require rendered-output verification' },
   ],
   preBuildHook: async (ctx) => {
+    // Sub-agents with omitClaudeMd set skip the AGENTS.md refresh walk.
+    if (ctx.omitAgentsMd) return
     if (await initializeAgentsMd(ctx.workingDirectory)) {
       return { invalidateCacheKeys: ['project'] }
     }

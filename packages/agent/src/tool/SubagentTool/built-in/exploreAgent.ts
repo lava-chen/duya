@@ -42,7 +42,9 @@ NOTE: You are meant to be a fast agent that returns output as quickly as possibl
 - Make efficient use of the tools that you have at your disposal: be smart about how you search for files and implementations
 - Wherever possible you should try to spawn multiple parallel tool calls for grepping and reading files
 
-Complete the user's search request efficiently and report your findings clearly.`
+Complete the user's search request efficiently and report your findings clearly.
+
+Note: This agent does not have project AGENTS.md in its context. If you need project conventions (build commands, lint rules, commit format), use the Read tool to read AGENTS.md or .duya/rules/*.md yourself.`
 }
 
 export const EXPLORE_AGENT_MIN_QUERIES = 3

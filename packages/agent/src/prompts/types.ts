@@ -222,6 +222,14 @@ export interface PromptContext {
   researchProjectId?: string
   /** Whether project references section is enabled */
   referencesEnabled?: boolean
+  /**
+   * When true, skip the AGENTS.md refresh in preBuildHook and skip the
+   * first-turn AGENTS.md user-message injection. Set by sub-agents whose
+   * `omitClaudeMd: true` (Explore, Plan, CodeReview, Research) so read-only
+   * agents never pay 5-50K tokens for project conventions the main agent
+   * already interprets.
+   */
+  omitAgentsMd?: boolean
 }
 
 // ============================================================
@@ -325,6 +333,7 @@ export interface PromptBuildContextOptions {
   scratchpadDir?: string
   researchIntent?: import('./research/types.js').ResearchTaskIntent
   researchProjectId?: string
+  omitAgentsMd?: boolean
 }
 
 // ============================================================
