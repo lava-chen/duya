@@ -93,6 +93,7 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
   getAgentsMdManager: vi.fn(() => ({
     refreshForTask: vi.fn(async () => ({})),
     buildAgentsMdPrompt: vi.fn(() => agentsMdState.currentText),
+    buildAgentsMdSection: vi.fn(() => agentsMdState.currentText),
     getLoadedFiles: vi.fn(() => []),
     getFilesByType: vi.fn(() => []),
     getLargeFiles: vi.fn(() => []),
@@ -601,8 +602,8 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
   // ---------------------------------------------------------------
   // 4. AGENTS.md is not duplicated across turns.
   // ---------------------------------------------------------------
-  describe('AGENTS.md injection', () => {
-    it('adds AGENTS.md exactly once on the first turn of a streamChat call', async () => {
+  describe('AGENTS.md in system prompt', () => {
+    it('carries AGENTS.md in the system prompt every turn without leaking into messages', async () => {
       agentsMdState.currentText = '<agents-md>project rules</agents-md>';
 
       const agent = newAgent();
@@ -630,35 +631,27 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
       expect(streamState.callCount).toBe(2);
 
-      // Round 1 payload should contain the AGENTS.md text exactly once.
-      const round1Messages = streamState.seenMessages[0] as Message[];
-      const round1MdCount = round1Messages.filter((m) => {
-        const text = typeof m.content === 'string'
-          ? m.content
-          : Array.isArray(m.content)
-            ? (m.content as MessageContent[])
-                .map((c) => (c as { text?: string }).text ?? '')
-                .join('')
-            : '';
-        return text.includes('<agents-md>project rules</agents-md>');
-      }).length;
-      expect(round1MdCount).toBe(1);
+      // AGENTS.md lives in the system field on every turn (Plan 408 Phase 5),
+      // so it sits on the system-prefix cache breakpoint.
+      expect(streamState.seenSystemPrompts[0] ?? '').toContain('<agents-md>project rules</agents-md>');
+      expect(streamState.seenSystemPrompts[1] ?? '').toContain('<agents-md>project rules</agents-md>');
 
-      // Round 2 payload should NOT re-inject AGENTS.md.
-      const round2Messages = streamState.seenMessages[1] as Message[];
-      const round2MdCount = round2Messages.filter((m) => {
-        const text = typeof m.content === 'string'
-          ? m.content
-          : Array.isArray(m.content)
-            ? (m.content as MessageContent[])
-                .map((c) => (c as { text?: string }).text ?? '')
-                .join('')
-            : '';
-        return text.includes('<agents-md>project rules</agents-md>');
-      }).length;
-      expect(round2MdCount).toBe(0);
+      // It never leaks into the messages payload.
+      for (const roundMessages of streamState.seenMessages) {
+        const leaked = (roundMessages as Message[]).some((m) => {
+          const text = typeof m.content === 'string'
+            ? m.content
+            : Array.isArray(m.content)
+              ? (m.content as MessageContent[])
+                  .map((c) => (c as { text?: string }).text ?? '')
+                  .join('')
+              : '';
+          return text.includes('<agents-md>project rules</agents-md>');
+        });
+        expect(leaked).toBe(false);
+      }
 
-      // getMessages does not surface AGENTS.md (it was added only to llmMessages, not timeline).
+      // getMessages does not surface AGENTS.md either (it is never in the timeline).
       const projected = agent.getMessages() as Message[];
       const mdLeaked = projected.some((m) => {
         const text = typeof m.content === 'string'

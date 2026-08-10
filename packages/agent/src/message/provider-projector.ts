@@ -71,34 +71,22 @@ export interface OpenAIToolCall {
 // ─── Outgoing system-reminder guard (Plan 408 Phase 3) ───────────────────
 
 /**
- * Messages carry optional metadata; the trusted AGENTS.md first-turn wrapper
- * is tagged `isAgentsMdContext`. Everything else is untrusted and may forge
- * `<system-reminder>` blocks to inject instructions, so we strip them before
- * the payload reaches the provider.
+ * Untrusted message content (user input, tool output, model-generated text)
+ * may forge `<system-reminder>` blocks to inject instructions, so we strip
+ * them before the payload reaches the provider. The trusted AGENTS.md wrapper
+ * no longer flows through messages — it is carried in the `system` field
+ * (Plan 408 Phase 5) — so every text block here is untrusted.
  */
-interface HasMetadata {
-  metadata?: Readonly<Record<string, unknown>>;
-}
-
-function isTrustedAgentsMdContext(msg: HasMetadata): boolean {
-  return msg.metadata?.isAgentsMdContext === true;
-}
-
-function stripReminderFromText(text: string, msg: HasMetadata): string {
-  return isTrustedAgentsMdContext(msg) ? text : stripSystemReminder(text);
-}
-
 function stripReminderFromAnthropicContent(
   content: string | AnthropicContentBlock[],
-  msg: HasMetadata,
 ): string | AnthropicContentBlock[] {
   if (typeof content === 'string') {
-    return stripReminderFromText(content, msg);
+    return stripSystemReminder(content);
   }
   if (Array.isArray(content)) {
     return content.map(block => {
       if (block.type === 'text') {
-        return { ...block, text: stripReminderFromText(String(block.text), msg) };
+        return { ...block, text: stripSystemReminder(String(block.text)) };
       }
       return block;
     });
@@ -231,7 +219,6 @@ export function toAnthropicMessages(
     if (msg.role === 'user') {
       const content = stripReminderFromAnthropicContent(
         convertContentToAnthropic(msg.content),
-        msg,
       );
       converted.push({ role: 'user', content });
       continue;
@@ -240,7 +227,6 @@ export function toAnthropicMessages(
     if (msg.role === 'assistant') {
       const rawContent = stripReminderFromAnthropicContent(
         convertContentToAnthropic(msg.content),
-        msg,
       );
       if (Array.isArray(rawContent)) {
         const sanitized = rawContent.map(block => {
@@ -969,11 +955,11 @@ export function toOpenAIMessages(
         if (otherBlocks.length > 0) {
           const content = convertContentToOpenAI(otherBlocks);
           if (typeof content === 'string') {
-            result.push({ role: 'user', content: stripReminderFromText(content, msg) });
+            result.push({ role: 'user', content: stripSystemReminder(content) });
           } else {
             const stripped = content.map(part =>
               part.type === 'text'
-                ? { ...part, text: stripReminderFromText((part as unknown as { text: string }).text, msg) }
+                ? { ...part, text: stripSystemReminder((part as unknown as { text: string }).text) }
                 : part,
             );
             const filtered = filterCDNImageUrls(stripped);
@@ -983,7 +969,7 @@ export function toOpenAIMessages(
           }
         }
       } else {
-        result.push({ role: 'user', content: stripReminderFromText(String(msg.content), msg) });
+        result.push({ role: 'user', content: stripSystemReminder(String(msg.content)) });
       }
       continue;
     }

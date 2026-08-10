@@ -1,12 +1,12 @@
 /**
- * Plan 408 Phase 2 — DuyaAgent omitAgentsMd AGENTS.md injection short-circuit.
+ * Plan 408 Phase 5 — DuyaAgent omitAgentsMd in the system prompt.
  *
- * Built-in read-only sub-agents (Explore / Plan / CodeReview / Research) run
- * through `duyaAgent.streamChat`. On the first turn, DuyaAgent unshifts the
- * AGENTS.md snapshot as an ephemeral user message (Codex-compatible). When the
- * agent is constructed with `omitAgentsMd: true`, that injection must be
- * skipped entirely — otherwise the whole snapshot (5-50K tokens) is billed on
- * every sub-agent turn for instructions the read-only agent does not need.
+ * AGENTS.md now lives in the system field (so it sits on the system-prefix
+ * cache breakpoint). Read-only sub-agents (Explore / Plan / CodeReview /
+ * Research) construct DuyaAgent with `omitAgentsMd: true`, which must keep
+ * the AGENTS.md section OUT of the system prompt — otherwise the whole
+ * snapshot (5-50K tokens) is billed on every sub-agent turn for conventions
+ * the read-only agent does not need.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,6 +65,7 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
   getAgentsMdManager: vi.fn(() => ({
     refreshForTask: vi.fn(async () => ({})),
     buildAgentsMdPrompt: vi.fn(() => agentsMdState.currentText),
+    buildAgentsMdSection: vi.fn(() => agentsMdState.currentText),
     getLoadedFiles: vi.fn(() => []),
     getFilesByType: vi.fn(() => []),
     getLargeFiles: vi.fn(() => []),
@@ -76,7 +77,7 @@ vi.mock('../../../src/agentsmd/index.js', () => ({
 // ---------------------------------------------------------------------------
 
 import { duyaAgent } from '../../../src/agent/DuyaAgent.js';
-import type { Message, MessageContent } from '../../../src/types.js';
+import type { MessageContent } from '../../../src/types.js';
 import { clearCommandQueue } from '../../../src/queue/index.js';
 
 const AGENTS_MD_MARKER = 'AGENTS_MD_MARKER_12345';
@@ -103,17 +104,7 @@ async function drainStream(
   return events;
 }
 
-function firstTurnTexts(): string[] {
-  const messages = streamState.seenMessages[0] as Array<{
-    role: string;
-    content: string | unknown[];
-  }>;
-  return (messages ?? []).map((m) =>
-    typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-  );
-}
-
-describe('Plan 408 Phase 2 — DuyaAgent omitAgentsMd', () => {
+describe('Plan 408 Phase 5 — DuyaAgent omitAgentsMd', () => {
   beforeEach(() => {
     streamState.callCount = 0;
     streamState.seenMessages = [];
@@ -128,19 +119,19 @@ describe('Plan 408 Phase 2 — DuyaAgent omitAgentsMd', () => {
     vi.restoreAllMocks();
   });
 
-  it('injects AGENTS.md as first user message on turn 1 by default', async () => {
+  it('includes AGENTS.md in the system prompt by default', async () => {
     const agent = newAgent();
     await drainStream(agent, 'hello');
 
-    const texts = firstTurnTexts();
-    expect(texts.some((t) => t.includes(AGENTS_MD_MARKER))).toBe(true);
+    const systemPrompt = streamState.seenSystemPrompts[0] ?? '';
+    expect(systemPrompt).toContain(AGENTS_MD_MARKER);
   });
 
-  it('skips AGENTS.md injection on turn 1 when omitAgentsMd=true', async () => {
+  it('omits AGENTS.md from the system prompt when omitAgentsMd=true', async () => {
     const agent = newAgent({ omitAgentsMd: true });
     await drainStream(agent, 'hello');
 
-    const texts = firstTurnTexts();
-    expect(texts.some((t) => t.includes(AGENTS_MD_MARKER))).toBe(false);
+    const systemPrompt = streamState.seenSystemPrompts[0] ?? '';
+    expect(systemPrompt).not.toContain(AGENTS_MD_MARKER);
   });
 });

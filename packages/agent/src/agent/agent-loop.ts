@@ -35,7 +35,6 @@ import type {
 import { getDiscoveredToolPrompts, harvestDiscoveredTools } from './tool-search-discovery.js';
 import { microCleanupMessages } from '../compact/microCompactCleanup.js';
 import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
-import { getAgentsMdManager } from '../agentsmd/index.js';
 import { collectRecentImageAttachments } from './utils/agent-helpers.js';
 import { isToolVisible } from '../agent-profile/ToolFilter.js';
 import { logger } from '../utils/logger.js';
@@ -261,24 +260,12 @@ export async function runAgentLoop(
 
       // Build the model-facing payload, then compress historical canvas tool
       // calls (canvas tools are not model-visible). The spread copies the
-      // array so the AGENTS.md unshift and deferred-context pushes below do
-      // not leak into the durable `state.messages` timeline.
+      // array so the deferred-context pushes below do not leak into the
+      // durable `state.messages` timeline.
       const llmMessages = [...compressHistoricalCanvasToolCalls(state.messages)];
 
-      // Codex-compatible: inject AGENTS.md as the first user message on the
-      // first turn. Ephemeral — sent to the LLM but never persisted.
-      if (state.turnCount === 1) {
-        const agentsMdText = getAgentsMdManager().buildAgentsMdPrompt();
-        if (agentsMdText) {
-          llmMessages.unshift({
-            id: crypto.randomUUID(),
-            role: 'user',
-            content: agentsMdText,
-            timestamp: Date.now(),
-            metadata: { isAgentsMdContext: true },
-          });
-        }
-      }
+      // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
+      // not injected as a first-turn user message.
 
       // Inject transient deferred tool contexts into the provider payload.
       await injectDeferredContexts(llmMessages, state);

@@ -9,6 +9,7 @@
  */
 
 import type { AIClient } from '@duya/ai';
+import { getAgentsMdManager } from '../../agentsmd/index.js';
 import { getAgentProfileService } from '../../agent-profile/AgentProfileService.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../../agent-profile/ToolFilter.js';
 import type { AgentProfile } from '../../agent-profile/types.js';
@@ -196,6 +197,17 @@ export async function buildSystemPrompt(
   if (appliedProfile) {
     const identityBlock = buildAgentIdentityBlock(appliedProfile);
     systemPromptContent = identityBlock + '\n\n' + systemPromptContent;
+  }
+
+  // Plan 408 Phase 5: AGENTS.md lives in the system field so it sits on the
+  // system-prefix cache breakpoint (Phase 4).
+  if (!options?.disableSystemPrompt) {
+    const agentsMdSection = getAgentsMdManager().buildAgentsMdSection();
+    if (agentsMdSection) {
+      systemPromptContent = systemPromptContent
+        ? `${systemPromptContent}\n\n${agentsMdSection}`
+        : agentsMdSection;
+    }
   }
 
   return systemPromptContent;
