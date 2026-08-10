@@ -48,6 +48,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [328-core-db-electron-wiring](./active/328-core-db-electron-wiring.md) | core-db 全量接线：Main 双库 + IPC/Worker 薄转发 + 全部直连消费方收编（无保留清单）+ 旧查询层删除（CLI 独立模式不接入） | P0 | Phase 1-7 接线完成 ✅（e2e smoke + grep 零引用 + db-handlers 转发测试通过）；手动 LLM 链路验证待办 |
 | [329-core-db-legacy-import](./active/329-core-db-legacy-import.md) | core-db 旧库导入（单文件 LegacyImport）+ 首启自动执行 + 对账与文档收口 | P0 | Planning |
 | [330-electron-cleanup-repair](./active/330-electron-cleanup-repair.md) | Electron 主进程清理修复：IPC 统一注册、agents barrel、services 分类、main.ts 启动编排下沉、上帝文件拆分、命名/shim 收口（六 Phase） | P1 | Planning |
+| [408-agents-md-loader-alignment](./active/408-agents-md-loader-alignment.md) | AGENTS.md 加载与 claude-code-haha 对齐：`<system-reminder>` 包裹 + `omitClaudeMd` 真正生效 + `stripHtmlComments` 堵 prompt injection + 修 `applyCacheControl` system-cache 永失活 bug + AGENTS.md 搬 system 字段 | P1 | Phase 1-5 ✅（2026-08-10）；Phase 6 阻塞（依赖 plan 87 hook） |
 
 ### Conductor / Canvas
 
