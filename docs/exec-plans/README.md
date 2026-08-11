@@ -125,6 +125,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [38-chat-generative-ui](./active/38-chat-generative-ui.md) | Chat Generative UI — Widget system V2 upgrade | P1 | Phase 1-4 ✅ Phase 5 🔴 |
 | [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills sync fix | P0 | In Progress |
 | [25-skills-completion-plan](./active/25-skills-completion-plan.md) | Official Skill completion plan (hermes-agent 等) | P1 | 进行中 |
+| [414-skills-system-cleanup-and-system-skills](./active/414-skills-system-cleanup-and-system-skills.md) | Skills 体系清理 + 系统级内置 skills（.system 机制，Codex 式） | P1 | ✅ 代码完成，测试通过 |
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |
 | [43-startup-landing](./active/43-startup-landing.md) | First-launch branded landing page | P1 | Phase 1 ✅ |

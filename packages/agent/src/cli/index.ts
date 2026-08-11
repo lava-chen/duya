@@ -629,8 +629,14 @@ export async function runCLI(
   const workspace = agentOptions.workingDirectory || process.cwd();
 
   // Load additional skill paths from settings
-    const additionalPaths = getCliSettingJson<string[]>('skillAdditionalPaths', []);
-  const loadOptions = additionalPaths.length > 0 ? { additionalPaths } : undefined;
+  const additionalPaths = getCliSettingJson<string[]>('skillAdditionalPaths', []);
+  // Bundled skills are installed on-demand via the plugin marketplace (same
+  // policy as the agent process); never auto-sync at CLI startup. System-level
+  // (.system) skills are always loaded regardless of this flag.
+  const loadOptions: { additionalPaths?: string[]; syncBundled: boolean } = {
+    syncBundled: false,
+    ...(additionalPaths.length > 0 ? { additionalPaths } : {}),
+  };
 
   await loadSkills(workspace, loadOptions);
   const loadedSkills = getSkillRegistry().list();

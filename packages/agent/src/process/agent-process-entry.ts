@@ -1156,7 +1156,9 @@ async function loadAgentSkills(workDir?: string, skillPaths?: string[], security
       );
       if (disabledNames.size > 0) {
         for (const skill of registry.list()) {
-          if (disabledNames.has(skill.name)) {
+          // System-level skills are always enabled; user overrides must not
+          // disable them.
+          if (disabledNames.has(skill.name) && skill.source !== 'system') {
             registry.unregister(skill.name);
           }
         }
@@ -2425,10 +2427,12 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
 async function reloadSkills(): Promise<void> {
   try {
     const registry = getSkillRegistry();
-    // Clear existing non-bundled skills
+    // Clear existing non-bundled skills (system-level skills are
+    // re-registered idempotently by loadSkills; keeping them out of the
+    // unregister pass avoids a transient window with no system skills).
     const allSkills = registry.list();
     for (const skill of allSkills) {
-      if (skill.source !== 'bundled') {
+      if (skill.source !== 'bundled' && skill.source !== 'system') {
         registry.unregister(skill.name);
       }
     }

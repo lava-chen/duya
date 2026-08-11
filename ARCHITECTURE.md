@@ -1312,6 +1312,43 @@ OAuth token brokering remains the responsibility of the app-connection layer
 (Plan 312), so a remote preset must retain its stdio fallback until it has an
 authorized connection.
 
+## Skills 系统
+
+### 来源体系
+
+| 来源 | 目录 | 加载方式 | 安全扫描 | 用户 GUI 可见 |
+|---|---|---|---|---|
+| `system`（系统级内置） | `packages/agent/skills/.system/` | `loadSkills()` 末尾**无条件加载**（不受 `syncBundled` 影响） | **跳过**（信任） | 否（`skills:list` 不扫该目录） |
+| `bundled`（普通内置） | `packages/agent/skills/<category>/` | 生产不自动加载（`syncBundled: false`，走 plugin marketplace 按需安装） | 跳过 | 同步后可见 |
+| `user` | `~/.duya/skills/` | `loadSkills()` | 扫描 | 是 |
+| `project` | `<cwd>/.duya/skills/` | `loadSkills()` | 扫描 | 是 |
+| `plugin` | 插件 `installPath/skills/` | `discoverPluginSkillPaths()` → `additionalPaths` | 扫描 | 是 |
+
+### 系统级 skills（`.system/`，Codex 式）
+
+- 位置：`packages/agent/skills/.system/<name>/SKILL.md`（随打包到
+  `resources/agent/skills/.system/`，由 `electron-builder.yml` 的
+  `extraResources` 自动包含）。
+- 特征：**永远加载**、**跳过安全扫描**（`source === 'system'`）、**不可被
+  用户禁用**（跳过 `skillEnabledOverrides` 过滤与 agent 进程二次过滤）、
+  不进 GUI `skills:list` 与 CLI `GET /v1/skills`，但通过
+  `listModelInvocable()` 对 agent 可见可调用。
+- 内容为"自我知识/自我配置"类：`self-config`（配置 `~/.duya/config.toml`、
+  `secrets.json` 等）、`self-knowledge`（仓库/文档地图）、
+  `plugin-mcp-builder`（插件 + MCP 扩展指南）。
+- 同名冲突：系统级 skills 在 `loadSkills()` **最后注册**，覆盖同名用户 skill。
+
+### 关键代码
+
+- 加载：`packages/agent/src/skills/loader.ts`（`loadSystemSkills()`、
+  `getSystemSkillsDir()`）
+- 类型：`packages/agent/src/skills/types.ts`（`SkillSource` 含 `'system'`）
+- 禁用过滤：`loader.ts` + `agent-process-entry.ts`（均跳过 `source === 'system'`）
+- 同步：`packages/agent/src/skills/skillsSync.ts`（跳过 `.` 前缀目录，`.system/`
+  不会被同步到用户目录）
+- GUI/CLI 列表：`electron/ipc/skills-handlers.ts`、`packages/agent/src/skills/skillService.ts`
+  （均不扫描 `.system/`）
+
 ## Memory: bounded projection and rg retrieval
 
 SQLite is the authoritative memory state. `projects` and

@@ -8,7 +8,7 @@ import type { ToolUseContext } from '../types.js';
 /**
  * Skill source
  */
-export type SkillSource = 'user' | 'project' | 'bundled' | 'mcp' | 'plugin';
+export type SkillSource = 'user' | 'project' | 'bundled' | 'mcp' | 'plugin' | 'system';
 
 /**
  * Skill category (Hermes-inspired classification)
