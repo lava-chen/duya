@@ -1416,6 +1416,27 @@ export function MessageInput({
     onStop?.();
   }, [onStop]);
 
+  // Plan 411 Phase 3: when the user taps the mic and the STT environment is
+  // not ready, auto-inject a guide message that directs the agent to the
+  // `voice-setup` skill. De-duplicated via localStorage so it only fires once
+  // per install (the agent drives the actual setup through `duya_cli`).
+  const handleVoiceNeedsSetup = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (localStorage.getItem('duya.voice.setupPromptShown') === '1') return;
+      localStorage.setItem('duya.voice.setupPromptShown', '1');
+    } catch {
+      // localStorage unavailable — still inject once per session below.
+    }
+    const guide =
+      '语音输入尚未就绪（本地 whisper 环境或云端 STT 未配置）。请使用 voice-setup 技能，' +
+      '通过 duya_cli 依次执行 voice doctor 诊断环境、voice setup 下载模型、' +
+      'voice enable / voice set 写入配置，最后复检确保语音立即可用。';
+    const sendMode = pickMessageMode(activeModes);
+    const conductorMode = activeModes.has('conductor') || undefined;
+    onSend(guide, undefined, undefined, sendMode, guide, conductorMode);
+  }, [onSend, activeModes]);
+
   // Remove CLI badge handler
   const handleRemoveCliBadge = useCallback(() => {
     setCliBadge(null);
@@ -1690,6 +1711,7 @@ export function MessageInput({
               <VoiceButton
                 disabled={disabled || isStreaming}
                 onTranscription={(text, _kind) => setInputValue(text)}
+                onNeedsSetup={handleVoiceNeedsSetup}
               />
               <IconButton
                 type="submit"
