@@ -6,6 +6,7 @@
  *   - GoalStore          (session_goals: per-session goal + token budget mirror)
  *   - SpawnEdgeStore     (session_spawn_edges: sub-agent lineage, plan 332)
  *   - AttachmentStore    (attachments: file-backed payloads, plan 332)
+ *   - ModeStateStore     (mode_state_snapshots: per (session, mode) tracker snapshot, plan 413c)
  *
  * Plan 327 decision 8: TaskStore / PermissionLedger / LockStore are each under
  * 100 lines of single-table CRUD. Splitting them into 6 files would buy no
@@ -678,6 +679,137 @@ export class GoalStore {
   }
 }
 
+// ─── ModeStateStore ───
+
+export interface ModeStateRow {
+  sessionId: string;
+  mode: string;
+  /** Queryable/displayable status (e.g. `'inactive' | 'pending' | 'active' | 'exit_pending'`). */
+  status: string;
+  /** Query redundancy for plan modes; derived from the snapshot payload by the persistence layer. */
+  reminderCount: number;
+  /** Full snapshot payload (JSON.stringify(ModeStateSnapshot)) — authoritative. */
+  snapshotJson: string;
+  updatedAt: number;
+}
+
+/**
+ * Mode tracker state snapshots (plan 413c).
+ *
+ * One row per (session_id, mode) — the unified disk backing for every
+ * `ModeTracker` in `packages/agent/src/modes/engine/`. `snapshot_json` is the
+ * authoritative payload (the full `ModeStateSnapshot`); `status` and
+ * `reminder_count` are query/display redundancy kept in sync by the single
+ * upsert write path, so callers can list active plan sessions without parsing
+ * every blob. Future mode state machines (e.g. goal) serialize their own
+ * orchestration into `snapshot_json` and only mirror a queryable `status`.
+ */
+export class ModeStateStore {
+  /** Migration id=11: create mode_state_snapshots table (plan 413c). */
+  static readonly migrations: Migration[] = [
+    {
+      id: 11,
+      name: 'create_mode_state_snapshots',
+      up: (db) => {
+        db.exec(`
+          CREATE TABLE mode_state_snapshots (
+            session_id     TEXT NOT NULL,
+            mode           TEXT NOT NULL,
+            status         TEXT NOT NULL,
+            reminder_count INTEGER NOT NULL DEFAULT 0,
+            snapshot_json  TEXT NOT NULL,
+            updated_at     INTEGER NOT NULL,
+            PRIMARY KEY (session_id, mode)
+          );
+          CREATE INDEX idx_mode_state_mode ON mode_state_snapshots(mode);
+        `);
+      },
+    },
+  ];
+
+  private readonly db: SqliteDatabase;
+
+  constructor(db: SqliteDatabase) { this.db = db; }
+
+  /** Get the snapshot for a (session, mode) pair (null if no row). */
+  get(sessionId: string, mode: string): ModeStateRow | null {
+    const row = this.db
+      .prepare('SELECT * FROM mode_state_snapshots WHERE session_id = ? AND mode = ?')
+      .get(sessionId, mode) as ModeStateRowRow | undefined;
+    return row ? rowToModeStateRow(row) : null;
+  }
+
+  /**
+   * Insert or overwrite the snapshot for a (session, mode) pair. Idempotent —
+   * the PRIMARY KEY drives `ON CONFLICT DO UPDATE`, so repeated upserts never
+   * duplicate rows and always stamp a fresh `updated_at`.
+   */
+  upsert(
+    sessionId: string,
+    mode: string,
+    status: string,
+    snapshotJson: string,
+    reminderCount = 0,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO mode_state_snapshots (
+          session_id, mode, status, reminder_count, snapshot_json, updated_at
+        ) VALUES (
+          @session_id, @mode, @status, @reminder_count, @snapshot_json, @updated_at
+        )
+        ON CONFLICT(session_id, mode) DO UPDATE SET
+          status = @status,
+          reminder_count = @reminder_count,
+          snapshot_json = @snapshot_json,
+          updated_at = @updated_at`,
+      )
+      .run({
+        session_id: sessionId,
+        mode,
+        status,
+        reminder_count: reminderCount,
+        snapshot_json: snapshotJson,
+        updated_at: Date.now(),
+      });
+  }
+
+  /** Update only the queryable status column for a (session, mode) pair. */
+  setStatus(sessionId: string, mode: string, status: string): void {
+    this.db
+      .prepare(
+        `UPDATE mode_state_snapshots
+         SET status = @status, updated_at = @updated_at
+         WHERE session_id = @session_id AND mode = @mode`,
+      )
+      .run({ session_id: sessionId, mode, status, updated_at: Date.now() });
+  }
+
+  /** All mode snapshots for a session, ordered by mode. */
+  listBySession(sessionId: string): ModeStateRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM mode_state_snapshots WHERE session_id = ? ORDER BY mode ASC')
+      .all(sessionId) as ModeStateRowRow[];
+    return rows.map(rowToModeStateRow);
+  }
+
+  /** All snapshots in a given status across sessions (e.g. every active plan). */
+  listByStatus(status: string): ModeStateRow[] {
+    const rows = this.db
+      .prepare('SELECT * FROM mode_state_snapshots WHERE status = ? ORDER BY updated_at DESC')
+      .all(status) as ModeStateRowRow[];
+    return rows.map(rowToModeStateRow);
+  }
+
+  /** Delete a (session, mode) snapshot. Returns true if a row was removed. */
+  delete(sessionId: string, mode: string): boolean {
+    const r = this.db
+      .prepare('DELETE FROM mode_state_snapshots WHERE session_id = ? AND mode = ?')
+      .run(sessionId, mode);
+    return r.changes > 0;
+  }
+}
+
 // ─── SpawnEdgeStore ───
 
 export interface SpawnEdge {
@@ -1034,6 +1166,26 @@ function rowToGoal(row: GoalRow): SessionGoal {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at,
+  };
+}
+
+interface ModeStateRowRow {
+  session_id: string;
+  mode: string;
+  status: string;
+  reminder_count: number;
+  snapshot_json: string;
+  updated_at: number;
+}
+
+function rowToModeStateRow(row: ModeStateRowRow): ModeStateRow {
+  return {
+    sessionId: row.session_id,
+    mode: row.mode,
+    status: row.status,
+    reminderCount: row.reminder_count,
+    snapshotJson: row.snapshot_json,
+    updatedAt: row.updated_at,
   };
 }
 

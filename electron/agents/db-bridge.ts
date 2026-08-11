@@ -277,6 +277,38 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return goals.listByStatus(p.status as 'active' | 'paused' | 'usage_limited' | 'complete').map(coreGoalToIpcRow);
     }
 
+    // ==================== Mode state actions (core store thin forward) ====================
+    // Plan 413c: mode_state_snapshots — per (session, mode) ModeTracker snapshot.
+    // The Agent persists tracker snapshots after state transitions and restores
+    // them on session resume via these actions.
+    case 'modeState:get': {
+      const { modeState } = getCoreStores();
+      return modeState.get(p.sessionId as string, p.mode as string);
+    }
+
+    case 'modeState:upsert': {
+      const { modeState } = getCoreStores();
+      modeState.upsert(
+        p.sessionId as string,
+        p.mode as string,
+        p.status as string,
+        p.snapshotJson as string,
+        (p.reminderCount as number | undefined) ?? 0,
+      );
+      return undefined;
+    }
+
+    case 'modeState:setStatus': {
+      const { modeState } = getCoreStores();
+      modeState.setStatus(p.sessionId as string, p.mode as string, p.status as string);
+      return undefined;
+    }
+
+    case 'modeState:listBySession': {
+      const { modeState } = getCoreStores();
+      return modeState.listBySession(p.sessionId as string);
+    }
+
     // Plan 328 Phase 6: session:search combines SessionStore.search (metadata
     // LIKE) with MessageLog.searchText (rollout content scan). Returns the old
     // `s.* + snippet` shape — same implementation as the `db:search:sessions`

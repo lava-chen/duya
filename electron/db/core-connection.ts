@@ -26,6 +26,7 @@ import {
   GoalStore,
   SpawnEdgeStore,
   AttachmentStore,
+  ModeStateStore,
   LegacyImport,
   type SqliteCtor,
   type Migration,
@@ -43,6 +44,7 @@ export interface CoreStores {
   goals: GoalStore;
   spawnEdges: SpawnEdgeStore;
   attachments: AttachmentStore;
+  modeState: ModeStateStore;
 }
 
 let stores: CoreStores | null = null;
@@ -107,6 +109,7 @@ function collectMigrations(): Migration[] {
     ...GoalStore.migrations,
     ...SpawnEdgeStore.migrations,
     ...AttachmentStore.migrations,
+    ...ModeStateStore.migrations,
   ].sort((a, b) => a.id - b.id);
 }
 
@@ -152,6 +155,7 @@ export function initCoreDatabase(sqlite: SqliteCtor): CoreStores | null {
       goals: new GoalStore(db),
       spawnEdges: new SpawnEdgeStore(db),
       attachments: new AttachmentStore(db, attachmentsRoot),
+      modeState: new ModeStateStore(db),
     };
 
     // Plan 329: auto-run the legacy import on first boot. Runs before any
