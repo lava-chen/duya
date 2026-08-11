@@ -1,7 +1,7 @@
 ---
 name: twitter
 description: Extract tweets, timelines, and search results from X (Twitter) using the browser tool. Uses DOM-based extraction as the primary method (more reliable than API), with API as fallback. Handles X's SPA navigation and tab disconnection.
-version:1.2.0
+version: 1.2.0
 author: DUYA Agent
 license: MIT
 metadata:
