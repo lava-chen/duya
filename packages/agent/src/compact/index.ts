@@ -25,3 +25,5 @@ export { microCleanupMessages } from './microCompactCleanup.js'
 
 // Historical canvas tool-call compression (LLM-facing only)
 export { compressHistoricalCanvasToolCalls } from './canvasHistoryCompress.js'
+// Projection-layer tool compression pipeline (LLM-facing only)
+export { compressProjectedToolMessages, DEFAULT_TRANSFORMS, type ProjectionTransform } from './projectionCompress.js'

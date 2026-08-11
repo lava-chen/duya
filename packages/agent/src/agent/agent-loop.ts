@@ -33,8 +33,7 @@ import type {
   LoopState,
 } from './types.js';
 import { getDiscoveredToolPrompts, harvestDiscoveredTools } from './tool-search-discovery.js';
-import { microCleanupMessages } from '../compact/microCompactCleanup.js';
-import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
+import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { collectRecentImageAttachments } from './utils/agent-helpers.js';
 import { isToolVisible } from '../agent-profile/ToolFilter.js';
 import { logger } from '../utils/logger.js';
@@ -218,8 +217,8 @@ export async function runAgentLoop(
 
     await emit({ type: 'turn_start', data: { turnCount: state.turnCount } });
 
-    // Lightweight tool-result cleanup before each turn.
-    state.messages = microCleanupMessages(state.messages);
+    // Lightweight tool-result cleanup before each turn (folded into the
+    // projection-compress pipeline at the LLM call below).
 
     // Proactive context compaction before the LLM call.
     if (deps.compactionController.shouldCompact()) {
@@ -262,7 +261,7 @@ export async function runAgentLoop(
       // calls (canvas tools are not model-visible). The spread copies the
       // array so the deferred-context pushes below do not leak into the
       // durable `state.messages` timeline.
-      const llmMessages = [...compressHistoricalCanvasToolCalls(state.messages)];
+      const llmMessages = [...compressProjectedToolMessages(state.messages)];
 
       // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
       // not injected as a first-turn user message.

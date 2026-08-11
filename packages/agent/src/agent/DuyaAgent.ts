@@ -31,8 +31,7 @@ import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile
 import type { PromptSystem } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
-import { microCleanupMessages } from '../compact/microCompactCleanup.js';
-import { compressHistoricalCanvasToolCalls } from '../compact/canvasHistoryCompress.js';
+import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
@@ -898,7 +897,6 @@ export class duyaAgent {
       yield { type: 'turn_start', data: { turnCount } };
 
       // Lightweight tool result cleanup before each turn
-      messages = microCleanupMessages(messages);
 
       // Proactive context compaction before each LLM call
       if (this.compactionController.shouldCompact()) {
@@ -977,7 +975,7 @@ export class duyaAgent {
         logger.info(`[Agent] Turn ${turnCount}: Starting LLM stream, messages=${messages.length}, provider=${this.provider}`);
         let llmEventCount = 0;
         logger.info(`[Agent] Turn ${turnCount}: Calling llmClient.streamChat...`);
-        const llmMessages = compressHistoricalCanvasToolCalls(
+        const llmMessages = compressProjectedToolMessages(
           runtimePromptMessageId
             ? messages.map((msg) => (
                 msg.id === runtimePromptMessageId
