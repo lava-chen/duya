@@ -15,6 +15,8 @@ export type VoiceErrorCode =
   | 'network'
   | 'internal';
 
+export type VoiceAutoStopReason = 'finalize' | 'no_speech';
+
 export interface VoiceConfigDTO {
   enabled: boolean;
   engine: 'local' | 'cloud';

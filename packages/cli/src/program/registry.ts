@@ -49,7 +49,8 @@ export type CliCommandPath =
   | 'security'
   | 'install-cli'
   | 'uninstall-cli'
-  | 'config';
+  | 'config'
+  | 'voice';
 
 /**
  * Normalized invocation that every subcommand `run` function receives.

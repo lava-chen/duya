@@ -1014,6 +1014,7 @@ export interface VoiceAPI {
     modelSizeMb: number
   }>
   getModelStatus: () => Promise<{ model: string; ready: boolean; sizeMb: number; path?: string }>
+  getModelList: () => Promise<Array<{ model: string; ready: boolean; sizeMb: number; path?: string }>>
   envDoctor: () => Promise<{
     platform: string
     binaryFound: boolean
@@ -1025,6 +1026,7 @@ export interface VoiceAPI {
   onFinal: (callback: (d: { sessionId?: string; text: string }) => void) => () => void
   onError: (callback: (d: { sessionId?: string; code: string; message: string }) => void) => () => void
   onCancelled: (callback: (d: { sessionId?: string; reason: string }) => void) => () => void
+  onAutoStop: (callback: (d: { sessionId?: string; reason: 'finalize' | 'no_speech' }) => void) => () => void
 }
 
 interface ImportAPI {
@@ -1887,6 +1889,7 @@ const electronAPI: ElectronAPI = {
     cancel: () => ipcRenderer.invoke('voice:cancel'),
     getConfig: () => ipcRenderer.invoke('voice:config'),
     getModelStatus: () => ipcRenderer.invoke('voice:model-status'),
+    getModelList: () => ipcRenderer.invoke('voice:model-list'),
     envDoctor: () => ipcRenderer.invoke('voice:env-doctor'),
     onInterim: (callback) => {
       const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; text: string }) => callback(d)
@@ -1907,6 +1910,11 @@ const electronAPI: ElectronAPI = {
       const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; reason: string }) => callback(d)
       ipcRenderer.on('voice:cancelled', handler)
       return () => ipcRenderer.removeListener('voice:cancelled', handler)
+    },
+    onAutoStop: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; reason: 'finalize' | 'no_speech' }) => callback(d)
+      ipcRenderer.on('voice:auto-stop', handler)
+      return () => ipcRenderer.removeListener('voice:auto-stop', handler)
     },
   },
 }
