@@ -205,6 +205,10 @@ const BACKOFF_DELAY_SECONDS = 30;
 const SESSION_EXPIRED_ERRCODE = -14;
 const UPLOAD_MAX_RETRIES = 3;
 
+// Hosts we are willing to fetch media from. Anything else is treated as a
+// potential SSRF vector and rejected before a request is made.
+const ALLOWED_CDN_HOSTS = new Set(['novac2c.cdn.weixin.qq.com', 'cdn.weixin.qq.com']);
+
 // MIME types mapping
 const EXTENSION_TO_MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -328,6 +332,21 @@ function buildCdnUploadUrl(params: {
   filekey: string;
 }): string {
   return `${params.cdnBaseUrl}/upload?encrypted_query_param=${encodeURIComponent(params.uploadParam)}&filekey=${encodeURIComponent(params.filekey)}`;
+}
+
+/**
+ * Reject a media URL whose host is not an allowlisted WeChat CDN host or the
+ * configured CDN base host. Guards against server-side request forgery when
+ * downloading media resolved from message content.
+ */
+function assertSafeMediaHost(url: string): void {
+  const { hostname } = new URL(url);
+  if (ALLOWED_CDN_HOSTS.has(hostname)) return;
+  if (_config.cdnBaseUrl) {
+    const cfgHost = new URL(_config.cdnBaseUrl).hostname;
+    if (hostname === cfgHost) return;
+  }
+  throw new Error(`Blocked unsafe media URL host: ${hostname}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -762,7 +781,7 @@ export const wxApi = {
     return response;
   },
 
-  async sendMessage(arg0: string | SendMessageRequest, arg1?: string): Promise<SendMessageResponse> {
+  async sendMessage(arg0: string | SendMessageRequest, arg1?: string, contextToken?: string): Promise<SendMessageResponse> {
     let request: SendMessageRequest;
     let to: string;
 
@@ -777,6 +796,7 @@ export const wxApi = {
           message_type: MessageType.BOT,
           message_state: MessageState.FINISH,
           item_list: [{ type: MessageItemType.TEXT, text_item: { text: arg1 } }],
+          ...(contextToken ? { context_token: contextToken } : {}),
         },
       };
     } else {
@@ -1133,6 +1153,7 @@ export const wxApi = {
     const { encryptedQueryParam, aesKeyB64, timeoutSeconds = 30 } = params;
     const downloadUrl = `${_config.cdnBaseUrl || DEFAULT_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptedQueryParam)}`;
     console.debug(`downloadAndDecryptMedia: downloading from ${downloadUrl}`);
+    assertSafeMediaHost(downloadUrl);
 
     const aesKey = parseAesKey(aesKeyB64);
 

@@ -1,6 +1,3 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as crypto from 'crypto';
 import type { Database } from 'better-sqlite3';
 import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 
@@ -14,32 +11,25 @@ import {
   type CurationInput,
   type InputDisposition,
 } from '../../packages/agent/src/memory-state/curation_ledger';
-import { createStaging, deleteStaging } from './curation_staging';
-import { runCurationAgent, type RunCurationAgentResult } from './curation_agent_runner';
-import { validateStaging } from '../../packages/agent/src/memory-state/curation_validator';
-import { preparePublication, executePublication, recoverPublication, type RecoveryAction } from './curation_publisher';
-import { createSnapshot } from './curation_snapshot';
-import { appendHealthReport, type HealthReport } from '../../packages/agent/src/memory-state/curation_health';
-import { scanAdHocChanges, type AdHocInput } from './ad_hoc_watcher';
-import { deriveRolloutSummaryFilename } from '../../packages/agent/src/memory-state/projectionContent';
+import { runCurationAgent } from './curation_agent_runner';
+import { backupMemoryBeforeRun } from './memory_git_backup';
 
 /**
- * End-to-end curation cycle orchestrator (design §8.4 + §9.1).
+ * End-to-end curation cycle orchestrator (simplified Phase 2 flow, 2026-08-09).
  *
- * Wires the full flow:
- *   queryEligibleInputs → claimRun → createStaging → runCurationAgent →
- *   validateStaging → createSnapshot → preparePublication →
- *   executePublication → completeRun → appendHealthReport → deleteStaging
+ * Wires the direct flow:
+ *   queryEligibleInputs → claimRun → git backup of the live memory root →
+ *   run curator agent directly against the live memory root → completeRun
  *
- * During Phase B shadow, the caller sets `shadowMode=true` which skips
- * the snapshot/publish/complete steps and discards staging after
- * validation — no live memory writes occur.
+ * No staging, snapshot, validation, or publication steps. The curator writes
+ * validated memory files in place; the git backup is the rollback point.
  */
 
 const MIN_INPUTS_FOR_RUN = 2;
 const MAX_INPUTS = 3;
 const MAX_INPUT_BYTES = 512 * 1024;
-const AGENT_TIMEOUT_MS = 1_200_000; // 20 minutes
+/** Default curator agent wall-clock budget (ms). 20 minutes. */
+const DEFAULT_CURATION_TIMEOUT_MS = 1_200_000;
 
 export interface ProviderConfig {
   apiKey: string;
@@ -51,15 +41,16 @@ export interface ProviderConfig {
 export interface RunCurationCycleOpts {
   memoryRoot: string;
   configRoot: string;
-  stagingRoot: string;
-  snapshotRoot: string;
   providerConfig: ProviderConfig;
-  systemLocation: string;
   workerId: string;
   pool: AgentProcessPool;
   sessionId: string;
+  /**
+   * Wall-clock budget (ms) for a single curator agent run. Used both for
+   * the run lease TTL and the agent hard deadline. Default 20 minutes.
+   */
+  curationTimeoutMs?: number;
   now?: number;
-  shadowMode?: boolean;
 }
 
 export interface CycleResult {
@@ -71,24 +62,10 @@ export interface CycleResult {
 }
 
 /**
- * A single input claimed for a curation run, normalized across rollout
- * and ad-hoc sources. `sourcePath` is the absolute path used to freeze
- * the input's evidence into the staging workspace.
- */
-interface ClaimedInput {
-  inputKind: 'rollout' | 'ad_hoc';
-  inputKey: string;
-  contentHash: string;
-  outputUpdatedAt: number;
-  sourcePath: string;
-}
-
-/**
  * Run a single curation cycle. Returns the result of the cycle.
  *
  * The cycle is single-flight: if no eligible inputs meet the minimum
- * threshold (and no timeout), it returns `{ skipped: true }` without
- * claiming a run.
+ * threshold, it returns `{ skipped: true }` without claiming a run.
  */
 export async function runCurationCycle(
   db: Database,
@@ -96,61 +73,32 @@ export async function runCurationCycle(
 ): Promise<CycleResult> {
   const startTime = Date.now();
   const now = opts.now ?? Date.now();
+  const curationTimeoutMs = opts.curationTimeoutMs ?? DEFAULT_CURATION_TIMEOUT_MS;
 
   // Recover orphaned runs (expired lease while still 'running') before
   // claiming, so their pinned inputs become claimable again.
   abandonExpiredRuns(db, now);
 
-  // 1. Query eligible inputs (rollout + ad-hoc), merged and truncated.
+  // 1. Query eligible rollout inputs, oldest-first, truncated to MAX_INPUTS.
   const rolloutEligible = queryEligibleInputs(db, {
     maxInputs: MAX_INPUTS,
     maxInputBytes: MAX_INPUT_BYTES,
     now,
   });
-  const adHocEligible: AdHocInput[] = await scanAdHocChanges(
-    db,
-    path.join(opts.memoryRoot, 'extensions', 'ad_hoc'),
-  );
-
-  const rolloutClaimed: ClaimedInput[] = rolloutEligible.map((e) => ({
+  const claimed = rolloutEligible.map((e) => ({
     inputKind: e.inputKind,
     inputKey: e.inputKey,
     contentHash: e.contentHash,
     outputUpdatedAt: e.outputUpdatedAt,
-    // The on-disk projection filename is derived (rollout_id + slug +
-    // generated_at), NOT `<rollout_id>.md` — match writer.ts exactly so the
-    // frozen evidence source exists.
-    sourcePath: path.join(
-      opts.memoryRoot,
-      'rollout_summaries',
-      deriveRolloutSummaryFilename({
-        rollout_id: e.inputKey,
-        rollout_slug: e.rolloutSlug,
-        generated_at: e.generatedAt,
-      }),
-    ),
   }));
-  const adHocClaimed: ClaimedInput[] = adHocEligible.map((e) => ({
-    inputKind: e.inputKind,
-    inputKey: e.inputKey,
-    contentHash: e.contentHash,
-    outputUpdatedAt: e.outputUpdatedAt,
-    sourcePath: e.sourcePath,
-  }));
-
-  // Merge both sources, oldest-first, then truncate to MAX_INPUTS.
-  const claimed = [...rolloutClaimed, ...adHocClaimed]
-    .sort((a, b) => a.outputUpdatedAt - b.outputUpdatedAt)
-    .slice(0, MAX_INPUTS);
 
   // 2. Skip if not enough inputs.
   if (claimed.length < MIN_INPUTS_FOR_RUN) {
     return { skipped: true, success: false };
   }
 
-  // 3. Claim the run.
+  // 3. Claim the run (single-flight).
   const inputSetHash = computeInputSetHash(claimed);
-  const baseManifestHash = computeLiveManifestHash(opts.memoryRoot);
   const inputs: CurationInput[] = claimed.map((e) => ({
     inputKind: e.inputKind,
     inputKey: e.inputKey,
@@ -162,9 +110,9 @@ export async function runCurationCycle(
   try {
     const claim = claimRun(db, {
       inputSetHash,
-      baseManifestHash,
+      baseManifestHash: 'empty',
       claimedBy: opts.workerId,
-      leaseTtlMs: AGENT_TIMEOUT_MS + 60_000,
+      leaseTtlMs: curationTimeoutMs + 60_000,
       inputs,
       now,
     });
@@ -178,268 +126,63 @@ export async function runCurationCycle(
     };
   }
 
-  let stagingDir: string | null = null;
+  // 4. Git-backup the live memory root so the run is rollback-safe.
+  const backedUp = await backupMemoryBeforeRun(opts.memoryRoot, runId);
+  if (!backedUp) {
+    // Non-fatal — the memory_write tool's format validation is the primary guard.
+    void backedUp;
+  }
 
+  // 5. Run the curator agent directly against the live memory root.
   try {
-    // 4. Create staging workspace.
-    const stagingResult = await createStaging(opts.stagingRoot, runId, {
+    await runCurationAgent({
+      pool: opts.pool,
+      // Unique session per run: the curator must be an independent agent
+      // instance (cronjob-style) with a fresh, empty message history. A
+      // stable session id across runs made the agent accumulate persisted
+      // tool_use/tool_result rounds, which (a) bloated context and drove
+      // MiniMax-M3 into endless-thinking 20-min timeouts, and (b) forced
+      // stale-message reconciliation that crashed the session with exit
+      // code 1. Keying the session off runId gives each cycle a clean slate.
+      sessionId: `${opts.sessionId}-${runId}`,
       memoryRoot: opts.memoryRoot,
-      configRoot: opts.configRoot,
-      inputs: claimed.map((e) => ({
-        inputKind: e.inputKind,
-        inputKey: e.inputKey,
-        contentHash: e.contentHash,
-        sourcePath: e.sourcePath,
-      })),
-    });
-    stagingDir = stagingResult.stagingDir;
-
-    // 5. Run the curation agent.
-    let agentResult: RunCurationAgentResult;
-    try {
-      agentResult = await runCurationAgent({
-        pool: opts.pool,
-        sessionId: opts.sessionId,
-        stagingDir,
-        runId,
-        inputs,
-        providerConfig: opts.providerConfig,
-        systemLocation: opts.systemLocation,
-        timeoutMs: AGENT_TIMEOUT_MS,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      failRun(db, runId, `agent failed: ${msg}`, Date.now());
-      return {
-        skipped: false,
-        success: false,
-        runId,
-        error: `agent failed: ${msg}`,
-        durationMs: Date.now() - startTime,
-      };
-    }
-
-    // 6. Validate staging (async — runs receipt + canonical + security checks).
-    const validation = await validateStaging(stagingDir, inputs);
-
-    if (!validation.valid) {
-      const errorMsg = validation.errors.join('; ');
-      failRun(db, runId, `validation failed: ${errorMsg}`, Date.now());
-      return {
-        skipped: false,
-        success: false,
-        runId,
-        error: `validation failed: ${errorMsg}`,
-        durationMs: Date.now() - startTime,
-      };
-    }
-
-    // 7. Shadow mode: stop here, discard staging.
-    if (opts.shadowMode) {
-      return {
-        skipped: false,
-        success: true,
-        runId,
-        durationMs: Date.now() - startTime,
-      };
-    }
-
-    // 8. Create pre-publish snapshot.
-    await createSnapshot({
-      liveMemoryRoot: opts.memoryRoot,
-      liveConfigRoot: opts.configRoot,
-      snapshotRoot: opts.snapshotRoot,
-    });
-
-    // 9. Prepare publication.
-    const journal = await preparePublication({
       runId,
-      stagingDir,
-      liveMemoryRoot: opts.memoryRoot,
-      liveConfigRoot: opts.configRoot,
-      oldManifestHash: baseManifestHash,
-      generation: extractCurrentGeneration(opts.memoryRoot) + 1,
+      // Pass the full eligible inputs (with rolloutSlug + generatedAt) so the
+      // prompt builder can derive the real on-disk summary filenames.
+      inputs: rolloutEligible,
+      providerConfig: opts.providerConfig,
+      timeoutMs: curationTimeoutMs,
     });
-
-    // 10. Execute publication.
-    await executePublication(journal, {
-      stagingDir,
-      liveMemoryRoot: opts.memoryRoot,
-      liveConfigRoot: opts.configRoot,
-    });
-
-    // 11. Complete the run in the ledger.
-    const dispositions: InputDisposition[] = agentResult.receipt?.inputs?.map((i) => ({
-      inputKind: i.input_kind === 'ad_hoc' ? 'ad_hoc' : 'rollout',
-      inputKey: i.input_key,
-      contentHash: i.content_hash,
-      disposition: i.disposition as InputDisposition['disposition'],
-      note: i.note,
-    })) ?? [];
-
-    completeRun(db, runId, {
-      dispositions,
-      publicationStatus: 'succeeded',
-      now: Date.now(),
-    });
-
-    // 12. Append health report.
-    const health: HealthReport = {
-      run_id: runId,
-      timestamp: new Date().toISOString(),
-      duration_ms: Date.now() - startTime,
-      inputs: inputs.length,
-      added: agentResult.receipt?.health?.added ?? 0,
-      merged: agentResult.receipt?.health?.merged ?? 0,
-      retired: agentResult.receipt?.health?.retired ?? 0,
-      no_change: agentResult.receipt?.health?.no_change ?? 0,
-      rejected: agentResult.receipt?.health?.rejected ?? 0,
-      duplicate_rate: inputs.length > 0
-        ? (agentResult.receipt?.health?.rejected ?? 0) / inputs.length
-        : 0,
-      memory_md_size: fs.existsSync(path.join(opts.memoryRoot, 'MEMORY.md'))
-        ? fs.statSync(path.join(opts.memoryRoot, 'MEMORY.md')).size
-        : 0,
-      summary_md_size: fs.existsSync(path.join(opts.memoryRoot, 'summary.md'))
-        ? fs.statSync(path.join(opts.memoryRoot, 'summary.md')).size
-        : 0,
-      entity_files: countEntityFiles(opts.memoryRoot),
-      policy_version: null,
-      layout_version: null,
-    };
-    appendHealthReport(opts.snapshotRoot, health);
-
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    failRun(db, runId, `agent failed: ${msg}`, Date.now());
     return {
       skipped: false,
-      success: true,
+      success: false,
       runId,
+      error: `agent failed: ${msg}`,
       durationMs: Date.now() - startTime,
     };
-  } finally {
-    // 13. Clean up staging.
-    if (stagingDir) {
-      await deleteStaging(stagingDir);
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// recoverAllPublications (design §8.5)
-// ---------------------------------------------------------------------------
-
-export interface RecoveryScanResult {
-  runId: string;
-  action: RecoveryAction;
-}
-
-export interface RecoverAllOpts {
-  stagingRoot: string;
-  liveMemoryRoot: string;
-}
-
-/**
- * Scan all staging directories for unfinished publication journals and
- * recover them. Called on memory-worker startup (design §8.5).
- *
- * For each `stagingRoot/<run_id>/publication.journal.json` found:
- *   1. Call `recoverPublication` to determine + perform the recovery action
- *   2. Record the result
- *
- * Returns a list of recovery results, one per journal found.
- */
-export async function recoverAllPublications(opts: RecoverAllOpts): Promise<RecoveryScanResult[]> {
-  if (!fs.existsSync(opts.stagingRoot)) return [];
-
-  const results: RecoveryScanResult[] = [];
-
-  const entries = fs.readdirSync(opts.stagingRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-
-    const stagingDir = path.join(opts.stagingRoot, entry.name);
-    const journalPath = path.join(stagingDir, 'publication.journal.json');
-
-    // A staging dir with no journal is a leftover skeleton from a failed
-    // createStaging (post-fix, createStaging self-cleans, but dirs created
-    // before the fix may linger). When it contains no files at all, remove
-    // it so empty dirs don't accumulate. A dir that HAS files but no journal
-    // is a mid-creation workspace — leave it for createStaging to handle.
-    if (!fs.existsSync(journalPath)) {
-      if (await dirHasNoFiles(stagingDir)) {
-        await fs.promises.rm(stagingDir, { recursive: true, force: true });
-      }
-      continue;
-    }
-
-    const recovery = await recoverPublication(journalPath, opts.liveMemoryRoot);
-
-    results.push({
-      runId: recovery.runId ?? entry.name,
-      action: recovery.action,
-    });
   }
 
-  return results;
-}
+  // 6. Success — mark all claimed inputs as consumed (absorbed) so they are
+  // not re-picked by queryEligibleInputs on a later run.
+  const dispositions: InputDisposition[] = inputs.map((i) => ({
+    inputKind: i.inputKind,
+    inputKey: i.inputKey,
+    contentHash: i.contentHash,
+    disposition: 'absorbed' as const,
+  }));
+  completeRun(db, runId, {
+    dispositions,
+    publicationStatus: 'succeeded',
+    now: Date.now(),
+  });
 
-/**
- * Recursively determine whether a directory tree contains zero files.
- * Empty directories (or directory trees containing only empty directories)
- * return true. Does not follow symlinks.
- */
-async function dirHasNoFiles(dir: string): Promise<boolean> {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isSymbolicLink()) continue;
-    if (entry.isDirectory()) {
-      if (!(await dirHasNoFiles(full))) return false;
-    } else {
-      return false;
-    }
-  }
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function computeLiveManifestHash(memoryRoot: string): string {
-  const manifestPath = path.join(memoryRoot, '.manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    const content = fs.readFileSync(manifestPath, 'utf8');
-    return crypto.createHash('sha256').update(content).digest('hex');
-  }
-  return 'empty';
-}
-
-function extractCurrentGeneration(memoryRoot: string): number {
-  const manifestPath = path.join(memoryRoot, '.manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      return manifest.generation ?? 0;
-    } catch {
-      return 0;
-    }
-  }
-  return 0;
-}
-
-function countEntityFiles(memoryRoot: string): number {
-  const entitiesDir = path.join(memoryRoot, 'entities');
-  if (!fs.existsSync(entitiesDir)) return 0;
-  let count = 0;
-  function walk(dir: string): void {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        walk(path.join(dir, entry.name));
-      } else if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'index.md') {
-        count++;
-      }
-    }
-  }
-  walk(entitiesDir);
-  return count;
+  return {
+    skipped: false,
+    success: true,
+    runId,
+    durationMs: Date.now() - startTime,
+  };
 }

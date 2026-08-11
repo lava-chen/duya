@@ -46,6 +46,7 @@ import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { RichTextInput } from './RichTextInput';
+import { VoiceButton } from './VoiceButton';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 
@@ -124,6 +125,15 @@ interface MessageInputProps {
   // Manual context compaction trigger
   onCompact?: () => void;
   isCompacting?: boolean;
+  /**
+   * Lazy new-chat draft mode. When set, the input has no backing session
+   * (`sessionId` stays undefined). It restores `initialDraft` on mount and
+   * reports every text/attachment change back via `onDraftChange` so the
+   * caller can persist an unsent draft that survives navigation/restarts.
+   */
+  draftMode?: boolean;
+  initialDraft?: { text: string; attachments: FileAttachment[] };
+  onDraftChange?: (text: string, attachments: FileAttachment[]) => void;
 }
 
 interface EffortOption {
@@ -258,6 +268,9 @@ export function MessageInput({
   agentPlanMode = false,
   onCompact,
   isCompacting,
+  draftMode = false,
+  initialDraft,
+  onDraftChange,
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
@@ -439,6 +452,32 @@ export function MessageInput({
     buildDisplayContent,
     hasUnparsedDocs,
   } = useAttachments();
+
+  // Lazy new-chat draft mode. Restore the saved draft once on mount, then
+  // report every change back so the caller can persist it across
+  // navigation/restarts. The restore is guarded by a ref so React StrictMode
+  // double-mounting (or session changes) never re-injects the draft.
+  const draftRestoredRef = useRef(false);
+  useEffect(() => {
+    if (!draftMode) return;
+    if (draftRestoredRef.current) return;
+    draftRestoredRef.current = true;
+    if (initialDraft) {
+      if (initialDraft.text) {
+        setInputValue(initialDraft.text);
+      }
+      if (initialDraft.attachments.length > 0) {
+        addAttachment(initialDraft.attachments);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftMode]);
+
+  useEffect(() => {
+    if (!draftMode || !onDraftChange) return;
+    onDraftChange(inputValue, attachments);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inputValue, attachments, draftMode]);
 
   // Plan 220 Phase 4: single listener for `duya:add-attachment` plus
   // legacy event name aliases (kept for one minor version per Plan 220
@@ -1140,6 +1179,17 @@ export function MessageInput({
           }
         }, 0);
         adjustTextareaHeight();
+        return;
+      }
+
+      // Strip rich-text formatting: always preventDefault and insert the
+      // plain-text clipboard payload so pasted content (e.g. colored text
+      // copied from a document or another app) never carries its HTML/span
+      // styling into the input. `insertText` preserves the caret position
+      // and emits an `input` event that RichTextInput forwards to onChange.
+      e.preventDefault();
+      if (textareaRef.current) {
+        document.execCommand('insertText', false, pastedText);
       }
     },
     [addPastedText, adjustTextareaHeight, addFile],
@@ -1637,6 +1687,10 @@ export function MessageInput({
                   <StopIcon size={16} />
                 </IconButton>
               )}
+              <VoiceButton
+                disabled={disabled || isStreaming}
+                onTranscription={(text, _kind) => setInputValue(text)}
+              />
               <IconButton
                 type="submit"
                 variant="primary"

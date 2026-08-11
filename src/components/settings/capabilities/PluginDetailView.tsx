@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect, useCallback } from "react";
-import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon, ArrowRightIcon, ExternalLinkIcon } from "@/components/icons";
+import { ArrowLeftIcon, CopyIcon, CheckIcon, WarningIcon, ChevronDownIcon, ChevronUpIcon, ArrowRightIcon, ExternalLinkIcon, SpinnerGapIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { cn } from "@/lib/utils";
@@ -509,7 +509,14 @@ export function PluginDetailView({
           {isInstalled ? (
             <>
               <Button variant="secondary" size="sm" disabled={busy} onClick={onRemove}>
-                Uninstall
+                {busy ? (
+                  <>
+                    <SpinnerGapIcon size={14} className="animate-spin" />
+                    Uninstalling…
+                  </>
+                ) : (
+                  "Uninstall"
+                )}
               </Button>
               <Button
                 variant="primary"
@@ -517,12 +524,25 @@ export function PluginDetailView({
                 disabled={busy}
                 onClick={installed!.enabled ? onDisable : onEnable}
               >
-                {installed!.enabled ? "Disable" : "Enable"}
+                {busy ? (
+                  <SpinnerGapIcon size={14} className="animate-spin" />
+                ) : installed!.enabled ? (
+                  "Disable"
+                ) : (
+                  "Enable"
+                )}
               </Button>
             </>
           ) : (
             <Button variant="primary" size="sm" disabled={busy} onClick={onInstall}>
-              Install
+              {busy ? (
+                <>
+                  <SpinnerGapIcon size={14} className="animate-spin" />
+                  Installing…
+                </>
+              ) : (
+                "Install"
+              )}
             </Button>
           )}
         </div>

@@ -13,7 +13,7 @@
  *     propagation
  *   - We only need to prevent "5 large PDFs in flight" from OOM'ing
  *
- * TextParser and ImageParser can be marked as "fast" and bypass the
+ * TextParser can be marked as "fast" and bypass the
  * pool entirely (no queuing overhead for trivial work).
  */
 

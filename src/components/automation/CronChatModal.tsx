@@ -89,6 +89,16 @@ export function CronChatModal({
     loadMessages();
   }, [sessionId, loadMessages]);
 
+  // Cron runs are executed by the scheduler in the main process, outside the
+  // renderer's stream manager, so no live phase/text events reach this modal.
+  // Poll the persisted messages while the run is active to keep the view live.
+  const isActiveRun = runStatus === "running" || runStatus === "pending";
+  useEffect(() => {
+    if (!isActiveRun) return;
+    const id = window.setInterval(() => void loadMessages(), 2000);
+    return () => window.clearInterval(id);
+  }, [isActiveRun, loadMessages]);
+
   // Subscribe to stream phase
   useEffect(() => {
     const unsubscribe = subscribeToPhase(sessionId, (newPhase) => {

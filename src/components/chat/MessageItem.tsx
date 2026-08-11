@@ -935,9 +935,9 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                   thumbnail={
                     attachment.displayUrl
                     || attachment.thumbnail
-                    || (isImageAttachment(attachment) ? attachment.url : undefined)
+                    || (isImageAttachment(attachment) ? (attachment.url || attachment.path) : undefined)
                   }
-                  url={attachment.url}
+                  url={attachment.url || attachment.path}
                   width={120}
                   onClick={() => handleOpenAttachmentPreview(attachment)}
                 />

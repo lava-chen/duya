@@ -1682,7 +1682,8 @@ class StreamSessionManager {
     this.clearIdleTimeout(sessionId);
     this.autoStartQueuedStream(sessionId);
     this.startPendingBackgroundResume(sessionId);
-    showMessageCompletionNotification(sessionId).catch(() => {
+    const threadTitle = useConversationStore.getState().threads.find((t) => t.id === sessionId)?.title;
+    showMessageCompletionNotification(sessionId, threadTitle, s.finalMessageContent ?? undefined).catch(() => {
       // Ignore notification errors
     });
   }
@@ -1955,6 +1956,21 @@ class StreamSessionManager {
     return () => {
       state.permissionListeners.delete(listener);
     };
+  }
+
+  /**
+   * Clear the stored pending permission request for a session. Called after
+   * the user resolves a permission (e.g. answers an AskUserQuestion) so a
+   * later re-subscription (page switch / remount) does NOT replay a stale
+   * request that the user already answered. Without this, the pending
+   * request lingers until the stream ends or a new stream starts, and the
+   * card reappears after navigating away and back.
+   */
+  clearPendingPermission(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.pendingPermissionRequest = null;
+    }
   }
 
   /**
@@ -3063,6 +3079,8 @@ export const subscribeSession = (sessionId: string, listener: (snapshot: Session
   streamSessionManager.subscribeSession(sessionId, listener);
 export const subscribeToPermissions = (sessionId: string, listener: (request: PermissionRequestEvent) => void) =>
   streamSessionManager.subscribeToPermissions(sessionId, listener);
+export const clearPendingPermission = (sessionId: string) =>
+  streamSessionManager.clearPendingPermission(sessionId);
 export const subscribeToModeChanged = (sessionId: string, listener: (event: ModeChangedEvent) => void) =>
   streamSessionManager.subscribeToModeChanged(sessionId, listener);
 export const subscribeToDbPersisted = (sessionId: string, listener: (event: PersistEvent) => void) =>

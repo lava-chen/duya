@@ -14,11 +14,6 @@ describe('ParserRegistry', () => {
     expect(getParser('.pptx')).not.toBeNull();
     expect(getParser('.xlsx')).not.toBeNull();
     expect(getParser('.pdf')).not.toBeNull();
-    expect(getParser('.png')).not.toBeNull();
-    expect(getParser('.jpg')).not.toBeNull();
-    expect(getParser('.jpeg')).not.toBeNull();
-    expect(getParser('.gif')).not.toBeNull();
-    expect(getParser('.webp')).not.toBeNull();
   });
 
   it('returns null for unsupported extensions', () => {
@@ -26,6 +21,13 @@ describe('ParserRegistry', () => {
     expect(getParser('.exe')).toBeNull();
     expect(getParser('.doc')).toBeNull(); // .doc not migrated (Phase 7)
     expect(getParser('')).toBeNull();
+    // Image files are not parsed by the file parser — ReadTool routes them
+    // to the dedicated vision_analyze tool.
+    expect(getParser('.png')).toBeNull();
+    expect(getParser('.jpg')).toBeNull();
+    expect(getParser('.jpeg')).toBeNull();
+    expect(getParser('.gif')).toBeNull();
+    expect(getParser('.webp')).toBeNull();
   });
 
   it('lowercases extensions', () => {

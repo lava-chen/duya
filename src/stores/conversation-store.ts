@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Message } from '@/types/message';
+import type { Message, FileAttachment } from '@/types/message';
 import {
   listThreadsIPC,
   getThreadIPC,
@@ -90,6 +90,26 @@ export interface ProviderEditTarget {
   providerId?: string;
 }
 
+/**
+ * Persisted draft for a not-yet-created new chat. The user can type text
+ * and attach files/images in the "new chat" composer without sending; the
+ * draft survives navigation and app restarts (stored via zustand persist).
+ * A real thread is only created when the user sends the message.
+ */
+export interface NewChatDraft {
+  text: string;
+  attachments: FileAttachment[];
+  /** Whether the draft has any content (text or attachments). */
+  hasContent: boolean;
+}
+
+/** Empty new-chat draft reused as the initial / cleared value. */
+export const EMPTY_NEW_CHAT_DRAFT: NewChatDraft = {
+  text: '',
+  attachments: [],
+  hasContent: false,
+};
+
 interface ConversationState {
   // View state for zero-router UI
   currentView: ViewType;
@@ -116,6 +136,14 @@ interface ConversationState {
    *  Empty string until loaded from the backend. Sessions whose
    *  workingDirectory equals this value are grouped under "无项目". */
   noProjectWorkspace: string;
+
+  // Plan: lazy new-chat draft. Clicking "new chat" only opens an empty
+  // composer (no real thread). Text + attachments are kept in a global
+  // draft that survives navigation and restarts (persisted below). A real
+  // thread is created and shown in the sidebar only when the user sends.
+  newChatDraft: NewChatDraft;
+  /** True while the "new chat" composer is open with no backing thread. */
+  isNewChatDrafting: boolean;
 
   // Actions
   setCurrentView: (view: ViewType) => void;
@@ -165,6 +193,18 @@ interface ConversationState {
   syncMessageToDatabase: (threadId: string, message: Message) => Promise<void>;
   syncThreadTitleToDatabase: (id: string, title: string) => Promise<void>;
   forceSync: () => Promise<void>; // Force immediate sync with database
+
+  // Lazy new-chat draft actions.
+  /** Open the blank "new chat" composer (no thread yet). Restores any
+   *  previously saved draft. */
+  startNewChat: () => void;
+  /** Persist the in-progress draft (text + attachments). */
+  updateNewChatDraft: (draft: NewChatDraft) => void;
+  /** Clear the saved draft after a successful send. */
+  clearNewChatDraft: () => void;
+  /** Leave the new-chat composer without clearing the draft (e.g. the user
+   *  navigated to an existing session). */
+  exitNewChatDraft: () => void;
 }
 
 // BroadcastChannel for cross-tab synchronization
@@ -257,9 +297,17 @@ export const useConversationStore = create<ConversationState>()(
       projectSortBy: 'lastActivity',
       projectGroupBy: 'byProject',
       noProjectWorkspace: '',
+      newChatDraft: EMPTY_NEW_CHAT_DRAFT,
+      isNewChatDrafting: false,
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
-      setCurrentView: (view) => set({ currentView: view }),
+      setCurrentView: (view) => {
+        // Navigating to another view (settings, skills, bridge, ...) while the
+        // lazy new-chat composer is open should leave draft mode so the target
+        // view actually renders. The unsent draft content is kept — it is
+        // restored when the user clicks "new chat" again.
+        set({ currentView: view, isNewChatDrafting: false });
+      },
       setSettingsTab: (tab) => {
         const legacy: Record<string, SettingsTab> = {
           plugins: 'extensions',
@@ -397,6 +445,9 @@ export const useConversationStore = create<ConversationState>()(
       setActiveThread: async (id) => {
         const startTime = performance.now();
         console.log(`[Store] setActiveThread START: ${id.slice(0, 8)}`);
+        // Leaving the new-chat composer to open an existing session: keep the
+        // draft (so the user can resume it later) but exit draft mode.
+        set({ isNewChatDrafting: false });
         let thread = get().threads.find(t => t.id === id);
         console.log('[Store] Found in local threads:', !!thread, 'parentId:', thread?.parentId);
 
@@ -455,33 +506,51 @@ export const useConversationStore = create<ConversationState>()(
         const startTime = performance.now();
         console.log(`[Store] loadThreadMessages START: ${threadId.slice(0, 8)}`);
         try {
-          // Check if session is currently streaming - if so skip DB load
-          // to avoid duplicates from SSE events
-          if (!options?.force) {
-            let isStreaming = false;
-            try {
-              const status = await getAgentServerClient().getSessionStatus(threadId);
-              if (status && status.state === 'STREAMING') {
-                console.log(`[Store] Skipping DB load for STREAMING session: ${threadId.slice(0, 8)}`);
-                isStreaming = true;
-              }
-            } catch {
-              // Ignore - Agent Server may not be running
+          // Detect whether the session is currently streaming. While streaming,
+          // the Agent worker persists the user's message only after the turn
+          // completes (appendMessages at stream end), so a forced DB reload
+          // would otherwise drop the optimistic in-flight user message.
+          let isStreaming = false;
+          try {
+            const status = await getAgentServerClient().getSessionStatus(threadId);
+            if (status && status.state === 'STREAMING') {
+              console.log(`[Store] Session is STREAMING: ${threadId.slice(0, 8)}`);
+              isStreaming = true;
             }
-            if (isStreaming) return;
+          } catch {
+            // Ignore - Agent Server may not be running
+          }
+
+          // For non-forced loads, skip the DB entirely for streaming sessions
+          // to avoid duplicates from SSE events.
+          if (isStreaming && !options?.force) {
+            console.log(`[Store] Skipping DB load for STREAMING session: ${threadId.slice(0, 8)}`);
+            return;
           }
 
           const dbStart = performance.now();
           const data = await getThreadIPC(threadId);
           console.log(`[Store] getThreadIPC DONE: ${threadId.slice(0, 8)}, messages=${data?.messages?.length ?? 0}, elapsed=${(performance.now() - dbStart).toFixed(1)}ms`);
           if (data) {
-            const messages = mapIpcMessagesToStore(data.messages || []);
+            let messages = mapIpcMessagesToStore(data.messages || []);
             const currentMessages = get().messages[threadId] ?? [];
             if (messages.length === 0 && currentMessages.length > 0) {
               console.warn(
                 `[Store] loadThreadMessages preserved local messages because DB returned empty: ${threadId.slice(0, 8)}, local=${currentMessages.length}`,
               );
               return;
+            }
+            // Forced reload of a streaming session (e.g. switching back while
+            // the agent is still working): merge back any local in-flight
+            // messages (the optimistic user message) not yet in the DB so a
+            // session switch doesn't wipe them from the UI.
+            if (isStreaming && currentMessages.length > 0) {
+              const dbIds = new Set(messages.map((m) => m.id));
+              const inFlight = currentMessages.filter((m) => !dbIds.has(m.id));
+              if (inFlight.length > 0) {
+                messages = [...messages, ...inFlight];
+                console.log(`[Store] Merged ${inFlight.length} in-flight message(s) for STREAMING session: ${threadId.slice(0, 8)}`);
+              }
             }
             const threadData = data.thread;
             const mapEnd = performance.now();
@@ -737,6 +806,8 @@ export const useConversationStore = create<ConversationState>()(
           for (const project of state.projects) {
             newCollapsed.add(project.workingDirectory);
           }
+          // Cron sidebar group shares the collapse state under a reserved key.
+          newCollapsed.add('__cron__');
           return { collapsedProjects: newCollapsed };
         });
       },
@@ -747,6 +818,7 @@ export const useConversationStore = create<ConversationState>()(
           for (const project of state.projects) {
             newCollapsed.delete(project.workingDirectory);
           }
+          newCollapsed.delete('__cron__');
           return { collapsedProjects: newCollapsed };
         });
       },
@@ -857,6 +929,27 @@ export const useConversationStore = create<ConversationState>()(
         await get().loadFromDatabase();
       },
 
+      startNewChat: () => {
+        set({
+          isNewChatDrafting: true,
+          activeThreadId: null,
+          currentView: 'chat',
+          parentSessionId: null,
+        });
+      },
+
+      updateNewChatDraft: (draft) => {
+        set({ newChatDraft: draft });
+      },
+
+      clearNewChatDraft: () => {
+        set({ newChatDraft: EMPTY_NEW_CHAT_DRAFT });
+      },
+
+      exitNewChatDraft: () => {
+        set({ isNewChatDrafting: false });
+      },
+
       syncThreadToDatabase: async (thread) => {
         try {
           await createThreadIPC({
@@ -929,6 +1022,10 @@ export const useConversationStore = create<ConversationState>()(
         projectSortBy: state.projectSortBy,
         projectGroupBy: state.projectGroupBy,
         lastSyncAt: state.lastSyncAt,
+        // Persist the new-chat draft so unsent text + attachments survive
+        // navigation and app restarts. `isNewChatDrafting` is intentionally
+        // NOT persisted — it's a session-scoped UI flag.
+        newChatDraft: state.newChatDraft,
       }),
       onRehydrateStorage: () => (state) => {
         // Mark hydration complete and restore collapsedProjects Set
@@ -944,6 +1041,17 @@ export const useConversationStore = create<ConversationState>()(
           // Ensure lastSyncAt is initialized
           if (!s.lastSyncAt) {
             s.lastSyncAt = 0;
+          }
+          // Normalize a persisted draft (older saves may lack `hasContent` or
+          // `attachments`). Derive `hasContent` so the composer can detect a
+          // non-empty draft reliably.
+          if (!s.newChatDraft || typeof s.newChatDraft !== 'object') {
+            s.newChatDraft = EMPTY_NEW_CHAT_DRAFT;
+          } else {
+            const d = s.newChatDraft;
+            d.text = typeof d.text === 'string' ? d.text : '';
+            d.attachments = Array.isArray(d.attachments) ? d.attachments : [];
+            d.hasContent = d.text.trim().length > 0 || d.attachments.length > 0;
           }
           // Migrate old sort/group state to the new model
           const legacySort = s.projectSortBy as unknown as string;

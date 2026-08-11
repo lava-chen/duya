@@ -994,6 +994,37 @@ export interface ElectronAPI {
     onAgentServerEvent?: (callback: (event: unknown) => void) => () => void;
   }
   import: ImportAPI
+  voice: VoiceAPI
+}
+
+export interface VoiceAPI {
+  start: (opts?: { sessionId?: string }) => Promise<{ ok: boolean; error?: string; message?: string }>
+  transcribeChunk: (chunk: Int16Array) => Promise<{ ok: boolean; error?: string }>
+  stop: () => Promise<{ ok: boolean }>
+  cancel: () => Promise<{ ok: boolean }>
+  getConfig: () => Promise<{
+    enabled: boolean
+    engine: 'local' | 'cloud'
+    endSilenceMs: number
+    noSpeechTimeoutMs: number
+    chunkMs: number
+    language: string
+    model: string
+    modelReady: boolean
+    modelSizeMb: number
+  }>
+  getModelStatus: () => Promise<{ model: string; ready: boolean; sizeMb: number; path?: string }>
+  envDoctor: () => Promise<{
+    platform: string
+    binaryFound: boolean
+    binaryPath?: string
+    installSteps: string[]
+    summary: string
+  }>
+  onInterim: (callback: (d: { sessionId?: string; text: string }) => void) => () => void
+  onFinal: (callback: (d: { sessionId?: string; text: string }) => void) => () => void
+  onError: (callback: (d: { sessionId?: string; code: string; message: string }) => void) => () => void
+  onCancelled: (callback: (d: { sessionId?: string; reason: string }) => void) => () => void
 }
 
 interface ImportAPI {
@@ -1848,6 +1879,35 @@ const electronAPI: ElectronAPI = {
   },
   capabilityManagement: {
     snapshot: () => ipcRenderer.invoke('capability-management:snapshot'),
+  },
+  voice: {
+    start: (opts) => ipcRenderer.invoke('voice:start', opts),
+    transcribeChunk: (chunk) => ipcRenderer.invoke('voice:transcribe-chunk', chunk),
+    stop: () => ipcRenderer.invoke('voice:stop'),
+    cancel: () => ipcRenderer.invoke('voice:cancel'),
+    getConfig: () => ipcRenderer.invoke('voice:config'),
+    getModelStatus: () => ipcRenderer.invoke('voice:model-status'),
+    envDoctor: () => ipcRenderer.invoke('voice:env-doctor'),
+    onInterim: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; text: string }) => callback(d)
+      ipcRenderer.on('voice:interim', handler)
+      return () => ipcRenderer.removeListener('voice:interim', handler)
+    },
+    onFinal: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; text: string }) => callback(d)
+      ipcRenderer.on('voice:final', handler)
+      return () => ipcRenderer.removeListener('voice:final', handler)
+    },
+    onError: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; code: string; message: string }) => callback(d)
+      ipcRenderer.on('voice:error', handler)
+      return () => ipcRenderer.removeListener('voice:error', handler)
+    },
+    onCancelled: (callback) => {
+      const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; reason: string }) => callback(d)
+      ipcRenderer.on('voice:cancelled', handler)
+      return () => ipcRenderer.removeListener('voice:cancelled', handler)
+    },
   },
 }
 

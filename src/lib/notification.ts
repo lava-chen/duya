@@ -115,19 +115,34 @@ export async function showNotification(options: ShowNotificationOptions): Promis
 }
 
 /**
- * Show a message completion notification. Provides a "Reply" action so
- * the user can answer from the system tray without refocusing the
- * window (the typed text is delivered via `onNotificationAction` with
- * `actionId === '__reply'`).
+ * Truncate a string to `max` characters, appending an ellipsis when cut.
+ * Used for notification bodies so the OS tray shows a digest, not the
+ * full reply.
+ */
+function truncate(text: string | undefined, max: number): string {
+  if (!text) return '';
+  const trimmed = text.trim();
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max)}…`;
+}
+
+/**
+ * Show a message completion notification. The title carries the session
+ * title (falling back to 'DUYA') and the body shows a truncated digest of
+ * the assistant reply. Provides a "Reply" action so the user can answer
+ * from the system tray without refocusing the window (the typed text is
+ * delivered via `onNotificationAction` with `actionId === '__reply'`).
  */
 export async function showMessageCompletionNotification(
   sessionId?: string,
   sessionTitle?: string,
+  replyBody?: string,
 ): Promise<boolean> {
   const title = sessionTitle || 'DUYA';
+  const body = truncate(replyBody, 160) || 'Message completed';
   return showNotification({
     title,
-    body: 'Message completed',
+    body,
     sessionId,
     type: 'message',
     actions: [{ id: 'open', label: 'Open' }, { id: 'reply', label: 'Reply' }],
@@ -160,6 +175,28 @@ export async function showPermissionNotification(args: {
       { id: 'allow', label: 'Allow' },
       { id: 'deny', label: 'Deny' },
     ],
+  });
+}
+
+/**
+ * Show an AskUserQuestion notification. Distinct from a permission
+ * request: the body carries the question text and there are NO Allow/Deny
+ * actions — clicking the notification focuses the window so the user can
+ * answer in-app. The in-app AskUserQuestionUI panel is the authoritative
+ * UI; this notification is only a heads-up when the window is hidden.
+ */
+export async function showAskUserQuestionNotification(args: {
+  sessionId: string;
+  permissionId: string;
+  question: string;
+  title?: string;
+}): Promise<boolean> {
+  return showNotification({
+    title: args.title ?? 'Ask you a question',
+    body: truncate(args.question, 160) || 'A question is waiting',
+    sessionId: args.sessionId,
+    type: 'message',
+    permissionId: args.permissionId,
   });
 }
 

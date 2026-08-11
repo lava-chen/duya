@@ -177,6 +177,14 @@ export function stripMarkdown(text: string): string {
 
   return (
     text
+      // Drop think-tag blocks and any orphan tags some providers emit
+      // (MiniMax leaks </mm:think> into the text stream; Qwen/Doubao use <think>).
+      .replace(/<think>[\s\S]*?(<\/think>|<\/think\s*>|$)/gi, '')
+      .replace(/<thought>[\s\S]*?(<\/thought>|$)/gi, '')
+      .replace(/<reasoning>[\s\S]*?(<\/reasoning>|$)/gi, '')
+      .replace(/<reflection>[\s\S]*?(<\/reflection>|$)/gi, '')
+      .replace(/<ant_thinking>[\s\S]*?(<\/ant_thinking>|$)/gi, '')
+      .replace(/<\/?(mm:think|antml:think|minimax:think|think|thought|reasoning|reflection|ant_thinking)\s*\/?>/gi, '')
       .replace(/```[\s\S]*?```/g, (match) => {
         const lines = match.split('\n');
         if (lines.length <= 2) return '';

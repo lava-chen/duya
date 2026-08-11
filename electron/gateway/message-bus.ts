@@ -46,49 +46,90 @@ function getCachedProviderConfig(): Record<string, unknown> | undefined {
     return undefined;
   }
 
+  const providerStore = getProviderStore();
+
+  // Fallback to the legacy ConfigManager read when ConfigStore has no
+  // active provider (Phase 3 pre-migration transition period).
+  const fallbackGetSetting = (key: string): string | undefined => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
+    if (row) {
+      try { return JSON.parse(row.value); } catch { return row.value; }
+    }
+    return undefined;
+  };
+
   try {
-    // New path: read the active provider from ProviderStore (backed by
-    // ConfigStore). ConfigStore merges secrets back into its snapshot, so
-    // the returned LlmProvider already carries apiKey.
     const configStore = getConfigStore();
-    const gatewayModelSetting = configStore.getByPath('channels.gateway_model') as string | undefined;
-    const provider = getProviderStore().getActiveLlmProvider();
 
-    // Fallback to the legacy ConfigManager read when ConfigStore has no
-    // active provider (Phase 3 pre-migration transition period).
-    const fallbackGetSetting = (key: string): string | undefined => {
-      const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | undefined;
-      if (row) {
-        try { return JSON.parse(row.value); } catch { return row.value; }
+    // Resolve the gateway model setting. It may live in several places and
+    // can be either a bare model id ("MiniMax-M3") or a provider-qualified
+    // one ("minimax-cn:MiniMax-M3"). Collect every source and prefer the
+    // first non-empty value.
+    let gatewayModelSetting = configStore.getByPath('channels.gateway_model') as string | undefined;
+    if (!gatewayModelSetting) gatewayModelSetting = fallbackGetSetting('gatewayModel');
+    if (!gatewayModelSetting) {
+      // ModelSelectionSection persists the qualified form under the
+      // `modelSelection` JSON key.
+      const modelSelection = fallbackGetSetting('modelSelection');
+      if (modelSelection) {
+        try {
+          const parsed = JSON.parse(modelSelection) as { gatewayModel?: unknown };
+          if (typeof parsed.gatewayModel === 'string' && parsed.gatewayModel) {
+            gatewayModelSetting = parsed.gatewayModel;
+          }
+        } catch { /* malformed JSON, ignore */ }
       }
-      return undefined;
-    };
-
-    let apiKey: string | undefined;
-    let baseURL: string | undefined;
-    let modelFromProvider = '';
-    let providerType: string | undefined;
-
-    if (provider) {
-      apiKey = provider.auth?.apiKey;
-      baseURL = provider.endpoints?.baseUrl;
-      modelFromProvider = (provider.options?.defaultModel as string | undefined) || (provider.options?.model as string | undefined) || '';
-      providerType = toLegacyApiProvider(provider).providerType;
     }
 
-    const resolvedModel = gatewayModelSetting || fallbackGetSetting('gatewayModel') || modelFromProvider;
+    // Split an optional "providerId:modelId" prefix from the bare model id.
+    let explicitProviderId: string | undefined;
+    let gatewayModel: string | undefined;
+    if (gatewayModelSetting) {
+      const sep = gatewayModelSetting.indexOf(':');
+      if (sep > 0) {
+        explicitProviderId = gatewayModelSetting.slice(0, sep);
+        gatewayModel = gatewayModelSetting.slice(sep + 1);
+      } else {
+        gatewayModel = gatewayModelSetting;
+      }
+    }
 
-    if (providerType) {
-      _cachedProviderConfig = {
-        apiKey,
-        baseURL: baseURL || undefined,
-        model: resolvedModel,
-        provider: providerType,
-        authStyle: 'api_key',
-      };
-    } else {
+    // Resolve the provider: explicit provider id from the qualified model
+    // setting > active/default provider > first configured provider. Falling
+    // back to the first configured provider keeps the gateway usable even
+    // when the user never set a soft default (`model.provider` is empty).
+    let provider = explicitProviderId
+      ? providerStore.getLlmProvider(explicitProviderId)
+      : providerStore.getActiveLlmProvider();
+    if (!provider) {
+      provider = providerStore.listLlmProviders()[0];
+    }
+
+    if (!provider) {
       _cachedProviderConfig = null;
+      _cachedProviderConfigAt = now;
+      return undefined;
     }
+
+    const apiKey = provider.auth?.apiKey;
+    const baseURL = provider.endpoints?.baseUrl;
+    const modelFromProvider = (provider.options?.defaultModel as string | undefined) || (provider.options?.model as string | undefined) || '';
+    const resolvedModel = gatewayModel || modelFromProvider;
+    const providerType = toLegacyApiProvider(provider).providerType;
+
+    if (!providerType || !resolvedModel) {
+      _cachedProviderConfig = null;
+      _cachedProviderConfigAt = now;
+      return undefined;
+    }
+
+    _cachedProviderConfig = {
+      apiKey,
+      baseURL: baseURL || undefined,
+      model: resolvedModel,
+      provider: providerType,
+      authStyle: 'api_key',
+    };
   } catch (err) {
     console.error('[Gateway] Failed to get provider config for cache:', err);
     _cachedProviderConfig = null;
@@ -1183,6 +1224,18 @@ export function registerGatewayIpcHandlers(): void {
 
   ipcMain.handle('gateway:reload', async () => {
     try {
+      // The renderer (BridgeSection.updateSetting) saves a gateway config key via
+      // db:setting:set (which schedules a 500ms config-changed reload) and then
+      // immediately invokes gateway:reload. Without cancelling the pending timer
+      // here, two reloads race: the second SIGTERMs the process the first just
+      // started, leaving the gateway disconnected until a manual restart. The
+      // explicit reload below already reads the latest config, so cancelling the
+      // debounced one is safe.
+      if (reloadDebounceTimer) {
+        clearTimeout(reloadDebounceTimer);
+        reloadDebounceTimer = null;
+      }
+
       const states = getSessionStates();
       states.clear();
       const config = getOrBuildInitConfig();

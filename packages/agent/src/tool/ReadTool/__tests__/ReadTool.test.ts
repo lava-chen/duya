@@ -145,17 +145,13 @@ describe('ReadTool text mode (legacy)', () => {
 });
 
 describe('ReadTool document mode (NodeFileParser)', () => {
-  it('reads a PNG and reports vision metadata', async () => {
+  it('rejects image files and points at the vision_analyze tool', async () => {
     const f = join(tmpDir, 'img.png');
     await makePng(f, 200, 100);
     const result = await tool.execute({ file_path: f });
-    expect(result.error).toBeFalsy();
-    expect(result.result).toContain('Method: vision');
-    expect(result.result).toContain('image');
-    expect(result.metadata).toBeDefined();
-    expect((result.metadata as Record<string, unknown>).extractMethod).toBe('vision');
-    expect((result.metadata as Record<string, unknown>).imageCount).toBe(1);
-    expect((result.metadata as Record<string, unknown>).thumbnail).toBeDefined();
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('image file');
+    expect(result.result).toContain('`vision_analyze`');
   });
 
   it('rejects unsupported binary formats', async () => {

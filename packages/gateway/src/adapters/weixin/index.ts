@@ -30,9 +30,11 @@ import type { WeChatMessage, WeChatConfigOptions } from './types.js';
 import { parseMessageContent, isFromGroup } from './message-utils.js';
 import { wxApi, getMimeFromFilename, MessageItemType } from './api.js';
 import type { IpcClient } from '../../ipc-client.js';
+import { WeixinStateStore, acquireTokenLock, releaseTokenLock } from './state-store.js';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -53,6 +55,15 @@ const DEFAULT_CHUNK_RETRY_DELAY_SECONDS = 1.0;
 
 const TYPING_START = 1;
 const TYPING_STOP = 2;
+
+// iLink error codes
+const SESSION_EXPIRED_ERRCODE = -14;
+const RATE_LIMIT_ERRCODE = -2;
+
+// Rate-limit circuit breaker
+const RATE_LIMIT_CIRCUIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_CIRCUIT_THRESHOLD = 3;
+const RATE_LIMIT_CIRCUIT_OPEN_MS = 30_000;
 
 /**
  * Strip path separators and other unsafe chars from a filename so it can be
@@ -87,9 +98,27 @@ export class WeixinAdapter extends BaseAdapter {
   private dmPolicy: 'open' | 'allowlist' | 'disabled' | 'pairing' = 'open';
   private allowFrom: Set<string> = new Set();
 
+  // Group policy
+  private groupPolicy: 'disabled' | 'allowlist' | 'pairing' = 'disabled';
+  private groupAllowFrom: Set<string> = new Set();
+
   // Deduplication (timestamp-based for WeChat)
   private recentMsgIds = new Set<string>();
   private dedupCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Content-fingerprint dedup (supplements message_id dedup)
+  private recentContentFingerprints = new Set<string>();
+
+  // Context token per peer (mirrors the persisted store)
+  private contextTokens = new Map<string, string>();
+
+  // Persisted state (context_token + sync_buf)
+  private stateStore: WeixinStateStore | null = null;
+  private tokenLockHeld = false;
+
+  // Rate-limit circuit breaker
+  private rateLimitEvents: number[] = [];
+  private rateLimitCircuitUntil = 0;
 
   // Typing indicator
   private typingActive = new Map<string, boolean>();
@@ -131,6 +160,19 @@ export class WeixinAdapter extends BaseAdapter {
       return;
     }
 
+    // Token exclusive lock: refuse to poll a token another instance is using.
+    this.tokenLockHeld = acquireTokenLock(this.token);
+    if (!this.tokenLockHeld) {
+      console.warn('[Weixin] Another instance already holds a lock for this token; continuing without lock');
+    }
+
+    // Restore persisted state (context_token + sync_buf) for continuity.
+    this.stateStore = new WeixinStateStore(this.accountId || 'default');
+    for (const peer of this.contextTokens.keys()) {
+      this.contextTokens.delete(peer);
+    }
+    this.pollSyncBuf = this.stateStore.getSyncBuf();
+
     this.baseUrl = (config.credentials.baseUrl ?? config.credentials.base_url ?? ILINK_BASE_URL) as string;
     console.log('[STARTUP] WeixinAdapter: token=%s, accountId=%s, baseUrl=%s', this.token ? this.token.substring(0, 8) + '...' : 'MISSING', this.accountId || 'MISSING', this.baseUrl);
     this.sendChunkDelaySeconds =
@@ -157,6 +199,18 @@ export class WeixinAdapter extends BaseAdapter {
     const allowFromRaw = weixinOptions?.allow_from as string[] | undefined;
     if (allowFromRaw) {
       this.allowFrom = new Set(allowFromRaw);
+    }
+
+    // Group policy configuration
+    const groupPolicyRaw = (weixinOptions?.group_policy as string) ??
+      (config.credentials.group_policy as string) ?? 'disabled';
+    this.groupPolicy = ['disabled', 'allowlist', 'pairing'].includes(groupPolicyRaw)
+      ? (groupPolicyRaw as 'disabled' | 'allowlist' | 'pairing')
+      : 'disabled';
+
+    const groupAllowFromRaw = weixinOptions?.group_allow_from as string[] | undefined;
+    if (groupAllowFromRaw) {
+      this.groupAllowFrom = new Set(groupAllowFromRaw);
     }
 
     this.running = true;
@@ -194,6 +248,7 @@ export class WeixinAdapter extends BaseAdapter {
     }
 
     this.recentMsgIds.clear();
+    this.recentContentFingerprints.clear();
     this.typingActive.clear();
 
     for (const interval of this.typingKeepalives.values()) {
@@ -201,6 +256,19 @@ export class WeixinAdapter extends BaseAdapter {
     }
     this.typingKeepalives.clear();
     this.typingTickets.clear();
+
+    if (this.stateStore) {
+      // Persist any in-memory context_token that was captured this run.
+      for (const [peer, token] of this.contextTokens) {
+        this.stateStore.setContextToken(peer, token);
+      }
+      this.stateStore.flush();
+      this.stateStore = null;
+    }
+    if (this.tokenLockHeld) {
+      releaseTokenLock(this.token);
+      this.tokenLockHeld = false;
+    }
 
     console.log('[Weixin] Stopped');
   }
@@ -345,20 +413,55 @@ export class WeixinAdapter extends BaseAdapter {
   }
 
   private async sendChunk(chatId: string, text: string): Promise<SendResult> {
+    // Circuit breaker: if a rate-limit circuit is currently open, block the
+    // send immediately instead of hammering the API.
+    if (Date.now() < this.rateLimitCircuitUntil) {
+      return { ok: false, error: 'iLink rate limited; circuit open' };
+    }
+
     let lastError: Error | undefined;
+    let contextToken = this.getContextToken(chatId);
+    let retriedWithoutToken = false;
 
     for (let attempt = 0; attempt <= this.sendChunkRetries; attempt++) {
       try {
-        const resp = await wxApi.sendMessage(chatId, text);
+        const resp = await wxApi.sendMessage(chatId, text, contextToken);
+
         if (resp.errcode && resp.errcode !== 0) {
-          throw new Error(
-            `Weixin API error: errcode=${resp.errcode} errmsg=${resp.errmsg ?? 'unknown'}`,
-          );
+          const errcode = resp.errcode;
+          const errmsg = resp.errmsg ?? '';
+
+          // Session expired: retry once without context_token (degraded fallback).
+          if (errcode === SESSION_EXPIRED_ERRCODE && !retriedWithoutToken && contextToken) {
+            retriedWithoutToken = true;
+            contextToken = undefined;
+            this.clearContextToken(chatId);
+            console.warn(`[Weixin] Session expired for ${chatId}; retrying without context_token`);
+            continue;
+          }
+
+          // Rate limited: back off, and open a circuit breaker after repeated hits.
+          if (errcode === RATE_LIMIT_ERRCODE) {
+            if (this.recordRateLimitEvent()) {
+              lastError = new Error('iLink rate limited; cooldown active');
+              break;
+            }
+            if (attempt >= this.sendChunkRetries) break;
+            const wait = this.sendChunkRetryDelaySeconds * 3 * 1000;
+            console.warn(`[Weixin] Rate limited for ${chatId}; backing off ${wait}ms`);
+            await this.delay(wait);
+            continue;
+          }
+
+          throw new Error(`Weixin API error: errcode=${errcode} errmsg=${errmsg}`);
         }
+
+        this.resetRateLimitCircuit();
         this.incrementMessageCount();
         return { ok: true, platformMsgId: resp.msg_id };
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
+        if (lastError.message.includes('rate limited')) break;
         if (attempt >= this.sendChunkRetries) break;
 
         const wait = this.sendChunkRetryDelaySeconds * (attempt + 1) * 1000;
@@ -427,6 +530,7 @@ export class WeixinAdapter extends BaseAdapter {
         const newSyncBuf = response.get_updates_buf;
         if (newSyncBuf) {
           this.pollSyncBuf = newSyncBuf;
+          this.stateStore?.setSyncBuf(newSyncBuf);
         }
 
         this.consecutiveFailures = 0;
@@ -478,6 +582,24 @@ export class WeixinAdapter extends BaseAdapter {
     const isGroup = isFromGroup(msg.to_user_id ?? msg.ToUserName ?? '');
     const chatId = isGroup ? (msg.to_user_id ?? msg.ToUserName ?? senderId) : senderId;
 
+    // Capture context_token from the inbound message for outbound session
+    // continuity. Persist it so it survives a process restart.
+    const inboundContextToken = msg.context_token;
+    if (inboundContextToken) {
+      this.contextTokens.set(chatId, inboundContextToken);
+      this.stateStore?.setContextToken(chatId, inboundContextToken);
+    }
+
+    // Group policy check. Do this before downloading media so disallowed
+    // groups never trigger CDN fetches.
+    if (isGroup) {
+      const groupAllowed = await this.isGroupAllowedAsync(chatId);
+      if (!groupAllowed) {
+        console.log('[Weixin] Group blocked by policy:', chatId, 'policy:', this.groupPolicy);
+        return;
+      }
+    }
+
     // Download all media (images/voice/files/videos) from item_list
     const { imagePaths, voicePaths, filePaths, videoPaths } =
       await this.downloadMediaFromMessage(msg, senderId);
@@ -506,6 +628,23 @@ export class WeixinAdapter extends BaseAdapter {
       videoPaths.length === 0
     ) {
       return;
+    }
+
+    // Content-fingerprint dedup (supplements message_id dedup, which is
+    // unreliable when the platform returns unstable or missing ids).
+    const fingerprint = this.computeContentFingerprint(
+      text,
+      imagePaths,
+      voicePaths,
+      filePaths,
+      videoPaths,
+    );
+    if (fingerprint && this.isContentDup(fingerprint)) {
+      console.log('[Weixin] Duplicate content skipped:', fingerprint);
+      return;
+    }
+    if (fingerprint) {
+      this.markContentDup(fingerprint);
     }
 
     // DM policy check (async for pairing)
@@ -725,6 +864,47 @@ export class WeixinAdapter extends BaseAdapter {
   }
 
   // ---------------------------------------------------------------------------
+  // Context token helpers (per peer, backed by persisted state store)
+  // ---------------------------------------------------------------------------
+
+  private getContextToken(peerId: string): string | undefined {
+    if (this.contextTokens.has(peerId)) {
+      return this.contextTokens.get(peerId);
+    }
+    return this.stateStore?.getContextToken(peerId);
+  }
+
+  private clearContextToken(peerId: string): void {
+    this.contextTokens.delete(peerId);
+    this.stateStore?.clearContextToken(peerId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rate-limit circuit breaker
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record a rate-limit occurrence. Returns true when the circuit should open
+   * because the threshold was reached within the sliding window.
+   */
+  private recordRateLimitEvent(): boolean {
+    const now = Date.now();
+    this.rateLimitEvents = this.rateLimitEvents.filter((t) => now - t < RATE_LIMIT_CIRCUIT_WINDOW_MS);
+    this.rateLimitEvents.push(now);
+    if (this.rateLimitEvents.length >= RATE_LIMIT_CIRCUIT_THRESHOLD) {
+      this.rateLimitCircuitUntil = now + RATE_LIMIT_CIRCUIT_OPEN_MS;
+      this.rateLimitEvents = [];
+      return true;
+    }
+    return false;
+  }
+
+  private resetRateLimitCircuit(): void {
+    this.rateLimitCircuitUntil = 0;
+    this.rateLimitEvents = [];
+  }
+
+  // ---------------------------------------------------------------------------
   // DM Policy
   // ---------------------------------------------------------------------------
 
@@ -769,6 +949,100 @@ export class WeixinAdapter extends BaseAdapter {
     }
     // 'open' policy
     return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Group Policy
+  // ---------------------------------------------------------------------------
+
+  private async isGroupAllowedAsync(groupId: string): Promise<boolean> {
+    if (this.groupPolicy === 'disabled') {
+      return false;
+    }
+    if (this.groupPolicy === 'allowlist') {
+      return this.groupAllowFrom.has(groupId);
+    }
+    if (this.groupPolicy === 'pairing') {
+      const ipc = this.getIpcClient?.();
+      if (ipc) {
+        try {
+          const result = await ipc.checkPairing('weixin', groupId) as { approved?: boolean };
+          if (result?.approved) {
+            return true;
+          }
+          const genResult = await ipc.generatePairingCode(
+            'weixin',
+            groupId,
+            groupId,
+            ''
+          ) as { code?: string; error?: string };
+          if (genResult?.code) {
+            const msg = `📱 请将此配对码发送给管理员进行审批：\n\n**${genResult.code}**\n\n配对码有效期1小时。`;
+            this.sendText(groupId, msg).catch((err) => {
+              console.error('[Weixin] Failed to send group pairing code:', err);
+            });
+          }
+          return false;
+        } catch (err) {
+          console.error('[Weixin] Group pairing check error:', err);
+          return false;
+        }
+      }
+      console.warn('[Weixin] IPC not available, using open group policy');
+      return true;
+    }
+    // 'open' group policy
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Content-fingerprint dedup
+  // ---------------------------------------------------------------------------
+
+  private computeContentFingerprint(
+    text: string,
+    imagePaths: string[],
+    voicePaths: string[],
+    filePaths: Array<{ name: string; path: string }>,
+    videoPaths: string[],
+  ): string {
+    if (
+      !text &&
+      imagePaths.length === 0 &&
+      voicePaths.length === 0 &&
+      filePaths.length === 0 &&
+      videoPaths.length === 0
+    ) {
+      return '';
+    }
+    const parts = [
+      text,
+      `img:${imagePaths.length}`,
+      `voice:${voicePaths.length}`,
+      `file:${filePaths.map((f) => f.name).join(',')}`,
+      `video:${videoPaths.length}`,
+    ];
+    return createHash('sha256').update(parts.join('|')).digest('hex').slice(0, 24);
+  }
+
+  private isContentDup(fingerprint: string): boolean {
+    return this.recentContentFingerprints.has(fingerprint);
+  }
+
+  private markContentDup(fingerprint: string): void {
+    this.recentContentFingerprints.add(fingerprint);
+    if (this.recentContentFingerprints.size > this.dedupCapacity) {
+      const toDelete: string[] = [];
+      let count = 0;
+      for (const fp of this.recentContentFingerprints) {
+        if (count >= this.dedupCapacity / 4) break;
+        toDelete.push(fp);
+        count++;
+      }
+      for (const fp of toDelete) {
+        this.recentContentFingerprints.delete(fp);
+      }
+    }
   }
 }
 

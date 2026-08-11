@@ -15,6 +15,9 @@ import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
+import { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
+import { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
+import { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
 import { subagentTool } from './SubagentTool/index.js';
 
 // Phase 5 tools imports
@@ -119,6 +122,13 @@ export function createBuiltinRegistry(
 
   // SubagentTool - for spawning sub-agents
   registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'always' });
+
+  // Memory curation tools — validated writes, registered discoverable so the
+  // curator profile can select them via allowedTools.
+  const memoryWriteTool = new MemoryWriteTool();
+  registry.register(memoryWriteTool.toTool(), memoryWriteTool, { exposeMode: 'discoverable' });
+  const writeStage1PolicyTool = new WriteStage1PolicyTool();
+  registry.register(writeStage1PolicyTool.toTool(), writeStage1PolicyTool, { exposeMode: 'discoverable' });
 
   // Phase 5: Task tool (unified)
   registry.register(taskTool.toTool(), taskTool, { exposeMode: 'always' });
@@ -242,6 +252,12 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
     { exposeMode: 'discoverable' }
   );
 
+  // send_artifact - explicit outbound file delivery through a gateway channel.
+  // Always-exposed so the gateway agent can hand files to the channel without
+  // a tool_search round-trip. In desktop sessions it is a harmless no-op.
+  const sendArtifactTool = new SendArtifactTool();
+  registry.register(sendArtifactTool.toTool(), sendArtifactTool, { exposeMode: 'always' });
+
   // Plan 224 Phase 3: canvas conductor tools are no longer registered
   // here. They are injected declaratively via `conductorMode.tools.inject`
   // when `applyModes` resolves the conductor modifier in `DuyaAgent.streamChat`.
@@ -267,6 +283,9 @@ export { WriteTool } from './WriteTool/WriteTool.js';
 export { GrepTool } from './GrepTool/GrepTool.js';
 export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
 export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
+export { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
+export { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
+export { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
 export { getSubagentToolDefinition, getAgentDefinitions, getPrompt } from './SubagentTool/index.js';
 export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './SubagentTool/index.js';
 

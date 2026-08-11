@@ -65,6 +65,8 @@ export interface WeChatConfigOptions {
   encoding_aes_key?: string;
   dm_policy?: 'open' | 'allowlist' | 'disabled';
   allow_from?: string[];
+  group_policy?: 'disabled' | 'allowlist' | 'pairing';
+  group_allow_from?: string[];
   require_mention?: boolean;
   mention_patterns?: string[];
   free_response_chats?: string[];

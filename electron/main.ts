@@ -52,6 +52,7 @@ import { registerBrowserCookieHandlers } from './ipc/browser-cookie-handlers';
 import { registerImportHandlers } from './import/import-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
+import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -717,6 +718,7 @@ registerBrowserCookieHandlers();
 registerGitHandlers();
 registerMemoryListHandlers();
 registerMemoryWakeupHandlers();
+registerVoiceHandlers();
 
 // =============================================================================
 // Step 4.6: Start CLI API server (Phase 0 — read-only control plane)

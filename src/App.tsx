@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useConversationStore } from "@/stores/conversation-store";
 import { initMailboxEventListener } from "@/stores/mailbox-store";
 import { ChatView } from "@/components/chat/ChatView";
+import { NewChatView } from "@/components/chat/NewChatView";
 import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
 import { ChannelsView } from "@/components/bridge/ChannelsView";
@@ -186,6 +187,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     isHydrated,
     markMessageInterrupted,
     updateThreadTitle,
+    isNewChatDrafting,
   } = useConversationStore();
   const { settings } = useSettings();
 
@@ -554,6 +556,12 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   const shouldRenderChat = chatEverMountedRef.current && !!activeThreadId;
 
   const renderView = () => {
+    // Lazy new-chat composer: no backing thread yet. Shown before the user
+    // sends anything, so an unsent draft never appears in the sidebar.
+    if (isNewChatDrafting) {
+      return <NewChatView onSendMessage={handleSendMessage} />;
+    }
+
     if (shouldRenderChat) {
       return (
         <>

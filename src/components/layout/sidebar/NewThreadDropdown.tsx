@@ -7,96 +7,18 @@ import { useTranslation } from "@/hooks/useTranslation";
 
 export function NewThreadDropdown() {
   const { t } = useTranslation();
-  const { createThread, setActiveThread } = useConversationStore();
+  const { createThread, setActiveThread, startNewChat } = useConversationStore();
   const [isCreating, setIsCreating] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const getRecentFolders = useCallback(async (): Promise<string[]> => {
-    if (!window.electronAPI?.projects?.getRecentFolders) return [];
-    try {
-      return await window.electronAPI.projects.getRecentFolders();
-    } catch (error) {
-      console.error("[NewThreadDropdown] Failed to load recent folders:", error);
-      return [];
-    }
-  }, []);
-
-  const getDefaultWorkspace = useCallback(async (): Promise<string | null> => {
-    if (!window.electronAPI?.app?.getDefaultWorkspace) return null;
-    try {
-      return await window.electronAPI.app.getDefaultWorkspace();
-    } catch (error) {
-      console.error("[NewThreadDropdown] Failed to get default workspace:", error);
-      return null;
-    }
-  }, []);
-
-  const createThreadInProject = async (workingDirectory: string) => {
-    const projectName = workingDirectory.split(/[\\/]/).pop() || t('project.untitled');
-    const newThread = await createThread({ workingDirectory, projectName });
-    if (newThread) {
-      setActiveThread(newThread.id);
-    }
-  };
-
-  const handleOpenFolderDialog = async () => {
-    try {
-      if (window.electronAPI?.dialog?.openFolder) {
-        const result = await window.electronAPI.dialog.openFolder({
-          title: t('project.selectNewProjectFolder'),
-        });
-
-        if (!result.canceled && result.filePaths.length > 0) {
-          const workingDirectory = result.filePaths[0];
-          await window.electronAPI.projects.addRecentFolder(workingDirectory);
-          await createThreadInProject(workingDirectory);
-        }
-      } else {
-        const workingDirectory = prompt(t('project.enterFolderPath'));
-        if (workingDirectory) {
-          await createThreadInProject(workingDirectory);
-        }
-      }
-    } catch (error) {
-      console.error("[NewThreadDropdown] Failed to create thread:", error);
-    }
-  };
-
-  const handleNewThread = async () => {
-    setIsCreating(true);
-
-    try {
-      // First, try to create thread with current active thread's working directory
-      const thread = await createThread();
-
-      if (thread) {
-        // Found working directory from active thread, navigate directly
-        setActiveThread(thread.id);
-        return;
-      }
-
-      // No active thread with working directory, check recent folders
-      const recentFolders = await getRecentFolders();
-
-      if (recentFolders.length > 0) {
-        // Use the most recent folder (first in the list)
-        await createThreadInProject(recentFolders[0]);
-      } else {
-        // No recent folders, use default workspace if available, otherwise open folder dialog
-        const defaultWorkspace = await getDefaultWorkspace();
-        if (defaultWorkspace) {
-          await createThreadInProject(defaultWorkspace);
-        } else {
-          await handleOpenFolderDialog();
-        }
-      }
-    } catch (error) {
-      console.error("[NewThreadDropdown] Failed to create thread:", error);
-    } finally {
-      setIsCreating(false);
-    }
-  };
+  // Main "new chat" button uses lazy creation: it only opens the empty
+  // composer (no real thread). The thread is created and shown in the
+  // sidebar only after the user actually sends a message, so an unsent
+  // draft never clogs the sidebar.
+  const handleNewThread = useCallback(() => {
+    startNewChat();
+  }, [startNewChat]);
 
   const handleNewNoProjectThread = useCallback(async () => {
     setIsMenuOpen(false);

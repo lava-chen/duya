@@ -53,6 +53,9 @@ export class AgentProcessPool {
   private busySessions = new Set<string>();
   private interruptedSessions = new Set<string>();
   private pendingMessages = new Map<string, { prompt: string; options?: Record<string, unknown> }[]>();
+  /** Sessions the pool has been asked to release (kill). Used to distinguish
+   *  an intentional teardown from an unexpected crash in the exit handler. */
+  private releasedSessions = new Set<string>();
   private debugIpc = process.env.DUYA_DEBUG_IPC === 'true';
   private logger = getLogger();
   private providerReinitLock = new Map<string, boolean>();
@@ -156,6 +159,16 @@ export class AgentProcessPool {
     }
 
     if (this.running.has(sessionId)) {
+      // Process reuse: the same sessionId is already running. This is only
+      // correct for interactive chat sessions where the caller intentionally
+      // continues the same conversation. One-shot runners (cron / curation)
+      // must pass a unique per-run sessionId so acquire ALWAYS starts fresh;
+      // a reused process here means the previous run's state was not torn down.
+      this.logger.warn(
+        `acquire: reusing already-running process for session ${sessionId}`,
+        { running: this.running.size, maxConcurrent: this.maxConcurrent },
+        LogComponent.AgentProcessPool,
+      );
       return { isNew: false };
     }
 
@@ -163,6 +176,11 @@ export class AgentProcessPool {
       await this.startProcess(sessionId);
       return { isNew: true };
     } else {
+      this.logger.info(
+        `acquire: queued session ${sessionId} (at max concurrency ${this.maxConcurrent})`,
+        undefined,
+        LogComponent.AgentProcessPool,
+      );
       await new Promise<void>((resolve, reject) => {
         this.queue.push({ sessionId, resolve, reject });
       });
@@ -261,15 +279,26 @@ export class AgentProcessPool {
         });
 
         child.on('exit', (code, signal) => {
-          // Log captured stderr for debugging
+          // The pool was asked to release this session (cron/curation teardown,
+          // shutdown, or a concurrency-policy replace). A force-kill on Windows
+          // surfaces as code 1 + EPIPE on the agent's stdout; that is expected,
+          // not a crash. Only treat a non-released exit as unexpected.
+          const intentionallyReleased = this.releasedSessions.has(sessionId);
+          this.releasedSessions.delete(sessionId);
+
+          // Log the FULL captured stderr so a real failure (provider error,
+          // uncaught exception, MiniMax hang) is diagnosable instead of being
+          // truncated to the pool's first-5-lines slice.
           if (stderrChunks.length > 0) {
-            this.logger.error('Agent process stderr', undefined, {
-              sessionId,
-              stderr: stderrChunks.slice(0, 5).join('\n'),
-            }, LogComponent.AgentProcessPool);
+            const stderrText = stderrChunks.join('\n');
+            if (intentionallyReleased) {
+              this.logger.warn('Agent process exited (released)', { sessionId, code, signal, stderr: stderrText }, LogComponent.AgentProcessPool);
+            } else {
+              this.logger.error('Agent process stderr on exit', undefined, { sessionId, code, signal, stderr: stderrText }, LogComponent.AgentProcessPool);
+            }
           }
 
-          const isCrash = code !== 0 || signal;
+          const isCrash = !intentionallyReleased && (code !== 0 || signal);
           if (isCrash) {
             this.logger.error('Process exited unexpectedly', undefined, { sessionId, code, signal }, LogComponent.AgentProcessPool);
           }
@@ -302,6 +331,7 @@ export class AgentProcessPool {
   release(sessionId: string): void {
     const proc = this.running.get(sessionId);
     if (proc) {
+      this.releasedSessions.add(sessionId);
       void killProcessTree(proc.child, { force: true });
     }
     this.releaseSession(sessionId);
@@ -326,6 +356,10 @@ export class AgentProcessPool {
     if (!proc) {
       return;
     }
+
+    // This method always tears the process down; mark it so the exit handler
+    // does not report a force-kill as an unexpected crash.
+    this.releasedSessions.add(sessionId);
 
     const child = proc.child;
 
@@ -698,7 +732,8 @@ export class AgentProcessPool {
     }
 
     const killPromises: Promise<void>[] = [];
-    for (const [, proc] of this.running) {
+    for (const [sessionId, proc] of this.running) {
+      this.releasedSessions.add(sessionId);
       killPromises.push(killProcessTree(proc.child, { force: true }));
     }
     await Promise.all(killPromises);

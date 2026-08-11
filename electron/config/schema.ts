@@ -47,6 +47,31 @@ export interface AgentConfig {
   default_timeout: number;
 }
 
+/**
+ * Desktop voice input config (`[voice]`). STT engine is local whisper.cpp by
+ * default; cloud (OpenAI-compatible `/v1/audio/transcriptions`) is optional.
+ * All fields are editable directly in config.toml.
+ */
+export interface VoiceConfig {
+  enabled?: boolean;
+  input_device?: string;
+  stt?: {
+    engine?: 'local' | 'cloud';
+    end_silence_ms?: number;
+    no_speech_timeout_ms?: number;
+    chunk_ms?: number;
+    language?: string;
+    local?: {
+      model?: string;
+    };
+    cloud?: {
+      provider?: string;
+      base_url?: string;
+      size?: string;
+    };
+  };
+}
+
 export interface ChannelAdapterEntry {
   id: string;
   enabled: boolean;
@@ -189,7 +214,7 @@ export interface DuyaConfig {
   security: { redact_secrets: boolean; secrets_encrypted: boolean };
   tts: Record<string, unknown>;
   stt: Record<string, unknown>;
-  voice: Record<string, unknown>;
+  voice: VoiceConfig;
   delegation: Record<string, unknown>;
 
   session_reset: Record<string, unknown>;
@@ -242,7 +267,19 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   security: { redact_secrets: true, secrets_encrypted: false },
   tts: {},
   stt: { enabled: true },
-  voice: {},
+  voice: {
+    enabled: false,
+    input_device: '',
+    stt: {
+      engine: 'local',
+      end_silence_ms: 900,
+      no_speech_timeout_ms: 4000,
+      chunk_ms: 200,
+      language: 'zh',
+      local: { model: 'ggml-base.bin' },
+      cloud: { provider: '', base_url: '', size: 'whisper-1' },
+    },
+  },
   delegation: {},
   session_reset: {},
   channels: {

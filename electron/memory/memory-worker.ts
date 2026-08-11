@@ -42,8 +42,7 @@ import { drainOutbox } from '../../packages/agent/src/memory-state/outbox.js';
 import { reconcileProjections } from '../../packages/agent/src/memory-state/reconcile.js';
 import { queryEligibleInputs } from '../../packages/agent/src/memory-state/curation_ledger.js';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
-import { runCurationCycle, recoverAllPublications } from './curation_publish_orchestrator';
-import { scanAdHocChanges } from './ad_hoc_watcher';
+import { runCurationCycle } from './curation_publish_orchestrator';
 import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import type { ProviderConfig } from './curation_publish_orchestrator';
 import type { CoreDatabase, SessionStore } from '../db/core';
@@ -101,14 +100,8 @@ export interface MemoryWorkerDeps {
 export interface CurationWorkerDeps {
   /** Root that holds `stage1_policy.md` + `memory_layout.json` (memory-config). */
   configRoot: string;
-  /** Root for `staging/<run_id>/` workspaces. */
-  stagingRoot: string;
-  /** Root for pre-publish snapshots. */
-  snapshotRoot: string;
   /** LLM provider config forwarded to the curator agent process. */
   providerConfig: ProviderConfig;
-  /** System location used as the agent's `init.workingDirectory`. */
-  systemLocation: string;
   /** Agent process pool (shared with cron). */
   pool: AgentProcessPool;
 }
@@ -164,6 +157,13 @@ export interface MemoryWorkerConfig {
    * Default 600_000 (10 min).
    */
   projectCooldownMs: number;
+  /**
+   * Wall-clock budget (ms) for a single curator agent run in the Phase 2
+   * curation cycle. Forwarded to `runCurationCycle`, which uses it for both
+   * the run lease TTL and the agent hard deadline. The outer cycle deadline
+   * is derived from this value (budget + margin). Default 1_200_000 (20 min).
+   */
+  curationTimeoutMs: number;
 }
 
 export interface ForceSweepResult {
@@ -209,24 +209,12 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   extractCooldownMs: 120_000, // 2 min — space batches to avoid LLM rate-limit spikes
   minMessageCount: 6, // filter thin sessions
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
+  curationTimeoutMs: 20 * 60_000, // 20 min — single curator agent run budget
 };
 
 // ---------------------------------------------------------------------------
 // Phase 2 curation switch + Hybrid scheduler (Plan 406, design §9.1)
 // ---------------------------------------------------------------------------
-
-/**
- * Whether the Phase 2 curation cycle is active. Evaluated at call time so
- * tests can toggle `DUYA_MEMORY_PHASE2_ENABLED` between worker construction
- * and ticks. After Phase D (Task 11) the flag is default-on: the legacy
- * consolidator path is deleted, so the curation cycle is the only Phase 2
- * driver. Set `DUYA_MEMORY_PHASE2_ENABLED=0` to force it back off.
- */
-function isPhase2Enabled(): boolean {
-  const v = process.env.DUYA_MEMORY_PHASE2_ENABLED;
-  if (v === '0' || v === 'false') return false;
-  return true;
-}
 
 /**
  * Race a promise against a hard wall-clock deadline so it is guaranteed
@@ -263,9 +251,8 @@ export interface CurationTickResult {
 }
 
 /**
- * Compute the Hybrid scheduler quorum from the two input axes (design §9.1):
+ * Compute the Hybrid scheduler quorum (design §9.1, simplified flow):
  *   - rollout inputs: `queryEligibleInputs` (stage1_outputs not yet consumed)
- *   - ad-hoc inputs: `scanAdHocChanges` (files under extensions/ad_hoc/)
  *
  * Returns the total eligible count and the age (ms) of the oldest eligible
  * input. When nothing is eligible, oldestAgeMs is 0 so the T=30min trigger
@@ -273,7 +260,7 @@ export interface CurationTickResult {
  */
 async function curationQuorum(
   db: Database,
-  memoryRoot: string,
+  _memoryRoot: string,
 ): Promise<{ eligibleCount: number; oldestAgeMs: number }> {
   const now = Date.now();
   const rollout = queryEligibleInputs(db, {
@@ -281,8 +268,7 @@ async function curationQuorum(
     maxInputBytes: HYBRID_QUORUM_MAX_BYTES,
     now,
   });
-  const adHoc = await scanAdHocChanges(db, path.join(memoryRoot, 'extensions', 'ad_hoc'));
-  const all = [...rollout, ...adHoc];
+  const all = rollout;
   if (all.length === 0) return { eligibleCount: 0, oldestAgeMs: 0 };
   const oldest = Math.min(...all.map((i) => i.outputUpdatedAt));
   return { eligibleCount: all.length, oldestAgeMs: now - oldest };
@@ -358,7 +344,6 @@ interface WorkerState {
   forceSweepInFlight: boolean;
   consolidatorInFlight: boolean;
   reconciledThisInstance: boolean;
-  curationRecoveredThisInstance: boolean;
   inFlightExtracts: Set<Promise<unknown>>;
   shutdownSignal: boolean;
   lastCatalogSyncAt: number;
@@ -394,7 +379,6 @@ function createWorker(
     forceSweepInFlight: false,
     consolidatorInFlight: false,
     reconciledThisInstance: false,
-    curationRecoveredThisInstance: false,
     inFlightExtracts: new Set(),
     shutdownSignal: false,
     lastCatalogSyncAt: 0,
@@ -436,15 +420,17 @@ function createWorker(
         runCurationCycle(deps.memoryDb, {
           memoryRoot,
           configRoot: curation.configRoot,
-          stagingRoot: curation.stagingRoot,
-          snapshotRoot: curation.snapshotRoot,
           providerConfig: curation.providerConfig,
-          systemLocation: curation.systemLocation,
           workerId: state.workerId,
           pool: curation.pool,
           sessionId: `curation-${state.workerId}`,
+          curationTimeoutMs: cfg.curationTimeoutMs,
         }),
-        10 * 60_000,
+        // Outer cycle deadline must exceed the agent budget (the configured
+        // curationTimeoutMs) plus the runner's +30s hard-deadline overhead.
+        // A tighter wrapper would abort the cycle even though the agent was
+        // given the full budget.
+        cfg.curationTimeoutMs + 5 * 60_000,
         'curation cycle',
       );
       logger.warn(
@@ -504,38 +490,6 @@ function createWorker(
       } catch (err) {
         logger.warn(
           'MemoryWorkerReconcile failed',
-          { error: err instanceof Error ? err.message : String(err) },
-          LogComponent.DB,
-        );
-      }
-    }
-
-    // Phase 2 curation publication recovery (design §8.5). Runs once per
-    // worker instance on the first non-paused tick (or any forceSweep).
-    // Idempotent — `recoverAllPublications` is a no-op when no unfinished
-    // journals exist. A recovery failure must not block the normal tick.
-    if (
-      isPhase2Enabled() &&
-      deps.curation &&
-      !state.curationRecoveredThisInstance &&
-      (options.force || !state.paused)
-    ) {
-      state.curationRecoveredThisInstance = true;
-      try {
-        const recoverResult = await recoverAllPublications({
-          stagingRoot: deps.curation.stagingRoot,
-          liveMemoryRoot: deps.rootDir ?? path.join(os.homedir(), '.duya', 'memory'),
-        });
-        if (recoverResult.length > 0) {
-          logger.warn(
-            'MemoryWorkerCurationRecover',
-            { recovered: recoverResult.length, actions: recoverResult.map((r) => r.action) },
-            LogComponent.DB,
-          );
-        }
-      } catch (err) {
-        logger.warn(
-          'MemoryWorkerCurationRecover failed',
           { error: err instanceof Error ? err.message : String(err) },
           LogComponent.DB,
         );

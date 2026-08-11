@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useConversationStore, type Thread, type ProjectGroup } from "@/stores/conversation-store";
 import { ThreadListItem } from "./ThreadListItem";
-import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretDownIcon, CaretRightIcon } from "@/components/icons";
+import { FolderIcon, FolderOpenIcon, ArchiveIcon, DotsThreeIcon, FolderOpenIcon as OpenFolderIcon, CopyIcon, PlusIcon, CaretRightIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 
@@ -22,24 +22,26 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
-  const [showAllThreads, setShowAllThreads] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(THREAD_COLLAPSE_THRESHOLD);
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
   // Sort threads by updatedAt, most recent first
   const sortedThreads = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
 
-  // Determine if we need to collapse threads
-  const hasMoreThreads = sortedThreads.length > THREAD_COLLAPSE_THRESHOLD;
-  const visibleThreads = showAllThreads
-    ? sortedThreads
-    : sortedThreads.slice(0, THREAD_COLLAPSE_THRESHOLD);
-  const hiddenCount = sortedThreads.length - THREAD_COLLAPSE_THRESHOLD;
+  // Reveal sessions incrementally (5 at a time) so expanding never jumps
+  // straight from 5 to the full list.
+  const hasMoreThreads = sortedThreads.length > visibleCount;
+  const visibleThreads = sortedThreads.slice(0, visibleCount);
+  const revealCount = Math.min(THREAD_COLLAPSE_THRESHOLD, sortedThreads.length - visibleCount);
 
   const isExpanded = !collapsedProjects.has(project.workingDirectory);
 
   const handleToggle = useCallback(() => {
     toggleProjectExpanded(project.workingDirectory);
+    // Re-opening the group always starts from the base limit instead of
+    // continuing the previous reveal count.
+    setVisibleCount(THREAD_COLLAPSE_THRESHOLD);
   }, [toggleProjectExpanded, project.workingDirectory]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -187,28 +189,16 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
                 childrenThreads={threadChildren?.get(thread.id) || []}
               />
             ))}
-            {hasMoreThreads && !showAllThreads && (
+            {hasMoreThreads && (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 className="project-group-expand-all justify-start"
-                onClick={() => setShowAllThreads(true)}
+                onClick={() => setVisibleCount((c) => c + THREAD_COLLAPSE_THRESHOLD)}
               >
                 <CaretRightIcon size={10} />
-                <span>{t('common.showAll', { count: hiddenCount })}</span>
-              </Button>
-            )}
-            {hasMoreThreads && showAllThreads && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="project-group-expand-all justify-start"
-                onClick={() => setShowAllThreads(false)}
-              >
-                <CaretDownIcon size={10} />
-                <span>{t('common.collapse')}</span>
+                <span>{t('common.showAll', { count: revealCount })}</span>
               </Button>
             )}
           </div>

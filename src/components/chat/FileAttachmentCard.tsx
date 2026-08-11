@@ -1,5 +1,6 @@
 import { XIcon } from '../icons';
 import { IconButton } from '@/components/ui/IconButton';
+import { rewriteMediaSrc } from './markdownComponents';
 
 interface FileAttachmentCardProps {
   id: string;
@@ -25,9 +26,11 @@ export function FileAttachmentCard({
   const isImage = ['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'BMP', 'SVG'].includes(ext);
   // Pasting images from the clipboard yields a File with no Electron file path,
   // so the hook falls back to storing a data URL on `url` rather than `displayUrl`.
-  // Accept any in-memory data URL as a preview source.
+  // Accept any in-memory data URL as a preview source, and rewrite absolute
+  // filesystem paths to the `duya-file://` custom protocol so the Electron
+  // renderer can load local images.
   const previewSrc =
-    thumbnail
+    (thumbnail ? rewriteMediaSrc(thumbnail) : undefined)
     || (url && url.startsWith('data:image/') ? url : undefined);
   const hasThumbnail = !!previewSrc;
   const isClickable = !!onClick;
