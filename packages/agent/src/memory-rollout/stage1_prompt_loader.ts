@@ -156,3 +156,60 @@ export async function loadPolicy(policyPath: string): Promise<{
 export function assembleStage1Prompt(policy: string): string {
   return STAGE1_HARD_CONTRACT + '\n\n' + policy;
 }
+
+/**
+ * Atomically replace the Stage 1 policy file and bump its `.version`
+ * sidecar. Called by the curation loop when the curator emits a
+ * `stage1_policy.update` suggestion (Plan 417 follow-up: the adaptive
+ * loop — curation notices a missing extraction dimension and teaches
+ * Stage 1 to look for it, so later rollouts carry richer signal).
+ *
+ * Returns the new version number. Idempotent per content: if the content
+ * is unchanged, the version sidecar is NOT bumped (same hash, no need to
+ * re-extract with a "new" policy).
+ *
+ * Safety: content is capped at 8 KiB and stored as a plain markdown file.
+ * Stage 1 appends it AFTER the immutable hard contract and `parseAndValidate`
+ * still rejects anything that contradicts the contract, so a poisoned
+ * policy cannot weaken the non-negotiable rules.
+ */
+export async function writePolicy(
+  policyPath: string,
+  content: string,
+): Promise<{ hash: string; version: number; changed: boolean }> {
+  const trimmed = content.trim();
+  const hash = crypto.createHash('sha256').update(trimmed).digest('hex');
+  const versionPath = `${policyPath}.version`;
+
+  // No-op when the content is identical to what is on disk.
+  try {
+    const existing = await fsPromises.readFile(policyPath, 'utf8');
+    if (existing.trim() === trimmed) {
+      return { hash, version: await readVersion(versionPath), changed: false };
+    }
+  } catch {
+    // file missing — treat as changed
+  }
+
+  await fsPromises.mkdir(path.dirname(policyPath), { recursive: true });
+
+  // Atomic write: tmp + rename.
+  const tmpPath = `${policyPath}.tmp`;
+  await fsPromises.writeFile(tmpPath, trimmed + '\n', 'utf8');
+  await fsPromises.rename(tmpPath, policyPath);
+
+  const version = (await readVersion(versionPath)) + 1;
+  await fsPromises.writeFile(versionPath, String(version), 'utf8');
+
+  return { hash, version, changed: true };
+}
+
+async function readVersion(versionPath: string): Promise<number> {
+  try {
+    const raw = await fsPromises.readFile(versionPath, 'utf8');
+    const parsed = parseInt(raw.trim(), 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  } catch {
+    return 0;
+  }
+}

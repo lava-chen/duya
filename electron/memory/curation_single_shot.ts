@@ -38,6 +38,7 @@ import type { AIClient } from '@duya/ai';
 import { parseCurationResponse, CurationParseError } from './curation_response_parser';
 import { applyCurationActions, resolveAreaPath, type ApplyResult } from './curation_file_writer';
 import type { CurationResponse } from './curation_response_parser';
+import { writePolicy } from '../../packages/agent/src/memory-rollout/stage1_prompt_loader';
 
 /**
  * Input shape — matches the rows `CurationInput[]` returned by
@@ -62,6 +63,12 @@ export interface SingleShotCurationOpts {
   timeoutMs?: number;
   /** Override the default curator system prompt (test hook). */
   systemPrompt?: string;
+  /**
+   * Path to `stage1_policy.md`. When provided and the LLM emits a
+   * `stage1_policy.update` suggestion, the policy file is rewritten
+   * (atomic write + version bump) so Stage 1 extraction adapts.
+   */
+  policyPath?: string;
 }
 
 export interface RunResult {
@@ -79,6 +86,10 @@ export interface RunResult {
   errors: ApplyResult['errors'];
   /** Top-level error if the LLM call / parse itself failed. */
   error?: string;
+  /** True when the LLM's stage1_policy.update was written to disk. */
+  policyUpdated?: boolean;
+  /** New stage1_policy version after a successful write (0 if untouched). */
+  policyVersion?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 4 * 60_000;
@@ -159,6 +170,36 @@ still emit the decision.
 - Output ONE JSON object. No prose before or after. No markdown
   code-fence unless the host wraps it for you.
 
+# Self-improvement: teach Stage 1 to watch missing dimensions
+
+You are not just a sink for the current batch — you are the curator of
+what future batches will even SEE. Stage 1 extracts each rollout into a
+summary using a hard contract (12 claim types) plus an editable policy
+file. If you notice that a recurring, important dimension of the user is
+NOT being captured (the rollouts repeatedly miss it), you can update the
+policy so Stage 1 pays attention to it from now on.
+
+Examples of a missing dimension:
+- The user talks about their own plans / goals / timelines repeatedly
+  (career, study, projects) but the summaries never surface goal or
+  commitment items.
+- The user reveals a stable personal fact (background, role, habits)
+  that no summary has ever recorded.
+- The user steers communication in a consistent way that keeps being
+  treated as incidental.
+
+Emit a "stage1_policy" block ONLY when the current policy would miss
+these signals again. When you do:
+  - op="update" with the FULL new policy text (markdown, <=8 KiB). Stage 1
+    appends it after its immutable hard contract; do NOT repeat the hard
+    contract, just add extraction focus: which dimensions to watch, how to
+    recognize them, what claim types to prefer, example signals.
+  - reason: <=500 chars, why this policy change improves future rollouts.
+  - Otherwise emit op="no_change" (or omit the field).
+
+Do NOT update the policy for one-off observations — only for recurring
+patterns that repeated rollouts keep missing.
+
 # JSON shape
 
 {
@@ -172,7 +213,12 @@ still emit the decision.
       "content": "<=50000 chars, markdown section>",
       "reason": "<=500 chars, why this area gets this change"
     }
-  ]
+  ],
+  "stage1_policy": {
+    "op": "update|no_change",
+    "content": "<=8192 chars, full new Stage 1 policy markdown (op=update only)",
+    "reason": "<=500 chars, why the extraction focus changed (op=update only)"
+  }
 }`;
 
 /**
@@ -291,6 +337,8 @@ export async function runSingleShotCuration(
   let actionsApplied = 0;
   let errors: ApplyResult['errors'] = [];
   let topLevelError: string | undefined;
+  let policyUpdated: boolean | undefined;
+  let policyVersion: number | undefined;
 
   try {
     const userPrompt = await assembleUserPrompt(opts.memoryRoot, opts.inputs);
@@ -334,6 +382,30 @@ export async function runSingleShotCuration(
       const applyResult = await applyCurationActions(opts.memoryRoot, response.actions);
       actionsApplied = applyResult.applied;
       errors = applyResult.errors;
+
+      // Adaptive loop: if the curator asked Stage 1 to watch a missing
+      // dimension, write the new policy (atomic + version bump). The
+      // extractor reloads it on mtime change, so the very next extraction
+      // uses the richer focus.
+      const suggestion = response.stage1_policy;
+      if (suggestion?.op === 'update' && opts.policyPath && suggestion.content) {
+        try {
+          const res = await writePolicy(opts.policyPath, suggestion.content);
+          policyUpdated = res.changed;
+          policyVersion = res.version;
+          if (res.changed) {
+            console.warn(
+              `[memory] stage1_policy updated to v${res.version} (${res.hash.slice(0, 8)})`,
+            );
+          }
+        } catch (err) {
+          // Policy write failure is non-fatal — the run still succeeded.
+          console.warn(
+            '[memory] stage1_policy write failed',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
     }
   } catch (err) {
     if ((err as Error).name === 'AbortError' || /aborted/i.test((err as Error).message)) {
@@ -353,5 +425,7 @@ export async function runSingleShotCuration(
     actionsApplied,
     errors,
     ...(topLevelError !== undefined ? { error: topLevelError } : {}),
+    ...(policyUpdated !== undefined ? { policyUpdated } : {}),
+    ...(policyVersion !== undefined ? { policyVersion } : {}),
   };
 }

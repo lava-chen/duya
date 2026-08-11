@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import type { AIClient } from '@duya/ai';
+import * as path from 'path';
 
 import {
   queryEligibleInputs,
@@ -160,6 +161,8 @@ export async function runCurationCycle(
     })),
     llmClient: opts.llmClient,
     timeoutMs: curationTimeoutMs,
+    // Adaptive loop: curation may teach Stage 1 a new extraction focus.
+    policyPath: path.join(opts.configRoot, 'stage1_policy.md'),
   });
 
   // 6. Mark claimed inputs according to the LLM's per-input decisions.

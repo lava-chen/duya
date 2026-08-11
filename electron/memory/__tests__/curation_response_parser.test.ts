@@ -151,4 +151,38 @@ describe('CurationResponseSchema — direct', () => {
     const result = CurationResponseSchema.safeParse(tooMany);
     expect(result.success).toBe(false);
   });
+
+  it('14. stage1_policy.update with content+reason validates', () => {
+    const withPolicy = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'update',
+        content: '# Focus\n\nWatch goal and commitment signals.',
+        reason: 'user keeps discussing plans',
+      },
+    };
+    const result = CurationResponseSchema.safeParse(withPolicy);
+    expect(result.success).toBe(true);
+  });
+
+  it('15. stage1_policy.update without content is rejected', () => {
+    const bad = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: { op: 'update', reason: 'no content' },
+    };
+    const result = CurationResponseSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it('16. stage1_policy.no_change without content validates', () => {
+    const ok = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'r' }],
+      actions: [],
+      stage1_policy: { op: 'no_change' },
+    };
+    const result = CurationResponseSchema.safeParse(ok);
+    expect(result.success).toBe(true);
+  });
 });
