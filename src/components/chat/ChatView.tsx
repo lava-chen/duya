@@ -237,6 +237,17 @@ export function ChatView({
     setConductorCanvasIdState(next);
   }, []);
 
+  // Plan 413e: plan-task is a session-level toggle persisted to
+  // `sessions.extensions.plan_mode_enabled`. Mirrors conductor's ref pattern
+  // so `handlePlanModeChange` reads the latest value synchronously and the
+  // DB write is skipped when the requested state already matches.
+  const [planModeEnabled, setPlanModeEnabledState] = useState(false);
+  const planModeEnabledRef = useRef<boolean>(false);
+  const setPlanModeEnabled = useCallback((next: boolean) => {
+    planModeEnabledRef.current = next;
+    setPlanModeEnabledState(next);
+  }, []);
+
   // Plan 224 follow-up: agent-initiated runtime mode (e.g. via
   // EnterPlanMode / ExitPlanMode / SwitchMode tool). When the agent
   // switches to 'plan' we surface it as a virtual plan-task mode on
@@ -576,6 +587,12 @@ export function ChatView({
                 closePanel(tab.id);
               }
             }
+
+            // Plan 413e: restore the plan-task session toggle from the
+            // session row so the user's persisted plan mode survives
+            // restarts. MessageInput syncs this prop back into its
+            // activeModes set.
+            setPlanModeEnabled(!!data.thread.planModeEnabled);
           }
         })
         .catch(console.error);
@@ -877,6 +894,27 @@ export function ChatView({
       }
     },
     [sessionId, openOrActivatePage],
+  );
+
+  // Plan 413e: persist the plan-task session toggle to the DB. Unlike
+  // conductor there is no canvas binding to resolve — just the boolean flag
+  // in sessions.extensions.plan_mode_enabled, written through the dedicated
+  // IPC and mirrored into the store thread for cross-component reads.
+  const handlePlanModeChange = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId) return;
+      // Avoid redundant DB writes when the requested state already matches
+      // (e.g. both the popover toggle and the session-restore prop fire).
+      if (enabled === planModeEnabledRef.current) return;
+      setPlanModeEnabled(enabled);
+      try {
+        await window.electronAPI.session.setPlanMode(sessionId, enabled);
+        useConversationStore.getState().setThreadPlanMode(sessionId, enabled);
+      } catch (err) {
+        console.error('[ChatView] setPlanMode IPC failed', err);
+      }
+    },
+    [sessionId],
   );
 
   // Auto-enable conductor mode when the user switches canvases inside an
@@ -1187,6 +1225,8 @@ export function ChatView({
                     messages={messages}
                     conductorEnabled={conductorEnabled}
                     onConductorChange={handleConductorChange}
+                    planModeEnabled={planModeEnabled}
+                    onPlanModeChange={handlePlanModeChange}
                     agentPlanMode={agentPlanMode}
                     onCompact={handleCompact}
                     isCompacting={isCompacting}
@@ -1311,6 +1351,8 @@ export function ChatView({
                 messages={messages}
                 conductorEnabled={conductorEnabled}
                 onConductorChange={handleConductorChange}
+                planModeEnabled={planModeEnabled}
+                onPlanModeChange={handlePlanModeChange}
                 onCompact={handleCompact}
                 isCompacting={isCompacting}
               />

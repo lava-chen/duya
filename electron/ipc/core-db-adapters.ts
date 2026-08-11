@@ -119,6 +119,7 @@ const SESSION_EXTENSION_KEYS = [
   'conductor_canvas_id',
   'context_summary',
   'context_summary_updated_at',
+  'plan_mode_enabled',
   'source',
 ] as const;
 
@@ -223,6 +224,7 @@ export function coreSessionToIpcRow(session: CoreSession): Record<string, unknow
     agent_name: session.agentName,
     conductor_mode_enabled: ext.conductor_mode_enabled ?? 0,
     conductor_canvas_id: ext.conductor_canvas_id ?? null,
+    plan_mode_enabled: ext.plan_mode_enabled ?? 0,
     draft_message: session.draft ?? '',
     source: ext.source ?? 'local',
     pinned: ext.pinned ? 1 : 0,
