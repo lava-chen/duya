@@ -54,7 +54,7 @@ import {
 
 function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): string {
   const sections = [
-    'Create a cron job automation using the cron tool. Here is the user request:',
+    'Create a cron job automation. Here is the user request:',
     '',
     userPrompt,
   ];
@@ -70,11 +70,14 @@ function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): s
   sections.push(
     '',
     'Instructions:',
-    '1. Use the cron tool with action "create" to set up this cron job',
-    '2. Analyze the request to determine the appropriate schedule (cron expression, interval, or specific time)',
-    '3. Extract a concise but descriptive name for the cron job',
-    '4. The "prompt" field should contain the task description for each execution',
-    '5. Set enabled to true by default',
+    '1. There is no dedicated "cron" tool — create the job by running the `duya_cli` command with argv ["cron", "create", "--cron", "<json>", "--yes"].',
+    '2. The --cron JSON must match this shape:',
+    '   { "name": "...", "prompt": "...", "schedule": { "kind": "cron", "expr": "0 9 * * *" } }',
+    '   schedule kinds: "every" ({ "every": "1d" }), "cron" ({ "expr": "0 9 * * *", "tz": "Asia/Shanghai" }), or "once" ({ "at": "2026-12-31T23:59:00Z" }).',
+    '3. Analyze the request to determine the schedule (cron expression, interval, or specific time).',
+    '4. Extract a concise but descriptive name for the cron job.',
+    '5. The "prompt" field should contain the task description for each execution.',
+    '6. Omit "enabled" (defaults to true).',
   );
 
   return sections.join('\n');

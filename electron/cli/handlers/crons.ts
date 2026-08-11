@@ -99,8 +99,11 @@ export interface CreateCronBody {
     kind: ScheduleKind;
     at?: string;
     everyMs?: number;
+    every?: string;
     cronExpr?: string;
+    expr?: string;
     cronTz?: string;
+    tz?: string;
     endAt?: string;
   };
   prompt: string;
@@ -263,11 +266,27 @@ function toRunItem(
 // Wire DTO → scheduler input mappers
 // ---------------------------------------------------------------------------
 
-/** Map the frozen wire schedule (at/everyMs/cronExpr) to the new nested shape. */
+/**
+ * Map the wire schedule onto the nested cronjob.toml shape. Accepts both the
+ * legacy wire fields (everyMs / cronExpr / cronTz) and the canonical nested
+ * fields (every / expr / tz) so agents following the new schedule format do
+ * not silently lose the expression.
+ */
 function toSchedulerSchedule(s: CreateCronBody['schedule']): CronSchedule {
   if (s.kind === 'at') return { kind: 'once', at: s.at ?? '', endAt: s.endAt };
-  if (s.kind === 'every') return { kind: 'every', every: formatEveryDuration(s.everyMs ?? 3_600_000), endAt: s.endAt };
-  return { kind: 'cron', expr: s.cronExpr ?? '', tz: s.cronTz, endAt: s.endAt };
+  if (s.kind === 'every') {
+    const everyMs =
+      typeof s.everyMs === 'number' && s.everyMs > 0
+        ? s.everyMs
+        : s.every
+          ? parseEveryDuration(s.every)
+          : 3_600_000;
+    return { kind: 'every', every: formatEveryDuration(everyMs), endAt: s.endAt };
+  }
+  // kind === 'cron'
+  const expr = s.expr || s.cronExpr || '';
+  const tz = s.tz || s.cronTz;
+  return { kind: 'cron', expr, tz, endAt: s.endAt };
 }
 
 function toCreateInput(body: CreateCronBody): CreateAutomationCronInput {

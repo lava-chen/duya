@@ -370,9 +370,9 @@ export class SessionStore {
          WHERE s.status != 'deleted'
            AND s.id LIKE @pattern ESCAPE '\\'
          ORDER BY s.updated_at DESC, s.id DESC
-         LIMIT ? OFFSET ?`,
+         LIMIT @limit OFFSET @offset`,
       )
-      .all(pattern, limit, offset) as SessionSummary[];
+      .all({ pattern, limit, offset }) as SessionSummary[];
     return rows;
   }
 
