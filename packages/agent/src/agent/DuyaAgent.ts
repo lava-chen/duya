@@ -623,6 +623,13 @@ export class duyaAgent {
         ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '')
         : undefined;
 
+    // Plan 413c: restore persisted tracker state for this session before any
+    // per-turn reminder injection (crash/restart recovery). Best-effort —
+    // restoreTracker swallows DB/IPC failures and leaves the tracker initial.
+    if (this.modeCoordinator) {
+      await this.modeCoordinator.restore();
+    }
+
     let turnCount = 0;
     const maxTurns = options?.maxTurns ?? 100;
     let runtimePromptMessageId: string | null = null;

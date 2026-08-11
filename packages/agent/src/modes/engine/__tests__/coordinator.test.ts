@@ -116,17 +116,28 @@ describe('ModeCoordinator', () => {
 
       expect((messages[0] as { content: string }).content).toContain('exited Plan Mode');
       expect(tracker.hasPendingExitReminder()).toBe(false);
-      // Second inject is a no-op — the exit notice fires exactly once.
+      // The exit notice fires exactly once; the tracker is still in the active
+      // set for this turn, so a later inject re-enters plan mode — and because
+      // `wasPreviouslyActive` is still set, it uses the re-entry reminder.
       const again: unknown[] = [];
       coordinator.injectTurnReminders(again, 2);
-      expect(again).toHaveLength(0);
+      expect(again).toHaveLength(1);
+      expect((again[0] as { content: string }).content).toContain('Returning to Plan Mode');
+      expect(tracker.state()).toBe('active');
     });
 
-    it('injects nothing for an idle tracker', () => {
-      const tracker = new PlanModeTracker(); // inactive
+    it('enters and activates a fresh inactive tracker, injecting the full reminder', async () => {
+      // In production the coordinator is built only when a tracker-bearing mode
+      // is active, so an `inactive` tracker means the mode just became active:
+      // enter → pending → activate → full reminder, and the transition persists.
+      const tracker = new PlanModeTracker();
       const messages: unknown[] = [];
       makeCoordinator(tracker).injectTurnReminders(messages, 1);
-      expect(messages).toHaveLength(0);
+
+      expect(tracker.state()).toBe('active');
+      expect(messages).toHaveLength(1);
+      expect((messages[0] as { content: string }).content).toContain('# Plan Mode Active');
+      await vi.waitFor(() => expect(mocks.modeStateDb.upsert).toHaveBeenCalledTimes(1));
     });
   });
 
@@ -206,6 +217,42 @@ describe('ModeCoordinator', () => {
 
       active.transition('exit_approved');
       expect(coordinator.resolveTurnMode('synthetic')).toEqual([]);
+    });
+  });
+
+  describe('restore', () => {
+    it('restores each registered tracker from its persisted snapshot', async () => {
+      mocks.modeStateDb.get.mockResolvedValueOnce({
+        sessionId: 'sess-1',
+        mode: 'plan-task',
+        status: 'active',
+        reminderCount: 2,
+        snapshotJson: JSON.stringify({
+          mode: 'plan-task',
+          sessionId: 'sess-1',
+          status: 'active',
+          data: {
+            state: 'active',
+            wasPreviouslyActive: true,
+            reminderCount: 2,
+            pendingExitReminder: false,
+            awaitingPlanApproval: false,
+          },
+          updatedAt: 123,
+        }),
+        updatedAt: 123,
+      });
+      const tracker = new PlanModeTracker();
+      await makeCoordinator(tracker).restore();
+      expect(tracker.state()).toBe('active');
+      expect(tracker.shouldUseFullReminder()).toBe(true); // reminderCount 2 → full
+    });
+
+    it('leaves the tracker initial when no snapshot exists', async () => {
+      mocks.modeStateDb.get.mockResolvedValueOnce(null);
+      const tracker = new PlanModeTracker();
+      await makeCoordinator(tracker).restore();
+      expect(tracker.state()).toBe('inactive');
     });
   });
 });
