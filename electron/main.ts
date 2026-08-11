@@ -385,7 +385,6 @@ if (gotTheLock) {
             ? {
                 configRoot: path.join(memoryRoot, 'memory-config'),
                 providerConfig: curationProviderConfig,
-                pool: getAgentProcessPool(),
               }
             : undefined;
 

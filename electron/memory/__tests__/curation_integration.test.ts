@@ -28,7 +28,6 @@ const Database = agentRequire('better-sqlite3') as typeof import('better-sqlite3
 
 import type { Database as BetterSqlite3Database } from 'better-sqlite3';
 import type { AIClient } from '@duya/ai';
-import type { AgentProcessPool } from '../../agents/process-pool/agent-process-pool';
 
 import { migration0001 } from '../../memory-state/migrations/0001_init.sql';
 import { migration0002 } from '../../memory-state/migrations/0002_lease_stage1.sql';
@@ -110,7 +109,7 @@ function mockLlm(reply: string): AIClient {
   } as unknown as AIClient;
 }
 
-const EMPTY_POOL = {} as unknown as AgentProcessPool;
+
 
 describe('runCurationCycle — full integration (Plan 417 Task G)', () => {
   let fx: ReturnType<typeof createFixture>;
@@ -152,7 +151,6 @@ describe('runCurationCycle — full integration (Plan 417 Task G)', () => {
       configRoot: fx.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: EMPTY_POOL,
       sessionId: 'sess-1',
       llmClient: llm,
     });
@@ -210,7 +208,6 @@ describe('runCurationCycle — full integration (Plan 417 Task G)', () => {
       configRoot: fx.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: EMPTY_POOL,
       sessionId: 'sess-2',
       llmClient: llm,
     });
@@ -261,7 +258,6 @@ describe('runCurationCycle — full integration (Plan 417 Task G)', () => {
       configRoot: fx.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: EMPTY_POOL,
       sessionId: 'sess-3',
       llmClient: llm,
     });

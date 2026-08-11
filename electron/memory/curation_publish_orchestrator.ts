@@ -1,4 +1,5 @@
 import type { Database } from 'better-sqlite3';
+import type { AIClient } from '@duya/ai';
 
 import {
   queryEligibleInputs,
@@ -14,7 +15,6 @@ import { runSingleShotCuration } from './curation_single_shot';
 import { backupMemoryBeforeRun } from './memory_git_backup';
 import { cleanStagingTmps } from './curation_file_writer';
 import { refreshProjections } from './curation_projection_refresh';
-import type { AIClient } from '@duya/ai';
 
 /**
  * End-to-end curation cycle orchestrator (Plan 417 Task B).
@@ -25,16 +25,11 @@ import type { AIClient } from '@duya/ai';
  *   writes) → completeRun with dispositions derived from the LLM's
  *   decisions.
  *
- * No more AgentProcessPool, no more curator profile, no more chat:done
- * IPC. The streaming curator hung at Turn 5-7 because M3 emits
- * `result` SSE without `message_stop` (see Plan 336 diagnosis). The
- * single-shot chat() path sidesteps that entirely.
- *
- * The legacy `pool: AgentProcessPool` parameter is kept for backward
- * compatibility with `MemoryWorkerDeps` but no longer used.
+ * No AgentProcessPool, no curator profile, no chat:done IPC. The
+ * streaming curator hung at Turn 5-7 because M3 emits `result` SSE
+ * without `message_stop` (see Plan 336 diagnosis). The single-shot
+ * chat() path sidesteps that entirely.
  */
-
-import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 
 const MIN_INPUTS_FOR_RUN = 2;
 const MAX_INPUTS = 3;
@@ -54,8 +49,6 @@ export interface RunCurationCycleOpts {
   configRoot: string;
   providerConfig: ProviderConfig;
   workerId: string;
-  /** @deprecated unused by the single-shot path; kept for the call signature. */
-  pool: AgentProcessPool;
   sessionId: string;
   /**
    * LLM client used for the single-shot chat() call. Required.

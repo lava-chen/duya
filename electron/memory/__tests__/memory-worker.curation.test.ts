@@ -111,7 +111,6 @@ function toDeps(f: CurationFixture): MemoryWorkerDeps {
     curation: {
       configRoot: f.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
-      pool: {} as never,
     },
   };
 }
