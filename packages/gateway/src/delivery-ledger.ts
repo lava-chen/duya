@@ -54,6 +54,34 @@ const DEFAULT_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_MAX_ROWS = 500;
 
+// Error patterns that will never succeed on retry. Marking these `failed`
+// would keep re-delivering a message every restart until attempts are
+// exhausted, piling up undeliverable obligations. They transition straight to
+// `abandoned` instead so they are excluded from redelivery.
+const PERMANENT_ERROR_PATTERNS: RegExp[] = [
+  // Filesystem: missing file / permission / not-a-directory.
+  /\bENOENT\b/,
+  /\bEACCES\b/,
+  /\bEPERM\b/,
+  /\bEISDIR\b/,
+  /\bENOTDIR\b/,
+  /no such file or directory/i,
+  // Platform contract violations: the adapter could not read a message id it
+  // always requires, so the outbound can never be reconciled with the platform.
+  /Cannot read properties of undefined \(reading ['"]message_id['"]\)/,
+  /Unknown reply type/i,
+];
+
+/**
+ * True when the error describes a condition retrying cannot fix. Used by
+ * `markFailed` to decide whether an obligation should stay recoverable or be
+ * abandoned on the first failure.
+ */
+export function isPermanentError(error: string): boolean {
+  if (!error) return false;
+  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
 export class DeliveryLedger {
   private filePath: string;
   private maxAttempts: number;
@@ -147,9 +175,15 @@ export class DeliveryLedger {
 
   markFailed(id: string, error: string): void {
     this.update(id, (r) => {
-      r.state = 'failed';
       r.attempts += 1;
       r.lastError = error?.slice(0, 500);
+      // Permanent failures can never succeed on retry, so abandon immediately
+      // instead of re-delivering them on every restart until attempts run out.
+      if (isPermanentError(error ?? '')) {
+        r.state = 'abandoned';
+        return;
+      }
+      r.state = 'failed';
     });
   }
 

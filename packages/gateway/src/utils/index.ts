@@ -4,8 +4,6 @@
  * Ported and enhanced from hermes-agent/gateway/platforms/helpers.py
  */
 
-import type { PlatformType } from '../types.js';
-
 // =============================================================================
 // Message Splitting
 // =============================================================================
@@ -284,64 +282,4 @@ export class TextBatchAggregator {
   clear(): void {
     this.items = [];
   }
-}
-
-// =============================================================================
-// Platform Display Config
-// =============================================================================
-
-export interface DisplayConfig {
-  tool_progress: 'on' | 'off';
-  streaming: boolean;
-  tool_preview_length: number;
-  show_reasoning: boolean;
-}
-
-type DisplayTier = 'high' | 'medium' | 'low';
-
-const DISPLAY_TIERS: Record<PlatformType, DisplayTier> = {
-  telegram: 'high',
-  discord: 'high',
-  qq: 'high',
-  whatsapp: 'medium',
-  feishu: 'medium',
-  weixin: 'low',
-};
-
-const DEFAULT_CONFIGS: Record<DisplayTier, DisplayConfig> = {
-  high: {
-    tool_progress: 'on',
-    streaming: true,
-    tool_preview_length: 200,
-    show_reasoning: true,
-  },
-  medium: {
-    tool_progress: 'on',
-    streaming: false,
-    tool_preview_length: 100,
-    show_reasoning: false,
-  },
-  low: {
-    tool_progress: 'off',
-    streaming: false,
-    tool_preview_length: 40,
-    show_reasoning: false,
-  },
-};
-
-/**
- * Get display configuration for a platform.
- * Resolution order: platform config > tier default
- */
-export function getDisplayConfig(
-  platform: PlatformType,
-  overrides?: Partial<DisplayConfig>
-): DisplayConfig {
-  const tier = DISPLAY_TIERS[platform] ?? 'medium';
-  const base = DEFAULT_CONFIGS[tier];
-
-  return {
-    ...base,
-    ...overrides,
-  };
 }

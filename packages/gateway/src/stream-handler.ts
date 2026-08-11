@@ -52,19 +52,62 @@ const TOOL_EMOJI: Record<string, string> = {
 };
 const DEFAULT_TOOL_EMOJI = '🔧';
 
-/** Render a compact, single-line preview of a tool input for the user. */
+/**
+ * Keys, in priority order, whose value is the most human-meaningful part of a
+ * tool input. Used to avoid dumping raw JSON arrays/objects as the preview.
+ */
+const PRIMARY_INPUT_KEYS = [
+  'command',
+  'prompt',
+  'content',
+  'text',
+  'message',
+  'query',
+  'path',
+  'file_path',
+  'filepath',
+  'url',
+  'pattern',
+  'name',
+  'repo',
+  'expression',
+  'code',
+  'sql',
+  'input',
+] as const;
+
+/** Render a tool input as a short human-readable string (no raw JSON). */
+function stringifyHuman(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) {
+    // Flat arrays of primitives read better as a comma list than JSON.
+    if (value.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')) {
+      return value.join(', ');
+    }
+    // Otherwise fall back to the first element (e.g. a bash command array).
+    return stringifyHuman(value[0]);
+  }
+  if (value && typeof value === 'object') {
+    const kv = value as Record<string, unknown>;
+    for (const key of PRIMARY_INPUT_KEYS) {
+      const v = kv[key];
+      if (v !== undefined && v !== null && v !== '') {
+        return stringifyHuman(v);
+      }
+    }
+    // No primary key: render a bounded key=value list instead of JSON.
+    return Object.entries(kv)
+      .slice(0, 4)
+      .map(([k, v]) => `${k}=${stringifyHuman(v)}`)
+      .join(' ');
+  }
+  return String(value);
+}
+
 function summarizeToolInput(input: unknown, maxLen: number): string {
   if (input == null) return '';
-  let s: string;
-  if (typeof input === 'string') {
-    s = input;
-  } else {
-    try {
-      s = JSON.stringify(input);
-    } catch {
-      s = String(input);
-    }
-  }
+  let s = stringifyHuman(input);
   s = s.replace(/\s+/g, ' ').trim();
   if (s.length === 0) return '';
   return s.length > maxLen ? `${s.slice(0, maxLen).trimEnd()}…` : s;
@@ -118,7 +161,11 @@ function collectMediaFromToolResult(toolResult: unknown, out: string[]): void {
   if (toolResult == null) return;
 
   if (typeof toolResult === 'string') {
-    // Strings are handled by the text-path fallback in finalizeSession.
+    // Tool results that crossed the IPC boundary as a string may still carry
+    // explicit MEDIA:/absolute-path markers (e.g. produced by send_artifact).
+    // Extract them here so the convention-based pipeline delivers the files,
+    // instead of relying solely on the final-text fallback in finalizeSession.
+    for (const p of extractMediaPathsFromText(toolResult)) out.push(p);
     return;
   }
 
@@ -329,20 +376,9 @@ export class StreamHandler {
       }
 
       case 'chat:thinking': {
-        // Surface reasoning. On streaming platforms it seeds a placeholder that
-        // later text chunks edit in place; on others it falls back to typing.
-        // When showReasoning is off we only show a generic hint, not the text.
-        const reasoning = event.content ?? '';
-        const cfg = this.displayConfigResolver(adapter.platform);
-        const seed = cfg.showReasoning && reasoning
-          ? `💭 ${reasoning}`
-          : '💭 Thinking...';
-        if (isStreamingEditPlatform(adapter.platform)) {
-          const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
-          if (chatId) {
-            await this.ensureStreamState(sessionId, chatId, adapter, seed);
-          }
-        } else if (adapter.sendTyping) {
+        // No visible "Thinking..." placeholder. Surface as a native typing
+        // indicator so the recipient sees the bot is working.
+        if (adapter.sendTyping) {
           const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) await adapter.sendTyping(chatId);
         }
@@ -350,34 +386,32 @@ export class StreamHandler {
       }
 
       case 'chat:status': {
-        // Turn/status message (e.g. "Turn 2"). On streaming platforms seed the
-        // placeholder with a short status line so the user sees progress.
+        // Turn/status message (e.g. "Turn 2"). Do NOT seed the placeholder
+        // here — that would flash a "🌀 status 💭 Working..." message to the
+        // user before the first real text chunk arrives, and the seed text
+        // can also leak into the final answer. Let chat:text create the
+        // placeholder, and just emit a typing indicator for status changes.
         const status = event.status ?? event.message ?? '';
-        if (status && isStreamingEditPlatform(adapter.platform)) {
+        if (status && !isStreamingEditPlatform(adapter.platform) && adapter.sendTyping) {
           const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
-          if (chatId) {
-            await this.ensureStreamState(sessionId, chatId, adapter, `🌀 ${status} 💭 Working...`);
-          }
+          if (chatId) await adapter.sendTyping(chatId);
         }
         break;
       }
 
       case 'chat:tool_use': {
-        // Surface every tool call to the user (hermes-style). The progress
-        // message quotes the user's original request and shows a compact input
-        // preview.
+        // Surface every tool call to the user (hermes-style). Standalone
+        // progress message with a compact input preview, no reply quote.
         const toolName = event.toolName ?? '';
         if (toolName) {
           const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) {
-            const replyToMsgId = this.replyToBySession.get(sessionId);
             const cfg = this.displayConfigResolver(adapter.platform);
             const previewLen = cfg.toolPreviewLength > 0 ? cfg.toolPreviewLength : TOOL_PREVIEW_LENGTH;
             await adapter.sendReply(chatId, {
               type: 'text',
               text: formatToolUseMessage(toolName, event.toolInput, previewLen),
               parseMode: 'Markdown',
-              replyToMsgId,
             });
           }
         }
@@ -511,7 +545,7 @@ export class StreamHandler {
     adapter: PlatformAdapter,
   ): Promise<void> {
     const state = await this.ensureStreamState(sessionId, chatId, adapter, content);
-    state.buffer = content;
+    state.buffer = stripMarkdown(content);
     adapter.sendTyping?.(chatId);
   }
 
@@ -523,7 +557,11 @@ export class StreamHandler {
     const state = this.activeStreams.get(sessionId);
     if (!state) return;
 
-    state.buffer += content;
+    // Strip any leaked think-tag fragments from the streamed text so the
+    // placeholder never shows </mm:think> to the user (MiniMax M3 emits the
+    // close tag of its internal thinking block in the text stream).
+    const clean = stripMarkdown(content);
+    state.buffer += clean;
 
     const now = Date.now();
     // Streaming-edit platforms: fold accumulated text into the placeholder,

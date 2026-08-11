@@ -81,11 +81,13 @@ export class GatewayManager {
     this.streamHandler.setReactionConfigResolver((platform) => {
       const opts = this.adapterConfigs.get(platform)?.options ?? {};
       const r = (opts as { reactions?: { enabled?: boolean; working?: string; done?: string; error?: string } }).reactions;
+      // Defaults must be in Telegram's built-in reaction emoji set; custom
+      // emoji like 🔨/✅/❌ are rejected with REACTION_INVALID for free bots.
       return {
         enabled: r?.enabled ?? true,
-        working: r?.working ?? '🔨',
-        done: r?.done ?? '✅',
-        error: r?.error ?? '❌',
+        working: r?.working ?? '🤔',
+        done: r?.done ?? '👍',
+        error: r?.error ?? '👎',
       };
     });
   }
@@ -661,7 +663,7 @@ export class GatewayManager {
       const reactionOpts = (this.adapterConfigs.get(msg.platform)?.options ?? {}) as
         { reactions?: { enabled?: boolean; working?: string } };
       const reactionsEnabled = reactionOpts.reactions?.enabled ?? true;
-      const workingEmoji = reactionOpts.reactions?.working ?? '🔨';
+      const workingEmoji = reactionOpts.reactions?.working ?? '🤔';
       if (reactionsEnabled) {
         adapter?.setMessageReaction?.(msg.platformChatId, msg.platformMsgId, workingEmoji);
       }

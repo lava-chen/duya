@@ -12,6 +12,7 @@
  */
 
 import https from 'https';
+import type { IncomingMessage } from 'http';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { execSync } from 'child_process';
@@ -333,6 +334,40 @@ export function cancelBatch(sessionId: string, chatId: string): void {
 }
 
 /**
+ * Convert a raw Node https response to a fetch {@link Response}.
+ *
+ * Accumulates the body as raw Buffers. Accumulating as a string corrupts
+ * binary payloads (e.g. Telegram file downloads) via UTF-8 re-encoding:
+ * invalid bytes are replaced with U+FFFD, destroying the image header.
+ */
+export function responseFromHttpResponse(res: IncomingMessage): Promise<Response> {
+  return new Promise<Response>((resolve) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    res.on('end', () => {
+      const body = Buffer.concat(chunks);
+      const headers = new Headers();
+      for (const [key, value] of Object.entries(res.headers)) {
+        if (Array.isArray(value)) {
+          value.forEach(v => headers.append(key, v));
+        } else if (value !== undefined) {
+          headers.set(key, String(value));
+        }
+      }
+      // Sniff JSON bodies (which may be missing a content-type header).
+      if (!headers.has('content-type') && body.length > 0 && body[0] === 0x7b /* '{' */) {
+        headers.set('content-type', 'application/json');
+      }
+      resolve(new Response(body, {
+        status: res.statusCode || 200,
+        statusText: res.statusMessage || 'OK',
+        headers,
+      }));
+    });
+  });
+}
+
+/**
  * Proxy-aware fetch wrapper using https-proxy-agent
  * Issue #9: Falls back to alternative IPs when Telegram API is unreachable
  * Issue #16: Supports batched sends for rate limit management
@@ -397,26 +432,7 @@ async function proxyFetchWithAgent(
     };
 
     const req = https.request(urlObj, options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (Array.isArray(value)) {
-            value.forEach(v => headers.append(key, v));
-          } else if (value !== undefined) {
-            headers.set(key, String(value));
-          }
-        }
-        if (!headers.has('content-type') && data.startsWith('{')) {
-          headers.set('content-type', 'application/json');
-        }
-        resolve(new Response(data, {
-          status: res.statusCode || 200,
-          statusText: res.statusMessage || 'OK',
-          headers,
-        }));
-      });
+      responseFromHttpResponse(res).then(resolve);
     });
 
     req.on('error', async (err) => {
@@ -463,26 +479,7 @@ async function proxyFetchDirect(
     };
 
     const req = https.request(urlObj, options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        const headers = new Headers();
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (Array.isArray(value)) {
-            value.forEach(v => headers.append(key, v));
-          } else if (value !== undefined) {
-            headers.set(key, String(value));
-          }
-        }
-        if (!headers.has('content-type') && data.startsWith('{')) {
-          headers.set('content-type', 'application/json');
-        }
-        resolve(new Response(data, {
-          status: res.statusCode || 200,
-          statusText: res.statusMessage || 'OK',
-          headers,
-        }));
-      });
+      responseFromHttpResponse(res).then(resolve);
     });
 
     req.on('error', async (err) => {

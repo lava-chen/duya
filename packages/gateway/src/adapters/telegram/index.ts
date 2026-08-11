@@ -442,7 +442,8 @@ export class TelegramAdapter extends BaseAdapter {
    * `bot_api_server` option (e.g. a local Bot API server).
    */
   private apiBase(): string {
-    return this.botApiServer ?? TELEGRAM_API;
+    const server = this.botApiServer?.trim();
+    return server ? server : TELEGRAM_API;
   }
 
   /**
@@ -698,8 +699,13 @@ export class TelegramAdapter extends BaseAdapter {
         }
       }
 
-      // Clamp to the configured max (and Telegram's hard cap of 100)
-      const limitedCommands = commands.slice(0, maxCommands);
+      // Clamp to the configured max (and Telegram's hard cap of 100), and drop
+      // commands whose names are invalid on Telegram (only [a-z0-9_], 1-32
+      // chars). A single invalid entry makes the whole setMyCommands call fail
+      // with BOT_COMMAND_INVALID, leaving the menu stale.
+      const limitedCommands = commands
+        .filter((c) => /^[a-z][a-z0-9_]{0,31}$/.test(c.command))
+        .slice(0, maxCommands);
 
       await this.telegramApiCall(`${this.apiBase()}${this.token}/setMyCommands`, 'POST', { commands: limitedCommands });
       console.log(`[Telegram] Commands registered (${limitedCommands.length} commands)`);

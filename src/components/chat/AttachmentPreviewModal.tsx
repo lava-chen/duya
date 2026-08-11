@@ -8,6 +8,7 @@ import { XIcon, FileTextIcon, DownloadSimpleIcon as DownloadIcon } from '@/compo
 import type { FileAttachment } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 import { Button } from '@/components/ui/Button';
+import { rewriteMediaSrc } from './markdownComponents';
 
 export type PreviewType = 'image' | 'pdf' | 'code' | 'doc' | 'text' | 'unknown';
 
@@ -88,7 +89,7 @@ function PdfPreview({ attachment }: { attachment: FileAttachment }) {
       <div className="attachment-preview-pdf-content">
         {attachment.thumbnail ? (
           <img
-            src={attachment.thumbnail}
+            src={rewriteMediaSrc(attachment.thumbnail)}
             alt={attachment.name}
             className="attachment-preview-pdf-thumbnail"
           />
@@ -130,7 +131,7 @@ function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClo
           <pre className="attachment-preview-doc-text">{attachment.text}</pre>
         ) : attachment.thumbnail ? (
           <img
-            src={attachment.thumbnail}
+            src={rewriteMediaSrc(attachment.thumbnail)}
             alt={attachment.name}
             className="attachment-preview-doc-thumbnail"
           />
@@ -149,7 +150,8 @@ function DocPreview({ attachment, onClose }: { attachment: FileAttachment; onClo
 }
 
 function ImagePreview({ attachment }: { attachment: FileAttachment }) {
-  const src = attachment.displayUrl || attachment.url;
+  const rawSrc = attachment.displayUrl || attachment.url || attachment.path;
+  const src = rawSrc ? rewriteMediaSrc(rawSrc) : '';
   return (
     <div className="attachment-preview-image-wrapper">
       <img

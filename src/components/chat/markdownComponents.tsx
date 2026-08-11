@@ -38,7 +38,7 @@ function isUnixAbsolutePath(value: string): boolean {
 // resolve to a nonexistent file. Strip it and re-evaluate so the real path wins.
 const ABS_PATH_PLACEHOLDER = '/abs/path';
 
-function rewriteMediaSrc(src: string): string {
+export function rewriteMediaSrc(src: string): string {
   if (!src) return src;
   // Windows absolute paths look like `C:/...` or `C:\...` — the `C:`
   // prefix could be mistaken for a URL scheme, so check this first.

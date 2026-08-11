@@ -18,7 +18,8 @@
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
 
@@ -3138,6 +3139,7 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     log('[Agent-Process] Fatal error in main loop:', err);
+    writeAgentCrashLog(err, 'main-loop');
     exitAfterCleanup(1);
   }
 }
@@ -3220,9 +3222,51 @@ process.on('disconnect', () => {
   exitAfterCleanup(0);
 });
 
+// Persist the full error to a file so the crash is diagnosable even though
+// the process pool only retains the first 5 stderr lines. Called from both
+// the main-loop fatal-error catch and the uncaughtException handler.
+function writeAgentCrashLog(err: unknown, origin: string): void {
+  try {
+    const crashDir = path.join(os.tmpdir(), 'duya-agent-crash');
+    mkdirSync(crashDir, { recursive: true });
+    const crashPath = path.join(crashDir, `agent-${sessionId || 'unknown'}-${origin}-${Date.now()}.log`);
+    writeFileSync(
+      crashPath,
+      `[${new Date().toISOString()}] sessionId=${sessionId} origin=${origin}\n${err instanceof Error ? (err.stack || err.toString()) : String(err)}\n`,
+      'utf-8',
+    );
+    log(`[Agent-Process] Crash log written to ${crashPath}`);
+  } catch (writeErr) {
+    warn('[Agent-Process] Failed to write crash log:', writeErr);
+  }
+}
+
+// Swallow EPIPE / broken-pipe errors on our own stdout & stderr. When the
+// parent tears the process down (releaseAndWait / killProcessTree) or exits
+// before we finish flushing, the write pipe is broken. Node surfaces that as
+// an ASYNC 'error' event on the stream (not a synchronous throw), which the
+// write-queue try/catch in worker-protocol.ts cannot intercept — without a
+// listener it escalates to uncaughtException and is misreported as a crash
+// (exit code 1 + a spurious crash log). A genuine write failure elsewhere is
+// still observable via other channels, so it is safe to swallow EPIPE only.
+const swallowPipeError = (err: unknown): void => {
+  const code = (err as { code?: string } | null)?.code;
+  if (code === 'EPIPE' || code === 'ERR_STREAM_WRITE_AFTER_END') {
+    log('[Agent-Process] Ignoring broken pipe on process output:', code);
+    return;
+  }
+  // Any other stream error is unexpected; surface it as a crash.
+  log('[Agent-Process] Fatal process output error:', err);
+  writeAgentCrashLog(err, 'output-stream');
+  exitAfterCleanup(1);
+};
+process.stdout.on('error', swallowPipeError);
+process.stderr.on('error', swallowPipeError);
+
 // Handle uncaught errors to avoid zombie processes
 process.on('uncaughtException', (err) => {
   log('[Agent-Process] Uncaught exception:', err);
+  writeAgentCrashLog(err, 'uncaught-exception');
   exitAfterCleanup(1);
 });
 

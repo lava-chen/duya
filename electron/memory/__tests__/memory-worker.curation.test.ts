@@ -1,11 +1,9 @@
 /**
  * Unit tests for the Phase 2 curation path in memory-worker (Plan 406
- * Tasks 8 + 9). Verifies the DUYA_MEMORY_PHASE2_ENABLED switch, the
- * Hybrid scheduler dispatch, and startup publication recovery.
+ * Tasks 8 + 9). Verifies the Hybrid scheduler dispatch to `runCurationCycle`.
  *
- * The orchestrator, ledger, and ad-hoc watcher are mocked so the test
- * asserts which path the worker takes without running the real LLM
- * curation pipeline.
+ * The orchestrator and ledger are mocked so the test asserts which path the
+ * worker takes without running the real LLM curation pipeline.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
@@ -34,22 +32,15 @@ import {
 // Hoisted mocks — shared between the vi.mock factories and test bodies.
 const mocks = vi.hoisted(() => ({
   runCurationCycle: vi.fn(),
-  recoverAllPublications: vi.fn(),
   queryEligibleInputs: vi.fn(),
-  scanAdHocChanges: vi.fn(),
 }));
 
 vi.mock('../curation_publish_orchestrator', () => ({
   runCurationCycle: mocks.runCurationCycle,
-  recoverAllPublications: mocks.recoverAllPublications,
 }));
 
 vi.mock('../../../packages/agent/src/memory-state/curation_ledger', () => ({
   queryEligibleInputs: mocks.queryEligibleInputs,
-}));
-
-vi.mock('../ad_hoc_watcher', () => ({
-  scanAdHocChanges: mocks.scanAdHocChanges,
 }));
 
 interface CurationFixture {
@@ -58,8 +49,6 @@ interface CurationFixture {
   memoryRoot: string;
   dbDir: string;
   configRoot: string;
-  stagingRoot: string;
-  snapshotRoot: string;
   llmClient: AIClient;
   cleanup: () => void;
 }
@@ -68,8 +57,6 @@ function createCurationFixture(): CurationFixture {
   const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-cur-db-'));
   const memoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-cur-root-'));
   const configRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-cur-cfg-'));
-  const stagingRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-cur-stg-'));
-  const snapshotRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-cur-snap-'));
   const memoryDb = new Database(path.join(dbDir, 'memory-state.db'));
   memoryDb.pragma('journal_mode = WAL');
   memoryDb.pragma('foreign_keys = ON');
@@ -104,11 +91,11 @@ function createCurationFixture(): CurationFixture {
   };
 
   return {
-    memoryDb, mainDb, memoryRoot, dbDir, configRoot, stagingRoot, snapshotRoot, llmClient,
+    memoryDb, mainDb, memoryRoot, dbDir, configRoot, llmClient,
     cleanup: () => {
       try { memoryDb.close(); } catch { /* already closed */ }
       try { mainDb.close(); } catch { /* already closed */ }
-      for (const dir of [dbDir, memoryRoot, configRoot, stagingRoot, snapshotRoot]) {
+      for (const dir of [dbDir, memoryRoot, configRoot]) {
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
       }
     },
@@ -123,10 +110,7 @@ function toDeps(f: CurationFixture): MemoryWorkerDeps {
     rootDir: f.memoryRoot,
     curation: {
       configRoot: f.configRoot,
-      stagingRoot: f.stagingRoot,
-      snapshotRoot: f.snapshotRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
-      systemLocation: f.memoryRoot,
       pool: {} as never,
     },
   };
@@ -138,18 +122,14 @@ describe('memory-worker curation path (Plan 406)', () => {
   beforeEach(() => {
     f = createCurationFixture();
     vi.clearAllMocks();
-    mocks.recoverAllPublications.mockResolvedValue([]);
-    mocks.scanAdHocChanges.mockResolvedValue([]);
-    process.env.DUYA_MEMORY_PHASE2_ENABLED = '1';
   });
 
   afterEach(() => {
-    delete process.env.DUYA_MEMORY_PHASE2_ENABLED;
     _resetMemoryWorkerForTesting();
     f.cleanup();
   });
 
-  it('calls runCurationCycle when Phase 2 enabled and quorum met', async () => {
+  it('calls runCurationCycle when quorum met', async () => {
     mocks.queryEligibleInputs.mockReturnValue([
       { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
       { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's2', generatedAt: Date.now() - 10_000, bytes: 100 },
@@ -161,8 +141,8 @@ describe('memory-worker curation path (Plan 406)', () => {
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
-    // Curation is now fire-and-forget from the tick (Task D decoupling), so
-    // forceSweep no longer carries the curated result — invocation is proof.
+    // Curation is fire-and-forget from the tick, so forceSweep does not
+    // carry the curated result — invocation is proof.
     expect(result.curated).toBeNull();
     expect(mocks.runCurationCycle.mock.calls[0][1].memoryRoot).toBe(f.memoryRoot);
   });
@@ -189,26 +169,6 @@ describe('memory-worker curation path (Plan 406)', () => {
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
-    // Curation is now fire-and-forget from the tick (Task D decoupling), so
-    // forceSweep no longer carries the curated result — invocation is proof.
     expect(result.curated).toBeNull();
-  });
-
-  it('calls recoverAllPublications on the first tick when Phase 2 enabled', async () => {
-    mocks.queryEligibleInputs.mockReturnValue([]);
-    const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
-    await h.forceSweep();
-
-    expect(mocks.recoverAllPublications).toHaveBeenCalledTimes(1);
-    expect(mocks.recoverAllPublications.mock.calls[0][0].stagingRoot).toBe(f.stagingRoot);
-  });
-
-  it('Phase 2 is always-on by default — recoverAllPublications is called even when the env var is unset', async () => {
-    delete process.env.DUYA_MEMORY_PHASE2_ENABLED;
-    mocks.queryEligibleInputs.mockReturnValue([]);
-    const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
-    await h.forceSweep();
-
-    expect(mocks.recoverAllPublications).toHaveBeenCalledTimes(1);
   });
 });

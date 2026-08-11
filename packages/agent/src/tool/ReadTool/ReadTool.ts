@@ -82,6 +82,10 @@ const TEXT_EXTENSIONS = new Set([
 const BINARY_SNIFF_BYTES = 16;
 const FILE_UNCHANGED_STUB =
   'File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.';
+// Image files are not read directly by this tool. They are routed to the
+// dedicated `vision_analyze` tool so pixels are never fed to a model that
+// can't see them, and analysis stays on the vision tool (not duplicated here).
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
 
 function isDocMode(input: ReadInput, ext: string | null): boolean {
   // .ipynb must always go through the document parser — its first
@@ -183,7 +187,7 @@ export function _resetSharedParser(): void {
 
 export class ReadTool extends BaseTool {
   readonly name = 'read';
-  readonly description = 'Read the contents of a file from the file system. Supports text files (with optional line ranges), PDFs, Word documents (.docx), PowerPoint files (.pptx), and images (png, jpg, gif, webp). Image files are attached directly as image content for vision-capable models. Use the `pages` parameter for PDFs to read specific page ranges. For models without vision support, use the vision tool to analyze images.';
+  readonly description = 'Read the contents of a file from the file system. Supports text files (with optional line ranges), PDFs, Word documents (.docx), and PowerPoint files (.pptx). Use the `pages` parameter for PDFs to read specific page ranges. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -351,6 +355,17 @@ export class ReadTool extends BaseTool {
         return {
           id, name: 'read', error: true,
           result: `Error: Cannot read '${input.file_path}' — unsupported binary format (${ext})${formatHint}. ${suggestion}`,
+        };
+      }
+
+      // Image files are handled by the dedicated vision_analyze tool, never
+      // by this read tool. Reject them with a clear pointer so the model
+      // routes image analysis through the vision tool instead of attaching
+      // raw pixels that a non-vision main model cannot consume.
+      if (ext && IMAGE_EXTENSIONS.has(ext.toLowerCase())) {
+        return {
+          id, name: 'read', error: true,
+          result: `Error: Cannot read '${input.file_path}' — this is an image file. Use the \`vision_analyze\` tool to analyze image content.`,
         };
       }
 
@@ -725,7 +740,7 @@ function suggestHandlerForFormat(
     return 'Use the `pdf` skill to read this PDF.';
   }
   if (lowerExt === '.png' || lowerExt === '.jpg' || lowerExt === '.jpeg' || lowerExt === '.gif' || lowerExt === '.webp') {
-    return 'Use the `mcp__MiniMax__understand_image` tool to view this image.';
+    return 'Use the `vision_analyze` tool to analyze this image.';
   }
   if (lowerExt === '.zip' || lowerExt === '.tar' || lowerExt === '.gz' || lowerExt === '.7z' || lowerExt === '.rar') {
     return 'Extract this archive with `bash` (e.g. `unzip`, `tar -xf`) before reading its contents.';
@@ -748,7 +763,7 @@ function suggestHandlerForFormat(
       magicFormat === 'GIF89a' || magicFormat === 'WebP' || magicFormat === 'BMP' ||
       magicFormat === 'ICO / CUR'
     ) {
-      return 'Use the `mcp__MiniMax__understand_image` tool to view this image.';
+      return 'Use the `vision_analyze` tool to analyze this image.';
     }
     if (
       magicFormat === 'ELF executable' || magicFormat === 'Mach-O 32-bit' ||

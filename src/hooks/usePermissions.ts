@@ -13,8 +13,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { PermissionRequestEvent } from '@/types/stream';
 import { resolvePermission } from '@/lib/agent-sse-client';
-import { subscribeToPhase, getSnapshot } from '@/lib/stream-session-manager';
-import { showPermissionNotification } from '@/lib/notification';
+import { subscribeToPhase, getSnapshot, clearPendingPermission } from '@/lib/stream-session-manager';
+import { showPermissionNotification, showAskUserQuestionNotification } from '@/lib/notification';
 
 export interface UsePermissionsOptions {
   /** Session ID for permission resolution forwarding */
@@ -123,6 +123,11 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
         // Update local state
         setPermissionResolved(decision === 'allow_session' ? 'allow' : decision);
 
+        // Clear the session-manager's stored pending request so a later
+        // re-subscription (page switch / remount) does not replay a stale
+        // permission the user already resolved, which would re-show the card.
+        clearPendingPermission(sessionId);
+
         // Notify callback
         onPermissionResolved?.(
           decision === 'allow_session' ? 'allow' : decision,
@@ -190,19 +195,30 @@ export function usePermissions(options: UsePermissionsOptions = {}): UsePermissi
     setPermissionResolved(null);
     waitingRef.current = false;
 
-    // Surface as a system notification with Allow / Deny actions so the
-    // user can decide from the OS tray when the window is hidden.
-    // Guarded by document.visibilityState to avoid double-prompting when
-    // the in-app modal is already on screen.
+    // Surface as a system notification when the window is hidden. AskUserQuestion
+    // is a distinct case: it carries a question (no Allow/Deny decision), so it is
+    // shown as a question notification without actions — the user answers in-app.
+    // Guarded by document.visibilityState to avoid double-prompting when the
+    // in-app modal is already on screen.
     if (systemNotify && typeof document !== 'undefined' && document.visibilityState === 'hidden' && sessionId) {
-      void showPermissionNotification({
-        sessionId,
-        permissionId: request.id,
-        toolName: request.toolName ?? 'tool',
-        body: typeof request.toolInput === 'string'
-          ? `Allow ${request.toolName}? ${request.toolInput}`.slice(0, 200)
-          : `Allow ${request.toolName ?? 'tool'} to run?`,
-      });
+      if (requiresUserAnswer) {
+        const questions = (request.toolInput?.questions ?? []) as Array<{ question?: string }>;
+        const question = questions[0]?.question ?? '';
+        void showAskUserQuestionNotification({
+          sessionId,
+          permissionId: request.id,
+          question,
+        });
+      } else {
+        void showPermissionNotification({
+          sessionId,
+          permissionId: request.id,
+          toolName: request.toolName ?? 'tool',
+          body: typeof request.toolInput === 'string'
+            ? `Allow ${request.toolName}? ${request.toolInput}`.slice(0, 200)
+            : `Allow ${request.toolName ?? 'tool'} to run?`,
+        });
+      }
     }
   }, [systemNotify, sessionId, permissionProfile, onPermissionResolved]);
 

@@ -37,10 +37,10 @@ import type {
   PluginManifest,
   PluginRegistryEntry,
   PluginViewItem,
-  PluginScope,
   PluginSetupState,
   PluginRuntimeHealth,
 } from './types';
+import { PluginScope } from './types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 
 function removeDirSafe(targetPath: string): void {

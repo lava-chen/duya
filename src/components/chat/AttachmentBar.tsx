@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import type { FileAttachment } from '@/types/message';
 import { FileAttachmentCard } from './FileAttachmentCard';
+import { rewriteMediaSrc } from './markdownComponents';
 
 export interface AttachmentBarProps {
   attachments: FileAttachment[];
@@ -142,7 +143,7 @@ function AttachmentChipCard({
           </IconButton>
         )}
         <img
-          src={previewImage}
+          src={previewImage ? rewriteMediaSrc(previewImage) : undefined}
           alt={preview}
           className="browser-screenshot-attachment-image"
           loading="lazy"
@@ -274,10 +275,10 @@ export function AttachmentBar({
                 name={isBrowserShot ? att.previewText || att.name : att.name}
                 thumbnail={
                   isBrowserShot
-                    ? linkedImage?.displayUrl || linkedImage?.thumbnail || linkedImage?.url
-                    : att.displayUrl || att.thumbnail || (att.kind === 'image' ? att.url : undefined)
+                    ? linkedImage?.displayUrl || linkedImage?.thumbnail || linkedImage?.url || linkedImage?.path
+                    : att.displayUrl || att.thumbnail || (att.kind === 'image' ? (att.url || att.path) : undefined)
                 }
-                url={isBrowserShot ? undefined : att.url}
+                url={isBrowserShot ? undefined : (att.url || att.path)}
                 width={104}
                 onRemove={mode === 'input' ? (id) => onRemove?.(id) : undefined}
                 onClick={mode === 'history' ? () => onPreview?.(att) : undefined}
@@ -297,7 +298,7 @@ export function AttachmentBar({
               onPreview={onPreview}
               previewImage={(() => {
                 const linkedImage = resolveLinkedBrowserScreenshotImage(att, attachments);
-                return linkedImage?.displayUrl || linkedImage?.thumbnail || linkedImage?.url;
+                return linkedImage?.displayUrl || linkedImage?.thumbnail || linkedImage?.url || linkedImage?.path;
               })()}
             />
           ))}

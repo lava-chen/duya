@@ -385,10 +385,6 @@ export function ExtensionsPage() {
   const [activeTab, setActiveTab] = useState<ExtensionTab>("plugins");
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [detailPluginId, setDetailPluginId] = useState<string | null>(null);
-  const [
-    marketplaceDetailPlugin,
-    setMarketplaceDetailPlugin,
-  ] = useState<PluginCatalogEntry | null>(null);
 
   // ── Data state ──
   const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
@@ -589,12 +585,13 @@ export function ExtensionsPage() {
     async (
       pluginId: string,
       action: () => Promise<{ success: boolean; error?: string }>
-    ) => {
+    ): Promise<{ success: boolean; error?: string }> => {
       setBusyPluginId(pluginId);
       const res = await action();
       if (!res.success) setPluginsError(res.error ?? t("extensions.actionFailed"));
       await reloadPlugins();
       setBusyPluginId(null);
+      return res;
     },
     [reloadPlugins, t]
   );
@@ -813,26 +810,6 @@ export function ExtensionsPage() {
               )
             }
             busy={busyPluginId === detailPlugin.id}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  // ── Marketplace plugin detail inline view ──
-  if (marketplaceDetailPlugin) {
-    return (
-      <div className="settings-page-content">
-        <div className="settings-content">
-          <PluginDetailView
-            catalog={marketplaceDetailPlugin}
-            onBack={() => setMarketplaceDetailPlugin(null)}
-            onInstall={() =>
-              void runPluginAction(marketplaceDetailPlugin.id, () =>
-                pluginApi!.registry.install({ pluginId: marketplaceDetailPlugin.id })
-              )
-            }
-            busy={busyPluginId === marketplaceDetailPlugin.id}
           />
         </div>
       </div>
@@ -1066,10 +1043,14 @@ export function ExtensionsPage() {
           open={marketplaceOpen}
           onClose={() => setMarketplaceOpen(false)}
           installedPlugins={installed}
+          busyPluginId={busyPluginId}
           connections={connections}
           providers={connectionProviders}
-          onInstallPlugin={(plugin) => setMarketplaceDetailPlugin(plugin)}
-          onPluginClick={(plugin) => setMarketplaceDetailPlugin(plugin)}
+          onInstall={async (plugin) =>
+            runPluginAction(plugin.id, () =>
+              pluginApi!.registry.install({ pluginId: plugin.id })
+            )
+          }
           onConnectProvider={requestConnection}
           onConfigureProvider={(provider) => {
             setConnectionSetupError(null);

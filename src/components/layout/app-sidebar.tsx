@@ -39,6 +39,7 @@ import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { InputDialog } from "@/components/ui/InputDialog";
@@ -140,6 +141,8 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const [isLoading, setIsLoading] = useState(true);
     const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
     const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+    const CRON_THREAD_LIMIT = 5;
+    const [cronVisibleCount, setCronVisibleCount] = useState(CRON_THREAD_LIMIT);
 
     const {
       threads,
@@ -156,6 +159,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       collapsedProjects,
       collapseAllProjects,
       expandAllProjects,
+      toggleProjectExpanded,
       projectSortBy,
       setProjectSortBy,
       projectGroupBy,
@@ -312,7 +316,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     };
 
     // Group threads by project (only main threads, sub-agents are nested under parents)
-    const { projectGroups, noProjectThreads, flatThreads, pinnedThreads, threadChildren } = useMemo(() => {
+    const { projectGroups, noProjectThreads, flatThreads, pinnedThreads, cronThreads, threadChildren } = useMemo(() => {
       const groups = new Map<string, Thread[]>();
       const childrenMap = new Map<string, Thread[]>();
       const mainThreads: Thread[] = [];
@@ -321,6 +325,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       // at the top of the sidebar. They still participate in `threadChildren`
       // so sub-agent nesting works the same as unpinned threads.
       const pinned: Thread[] = [];
+      const cronThreads: Thread[] = [];
 
       for (const thread of threads) {
         // Sub-agent sessions without a parent are malformed/orphaned. Do not
@@ -341,6 +346,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         // project grouping and stay visible at the top.
         if (thread.pinned === 1) {
           pinned.push(thread);
+          continue;
+        }
+
+        // Cron sessions get their own sidebar group (id prefix `cron:`).
+        if (thread.id.startsWith('cron:')) {
+          cronThreads.push(thread);
           continue;
         }
 
@@ -391,6 +402,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
         noProjectThreads: sortThreads(noProjectThreads),
         flatThreads: sortThreads(mainThreads),
         pinnedThreads: sortThreads(pinned),
+        cronThreads: sortThreads(cronThreads),
         threadChildren: childrenMap,
       };
     }, [threads, projectSortBy, collapsedProjects, noProjectWorkspace]);
@@ -399,6 +411,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       () => projectGroups.length > 0 && projectGroups.every((p) => collapsedProjects.has(p.workingDirectory)),
       [projectGroups, collapsedProjects]
     );
+
+    // Cron group mirrors ProjectGroupItem: reveal sessions incrementally (5 at
+    // a time) so expanding never jumps straight from 5 to the full list.
+    const hasMoreCronThreads = cronThreads.length > cronVisibleCount;
+    const cronRevealCount = Math.min(CRON_THREAD_LIMIT, cronThreads.length - cronVisibleCount);
+    const cronVisibleThreads = cronThreads.slice(0, cronVisibleCount);
 
     // Handle settings tab change
     const handleSettingsTabChange = (tabId: SettingsTab) => {
@@ -487,7 +505,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           })}
         </nav>
 
-        {(flatThreads.length > 0 || pinnedThreads.length > 0) && (
+        {(flatThreads.length > 0 || pinnedThreads.length > 0 || cronThreads.length > 0) && (
           <SidebarProjectHeader
             onNewBlankProject={handleNewBlankProject}
             onUseExistingFolder={handleOpenExistingFolder}
@@ -521,11 +539,65 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
             </>
           )}
 
+          {cronThreads.length > 0 && (
+            <div className="project-group-item">
+              <div
+                className="project-group-header"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  toggleProjectExpanded('__cron__');
+                  // Re-opening the group always starts from the base limit
+                  // instead of continuing the previous reveal count.
+                  setCronVisibleCount(CRON_THREAD_LIMIT);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    toggleProjectExpanded('__cron__');
+                    setCronVisibleCount(CRON_THREAD_LIMIT);
+                  }
+                }}
+              >
+                {collapsedProjects.has('__cron__') ? (
+                  <CaretRightIcon size={12} />
+                ) : (
+                  <CaretDownIcon size={12} />
+                )}
+                <span className="project-group-name">{t('thread.cronSection')}</span>
+              </div>
+              {!collapsedProjects.has('__cron__') && (
+                <div className="project-group-threads">
+                  {cronVisibleThreads.map((thread) => (
+                    <ThreadListItem
+                      key={thread.id}
+                      thread={thread}
+                      isActive={thread.id === activeThreadId}
+                      childrenThreads={threadChildren.get(thread.id) || []}
+                    />
+                  ))}
+                  {hasMoreCronThreads && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="project-group-expand-all justify-start"
+                      onClick={() => setCronVisibleCount((c) => c + CRON_THREAD_LIMIT)}
+                    >
+                      <CaretRightIcon size={10} />
+                      <span>{t('common.showAll', { count: cronRevealCount })}</span>
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {projectGroupBy === 'byProject' && projectGroups.length > 0 && (
             <div className="project-list">
               {projectGroups.map((project) => {
                 const projectThreads = threads.filter(
-                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t) && t.pinned !== 1
+                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t) && t.pinned !== 1 && !t.id.startsWith('cron:')
                 );
                 return (
                   <ProjectGroupItem

@@ -2,16 +2,18 @@
  * ParserRegistry - extension -> Parser factory
  *
  * Lightweight registry that defers parser construction to first use.
- * TextParser and ImageParser are constructed on the spot; heavier
+ * TextParser and DocumentParser are constructed on the spot; heavier
  * parsers (docx/pptx/pdf) are also lightweight classes but we keep
  * the factory pattern for future caching.
+ *
+ * Image files are NOT registered here. The ReadTool routes image files
+ * to the dedicated vision_analyze tool instead of parsing pixels.
  */
 
 import { TextParser } from './parsers/text.js';
 import { DocxParser } from './parsers/docx.js';
 import { PptxParser } from './parsers/pptx.js';
 import { PdfParser } from './parsers/pdf.js';
-import { ImageParser } from './parsers/image.js';
 import { NotebookParser } from './parsers/notebook.js';
 import { XlsxParser } from './parsers/xlsx.js';
 import type { RawParse } from './types.js';
@@ -30,11 +32,6 @@ export const REGISTRY: Record<string, ParserFactory> = {
   '.xlsx': () => new XlsxParser(),
   '.pdf': () => new PdfParser(),
   '.ipynb': () => new NotebookParser(),
-  '.png': () => new ImageParser(),
-  '.jpg': () => new ImageParser(),
-  '.jpeg': () => new ImageParser(),
-  '.gif': () => new ImageParser(),
-  '.webp': () => new ImageParser(),
 };
 
 export function getParser(ext: string): Parser | null {

@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
+import { EXT_MIME_MAP } from '../../utils/mime.js';
 
 const TELEGRAM_FILE_API = 'https://api.telegram.org/file/bot';
 const MEDIA_CACHE_DIR = path.join(os.tmpdir(), 'duya-telegram-media');
@@ -40,31 +41,6 @@ export const SUPPORTED_VIDEO_TYPES: Record<string, string> = {
   '.webm': 'video/webm',
 };
 
-export const MIME_TYPES: Record<string, string> = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.mp4': 'video/mp4',
-  '.mov': 'video/quicktime',
-  '.avi': 'video/x-msvideo',
-  '.mkv': 'video/x-matroska',
-  '.webm': 'video/webm',
-  '.mp3': 'audio/mpeg',
-  '.ogg': 'audio/ogg',
-  '.oga': 'audio/ogg',
-  '.wav': 'audio/wav',
-  '.m4a': 'audio/mp4',
-  '.pdf': 'application/pdf',
-  '.zip': 'application/zip',
-  '.doc': 'application/msword',
-  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  '.txt': 'text/plain',
-  '.md': 'text/markdown',
-  '.json': 'application/json',
-};
-
 export function ensureCacheDir(): void {
   if (!fs.existsSync(MEDIA_CACHE_DIR)) {
     fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true });
@@ -77,7 +53,7 @@ export function getCacheDir(): string {
 
 export function getMimeType(filePath: string, mediaType: string): string {
   const ext = path.extname(filePath).toLowerCase();
-  if (MIME_TYPES[ext]) return MIME_TYPES[ext];
+  if (EXT_MIME_MAP[ext]) return EXT_MIME_MAP[ext];
 
   switch (mediaType) {
     case 'photo': return 'image/jpeg';
