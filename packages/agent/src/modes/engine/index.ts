@@ -9,7 +9,7 @@
  */
 
 export type { AnyModeTracker } from './engine.js';
-export { ModeTrackerEngine } from './engine.js';
+export { ModeTrackerEngine, modeTrackerEngine } from './engine.js';
 export type { ModeStateSnapshot, ModeTracker } from './tracker.js';
 export {
   applySnapshot,
@@ -17,3 +17,17 @@ export {
   snapshotStatus,
 } from './persistence.js';
 export { ModeCoordinator } from './coordinator.js';
+export { PlanModeTracker, planModeTracker } from './plan-tracker.js';
+export type {
+  PlanModeEvent,
+  PlanModeSnapshot,
+  PlanModeState,
+  PlanModeTransitionPayload,
+} from './plan-tracker.js';
+export {
+  exitReminder,
+  fullReminder,
+  reentryReminder,
+  renderReminder,
+  sparseReminder,
+} from './reminders.js';

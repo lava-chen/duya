@@ -59,3 +59,10 @@ export class ModeTrackerEngine {
     return applySnapshot(tracker, snap);
   }
 }
+
+/**
+ * Singleton engine instance. Stateful modes register their trackers against
+ * this in `packages/agent/src/modes/index.ts` (plan 413b), mirroring the
+ * `modeModifierRegistry` pattern.
+ */
+export const modeTrackerEngine = new ModeTrackerEngine();

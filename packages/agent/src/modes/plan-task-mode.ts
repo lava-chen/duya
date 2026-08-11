@@ -17,6 +17,7 @@
  */
 
 import type { ModeModifier } from './types.js';
+import { planModeTracker } from './engine/plan-tracker.js';
 
 /**
  * System prompt prefix prepended in plan-task mode.
@@ -86,12 +87,17 @@ Do not begin implementation until the user explicitly approves the plan and exit
 `;
 
 /**
- * Plan-task mode modifier — per-message, read-only, mutually exclusive
+ * Plan-task mode modifier — session-kind, read-only, mutually exclusive
  * with research and conductor.
+ *
+ * Session kind (plan 413b): the modifier persists across messages and carries a
+ * {@link PlanModeTracker} runtime state machine. The frontend session wiring
+ * lands in plan 413e — until then the agent-side declaration only changes the
+ * mode's lifecycle contract; runtime reminder injection / gating is 413d.
  */
 export const planTaskMode: ModeModifier = {
   id: 'plan-task',
-  kind: 'message',
+  kind: 'session',
   exclusiveWith: ['research', 'conductor'],
   display: { label: 'Plan Mode', icon: 'ListChecks' },
 
@@ -109,6 +115,12 @@ export const planTaskMode: ModeModifier = {
   },
 
   prompt: {
+    // Long-form activation prompt kept for now; 413d may fold it into the
+    // per-turn reminders and retire this prefix.
     prefix: PLAN_TASK_PROMPT,
   },
+
+  // Runtime state machine (plan 413b): drives lifecycle / reminders / tool
+  // gating once 413d wires the coordinator into the agent loop.
+  tracker: planModeTracker,
 };
