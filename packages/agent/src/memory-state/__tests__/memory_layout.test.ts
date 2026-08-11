@@ -118,10 +118,12 @@ describe('parseLayout', () => {
     expect(layout.entities.size).toBe(12);
   });
 
-  it('DEFAULT_LAYOUT has person + area', () => {
-    expect(DEFAULT_LAYOUT.entities.size).toBe(2);
+  it('DEFAULT_LAYOUT has person + preference + area', () => {
+    expect(DEFAULT_LAYOUT.entities.size).toBe(3);
     expect(DEFAULT_LAYOUT.entities.has('person')).toBe(true);
+    expect(DEFAULT_LAYOUT.entities.has('preference')).toBe(true);
     expect(DEFAULT_LAYOUT.entities.has('area')).toBe(true);
+    expect(DEFAULT_LAYOUT.entities.get('preference')?.dir).toBe('global/preferences');
   });
 
   it('rejects non-object input', () => {

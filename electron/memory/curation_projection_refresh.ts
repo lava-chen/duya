@@ -56,14 +56,15 @@ export async function refreshProjections(memoryRoot: string): Promise<string[]> 
     touched.push(absolute);
   }
 
-  // Index files per entity directory. Hardcoded for now because the
-  // layout is fixed (memory_layout.json declares area → global/areas,
-  // person → global/people). A future plan can read the layout and
-  // loop over its declared entity types instead.
-  for (const entityType of ['area', 'person'] as const) {
+  // Index files per entity directory.
+  for (const entityType of ['area', 'person', 'preference'] as const) {
     const content = generateIndexMdLive(memoryRoot, entityType);
     if (content === '') continue;
-    const relPath = `global/${entityType === 'area' ? 'areas' : 'people'}/index.md`;
+    const dir =
+      entityType === 'area' ? 'areas'
+      : entityType === 'person' ? 'people'
+      : 'preferences';
+    const relPath = `global/${dir}/index.md`;
     const absolute = path.join(memoryRoot, relPath);
     await atomicWrite(absolute, content);
     touched.push(absolute);

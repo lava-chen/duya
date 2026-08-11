@@ -67,6 +67,7 @@ export const DEFAULT_LAYOUT: MemoryLayout = {
   schema_version: 1,
   entities: new Map<ClaimType, MemoryEntityConfig>([
     ['person', { dir: 'global/people', key_prefix: 'person:', index: 'index.md', max_files: 128 }],
+    ['preference', { dir: 'global/preferences', key_prefix: 'preference:', index: 'index.md', max_files: 128 }],
     ['area', { dir: 'global/areas', key_prefix: 'area:', index: 'index.md', max_files: 128 }],
   ]),
 };
