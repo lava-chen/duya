@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import { randomUUID } from 'crypto';
 import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
+import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import {
   createCanvas as createConductorCanvas,
@@ -268,8 +269,8 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:session:list', () => {
     const { sessions } = getCoreStores();
-    // Decision 5: preserve renderer's mode != 'automation' filter.
-    const list = sessions.list({ excludeModes: ['automation'] });
+    // Cron sessions are fully ordinary (mode='chat'); no exclusion here.
+    const list = sessions.list();
     return list.map(coreSessionToIpcRow);
   });
 
@@ -579,18 +580,7 @@ export function registerDbHandlers(): void {
     return scheduler.listCrons();
   });
 
-  ipcMain.handle('automation:cron:create', (_event, data: {
-    name: string;
-    description?: string | null;
-    workingDirectory?: string;
-    schedule: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
-    prompt: string;
-    model: string;
-    inputParams?: Record<string, unknown>;
-    concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
-    maxRetries?: number;
-    enabled?: boolean;
-  }) => {
+  ipcMain.handle('automation:cron:create', (_event, data: CreateAutomationCronInput) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
@@ -598,17 +588,7 @@ export function registerDbHandlers(): void {
     return scheduler.createCron(data);
   });
 
-  ipcMain.handle('automation:cron:update', (_event, id: string, patch: {
-    name?: string;
-    description?: string | null;
-    workingDirectory?: string;
-    schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
-    prompt?: string;
-    inputParams?: Record<string, unknown>;
-    concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
-    maxRetries?: number;
-    status?: 'enabled' | 'disabled' | 'error';
-  }) => {
+  ipcMain.handle('automation:cron:update', (_event, id: string, patch: UpdateAutomationCronInput) => {
     const scheduler = getAutomationScheduler();
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
@@ -632,7 +612,8 @@ export function registerDbHandlers(): void {
     return await scheduler.runCronNow(id);
   });
 
-  ipcMain.handle('automation:cron:runs', (_event, input: {
+  // Cron run history = the job's ordinary sessions (id prefix `cron:<jobId>:`).
+  ipcMain.handle('automation:cron:sessions', (_event, input: {
     cronId: string;
     limit?: number;
     offset?: number;
@@ -641,7 +622,16 @@ export function registerDbHandlers(): void {
     if (!scheduler) {
       throw new Error('Automation scheduler is not initialized');
     }
-    return scheduler.listCronRuns(input);
+    const { sessions } = getCoreStores();
+    const rows = sessions.listByPrefix(`cron:${input.cronId}:`, { limit: input.limit, offset: input.offset });
+    return rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      model: r.model,
+      messageCount: r.message_count,
+    }));
   });
 
   ipcMain.handle('automation:template:list', () => {

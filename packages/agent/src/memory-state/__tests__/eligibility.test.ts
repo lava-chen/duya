@@ -69,13 +69,13 @@ describe('selectEligible', () => {
     expect(ids).not.toContain('gw');
   });
 
-  it("2. agent_type='main' + mode='automation' is excluded", () => {
+  it("2. cron sessions (mode='automation' legacy) are eligible like any other", () => {
     insertCatalogRow(db, { rollout_id: 'plain', last_message_at: BASE_LAST_MESSAGE_AT });
     insertCatalogRow(db, { rollout_id: 'cron', mode: 'automation', last_message_at: BASE_LAST_MESSAGE_AT });
 
     const ids = eligibleIds(db);
     expect(ids).toContain('plain');
-    expect(ids).not.toContain('cron');
+    expect(ids).toContain('cron');
   });
 
   it("3. source_status='deleted' / 'missing' is excluded", () => {

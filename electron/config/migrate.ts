@@ -21,8 +21,13 @@ import path from 'path';
 import { safeStorage } from 'electron';
 import { parseUserMcpToml } from '@duya/plugin-core/src/mcp/user-config.js';
 import { getLogger, LogComponent } from '../logging/logger';
+import { parse, stringify } from '@iarna/toml';
+import writeFileAtomic from 'write-file-atomic';
 import { ConfigStore } from './store';
-import type { CronJob, SkillConfigEntry } from './schema';
+import type { CronJobFile } from '../automation/cron-file';
+import { formatEveryDuration } from '../automation/schedule.js';
+import type { ConcurrencyPolicy } from '../automation/types';
+import type { SkillConfigEntry } from './schema';
 
 const logger = getLogger();
 
@@ -340,47 +345,10 @@ export function migrateSqliteRows(store: ConfigStore, db: MigrateDb): void {
     }
   }
 
-  // --- automation_crons -> cron.jobs ---
-  // New databases no longer create automation_crons (definitions now live in
-  // config.toml cron.jobs), so the legacy read may fail with no such table.
-  let cronRows: Array<Record<string, unknown>> = [];
-  try {
-    cronRows = db.prepare(
-      'SELECT id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz, schedule_end_at, workflow_id, working_directory, prompt, input_params, model, status, concurrency_policy, max_retries FROM automation_crons',
-    ).all() as Array<Record<string, unknown>>;
-  } catch {
-    cronRows = [];
-  }
-  if (cronRows.length > 0) {
-    const jobs: CronJob[] = cronRows.map((c) => ({
-      id: String(c.id ?? ''),
-      name: String(c.name ?? ''),
-      description: typeof c.description === 'string' ? c.description : undefined,
-      schedule_kind: (c.schedule_kind as CronJob['schedule_kind']) ?? 'every',
-      schedule_at: typeof c.schedule_at === 'string' ? c.schedule_at : undefined,
-      schedule_every_ms: typeof c.schedule_every_ms === 'number' ? c.schedule_every_ms : undefined,
-      schedule_cron_expr: typeof c.schedule_cron_expr === 'string' ? c.schedule_cron_expr : undefined,
-      schedule_cron_tz: typeof c.schedule_cron_tz === 'string' ? c.schedule_cron_tz : undefined,
-      schedule_end_at: typeof c.schedule_end_at === 'string' ? c.schedule_end_at : undefined,
-      workflow_id: typeof c.workflow_id === 'string' ? c.workflow_id : undefined,
-      working_directory: String(c.working_directory ?? ''),
-      prompt: String(c.prompt ?? ''),
-      input_params: safeJson(typeof c.input_params === 'string' ? c.input_params : '{}'),
-      model: String(c.model ?? ''),
-      status: (c.status as CronJob['status']) ?? 'enabled',
-      concurrency_policy: (c.concurrency_policy as CronJob['concurrency_policy']) ?? 'skip',
-      max_retries: typeof c.max_retries === 'number' ? c.max_retries : 3,
-    }));
-    store.set('cron.jobs', jobs);
-  }
-}
-
-function safeJson(text: string): Record<string, unknown> {
-  try {
-    return JSON.parse(text) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  // --- automation_crons -> cronjob.toml ---
+  // Cron definitions now live in the single-source `~/.duya/cronjob.toml`.
+  // migrateCronJobsToFile handles the legacy automation_crons table and any
+  // config.toml `cron.jobs` left by the plan 405 interim layout.
 }
 
 // =============================================================================
@@ -441,5 +409,125 @@ function deleteSources(migratedPaths: string[], bootPath: string): void {
       // Never throw during cleanup; the config merge already succeeded.
       logger.warn('Failed to delete legacy config source', { path: p }, LogComponent.ConfigManager);
     }
+  }
+}
+
+// =============================================================================
+// cronjob.toml migration (single source of truth)
+// =============================================================================
+
+/**
+ * Migrate legacy cron definitions into the single-source `~/.duya/cronjob.toml`.
+ * Idempotent: skips once the file exists.
+ *
+ * Merges two legacy sources:
+ *  1. The old `automation_crons` SQLite table (pre-plan-405 shape).
+ *  2. `config.toml` `cron.jobs` (plan 405 wrote definitions there).
+ *
+ * After writing cronjob.toml, `cron.jobs` is removed from config.toml so cron
+ * data lives in exactly one place.
+ */
+export function migrateCronJobsToFile(db: MigrateDb, opts: { configPath: string; cronFilePath: string }): void {
+  if (fs.existsSync(opts.cronFilePath)) return;
+
+  const jobs: CronJobFile[] = [];
+
+  // 1. legacy automation_crons table (may not exist on fresh databases).
+  let cronRows: Array<Record<string, unknown>> = [];
+  try {
+    cronRows = db.prepare(
+      'SELECT id, name, description, schedule_kind, schedule_at, schedule_every_ms, schedule_cron_expr, schedule_cron_tz, schedule_end_at, workflow_id, working_directory, prompt, input_params, model, status, concurrency_policy, max_retries FROM automation_crons',
+    ).all() as Array<Record<string, unknown>>;
+  } catch {
+    cronRows = [];
+  }
+  for (const c of cronRows) jobs.push(legacyRowToJob(c));
+
+  // 2. config.toml cron.jobs (plan 405 interim layout).
+  if (fs.existsSync(opts.configPath)) {
+    try {
+      const parsed = parse(fs.readFileSync(opts.configPath, 'utf-8')) as {
+        cron?: { jobs?: Array<Record<string, unknown>> };
+      };
+      if (Array.isArray(parsed.cron?.jobs)) {
+        for (const j of parsed.cron.jobs) jobs.push(legacyRowToJob(j));
+      }
+    } catch {
+      // best effort; a malformed config.toml should not block startup
+    }
+  }
+
+  if (jobs.length > 0) {
+    const dir = path.dirname(opts.cronFilePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    writeFileAtomic.sync(
+      opts.cronFilePath,
+      stringify({ version: 1, jobs } as unknown as Parameters<typeof stringify>[0]),
+      { mode: 0o600 },
+    );
+  }
+
+  removeCronJobsFromConfig(opts.configPath);
+}
+
+/** Map a legacy flat schedule to the nested CronSchedule shape. */
+function flatScheduleToNested(c: Record<string, unknown>): CronJobFile['schedule'] {
+  const kind = c.schedule_kind;
+  if (kind === 'at') {
+    return { kind: 'once', at: String(c.schedule_at ?? ''), endAt: c.schedule_end_at ? String(c.schedule_end_at) : null };
+  }
+  if (kind === 'every') {
+    return {
+      kind: 'every',
+      every: formatEveryDuration(typeof c.schedule_every_ms === 'number' ? c.schedule_every_ms : 3_600_000),
+      endAt: c.schedule_end_at ? String(c.schedule_end_at) : null,
+    };
+  }
+  return {
+    kind: 'cron',
+    expr: String(c.schedule_cron_expr ?? ''),
+    tz: typeof c.schedule_cron_tz === 'string' ? c.schedule_cron_tz : null,
+    endAt: c.schedule_end_at ? String(c.schedule_end_at) : null,
+  };
+}
+
+/** Convert a legacy flat cron row into the new cronjob.toml job shape. */
+function legacyRowToJob(c: Record<string, unknown>): CronJobFile {
+  return {
+    id: String(c.id ?? ''),
+    name: String(c.name ?? ''),
+    prompt: String(c.prompt ?? ''),
+    enabled: c.status !== 'disabled',
+    schedule: flatScheduleToNested(c),
+    working_directory: String(c.working_directory ?? ''),
+    model:
+      typeof c.model === 'string' && c.model && c.model.toLowerCase() !== 'default'
+        ? c.model
+        : undefined,
+    concurrency: (c.concurrency_policy as ConcurrencyPolicy) ?? 'skip',
+    max_retries: typeof c.max_retries === 'number' ? c.max_retries : 3,
+    last_run_at: 0,
+    last_error: null,
+    retry_count: 0,
+  };
+}
+
+/** Remove `cron.jobs` from config.toml so cron data lives in one place. */
+function removeCronJobsFromConfig(configPath: string): void {
+  if (!fs.existsSync(configPath)) return;
+  try {
+    const raw = fs.readFileSync(configPath, 'utf-8');
+    const doc = parse(raw) as Record<string, unknown>;
+    const cron = doc.cron;
+    if (cron && typeof cron === 'object') {
+      const cronObj = cron as Record<string, unknown>;
+      if ('jobs' in cronObj) {
+        delete cronObj.jobs;
+        if (Object.keys(cronObj).length === 0) delete doc.cron;
+        writeFileAtomic.sync(configPath, stringify(doc as unknown as Parameters<typeof stringify>[0]), { mode: 0o600 });
+      }
+    }
+  } catch {
+    // best effort; leaving a stale cron.jobs is harmless (nothing reads it).
   }
 }

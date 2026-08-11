@@ -1,68 +1,75 @@
-export type CronScheduleKind = 'at' | 'every' | 'cron';
-export type ConcurrencyPolicy = 'skip' | 'parallel' | 'queue' | 'replace';
-export type CronStatus = 'enabled' | 'disabled' | 'error';
-export type CronRunStatus = 'pending' | 'running' | 'success' | 'failed' | 'cancelled';
+/**
+ * src/types/automation.ts
+ *
+ * Renderer-side mirror of `electron/automation/types.ts`. Keep the two in
+ * lockstep. A cron run is an ordinary agent session (mode='chat', source='cron')
+ * whose history lives in the session transcript; there is no run table.
+ */
 
-export interface CronSchedule {
-  kind: CronScheduleKind;
-  at?: string;
-  everyMs?: number;
-  cronExpr?: string;
-  cronTz?: string | null;
+export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
+export type CronScheduleKind = 'once' | 'every' | 'cron';
+
+export interface CronEverySchedule {
+  kind: 'every';
+  every: string; // human-friendly duration: "5m", "1h", "1d"
   endAt?: string | null;
 }
+export interface CronOnceSchedule {
+  kind: 'once';
+  at: string; // ISO date-time
+  endAt?: string | null;
+}
+export interface CronExprSchedule {
+  kind: 'cron';
+  expr: string; // 5-field cron expression
+  tz?: string | null;
+  endAt?: string | null;
+}
+export type CronSchedule = CronEverySchedule | CronOnceSchedule | CronExprSchedule;
 
+/** A cron job: definition + runtime state, mirrored from cronjob.toml. */
 export interface AutomationCron {
   id: string;
   name: string;
-  description: string | null;
-  tags: string[];
-  schedule_kind: CronScheduleKind;
-  schedule_at: string | null;
-  schedule_every_ms: number | null;
-  schedule_cron_expr: string | null;
-  schedule_cron_tz: string | null;
-  schedule_end_at: string | null;
-  workflow_id: string | null;
-  working_directory: string;
   prompt: string;
-  input_params: string;
-  session_target: 'isolated';
-  delivery_mode: 'none';
-  status: CronStatus;
+  schedule: CronSchedule;
+  workingDirectory: string;
   model: string;
-  last_run_at: number | null;
-  next_run_at: number | null;
-  last_error: string | null;
-  retry_count: number;
-  concurrency_policy: ConcurrencyPolicy;
-  max_retries: number;
-  created_at: number;
-  updated_at: number;
+  enabled: boolean;
+  concurrencyPolicy: ConcurrencyPolicy;
+  maxRetries: number;
+  lastRunAt: number | null;
+  lastError: string | null;
+  retryCount: number;
+  /** Computed on read from (schedule, lastRunAt, now); not persisted. */
+  nextRunAt: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
-export interface AutomationCronRun {
+/** Returned by `runCronNow` so the caller can open the run view immediately. */
+export interface CronRunHandle {
+  runId: string;
+  sessionId: string;
+  cronId: string;
+}
+
+/** One cron session (one scheduled run) as shown in the history panel. */
+export interface CronSessionSummary {
   id: string;
-  cron_id: string;
-  run_status: CronRunStatus;
-  started_at: number | null;
-  ended_at: number | null;
-  output: string | null;
-  error_message: string | null;
-  logs: string | null;
-  session_id: string | null;
-  created_at: number;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  model: string;
+  messageCount: number;
 }
 
 export interface CreateAutomationCronInput {
   name: string;
-  description?: string | null;
-  tags?: string[];
-  workingDirectory?: string;
-  schedule: CronSchedule;
   prompt: string;
-  model: string;
-  inputParams?: Record<string, unknown>;
+  schedule: CronSchedule;
+  workingDirectory?: string;
+  model?: string;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
@@ -70,16 +77,13 @@ export interface CreateAutomationCronInput {
 
 export interface UpdateAutomationCronInput {
   name?: string;
-  description?: string | null;
-  tags?: string[];
-  workingDirectory?: string;
-  schedule?: CronSchedule;
   prompt?: string;
+  schedule?: CronSchedule;
+  workingDirectory?: string;
   model?: string;
-  inputParams?: Record<string, unknown>;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
-  status?: CronStatus;
+  enabled?: boolean;
 }
 
 export interface AutomationTemplate {

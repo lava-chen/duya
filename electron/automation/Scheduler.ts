@@ -1,261 +1,232 @@
+/**
+ * electron/automation/Scheduler.ts
+ *
+ * Cron scheduler. A 60-second polling tick re-reads `~/.duya/cronjob.toml`
+ * (single source of truth) and fires due jobs. Execution goes through the main
+ * agent HTTP channel (see agent-run.ts) — a cron run is an ordinary agent
+ * session that a system component kicks off by sending it a prompt.
+ *
+ * This replaces the old per-job setTimeout chains / process-pool copies.
+ * Crash-safety: `next_run_at` is derived on each tick from (schedule,
+ * lastRunAt, now), and a due job claims its fire (last_run_at = now) before
+ * running, so a crash mid-run never re-fires forever and a restart naturally
+ * catches up.
+ */
+
 import { randomUUID } from 'crypto';
-import type Database from 'better-sqlite3';
-import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool.js';
-import { toLLMProvider } from '../config/provider-types.js';
-import { getProviderStore } from '../services/providers/provider-store-electron';
-import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { CronStore, computeNextRunAtMs, rowToSchedule } from './cron-store.js';
-import type { AutomationCron, AutomationCronRun } from './types.js';
+import { CronFileStore } from './cron-file.js';
+import { computeNextRunAt } from './schedule.js';
+import { createCronSessionRow, interruptCronSession, runCronInSession } from './agent-run.js';
+import { resolveCronProvider } from './provider.js';
 import { prepareAutomationWorkspace } from './workspace.js';
-import { getCoreStores } from '../db/core-connection.js';
+import type { AutomationCron, CreateAutomationCronInput, CronRunHandle, UpdateAutomationCronInput } from './types.js';
 
-export { computeNextRunAtMs } from './cron-store.js';
+export { computeNextRunAt } from './schedule.js';
 
-const RUN_TIMEOUT_MS = 10 * 60_000;
-const MAX_TIMER_DELAY_MS = 2_147_000_000;
-
-type RunningExecution = { runId: string; sessionId: string; startedAt: number };
+const TICK_INTERVAL_MS = 60_000;
+const RETRY_BACKOFF_MS = [30_000, 60_000, 300_000];
 
 export class AutomationScheduler {
-  private persistence: CronStore;
-  private timers = new Map<string, NodeJS.Timeout>();
-  private running = new Map<string, RunningExecution[]>();
-  private queued = new Map<string, number>();
+  private store: CronFileStore;
+  private running = new Map<string, Set<string>>(); // cronId -> sessionIds
+  private retryTimers = new Map<string, NodeJS.Timeout>();
+  private tickTimer: NodeJS.Timeout | null = null;
   private started = false;
-  private cleanupInterval: NodeJS.Timeout | null = null;
 
-  constructor(db: Database.Database) {
-    this.persistence = new CronStore(db);
+  constructor(store?: CronFileStore) {
+    this.store = store ?? new CronFileStore();
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
-    for (const cron of this.persistence.loadEnabledCrons()) this.reschedule(cron);
-
-    this.cleanupInterval = setInterval(() => {
-      try {
-        const result = this.persistence.cleanupOldRuns();
-        if (result.deletedCount > 0) {
-          getLogger().info('Automation run history cleaned up', {
-            deletedCount: result.deletedCount,
-          }, LogComponent.Automation);
-        }
-      } catch (error) {
-        getLogger().warn('Automation run-history cleanup failed', {
-          error: error instanceof Error ? error.message : String(error),
-        }, LogComponent.Automation);
-      }
-    }, 12 * 60 * 60 * 1000); // every 12 hours
+    try {
+      this.store.load();
+    } catch (error) {
+      getLogger().error('Failed to load cronjob.toml', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Automation);
+    }
+    void this.tick().catch((error) => {
+      getLogger().error('Cron tick failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Automation);
+    });
+    this.tickTimer = setInterval(() => {
+      void this.tick().catch((error) => {
+        getLogger().error('Cron tick failed', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Automation);
+      });
+    }, TICK_INTERVAL_MS);
   }
 
   shutdown(): void {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-      this.cleanupInterval = null;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
     }
-    for (const t of this.timers.values()) clearTimeout(t);
-    this.timers.clear(); this.running.clear(); this.queued.clear(); this.started = false;
+    for (const t of this.retryTimers.values()) clearTimeout(t);
+    this.retryTimers.clear();
+    this.running.clear();
+    this.started = false;
   }
 
-  listCrons(): AutomationCron[] { return this.persistence.listCrons(); }
-  listCronRuns(input: import('./types.js').ListCronRunsInput): AutomationCronRun[] { return this.persistence.listCronRuns(input); }
-
-  createCron(input: import('./types.js').CreateAutomationCronInput): AutomationCron {
-    const cron = this.persistence.createCron(input);
-    this.reschedule(cron);
-    return cron;
+  listCrons(): AutomationCron[] {
+    return this.store.listCrons();
   }
 
-  updateCron(id: string, patch: import('./types.js').UpdateAutomationCronInput): AutomationCron {
-    const cron = this.persistence.updateCron(id, patch);
-    this.reschedule(cron);
-    return cron;
+  getCron(id: string): AutomationCron | null {
+    return this.store.getCron(id);
+  }
+
+  createCron(input: CreateAutomationCronInput): AutomationCron {
+    return this.store.createCron(input);
+  }
+
+  updateCron(id: string, patch: UpdateAutomationCronInput): AutomationCron {
+    return this.store.updateCron(id, patch);
   }
 
   deleteCron(id: string): { success: boolean } {
-    this.unschedule(id);
+    const result = this.store.deleteCron(id);
     this.running.delete(id);
-    this.queued.delete(id);
-    return this.persistence.deleteCron(id);
-  }
-
-  async runCronNow(id: string): Promise<AutomationCronRun> {
-    const cron = this.persistence.getCron(id);
-    if (!cron) throw new Error(`cron not found: ${id}`);
-    const runId = await this.executeCron(cron, true);
-    const run = this.persistence.getRun(runId);
-    if (!run) throw new Error('run not found');
-    return run;
-  }
-
-  private reschedule(cron: AutomationCron): void {
-    this.unschedule(cron.id);
-    if (cron.status !== 'enabled') return;
-    try {
-      const schedule = rowToSchedule(cron);
-      const nextRunAt = computeNextRunAtMs(schedule, Date.now());
-      this.persistence.updateNextRunAt(cron.id, nextRunAt);
-      if (!nextRunAt) {
-        if (schedule.kind === 'at' || schedule.endAt) this.persistence.disableExhaustedCron(cron.id);
-        return;
-      }
-      this.armTimer(cron.id, nextRunAt);
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      this.persistence.markScheduleError(cron.id, reason);
-      getLogger().error('Failed to schedule automation', error instanceof Error ? error : new Error(reason), {
-        cronId: cron.id,
-      }, LogComponent.Automation);
+    const t = this.retryTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      this.retryTimers.delete(id);
     }
+    return result;
   }
 
-  private armTimer(cronId: string, nextRunAt: number): void {
-    const remaining = Math.max(0, nextRunAt - Date.now());
-    const delay = Math.min(remaining, MAX_TIMER_DELAY_MS);
-    this.timers.set(cronId, setTimeout(() => {
-      this.timers.delete(cronId);
-      if (nextRunAt - Date.now() > 500) {
-        this.armTimer(cronId, nextRunAt);
-        return;
-      }
-      void this.onCronTimer(cronId).catch((error) => {
-        getLogger().error('Automation timer execution failed', error instanceof Error ? error : new Error(String(error)), {
-          cronId,
+  /**
+   * Trigger a cron immediately. Creates the session row eagerly (so the caller
+   * can open the run view with a session_id right away) and executes in the
+   * background — awaiting completion would block the IPC handler up to the run
+   * timeout, leaving the UI stuck on "run now".
+   */
+  async runCronNow(id: string): Promise<CronRunHandle> {
+    const job = this.store.getCron(id);
+    if (!job) throw new Error(`cron not found: ${id}`);
+    const runId = randomUUID();
+    const sessionId = `cron:${job.id}:${Date.now()}:${runId}`;
+
+    // Resolve provider + create the session row synchronously so provider
+    // errors surface immediately to the caller instead of vanishing into a
+    // background failure. runCronInSession reuses the row (idempotent create).
+    const { provider, model } = resolveCronProvider(job.model);
+    createCronSessionRow({
+      sessionId,
+      title: `[Cron] ${job.name}`,
+      model,
+      providerId: provider.id,
+      workingDirectory: prepareAutomationWorkspace(job.workingDirectory),
+      cronId: job.id,
+    });
+
+    void this.executeCron(job, true, { runId, sessionId }).catch((error) => {
+      getLogger().error('Manual cron run failed asynchronously', error instanceof Error ? error : new Error(String(error)), {
+        cronId: job.id,
+        runId,
+      }, LogComponent.Automation);
+    });
+    return { runId, sessionId, cronId: job.id };
+  }
+
+  /** One polling pass: fire every enabled job whose next run is due. */
+  async tick(): Promise<void> {
+    this.store.load();
+    const now = Date.now();
+    const due = this.store
+      .listCrons()
+      .filter((j) => j.enabled && j.nextRunAt !== null && j.nextRunAt <= now);
+    for (const job of due) {
+      void this.executeCron(job, false).catch((error) => {
+        getLogger().error('Scheduled cron run failed asynchronously', error instanceof Error ? error : new Error(String(error)), {
+          cronId: job.id,
         }, LogComponent.Automation);
       });
-    }, delay));
+    }
   }
 
-  private unschedule(id: string): void {
-    const t = this.timers.get(id);
-    if (t) { clearTimeout(t); this.timers.delete(id); }
-  }
+  private async executeCron(
+    job: AutomationCron,
+    manual: boolean,
+    existing?: { runId: string; sessionId: string },
+  ): Promise<void> {
+    const runningList = this.running.get(job.id);
 
-  private async onCronTimer(cronId: string): Promise<void> {
-    this.timers.delete(cronId);
-    const cron = this.persistence.getCron(cronId);
-    if (!cron || cron.status !== 'enabled') return;
-    await this.executeCron(cron, false);
-    const latest = this.persistence.getCron(cronId);
-    if (latest) this.reschedule(latest);
-  }
-
-  private async executeCron(cron: AutomationCron, manual: boolean): Promise<string> {
-    const pool = getAgentProcessPool();
-    const policy = cron.concurrency_policy;
-    const runningList = this.running.get(cron.id) ?? [];
-
-    if (runningList.length > 0) {
-      if (policy === 'skip') return this.persistence.insertRun(cron.id, 'skipped-by-concurrency');
-      if (policy === 'queue') { const c = this.queued.get(cron.id) ?? 0; this.queued.set(cron.id, c + 1); return this.persistence.insertRun(cron.id, 'queued'); }
-      if (policy === 'replace') for (const exec of runningList) pool.release(exec.sessionId);
+    // Manually-triggered runs (existing handle) bypass the concurrency policy:
+    // the user explicitly asked to run now.
+    if (!manual && runningList && runningList.size > 0) {
+      if (job.concurrencyPolicy === 'skip') return;
+      if (job.concurrencyPolicy === 'replace') {
+        for (const sid of runningList) interruptCronSession(sid);
+      }
+      // 'parallel' → fall through and allow concurrent sessions.
     }
 
-    const runId = randomUUID();
-    const now = Date.now();
-    const sessionId = `cron:${cron.id}:${now}:${runId}`;
-    this.persistence.beginRun(runId, cron.id, sessionId, manual);
+    const runId = existing?.runId ?? randomUUID();
+    const sessionId = existing?.sessionId ?? `cron:${job.id}:${Date.now()}:${runId}`;
 
-    const exec: RunningExecution = { runId, sessionId, startedAt: now };
-    this.running.set(cron.id, [...runningList, exec]);
+    // Claim the fire BEFORE executing (at-least-once): advancing last_run_at
+    // moves the schedule forward so a crash mid-run does not re-fire forever;
+    // the session history is the run record.
+    if (!existing) {
+      this.store.markRunResult(job.id, {
+        lastRunAt: Date.now(),
+        error: job.lastError,
+        retryCount: job.retryCount,
+      });
+    }
+
+    const nextRunning = new Set(runningList ?? []);
+    nextRunning.add(sessionId);
+    this.running.set(job.id, nextRunning);
 
     try {
-      const output = await this.runInSession(cron, sessionId);
-      this.persistence.finishRunSuccess(cron.id, runId, output);
-      return runId;
+      await runCronInSession(job, sessionId);
+      this.store.markRunResult(job.id, { lastRunAt: Date.now(), error: null, retryCount: 0 });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      const { shouldRetry, retryDelay } = this.persistence.finishRunFailure(cron, runId, reason);
-      if (shouldRetry) {
-        setTimeout(() => { const c = this.persistence.getCron(cron.id); if (c?.status === 'enabled') void this.executeCron(c, false); }, retryDelay);
+      const nextRetry = job.retryCount + 1;
+      this.store.markRunResult(job.id, { lastRunAt: Date.now(), error: reason, retryCount: nextRetry });
+      if (nextRetry < job.maxRetries) {
+        const delay = RETRY_BACKOFF_MS[Math.min(job.retryCount, RETRY_BACKOFF_MS.length - 1)];
+        this.scheduleRetry(job.id, delay);
+      } else {
+        // Retries exhausted: pause the job so the UI surfaces last_error instead
+        // of it failing forever. (Replaces the old status:'error' override.)
+        getLogger().error('Cron run failed after max retries; pausing job', new Error(reason), { cronId: job.id }, LogComponent.Automation);
+        this.store.updateCron(job.id, { enabled: false });
       }
-      return runId;
     } finally {
-      this.running.set(cron.id, (this.running.get(cron.id) ?? []).filter(i => i.runId !== runId));
-      pool.release(sessionId);
-      const q = this.queued.get(cron.id) ?? 0;
-      if (q > 0) {
-        this.queued.set(cron.id, q - 1);
-        const c = this.persistence.getCron(cron.id);
-        if (c?.status === 'enabled') void this.executeCron(c, false);
+      const s = this.running.get(job.id);
+      if (s) {
+        s.delete(sessionId);
+        if (s.size === 0) this.running.delete(job.id);
       }
     }
   }
 
-  private async runInSession(cron: AutomationCron, sessionId: string): Promise<string> {
-    const pool = getAgentProcessPool();
-    const p = getProviderStore().getDefaultLlmProvider();
-    const activeProvider = p ? toLegacyApiProvider(p) : undefined;
-    if (!activeProvider) throw new Error('no active provider configured');
-    const model = cron.model?.trim();
-    if (!model) throw new Error('cron model is not configured');
-
-    // Older cron rows did not retain their project path. Never initialise an
-    // agent with an empty cwd: it can stall project discovery before `ready`.
-    const workingDirectory = prepareAutomationWorkspace(cron.working_directory);
-    // Cron sessions are fixed to permission_mode='default' and mode='automation'.
-    // system_prompt / context_summary go to extensions (legacy column mapping).
-    getCoreStores().sessions.create({
-      id: sessionId,
-      title: `[Cron] ${cron.name}`,
-      model,
-      providerId: activeProvider.id,
-      workingDirectory,
-      status: 'active',
-      mode: 'automation',
-      permissionMode: 'default',
-      extensions: {
-        system_prompt: '',
-        context_summary: '',
-        context_summary_updated_at: 0,
-      },
-    });
-    await pool.acquire(sessionId);
-    // Subscribe before sending init. A fast child can otherwise emit `ready`
-    // between send() and waitForReady(), turning a healthy start into 30s timeout.
-    const ready = pool.waitForReady(sessionId);
-    const initSent = pool.send(sessionId, {
-      type: 'init', sessionId,
-      providerConfig: { apiKey: activeProvider.apiKey, baseURL: activeProvider.baseUrl, model, provider: toLLMProvider(activeProvider.providerType), authStyle: 'api_key' },
-      workingDirectory, systemPrompt: '',
-    });
-    if (!initSent) {
-      void ready.catch(() => undefined);
-      throw new Error(`Agent process ${sessionId} stopped before initialization`);
-    }
-    await ready;
-
-    return await new Promise<string>((resolve, reject) => {
-      const chunks: string[] = [];
-      const startedAt = Date.now();
-      const timeout = setTimeout(() => { pool.removeMessageHandler(sessionId); reject(new Error('cron run timeout')); }, RUN_TIMEOUT_MS);
-      pool.onMessage(sessionId, (msg) => {
-        const m = msg as Record<string, unknown>;
-        if (m.type === 'chat:text' && typeof m.content === 'string') { chunks.push(m.content); return; }
-        if (m.type === 'chat:error') { clearTimeout(timeout); pool.removeMessageHandler(sessionId); reject(new Error(typeof m.message === 'string' ? m.message : 'chat error')); return; }
-        if (m.type === 'chat:done') { clearTimeout(timeout); pool.removeMessageHandler(sessionId); resolve(chunks.join('').trim() || `completed in ${Date.now() - startedAt}ms`); }
-      });
-      // Pass agentProfileId: 'cron' so the cron profile (deny list:
-      // AskUserQuestion/show_widget/Agent/canvas:*/mode-switch/worktree)
-      // is applied. Without this, options: undefined caused the agent to
-      // fall back to the general-purpose profile with ALL tools, including
-      // interactive ones that would hang forever in a headless cron run.
-      const chatSent = pool.send(sessionId, { type: 'chat:start', id: randomUUID(), sessionId, prompt: cron.prompt, options: { agentProfileId: 'cron' } });
-      if (!chatSent) {
-        clearTimeout(timeout);
-        pool.removeMessageHandler(sessionId);
-        reject(new Error(`Agent process ${sessionId} stopped before the cron prompt was sent`));
+  private scheduleRetry(cronId: string, delay: number): void {
+    const existing = this.retryTimers.get(cronId);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      this.retryTimers.delete(cronId);
+      const job = this.store.getCron(cronId);
+      if (job?.enabled) {
+        void this.executeCron(job, false).catch((error) => {
+          getLogger().error('Cron retry failed asynchronously', error instanceof Error ? error : new Error(String(error)), { cronId }, LogComponent.Automation);
+        });
       }
-    });
+    }, delay);
+    this.retryTimers.set(cronId, t);
   }
 }
 
 let instance: AutomationScheduler | null = null;
 
-export function initAutomationScheduler(db: Database.Database): AutomationScheduler {
-  if (!instance) { instance = new AutomationScheduler(db); instance.start(); }
+export function initAutomationScheduler(): AutomationScheduler {
+  if (!instance) {
+    instance = new AutomationScheduler();
+    instance.start();
+  }
   return instance;
 }
 

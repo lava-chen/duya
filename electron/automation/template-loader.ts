@@ -2,7 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { app } from 'electron';
 import { getLogger, LogComponent } from '../logging/logger';
-import type { AutomationTemplate } from './types';
+import { formatEveryDuration } from './schedule.js';
+import type { AutomationTemplate, CronSchedule } from './types';
 
 const logger = getLogger();
 
@@ -19,13 +20,47 @@ function resolveTemplatesPath(): string | null {
   return null;
 }
 
+/**
+ * Normalize a template's `defaultSchedule` into the new nested `CronSchedule`
+ * shape. Accepts both the new fields (`expr`/`every`) and the legacy template
+ * fields (`cronExpr`/`everyMs`) so older packaged template files keep working.
+ */
+function normalizeDefaultSchedule(schedule: Record<string, unknown>): CronSchedule | null {
+  const kind = schedule.kind;
+  if (kind === 'once') {
+    if (typeof schedule.at !== 'string' || !schedule.at) return null;
+    return { kind: 'once', at: schedule.at };
+  }
+  if (kind === 'every') {
+    const every =
+      typeof schedule.every === 'string' && schedule.every.trim()
+        ? schedule.every.trim()
+        : typeof schedule.everyMs === 'number'
+          ? formatEveryDuration(schedule.everyMs)
+          : '5m';
+    return { kind: 'every', every };
+  }
+  if (kind === 'cron') {
+    const expr = typeof schedule.expr === 'string' ? schedule.expr : typeof schedule.cronExpr === 'string' ? schedule.cronExpr : '';
+    if (!expr) return null;
+    const tz =
+      typeof schedule.tz === 'string'
+        ? schedule.tz
+        : typeof schedule.cronTz === 'string'
+          ? schedule.cronTz
+          : null;
+    return { kind: 'cron', expr, tz };
+  }
+  return null;
+}
+
 function validateTemplate(t: Record<string, unknown>): AutomationTemplate | null {
   if (!t || typeof t !== 'object') return null;
   if (typeof t.id !== 'string' || !t.id) return null;
   if (typeof t.prompt !== 'string' || !t.prompt) return null;
   if (!t.defaultSchedule || typeof t.defaultSchedule !== 'object') return null;
-  const schedule = t.defaultSchedule as Record<string, unknown>;
-  if (!schedule.kind || typeof schedule.kind !== 'string') return null;
+  const defaultSchedule = normalizeDefaultSchedule(t.defaultSchedule as Record<string, unknown>);
+  if (!defaultSchedule) return null;
   return {
     id: t.id as string,
     icon: typeof t.icon === 'string' ? t.icon : 'gear',
@@ -34,13 +69,7 @@ function validateTemplate(t: Record<string, unknown>): AutomationTemplate | null
     description_en: typeof t.description_en === 'string' ? t.description_en : '',
     description_zh: typeof t.description_zh === 'string' ? t.description_zh : '',
     prompt: t.prompt as string,
-    defaultSchedule: {
-      kind: schedule.kind as 'at' | 'every' | 'cron',
-      at: typeof schedule.at === 'string' ? schedule.at : undefined,
-      everyMs: typeof schedule.everyMs === 'number' ? schedule.everyMs : undefined,
-      cronExpr: typeof schedule.cronExpr === 'string' ? schedule.cronExpr : undefined,
-      cronTz: (typeof schedule.cronTz === 'string' ? schedule.cronTz : null),
-    },
+    defaultSchedule,
     defaultModel: typeof t.defaultModel === 'string' ? t.defaultModel : undefined,
     tags: Array.isArray(t.tags) ? t.tags.filter((tag): tag is string => typeof tag === 'string') : [],
   };
@@ -81,7 +110,12 @@ export function loadTemplates(): AutomationTemplate[] {
     logger.info(`Loaded ${templates.length} automation templates`, undefined, LogComponent.Automation);
     return cachedTemplates;
   } catch (err) {
-    logger.error(`Failed to load templates: ${err instanceof Error ? err.message : String(err)}`, undefined, LogComponent.Automation);
+    logger.error(
+      `Failed to load templates: ${err instanceof Error ? err.message : String(err)}`,
+      err instanceof Error ? err : new Error(String(err)),
+      {},
+      LogComponent.Automation,
+    );
     cachedTemplates = [];
     return cachedTemplates;
   }

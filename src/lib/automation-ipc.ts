@@ -1,8 +1,9 @@
 import type {
   AutomationCron,
-  AutomationCronRun,
   AutomationTemplate,
   CreateAutomationCronInput,
+  CronRunHandle,
+  CronSessionSummary,
   UpdateAutomationCronInput,
 } from '@/types/automation';
 
@@ -22,12 +23,13 @@ export async function deleteAutomationCronIPC(id: string): Promise<{ success: bo
   return window.electronAPI.automation.deleteCron(id) as Promise<{ success: boolean }>;
 }
 
-export async function runAutomationCronIPC(id: string): Promise<AutomationCronRun> {
-  return window.electronAPI.automation.runCron(id) as Promise<AutomationCronRun>;
+export async function runAutomationCronIPC(id: string): Promise<CronRunHandle> {
+  return window.electronAPI.automation.runCron(id) as Promise<CronRunHandle>;
 }
 
-export async function listAutomationCronRunsIPC(cronId: string, limit = 20, offset = 0): Promise<AutomationCronRun[]> {
-  return window.electronAPI.automation.listCronRuns({ cronId, limit, offset }) as Promise<AutomationCronRun[]>;
+/** A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`). */
+export async function listAutomationCronSessionsIPC(cronId: string, limit = 20, offset = 0): Promise<CronSessionSummary[]> {
+  return window.electronAPI.automation.listCronSessions({ cronId, limit, offset }) as Promise<CronSessionSummary[]>;
 }
 
 export async function listAutomationTemplatesIPC(): Promise<AutomationTemplate[]> {

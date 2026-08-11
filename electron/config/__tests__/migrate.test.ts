@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { parse } from '@iarna/toml';
 import { ConfigStore } from '../store';
-import { migrateConfig, migrateSqliteRows, type MigrateOptions } from '../migrate';
+import { migrateConfig, migrateCronJobsToFile, migrateSqliteRows, type MigrateOptions } from '../migrate';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'duya-migrate-'));
@@ -149,8 +150,18 @@ describe('migrateConfig', () => {
 });
 
 describe('migrateSqliteRows', () => {
-  it('migrates gatewayModel and cron.jobs', () => {
+  it('migrates gatewayModel (cron definitions now go to cronjob.toml)', () => {
     const settings = [{ key: 'gatewayModel', value: JSON.stringify('gpt-4o') }];
+    const db = fakeDb(settings);
+    const store = new ConfigStore({ configPath: cfgPath, secretsPath });
+    migrateSqliteRows(store, db);
+
+    expect(store.getByPath('channels.gateway_model')).toBe('gpt-4o');
+  });
+});
+
+describe('migrateCronJobsToFile', () => {
+  it('migrates legacy automation_crons into cronjob.toml (single source)', () => {
     const crons = [
       {
         id: 'c1', name: 'daily', description: 'daily run', schedule_kind: 'cron', schedule_cron_expr: '0 8 * * *',
@@ -158,16 +169,46 @@ describe('migrateSqliteRows', () => {
         concurrency_policy: 'skip', max_retries: 3,
       },
     ];
-    const db = fakeDb(settings, { crons });
-    const store = new ConfigStore({ configPath: cfgPath, secretsPath });
-    migrateSqliteRows(store, db);
+    const db = fakeDb([], { crons });
+    const cronFile = path.join(dir, 'cronjob.toml');
+    migrateCronJobsToFile(db, { configPath: cfgPath, cronFilePath: cronFile });
 
-    expect(store.getByPath('channels.gateway_model')).toBe('gpt-4o');
-    expect(store.get().cron.jobs.length).toBe(1);
-    const job = store.get().cron.jobs[0];
-    expect(job?.id).toBe('c1');
-    expect(job?.model).toBe('gpt-4o');
-    expect(job?.schedule_cron_expr).toBe('0 8 * * *');
-    expect(job?.input_params).toEqual({ a: 1 });
+    expect(fs.existsSync(cronFile)).toBe(true);
+    const doc = parse(fs.readFileSync(cronFile, 'utf-8')) as {
+      version: number;
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(doc.version).toBe(1);
+    expect(doc.jobs).toHaveLength(1);
+    expect(doc.jobs[0].id).toBe('c1');
+    expect(doc.jobs[0].model).toBe('gpt-4o');
+    expect(doc.jobs[0].schedule).toMatchObject({ kind: 'cron', expr: '0 8 * * *' });
+  });
+
+  it('is idempotent and removes cron.jobs from config.toml', () => {
+    // config.toml carries a plan-405 interim cron.jobs (flat schedule fields).
+    const cfg = [
+      '_config_version = 1',
+      '',
+      '[[cron.jobs]]',
+      'id = "j1"',
+      'name = "x"',
+      'prompt = "p"',
+      'enabled = true',
+      'schedule_kind = "every"',
+      'schedule_every_ms = 3600000',
+      '',
+    ].join('\n');
+    fs.writeFileSync(cfgPath, cfg);
+    const cronFile = path.join(dir, 'cronjob.toml');
+    migrateCronJobsToFile(fakeDb([], {}), { configPath: cfgPath, cronFilePath: cronFile });
+
+    expect(fs.existsSync(cronFile)).toBe(true);
+    const doc = parse(fs.readFileSync(cronFile, 'utf-8')) as { jobs: Array<Record<string, unknown>> };
+    expect(doc.jobs).toHaveLength(1);
+    expect(doc.jobs[0].schedule).toMatchObject({ kind: 'every', every: '1h' });
+
+    // config.toml no longer holds cron.jobs.
+    expect(fs.readFileSync(cfgPath, 'utf-8')).not.toContain('cron.jobs');
   });
 });

@@ -1,70 +1,31 @@
 /**
  * electron/automation/Scheduler.test.ts
  *
- * Regression tests for the cron scheduler runtime:
- *   - runInSession resolves the active provider from the ProviderStore via
- *     `getDefaultLlmProvider()`, throws a useful error when none is configured,
- *     and sends a complete init payload (providerConfig, workingDirectory,
- *     systemPrompt).
- *
- * The legacy `resolveCronProvider` helper was removed during
- * the ProviderStore migration (plan 334 Phase 6a); the remaining tests target
- * the current `AutomationScheduler.runInSession` behavior.
- *
- * better-sqlite3 is mocked so these tests do not depend on the native
- * binding's Node ABI version.
+ * Regression tests for the cron scheduler runtime: 60s polling tick fires due
+ * jobs, runCronNow returns a handle and executes in the background, and a job
+ * pauses itself after retries are exhausted. Execution (agent-run) is mocked;
+ * the store is a real CronFileStore over a temp cronjob.toml.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
-vi.mock('better-sqlite3', () => {
-  class FakeDB {
-    prepare() {
-      return {
-        run: () => ({ changes: 1 }),
-        get: () => undefined,
-        all: () => [],
-      };
-    }
-  }
-  return { default: FakeDB };
-});
-
-vi.mock('electron', () => ({
-  app: {
-    getLocale: () => 'en-US',
-    getLocaleCountryCode: () => 'US',
-  },
+const mocks = vi.hoisted(() => ({
+  runCronInSession: vi.fn(),
+  createCronSessionRow: vi.fn(),
+  resolveCronProvider: vi.fn(),
 }));
 
-const providerStoreMock = {
-  getDefaultLlmProvider: vi.fn(),
-  listLlmProviders: vi.fn(() => []),
-};
-vi.mock('../services/providers/provider-store-electron', () => ({
-  getProviderStore: () => providerStoreMock,
+vi.mock('./agent-run', () => ({
+  runCronInSession: mocks.runCronInSession,
+  createCronSessionRow: mocks.createCronSessionRow,
+  interruptCronSession: vi.fn(),
 }));
-
-const poolMock = {
-  acquire: vi.fn(),
-  waitForReady: vi.fn(),
-  send: vi.fn(),
-  onMessage: vi.fn(),
-  removeMessageHandler: vi.fn(),
-  release: vi.fn(),
-};
-vi.mock('../agents/process-pool/agent-process-pool', () => ({
-  getAgentProcessPool: () => poolMock,
+vi.mock('./provider', () => ({
+  resolveCronProvider: mocks.resolveCronProvider,
 }));
-
-vi.mock('../ipc/db-handlers', () => ({
-  getDatabase: () => null,
-}));
-
-vi.mock('../db/core-connection', () => ({
-  getCoreStores: () => ({ sessions: { create: vi.fn() } }),
-}));
-
 vi.mock('../logging/logger', () => ({
   getLogger: () => ({
     info: vi.fn(),
@@ -75,90 +36,112 @@ vi.mock('../logging/logger', () => ({
   }),
   LogComponent: { Automation: 'Automation' },
 }));
+vi.mock('../db/core-connection', () => ({
+  getCoreStores: () => ({ sessions: { get: () => null, create: vi.fn() } }),
+}));
+vi.mock('./workspace', () => ({
+  prepareAutomationWorkspace: (v?: string | null) => v?.trim() || '/tmp/ws',
+  resolveAutomationWorkspace: (v?: string | null) => v?.trim() || '/tmp/ws',
+}));
 
 import { AutomationScheduler } from './Scheduler';
-import type { LlmProvider } from '../../src/lib/providers/types';
+import { CronFileStore } from './cron-file';
+import type { CreateAutomationCronInput } from './types';
 
-const fakeDb = {
-  prepare: () => ({
-    run: () => ({ changes: 1 }),
-    get: () => undefined,
-    all: () => [],
-  }),
-};
+let dir: string;
+let store: CronFileStore;
+let scheduler: AutomationScheduler;
 
-// A minimal LlmProvider that `toLegacyApiProvider` can round-trip back to the
-// legacy ApiProvider shape (requires `meta`, `endpoints.baseUrl`, `auth`).
-const makeLlmProvider = (overrides: Record<string, unknown> = {}): LlmProvider => ({
-  id: 'p1',
-  name: 'p1',
-  category: 'official',
-  apiFormat: 'openai-chat',
-  auth: { type: 'api-key', apiKey: 'sk-test' },
-  endpoints: { baseUrl: 'https://api.openai.com/v1' },
-  ui: {},
-  meta: { createdAt: 0, updatedAt: 0, sortIndex: 0 },
-  options: {},
-  ...overrides,
-}) as LlmProvider;
+function makeInput(overrides: Record<string, unknown> = {}): CreateAutomationCronInput {
+  return {
+    name: 'daily report',
+    prompt: 'summarize yesterday',
+    schedule: { kind: 'every', every: '1m' },
+    ...overrides,
+  };
+}
 
-describe('AutomationScheduler.runInSession', () => {
-  beforeEach(() => {
-    providerStoreMock.getDefaultLlmProvider.mockReset();
-    providerStoreMock.listLlmProviders.mockReset();
-    providerStoreMock.listLlmProviders.mockReturnValue([]);
-    poolMock.acquire.mockReset();
-    poolMock.waitForReady.mockReset();
-    poolMock.send.mockReset();
-    poolMock.onMessage.mockReset();
-    poolMock.removeMessageHandler.mockReset();
-    poolMock.release.mockReset();
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cron-test-'));
+  store = new CronFileStore(path.join(dir, 'cronjob.toml'));
+  scheduler = new AutomationScheduler(store);
+  mocks.runCronInSession.mockReset();
+  mocks.createCronSessionRow.mockReset();
+  mocks.resolveCronProvider.mockReset();
+  mocks.resolveCronProvider.mockReturnValue({
+    provider: { id: 'p1', apiKey: 'k', baseUrl: 'http://x', providerType: 'openai', options: {} },
+    model: 'test-model',
+  });
+  mocks.runCronInSession.mockResolvedValue({ output: 'ok', events: [] });
+});
+
+afterEach(() => {
+  scheduler.shutdown();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+describe('AutomationScheduler', () => {
+  it('createCron persists to cronjob.toml and listCrons returns it', () => {
+    const cron = scheduler.createCron(makeInput());
+    expect(cron.id).toBeTruthy();
+    expect(scheduler.listCrons()).toHaveLength(1);
+    expect(scheduler.getCron(cron.id)?.prompt).toBe('summarize yesterday');
+    expect(scheduler.getCron(cron.id)?.enabled).toBe(true);
+    expect(fs.existsSync(path.join(dir, 'cronjob.toml'))).toBe(true);
   });
 
-  it('throws when no active provider is configured', async () => {
-    providerStoreMock.getDefaultLlmProvider.mockReturnValue(undefined);
-
-    const scheduler = new AutomationScheduler(fakeDb as never);
-    await expect(
-      scheduler['runInSession']({ model: 'claude', concurrency_policy: 'skip' } as never, 'cron:test:1:r1'),
-    ).rejects.toThrow('no active provider configured');
+  it('tick fires a job whose next run is due', async () => {
+    const cron = scheduler.createCron(makeInput());
+    // Force the job to be due: lastRunAt far in the past.
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 5 * 60_000, error: null, retryCount: 0 });
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalledTimes(1));
+    const updated = scheduler.getCron(cron.id)!;
+    expect(updated.lastError).toBeNull();
+    expect(updated.retryCount).toBe(0);
   });
 
-  it('throws when the cron model is not configured', async () => {
-    providerStoreMock.getDefaultLlmProvider.mockReturnValue(makeLlmProvider());
-
-    const scheduler = new AutomationScheduler(fakeDb as never);
-    await expect(
-      scheduler['runInSession']({ model: '', concurrency_policy: 'skip' } as never, 'cron:test:1:r1'),
-    ).rejects.toThrow('cron model is not configured');
+  it('tick does not fire a job that is not yet due', async () => {
+    scheduler.createCron(makeInput()); // fresh job: next run = now + 1m
+    await scheduler.tick();
+    expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
 
-  it('sends a complete init payload (providerConfig, workingDirectory, systemPrompt)', async () => {
-    providerStoreMock.getDefaultLlmProvider.mockReturnValue(makeLlmProvider({ apiFormat: 'anthropic' }));
+  it('runCronNow returns a handle and executes in the background', async () => {
+    const cron = scheduler.createCron(makeInput());
+    const handle = await scheduler.runCronNow(cron.id);
+    expect(handle.cronId).toBe(cron.id);
+    expect(handle.sessionId).toContain(`cron:${cron.id}:`);
+    await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalled());
+  });
 
-    poolMock.acquire.mockResolvedValue({ isNew: true });
-    poolMock.waitForReady.mockResolvedValue(undefined);
-    let initSent: Record<string, unknown> | undefined;
-    poolMock.send.mockImplementation((_sid: string, msg: Record<string, unknown>) => {
-      if (msg.type === 'init') initSent = msg;
-      if (msg.type === 'chat:start') {
-        setImmediate(() => {
-          // Simulate the worker streaming a reply and completing.
-          (poolMock.onMessage.mock.calls[0][1] as (m: Record<string, unknown>) => void)({ type: 'chat:text', content: 'hello world' });
-          (poolMock.onMessage.mock.calls[0][1] as (m: Record<string, unknown>) => void)({ type: 'chat:done' });
-        });
-      }
-      return true;
+  it('runCronNow throws for an unknown cron', async () => {
+    await expect(scheduler.runCronNow('nope')).rejects.toThrow('cron not found');
+  });
+
+  it('records last_error and pauses the job after retries are exhausted', async () => {
+    const cron = scheduler.createCron(makeInput({ maxRetries: 1 }));
+    mocks.runCronInSession.mockRejectedValue(new Error('boom'));
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 60_000, error: null, retryCount: 0 });
+    await scheduler.tick();
+
+    await vi.waitFor(() => {
+      const c = scheduler.getCron(cron.id)!;
+      expect(c.lastError).toBe('boom');
+      expect(c.retryCount).toBe(1);
     });
+    await vi.waitFor(() => {
+      expect(scheduler.getCron(cron.id)?.enabled).toBe(false);
+    });
+  });
 
-    const scheduler = new AutomationScheduler(fakeDb as never);
-    const result = await scheduler['runInSession']({ model: 'claude', concurrency_policy: 'skip' } as never, 'cron:test:1:r1');
-
-    expect(initSent).toBeDefined();
-    expect(initSent!.type).toBe('init');
-    expect(initSent!.workingDirectory).toBeTruthy();
-    expect(initSent!.systemPrompt).toBe('');
-    expect(initSent!.providerConfig).toMatchObject({ model: 'claude', provider: 'anthropic' });
-    expect(result).toBe('hello world');
+  it('skips a scheduled run while the same cron is already running (skip policy)', async () => {
+    const cron = scheduler.createCron(makeInput({ concurrencyPolicy: 'skip' }));
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 60_000, error: null, retryCount: 0 });
+    // Simulate an in-flight run occupying the cron.
+    scheduler['running'].set(cron.id, new Set(['cron:x:0:r1']));
+    await scheduler.tick();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
 });

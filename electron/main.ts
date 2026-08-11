@@ -14,8 +14,9 @@ import { registerNetHandlers } from './ipc/net-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
 import { resolveDatabasePath, updateDatabasePath } from './config/index';
 import { getConfigStore } from './config/store-instance';
-import { migrateConfig } from './config/migrate';
-import { resolveConfigTomlPath } from './config/compass';
+import { migrateConfig, migrateCronJobsToFile } from './config/migrate';
+import { resolveConfigRoot, resolveConfigTomlPath } from './config/compass';
+import { defaultCronFilePath } from './automation/cron-file';
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
@@ -254,16 +255,18 @@ if (gotTheLock) {
           configPath,
           secretsPath: path.join(path.dirname(configPath), 'secrets.json'),
         });
+        // Cron definitions converge into the single-source cronjob.toml.
+        migrateCronJobsToFile(db, {
+          configPath,
+          cronFilePath: defaultCronFilePath(),
+        });
       }
     } catch (error) {
       logger.error('Failed to migrate legacy config to config.toml', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     try {
-      const database = getDatabase();
-      if (database) {
-        initAutomationScheduler(database);
-      }
+      initAutomationScheduler();
     } catch (error) {
       logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
@@ -367,25 +370,21 @@ if (gotTheLock) {
         if (llmClient) {
           // Phase 2 curation wiring (Plan 406): without these deps every
           // curation tick is silently skipped (skipped_no_curation_deps).
-          // The live config root sits inside the memory root; staging and
-          // snapshots are siblings so run workspaces stay out of the
-          // published tree.
+          // The curator works directly on the live memory root (simplified
+          // flow, 2026-08-09); a git backup is taken before each run.
           const os = await import('os');
           const memoryRoot = path.join(os.homedir(), '.duya', 'memory');
           const curation = curationProviderConfig
             ? {
                 configRoot: path.join(memoryRoot, 'memory-config'),
-                stagingRoot: path.join(os.homedir(), '.duya', 'memory-staging'),
-                snapshotRoot: path.join(os.homedir(), '.duya', 'memory-snapshots'),
                 providerConfig: curationProviderConfig,
-                systemLocation: memoryRoot,
                 pool: getAgentProcessPool(),
               }
             : undefined;
 
           // Ensure the curation config root exists with default files. Without
-          // `memory-config/`, createStaging throws when copying the config
-          // root (failing curation and accumulating empty staging dirs).
+          // `memory-config/`, the memory_write tool and the Stage 1 extractor
+          // have no policy to read.
           if (curation) {
             try {
               await ensureMemoryConfigDir(curation.configRoot);
