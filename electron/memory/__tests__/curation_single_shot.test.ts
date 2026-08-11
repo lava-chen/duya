@@ -238,6 +238,95 @@ describe('runSingleShotCuration — failure modes', () => {
   });
 });
 
+describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkRoot();
+    seedRolloutSummary(root, 'r-1', '# r-1 with plan signals');
+  });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('9. LLM emits stage1_policy.update → policy file written + version bumped', async () => {
+    const policyDir = path.join(root, 'memory-config');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(policyPath + '.version', '3', 'utf8');
+
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'no durable claim' }],
+      actions: [],
+      stage1_policy: {
+        op: 'update',
+        content: '# Focus\n\nWatch goal and commitment signals from user planning talk.',
+        reason: 'user keeps discussing career plans; summaries miss them',
+      },
+    }));
+
+    const result = await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+      policyPath,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyUpdated).toBe(true);
+    expect(result.policyVersion).toBe(4); // bumped 3 -> 4
+    expect(fs.readFileSync(policyPath, 'utf8')).toContain('goal and commitment');
+    expect(fs.readFileSync(policyPath + '.version', 'utf8').trim()).toBe('4');
+  });
+
+  it('10. stage1_policy.no_change → policy file untouched', async () => {
+    const policyDir = path.join(root, 'memory-config');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(policyPath, 'old policy', 'utf8');
+    fs.writeFileSync(policyPath + '.version', '2', 'utf8');
+
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'noise' }],
+      actions: [],
+      stage1_policy: { op: 'no_change' },
+    }));
+
+    const result = await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+      policyPath,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyUpdated).toBeUndefined();
+    expect(fs.readFileSync(policyPath, 'utf8')).toBe('old policy');
+    expect(fs.readFileSync(policyPath + '.version', 'utf8').trim()).toBe('2');
+  });
+
+  it('11. no policyPath provided → suggestion ignored silently', async () => {
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'noise' }],
+      actions: [],
+      stage1_policy: {
+        op: 'update',
+        content: 'x',
+        reason: 'y',
+      },
+    }));
+
+    const result = await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyUpdated).toBeUndefined();
+  });
+});
+
 describe('runSingleShotCuration — empty input set', () => {
   it('8. empty inputs → LLM still called; actions that target valid areas land', async () => {
     const root = mkRoot();

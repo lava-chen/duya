@@ -46,9 +46,27 @@ export interface CurationDecision {
   reason: string;
 }
 
+/**
+ * Optional Stage-1 policy suggestion emitted by the curator.
+ *
+ * When the curator notices a dimension the Stage 1 extractor is missing
+ * (a recurring signal that the 12 claim types + current policy never
+ * surface), it can request a policy update. `content` is the FULL new
+ * policy text (appended to STAGE1_HARD_CONTRACT at extraction time), not
+ * a diff. `no_change` means leave the file alone.
+ */
+export interface Stage1PolicySuggestion {
+  op: 'update' | 'no_change';
+  /** Full replacement policy markdown (max 8 KiB). Required when op=update. */
+  content?: string;
+  /** Why the extraction focus changed. Required when op=update. */
+  reason?: string;
+}
+
 export interface CurationResponse {
   decisions: CurationDecision[];
   actions: CurationAction[];
+  stage1_policy?: Stage1PolicySuggestion;
 }
 
 /**
@@ -80,9 +98,22 @@ export const CurationDecisionSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+export const Stage1PolicySchema = z.object({
+  op: z.enum(['update', 'no_change']),
+  content: z.string().max(8192).optional(),
+  reason: z.string().max(500).optional(),
+}).refine(
+  (s) => s.op === 'no_change' || (typeof s.content === 'string' && s.content.length > 0),
+  { message: 'stage1_policy.update requires non-empty content' },
+).refine(
+  (s) => s.op === 'no_change' || (typeof s.reason === 'string' && s.reason.length > 0),
+  { message: 'stage1_policy.update requires a reason' },
+);
+
 export const CurationResponseSchema = z.object({
   decisions: z.array(CurationDecisionSchema).min(1).max(20),
   actions: z.array(CurationActionSchema).max(20),
+  stage1_policy: Stage1PolicySchema.optional(),
 });
 
 export class CurationParseError extends Error {

@@ -548,7 +548,11 @@ interface CatalogMappingRow {
 export class Stage1Extractor {
   private readonly streamChat: AIClient['streamChat'];
 
-  private policyCache: { content: string; hash: string; version: number } | null = null;
+  // Deliberately NOT cached: the policy file is small (<= 8 KiB) and the
+  // curation loop may rewrite it between extractions. Reading it per
+  // extract guarantees the adaptive loop's policy updates take effect
+  // immediately (no mtime-resolution or staleness issues).
+  private policyCache: null = null;
 
   constructor(
     private readonly memoryDb: Database,
@@ -566,14 +570,16 @@ export class Stage1Extractor {
   }
 
   private async resolvePolicy(): Promise<{ content: string; hash: string; version: number }> {
-    if (this.policyCache) return this.policyCache;
     const policyPath = this.opts?.policyPath;
-    this.policyCache = policyPath ? await loadPolicy(policyPath) : {
-      content: '',
-      hash: crypto.createHash('sha256').update('').digest('hex'),
-      version: 0,
-    };
-    return this.policyCache;
+    if (!policyPath) {
+      return {
+        content: '',
+        hash: crypto.createHash('sha256').update('').digest('hex'),
+        version: 0,
+      };
+    }
+    // Always reload (see policyCache note above).
+    return loadPolicy(policyPath);
   }
 
   async extract(input: ExtractInput): Promise<ExtractResult> {

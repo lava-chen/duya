@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { loadPolicy, STAGE1_HARD_CONTRACT, assembleStage1Prompt } from '../stage1_prompt_loader';
+import { loadPolicy, writePolicy, STAGE1_HARD_CONTRACT, assembleStage1Prompt } from '../stage1_prompt_loader';
 import { Stage1Extractor } from '../extractor';
 import { createMemoryStateFixture } from '../../memory-state/__tests__/fixture';
 import type { AIClient } from '@duya/ai';
@@ -112,6 +112,43 @@ describe('loadPolicy', () => {
   });
 });
 
+describe('writePolicy', () => {
+  let env: LoaderEnv;
+  beforeEach(() => { env = makeEnv(); });
+  afterEach(() => { env.cleanup(); });
+
+  it('writes content atomically and bumps version from sidecar', async () => {
+    const policyPath = path.join(env.dir, 'stage1_policy.md');
+    fs.writeFileSync(`${policyPath}.version`, '3', 'utf8');
+
+    const res = await writePolicy(policyPath, '# Focus\n\nWatch goal signals.');
+    expect(res.changed).toBe(true);
+    expect(res.version).toBe(4);
+    expect(fs.readFileSync(policyPath, 'utf8')).toContain('Watch goal signals');
+    expect(fs.readFileSync(`${policyPath}.version`, 'utf8').trim()).toBe('4');
+    expect(res.hash).toBe(crypto.createHash('sha256').update('# Focus\n\nWatch goal signals.').digest('hex'));
+  });
+
+  it('no-op (changed=false) when content is identical, no version bump', async () => {
+    const policyPath = path.join(env.dir, 'stage1_policy.md');
+    fs.writeFileSync(policyPath, 'same policy', 'utf8');
+    fs.writeFileSync(`${policyPath}.version`, '2', 'utf8');
+
+    const res = await writePolicy(policyPath, 'same policy');
+    expect(res.changed).toBe(false);
+    expect(res.version).toBe(2);
+    expect(fs.readFileSync(`${policyPath}.version`, 'utf8').trim()).toBe('2');
+  });
+
+  it('creates version sidecar starting at 1 when file is new', async () => {
+    const policyPath = path.join(env.dir, 'new-policy.md');
+    const res = await writePolicy(policyPath, 'brand new');
+    expect(res.changed).toBe(true);
+    expect(res.version).toBe(1);
+    expect(fs.readFileSync(`${policyPath}.version`, 'utf8').trim()).toBe('1');
+  });
+});
+
 describe('assembleStage1Prompt', () => {
   it('returns hard contract followed by policy, separated by double newline', () => {
     const policy = '# Extraction policy\n\nFocus on preferences.';
@@ -214,6 +251,48 @@ describe('Stage1Extractor with policyPath', () => {
     expect(loaded.content).toBe('');
     expect(loaded.version).toBe(0);
     expect(assembled).toBe(STAGE1_HARD_CONTRACT + '\n\n');
+  });
+
+  it('reloads policy when the file changes (adaptive loop cache invalidation)', async () => {
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(policyPath, '# Policy v1', 'utf8');
+    fs.writeFileSync(`${policyPath}.version`, '1', 'utf8');
+
+    const systemPrompts: string[] = [];
+    const llmClient: AIClient = {
+      async *streamChat(_messages, options) {
+        systemPrompts.push(options?.systemPrompt ?? '');
+        yield { type: 'text', data: JSON.stringify({
+          job_status: 'succeeded_no_output',
+          content_outcome: null,
+          rollout_summary: null,
+          rollout_slug: 'noop',
+          raw_memory: { items: [] },
+        }) };
+      },
+    } as unknown as AIClient;
+
+    // Construct an extractor pointing at the live policy file, then poke
+    // resolvePolicy twice with a file change in between. This mirrors what
+    // the curation loop does: it rewrites stage1_policy.md + bumps the
+    // version, and the extractor must pick it up on the next extract.
+    const extractor = new Stage1Extractor(
+      env.db as unknown as BetterSqlite3Database,
+      env.mainDb as unknown as BetterSqlite3Database,
+      llmClient,
+      { policyPath },
+    );
+    // @ts-expect-error accessing private member for test
+    const first = await extractor.resolvePolicy();
+    expect(first.content).toContain('Policy v1');
+    expect(first.version).toBe(1);
+
+    // The curation loop rewrites the policy (same path).
+    await writePolicy(policyPath, '# Policy v2 — now watch goal signals');
+    // @ts-expect-error accessing private member for test
+    const second = await extractor.resolvePolicy();
+    expect(second.content).toContain('Policy v2');
+    expect(second.version).toBe(2);
   });
 
   it('records stage1_policy_version and stage1_policy_hash in stage1_outputs', async () => {
