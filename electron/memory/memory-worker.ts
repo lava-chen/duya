@@ -43,7 +43,6 @@ import { reconcileProjections } from '../../packages/agent/src/memory-state/reco
 import { queryEligibleInputs } from '../../packages/agent/src/memory-state/curation_ledger.js';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
 import { runCurationCycle } from './curation_publish_orchestrator';
-import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import type { ProviderConfig } from './curation_publish_orchestrator';
 import type { CoreDatabase, SessionStore } from '../db/core';
 
@@ -102,8 +101,6 @@ export interface CurationWorkerDeps {
   configRoot: string;
   /** LLM provider config forwarded to the curator agent process. */
   providerConfig: ProviderConfig;
-  /** Agent process pool (shared with cron). */
-  pool: AgentProcessPool;
 }
 
 export interface MemoryWorkerConfig {
@@ -422,7 +419,6 @@ function createWorker(
           configRoot: curation.configRoot,
           providerConfig: curation.providerConfig,
           workerId: state.workerId,
-          pool: curation.pool,
           sessionId: `curation-${state.workerId}`,
           llmClient: deps.llmClient,
           curationTimeoutMs: cfg.curationTimeoutMs,

@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { Database } from 'better-sqlite3';
-import type { AgentProcessPool } from '../../agents/process-pool/agent-process-pool';
 import type { AIClient } from '@duya/ai';
 
 // Hoisted mock state — shared between vi.mock factories and test bodies.
@@ -112,7 +111,6 @@ describe('runCurationCycle', () => {
       configRoot: env.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
       sessionId: 'session-1',
       llmClient: llm,
       now: T0,
@@ -133,7 +131,6 @@ describe('runCurationCycle', () => {
       configRoot: env.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
       sessionId: 'session-1',
       llmClient: llm,
       now: T0,
@@ -190,7 +187,6 @@ describe('runCurationCycle', () => {
       configRoot: env.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
       sessionId: 'session-1',
       llmClient: llm,
       now: T0,
@@ -217,7 +213,6 @@ describe('runCurationCycle', () => {
       configRoot: env.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
       sessionId: 'session-1',
       llmClient: llm,
       now: T0,
@@ -252,7 +247,6 @@ describe('runCurationCycle', () => {
       configRoot: env.configRoot,
       providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
       workerId: 'w1',
-      pool: {} as unknown as AgentProcessPool,
       sessionId: 'session-1',
       llmClient: llm,
       now: T0,
