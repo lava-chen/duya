@@ -95,6 +95,7 @@ export interface SessionAPI {
   getDraft: (sessionId: string) => Promise<string>
   setConductorMode: (sessionId: string, enabled: boolean, canvasId?: string | null) => Promise<unknown>
   setPinned: (sessionId: string, pinned: boolean) => Promise<unknown>
+  setPlanMode: (sessionId: string, enabled: boolean) => Promise<unknown>
 }
 
 export interface MessageAPI {
@@ -1472,6 +1473,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:session:set_conductor_mode', { sessionId, enabled, canvasId }),
     setPinned: (sessionId: string, pinned: boolean) =>
       ipcRenderer.invoke('db:session:set_pinned', { sessionId, pinned }),
+    setPlanMode: (sessionId: string, enabled: boolean) =>
+      ipcRenderer.invoke('db:session:set_plan_mode', { sessionId, enabled }),
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
