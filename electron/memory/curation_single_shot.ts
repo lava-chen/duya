@@ -93,30 +93,64 @@ their target areas) and decide what to persist. Your goal: turn each
 rollout into the minimum set of stable, useful facts that future sessions
 can rely on without re-reading the source.
 
+# Where facts live (three buckets — pick the right one)
+
+Canonical memory is split into THREE entity directories, each mapping to
+a claim type. Choose the bucket by what the fact IS, not where it
+happened:
+
+1. "global/preferences/<slug>.md" — USER PREFERENCES: durable "the user
+   wants / likes / prefers / always / never" statements. Communication
+   style, workflow preferences, tool-choice preferences, correction
+   patterns, project conventions the user expects. This is the HIGHEST
+   value memory — always prefer a preference bucket over burying it in
+   an area.
+2. "global/people/<slug>.md" — PERSON RECORDS: a specific human (the
+   user, collaborators, named people). Identity facts, roles, skills,
+   working style, relationship to projects. One file per person.
+3. "global/areas/<slug>.md" — DOMAIN KNOWLEDGE: everything else that is
+   stable and reusable — architecture facts, procedures, tool behavior,
+   project history, decisions, references, invariants. Fold secondary
+   claim types (fact/decision/procedure/reference/invariant/goal/
+   capability/commitment/relationship) into the nearest area here.
+
+Classification rules:
+- If a rollout reveals a user preference, ALWAYS emit an action into
+  "global/preferences/". Do not let it ride along in an area.
+- If a rollout names a person with stable attributes, emit an action
+  into "global/people/".
+- Only when a fact is clearly domain knowledge with no preference or
+  person component, emit into "global/areas/".
+- Reuse an existing slug when one covers the same topic; create a new
+  slug only when no existing file fits.
+
 # Decision boundary
 
 For each rollout you MUST emit exactly one decision:
   - "absorbed": at least one non-trivial fact from this rollout was merged
-    into an area file.
+    into a canonical file.
   - "no_signal": the rollout contains nothing worth persisting (chit-chat,
     test runs, ephemeral work, duplicates of existing memory).
   - "uncertain": you cannot decide safely; the next curation cycle will
     revisit it with a fresh prompt.
 
 When you choose "absorbed", emit at least one action whose
-"area_path" is the slugged area name and whose "content" is the section
-to append. When you choose "no_signal" or "uncertain", you may emit zero
-actions (use op="no_op") but you MUST still emit the decision.
+"area_path" targets one of the three entity directories and whose
+"content" is the section to append. When you choose "no_signal" or
+"uncertain", you may emit zero actions (use op="no_op") but you MUST
+still emit the decision.
 
 # Hard rules
 
-- Every action's "area_path" MUST match exactly one of the existing
-  area slugs in the "existing_areas" map. Never invent new slugs; new
-  topics get folded into the nearest existing one.
+- Every action's "area_path" must be one of:
+  "global/preferences/<slug>.md", "global/people/<slug>.md", or
+  "global/areas/<slug>.md". Prefer matching an existing slug from the
+  "existing_areas" map; create a new slug only when no existing file
+  fits the bucket.
 - "append" is the default. Only use "replace" when the existing content
   is genuinely obsolete AND you have the full replacement ready.
 - Use "no_op" (with zero content) when you decide not to write anything
-  for an area. Never use it for a decision row.
+  for an entity. Never use it for a decision row.
 - Strip tool-message noise, message counts, "current state" sections,
   and relative dates ("yesterday", "last week"). Convert relative dates
   to absolute dates (YYYY-MM-DD).
@@ -184,9 +218,12 @@ async function assembleUserPrompt(
     ),
   );
 
+  // Read existing canonical files across all three entity directories,
+  // keyed by the rollout slug first and the directory second. The curator
+  // sees what already exists so it can append instead of duplicate.
   const existingAreas: Record<string, string> = {};
   for (const slug of slugs) {
-    for (const sub of ['global/areas', 'global/people'] as const) {
+    for (const sub of ['global/preferences', 'global/people', 'global/areas'] as const) {
       const areaPath = `${sub}/${slug}.md`;
       try {
         const absolute = resolveAreaPath(memoryRoot, areaPath);

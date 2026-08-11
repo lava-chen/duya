@@ -51,8 +51,13 @@ export interface CurationResponse {
   actions: CurationAction[];
 }
 
-/** Strict whitelist of writeable area paths. */
-const AREA_PATH_RE = /^global\/(areas|people)\/[a-z0-9][a-z0-9._-]*\.md$/;
+/**
+ * Strict whitelist of writeable canonical paths. The three live entity
+ * directories are `areas` (domain knowledge), `people` (person records),
+ * and `preferences` (user preferences). Everything else folds into one
+ * of these during curation.
+ */
+const AREA_PATH_RE = /^global\/(areas|people|preferences)\/[a-z0-9][a-z0-9._-]*\.md$/;
 
 export const CurationActionSchema = z.object({
   op: z.enum(['append', 'replace', 'no_op']),
