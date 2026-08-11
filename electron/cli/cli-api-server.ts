@@ -97,7 +97,7 @@ import {
   handleBackupRestore,
 } from './handlers/backup.js';
 import { handleSecurityAudit, handleSecurityFix } from './handlers/security.js';
-import { handleVoiceEnvDoctor, handleVoiceSetup } from './handlers/voice.js';
+import { handleVoiceEnvDoctor, handleVoiceSetup, handleVoiceConfig } from './handlers/voice.js';
 import {
   handleSendMessage,
   handleSkillInstall,
@@ -533,6 +533,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/voice/setup
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'voice' && parts[2] === 'setup') {
     void handleVoiceSetup(req, res);
+    return;
+  }
+
+  // POST /v1/voice/config
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'voice' && parts[2] === 'config') {
+    void handleVoiceConfig(req, res);
     return;
   }
 
