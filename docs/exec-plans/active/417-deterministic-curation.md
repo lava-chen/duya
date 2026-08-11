@@ -173,16 +173,17 @@ Plan 417 选用 **4 min**（比 cron 的 10 min 短很多，比 stage1 的单次
 
 ## Task 清单
 
-| Task | 文件 | 内容 |
-|------|------|------|
-| A | `electron/memory/curation_single_shot.ts` | 新模块：`runSingleShotCuration` |
-| B | `electron/memory/curation_publish_orchestrator.ts` | 替换 `runCurationAgent` → `runSingleShotCuration` |
-| C | `electron/memory/curation_response_parser.ts` | 解析 LLM JSON 响应（含 Zod schema） |
-| D | `electron/memory/curation_file_writer.ts` | 确定性文件落地（append / replace / no-op） |
-| E | `electron/memory/memory-worker.ts` | `curationTick` 改用单次调用（移除 withHardDeadline） |
-| F | tests | 单测 `curation_response_parser` + `curation_file_writer` + `curation_single_shot` |
-| G | 集成测试 | 模拟完整 cycle：3 个 input → LLM 返回 2 个 action → 文件正确落地 |
-| H | 文档 | 更新 ARCHITECTURE.md + `electron/memory/README.md`（如有） |
+| Task | 文件 | 内容 | 状态 |
+|------|------|------|------|
+| A | `electron/memory/curation_single_shot.ts` | 新模块：`runSingleShotCuration` | ✅ 6253eb01 |
+| B | `electron/memory/curation_publish_orchestrator.ts` | 替换 `runCurationAgent` → `runSingleShotCuration` | ✅ c0fb6818 + fe8993bc |
+| C | `electron/memory/curation_response_parser.ts` | 解析 LLM JSON 响应（含 Zod schema） | ✅ 6253eb01 |
+| D | `electron/memory/curation_file_writer.ts` | 确定性文件落地（append / replace / no-op） | ✅ 6253eb01 |
+| E | `electron/memory/memory-worker.ts` | `curationTick` 改用单次调用（移除 withHardDeadline） | ✅ fe8993bc |
+| F | tests | 单测 `curation_response_parser` + `curation_file_writer` + `curation_single_shot` | ✅ 6253eb01 |
+| G | 集成测试 | 模拟完整 cycle：3 个 input → LLM 返回 2 个 action → 文件正确落地 | ✅ 41a7c95e |
+| H | 文档 | 更新 ARCHITECTURE.md + 投影刷新（live-layout projector） | ✅ 76ae9768 |
+| — | 死代码清理 | `curation_agent_runner.ts` / `curation_prompt.ts` 删除 + index.ts 导出移除 | ✅ 76ae9768 |
 
 ---
 
