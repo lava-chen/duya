@@ -265,20 +265,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
 
   db.exec(`
-    CREATE TABLE IF NOT EXISTS automation_cron_runs (
-      id TEXT PRIMARY KEY,
-      cron_id TEXT NOT NULL,
-      run_status TEXT NOT NULL CHECK(run_status IN ('pending', 'running', 'success', 'failed', 'cancelled')),
-      started_at INTEGER,
-      ended_at INTEGER,
-      output TEXT,
-      error_message TEXT,
-      logs TEXT,
-      created_at INTEGER NOT NULL
-    )
-  `);
-
-  db.exec(`
     CREATE TABLE IF NOT EXISTS conductor_canvases (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -362,7 +348,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_bindings_active ON channel_bindings(channel_type, active)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_offsets_updated ON channel_offsets(updated_at)`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_automation_cron_runs_cron ON automation_cron_runs(cron_id, created_at DESC)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_widgets_canvas ON conductor_widgets(canvas_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_canvas_ts ON conductor_actions(canvas_id, ts)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_conductor_actions_widget_ts ON conductor_actions(widget_id, ts)`);
@@ -2422,6 +2407,19 @@ const migrations: Migration[] = [
 
         CREATE INDEX IF NOT EXISTS idx_automation_cron_runs_cron
           ON automation_cron_runs(cron_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    id: 50,
+    name: 'drop_automation_cron_tables',
+    migrate(db: BetterSqlite3Db): void {
+      // Cron run history now lives in ordinary agent sessions (rollout), and
+      // runtime state is written back to cronjob.toml. Drop the legacy run
+      // and state tables (idempotent for fresh databases that never created them).
+      db.exec(`
+        DROP TABLE IF EXISTS automation_cron_runs;
+        DROP TABLE IF EXISTS automation_cron_state;
       `);
     },
   },

@@ -795,13 +795,11 @@ export const automationDb = {
 
   createCron: (data: {
     name: string;
-    description?: string | null;
-    workingDirectory?: string;
-    schedule: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
     prompt: string;
-    model: string;
-    inputParams?: Record<string, unknown>;
-    concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
+    schedule: { kind: 'once' | 'every' | 'cron'; every?: string; at?: string; expr?: string; tz?: string | null; endAt?: string | null };
+    workingDirectory?: string;
+    model?: string;
+    concurrencyPolicy?: 'skip' | 'parallel' | 'replace';
     maxRetries?: number;
     enabled?: boolean;
   }) => sendDbRequest('automation:cron:create', data),
@@ -810,14 +808,13 @@ export const automationDb = {
     id: string,
     patch: {
       name?: string;
-      description?: string | null;
-      workingDirectory?: string;
-      schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
       prompt?: string;
-      inputParams?: Record<string, unknown>;
-      concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
+      schedule?: { kind: 'once' | 'every' | 'cron'; every?: string; at?: string; expr?: string; tz?: string | null; endAt?: string | null };
+      workingDirectory?: string;
+      model?: string;
+      concurrencyPolicy?: 'skip' | 'parallel' | 'replace';
       maxRetries?: number;
-      status?: 'enabled' | 'disabled' | 'error';
+      enabled?: boolean;
     }
   ) => sendDbRequest('automation:cron:update', { id, patch }),
 
@@ -825,7 +822,8 @@ export const automationDb = {
 
   runCron: (id: string) => sendDbRequest('automation:cron:run', { id }),
 
-  listCronRuns: (input: { cronId: string; limit?: number; offset?: number }) =>
+  // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
+  listCronSessions: (input: { cronId: string; limit?: number; offset?: number }) =>
     sendDbRequest('automation:cron:runs', input),
 };
 

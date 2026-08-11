@@ -1,28 +1,29 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import type {
   AutomationCron,
-  AutomationCronRun,
   AutomationTemplate,
   ConcurrencyPolicy,
   CreateAutomationCronInput,
+  CronRunHandle,
+  CronSessionSummary,
 } from '@/types/automation';
 import {
   createAutomationCronIPC,
   deleteAutomationCronIPC,
-  listAutomationCronRunsIPC,
+  listAutomationCronSessionsIPC,
   listAutomationCronsIPC,
   listAutomationTemplatesIPC,
   runAutomationCronIPC,
   updateAutomationCronIPC,
 } from '@/lib/automation-ipc';
 import { CronChatModal } from './CronChatModal';
+import { CronHistoryPanel } from './CronHistoryPanel';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
 import {
   PlayIcon,
   ClockIcon,
   WarningCircleIcon,
-  XCircleIcon,
   SpinnerGapIcon,
   SquaresFourIcon,
   XIcon,
@@ -79,28 +80,16 @@ function buildCronCreationPrompt(userPrompt: string, templatePrompt?: string): s
   return sections.join('\n');
 }
 
-type CronTag = 'Work' | 'Code';
-const CRON_TAGS: CronTag[] = ['Work', 'Code'];
-
-function normalizeTags(tags?: string[] | null): CronTag[] {
-  if (!tags || tags.length === 0) return ['Work'];
-  const first = tags[0];
-  return CRON_TAGS.includes(first as CronTag) ? [first as CronTag] : ['Work'];
-}
-
 type EditorState = {
   id?: string;
   name: string;
-  description: string;
   prompt: string;
-  inputParams: string;
   concurrencyPolicy: ConcurrencyPolicy;
   maxRetries: string;
   enabled: boolean;
   model: string;
   workingDirectory: string;
   scheduleDraft: ScheduleDraft;
-  tag: CronTag;
 };
 
 function formatDateShort(value: number | null): string {
@@ -124,6 +113,13 @@ function formatCronSchedule(expression: string | null): string {
   if (minute.startsWith('*/') && hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
     return `每 ${minute.slice(2)} 分钟`;
   }
+  const fixedMinute = /^\d+$/.test(minute) ? Number(minute) : NaN;
+  if (
+    hour === '*' && dayOfMonth === '*' && month === '*' && dayOfWeek === '*' &&
+    Number.isInteger(fixedMinute) && fixedMinute >= 0 && fixedMinute <= 59
+  ) {
+    return fixedMinute === 0 ? '每小时' : `每小时第 ${minute} 分钟`;
+  }
   const time = /^\d+$/.test(minute) && /^\d+$/.test(hour)
     ? `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`
     : '';
@@ -138,13 +134,14 @@ function formatCronSchedule(expression: string | null): string {
 }
 
 function getFriendlySchedule(cron: AutomationCron): string {
-  switch (cron.schedule_kind) {
+  const s = cron.schedule;
+  switch (s.kind) {
     case 'every':
-      return formatInterval(cron.schedule_every_ms);
-    case 'at':
-      return cron.schedule_at ? `一次性 · ${formatDateShort(Date.parse(cron.schedule_at))}` : '一次性任务';
+      return `每 ${s.every}`;
+    case 'once':
+      return s.at ? `一次性 · ${formatDateShort(Date.parse(s.at))}` : '一次性任务';
     case 'cron':
-      return formatCronSchedule(cron.schedule_cron_expr);
+      return formatCronSchedule(s.expr);
     default:
       return '未设置计划';
   }
@@ -152,32 +149,26 @@ function getFriendlySchedule(cron: AutomationCron): string {
 
 const DEFAULT_EDITOR: EditorState = {
   name: '',
-  description: '',
   prompt: '',
-  inputParams: '{}',
   concurrencyPolicy: 'skip',
   maxRetries: '3',
   enabled: true,
   model: '',
   workingDirectory: '',
   scheduleDraft: createDefaultScheduleDraft(),
-  tag: 'Work',
 };
 
 function editorStateFromCron(cron: AutomationCron): EditorState {
   return {
     id: cron.id,
     name: cron.name,
-    description: cron.description ?? '',
     prompt: cron.prompt,
-    inputParams: cron.input_params || '{}',
-    concurrencyPolicy: cron.concurrency_policy,
-    maxRetries: String(cron.max_retries),
-    enabled: cron.status === 'enabled',
+    concurrencyPolicy: cron.concurrencyPolicy,
+    maxRetries: String(cron.maxRetries),
+    enabled: cron.enabled,
     model: cron.model,
-    workingDirectory: cron.working_directory || '',
+    workingDirectory: cron.workingDirectory || '',
     scheduleDraft: scheduleToDraft(cron),
-    tag: normalizeTags(cron.tags)[0] ?? 'Work',
   };
 }
 
@@ -190,7 +181,7 @@ export function AutomationView() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [crons, setCrons] = useState<AutomationCron[]>([]);
-  const [runsMap, setRunsMap] = useState<Record<string, AutomationCronRun[]>>({});
+  const [sessionsMap, setSessionsMap] = useState<Record<string, CronSessionSummary[]>>({});
   const [activeTab, setActiveTab] = useState<TabKey>('configured');
 
   // Edit modal state (create & edit)
@@ -210,7 +201,7 @@ export function AutomationView() {
 
   // Cron chat modal state
   const [chatModalOpen, setChatModalOpen] = useState(false);
-  const [selectedRun, setSelectedRun] = useState<AutomationCronRun | null>(null);
+  const [selectedRun, setSelectedRun] = useState<{ sessionId: string; runStatus?: string } | null>(null);
   const [selectedCronForRun, setSelectedCronForRun] = useState<AutomationCron | null>(null);
 
   // Models state
@@ -308,10 +299,10 @@ export function AutomationView() {
     }
   }, [hasElectronApi]);
 
-  const handleOpenChat = (cron: AutomationCron, run: AutomationCronRun) => {
-    if (run.session_id) {
+  const handleOpenChat = (cron: AutomationCron, sessionId: string) => {
+    if (sessionId) {
       setSelectedCronForRun(cron);
-      setSelectedRun(run);
+      setSelectedRun({ sessionId });
       setChatModalOpen(true);
     }
   };
@@ -327,19 +318,19 @@ export function AutomationView() {
     setCrons(list);
   }
 
-  async function reloadAllRuns(): Promise<void> {
-    const next: Record<string, AutomationCronRun[]> = {};
+  async function reloadAllSessions(): Promise<void> {
+    const next: Record<string, CronSessionSummary[]> = {};
     await Promise.all(
       crons.map(async (cron) => {
         try {
-          const list = await listAutomationCronRunsIPC(cron.id, 5, 0);
+          const list = await listAutomationCronSessionsIPC(cron.id, 5, 0);
           next[cron.id] = list;
         } catch {
           next[cron.id] = [];
         }
       }),
     );
-    setRunsMap(next);
+    setSessionsMap(next);
   }
 
   useEffect(() => {
@@ -363,7 +354,7 @@ export function AutomationView() {
 
   useEffect(() => {
     if (!hasElectronApi || crons.length === 0) return;
-    void reloadAllRuns();
+    void reloadAllSessions();
   }, [hasElectronApi, crons.length]);
 
   function handleCreateNew(): void {
@@ -425,22 +416,37 @@ export function AutomationView() {
 
     const prompt = buildCronCreationPrompt(userPrompt, templatePrompt);
 
-    setTimeout(() => {
-      const win = window as unknown as Record<string, unknown>;
+    // ChatView registers __widgetSendMessage only after it mounts, so wait
+    // for the bridge instead of assuming a fixed delay. Poll up to 5s in
+    // case the view is slow to appear.
+    const win = window as unknown as Record<string, unknown>;
+    let attempts = 0;
+    const intervalId = window.setInterval(() => {
       const sendFn = win.__widgetSendMessage as ((text: string) => void) | undefined;
       if (sendFn) {
+        window.clearInterval(intervalId);
         sendFn(prompt);
+      } else if (++attempts >= 50) {
+        window.clearInterval(intervalId);
       }
-    }, 200);
+    }, 100);
   }
 
   async function runNow(cron: AutomationCron): Promise<void> {
     if (!hasElectronApi) return;
     try {
       setError(null);
-      await runAutomationCronIPC(cron.id);
+      const handle = await runAutomationCronIPC(cron.id);
+      // runCronNow returns the run handle (with session_id) immediately and
+      // executes in the background, so jump straight to the run view to watch
+      // it live. Provider errors surface synchronously as a thrown error.
+      if (handle && handle.sessionId) {
+        setSelectedCronForRun(cron);
+        setSelectedRun({ sessionId: handle.sessionId, runStatus: 'running' });
+        setChatModalOpen(true);
+      }
       await reloadCrons();
-      await reloadAllRuns();
+      await reloadAllSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -451,7 +457,7 @@ export function AutomationView() {
     try {
       setError(null);
       await updateAutomationCronIPC(cron.id, {
-        status: cron.status === 'enabled' ? 'disabled' : 'enabled',
+        enabled: !cron.enabled,
       });
       await reloadCrons();
     } catch (err) {
@@ -479,18 +485,15 @@ export function AutomationView() {
       setSaving(true);
       setError(null);
       if (cronId) {
-        const { enabled, ...patch } = data;
-        await updateAutomationCronIPC(cronId, {
-          ...patch,
-          status: enabled === false ? 'disabled' : 'enabled',
-        });
+        await updateAutomationCronIPC(cronId, data);
       } else {
         await createAutomationCronIPC(data);
       }
       await reloadCrons();
       handleCloseEditModal();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // Surface the error through the edit modal's inline formError (single
+      // display point) instead of also setting the page-level banner.
       throw err;
     } finally {
       setSaving(false);
@@ -499,15 +502,15 @@ export function AutomationView() {
 
   const showEmptyState = !loading && crons.length === 0 && activeTab === 'configured';
 
-  const allRuns = useMemo(() => {
-    const runs: Array<{ run: AutomationCronRun; cron: AutomationCron }> = [];
-    Object.entries(runsMap).forEach(([cronId, list]) => {
+  const allSessions = useMemo(() => {
+    const sessions: Array<{ session: CronSessionSummary; cron: AutomationCron; scheduleLabel: string }> = [];
+    Object.entries(sessionsMap).forEach(([cronId, list]) => {
       const cron = crons.find((c) => c.id === cronId);
       if (!cron) return;
-      list.forEach((run) => runs.push({ run, cron }));
+      list.forEach((session) => sessions.push({ session, cron, scheduleLabel: getFriendlySchedule(cron) }));
     });
-    return runs.sort((a, b) => (b.run.created_at ?? 0) - (a.run.created_at ?? 0));
-  }, [runsMap, crons]);
+    return sessions.sort((a, b) => b.session.updatedAt - a.session.updatedAt);
+  }, [sessionsMap, crons]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -634,53 +637,11 @@ export function AutomationView() {
             </div>
           </div>
         ) : activeTab === 'history' ? (
-          <div className="h-full overflow-y-auto scrollbar-thin pt-5">
-            {allRuns.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-64 text-center p-4">
-                <ClockIcon size={40} className="mb-3 opacity-30 text-muted-foreground" />
-                <p className="text-sm text-muted-foreground">{t('automation.noExecutionHistory')}</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {allRuns.map(({ run, cron }) => (
-                  <button
-                    key={run.id}
-                    type="button"
-                    onClick={() => handleOpenChat(cron, run)}
-                    disabled={!run.session_id}
-                    className="w-full flex items-center justify-between rounded-lg border border-border/50 bg-[var(--surface)] px-4 py-3 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-default"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <RunStatusIndicator status={run.run_status} />
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-foreground truncate">{cron.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {formatDateShort(run.started_at)} · {getFriendlySchedule(cron)}
-                        </p>
-                      </div>
-                    </div>
-                    <span
-                      className={`text-xs shrink-0 capitalize ${
-                        run.run_status === 'success'
-                          ? 'text-[var(--success)]'
-                          : run.run_status === 'failed'
-                            ? 'text-destructive'
-                            : 'text-muted-foreground'
-                      }`}
-                    >
-                      {run.run_status === 'success'
-                        ? '成功'
-                        : run.run_status === 'failed'
-                          ? '失败'
-                          : run.run_status === 'running'
-                            ? '运行中'
-                            : run.run_status}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          <CronHistoryPanel
+            sessions={allSessions}
+            onOpenChat={handleOpenChat}
+            onRefresh={reloadAllSessions}
+          />
         ) : (
           <div className="h-full flex flex-col pt-5">
             <div className="mb-4 flex items-center justify-between">
@@ -747,10 +708,10 @@ export function AutomationView() {
       {/* Cron Chat Modal */}
       {chatModalOpen && selectedRun && selectedCronForRun && (
         <CronChatModal
-          sessionId={selectedRun.session_id!}
-          sessionTitle={`[Cron] ${selectedCronForRun.name} - ${selectedRun.run_status}`}
+          sessionId={selectedRun.sessionId}
+          sessionTitle={`[Cron] ${selectedCronForRun.name}`}
           cronName={selectedCronForRun.name}
-          runStatus={selectedRun.run_status}
+          runStatus={selectedRun.runStatus ?? 'running'}
           onClose={handleCloseChat}
         />
       )}
@@ -785,25 +746,15 @@ function CronListItem({
   onViewRuns: () => void;
 }) {
   const { t } = useTranslation();
-  const tag = normalizeTags(cron.tags)[0] ?? 'Work';
 
   return (
     <div
       className="grid items-center gap-4 px-4 py-3 text-sm border-b border-border/20 transition-colors last:border-b-0 hover:bg-[var(--surface-hover)]"
       style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
     >
-      {/* Task name + tag */}
+      {/* Task name */}
       <div className="flex items-center gap-2 min-w-0">
         <span className="truncate font-medium text-foreground">{cron.name}</span>
-        <span
-          className={`inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
-            tag === 'Code'
-              ? 'bg-purple-500/10 text-purple-400'
-              : 'bg-blue-500/10 text-blue-400'
-          }`}
-        >
-          {tag}
-        </span>
       </div>
 
       {/* Schedule */}
@@ -812,17 +763,26 @@ function CronListItem({
       {/* Status */}
       <div className="flex items-center gap-2">
         <Switch
-          checked={cron.status === 'enabled'}
+          checked={cron.enabled}
           onCheckedChange={onToggleStatus}
           ariaLabel={t('automation.enabled')}
         />
-        <span
-          className={`text-xs ${
-            cron.status === 'enabled' ? 'text-[var(--success)]' : 'text-muted-foreground'
-          }`}
-        >
-          {cron.status === 'enabled' ? t('automation.statusSuccess') : t('automation.enabled')}
-        </span>
+        {cron.lastError ? (
+          <span
+            className="text-xs text-destructive"
+            title={cron.lastError}
+          >
+            {t('automation.statusError')}
+          </span>
+        ) : (
+          <span
+            className={`text-xs ${
+              cron.enabled ? 'text-[var(--success)]' : 'text-muted-foreground'
+            }`}
+          >
+            {cron.enabled ? t('automation.enabled') : t('common.disabled')}
+          </span>
+        )}
       </div>
 
       {/* Actions */}
@@ -875,19 +835,6 @@ function CronListItem({
       </div>
     </div>
   );
-}
-
-function RunStatusIndicator({ status }: { status: string }) {
-  switch (status) {
-    case 'success':
-      return <span className="h-3 w-3 flex-shrink-0 rounded-full bg-[var(--success)]" aria-label="成功" />;
-    case 'failed':
-      return <XCircleIcon size={14} className="flex-shrink-0 text-destructive" />;
-    case 'running':
-      return <SpinnerGapIcon size={14} className="flex-shrink-0 animate-spin text-accent" />;
-    default:
-      return <ClockIcon size={14} className="flex-shrink-0 text-muted-foreground" />;
-  }
 }
 
 function CronEditModal({
@@ -948,25 +895,18 @@ function CronEditModal({
     }
 
     try {
-      const parsedParams = editor.inputParams ? JSON.parse(editor.inputParams) : {};
-      if (!parsedParams || Array.isArray(parsedParams) || typeof parsedParams !== 'object') {
-        throw new Error('输入参数必须是 JSON 对象。');
-      }
       const maxRetries = Number(editor.maxRetries || '3');
       const schedule = draftToSchedule(editor.scheduleDraft);
-      if (schedule.kind === 'cron' && !schedule.cronExpr?.trim()) throw new Error('请输入 Cron 表达式。');
-      if (schedule.kind === 'at' && !schedule.at) throw new Error('请选择运行时间。');
+      if (schedule.kind === 'cron' && !schedule.expr?.trim()) throw new Error('请输入 Cron 表达式。');
+      if (schedule.kind === 'once' && !schedule.at) throw new Error('请选择运行时间。');
       if (editor.scheduleDraft.endRepeat === 'on' && !editor.scheduleDraft.endAt) throw new Error('请选择结束重复时间。');
 
       await onSave(cron?.id, {
         name: editor.name.trim(),
-        description: editor.description.trim() || null,
-        tags: [editor.tag],
         schedule,
         prompt: editor.prompt.trim(),
         model: editor.model.trim(),
         workingDirectory: editor.workingDirectory.trim() || undefined,
-        inputParams: parsedParams as Record<string, unknown>,
         concurrencyPolicy: editor.concurrencyPolicy,
         maxRetries,
         enabled: editor.enabled,
@@ -1110,25 +1050,7 @@ function CronEditModal({
 
             {/* Prompt */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-sm font-medium text-foreground">{t('automation.whatToDo')}</label>
-                <div className="flex items-center gap-1 rounded-lg border border-border/50 bg-chip p-0.5">
-                  {CRON_TAGS.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => setEditor((prev) => ({ ...prev, tag }))}
-                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                        editor.tag === tag
-                          ? 'bg-accent text-white'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      {tag === 'Work' ? t('automation.work') : t('automation.code')}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <label className="text-sm font-medium text-foreground">{t('automation.whatToDo')}</label>
               <textarea
                 className="w-full min-h-[180px] rounded-lg border border-border/50 bg-chip px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-y"
                 placeholder={t('automation.promptPlaceholder')}
@@ -1161,15 +1083,6 @@ function CronEditModal({
                   placeholder="~/.duya/workspace"
                   value={editor.workingDirectory}
                   onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-foreground">{t('automation.inputParams')}</label>
-                <textarea
-                  className="w-full min-h-[60px] rounded-lg border border-border/50 bg-chip px-3 py-2 text-sm font-mono text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-none"
-                  placeholder='{"key": "value"}'
-                  value={editor.inputParams}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, inputParams: event.target.value }))}
                 />
               </div>
             </div>

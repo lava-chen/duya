@@ -96,29 +96,47 @@ export function createDefaultScheduleDraft(now = new Date()): ScheduleDraft {
   };
 }
 
+function parseEveryDurationSafe(input: string): number | undefined {
+  const m = /^(\d+)(s|m|h|d|w)$/.exec(input.trim());
+  if (!m) return undefined;
+  const unitMs: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+  return Number(m[1]) * unitMs[m[2]];
+}
+
 export function scheduleToDraft(cron: AutomationCron): ScheduleDraft {
   const draft = createDefaultScheduleDraft();
-  draft.timezone = cron.schedule_cron_tz || draft.timezone;
-  draft.endRepeat = cron.schedule_end_at ? 'on' : 'never';
-  draft.endAt = toLocalInput(cron.schedule_end_at);
+  const s = cron.schedule;
+  draft.timezone = (s.kind === 'cron' && s.tz) || draft.timezone;
+  draft.endRepeat = s.endAt ? 'on' : 'never';
+  draft.endAt = toLocalInput(s.endAt);
 
-  if (cron.schedule_kind === 'at') {
-    return { ...draft, preset: 'once', at: toLocalInput(cron.schedule_at) };
+  if (s.kind === 'once') {
+    return { ...draft, preset: 'once', at: toLocalInput(s.at) };
   }
-  if (cron.schedule_kind === 'every') {
-    const everyMs = cron.schedule_every_ms ?? 3_600_000;
+  if (s.kind === 'every') {
+    const everyMs = parseEveryDurationSafe(s.every) ?? 3_600_000;
     if (everyMs === 3_600_000) return { ...draft, preset: 'hourly' };
+    const minutes = everyMs / 60_000;
+    const hours = everyMs / 3_600_000;
+    let cronExpr: string;
+    if (everyMs % 60_000 === 0 && minutes >= 1 && minutes <= 59) {
+      cronExpr = `*/${minutes} * * * *`;
+    } else if (everyMs % 3_600_000 === 0 && hours >= 1 && hours <= 23) {
+      cronExpr = `0 */${hours} * * *`;
+    } else {
+      cronExpr = '*/5 * * * *';
+    }
     return {
       ...draft,
       preset: 'custom',
       customFrequency: 'cron',
-      cronExpr: everyMs % 60_000 === 0 ? `*/${Math.max(1, everyMs / 60_000)} * * * *` : cron.schedule_cron_expr || '*/5 * * * *',
+      cronExpr,
     };
   }
 
-  const fields = cronParts(cron.schedule_cron_expr);
+  const fields = cronParts(s.expr);
   if (fields.length !== 5) {
-    return { ...draft, preset: 'custom', customFrequency: 'cron', cronExpr: cron.schedule_cron_expr || '' };
+    return { ...draft, preset: 'custom', customFrequency: 'cron', cronExpr: s.expr || '' };
   }
   const [minute, hour, dayOfMonth, month, dayOfWeek] = fields;
   const numericMinute = Number(minute);
@@ -145,7 +163,7 @@ export function scheduleToDraft(cron: AutomationCron): ScheduleDraft {
     ...draft,
     preset: 'custom',
     customFrequency: 'cron',
-    cronExpr: cron.schedule_cron_expr || '',
+    cronExpr: s.expr || '',
   };
 }
 
@@ -168,27 +186,27 @@ function cronForFrequency(
 export function draftToSchedule(draft: ScheduleDraft): CronSchedule {
   const endAt = draft.endRepeat === 'on' ? isoFromLocalInput(draft.endAt) ?? null : null;
   if (draft.preset === 'once') {
-    return { kind: 'at', at: isoFromLocalInput(draft.at) };
+    return { kind: 'once', at: isoFromLocalInput(draft.at) ?? '', endAt };
   }
   if (draft.preset === 'weekdays') {
     const [hour, minute] = timeParts(draft.time);
-    return { kind: 'cron', cronExpr: `${minute} ${hour} * * 1-5`, cronTz: draft.timezone || null, endAt };
+    return { kind: 'cron', expr: `${minute} ${hour} * * 1-5`, tz: draft.timezone || null, endAt };
   }
   if (draft.preset === 'custom') {
     if (draft.customFrequency === 'cron') {
-      return { kind: 'cron', cronExpr: draft.cronExpr.trim(), cronTz: draft.timezone || null, endAt };
+      return { kind: 'cron', expr: draft.cronExpr.trim(), tz: draft.timezone || null, endAt };
     }
     return {
       kind: 'cron',
-      cronExpr: cronForFrequency(draft.customFrequency, draft),
-      cronTz: draft.timezone || null,
+      expr: cronForFrequency(draft.customFrequency, draft),
+      tz: draft.timezone || null,
       endAt,
     };
   }
   return {
     kind: 'cron',
-    cronExpr: cronForFrequency(draft.preset, draft),
-    cronTz: draft.timezone || null,
+    expr: cronForFrequency(draft.preset, draft),
+    tz: draft.timezone || null,
     endAt,
   };
 }

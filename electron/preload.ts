@@ -439,7 +439,7 @@ export interface AutomationAPI {
   updateCron: (id: string, patch: Record<string, unknown>) => Promise<unknown>
   deleteCron: (id: string) => Promise<{ success: boolean }>
   runCron: (id: string) => Promise<unknown>
-  listCronRuns: (input: { cronId: string; limit?: number; offset?: number }) => Promise<unknown[]>
+  listCronSessions: (input: { cronId: string; limit?: number; offset?: number }) => Promise<unknown[]>
   listTemplates: () => Promise<unknown[]>
 }
 
@@ -1566,8 +1566,8 @@ const electronAPI: ElectronAPI = {
     updateCron: (id: string, patch: Record<string, unknown>) => ipcRenderer.invoke('automation:cron:update', id, patch),
     deleteCron: (id: string) => ipcRenderer.invoke('automation:cron:delete', id),
     runCron: (id: string) => ipcRenderer.invoke('automation:cron:run', id),
-    listCronRuns: (input: { cronId: string; limit?: number; offset?: number }) =>
-      ipcRenderer.invoke('automation:cron:runs', input),
+    listCronSessions: (input: { cronId: string; limit?: number; offset?: number }) =>
+      ipcRenderer.invoke('automation:cron:sessions', input),
     listTemplates: () => ipcRenderer.invoke('automation:template:list'),
   },
   safeMode: {

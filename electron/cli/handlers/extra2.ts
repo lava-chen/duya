@@ -17,6 +17,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getDatabase } from '../../db/connection';
+import { getCoreStores } from '../../db/core-connection';
 import { getAutomationScheduler } from '../../automation/Scheduler.js';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { app } from 'electron';
@@ -101,15 +102,15 @@ async function setCronStatus(
       sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
       return;
     }
-    scheduler.updateCron(id, { status: next });
+    scheduler.updateCron(id, { enabled: next === 'enabled' });
     await recordAudit(
       req,
       correlationId,
       next === 'enabled' ? 'cron.enable' : 'cron.disable',
       id,
-      `from=${current.status}`,
+      `from=${current.enabled ? 'enabled' : 'disabled'}`,
     );
-    sendJson(res, 200, { ok: true, id, status: next, previousStatus: current.status });
+    sendJson(res, 200, { ok: true, id, status: next, previousStatus: current.enabled ? 'enabled' : 'disabled' });
   } catch (err) {
     sendJson(res, 500, {
       error: { code: 'internal_error', message: err instanceof Error ? err.message : String(err) },
@@ -162,7 +163,8 @@ export function handleCronLogs(
       return;
     }
     const scheduler = getAutomationScheduler();
-    if (!scheduler || !scheduler.listCrons().some((c) => c.id === id)) {
+    const job = scheduler?.listCrons().find((c) => c.id === id);
+    if (!scheduler || !job) {
       sendJson(res, 404, { error: { code: 'cron_not_found', message: id } });
       return;
     }
@@ -178,12 +180,19 @@ export function handleCronLogs(
         if (k === 'limit') limit = Math.max(1, Math.min(200, Number(v) || limit));
       }
     }
-    const rows = db
-      .prepare(
-        'SELECT id, started_at, ended_at, run_status, error_message, output, logs FROM automation_cron_runs WHERE cron_id = ? ORDER BY started_at DESC LIMIT ?',
-      )
-      .all(id, limit) as CronRunRow[];
-    sendJson(res, 200, { id, runs: rows });
+    // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
+    const { sessions } = getCoreStores();
+    const rows = sessions.listByPrefix(`cron:${id}:`, { limit });
+    const runs: CronRunRow[] = rows.map((r, i) => ({
+      id: r.id,
+      started_at: r.created_at,
+      ended_at: r.updated_at,
+      run_status: i === 0 && job.lastError ? 'failed' : 'success',
+      error_message: i === 0 ? (job.lastError ?? null) : null,
+      output: null,
+      logs: null,
+    }));
+    sendJson(res, 200, { id, runs });
   } catch (err) {
     sendJson(res, 500, {
       error: { code: 'internal_error', message: err instanceof Error ? err.message : String(err) },

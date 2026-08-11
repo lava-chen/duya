@@ -156,6 +156,23 @@ describe('SessionStore', () => {
     expect(ids).toEqual(['s-1', 's-3']);
   });
 
+  it('listByPrefix matches the id prefix with a message_count aggregate', () => {
+    store.create(createInput('cron:job1:1:r1'));
+    store.create(createInput('cron:job1:2:r2'));
+    store.create(createInput('cron:job2:1:r1'));
+    store.create(createInput('other-1'));
+    const rows = store.listByPrefix('cron:job1:', { limit: 10, offset: 0 });
+    expect(rows.map((r) => r.id).sort()).toEqual(['cron:job1:1:r1', 'cron:job1:2:r2']);
+    expect(rows[0]).toHaveProperty('message_count');
+  });
+
+  it('listByPrefix escapes LIKE special characters in the prefix', () => {
+    store.create(createInput('cron:a%b:1:r1'));
+    store.create(createInput('cron:axxb:1:r1'));
+    const rows = store.listByPrefix('cron:a%b:', {});
+    expect(rows.map((r) => r.id)).toEqual(['cron:a%b:1:r1']);
+  });
+
   // ─── draft ───
 
   it('saveDraft / getDraft round-trip', () => {

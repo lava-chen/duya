@@ -224,7 +224,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'session:list': {
       const { sessions } = getCoreStores();
-      return sessions.list({ excludeModes: ['automation'] }).map(coreSessionToIpcRow);
+      return sessions.list().map(coreSessionToIpcRow);
     }
 
     case 'session:listByWorkingDirectory': {
@@ -770,11 +770,17 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'automation:cron:runs': {
-      const scheduler = getAutomationScheduler();
-      if (!scheduler) {
-        throw new Error('Automation scheduler is not initialized');
-      }
-      return scheduler.listCronRuns(p as { cronId: string; limit?: number; offset?: number });
+      const input = p as { cronId: string; limit?: number; offset?: number };
+      const { sessions } = getCoreStores();
+      const rows = sessions.listByPrefix(`cron:${input.cronId}:`, { limit: input.limit, offset: input.offset });
+      return rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        model: r.model,
+        messageCount: r.message_count,
+      }));
     }
 
     // ==================== Config Manager actions ====================

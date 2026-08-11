@@ -37,7 +37,6 @@ const SELECT_ELIGIBLE_SQL = `
 SELECT r.rollout_id, r.last_message_at, r.source_fingerprint
 FROM rollout_catalog r
 WHERE r.agent_type = 'main'
-  AND (r.mode IS NULL OR r.mode != 'automation')
   AND r.source_status = 'active'
   AND r.message_count >= :minMessageCount
   AND r.last_message_at < :now - :idleMs

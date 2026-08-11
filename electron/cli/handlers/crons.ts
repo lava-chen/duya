@@ -28,14 +28,14 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getAutomationScheduler } from '../../automation/Scheduler';
+import { formatEveryDuration, parseEveryDuration } from '../../automation/schedule.js';
+import { getCoreStores } from '../../db/core-connection';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import type {
   AutomationCron,
-  AutomationCronRun,
   CreateAutomationCronInput,
-  UpdateAutomationCronInput,
   CronSchedule,
-  CronStatus as DbCronStatus,
+  UpdateAutomationCronInput,
 } from '../../automation/types';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -185,69 +185,77 @@ function makeAuditEvent(
 // ---------------------------------------------------------------------------
 
 function scheduleSummary(row: AutomationCron): string {
-  if (row.schedule_kind === 'at') return row.schedule_at ? `at ${row.schedule_at}` : '-';
-  if (row.schedule_kind === 'every') return row.schedule_every_ms ? `every ${row.schedule_every_ms}ms` : '-';
-  if (row.schedule_kind === 'cron') return row.schedule_cron_expr || '-';
+  const s = row.schedule;
+  if (s.kind === 'once') return s.at ? `at ${s.at}` : '-';
+  if (s.kind === 'every') return `every ${s.every}`;
+  if (s.kind === 'cron') return s.expr || '-';
   return '-';
+}
+
+/** Effective wire status: the user toggle is `enabled`; a run error pauses the job. */
+function effectiveStatus(row: AutomationCron): CronStatus {
+  if (!row.enabled) return 'disabled';
+  return row.lastError ? 'error' : 'enabled';
 }
 
 function toListItem(row: AutomationCron): CronListItemDTO {
   return {
     id: row.id,
     name: row.name,
-    description: row.description ?? undefined,
-    status: row.status as CronStatus,
-    scheduleKind: row.schedule_kind,
+    description: undefined,
+    status: effectiveStatus(row),
+    scheduleKind: row.schedule.kind === 'once' ? 'at' : row.schedule.kind,
     scheduleExpr: scheduleSummary(row),
-    nextRunAt: row.next_run_at ?? undefined,
-    lastRunAt: row.last_run_at ?? undefined,
-    lastError: row.last_error ?? undefined,
+    nextRunAt: row.nextRunAt ?? undefined,
+    lastRunAt: row.lastRunAt ?? undefined,
+    lastError: row.lastError ?? undefined,
   };
 }
 
 function toInfoItem(row: AutomationCron): CronInfoItemDTO {
+  const s = row.schedule;
+  let everyMs: number | undefined;
+  if (s.kind === 'every') {
+    try {
+      everyMs = parseEveryDuration(s.every);
+    } catch {
+      everyMs = undefined;
+    }
+  }
   return {
     ...toListItem(row),
-    workingDirectory: row.working_directory || undefined,
-    scheduleAt: row.schedule_at ?? undefined,
-    scheduleEveryMs: row.schedule_every_ms ?? undefined,
-    scheduleCronExpr: row.schedule_cron_expr ?? undefined,
-    scheduleCronTz: row.schedule_cron_tz ?? undefined,
-    scheduleEndAt: row.schedule_end_at ?? undefined,
+    workingDirectory: row.workingDirectory || undefined,
+    scheduleAt: s.kind === 'once' ? s.at : undefined,
+    scheduleEveryMs: everyMs,
+    scheduleCronExpr: s.kind === 'cron' ? s.expr : undefined,
+    scheduleCronTz: s.kind === 'cron' ? (s.tz ?? undefined) : undefined,
+    scheduleEndAt: s.endAt ?? undefined,
     prompt: row.prompt,
     model: row.model,
-    concurrencyPolicy: row.concurrency_policy,
-    maxRetries: row.max_retries,
-    inputParams: parseInputParams(row.input_params),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    concurrencyPolicy: row.concurrencyPolicy,
+    maxRetries: row.maxRetries,
+    inputParams: undefined,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
-function parseInputParams(raw: string | null): Record<string, unknown> | undefined {
-  if (!raw) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // ignore
-  }
-  return undefined;
-}
-
-function toRunItem(row: AutomationCronRun): CronRunItemDTO {
+/** A cron run is an ordinary session; map it to the frozen run DTO. */
+function toRunItem(
+  session: { id: string; created_at: number; updated_at: number; model: string },
+  job: AutomationCron,
+  isLatest: boolean,
+): CronRunItemDTO {
   return {
-    id: row.id,
-    cronId: row.cron_id,
-    runStatus: row.run_status as RunStatus,
-    startedAt: row.started_at ?? undefined,
-    endedAt: row.ended_at ?? undefined,
-    output: row.output ?? undefined,
-    errorMessage: row.error_message ?? undefined,
-    sessionId: row.session_id ?? undefined,
-    createdAt: row.created_at,
+    id: session.id,
+    cronId: job.id,
+    runStatus: isLatest && job.lastError ? 'failed' : 'success',
+    startedAt: session.created_at,
+    endedAt: session.updated_at,
+    output: undefined,
+    errorMessage: isLatest ? (job.lastError ?? undefined) : undefined,
+    sessionId: session.id,
+    createdAt: session.created_at,
   };
 }
 
@@ -255,27 +263,21 @@ function toRunItem(row: AutomationCronRun): CronRunItemDTO {
 // Wire DTO → scheduler input mappers
 // ---------------------------------------------------------------------------
 
+/** Map the frozen wire schedule (at/everyMs/cronExpr) to the new nested shape. */
 function toSchedulerSchedule(s: CreateCronBody['schedule']): CronSchedule {
-  return {
-    kind: s.kind,
-    at: s.at,
-    everyMs: s.everyMs,
-    cronExpr: s.cronExpr,
-    cronTz: s.cronTz,
-    endAt: s.endAt,
-  };
+  if (s.kind === 'at') return { kind: 'once', at: s.at ?? '', endAt: s.endAt };
+  if (s.kind === 'every') return { kind: 'every', every: formatEveryDuration(s.everyMs ?? 3_600_000), endAt: s.endAt };
+  return { kind: 'cron', expr: s.cronExpr ?? '', tz: s.cronTz, endAt: s.endAt };
 }
 
 function toCreateInput(body: CreateCronBody): CreateAutomationCronInput {
   return {
     name: body.name,
-    description: body.description,
     workingDirectory: body.workingDirectory,
     schedule: toSchedulerSchedule(body.schedule),
     prompt: body.prompt,
-    model: body.model ?? '',
-    inputParams: body.inputParams,
-    concurrencyPolicy: body.concurrencyPolicy,
+    model: body.model,
+    concurrencyPolicy: body.concurrencyPolicy as CreateAutomationCronInput['concurrencyPolicy'],
     maxRetries: body.maxRetries,
     enabled: body.enabled,
   };
@@ -284,15 +286,13 @@ function toCreateInput(body: CreateCronBody): CreateAutomationCronInput {
 function toUpdateInput(body: UpdateCronBody): UpdateAutomationCronInput {
   return {
     name: body.name,
-    description: body.description,
     workingDirectory: body.workingDirectory,
     schedule: body.schedule ? toSchedulerSchedule(body.schedule) : undefined,
     prompt: body.prompt,
     model: body.model,
-    inputParams: body.inputParams,
-    concurrencyPolicy: body.concurrencyPolicy,
+    concurrencyPolicy: body.concurrencyPolicy as UpdateAutomationCronInput['concurrencyPolicy'],
     maxRetries: body.maxRetries,
-    status: body.status as DbCronStatus | undefined,
+    enabled: body.status ? body.status === 'enabled' : undefined,
   };
 }
 
@@ -393,14 +393,15 @@ export function handleListCronRuns(
   }
   try {
     const scheduler = getScheduler();
-    // Verify the cron exists so 404 trumps empty result.
-    const exists = scheduler.listCrons().some((c) => c.id === id);
-    if (!exists) {
+    const job = scheduler.listCrons().find((c) => c.id === id);
+    if (!job) {
       sendError(res, 404, 'cron_not_found', `Cron not found: ${id}`);
       return;
     }
-    const runs = scheduler.listCronRuns({ cronId: id, limit: query.limit, offset: query.offset });
-    sendJson(res, 200, { runs: runs.map(toRunItem) });
+    // A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
+    const { sessions } = getCoreStores();
+    const rows = sessions.listByPrefix(`cron:${id}:`, { limit: query.limit, offset: query.offset });
+    sendJson(res, 200, { runs: rows.map((r, i) => toRunItem(r, job, i === 0)) });
   } catch (err) {
     sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
   }
@@ -528,7 +529,14 @@ export async function handleRunCron(
       getUserDataDir(),
       makeAuditEvent(req, 'cron.run', id, correlationId),
     );
-    sendJson(res, 202, { run: toRunItem(run) });
+    sendJson(res, 202, {
+      run: {
+        id: run.runId,
+        cronId: run.cronId,
+        runStatus: 'running',
+        sessionId: run.sessionId,
+      },
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.startsWith('cron not found')) {

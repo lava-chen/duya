@@ -337,13 +337,42 @@ export class SessionStore {
            (SELECT COUNT(*) FROM message_index WHERE session_id = s.id) AS message_count
          FROM sessions s
          WHERE s.status != 'deleted'
-           AND s.mode != 'automation'
            AND s.id NOT LIKE 'gw-%'
            AND s.parent_session_id IS NULL
          ORDER BY s.updated_at DESC, s.id DESC
          LIMIT ? OFFSET ?`,
       )
       .all(limit, offset) as SessionSummary[];
+    return rows;
+  }
+
+  /**
+   * List sessions whose id starts with `rawPrefix` (e.g. `cron:<jobId>:`),
+   * with the `message_count` aggregate. Used for cron run history — each cron
+   * run is an ordinary session whose id keeps the `cron:<jobId>:...` prefix.
+   * `rawPrefix` is treated as a literal prefix (no wildcards): it is escaped
+   * and a trailing `%` wildcard is appended.
+   */
+  listByPrefix(rawPrefix: string, opts: SessionSummaryOptions = {}): SessionSummary[] {
+    const limit = clampLimit(opts.limit ?? SESSION_LIST_DEFAULT_LIMIT);
+    const offset = clampOffset(opts.offset ?? 0);
+    const pattern = `${escapeLike(rawPrefix)}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT
+           s.id,
+           s.title,
+           s.created_at,
+           s.updated_at,
+           s.model,
+           (SELECT COUNT(*) FROM message_index WHERE session_id = s.id) AS message_count
+         FROM sessions s
+         WHERE s.status != 'deleted'
+           AND s.id LIKE @pattern ESCAPE '\\'
+         ORDER BY s.updated_at DESC, s.id DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .all(pattern, limit, offset) as SessionSummary[];
     return rows;
   }
 
@@ -364,7 +393,6 @@ export class SessionStore {
          FROM sessions s
          WHERE s.id = ?
            AND s.status != 'deleted'
-           AND s.mode != 'automation'
            AND s.id NOT LIKE 'gw-%'
            AND s.parent_session_id IS NULL`,
       )

@@ -47,31 +47,75 @@ export interface AgentConfig {
   default_timeout: number;
 }
 
-export interface CronJob {
-  id: string;
-  name: string;
-  description?: string;
-  tags?: string[];
-  schedule_kind: 'at' | 'every' | 'cron';
-  schedule_at?: string;
-  schedule_every_ms?: number;
-  schedule_cron_expr?: string;
-  schedule_cron_tz?: string;
-  schedule_end_at?: string;
-  workflow_id?: string;
-  working_directory: string;
-  prompt: string;
-  input_params: Record<string, unknown>;
-  model: string;
-  status: 'enabled' | 'disabled' | 'error';
-  concurrency_policy: 'skip' | 'parallel' | 'queue' | 'replace';
-  max_retries: number;
-}
-
 export interface ChannelAdapterEntry {
   id: string;
   enabled: boolean;
   [key: string]: unknown; // platform-specific fields; credentials split to secrets
+}
+
+/** Telegram adapter DM topic config (`options.dm_topics_config`). */
+export interface TelegramDmTopicsConfig {
+  chat_id: number;
+  topics: Array<{
+    name: string;
+    thread_id?: number;
+    icon_color?: number;
+    icon_custom_emoji_id?: string;
+  }>;
+}
+
+/**
+ * Options supported by the Telegram adapter (`channels.adapters.telegram.options`).
+ * These mirror `packages/gateway/src/adapters/telegram/index.ts` and the group
+ * gating module so users can align every setting directly in config.toml.
+ * The bot token stays in secrets.json (`channels.adapters.telegram.credentials.token`).
+ */
+export interface TelegramAdapterOptions {
+  account?: string;
+  reply_to_mode?: 'first' | 'all' | 'off';
+  disable_link_previews?: boolean;
+  bot_api_server?: string;
+  cron_thread_id?: number;
+  status_indicator?: boolean;
+  status_online?: string;
+  status_offline?: string;
+  require_pairing?: boolean;
+  dm_topics?: boolean;
+  dm_topics_group?: string;
+  dm_topics_config?: TelegramDmTopicsConfig[];
+  stt?: { enabled?: boolean };
+  commands?: Array<{ command: string; description: string }>;
+  command_menu?: {
+    max_commands?: number;
+    priority_mode?: 'prepend' | 'append' | 'replace';
+    priority?: string[];
+  };
+  webhook_url?: string;
+  webhook_port?: number;
+  webhook_path?: string;
+  webhook_secret?: string;
+  // group gating (packages/gateway/src/adapters/telegram/handlers/group-gating.ts)
+  free_response_chats?: string[];
+  ignored_threads?: string[];
+  require_mention?: boolean;
+  mention_patterns?: string[];
+  observe_unmentioned_group_messages?: boolean;
+  allowed_chats?: string[];
+  group_allowed_chats?: string[];
+  allow_from?: string[];
+  allow_admin_from?: string[];
+  group_allow_from?: string[];
+  group_allow_admin_from?: string[];
+  user_allowed_commands?: string[];
+  group_user_allowed_commands?: string[];
+}
+
+export interface TelegramAdapterEntry {
+  id: string;
+  enabled: boolean;
+  options?: TelegramAdapterOptions;
+  accounts?: Array<Record<string, unknown>>;
+  credentials?: Record<string, unknown>; // token split to secrets.json
 }
 
 export interface ChannelsConfig {
@@ -148,8 +192,6 @@ export interface DuyaConfig {
   voice: Record<string, unknown>;
   delegation: Record<string, unknown>;
 
-  cron: { jobs: CronJob[] };
-
   session_reset: Record<string, unknown>;
   channels: ChannelsConfig;
   gateway_proxy: GatewayProxyConfig;
@@ -202,9 +244,57 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   stt: { enabled: true },
   voice: {},
   delegation: {},
-  cron: { jobs: [] },
   session_reset: {},
-  channels: { auto_start: false, workspace: '', proxy_url: '', gateway_model: '', adapters: {} },
+  channels: {
+    auto_start: false,
+    workspace: '',
+    proxy_url: '',
+    gateway_model: '',
+    adapters: {
+      // Telegram adapter template so the full option surface is visible and
+      // editable in config.toml. The bot token lives in secrets.json under
+      // `channels.adapters.telegram.credentials.token`.
+      telegram: {
+        id: 'telegram',
+        enabled: false,
+        options: {
+          account: '',
+          reply_to_mode: 'first',
+          disable_link_previews: false,
+          bot_api_server: '',
+          cron_thread_id: 0,
+          status_indicator: false,
+          status_online: 'Online',
+          status_offline: 'Offline',
+          require_pairing: false,
+          dm_topics: false,
+          dm_topics_group: '',
+          dm_topics_config: [],
+          stt: { enabled: true },
+          commands: [],
+          command_menu: { max_commands: 60, priority_mode: 'prepend', priority: [] },
+          webhook_url: '',
+          webhook_port: 0,
+          webhook_path: '',
+          webhook_secret: '',
+          free_response_chats: [],
+          ignored_threads: [],
+          require_mention: true,
+          mention_patterns: [],
+          observe_unmentioned_group_messages: false,
+          allowed_chats: [],
+          group_allowed_chats: [],
+          allow_from: [],
+          allow_admin_from: [],
+          group_allow_from: [],
+          group_allow_admin_from: [],
+          user_allowed_commands: [],
+          group_user_allowed_commands: [],
+        },
+        accounts: [],
+      },
+    },
+  },
   gateway_proxy: { global_enabled: true, channels: {} },
   approvals: {},
   command_allowlist: [],
