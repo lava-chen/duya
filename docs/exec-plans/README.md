@@ -52,8 +52,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [413-mode-state-machine-framework](./active/413-mode-state-machine-framework.md) | Mode 状态机框架：在 `ModeModifier` 之上加 `ModeTrackerEngine` + `ModeCoordinator`，对齐 grok 多 mode 状态机（生命周期状态机 + 每轮提醒注入 + 运行时工具门控 + 持久化 + 仲裁层） | P1 | 总览：已拆分为子 plan 413a-e |
 | [413a-mode-tracker-framework](./active/413a-mode-tracker-framework.md) | ModeTracker 引擎框架：泛型接口 + engine 容器 + 序列化纯函数 + coordinator 骨架 | P1 | ✅ 完成（2026-08-11） |
 | [413b-plan-tracker-state-machine](./active/413b-plan-tracker-state-machine.md) | PlanModeTracker 4 态状态机 + 四份提醒模板 + plan-task 改 session 型 | P1 | ✅ 完成（2026-08-11） |
-| [413c-mode-state-persistence](./active/413c-mode-state-persistence.md) | mode 状态快照落盘：core-db `mode_state_snapshots` 表 + `modeState:*` IPC + `modeStateDb` | P1 | Planning |
-| [413d-agent-loop-wiring](./active/413d-agent-loop-wiring.md) | agent 侧接线：DuyaAgent 四处检查点 + coordinator 主体（注入/仲裁/门控/buffer）+ e2e | P1 | Planning |
+| [413c-mode-state-persistence](./active/413c-mode-state-persistence.md) | mode 状态快照落盘：core-db `mode_state_snapshots` 表 + `modeState:*` IPC + `modeStateDb` | P1 | ✅ 完成（2026-08-11） |
+| [413d-agent-loop-wiring](./active/413d-agent-loop-wiring.md) | agent 侧接线：DuyaAgent 四处检查点 + coordinator 主体（注入/仲裁/门控/buffer）+ e2e | P1 | ✅ 完成（2026-08-11） |
 | [413e-plan-mode-frontend-session](./active/413e-plan-mode-frontend-session.md) | plan-task session 化前端：extensions key + set_plan_mode IPC + store/ChatView/MessageInput + mode-id | P1 | Planning |
 
 ### Conductor / Canvas
