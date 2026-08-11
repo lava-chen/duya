@@ -16,7 +16,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Heavy modules that MessageInput transitively imports. We mock them out
-// so the test runs in a lean environment.
+// so the test runs in a lean environment. The icons list covers what
+// MessageInput and useSlashCommands import directly — keeping it explicit
+// (rather than a Proxy) avoids vitest ESM-interop hangs.
 vi.mock('@/components/icons', () => ({
   ArrowUpIcon: () => null,
   SearchIcon: () => null,
@@ -28,11 +30,21 @@ vi.mock('@/components/icons', () => ({
   CopyIcon: () => null,
   NotePencilIcon: () => null,
   ArrowCounterClockwiseIcon: () => null,
+  ClockCounterClockwiseIcon: () => null,
   FileTextIcon: () => null,
   ExternalLinkIcon: () => null,
   CaretDownIcon: () => null,
   TelescopeIcon: () => null,
   PlusIcon: () => null,
+  TerminalIcon: () => null,
+  QuestionIcon: () => null,
+  BrainIcon: () => null,
+  GlobeSimpleIcon: () => null,
+  ListChecksIcon: () => null,
+  FeatherIcon: () => null,
+  PlugIcon: () => null,
+  SquareHalfIcon: () => null,
+  ArrowsInLineVerticalIcon: () => null,
 }));
 
 vi.mock('@/components/chat/ModelSelector', () => ({
@@ -93,7 +105,49 @@ vi.mock('@/lib/ipc-client', () => ({
   getDraftIPC: vi.fn().mockResolvedValue(''),
 }));
 
-import { MessageInput } from '../MessageInput';
+import { MessageInput, pickMessageMode, clearMessageModes } from '../MessageInput';
+
+describe('MessageInput mode helpers (plan 413e)', () => {
+  it('pickMessageMode returns plan-task (session-level) but skips conductor', () => {
+    expect(pickMessageMode(new Set(['plan-task']))).toBe('plan-task');
+    expect(pickMessageMode(new Set(['research']))).toBe('research');
+    expect(pickMessageMode(new Set(['conductor']))).toBeUndefined();
+    expect(pickMessageMode(new Set(['plan-task', 'conductor']))).toBe('plan-task');
+  });
+
+  it('clearMessageModes keeps session modes (plan-task, conductor) and drops research', () => {
+    const next = clearMessageModes(new Set(['plan-task', 'research', 'conductor']));
+    expect(next.has('plan-task')).toBe(true);
+    expect(next.has('conductor')).toBe(true);
+    expect(next.has('research')).toBe(false);
+  });
+});
+
+describe('MessageInput plan-task session toggle (plan 413e)', () => {
+  it('restores plan-task from the planModeEnabled prop and reports toggle-off', async () => {
+    const onPlanModeChange = vi.fn();
+    render(
+      <MessageInput
+        onSend={() => {}}
+        planModeEnabled
+        onPlanModeChange={onPlanModeChange}
+      />,
+    );
+    // The sync effect surfaces the persisted toggle as a chip.
+    const chip = await screen.findByText('Plan Mode');
+    fireEvent.click(chip);
+    expect(onPlanModeChange).toHaveBeenCalledWith(false);
+  });
+
+  it('shows the plan-task chip only while the persisted toggle is on', async () => {
+    const { rerender } = render(<MessageInput onSend={() => {}} />);
+    expect(screen.queryByText('Plan Mode')).not.toBeInTheDocument();
+    rerender(<MessageInput onSend={() => {}} planModeEnabled />);
+    expect(await screen.findByText('Plan Mode')).toBeInTheDocument();
+    rerender(<MessageInput onSend={() => {}} planModeEnabled={false} />);
+    expect(screen.queryByText('Plan Mode')).not.toBeInTheDocument();
+  });
+});
 
 describe('MessageInput (Plan 220 smoke test)', () => {
   it('mounts and renders the unified AttachmentBar after migration', () => {
