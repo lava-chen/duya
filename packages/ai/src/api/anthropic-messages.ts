@@ -1643,12 +1643,16 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       ) as Anthropic.MessageCreateParams['system'];
       // Diagnostic: verify the assembled system prompt actually reaches the
       // wire. This is critical because third-party Anthropic-compatible
-      // endpoints (MiniMax) may silently drop the `system` field.
+      // endpoints (MiniMax) may silently drop the `system` field. Also expose
+      // the resolved thinking/effort so reasoning leaks can be traced to the
+      // request parameters.
       console.warn('[duya-ai] anthropic request system prompt', {
         length: systemPromptForRequest.length,
         hasMemorySection: systemPromptForRequest.includes('Persistent memory'),
         isMiniMax,
         model: options.model,
+        effort: effectiveEffort,
+        thinking: thinking ?? null,
         preview: systemPromptForRequest.slice(0, 200),
       });
       const params: Anthropic.MessageCreateParams = {

@@ -12,6 +12,8 @@ export function getToneAndStyleSection(_ctx: PromptContext): string {
 
 IMPORTANT: Go straight to the point. Keep your text output brief and direct. Lead with the answer or action, not the reasoning. Skip filler words, preamble, and unnecessary transitions. If you can say it in one sentence, don't use three.
 
+NEVER include analysis, reasoning steps, or thinking-out-loud in your reply. Do not restate the user's question, do not summarize what you "would do" or "need to check", and do not narrate your decision process. Output ONLY the final answer, as if it were the last line of a chat.
+
 - Use structure only when the content genuinely requires it. Section headers are justified when the reader needs navigation across clearly distinct topics; omit them when the response is a single coherent argument or explanation. Within any section, write in continuous prose paragraphs.
 - Do not open paragraphs with bolded noun phrases acting as mini-headers.
 - Do not use bold text to introduce each item in a series; if something deserves emphasis, let the sentence carry it.

@@ -449,7 +449,10 @@ async function proxyFetchWithAgent(
       reject(err);
     });
 
-    if (init?.body) req.write(String(init.body));
+    // Write the body through as-is: `req.write` accepts string | Buffer |
+    // Uint8Array. Coercing via String(buffer) would UTF-8-decode binary
+    // payloads (multipart file uploads) and corrupt every non-UTF8 byte.
+    if (init?.body != null) req.write(init.body as string | Uint8Array);
     req.end();
   });
 }
@@ -496,7 +499,9 @@ async function proxyFetchDirect(
       reject(err);
     });
 
-    if (init?.body) req.write(String(init.body));
+    // See proxyFetchWithAgent: pass binary bodies (file uploads) through
+    // unchanged instead of String()-coercing them.
+    if (init?.body != null) req.write(init.body as string | Uint8Array);
     req.end();
   });
 }

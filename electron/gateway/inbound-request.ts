@@ -36,6 +36,11 @@ export function buildGatewayInboundChatRequest({
       platformMsgId: inbound.platformMsgId,
       platformChatId: inbound.platformChatId,
       agentProfileId: routedProfile,
+      // Channel replies must be clean. MiniMax's adaptive thinking streams its
+      // reasoning into the text channel instead of thinking_delta, so the
+      // reasoning leaks into the delivered answer. Disable thinking for
+      // channel turns so only the final answer is emitted.
+      effort: (inbound.options?.effort as string | undefined) ?? 'off',
     },
     providerConfig,
     workingDirectory,

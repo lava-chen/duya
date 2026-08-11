@@ -73,6 +73,13 @@ export interface PlatformAdapter {
   setMessageReaction?(chatId: string, messageId: string, emoji: string): Promise<void>;
 
   /**
+   * Delete a message the bot previously sent (optional). Used to clean up a
+   * placeholder message that was abandoned because its creation outlasted the
+   * finalize wait window.
+   */
+  deleteMessage?(chatId: string, messageId: string): Promise<void>;
+
+  /**
    * Clear all reactions on a message (optional, telegram-style).
    * Called when a stream completes or errors.
    */

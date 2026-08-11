@@ -242,15 +242,44 @@ export class TelegramAdapter extends BaseAdapter {
             let lastMsgId = reply.editTargetMsgId;
             for (let i = 0; i < chunks.length; i++) {
               if (i === 0) {
-                await this.editMessageText(chatId, lastMsgId, chunks[i], parseMode);
+                try {
+                  await this.editMessageText(chatId, lastMsgId, chunks[i], parseMode);
+                  console.log(`[Telegram] stream edit ok: msg_id=${lastMsgId} len=${chunks[i].length} fresh=${reply.freshOnEditFail ?? false}`);
+                } catch (err) {
+                  // Final delivery (freshOnEditFail): an uneditable placeholder
+                  // must never swallow the answer. Remove the leftover
+                  // placeholder and send the text as a fresh message. Live
+                  // streaming edits (no flag) keep failing silently — the next
+                  // throttled edit or the final edit retries anyway.
+                  if (!reply.freshOnEditFail) throw err;
+                  console.warn(`[Telegram] stream edit FAILED, fallback fresh: msg_id=${lastMsgId} err=${err instanceof Error ? err.message : String(err)}`);
+                  await this.deleteMessage(chatId, lastMsgId).catch(() => { /* best-effort */ });
+                  await this.waitForRateLimit(chatId);
+                  const result = await this.sendMessageWithFormatFallback(
+                    chatId,
+                    chunks[i],
+                    reply.text,
+                    parseMode,
+                    {
+                      message_thread_id: this.replyThreadId(reply),
+                      disable_web_page_preview: reply.disableLinkPreview ?? this.disableLinkPreviews,
+                    },
+                  );
+                  lastMsgId = String(result.result.message_id);
+                  this.recordSendTime(chatId);
+                }
               } else {
                 await this.waitForRateLimit(chatId);
-                const result = await this.sendMessageWithRetry(chatId, {
-                  text: chunks[i],
-                  parse_mode: parseMode,
-                  message_thread_id: this.replyThreadId(reply),
-                  disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview ?? this.disableLinkPreviews,
-                });
+                const result = await this.sendMessageWithFormatFallback(
+                  chatId,
+                  chunks[i],
+                  reply.text,
+                  parseMode,
+                  {
+                    message_thread_id: this.replyThreadId(reply),
+                    disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview ?? this.disableLinkPreviews,
+                  },
+                );
                 lastMsgId = String(result.result.message_id);
                 this.recordSendTime(chatId);
               }
@@ -271,13 +300,17 @@ export class TelegramAdapter extends BaseAdapter {
             } else {
               await this.waitForRateLimit(chatId);
               const shouldThread = this._shouldThreadReply(reply.replyToMsgId, i);
-              const result = await this.sendMessageWithRetry(chatId, {
-                text: chunk,
-                parse_mode: parseMode,
-                message_thread_id: this.replyThreadId(reply),
-                reply_to_message_id: shouldThread ? parseInt(reply.replyToMsgId!, 10) : undefined,
-                disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview ?? this.disableLinkPreviews,
-              });
+              const result = await this.sendMessageWithFormatFallback(
+                chatId,
+                chunk,
+                reply.text,
+                parseMode,
+                {
+                  message_thread_id: this.replyThreadId(reply),
+                  reply_to_message_id: shouldThread ? parseInt(reply.replyToMsgId!, 10) : undefined,
+                  disable_web_page_preview: (reply as { disableLinkPreview?: boolean }).disableLinkPreview ?? this.disableLinkPreviews,
+                },
+              );
               lastMsgId = String(result.result.message_id);
               this.recordSendTime(chatId);
             }
@@ -299,6 +332,7 @@ export class TelegramAdapter extends BaseAdapter {
               reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
               disable_web_page_preview: this.disableLinkPreviews,
             });
+            console.log(`[Telegram] stream_start placeholder: msg_id=${result.result.message_id} seed_len=${reply.placeholderText.length}`);
             return { ok: true, platformMsgId: String(result.result.message_id) };
           }
         case 'stream_chunk':
@@ -312,13 +346,17 @@ export class TelegramAdapter extends BaseAdapter {
           for (let i = 0; i < chunks.length; i++) {
             await this.waitForRateLimit(chatId);
             const shouldThread = this._shouldThreadReply(reply.replyToMsgId, i);
-            const result = await this.sendMessageWithRetry(chatId, {
-              text: chunks[i],
-              parse_mode: 'MarkdownV2',
-              message_thread_id: this.replyThreadId(reply),
-              reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
-              disable_web_page_preview: this.disableLinkPreviews,
-            });
+            const result = await this.sendMessageWithFormatFallback(
+              chatId,
+              chunks[i],
+              reply.finalText,
+              'MarkdownV2',
+              {
+                message_thread_id: this.replyThreadId(reply),
+                reply_to_message_id: shouldThread && reply.replyToMsgId ? parseInt(reply.replyToMsgId, 10) : undefined,
+                disable_web_page_preview: this.disableLinkPreviews,
+              },
+            );
             lastMsgId = String(result.result.message_id);
             this.recordSendTime(chatId);
           }
@@ -362,6 +400,7 @@ export class TelegramAdapter extends BaseAdapter {
           await this.waitForRateLimit(chatId);
           const result = await this.sendMedia(chatId, reply as MediaReply);
           this.recordSendTime(chatId);
+          console.warn(`[Telegram] media send: ok=${result.ok} type=${(reply as MediaReply).mediaType} msgId=${result.platformMsgId ?? ''} err=${result.error ?? ''}`);
           return result;
         }
 
@@ -433,6 +472,18 @@ export class TelegramAdapter extends BaseAdapter {
     }
   }
 
+  async deleteMessage(chatId: string, messageId: string): Promise<void> {
+    try {
+      await this.telegramApiCall(`${this.apiBase()}${this.token}/deleteMessage`, 'POST', {
+        chat_id: chatId,
+        message_id: parseInt(messageId, 10),
+      });
+      console.warn(`[Telegram] deleteMessage ok: msg_id=${messageId}`);
+    } catch (err) {
+      console.warn(`[Telegram] deleteMessage FAILED: msg_id=${messageId} err=${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Private methods
   // ---------------------------------------------------------------------------
@@ -501,6 +552,37 @@ export class TelegramAdapter extends BaseAdapter {
       'POST',
       { chat_id: chatId, ...params }
     ));
+  }
+
+  /**
+   * Send a message with optional parse_mode, retrying as PLAIN text (using the
+   * original unformatted text) when Telegram rejects the formatted payload
+   * ("can't parse entities"). A formatting failure must never lose the message
+   * or leak escape characters. Plain sends (no parseMode) pass through.
+   */
+  private async sendMessageWithFormatFallback(
+    chatId: string,
+    formattedText: string,
+    rawText: string,
+    parseMode: string | undefined,
+    extra: Record<string, unknown> = {},
+  ): Promise<{ ok: boolean; result: { message_id: number } }> {
+    try {
+      return await this.sendMessageWithRetry(chatId, { text: formattedText, parse_mode: parseMode, ...extra });
+    } catch (err) {
+      if (parseMode && err instanceof Error && /can't parse entities|entity_refers/i.test(err.message)) {
+        console.warn(`[Telegram] Formatted send rejected, resending as plain text: ${err.message}`);
+        // Split the RAW text so the fallback has no MarkdownV2 escape chars.
+        const rawChunks = splitMessage(rawText, MAX_MESSAGE_LENGTH);
+        let lastMsgId = '';
+        for (const rawChunk of rawChunks) {
+          const result = await this.sendMessageWithRetry(chatId, { text: rawChunk, ...extra });
+          lastMsgId = String(result.result.message_id);
+        }
+        return { ok: true, result: { message_id: parseInt(lastMsgId, 10) || 0 } };
+      }
+      throw err;
+    }
   }
 
   private async editMessageText(

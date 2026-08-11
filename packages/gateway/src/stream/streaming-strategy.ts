@@ -149,7 +149,10 @@ export class FeishuStreamingStrategy implements StreamingStrategy {
 export class StreamingStrategyRegistry {
   private strategies: StreamingStrategy[] = [
     new FeishuStreamingStrategy(),
-    new NonStreamingStrategy('telegram'),
+    // Telegram: Markdown-capable. The final reply is sent with parse_mode
+    // MarkdownV2 (bold/headers/code blocks render natively); the adapter
+    // falls back to plain text if Telegram rejects the entities.
+    new MarkdownStreamingStrategy('telegram'),
     new NonStreamingStrategy('whatsapp'),
     new NonStreamingStrategy('discord'),
     new WeixinStreamingStrategy(),
@@ -204,4 +207,38 @@ export function stripMarkdown(text: string): string {
       .replace(/\n{3,}/g, '\n\n')
       .trim()
   );
+}
+
+/**
+ * Think-tag regex shared by stripMarkdown and stripThinkTags.
+ */
+const THINK_TAG_NAMES = 'mm:think|antml:think|minimax:think|think|thinking|thought|reasoning|reflection|ant_thinking';
+const THINK_CLOSE_TAG_RE = new RegExp(`</(${THINK_TAG_NAMES})\\s*>`, 'i');
+const THINK_BLOCK_RE = new RegExp(`<(${THINK_TAG_NAMES})>[\\s\\S]*?(</(${THINK_TAG_NAMES})\\s*>|$)`, 'gi');
+const THINK_STRAY_TAG_RE = new RegExp(`</?(${THINK_TAG_NAMES})\\s*\\/?>`, 'gi');
+
+/**
+ * Remove think/reasoning tags from text WITHOUT stripping markdown formatting.
+ *
+ * MiniMax-M3 leaks a stray `</mm:think>` close tag into the text stream; the
+ * reasoning that precedes it must go too. Handles:
+ *   1. Stray close tag → everything up to and including the tag is dropped
+ *      (the reasoning precedes it, the answer follows).
+ *   2. Complete `<think>…</think>` blocks in the text.
+ *   3. Any remaining orphan tags.
+ */
+export function stripThinkTags(text: string): string {
+  if (!text) return text;
+
+  const closeTag = text.match(THINK_CLOSE_TAG_RE);
+  if (closeTag && closeTag.index !== undefined) {
+    // Stray close tag (MiniMax leak): reasoning precedes the tag, the answer
+    // follows — drop everything up to and including the tag.
+    text = text.slice(closeTag.index + closeTag[0].length);
+  }
+
+  return text
+    .replace(THINK_BLOCK_RE, '')
+    .replace(THINK_STRAY_TAG_RE, '')
+    .trim();
 }

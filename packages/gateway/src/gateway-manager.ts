@@ -74,6 +74,7 @@ export class GatewayManager {
         showReasoning: cfg.showReasoning,
         toolProgress: cfg.toolProgress,
         toolPreviewLength: cfg.toolPreviewLength,
+        streaming: cfg.streaming,
       };
     });
 
