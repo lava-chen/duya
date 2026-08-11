@@ -2,6 +2,7 @@ import type { AIClient } from '@duya/ai';
 import type { SSEEvent, Tool } from '../types.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import type { ToolRegistry } from '../tool/registry.js';
+import type { ModeTracker } from './engine/tracker.js';
 
 export type { SSEEvent };
 
@@ -192,6 +193,13 @@ export interface ModeModifier {
   exclusiveWith?: string[];
   /** UI metadata. */
   display?: ModeModifierDisplay;
+  /**
+   * Runtime state machine for stateful modes (plan 413a/b). Optional —
+   * only session-type modes needing lifecycle state, per-turn reminders,
+   * or runtime tool gating declare one (e.g. plan-task). Plain modes are
+   * unaffected.
+   */
+  tracker?: ModeTracker<string, string, unknown>;
 
   // ─── Modifier paradigm (mutually exclusive with `orchestrator`) ───
   tools?: ModeModifierTools;

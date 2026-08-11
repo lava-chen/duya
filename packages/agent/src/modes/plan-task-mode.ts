@@ -1,5 +1,5 @@
 /**
- * Plan-task mode modifier (plan 224 Phase 4).
+ * Plan-task mode modifier (plan 224 Phase 4; session-typed in plan 413b).
  *
  * Read-only planning mode: the agent analyzes the codebase and produces
  * a structured plan without making any changes. Write/execute tools are
@@ -10,6 +10,12 @@
  * normal agent loop — no orchestrator takeover. It also replaces the old
  * class-based mode dispatch that could not resolve the popover's plan mode.
  *
+ * Since plan 413b the mode is session-typed (`kind: 'session'`) and
+ * carries a {@link PlanModeTracker}: the state machine survives across
+ * messages, drives per-turn `<system-reminder>` injection, and enables
+ * state-based runtime tool gating (plan 413d). The frontend session
+ * toggle lands in plan 413e.
+ *
  * Mutual exclusion: plan-task conflicts with research (research has its
  * own multi-stage flow that shouldn't be mixed with planning) and
  * conductor (conductor needs to write canvas elements, plan-task is
@@ -17,6 +23,7 @@
  */
 
 import type { ModeModifier } from './types.js';
+import { planModeTracker } from './engine/plan-tracker.js';
 
 /**
  * System prompt prefix prepended in plan-task mode.
@@ -86,12 +93,13 @@ Do not begin implementation until the user explicitly approves the plan and exit
 `;
 
 /**
- * Plan-task mode modifier — per-message, read-only, mutually exclusive
- * with research and conductor.
+ * Plan-task mode modifier — session-level, read-only, mutually exclusive
+ * with research and conductor. Carries the plan mode state machine
+ * (plan 413b).
  */
 export const planTaskMode: ModeModifier = {
   id: 'plan-task',
-  kind: 'message',
+  kind: 'session',
   exclusiveWith: ['research', 'conductor'],
   display: { label: 'Plan Mode', icon: 'ListChecks' },
 
@@ -109,6 +117,11 @@ export const planTaskMode: ModeModifier = {
   },
 
   prompt: {
+    // Kept as the long activation prompt for now. Plan 413d decides
+    // whether the per-turn reminders fully take over dynamic injection
+    // and this prefix is shortened or dropped.
     prefix: PLAN_TASK_PROMPT,
   },
+
+  tracker: planModeTracker,
 };
