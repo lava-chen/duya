@@ -207,6 +207,28 @@ export interface ChatOptions {
   parentMessageId?: string;
   /** Maximum number of agent turns (LLM calls) before stopping. Default: 100 */
   maxTurns?: number;
+  /**
+   * Anti-dead-loop guard. Tracks consecutive identical tool calls across
+   * turns (signature = tool name + serialized input). At `nudgeAt` a steering
+   * message is injected to steer the model; at `hardStopAt` the loop stops
+   * with `done.reason = 'repeated_tool_calls'`. Enabled by default.
+   */
+  antiDeadLoop?: {
+    enabled?: boolean;
+    /** Consecutive identical calls before a steering message is injected. Default: 8. */
+    nudgeAt?: number;
+    /** Consecutive identical calls before the loop hard-stops. Default: 16. */
+    hardStopAt?: number;
+  };
+  /**
+   * Todo gate. When the agent would otherwise finish but pending/in-progress
+   * tasks remain, inject a steering message asking the model to continue
+   * instead of stopping. Only triggers when pending tasks exist. Enabled by
+   * default.
+   */
+  todoGate?: {
+    enabled?: boolean;
+  };
   /** Message history for context. If provided, uses this instead of internal messages */
   messages?: Message[];
   /**

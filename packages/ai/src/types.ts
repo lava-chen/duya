@@ -160,7 +160,8 @@ export type StopReason =
   | 'max_turns'
   | 'error'
   | 'tool_use'
-  | 'end_turn';
+  | 'end_turn'
+  | 'repeated_tool_calls';
 
 // ─── SSE Event types (migrated from packages/agent) ───
 // mode_changed.mode uses `string` instead of AgentRuntimeMode to avoid

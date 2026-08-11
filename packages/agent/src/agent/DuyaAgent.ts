@@ -55,6 +55,7 @@ import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxRow } from '../session/db.js';
+import { getDatabaseTaskStore } from '../session/task-store.js';
 import path from 'node:path';
 
 // Mode System imports (the class is the only consumer in this file;
@@ -615,6 +616,22 @@ export class duyaAgent {
     const maxTurns = options?.maxTurns ?? 100;
     let runtimePromptMessageId: string | null = null;
 
+    // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
+    // tool calls so the loop can steer or stop instead of spinning forever.
+    const deadLoop = options?.antiDeadLoop ?? {};
+    const deadLoopEnabled = deadLoop.enabled ?? true;
+    const deadLoopNudgeAt = deadLoop.nudgeAt ?? 8;
+    const deadLoopHardStopAt = deadLoop.hardStopAt ?? 16;
+    let lastToolCallSignature: string | null = null;
+    let consecutiveToolCalls = 0;
+    let deadLoopNudged = false;
+    let deadLoopNudgeToolName: string | null = null;
+
+    // Todo gate. When the agent would otherwise finish but pending tasks
+    // remain, inject a steering message instead of stopping.
+    const todoGateEnabled = options?.todoGate?.enabled ?? true;
+    let todoGatePrompted = false;
+
     // Plan 241 Phase 3: tools discovered via `tool_search` during this
     // streamChat call are added to the next turn's tool list so the LLM
     // can invoke them without searching again. Set is local to this call,
@@ -941,13 +958,11 @@ export class duyaAgent {
       // normal-completion and error paths.
       let requestController: (AbortController & { dispose?: () => void }) | null = null;
       let requestTimer: ReturnType<typeof setTimeout> | undefined;
-      let requestTimedOut = false;
       let requestSignal: AbortSignal = this.abortController.signal;
       if (options?.llmRequestTimeoutMs && options.llmRequestTimeoutMs > 0) {
         requestController = createChildAbortController(this.abortController);
         requestSignal = requestController.signal;
         requestTimer = setTimeout(() => {
-          requestTimedOut = true;
           requestController?.abort(new Error(`LLM request timed out after ${options.llmRequestTimeoutMs}ms`));
         }, options.llmRequestTimeoutMs);
       }
@@ -1007,7 +1022,7 @@ export class duyaAgent {
           tools,
           maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
           temperature: options?.temperature ?? 1,
-          signal: this.abortController.signal,
+          signal: requestSignal,
           effort: options?.effort,
           maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
         });
@@ -1027,6 +1042,30 @@ export class duyaAgent {
             // Add tool to executor for background execution
             executor.addTool(event.data);
             needsFollowUp = true;
+
+            // Anti-dead-loop: track consecutive identical tool calls (name +
+            // serialized input). U+0001 is a safe field separator that cannot
+            // appear in a tool name or JSON input.
+            const signature = `${event.data.name}\u0001${JSON.stringify(event.data.input ?? {})}`;
+            if (signature === lastToolCallSignature) {
+              consecutiveToolCalls++;
+            } else {
+              lastToolCallSignature = signature;
+              consecutiveToolCalls = 1;
+              deadLoopNudged = false;
+            }
+            if (
+              deadLoopEnabled &&
+              consecutiveToolCalls === deadLoopNudgeAt &&
+              !deadLoopNudged
+            ) {
+              deadLoopNudged = true;
+              // Defer the steering message until the tool results for this
+              // turn are committed (below), so it follows the tool results
+              // rather than appearing before them (grok "results committed
+              // after" semantics).
+              deadLoopNudgeToolName = event.data.name;
+            }
 
             // Build assistant content with tool_use block
             assistantContent.push({
@@ -1238,6 +1277,22 @@ export class duyaAgent {
               }
             }
 
+            // Deferred anti-dead-loop nudge: injected now that the assistant
+            // message and tool results are committed, so it reads as feedback
+            // on those results. Transient (mailbox pattern) — visible to the
+            // model next turn, filtered from durable history.
+            if (deadLoopNudgeToolName) {
+              const toolName = deadLoopNudgeToolName;
+              deadLoopNudgeToolName = null;
+              messages.push({
+                id: crypto.randomUUID(),
+                role: 'user',
+                content: `[System] Detected ${deadLoopNudgeAt} consecutive identical calls to tool "${toolName}". If this is not making progress, change your approach or state explicitly that this step is complete.`,
+                timestamp: Date.now(),
+                seq_index: seqIndex,
+              });
+            }
+
             // widgetStyleHistory and canvasFreshness are stable references
             // injected into toolUseContext; canvas tools mutate them in
             // place, so nothing to copy back here. The next turn reads the
@@ -1317,11 +1372,52 @@ export class duyaAgent {
             continue;
           }
 
+          // Todo gate: before finalizing, if pending/in-progress tasks remain,
+          // inject a steering message asking the model to continue instead of
+          // stopping. Reuses the task-store data source (same as TaskTool).
+          // Only triggered once per run to avoid repeated nudging.
+          if (todoGateEnabled && !todoGatePrompted && this.sessionId) {
+            try {
+              const store = getDatabaseTaskStore(this.sessionId);
+              const tasks = await store.listTasks();
+              const pending = tasks.filter(
+                (t) => t.status === 'pending' || t.status === 'in_progress',
+              );
+              if (pending.length > 0) {
+                todoGatePrompted = true;
+                // Transient steering message (same pattern as mailbox guidance).
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'user',
+                  content: `[System] There ${pending.length === 1 ? 'is 1 unfinished task' : `are ${pending.length} unfinished tasks`} that should be completed before finishing:\n${pending
+                    .map((t) => `- ${t.subject}`)
+                    .join('\n')}\nContinue working to complete ${pending.length === 1 ? 'it' : 'them'} now.`,
+                  timestamp: Date.now(),
+                  seq_index: seqIndex,
+                });
+                continue;
+              }
+            } catch (err) {
+              logger.warn(
+                `[TodoGate] listTasks failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          }
+
           // Refresh sessionInfo counters BEFORE yielding done event
           // so API route can retrieve the final state
           this._commitMessages();
 
           yield { type: 'done', reason: 'completed' };
+          return;
+        }
+
+        // Anti-dead-loop hard stop: only when the model requested more tool
+        // rounds. The assistant message and tool results are already persisted
+        // above, so terminating here is safe.
+        if (deadLoopEnabled && consecutiveToolCalls >= deadLoopHardStopAt) {
+          this._commitMessages();
+          yield { type: 'done', reason: 'repeated_tool_calls' };
           return;
         }
 
@@ -1431,6 +1527,11 @@ export class duyaAgent {
           yield { type: 'done', reason: 'error' };
         }
         return;
+      } finally {
+        // Always release the per-request timeout controller (clear the
+        // timer and drop the parent-signal abort listener) so a long
+        // multi-turn run does not accumulate listeners/timers.
+        disposeRequestController();
       }
     }
 
