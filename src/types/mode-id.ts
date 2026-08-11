@@ -11,7 +11,7 @@
  *  - `RuntimeAgentMode` (SwitchModeTool runtime: general/plan/explore)
  *  - `PermissionMode` (permission selector: ask/auto/bypass)
  */
-export type ModeModifierId = 'plan-task' | 'research' | 'conductor';
+export type ModeModifierId = 'plan-task' | 'research' | 'conductor' | 'goal';
 
 /**
  * Mode lifecycle. Session-level modes persist across messages (conductor,
@@ -26,6 +26,9 @@ export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
   'plan-task': 'session',
   'research': 'message',
   'conductor': 'session',
+  // Plan 411: goal is a session-level mode like conductor — survives
+  // across messages so the tracker keeps driving rounds.
+  'goal': 'session',
 };
 
 /**
@@ -40,14 +43,17 @@ export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
  * directions.
  *
  * Keep in sync with:
- *   - `packages/agent/src/modes/plan-task-mode.ts`     (exclusiveWith: research, conductor)
- *   - `packages/agent/src/modes/conductor-mode.ts`     (exclusiveWith: plan-task)
- *   - `packages/agent/src/modes/research-mode.ts`      (exclusiveWith: plan-task)
+ *   - `packages/agent/src/modes/plan/plan-task-mode.ts`    (exclusiveWith: research, conductor)
+ *   - `packages/agent/src/modes/conductor-mode.ts`         (exclusiveWith: plan-task)
+ *   - `packages/agent/src/modes/research-mode.ts`          (exclusiveWith: plan-task)
  */
 export const MODE_EXCLUSIVE_WITH: Record<ModeModifierId, ModeModifierId[]> = {
   'plan-task': ['research', 'conductor'],
   'research': ['plan-task'],
   'conductor': ['plan-task'],
+  // Goal is a parallel tracker — no mutual exclusion with plan-task
+  // (plan 411 §4.3).
+  'goal': [],
 };
 
 /**

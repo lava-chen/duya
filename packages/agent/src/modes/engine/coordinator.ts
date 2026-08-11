@@ -23,8 +23,15 @@ import {
   sparseReminder,
   reentryReminder,
   exitReminder,
-} from './reminders.js';
+} from '../plan/reminders.js';
+import { renderGoalContinuation } from '../goal/goal-reminders.js';
+import type { GoalTracker } from '../goal/goal-tracker.js';
 import { persistSnapshot, restoreTracker } from './persistence.js';
+import { expandPath } from '../../utils/path.js';
+import {
+  resolvePlanFilePath,
+  isPlanFileWrite,
+} from '../plan/plan-file-path.js';
 
 /**
  * Duck-typed view of a plan-mode tracker (`PlanModeTracker`, plan 413b).
@@ -48,14 +55,52 @@ function isPlanReminderTracker(
   return typeof (t as PlanReminderTracker).shouldUseFullReminder === 'function';
 }
 
+/**
+ * Duck-typed view of the goal tracker (`GoalTracker`, plan 411). The goal
+ * branch is orthogonal to the plan branch: goal injects a continuation
+ * reminder each round while active, and persists on round-end so a restart
+ * resumes the objective.
+ */
+interface GoalReminderTracker extends ModeTracker<string, string, unknown> {
+  recordWorkerRound(): void;
+  updateTokenUsage(used: number): boolean;
+}
+
+function isGoalReminderTracker(
+  t: ModeTracker<string, string, unknown>,
+): t is GoalReminderTracker {
+  return typeof (t as GoalReminderTracker).recordWorkerRound === 'function';
+}
+
+/** Cast a goal duck-type to the concrete tracker for payload events / renderers. */
+function asGoalTracker(t: GoalReminderTracker): GoalTracker {
+  return t as unknown as GoalTracker;
+}
+
 /** Write/execute tools gated out while a tracker is `canGateTools()`-active. */
 const GATED_WRITE_TOOLS = new Set(['edit', 'write', 'bash', 'powershell', 'module']);
 
 export class ModeCoordinator {
+  /**
+   * @param engine      the ModeTrackerEngine holding all registered trackers
+   * @param sessionId   the session these turns belong to
+   * @param activeTrackerIds trackers active THIS turn (mode ids with a
+   *   tracker in `resolvedModes`). When omitted, every registered tracker is
+   *   considered active (single-tracker compatibility for tests). Scoping to
+   *   the active set prevents a dormant tracker (e.g. planModeTracker while
+   *   only goal mode is on) from being auto-activated or injected by the
+   *   coordinator (plan 411 follow-up: goal mode must not wake plan mode).
+   */
   constructor(
     private readonly engine: ModeTrackerEngine,
     private readonly sessionId: string,
+    private readonly activeTrackerIds?: ReadonlySet<string>,
   ) {}
+
+  /** Whether this tracker belongs to the current turn's active mode set. */
+  private isActive(tracker: ModeTracker<string, string, unknown>): boolean {
+    return !this.activeTrackerIds || this.activeTrackerIds.has(tracker.id);
+  }
 
   /**
    * Append a transient `<system-reminder>` message to the working message
@@ -83,6 +128,21 @@ export class ModeCoordinator {
    */
   injectTurnReminders(messages: unknown[], seqIndex: number): void {
     for (const tracker of this.engine.list()) {
+      if (!this.isActive(tracker)) continue;
+      // Goal branch: while the goal is active/verifying, inject the per-round
+      // continuation (goal-state + sentinel + verifier gaps). The goal tracker
+      // self-activates via `start` (triggered by the /goal command or tool), so
+      // no enter-path nudge is needed here. Persists on round-end, not here.
+      if (isGoalReminderTracker(tracker)) {
+        if (tracker.shouldInjectReminder()) {
+          this.pushReminder(
+            messages,
+            seqIndex,
+            renderReminder(renderGoalContinuation(asGoalTracker(tracker))),
+          );
+        }
+        continue;
+      }
       if (!isPlanReminderTracker(tracker)) continue;
       // MVP enter path: the coordinator is built only when a tracker-bearing
       // session mode is active this turn, so a tracker still `inactive` here
@@ -104,7 +164,11 @@ export class ModeCoordinator {
           this.pushReminder(
             messages,
             seqIndex,
-            renderReminder(reentry ? reentryReminder() : fullReminder()),
+            renderReminder(
+              reentry
+                ? reentryReminder(resolvePlanFilePath(this.sessionId))
+                : fullReminder(resolvePlanFilePath(this.sessionId)),
+            ),
           );
           tracker.recordReminderInjected();
         }
@@ -112,7 +176,11 @@ export class ModeCoordinator {
         this.pushReminder(
           messages,
           seqIndex,
-          renderReminder(tracker.shouldUseFullReminder() ? fullReminder() : sparseReminder()),
+          renderReminder(
+            tracker.shouldUseFullReminder()
+              ? fullReminder(resolvePlanFilePath(this.sessionId))
+              : sparseReminder(),
+          ),
         );
         tracker.recordReminderInjected();
       }
@@ -124,12 +192,48 @@ export class ModeCoordinator {
   }
 
   /**
+   * Feed token usage into the goal tracker's budget (plan 411 Phase 2).
+   * When the goal has a budget and usage reaches it, transition to
+   * `budget_limited` and persist. Called by DuyaAgent on each LLM
+   * `result` event while a goal is active. No-op when no goal tracker
+   * is registered or the goal has no budget.
+   */
+  async reportGoalTokenUsage(used: number): Promise<void> {
+    for (const tracker of this.engine.list()) {
+      if (!this.isActive(tracker)) continue;
+      if (!isGoalReminderTracker(tracker)) continue;
+      const goal = asGoalTracker(tracker);
+      const over = goal.updateTokenUsage(used);
+      if (over && goal.state() === 'active') {
+        goal.transition({ type: 'budget_limit' });
+        await persistSnapshot(tracker, this.sessionId);
+      }
+    }
+  }
+
+  /**
    * Round end: state transitions + snapshot persistence. MVP covers plan's
    * `exit_pending → inactive` (the deferred exit completes now that the
    * in-flight turn has ended). Persists only when a transition happened.
    */
   async onRoundEnd(): Promise<void> {
     for (const tracker of this.engine.list()) {
+      if (!this.isActive(tracker)) continue;
+      if (isGoalReminderTracker(tracker)) {
+        // Goal round-end: record the worker round while active and persist the
+        // snapshot so a restart resumes the objective. Verification rounds are
+        // counted by the tracker itself on verdicts; budget cut-off and
+        // verifier-driven transitions land via the evaluator / tool wiring
+        // (plan 411 Phase 2). This checkpoint keeps the snapshot durable.
+        // Idle goals are skipped (no need to write a fresh idle snapshot).
+        if (tracker.state() === 'active') {
+          tracker.recordWorkerRound();
+        }
+        if (tracker.state() !== 'idle') {
+          await persistSnapshot(tracker, this.sessionId);
+        }
+        continue;
+      }
       if (!isPlanReminderTracker(tracker)) continue;
       const before = tracker.state();
       if (before === 'exit_pending') {
@@ -149,6 +253,7 @@ export class ModeCoordinator {
    */
   refreshTurn(messages: unknown[], seqIndex: number): void {
     for (const tracker of this.engine.list()) {
+      if (!this.isActive(tracker)) continue;
       if (!isPlanReminderTracker(tracker)) continue;
       const buffered = tracker.takePendingActivation();
       if (buffered) {
@@ -167,9 +272,66 @@ export class ModeCoordinator {
    * the frontend session toggle (plan 413e).
    */
   filterTools<T extends { name: string }>(tools: T[]): T[] {
-    const gated = this.engine.list().some((t) => t.canGateTools());
+    // Plan-only gating (goal's canGateTools is also true while active — must
+    // not strip write tools from goal execution). Scoped to active plan tracker.
+    const gated = this.engine
+      .list()
+      .some(
+        (t) => this.isActive(t) && isPlanReminderTracker(t) && t.canGateTools(),
+      );
     if (!gated) return tools;
     return tools.filter((t) => !GATED_WRITE_TOOLS.has(t.name));
+  }
+
+  /**
+   * Plan-mode exact-path gating (grok `is_plan_file_write`). Invoked from the
+   * per-tool permission checkpoint (`canUseTool`) so a write tool stays
+   * callable while plan mode is active — but only when it targets the session
+   * plan file. This is the runtime enforcement half of the plan-file contract;
+   * the model reminder points at the same path (see `plan/reminders.ts`).
+   *
+   * Returns:
+   *   - `'allow'` : the tool targets the plan file — skip the generic
+   *                 permission flow (grok `should_auto_approve_edit`).
+   *   - `'deny'`  : a gated write/execute tool not targeting the plan file.
+   *   - `null`    : not gated by plan mode (let the normal permission flow
+   *                 decide). Covers non-write tools and any turn where no
+   *                 tracker is `canGateTools()`-active.
+   */
+  gateWriteTool(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    workingDirectory: string,
+  ): 'allow' | 'deny' | null {
+    // Plan-mode gating applies ONLY when the plan tracker (not a goal or any
+    // other tracker) is active this turn. Goal mode's `canGateTools()` is also
+    // true while active/verifying — gating on it would lock goal execution's
+    // write tools to the plan file (grok `plan_mode_edit_gate` is plan-only).
+    const planActive = this.engine
+      .list()
+      .some(
+        (t) =>
+          this.isActive(t) &&
+          isPlanReminderTracker(t) &&
+          t.canGateTools(),
+      );
+    if (!planActive) return null;
+
+    const name = toolName.toLowerCase();
+    if (!GATED_WRITE_TOOLS.has(name)) return null;
+
+    // edit/write carry a file path; gate them by exact path match.
+    if (name === 'edit' || name === 'write') {
+      const filePath = toolInput?.file_path;
+      if (typeof filePath !== 'string' || filePath.length === 0) return 'deny';
+      const target = expandPath(filePath, workingDirectory);
+      const planFile = resolvePlanFilePath(this.sessionId);
+      return isPlanFileWrite(target, planFile) ? 'allow' : 'deny';
+    }
+
+    // bash/powershell/module cannot be path-gated — reject outright so plan
+    // mode stays read-only outside the plan file.
+    return 'deny';
   }
 
   /**
@@ -183,7 +345,7 @@ export class ModeCoordinator {
   resolveTurnMode(_origin: 'user' | 'synthetic'): string[] {
     return this.engine
       .list()
-      .filter((t) => t.shouldInjectReminder())
+      .filter((t) => this.isActive(t) && t.shouldInjectReminder())
       .map((t) => t.id);
   }
 
@@ -197,6 +359,7 @@ export class ModeCoordinator {
    */
   async restore(): Promise<void> {
     for (const tracker of this.engine.list()) {
+      if (!this.isActive(tracker)) continue;
       await restoreTracker(tracker, this.sessionId);
     }
   }

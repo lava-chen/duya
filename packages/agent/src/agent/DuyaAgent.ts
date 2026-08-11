@@ -63,6 +63,8 @@ import { modeModifierRegistry, modeTrackerEngine } from '../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '../modes/index.js';
 import { ModeCoordinator } from '../modes/engine/index.js';
 import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
+import { matchedStopPattern, prematureStopNudge } from '../modes/goal/goal-stop-detector.js';
+import { goalModeTracker } from '../modes/goal/goal-tracker.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
@@ -618,9 +620,18 @@ export class duyaAgent {
     // session-level mode with a tracker is active. Rebuilt per streamChat
     // call (same lifecycle as modeCtx); the trackers themselves are engine
     // singletons that survive across calls, so state persists between turns.
+    // Scope the coordinator to THIS turn's active tracker ids — otherwise a
+    // dormant tracker (e.g. planModeTracker while only goal mode is on)
+    // would be auto-activated and injected by the coordinator (plan 411
+    // follow-up: goal mode must not wake plan mode).
+    const activeTrackerIds = new Set<string>(
+      (this.resolvedModes?.modes ?? [])
+        .filter((m) => m.tracker)
+        .map((m) => m.tracker!.id),
+    );
     this.modeCoordinator =
-      this.resolvedModes && this.resolvedModes.modes.some((m) => m.tracker)
-        ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '')
+      activeTrackerIds.size > 0
+        ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '', activeTrackerIds)
         : undefined;
 
     // Plan 413c: restore persisted tracker state for this session before any
@@ -1361,6 +1372,16 @@ export class duyaAgent {
           } else if (event.type === 'result') {
             // Preserve the token-usage event for cost accounting and
             // context-ring display (persisted to DB by the agent process).
+            // Also feed usage into the goal tracker's token budget so an
+            // over-budget goal transitions to `budget_limited` (plan 411
+            // Phase 2) instead of silently burning tokens.
+            const usage = event.data as
+              | { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+              | undefined;
+            const used = usage?.total_tokens ?? usage?.input_tokens ?? 0;
+            if (used > 0 && this.modeCoordinator) {
+              void this.modeCoordinator.reportGoalTokenUsage(used);
+            }
             yield event;
           }
         }
@@ -1402,6 +1423,29 @@ export class duyaAgent {
           // has ended). Runs before _commitMessages so persistence is not
           // coupled to message commit.
           await this.modeCoordinator?.onRoundEnd();
+
+          // Goal premature-stop detection (grok goal_stop_detector.rs): when
+          // the model ends its turn with a surrender/hand-off signal while the
+          // goal is still active, inject a bail-specific nudge and continue
+          // instead of finalizing — a "giving up" ending must not silently
+          // stop the goal while open work remains.
+          if (goalActive()) {
+            const lastAssistantText = lastAssistantTextOf(messages);
+            if (lastAssistantText) {
+              const pattern = matchedStopPattern(lastAssistantText);
+              if (pattern) {
+                logger.info(`[Agent] Goal premature-stop detected (pattern=${pattern}); nudging to continue`);
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'user',
+                  content: `[System] ${prematureStopNudge(pattern)}`,
+                  timestamp: Date.now(),
+                  seq_index: seqIndex,
+                });
+                continue;
+              }
+            }
+          }
 
           // Todo gate: before finalizing, if pending/in-progress tasks remain,
           // inject a steering message asking the model to continue instead of
@@ -2076,6 +2120,24 @@ export class duyaAgent {
       toolInput?: Record<string, unknown>,
     ) => {
       try {
+        // Plan-mode exact-path gating: when a plan tracker is active, write
+        // tools are only allowed when they target the session plan file.
+        // `'allow'`/`'deny'` are authoritative; `null` falls through to the
+        // normal permission flow below. The coordinator is rebuilt per
+        // streamChat before the turn loop runs, so reading it lazily here
+        // picks up the current turn's instance.
+        const gate = this.modeCoordinator?.gateWriteTool(
+          toolName,
+          toolInput ?? {},
+          this.workingDirectory ?? '',
+        );
+        if (gate === 'deny') {
+          return { allowed: false, behavior: 'deny' };
+        }
+        if (gate === 'allow') {
+          return { allowed: true, behavior: 'allow' };
+        }
+
         const decision = await this.hasPermissionsToUseTool(
           toolName,
           toolInput ?? {},
@@ -2691,4 +2753,27 @@ export class duyaAgent {
       tokensRetained: compactEntry.tokensAfter ?? 0,
     };
   }
+}
+
+/** Whether a goal is currently active (self-driving) on the tracker. */
+function goalActive(): boolean {
+  const s = goalModeTracker.state();
+  return s === 'active' || s === 'verifying';
+}
+
+/** Text of the last assistant message in the working message array. */
+function lastAssistantTextOf(
+  messages: Array<{ role?: string; content?: string | readonly unknown[] | null }>,
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== 'assistant') continue;
+    if (m.content === undefined || m.content === null) continue;
+    const text =
+      typeof m.content === 'string'
+        ? m.content
+        : extractTextFromContent(m.content as readonly MessageContent[]);
+    if (text && text.trim().length > 0) return text;
+  }
+  return undefined;
 }

@@ -16,6 +16,10 @@ describe('MODE_KIND (plan 413e)', () => {
     expect(MODE_KIND['research']).toBe('message');
     expect(MODE_KIND['conductor']).toBe('session');
   });
+
+  it('marks goal as session-level (plan 411)', () => {
+    expect(MODE_KIND['goal']).toBe('session');
+  });
 });
 
 describe('toggleModeInSet with session-level plan-task', () => {
@@ -45,5 +49,20 @@ describe('isModeExcludedByActive with plan-task', () => {
 
   it('blocks research while plan-task is active', () => {
     expect(isModeExcludedByActive(new Set(['plan-task']), 'research')).toBe(true);
+  });
+});
+
+describe('goal mode exclusivity (plan 411)', () => {
+  it('goal excludes nothing — parallel tracker with plan-task', () => {
+    expect(isModeExcludedByActive(new Set(['goal']), 'plan-task')).toBe(false);
+    expect(isModeExcludedByActive(new Set(['plan-task']), 'goal')).toBe(false);
+    expect(isModeExcludedByActive(new Set(['goal']), 'research')).toBe(false);
+    expect(isModeExcludedByActive(new Set(['goal']), 'conductor')).toBe(false);
+  });
+
+  it('goal toggles on independently and co-exists with plan-task', () => {
+    const next = toggleModeInSet(new Set(['plan-task']), 'goal');
+    expect(next.has('goal')).toBe(true);
+    expect(next.has('plan-task')).toBe(true);
   });
 });

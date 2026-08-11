@@ -18,6 +18,7 @@ import { migrateConfig, migrateCronJobsToFile } from './config/migrate';
 import { resolveConfigRoot, resolveConfigTomlPath } from './config/compass';
 import { defaultCronFilePath } from './automation/cron-file';
 import { initChannelManager, getChannelManager } from './messaging/index';
+import { subscribeMcpConfigHotReload } from './services/mcp-config';
 import { initPerformanceMonitor } from './services/performance-monitor';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
@@ -244,6 +245,11 @@ if (gotTheLock) {
     } catch (error) {
       logger.error('Failed to initialize agent process pool', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
+
+    // Hot reload: manual edits to config.toml `mcp_servers` are picked up
+    // without restarting DUYA (ConfigStore watches the file; this forwards
+    // the change to the worker reload path).
+    subscribeMcpConfigHotReload();
 
     // One-time migration of legacy config sources into config.toml
     // (plan 334, Phase 3). Idempotent: skips once config.toml exists.

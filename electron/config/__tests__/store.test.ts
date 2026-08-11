@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { ConfigStore, type ConfigStoreOptions } from '../store';
+import { ConfigStore, diffConfigPaths, type ConfigStoreOptions } from '../store';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'duya-config-store-'));
@@ -68,5 +68,67 @@ describe('ConfigStore', () => {
     store.subscribe(cb);
     store.set('timezone', 'UTC');
     expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('external edit to config.toml is hot-reloaded and reported to the external handler', async () => {
+    const store = new ConfigStore(opts);
+    store.set('mcp_servers', {
+      foo: { name: 'foo', command: 'npx', args: ['-y', '@foo/mcp'], enabled: true },
+    });
+    const handler = vi.fn();
+    const broadcast = vi.fn();
+    store.setExternalChangeHandler(handler);
+    store.subscribe(broadcast);
+
+    // Simulate a user manually editing config.toml while DUYA is running.
+    fs.writeFileSync(
+      opts.configPath,
+      '[mcp_servers.foo]\nname = "foo"\ncommand = "node"\nargs = ["-y", "@foo/mcp"]\nenabled = true\n',
+      'utf-8',
+    );
+
+    await vi.waitFor(() => expect(handler).toHaveBeenCalled(), { timeout: 3000 });
+    const cfg = store.get();
+    expect(cfg.mcp_servers?.foo?.command).toBe('node');
+    expect(
+      handler.mock.calls.flat(Infinity).some((p) => p === 'mcp_servers.foo.command' || p === 'mcp_servers.foo'),
+    ).toBe(true);
+    // The external change also broadcasts so the renderer sees the new value.
+    expect(broadcast).toHaveBeenCalled();
+    store.close();
+  });
+
+  it('self-write via set() does not re-fire the external change handler (no reload loop)', async () => {
+    const store = new ConfigStore(opts);
+    const handler = vi.fn();
+    store.setExternalChangeHandler(handler);
+    // set() persists to disk; the watcher fires but the reload sees identical
+    // content and must NOT report an external change (avoids a reload loop).
+    store.set('timezone', 'UTC');
+    await new Promise((r) => setTimeout(r, 700));
+    expect(handler).not.toHaveBeenCalled();
+    store.close();
+  });
+});
+
+describe('diffConfigPaths', () => {
+  it('returns changed leaf dotted paths', () => {
+    const prev = { mcp_servers: { foo: { command: 'npx' }, bar: { command: 'x' } } };
+    const next = { mcp_servers: { foo: { command: 'node' }, bar: { command: 'x' } } };
+    expect(diffConfigPaths(prev, next)).toEqual(['mcp_servers.foo.command']);
+  });
+
+  it('returns the parent key when an entire nested object is added', () => {
+    expect(diffConfigPaths({}, { mcp_servers: { foo: { command: 'npx' } } })).toEqual([
+      'mcp_servers',
+    ]);
+  });
+
+  it('is order-insensitive (structural equality)', () => {
+    expect(diffConfigPaths({ a: 1, b: 2 }, { b: 2, a: 1 })).toEqual([]);
+  });
+
+  it('isEmpty when snapshots are equal', () => {
+    expect(diffConfigPaths({ a: 1, b: [1, 2, 3] }, { a: 1, b: [1, 2, 3] })).toEqual([]);
   });
 });

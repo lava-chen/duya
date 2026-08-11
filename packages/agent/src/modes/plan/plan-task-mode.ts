@@ -22,8 +22,8 @@
  * read-only).
  */
 
-import type { ModeModifier } from './types.js';
-import { planModeTracker } from './engine/plan-tracker.js';
+import type { ModeModifier } from '../types.js';
+import { planModeTracker } from './plan-tracker.js';
 
 /**
  * System prompt prefix prepended in plan-task mode.

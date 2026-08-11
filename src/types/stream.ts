@@ -58,6 +58,22 @@ export interface ModeChangedEvent {
 }
 
 /**
+ * Goal tracker state broadcast (plan 411 Phase 3). Emitted by the agent
+ * worker after goal transitions / verification rounds; the frontend renders
+ * a goal status card from it.
+ */
+export interface GoalUpdatedEvent {
+  state: string;
+  phase: string;
+  objective: string;
+  tokensUsed: number;
+  tokenBudget: number;
+  consecutiveNotAchieved: number;
+  gapsSummary?: string;
+  strategyProposal?: string;
+}
+
+/**
  * Permission request event sent via SSE
  */
 export interface PermissionRequestEvent {

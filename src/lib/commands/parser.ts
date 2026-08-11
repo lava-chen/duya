@@ -89,6 +89,18 @@ export const DEFAULT_EXECUTORS: Record<string, (ctx: CommandContext) => CommandR
   doctor: (ctx) => ({ type: 'forward', prompt: 'Use the /doctor skill.' }),
   commit: (ctx) => ({ type: 'forward', prompt: 'Use the /commit skill.' }),
   plan: (ctx) => ({ type: 'forward', prompt: 'Use the /plan skill.' }),
+  goal: (ctx) => {
+    // /goal <objective> → hand the objective to the agent in goal mode.
+    // /goal status|pause|resume|clear → the agent resolves these against
+    // the goal tracker via goal_start/update_goal tools.
+    const sub = (ctx.args[0] ?? '').toLowerCase();
+    if (['status', 'pause', 'resume', 'clear'].includes(sub)) {
+      return { type: 'forward', prompt: `/goal ${sub}` };
+    }
+    const objective = ctx.args.join(' ');
+    if (!objective) return { type: 'forward', prompt: '/goal status' };
+    return { type: 'forward', prompt: `/goal ${objective}` };
+  },
 };
 
 /**

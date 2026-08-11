@@ -1113,7 +1113,7 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 | 层 | 标识 | 来源 | 控制内容 |
 |----|------|------|----------|
 | **Profile** | `AgentProfile.id`（main / code / plan / …） | Agent Profile 选择器（侧栏顶部） | 基础工具集 + 基础 system prompt + 默认权限模式 |
-| **Mode** | `ModeModifier.id`（plan-task / research / conductor） | 输入框 popover "Mode" 项 | 在 profile 之上叠加：注入/屏蔽工具、追加 prompt 前缀/后缀、注入 ToolUseContext 字段 |
+| **Mode** | `ModeModifier.id`（plan-task / research / conductor / goal） | 输入框 popover "Mode" 项 | 在 profile 之上叠加：注入/屏蔽工具、追加 prompt 前缀/后缀、注入 ToolUseContext 字段 |
 | **Permission** | `PermissionMode`（ask / auto / bypass） | 权限选择器（输入框右侧） | 工具执行前的授权检查策略 |
 
 三层的运行时合成由 `DuyaAgent.streamChat` 在 `_resolveAgentProfile` → `_buildSystemPrompt` → `applyModes` → `_buildPermissionContext` 顺序完成。Profile 与 Mode 通过 `applyModes` 合并工具集和 prompt；Permission 独立作用于 `canUseTool` 检查函数。
@@ -1153,6 +1153,36 @@ Electron/`@duya/conductor` 路径负责。
 
 无需改动 `DuyaAgent.streamChat` / `builtin.ts` —— `applyModes` 自动消费新注册的 modifier，`collectActiveModes` 自动转发 `options.mode` 字段。
 
+### Goal 模式（Plan 411）
+
+Goal 是 `kind:'session'` 的 Modifier 模式，让用户把一个长期目标交给 agent 跨多轮自主推进，直到独立核验通过（学习 grok goal mode）。
+
+**状态机**：`GoalTracker` 实现 413 的 `ModeTracker` 接口，10 态（idle / active / verifying / user_paused / backoff_paused / no_progress_paused / infra_paused / blocked / budget_limited / complete）+ 3 段（idle / planning / executing），挂 `modeTrackerEngine`。快照经 413c `mode_state_snapshots` 表持久化；每轮 continuation 由 `ModeCoordinator.injectTurnReminders` 注入（合成 user 消息，goal-state + sentinel + gaps）。
+
+**完成判定（不盲信模型自报）**：模型调 `update_goal(completed:true)` → 工具阻塞等待 `goal-evaluator` 核验 → N-skeptic 对抗面板（`verifier_count` 个 skeptic 子 agent **并行**跑，每个输出结构化 JSON verdict，`VERDICT:` 文本行作 fallback；保守聚合：任一 refuted → not_achieved；blocking=contradiction/unverifiable → blocked）→ verdict 回写 tracker（achieved → complete / not_achieved → active + gaps / blocked → blocked）。连续 not_achieved 触发 strategist 重构策略；gap fingerprint 停滞 → `no_progress_paused`；token 超预算 → `budget_limited`（可带新预算 resume）。
+
+**Grok 学习点（已落地）**：
+- **并行 skeptic + JSON verdict**（`goal-evaluator.ts`）：面板 `Promise.all` 并发（grok spawn_parallel）；JSON 契约 `{refuted, evidence, confidence, blocking, findings}` 权威，`VERDICT:` 行 fallback；JSON 的 contradiction/unverifiable 映射 blocked。
+- **planner + next-step**（`goal-plan.ts` + `goal-reminders.ts`）：goal_start 写 `.duya/goal-plan.md` 初始 checklist（`writeGoalPlan`）；每轮 continuation 从 plan 挖第一个 `- [ ]` 未完成项（`extractNextStep`，Task checklist 段优先、Non-goals/Deviations/Acceptance criteria 排除、8 KiB 读上限）内联进 nudge（grok goal_planner + goal_next_step）。
+- **提前停检测**（`goal-stop-detector.ts` + `DuyaAgent.ts`）：模型自然收尾且 goal 仍 active 时，检测最后一段的 surrender/hand-off 信号（unable_to_proceed / giving_up / stopping_here / agents_in_flight / check_back_later / verdict_line / commit_push_pr / ready_for_review / please_deflection，无正则依赖的轻量前缀匹配）→ 注入 bail 专属 nudge 强制续轮（grok goal_stop_detector）。
+- **repo changes diff**（`goal-changes.ts`）：goal_start 捕获 git baseline（`captureBaselineCommit`）；核验时 `serializeRepoChanges` 产出 baseline 后的 stat + patch（12 KiB 上限），内联进 verifier prompt（grok repo_changes/）。
+- **达成总结**（`goal-summarizer.ts`）：verdict=achieved 后跑一次 read-only 总结子 agent，产出 closing summary（fail-open，1200 字符上限）作为最终答复（grok goal_summarizer）。
+
+**恢复安全**：`GoalTracker.restore` 冷启动时把 active/verifying 折叠为 `user_paused`（grok from_snapshot）——重启后绝不让 goal 自动续跑；同进程跨消息恢复跳过（保留内存状态）。`update_goal` 在核验进行中（verifying）再收 completed=true 拒绝（`goal_update_in_flight`）。
+
+**配置**（`~/.duya/config.toml`）：
+```toml
+[goal]
+enabled = true
+verifier_count = 3
+strategist_every = 3
+max_not_achieved_rounds = 5
+```
+
+**事件流**：goal 工具在 start/verdict 后 emit `chat:goal_updated`（worker-protocol）→ `electron/agents/server/router.ts` 转发 SSE `goal_updated` → 前端 `subscribeToGoalUpdated` 驱动 `GoalStatusCard`。
+
+**入口**：popover Goal 项（session toggle）或 `/goal <objective>` 命令；`/goal status|pause|resume|clear` 子命令。
+
 ### 关键文件
 
 | 文件 | 作用 |
@@ -1161,8 +1191,16 @@ Electron/`@duya/conductor` 路径负责。
 | `packages/agent/src/modes/registry.ts` | `ModeModifierRegistry`：注册 + `resolve(ids)` 合并互斥规则；Plan 242 已删除无注册项的旧 `ModeRegistry` / `BaseMode` 接管 API |
 | `packages/agent/src/modes/apply-modes.ts` | `applyModes`：单入口执行 onEnter hooks → prompt prefix/suffix → tools 合并 → toolUseContextPatch → beforeStream hooks；`collectActiveModes` 从 ChatOptions 提取激活 mode ids |
 | `packages/agent/src/modes/conductor-mode.ts` | Conductor modifier（session 级，注入 canvas 工具） |
-| `packages/agent/src/modes/plan-task-mode.ts` | Plan-task modifier（message 级，只读规划） |
+| `packages/agent/src/modes/plan/plan-task-mode.ts` | Plan-task modifier（message 级，只读规划） |
 | `packages/agent/src/modes/research-mode.ts` | Research modifier（message 级，prompt + tool block） |
+| `packages/agent/src/modes/goal/goal-mode.ts` | Goal modifier（session 级，自主多轮目标追踪 + 核验，plan 411） |
+| `packages/agent/src/modes/goal/goal-tracker.ts` | GoalTracker 10 态状态机（实现 `ModeTracker` 接口，挂 ModeTrackerEngine） |
+| `packages/agent/src/modes/goal/goal-reminders.ts` | goal continuation 渲染（goal-state / sentinel / gaps） |
+| `packages/agent/src/modes/goal/goal-evaluator.ts` | 独立核验：N-skeptic 对抗面板 + strategist + gap fingerprint 停滞检测 |
+| `packages/agent/src/modes/goal/goal-tools.ts` | `goal_start` / `update_goal` 工具（阻塞 ack + 稳定错误码） |
+| `packages/agent/src/modes/goal/goal-config.ts` | `[goal]` config.toml 配置读取（enabled / verifier_count / strategist_every / max_not_achieved_rounds） |
+| `packages/agent/src/modes/engine/` | 413 框架层：`ModeTracker` 接口 / `ModeTrackerEngine` 容器 / `ModeCoordinator` / 持久化 |
+| `src/components/chat/GoalStatusCard.tsx` | 前端 goal 状态卡片（订阅 `goal_updated` SSE） |
 | `src/types/mode-id.ts` | 前端镜像：`ModeModifierId` / `MODE_KIND` / `MODE_EXCLUSIVE_WITH` / `toggleModeInSet` / `isModeExcludedByActive` |
 | `src/components/chat/SlashCommandPopover.tsx` | popover UI：activeModes 状态 + 互斥可视化 + conductor toggle 视觉 |
 | `src/components/chat/MessageInput.tsx` | `activeModes: Set<ModeModifierId>` 统一状态 + conductor slot 与 DB 双向同步 |

@@ -1,12 +1,12 @@
 import { modeModifierRegistry } from './registry.js';
 import { researchMode } from './research-mode.js';
 import { conductorMode } from './conductor-mode.js';
-import { planTaskMode } from './plan-task-mode.js';
+import { planTaskMode } from './plan/plan-task-mode.js';
 import { automationMode } from './automation-mode.js';
-import { goalMode } from './goal-mode.js';
+import { goalMode } from './goal/goal-mode.js';
 import { ModeTrackerEngine } from './engine/index.js';
-import { planModeTracker } from './engine/plan-tracker.js';
-import { goalModeTracker } from './engine/goal-tracker.js';
+import { planModeTracker } from './plan/plan-tracker.js';
+import { goalModeTracker } from './goal/goal-tracker.js';
 import type { ModeTracker } from './engine/tracker.js';
 
 // Register declarative ModeModifiers (plan 224).

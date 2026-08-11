@@ -39,6 +39,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [310-multi-model-reasoning-architecture](./active/310-multi-model-reasoning-architecture.md) | Multi-model reasoning architecture | P1 | Planning |
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like runtime instruction injection (`agent_mailbox` + checkpoints + soft interrupt) | P0 | Planning |
 | [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive memory — RealTimeCapture hook + scoring + dual-path Recall + decay archival | P1 | Planning |
+| [336-memory-pipeline-unblock](./active/336-memory-pipeline-unblock.md) | Phase1 提取恢复 + Phase2 curation 不再卡死 + 数据清理（reconcile 脚本已落地） | P0 | Phase A–E 已完成；F Task 已 commit (65c6b3f3) |
+| [417-deterministic-curation](./active/417-deterministic-curation.md) | Replace streaming LLM-as-curator with single-shot non-streaming call + deterministic file writes (M3 'result' w/o 'message_stop' 阻塞根因修复) | P0 | Planning |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
@@ -126,6 +128,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills sync fix | P0 | In Progress |
 | [25-skills-completion-plan](./active/25-skills-completion-plan.md) | Official Skill completion plan (hermes-agent 等) | P1 | 进行中 |
 | [414-skills-system-cleanup-and-system-skills](./active/414-skills-system-cleanup-and-system-skills.md) | Skills 体系清理 + 系统级内置 skills（.system 机制，Codex 式） | P1 | ✅ 代码完成，测试通过 |
+| [416-inline-task-row](./active/416-inline-task-row.md) | 任务胶囊从输入框外移到输入框内部顶部，弹窗样式对齐 settings 弹窗 | P1 | 🟡 Planning |
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |
 | [43-startup-landing](./active/43-startup-landing.md) | First-launch branded landing page | P1 | Phase 1 ✅ |
@@ -189,6 +192,8 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [306-memory-v2-phase-2-consolidator-and-recall](./completed/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory Phase 2 Consolidator (legacy) — superseded by Plan 401-406 curation agent architecture; consolidator.ts deleted, memory_entries dropped in migration 0009 | 2026-08-03 |
 | [406-memory-curation-rebuild-adhoc-retire](./completed/406-memory-curation-rebuild-adhoc-retire.md) | Memory Phase 2 Plan 406 — memory_entries rebuild cache + ad-hoc input chain + Phase D retire (migration 0009 drops legacy tables, consolidator.ts deleted) | 2026-08-04 |
 | [410-voice-library](./completed/410-voice-library.md) | 语音库 `@duya/voice`：麦克风→流式STT→文本进框，对齐 grok 纯听写（不接 xAI API），本地 whisper.cpp 默认 + 云端 OpenAI 兼容可选，独立 workspace 包 + 首次配置指引 | 2026-08-11 |
+| [411-goal-mode](./completed/411-goal-mode.md) | Goal 模式：自主多轮目标追踪与核验 — 10 态 GoalTracker + N-skeptic 对抗面板 + strategist + 停滞检测 + `goal_updated` 事件流 + 前端 GoalStatusCard | 2026-08-11 |
+| [411-agent-voice-setup](./completed/411-agent-voice-setup.md) | 语音首次使用 Agent 自动配置 — `duya voice` 配置写入子命令 + 内置 voice-setup skill + 首次点击麦自动注入引导消息（Phase 1-3 全部完成） | 2026-08-11 |
 
 ### Canvas / Conductor
 

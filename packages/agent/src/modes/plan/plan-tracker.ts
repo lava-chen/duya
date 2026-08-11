@@ -21,7 +21,7 @@
  * back to inactive so a restart never resurrects a half-open plan turn.
  */
 
-import type { ModeTracker } from './tracker.js';
+import type { ModeTracker } from '../engine/tracker.js';
 
 /** Plan mode lifecycle state. */
 export type PlanModeState = 'inactive' | 'pending' | 'active' | 'exit_pending';

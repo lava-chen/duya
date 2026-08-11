@@ -74,12 +74,84 @@ export class ConfigStore {
   private portSubscribers = new Map<MessagePortMain, PortSubscriber>();
   /** Flat keys written through the port that are not in FLAT_TO_PATH. */
   private extraFlatKeys = new Set<string>();
+  /** Watches config.toml (and secrets.json, same dir) for external edits. */
+  private watcher?: fs.FSWatcher;
+  private reloadTimer?: NodeJS.Timeout;
+  /** Invoked after an external (manual) config.toml edit is applied. */
+  private externalChangeHandler?: (changedPaths: string[]) => void;
 
   constructor(opts: ConfigStoreOptions) {
     this.configPath = opts.configPath;
     this.secretsPath = opts.secretsPath;
     this.secrets = {};
     this.config = this.load();
+    this.startWatching();
+  }
+
+  // ==== external file watch ====
+
+  /**
+   * Watch config.toml so manual edits take effect without restarting DUYA.
+   *
+   * We watch the parent directory and filter on the config/secrets basenames.
+   * This keeps the watcher alive even when config.toml does not exist yet on
+   * first launch (it is created shortly after by migration), and it naturally
+   * covers secrets.json edits too. `persistent: false` lets the process exit
+   * even while a watcher is registered (important for tests).
+   */
+  private startWatching(): void {
+    const dir = path.dirname(this.configPath);
+    const configBase = path.basename(this.configPath);
+    const secretsBase = path.basename(this.secretsPath);
+    try {
+      this.watcher = fs.watch(dir, { persistent: false }, (eventType, filename) => {
+        const name = filename ? filename.toString() : '';
+        if (name !== configBase && name !== secretsBase) return;
+        if (this.reloadTimer) clearTimeout(this.reloadTimer);
+        // Debounce: writeFileAtomic performs tmp-write + rename, which fires
+        // several events. The delay lets the rename settle before we read.
+        this.reloadTimer = setTimeout(() => this.reloadFromDisk(), 400);
+      });
+      this.watcher.on('error', () => {
+        // Non-fatal: hot reload simply does not apply for this session.
+      });
+    } catch {
+      // Directory may be unwatchable (e.g. test sandbox). Non-fatal.
+    }
+  }
+
+  /**
+   * Re-read config.toml from disk and apply it if it differs from the
+   * in-memory snapshot. Self-writes (set() → persist()) produce identical
+   * content on disk, so they are skipped by the deep-equality check — this
+   * avoids both redundant broadcasts and MCP reload loops.
+   */
+  private reloadFromDisk(): void {
+    const prev = this.config;
+    let next: DuyaConfig;
+    try {
+      next = this.load();
+    } catch {
+      return; // malformed file; keep the last good snapshot
+    }
+    if (isDeepEqual(prev, next)) return;
+    this.config = next;
+    const changed = diffConfigPaths(prev, next);
+    this.broadcast();
+    this.externalChangeHandler?.(changed);
+  }
+
+  /** Register a handler notified with changed dotted paths after an external edit. */
+  setExternalChangeHandler(handler: (changedPaths: string[]) => void): void {
+    this.externalChangeHandler = handler;
+  }
+
+  /** Release the config watcher (mainly for tests / shutdown). */
+  close(): void {
+    if (this.reloadTimer) clearTimeout(this.reloadTimer);
+    this.reloadTimer = undefined;
+    this.watcher?.close();
+    this.watcher = undefined;
   }
 
   // ==== persistence ====
@@ -273,6 +345,61 @@ export class ConfigStore {
 }
 
 // ==== dotted-path helpers ====
+
+/** Order-insensitive structural equality (used to detect real external edits). */
+function isDeepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (typeof a !== 'object') return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    const aa = a as unknown[];
+    const bb = b as unknown[];
+    if (aa.length !== bb.length) return false;
+    return aa.every((v, i) => isDeepEqual(v, bb[i]));
+  }
+  const ao = a as Record<string, unknown>;
+  const bo = b as Record<string, unknown>;
+  const aKeys = Object.keys(ao);
+  const bKeys = Object.keys(bo);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (k) => Object.prototype.hasOwnProperty.call(bo, k) && isDeepEqual(ao[k], bo[k]),
+  );
+}
+
+/**
+ * Return the leaf dotted paths that differ between two config snapshots.
+ * e.g. editing `[mcp_servers.foo].command` yields `['mcp_servers.foo.command']`.
+ * Used by the external-change handler to decide which subsystems to reload.
+ */
+export function diffConfigPaths(prev: unknown, next: unknown, prefix = ''): string[] {
+  const out: string[] = [];
+  const walk = (a: unknown, b: unknown, path: string): void => {
+    if (isDeepEqual(a, b)) return;
+    if (
+      a !== null && b !== null &&
+      typeof a === 'object' && typeof b === 'object' &&
+      !Array.isArray(a)
+    ) {
+      const ao = a as Record<string, unknown>;
+      const bo = b as Record<string, unknown>;
+      const keys = new Set<string>([...Object.keys(ao), ...Object.keys(bo)]);
+      if (keys.size === 0) {
+        out.push(path);
+        return;
+      }
+      for (const k of keys) {
+        walk(ao[k], bo[k], path ? `${path}.${k}` : k);
+      }
+      return;
+    }
+    out.push(path);
+  };
+  walk(prev, next, prefix);
+  return out;
+}
 
 function getByPath(obj: unknown, key: string): unknown {
   let cur = obj;
