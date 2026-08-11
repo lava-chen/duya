@@ -348,6 +348,27 @@ describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
     expect(result.success).toBe(true);
     expect(result.policyUpdated).toBeUndefined();
   });
+
+  it('12. new_categories creates the directory + actions land inside it', async () => {
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'learner profile' }],
+      actions: [{
+        op: 'append',
+        area_path: 'global/lessons/math-101.md',
+        content: '## Course\n- user is studying calculus',
+        reason: 'learner dimension',
+      }],
+      new_categories: [{
+        name: 'lessons',
+        reason: 'user activity is mostly coursework across many sessions',
+      }],
+    }));
+
+    const result = await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+    expect(result.success).toBe(true);
+    expect(fs.existsSync(path.join(root, 'global/lessons'))).toBe(true);
+    expect(fs.readFileSync(path.join(root, 'global/lessons/math-101.md'), 'utf8')).toContain('calculus');
+  });
 });
 
 describe('runSingleShotCuration — empty input set', () => {

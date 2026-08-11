@@ -177,6 +177,46 @@ Classification rules:
 - Reuse an existing slug when one covers the same topic; create a new
   slug only when no existing file fits.
 
+# Restraint: quality over quantity
+
+The memory store must stay SMALL and DENSE. Small, well-maintained
+files beat many thin ones:
+
+- APPEND is almost always right. New facts about an existing topic go
+  into the existing file — do not spin up a new slug because a session
+  felt different. Only create a new file when the topic is genuinely
+  absent from the panorama and cannot reasonably live inside an
+  existing one.
+- One topic, one file. If two existing files cover the same topic,
+  prefer the more established one and note the overlap in your reason.
+- The panorama shows you every file that exists. Before creating a new
+  slug, scan it: is there already a file this belongs in? If yes,
+  append.
+- A new file should have a DISTINCT title and a real Summary. A
+  one-session observation is not a file.
+
+# New categories (rare, evidence-gated)
+
+The three buckets (preferences / people / areas) are the default and
+should cover ~all cases. A NEW category directory is justified only
+when a whole CLASS of user activity is recurring and none of the three
+buckets fits — e.g. the user is clearly a learner whose sessions are
+almost all coursework (a "lessons" category) or mostly company work
+(a "company" category).
+
+To propose a new category you must satisfy ALL of:
+- the pattern spans MULTIPLE rollouts in this batch or is clearly a
+  long-term class of activity, not one session;
+- none of the three buckets can hold it (it is not a preference, not a
+  person, and not domain knowledge of one project);
+- you can name the class and its distinguishing signals.
+
+Emit at most ONE "new_categories" entry per run. When you do, also
+write your first file into it (an action targeting the new directory)
+and emit a stage1_policy update so Stage 1 starts watching the
+signals. If in doubt, fold into "global/areas/" instead — you can
+always promote a category later.
+
 # Decision boundary
 
 For each rollout you MUST emit exactly one decision:
@@ -274,7 +314,13 @@ two or three more cycles.
     "op": "update|no_change",
     "content": "<=8192 chars, full new Stage 1 policy markdown (op=update only)",
     "reason": "<=500 chars, why the extraction focus changed (op=update only)"
-  }
+  },
+  "new_categories": [
+    {
+      "name": "lessons",
+      "reason": "<=500 chars, evidence the user's activity is a recurring class that no bucket fits"
+    }
+  ]
 }`;
 
 /**
@@ -482,6 +528,21 @@ export async function runSingleShotCuration(
       const applyResult = await applyCurationActions(opts.memoryRoot, response.actions);
       actionsApplied = applyResult.applied;
       errors = applyResult.errors;
+
+      // New category creation (rare, evidence-gated): create the directory
+      // so subsequent actions in this batch (and later cycles) can write
+      // into it. Non-fatal on failure — the run still succeeded.
+      for (const cat of response.new_categories ?? []) {
+        try {
+          await fs.mkdir(path.join(opts.memoryRoot, 'global', cat.name), { recursive: true });
+          console.warn(`[memory] new category created: global/${cat.name} (${cat.reason.slice(0, 80)})`);
+        } catch (err) {
+          console.warn(
+            '[memory] new category creation failed',
+            err instanceof Error ? err.message : String(err),
+          );
+        }
+      }
 
       // Adaptive loop: if the curator asked Stage 1 to watch a missing
       // dimension, write the new policy (atomic + version bump). The
