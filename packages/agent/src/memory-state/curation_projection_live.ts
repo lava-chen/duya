@@ -66,24 +66,57 @@ function extractTitle(body: string): string {
   return '';
 }
 
-/** Extract the first meaningful paragraph after the H1, for the registry line. */
-function extractFirstParagraph(body: string): string {
+/**
+ * Extract the Summary section of a canonical record.
+ *
+ * Canonical files use the shape `# title` → `## Summary` → prose →
+ * `## Details`. The Summary section is the bounded description a future
+ * session should read first; Details is the deep dump and stays in the
+ * file. We prefer the `## Summary` body, falling back to the first
+ * non-title, non-comment paragraph when the section header is absent.
+ */
+function extractSummary(body: string): string {
   const lines = body.split('\n');
+  const trimmed = lines.map((l) => l.trim());
+
+  // Find `## Summary` (case-insensitive) and collect prose until the
+  // next heading of level >= 2.
+  let summaryIdx = -1;
+  for (let i = 0; i < trimmed.length; i++) {
+    if (/^#{2,}\s+summary\b/i.test(trimmed[i])) {
+      summaryIdx = i;
+      break;
+    }
+  }
+  if (summaryIdx >= 0) {
+    const para: string[] = [];
+    for (let i = summaryIdx + 1; i < trimmed.length; i++) {
+      const line = trimmed[i];
+      if (/^#{1,}\s/.test(line)) break;
+      if (line === '' || /^<!--/.test(line) || /^-->/.test(line)) continue;
+      para.push(line);
+    }
+    const text = para.join(' ').replace(/\s+/g, ' ').trim();
+    if (text.length > 0) return text;
+  }
+
+  // Fallback: first non-title, non-comment paragraph (legacy files
+  // without a Summary header, e.g. a stray auto-generated comment).
+  const para: string[] = [];
   let sawTitle = false;
   let started = false;
-  const para: string[] = [];
-  for (const line of lines) {
+  for (const line of trimmed) {
     if (!sawTitle && /^#\s+/.test(line)) { sawTitle = true; continue; }
-    if (line.trim() === '') {
+    if (line === '' || /^<!--/.test(line) || /^-->/.test(line)) {
       if (started) break;
       continue;
     }
     if (/^#{2,}\s/.test(line)) break;
     started = true;
-    para.push(line.trim());
+    para.push(line);
   }
   const text = para.join(' ').replace(/\s+/g, ' ').trim();
-  return text.length > 200 ? text.slice(0, 200) + '…' : text;
+  return text;
 }
 
 /** Read every canonical file under the configured layout. */
@@ -110,7 +143,7 @@ function readLiveFiles(memoryRoot: string): CanonicalFile[] {
         canonicalKey: `${entry.type}:${slug}`,
         claimType: entry.type,
         title: extractTitle(body),
-        firstParagraph: extractFirstParagraph(body),
+        firstParagraph: extractSummary(body),
         // Use forward slashes regardless of platform (output is markdown
         // and gets copied between Windows + Linux dev machines).
         relPath: `${entry.dir}/${name}`.replace(/\\/g, '/'),
@@ -182,7 +215,10 @@ export function generateMemoryMdLive(memoryRoot: string): string {
       lines.push('');
     }
     const desc = f.firstParagraph.length > 0 ? f.firstParagraph : f.title;
-    lines.push(`- **${f.canonicalKey}**: ${desc} → ${f.relPath}`);
+    // Inline a bounded summary so MEMORY.md is a readable digest, not a
+    // bare filename index (Plan 417 follow-up: Codex-memory style).
+    const inline = truncateChars(desc, 400);
+    lines.push(`- **${f.canonicalKey}**: ${inline} → ${f.relPath}`);
   }
   lines.push('');
 
@@ -216,7 +252,11 @@ export function generateSummaryMdLive(memoryRoot: string): string {
   ].join('\n');
 
   const body = recent
-    .map((f) => `- [${f.claimType}] ${f.firstParagraph || f.title}`)
+    .map((f) => {
+      const desc = f.firstParagraph.length > 0 ? f.firstParagraph : f.title;
+      const inline = truncateChars(desc, 300);
+      return `- [${f.claimType}] ${inline}`;
+    })
     .join('\n');
 
   return truncateChars(header + body + '\n', MAX_SUMMARY_CHARS);
