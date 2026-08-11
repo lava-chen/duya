@@ -185,4 +185,46 @@ describe('CurationResponseSchema — direct', () => {
     const result = CurationResponseSchema.safeParse(ok);
     expect(result.success).toBe(true);
   });
+
+  it('17. new_categories with a valid lowercase name validates', () => {
+    const ok = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [{ op: 'append', area_path: 'global/lessons/math.md', content: '## x\n- y', reason: 'r' }],
+      new_categories: [{ name: 'lessons', reason: 'user activity is mostly coursework across many sessions' }],
+    };
+    const result = CurationResponseSchema.safeParse(ok);
+    expect(result.success).toBe(true);
+  });
+
+  it('18. new_categories with invalid name (uppercase/space) is rejected', () => {
+    const bad = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      new_categories: [{ name: 'Lessons 101', reason: 'x'.repeat(20) }],
+    };
+    const result = CurationResponseSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it('19. more than one new_category is rejected', () => {
+    const bad = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      new_categories: [
+        { name: 'lessons', reason: 'a'.repeat(20) },
+        { name: 'company', reason: 'b'.repeat(20) },
+      ],
+    };
+    const result = CurationResponseSchema.safeParse(bad);
+    expect(result.success).toBe(false);
+  });
+
+  it('20. action targeting a new category path validates (regex allows it)', () => {
+    const ok = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [{ op: 'append', area_path: 'global/lessons/math-101.md', content: '## x\n- y', reason: 'r' }],
+    };
+    const result = CurationResponseSchema.safeParse(ok);
+    expect(result.success).toBe(true);
+  });
 });

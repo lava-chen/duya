@@ -67,15 +67,37 @@ export interface CurationResponse {
   decisions: CurationDecision[];
   actions: CurationAction[];
   stage1_policy?: Stage1PolicySuggestion;
+  /** At most one per run — new entity category proposal. */
+  new_categories?: NewCategory[];
 }
 
 /**
- * Strict whitelist of writeable canonical paths. The three live entity
+ * Strict whitelist of writeable canonical paths. The three default entity
  * directories are `areas` (domain knowledge), `people` (person records),
- * and `preferences` (user preferences). Everything else folds into one
- * of these during curation.
+ * and `preferences` (user preferences). A curator-proposed category
+ * (`new_categories`) may add a fourth directory — validated separately
+ * against this same shape (single lowercase word). Everything else folds
+ * into one of the default buckets.
  */
-const AREA_PATH_RE = /^global\/(areas|people|preferences)\/[a-z0-9][a-z0-9._-]*\.md$/;
+const AREA_PATH_RE = /^global\/(areas|people|preferences|[a-z][a-z0-9-]{1,20})\/[a-z0-9][a-z0-9._-]*\.md$/;
+
+/**
+ * A curator-proposed new entity category (e.g. "lessons", "company").
+ * Name must be a single lowercase word; the directory is created under
+ * `global/` at write time. Evidence-gated: the system prompt requires
+ * multiple-rollout evidence and at most one per run.
+ */
+export interface NewCategory {
+  name: string;
+  reason: string;
+}
+
+export const NewCategorySchema = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9-]{1,20}$/, {
+    message: 'category name must be one lowercase word (2-21 chars)',
+  }),
+  reason: z.string().min(10).max(500),
+});
 
 export const CurationActionSchema = z.object({
   op: z.enum(['append', 'replace', 'no_op']),
@@ -114,6 +136,7 @@ export const CurationResponseSchema = z.object({
   decisions: z.array(CurationDecisionSchema).min(1).max(20),
   actions: z.array(CurationActionSchema).max(20),
   stage1_policy: Stage1PolicySchema.optional(),
+  new_categories: z.array(NewCategorySchema).max(1).optional(),
 });
 
 export class CurationParseError extends Error {
