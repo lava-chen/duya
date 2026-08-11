@@ -766,8 +766,8 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 | `channel_permission_links` | Bridge 权限链接 | Bridge |
 | ~~`weixin_accounts`~~ | ~微信账户（已迁移至 ConfigStore `channels.adapters.weixin.accounts`，见下说明）~ | Bridge |
 | `weixin_context_tokens` | 微信上下文 Token（运行时上下文，仍留 SQLite） | Bridge |
-| `automation_cron_state` | 定时任务运行时状态（status 覆盖 / next_run_at / last_run_at / last_error / retry_count） | Automation Scheduler |
-| `automation_cron_runs` | 定时任务执行历史（append-only） | Automation Scheduler |
+| ~~`automation_cron_state`~~ | ~定时任务运行时状态（已废弃，Plan 409：状态并入 `cronjob.toml`）~ | — |
+| ~~`automation_cron_runs`~~ | ~定时任务执行历史（已废弃，Plan 409：历史 = cron session 的 rollout）~ | — |
 | `conductor_canvases` | Conductor 画布 | Renderer / Agent Process (via Main) |
 | `conductor_widgets` | Conductor Widget 实例 | Renderer / Agent Process (via Main) |
 | `conductor_actions` | Conductor 操作日志（可审计、可回放） | Main Process (唯一写入) / Renderer (只读) |
@@ -777,52 +777,34 @@ type PromptMode = 'full' | 'minimal' | 'none' | 'coding' | 'chat';
 >
 > **Channel/Gateway 配置收敛（Plan 335）**：`mcp_servers`、`channels`、`gateway_proxy`、`weixin_accounts` 的读写已全部收敛到 ConfigStore（`config.toml` + `secrets.json`）。`mcp.toml` 与 SQLite `settings`/`weixin_accounts` 直读路径已移除：MCP 用户列表经 `electron/services/mcp-config.ts` 读写 `mcp_servers.*`；channel 键经 `electron/config/gateway-setting-adapter.ts` 与 `electron/services/weixin-account-store.ts` 读写 `channels.*`；gateway 代理经 `gateway_proxy`。SQLite `settings` 表仅保留非 channel 键，`weixin_context_tokens` 作为运行时上下文仍留 SQLite。
 
-#### 自动化定时任务表
+#### 自动化定时任务（Plan 409：单一来源）
 
-**`cron.jobs`（ConfigStore，`config.toml`）** - 定时任务**定义**（唯一权威源，Plan 405）：
+**`~/.duya/cronjob.toml`** - 定时任务**唯一权威源**（定义 + 运行时状态写回）：
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | TEXT | 主键，UUID |
+| `version` | INT | 文档版本（当前 1） |
+| `jobs` | ARRAY | 任务数组（见下） |
+
+每个 job：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | TEXT | 主键，UUID（手写可省略，加载时生成） |
 | `name` | TEXT | 任务名称 |
-| `description` | TEXT | 任务描述 |
-| `schedule_kind` | TEXT | 调度类型：`at`/`every`/`cron` |
-| `schedule_at` / `schedule_every_ms` / `schedule_cron_expr` / `schedule_cron_tz` / `schedule_end_at` | TEXT/INT | 调度参数（按 kind 择一） |
-| `working_directory` | TEXT | 执行工作目录 |
 | `prompt` | TEXT | 执行提示词 |
-| `input_params` | OBJECT | 输入参数（TOML 存对象） |
-| `model` | TEXT | 模型 ID |
-| `status` | TEXT | 用户意图：`enabled`/`disabled`/`error`（定义态） |
-| `concurrency_policy` | TEXT | 并发策略：`skip`/`parallel`/`queue`/`replace` |
-| `max_retries` | INTEGER | 最大重试次数 |
+| `enabled` | BOOL | 用户意图：启/停 |
+| `schedule` | OBJECT | 调度：`{kind="every", every="1d"}` / `{kind="once", at="..."}` / `{kind="cron", expr="0 9 * * *", tz=...}` |
+| `working_directory` | TEXT | 执行工作目录 |
+| `model` | TEXT | 模型 ID（可选 → provider 默认） |
+| `concurrency` | TEXT | 并发策略：`skip`/`parallel`/`replace` |
+| `max_retries` | INT | 最大重试次数 |
+| `last_run_at` / `last_error` / `retry_count` | INT/TEXT/INT | 运行时状态（写回同文件） |
 
-> 生命周期时间戳（`created_at`/`updated_at`）与运行时字段**不**入 TOML，存 `automation_cron_state`。定义由 `CronStore` 门面经 `getConfigStore()` 读写 `cron.jobs`。
-
-**`automation_cron_state`** - 定时任务**运行时状态**（有效 status = `state.status ?? def.status`）：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `cron_id` | TEXT | 主键，关联 cron 定义 ID（字符串关联，无 FK） |
-| `status` | TEXT | 运行时状态覆盖（`error`/自动 `disabled`）；NULL 表示有效状态取自定义 |
-| `next_run_at` | INTEGER | 下次运行时间戳 |
-| `last_run_at` | INTEGER | 上次运行时间戳 |
-| `last_error` | TEXT | 最近错误信息 |
-| `retry_count` | INTEGER | 当前重试计数 |
-| `created_at` / `updated_at` | INTEGER | 生命周期时间戳 |
-
-**`automation_cron_runs`** - 定时任务执行历史：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | TEXT | 主键，UUID |
-| `cron_id` | TEXT | 关联的 cron 任务 ID |
-| `scheduled_at` | INTEGER | 计划执行时间 |
-| `started_at` | INTEGER | 实际开始时间 |
-| `completed_at` | INTEGER | 完成时间 |
-| `status` | TEXT | 状态：`pending`/`running`/`completed`/`failed` |
-| `output` | TEXT | 执行输出 |
-| `error` | TEXT | 错误信息 |
-| `retry_count` | INTEGER | 重试次数 |
+- **`next_run_at` 不持久化** —— 60s 轮询 tick 由 `(schedule, lastRunAt, now)` 派生（`electron/automation/schedule.ts`），崩溃恢复天然。
+- **执行 = 普通 agent session**：创建 `mode='chat'`、`extensions.source='cron'`、id 前缀 `cron:<jobId>:` 的 session → `POST /sessions/:id/chat`（主 agent HTTP 通道，与聊天/gateway 同路，`electron/automation/agent-run.ts`）。历史 = session 的 rollout，经 `SessionStore.listByPrefix('cron:<jobId>:')` 查询。
+- headless 交互工具抑制靠 `cron` agent profile deny 集（AskUserQuestion/show_widget/Agent/canvas:*/mode-switch）—— 通用安全网，非 cron 身份。
+- 迁移：`migrateCronJobsToFile`（`electron/config/migrate.ts`，main.ts 启动时调用）把 legacy `automation_crons` 表 + config.toml `cron.jobs`（Plan 405 interim）收敛进 cronjob.toml。
 
 #### Conductor 表
 
@@ -1473,17 +1455,17 @@ commits, pushes, or otherwise mutates Git state.
 
 DUYA now includes a Phase 1 CronJob foundation in Electron Main Process:
 
-- **Scheduler location**: `electron/automation/Scheduler.ts`
-- **Storage**: cron definitions in ConfigStore `cron.jobs` (`config.toml`, sole authority); runtime state in `automation_cron_state`; run history in `automation_cron_runs` (SQLite, main-process single writer). Unified behind `CronStore` (`electron/automation/cron-store.ts`).
-- **Execution target**: fixed to **isolated** session (`session_target = 'isolated'`)
-- **Delivery mode**: fixed to **none** (`delivery_mode = 'none'`, run history only)
+- **Scheduler location**: `electron/automation/Scheduler.ts` (60s polling tick)
+- **Storage**: single source — `~/.duya/cronjob.toml` (definitions + runtime state written back; `next_run_at` derived on each tick via `electron/automation/schedule.ts`). Run history is the cron session's own rollout (`SessionStore.listByPrefix('cron:<jobId>:')`). Modules: `cron-file.ts` / `schedule.ts` / `provider.ts` / `agent-run.ts`.
+- **Execution target**: an **ordinary agent session** (`mode='chat'`, `extensions.source='cron'`, id prefix `cron:<jobId>:`) kicked off via the main agent HTTP channel `POST /sessions/:id/chat`.
+- **Headless safety net**: `cron` agent profile deny list (AskUserQuestion/show_widget/Agent/canvas:*/mode-switch) — a generic headless guard, not a cron-specific identity.
 - **IPC APIs**:
   - `automation:cron:list`
   - `automation:cron:create`
   - `automation:cron:update`
   - `automation:cron:delete`
-  - `automation:cron:run`
-  - `automation:cron:runs`
+  - `automation:cron:run` (returns `CronRunHandle`)
+  - `automation:cron:sessions` (cron run history = its sessions)
 
 ### Scheduler behavior
 
