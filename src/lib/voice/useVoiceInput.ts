@@ -55,11 +55,25 @@ export function useVoiceInput({ onText, onCancelled }: UseVoiceInputOptions): Us
       onCancelledRef.current?.(d.reason);
       setStatusSafe('idle');
     });
+    const unsubAutoStop = api.onAutoStop((d) => {
+      if (d.reason === 'finalize') {
+        // Main already finalized the utterance; final text arrives via onFinal.
+        captureRef.current?.stop();
+        captureRef.current = null;
+        if (statusRef.current === 'recording') setStatusSafe('idle');
+      } else {
+        captureRef.current?.stop();
+        captureRef.current = null;
+        onCancelledRef.current?.('no_speech');
+        setStatusSafe('idle');
+      }
+    });
     return () => {
       unsubInterim();
       unsubFinal();
       unsubError();
       unsubCancelled();
+      unsubAutoStop();
     };
   }, [apiSupported, setStatusSafe]);
 

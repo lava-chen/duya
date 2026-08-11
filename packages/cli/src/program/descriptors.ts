@@ -33,6 +33,7 @@ import { runStatusCommand, runStatusCommandCtx } from '../commands/status.js';
 import { runUpdateStatus, runUpdateCheck, runUpdateDownload, runUpdateInstall } from '../commands/update.js';
 import { runBackupPlan, runBackupCreate, runBackupVerify, runBackupRestore } from '../commands/backup.js';
 import { runSecurityAudit, runSecurityFix } from '../commands/security.js';
+import { runVoiceDoctorCommand, runVoiceSetupCommand } from '../commands/voice.js';
 import {
   runMessageSend,
   runSkillInstall,
@@ -659,6 +660,17 @@ const subSecurityFix: CliSubcommand = {
   write: true,
   options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
   run: (ctx) => runSecurityFix(ctx),
+};
+
+const subVoiceDoctor: CliSubcommand = {
+  description: 'Read-only whisper environment diagnostics (binary detection + model cache status)',
+  run: (ctx) => adaptLegacy(runVoiceDoctorCommand as LegacyFn, [])(ctx),
+};
+
+const subVoiceSetup: CliSubcommand = {
+  description: 'Guided first-use setup: download + verify the configured whisper model and report binary readiness',
+  write: true,
+  run: (ctx) => adaptLegacy(runVoiceSetupCommand as LegacyFn, [])(ctx),
 };
 
 // ============================================================================

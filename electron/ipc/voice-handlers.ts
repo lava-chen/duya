@@ -64,6 +64,10 @@ export function registerVoiceHandlers(): void {
     return getService().getModelStatus();
   });
 
+  ipcMain.handle('voice:model-list', () => {
+    return getService().getModelList();
+  });
+
   ipcMain.handle('voice:env-doctor', () => {
     return getService().envReport();
   });

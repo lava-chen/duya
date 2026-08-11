@@ -10,6 +10,7 @@ export { default as BrowserExtensionSection } from "./BrowserExtensionSection";
 export { SupportSection } from "./SupportSection";
 export { CapabilitiesSection } from "./CapabilitiesSection";
 export { MemorySection } from "./MemorySection";
+export { VoiceSection } from "./VoiceSection";
 // Plan 205: `ProviderConnectDialog` is still used by the
 // onboarding flow. The settings flow no longer mounts it —
 // `ProviderEditView` is the inline page that replaces it.

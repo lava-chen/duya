@@ -49,8 +49,12 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [329-core-db-legacy-import](./active/329-core-db-legacy-import.md) | core-db 旧库导入（单文件 LegacyImport）+ 首启自动执行 + 对账与文档收口 | P0 | Planning |
 | [330-electron-cleanup-repair](./active/330-electron-cleanup-repair.md) | Electron 主进程清理修复：IPC 统一注册、agents barrel、services 分类、main.ts 启动编排下沉、上帝文件拆分、命名/shim 收口（六 Phase） | P1 | Planning |
 | [408-agents-md-loader-alignment](./active/408-agents-md-loader-alignment.md) | AGENTS.md 加载与 claude-code-haha 对齐：`<system-reminder>` 包裹 + `omitClaudeMd` 真正生效 + `stripHtmlComments` 堵 prompt injection + 修 `applyCacheControl` system-cache 永失活 bug + AGENTS.md 搬 system 字段 | P1 | Phase 1-5 ✅（2026-08-10）；Phase 6 阻塞（依赖 plan 87 hook） |
-| [410-voice-library](./active/410-voice-library.md) | 语音库 `@duya/voice`：麦克风→流式STT→文本进框，对齐 grok 纯听写（不接 xAI API），本地 whisper.cpp 默认 + 云端 OpenAI 兼容可选，独立 workspace 包 + 首次配置指引 | P1 | Planning |
-| [413-mode-state-machine-framework](./active/413-mode-state-machine-framework.md) | Mode 状态机框架：在 `ModeModifier` 之上加 `ModeTrackerEngine` + `ModeCoordinator`，对齐 grok 多 mode 状态机（生命周期状态机 + 每轮提醒注入 + 运行时工具门控 + 持久化 + 仲裁层） | P1 | Planning |
+| [413-mode-state-machine-framework](./active/413-mode-state-machine-framework.md) | Mode 状态机框架：在 `ModeModifier` 之上加 `ModeTrackerEngine` + `ModeCoordinator`，对齐 grok 多 mode 状态机（生命周期状态机 + 每轮提醒注入 + 运行时工具门控 + 持久化 + 仲裁层） | P1 | 总览：已拆分为子 plan 413a-e |
+| [413a-mode-tracker-framework](./active/413a-mode-tracker-framework.md) | ModeTracker 引擎框架：泛型接口 + engine 容器 + 序列化纯函数 + coordinator 骨架 | P1 | Planning |
+| [413b-plan-tracker-state-machine](./active/413b-plan-tracker-state-machine.md) | PlanModeTracker 4 态状态机 + 四份提醒模板 + plan-task 改 session 型 | P1 | Planning |
+| [413c-mode-state-persistence](./active/413c-mode-state-persistence.md) | mode 状态快照落盘：core-db `mode_state_snapshots` 表 + `modeState:*` IPC + `modeStateDb` | P1 | Planning |
+| [413d-agent-loop-wiring](./active/413d-agent-loop-wiring.md) | agent 侧接线：DuyaAgent 四处检查点 + coordinator 主体（注入/仲裁/门控/buffer）+ e2e | P1 | Planning |
+| [413e-plan-mode-frontend-session](./active/413e-plan-mode-frontend-session.md) | plan-task session 化前端：extensions key + set_plan_mode IPC + store/ChatView/MessageInput + mode-id | P1 | Planning |
 
 ### Conductor / Canvas
 
@@ -183,6 +187,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [405-memory-curation-prompt-canary-layout](./completed/405-memory-curation-prompt-canary-layout.md) | Memory curation prompt canary layout — two-layer prompt contract + canary + memory_layout.json | 2026-08-04 |
 | [306-memory-v2-phase-2-consolidator-and-recall](./completed/306-memory-v2-phase-2-consolidator-and-recall.md) | Memory Phase 2 Consolidator (legacy) — superseded by Plan 401-406 curation agent architecture; consolidator.ts deleted, memory_entries dropped in migration 0009 | 2026-08-03 |
 | [406-memory-curation-rebuild-adhoc-retire](./completed/406-memory-curation-rebuild-adhoc-retire.md) | Memory Phase 2 Plan 406 — memory_entries rebuild cache + ad-hoc input chain + Phase D retire (migration 0009 drops legacy tables, consolidator.ts deleted) | 2026-08-04 |
+| [410-voice-library](./completed/410-voice-library.md) | 语音库 `@duya/voice`：麦克风→流式STT→文本进框，对齐 grok 纯听写（不接 xAI API），本地 whisper.cpp 默认 + 云端 OpenAI 兼容可选，独立 workspace 包 + 首次配置指引 | 2026-08-11 |
 
 ### Canvas / Conductor
 

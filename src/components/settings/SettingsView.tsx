@@ -11,6 +11,7 @@ import {
   AgentsSection,
   SupportSection,
   MemorySection,
+  VoiceSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
 import { ProviderPickerView } from "@/components/providers/ProviderPickerView";
@@ -37,6 +38,7 @@ export function SettingsView() {
         {settingsTab === "agents" && <AgentsSection />}
         {settingsTab === "support" && <SupportSection />}
         {settingsTab === "memory" && <MemorySection />}
+        {settingsTab === "voice" && <VoiceSection />}
       </div>
     </div>
   );

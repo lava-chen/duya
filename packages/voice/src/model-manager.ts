@@ -64,6 +64,11 @@ export class ModelManager {
     return { model, ready: true, sizeMb: this.sizeMb(p), path: p };
   }
 
+  /** List the known model sizes with their local readiness/size. */
+  listModels(): ModelStatusDTO[] {
+    return Object.keys(MODEL_SIZES_MB).map((model) => this.status(model));
+  }
+
   /** Download a model from the canonical source with optional SHA256 verification. */
   async ensure(model: string, sha256?: string): Promise<ModelStatusDTO> {
     const target = this.pathFor(model);

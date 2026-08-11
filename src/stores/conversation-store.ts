@@ -75,7 +75,7 @@ export type SettingsTab =
   | 'general' | 'appearance' | 'providers'
   | 'provider-picker' | 'provider-edit'
   | 'extensions' | 'channels' | 'browser' | 'security'
-  | 'usage' | 'agents' | 'support' | 'memory';
+  | 'usage' | 'agents' | 'support' | 'memory' | 'voice';
 
 /**
  * Plan 205: the target of the `provider-edit` page. Either

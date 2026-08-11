@@ -27,6 +27,7 @@ import {
   FolderOpenIcon,
   DotsThreeIcon,
   BrainIcon,
+  MicrophoneIcon,
   CaretRightIcon,
   CaretDownIcon,
   CheckIcon,
