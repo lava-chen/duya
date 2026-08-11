@@ -209,7 +209,7 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   extractCooldownMs: 120_000, // 2 min — space batches to avoid LLM rate-limit spikes
   minMessageCount: 6, // filter thin sessions
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
-  curationTimeoutMs: 20 * 60_000, // 20 min — single curator agent run budget
+  curationTimeoutMs: 4 * 60_000, // 4 min — single-shot curator chat() budget
 };
 
 // ---------------------------------------------------------------------------
@@ -424,13 +424,14 @@ function createWorker(
           workerId: state.workerId,
           pool: curation.pool,
           sessionId: `curation-${state.workerId}`,
+          llmClient: deps.llmClient,
           curationTimeoutMs: cfg.curationTimeoutMs,
         }),
-        // Outer cycle deadline must exceed the agent budget (the configured
-        // curationTimeoutMs) plus the runner's +30s hard-deadline overhead.
-        // A tighter wrapper would abort the cycle even though the agent was
-        // given the full budget.
-        cfg.curationTimeoutMs + 5 * 60_000,
+        // Outer cycle deadline must exceed the LLM call budget (cfg.curationTimeoutMs)
+        // plus the file-apply + projection-drain overhead. The single-shot
+        // path returns RunResult.success/failure rather than throwing on most
+        // failures, so this wrapper only fires for genuinely hung cycles.
+        cfg.curationTimeoutMs + 2 * 60_000,
         'curation cycle',
       );
       logger.warn(
