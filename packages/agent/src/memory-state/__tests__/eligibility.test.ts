@@ -17,14 +17,14 @@ import {
  * Eligibility matrix (Plan 302 Phase C, design v3 Scheduler 决策).
  *
  * Baseline eligible rollout: agent_type='main', no mode, active source,
- * last_message_at 12h ago (past the 6h idle threshold, inside the 30d
+ * last_message_at 13h ago (past the 12h idle threshold, inside the 30d
  * window), no stage1_outputs row, no lease, not retired.
  */
 
 const T0 = 1_750_000_000_000;
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
-const BASE_LAST_MESSAGE_AT = T0 - 12 * HOUR;
+const BASE_LAST_MESSAGE_AT = T0 - 13 * HOUR;
 
 function eligibleIds(db: Database, now = T0): string[] {
   return selectEligible(db, { now }).map((e) => e.rolloutId);
@@ -245,7 +245,8 @@ describe('selectEligible', () => {
   });
 
   it('12. more eligible rollouts than the limit → returns limit rows, idle-DESC order', () => {
-    // 20 rollouts, idle from 7h (least idle) to 26h (most idle).
+    // 20 rollouts, idle from 7h (least idle) to 26h (most idle). With the
+    // 12h idle threshold only 14 (13h..26h idle) qualify.
     for (let i = 0; i < 20; i++) {
       insertCatalogRow(db, {
         rollout_id: `bulk-${String(i).padStart(2, '0')}`,
@@ -254,10 +255,10 @@ describe('selectEligible', () => {
     }
 
     const result = selectEligible(db, { now: T0, limit: DEFAULT_ELIGIBILITY_LIMIT });
-    expect(result).toHaveLength(16);
-    // Longest-idle first: bulk-19 (26h idle) … bulk-04 (11h idle).
+    expect(result).toHaveLength(14);
+    // Longest-idle first: bulk-19 (26h idle) … bulk-06 (13h idle).
     expect(result[0].rolloutId).toBe('bulk-19');
-    expect(result[15].rolloutId).toBe('bulk-04');
+    expect(result[13].rolloutId).toBe('bulk-06');
     for (let i = 1; i < result.length; i++) {
       expect(result[i - 1].lastMessageAt).toBeLessThanOrEqual(result[i].lastMessageAt);
     }

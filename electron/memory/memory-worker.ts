@@ -200,10 +200,13 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   paused: false,
   idleMs: DEFAULT_IDLE_MS,
   windowMs: DEFAULT_WINDOW_MS,
-  consolidatorIntervalMs: 5 * 60_000, // 5 min
+  // Token budget control (Plan 417 follow-up): curation polls every 30 min
+  // instead of 5 min, and Stage 1 cooldown widened to 5 min, so the memory
+  // system makes at most a handful of LLM calls per day instead of dozens.
+  consolidatorIntervalMs: 30 * 60_000, // 30 min
   consolidatorOnForceSweep: true,
   catalogSyncIntervalMs: 60_000, // 1 min
-  extractCooldownMs: 120_000, // 2 min — space batches to avoid LLM rate-limit spikes
+  extractCooldownMs: 300_000, // 5 min — space batches to avoid LLM rate-limit spikes
   minMessageCount: 6, // filter thin sessions
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
   curationTimeoutMs: 4 * 60_000, // 4 min — single-shot curator chat() budget
@@ -233,9 +236,9 @@ function withWallClockDeadline<T>(fn: Promise<T>, timeoutMs: number, label: stri
 }
 
 /** Fire the curation cycle when ≥ this many eligible inputs accumulate. */
-const HYBRID_MIN_INPUTS = 3;
-/** Or when the oldest eligible input has sat this long (30 min). */
-const HYBRID_MAX_AGE_MS = 30 * 60_000;
+const HYBRID_MIN_INPUTS = 4;
+/** Or when the oldest eligible input has sat this long (2 h). */
+const HYBRID_MAX_AGE_MS = 2 * 60 * 60_000;
 /** Eligibility scan window for the Hybrid trigger (reuse the ledger query). */
 const HYBRID_QUORUM_MAX_INPUTS = 100;
 const HYBRID_QUORUM_MAX_BYTES = 512 * 1024;

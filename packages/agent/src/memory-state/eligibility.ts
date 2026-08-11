@@ -22,7 +22,9 @@ import type { Database } from 'better-sqlite3';
  */
 
 export const DEFAULT_ELIGIBILITY_LIMIT = 16;
-export const DEFAULT_IDLE_MS = 6 * 3600 * 1000; // 6h
+// Token budget control (Plan 417 follow-up): a session must be idle 12h
+// before extraction, halving how many sessions qualify per day.
+export const DEFAULT_IDLE_MS = 12 * 3600 * 1000; // 12h
 export const DEFAULT_WINDOW_MS = 30 * 86400 * 1000; // 30d
 /** Minimum message count for a session to be eligible for extraction. Filters out thin sessions. */
 export const DEFAULT_MIN_MESSAGE_COUNT = 6;

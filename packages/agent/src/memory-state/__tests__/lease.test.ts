@@ -257,7 +257,7 @@ describe('lease race conditions (D4)', () => {
   });
 
   it('10. complete(succeeded_no_output) writes a NULL content row and blocks re-extraction', () => {
-    const lastMessageAt = T0 - 12 * HOUR;
+    const lastMessageAt = T0 - 13 * HOUR; // past the 12h idle threshold
     insertCatalogRow(db, {
       rollout_id: 'r10',
       last_message_at: lastMessageAt,
