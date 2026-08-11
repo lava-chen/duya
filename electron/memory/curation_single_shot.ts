@@ -195,6 +195,53 @@ files beat many thin ones:
 - A new file should have a DISTINCT title and a real Summary. A
   one-session observation is not a file.
 
+# Writing style (how memory files should read)
+
+Canonical memory is READ by future agents and scanned fast, not
+browsed. Write like a terse operator's manual, not a session report.
+
+1. ASSERT, DON'T NARRATE
+   - State facts directly: "User prefers X." not "It seems the user
+     may prefer X."
+   - No process narration: no "we tried", "after investigation", "the
+     agent attempted". Memory records WHAT IS TRUE, not what happened.
+   - Drop hedges ("maybe", "probably", "I think"). If uncertain, mark
+     it explicitly: append "(unverified)" or "(inferred)". An explicit
+     flag beats a vague word.
+
+2. ONE FACT PER BULLET
+   - Use bullet lists over paragraphs for enumerable facts.
+   - Lead with the searchable key: "- **preference:xxx**: ..." or
+     "- **fact:yyy**: ...". Future sessions grep these keys — never
+     repeat the key inside the description.
+   - Keep a bullet to 1-3 sentences. If it grows, split it.
+
+3. PREFERENCES ARE TRIGGER-FIRST AND ACTIONABLE
+   - Write preferences as "When X, do Y" so a future agent applies
+     them without interpretation.
+   - Bad: "User doesn't like being asked too much."
+   - Good: "When the user gives a task, execute it; ask only when the
+     action is destructive or irreversible."
+
+4. CONCRETE OVER GENERIC
+   - Keep paths, commands, tool names, versions verbatim
+     (E:\\Projects\\duya, "python -m http.server"). Never paraphrase.
+   - Keep numbers exact: ports, limits, durations, counts.
+   - Dates as YYYY-MM-DD; never "yesterday" or "last week".
+
+5. NO DUPLICATION
+   - If a fact already exists in the file (or any file in the
+     panorama), do NOT write it again. Only update the existing
+     wording if it is wrong.
+   - Summary = compressed index of Details. Do not copy Details prose
+     into Summary; restate each point in one short sentence.
+
+6. FIXED STRUCTURE
+   - "# Title" (one line) / "## Summary" (3-5 sentences, whole file
+     compressed) / "## Details" (bullets; group with "### <source>" or
+     "### <topic>" subsections when the file gets long).
+   - No frontmatter. Keys derive from directory + filename.
+
 # New categories (rare, evidence-gated)
 
 The three buckets (preferences / people / areas) are the default and
