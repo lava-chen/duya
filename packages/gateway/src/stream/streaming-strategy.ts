@@ -181,12 +181,15 @@ export function stripMarkdown(text: string): string {
   return (
     text
       // Drop think-tag blocks and any orphan tags some providers emit
-      // (MiniMax leaks </mm:think> into the text stream; Qwen/Doubao use <think>).
-      .replace(/<think>[\s\S]*?(<\/think>|<\/think\s*>|$)/gi, '')
-      .replace(/<thought>[\s\S]*?(<\/thought>|$)/gi, '')
-      .replace(/<reasoning>[\s\S]*?(<\/reasoning>|$)/gi, '')
-      .replace(/<reflection>[\s\S]*?(<\/reflection>|$)/gi, '')
-      .replace(/<ant_thinking>[\s\S]*?(<\/ant_thinking>|$)/gi, '')
+      // (MiniMax leaks </mm:think> into the text stream; Qwen/Doubao use  thinking).
+      // A block is only stripped when its matching close tag is present, so a
+      // plain answer that merely contains the word "thinking" (or a lone
+      // <thought>/<reasoning> tag) is never truncated to that point.
+      .replace(/ thinking[\s\S]*?(<\/think\s*>)/gi, '')
+      .replace(/<thought>[\s\S]*?(<\/thought>)/gi, '')
+      .replace(/<reasoning>[\s\S]*?(<\/reasoning>)/gi, '')
+      .replace(/<reflection>[\s\S]*?(<\/reflection>)/gi, '')
+      .replace(/<ant_thinking>[\s\S]*?(<\/ant_thinking>)/gi, '')
       .replace(/<\/?(mm:think|antml:think|minimax:think|think|thought|reasoning|reflection|ant_thinking)\s*\/?>/gi, '')
       .replace(/```[\s\S]*?```/g, (match) => {
         const lines = match.split('\n');
