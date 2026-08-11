@@ -145,6 +145,29 @@ describe('runSingleShotCuration — happy path', () => {
     expect(payload.inputs[0].summary_md).toContain('never lie');
     expect(payload.existing_areas['global/areas/foo.md']).toContain('foo existing');
   });
+
+  it('3b. memory panorama lists every canonical file with bucket + recency', async () => {
+    seedArea(root, 'global/areas/foo.md', '# Foo Area\n\n## Summary\n\nbody');
+    seedArea(root, 'global/preferences/taste.md', '# Taste prefs\n\n## Summary\n\nbody');
+    seedArea(root, 'global/people/alice.md', '# Alice\n\n## Summary\n\nbody');
+    let captured: Message[] | undefined;
+    const llm = createMockLLMClient((messages) => {
+      captured = messages;
+      return VALID_REPLY;
+    });
+    await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+
+    const payload = JSON.parse(captured![0].content as string);
+    expect(payload.memory_panorama).toBeDefined();
+    const files = payload.memory_panorama.files as Array<{ bucket: string; slug: string; title: string; updated: string }>;
+    expect(files).toHaveLength(3);
+    const bySlug = new Map(files.map((f) => [f.slug, f]));
+    expect(bySlug.get('foo')?.bucket).toBe('areas');
+    expect(bySlug.get('foo')?.title).toBe('Foo Area');
+    expect(bySlug.get('taste')?.bucket).toBe('preferences');
+    expect(bySlug.get('alice')?.bucket).toBe('people');
+    expect(bySlug.get('foo')?.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
 });
 
 describe('runSingleShotCuration — failure modes', () => {
