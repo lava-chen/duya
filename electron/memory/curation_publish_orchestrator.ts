@@ -1,5 +1,4 @@
 import type { Database } from 'better-sqlite3';
-import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 
 import {
   queryEligibleInputs,
@@ -11,25 +10,37 @@ import {
   type CurationInput,
   type InputDisposition,
 } from '../../packages/agent/src/memory-state/curation_ledger';
-import { runCurationAgent } from './curation_agent_runner';
+import { runSingleShotCuration } from './curation_single_shot';
 import { backupMemoryBeforeRun } from './memory_git_backup';
+import { cleanStagingTmps } from './curation_file_writer';
+import { refreshProjections } from './curation_projection_refresh';
+import type { AIClient } from '@duya/ai';
 
 /**
- * End-to-end curation cycle orchestrator (simplified Phase 2 flow, 2026-08-09).
+ * End-to-end curation cycle orchestrator (Plan 417 Task B).
  *
- * Wires the direct flow:
- *   queryEligibleInputs → claimRun → git backup of the live memory root →
- *   run curator agent directly against the live memory root → completeRun
+ * Flow:
+ *   queryEligibleInputs → claimRun → git backup → cleanStagingTmps →
+ *   runSingleShotCuration (non-streaming chat() + deterministic file
+ *   writes) → completeRun with dispositions derived from the LLM's
+ *   decisions.
  *
- * No staging, snapshot, validation, or publication steps. The curator writes
- * validated memory files in place; the git backup is the rollback point.
+ * No more AgentProcessPool, no more curator profile, no more chat:done
+ * IPC. The streaming curator hung at Turn 5-7 because M3 emits
+ * `result` SSE without `message_stop` (see Plan 336 diagnosis). The
+ * single-shot chat() path sidesteps that entirely.
+ *
+ * The legacy `pool: AgentProcessPool` parameter is kept for backward
+ * compatibility with `MemoryWorkerDeps` but no longer used.
  */
+
+import type { AgentProcessPool } from '../agents/process-pool/agent-process-pool';
 
 const MIN_INPUTS_FOR_RUN = 2;
 const MAX_INPUTS = 3;
 const MAX_INPUT_BYTES = 512 * 1024;
-/** Default curator agent wall-clock budget (ms). 20 minutes. */
-const DEFAULT_CURATION_TIMEOUT_MS = 1_200_000;
+/** Default single-shot curator wall-clock budget (ms). 4 minutes. */
+const DEFAULT_CURATION_TIMEOUT_MS = 4 * 60_000;
 
 export interface ProviderConfig {
   apiKey: string;
@@ -43,11 +54,16 @@ export interface RunCurationCycleOpts {
   configRoot: string;
   providerConfig: ProviderConfig;
   workerId: string;
+  /** @deprecated unused by the single-shot path; kept for the call signature. */
   pool: AgentProcessPool;
   sessionId: string;
   /**
-   * Wall-clock budget (ms) for a single curator agent run. Used both for
-   * the run lease TTL and the agent hard deadline. Default 20 minutes.
+   * LLM client used for the single-shot chat() call. Required.
+   */
+  llmClient: AIClient;
+  /**
+   * Wall-clock budget (ms) for the single LLM call. Default 4 minutes.
+   * Used both for the run lease TTL and the chat() deadline.
    */
   curationTimeoutMs?: number;
   now?: number;
@@ -78,6 +94,10 @@ export async function runCurationCycle(
   // Recover orphaned runs (expired lease while still 'running') before
   // claiming, so their pinned inputs become claimable again.
   abandonExpiredRuns(db, now);
+
+  // Best-effort cleanup of stale .tmp files left behind by a crashed
+  // prior cycle. Non-fatal.
+  await cleanStagingTmps(opts.memoryRoot).catch(() => 0);
 
   // 1. Query eligible rollout inputs, oldest-first, truncated to MAX_INPUTS.
   const rolloutEligible = queryEligibleInputs(db, {
@@ -129,60 +149,93 @@ export async function runCurationCycle(
   // 4. Git-backup the live memory root so the run is rollback-safe.
   const backedUp = await backupMemoryBeforeRun(opts.memoryRoot, runId);
   if (!backedUp) {
-    // Non-fatal — the memory_write tool's format validation is the primary guard.
+    // Non-fatal — the file writer's path validation is the primary guard.
     void backedUp;
   }
 
-  // 5. Run the curator agent directly against the live memory root.
-  try {
-    await runCurationAgent({
-      pool: opts.pool,
-      // Unique session per run: the curator must be an independent agent
-      // instance (cronjob-style) with a fresh, empty message history. A
-      // stable session id across runs made the agent accumulate persisted
-      // tool_use/tool_result rounds, which (a) bloated context and drove
-      // MiniMax-M3 into endless-thinking 20-min timeouts, and (b) forced
-      // stale-message reconciliation that crashed the session with exit
-      // code 1. Keying the session off runId gives each cycle a clean slate.
-      sessionId: `${opts.sessionId}-${runId}`,
-      memoryRoot: opts.memoryRoot,
-      runId,
-      // Pass the full eligible inputs (with rolloutSlug + generatedAt) so the
-      // prompt builder can derive the real on-disk summary filenames.
-      inputs: rolloutEligible,
-      providerConfig: opts.providerConfig,
-      timeoutMs: curationTimeoutMs,
+  // 5. Run the single-shot curator (non-streaming chat + deterministic file
+  // writes). The runner never throws — failures surface via RunResult.error
+  // / RunResult.errors.
+  const result = await runSingleShotCuration({
+    memoryRoot: opts.memoryRoot,
+    inputs: rolloutEligible.map((e) => ({
+      inputKind: e.inputKind,
+      inputKey: e.inputKey,
+      contentHash: e.contentHash,
+      outputUpdatedAt: e.outputUpdatedAt,
+      rolloutSlug: e.rolloutSlug,
+    })),
+    llmClient: opts.llmClient,
+    timeoutMs: curationTimeoutMs,
+  });
+
+  // 6. Mark claimed inputs according to the LLM's per-input decisions.
+  // Defaults: when the LLM gave no decisions (parse failure / empty response),
+  // fall back to `uncertain` so the inputs get retried on a later cycle.
+  const dispositionByKey = new Map<string, 'absorbed' | 'no_signal' | 'uncertain'>();
+  if (result.response !== null) {
+    for (const d of result.response.decisions) {
+      dispositionByKey.set(d.rollout_id, d.disposition);
+    }
+  }
+  const dispositions: InputDisposition[] = inputs.map((i) => {
+    const explicit = dispositionByKey.get(i.inputKey);
+    const fallback: 'absorbed' | 'no_signal' | 'uncertain' =
+      result.success && explicit === undefined ? 'absorbed' : explicit ?? 'uncertain';
+    return {
+      inputKind: i.inputKind,
+      inputKey: i.inputKey,
+      contentHash: i.contentHash,
+      disposition: fallback,
+    };
+  });
+
+  if (result.success) {
+    // Refresh MEMORY.md / summary.md / index.md after a successful run.
+    // Best-effort: failures here are logged but don't downgrade the run.
+    try {
+      const touched = await refreshProjections(opts.memoryRoot);
+      if (touched.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[memory] refreshed ${touched.length} projection file(s)`);
+      }
+    } catch (err) {
+      console.warn(
+        '[memory] projection refresh failed',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    completeRun(db, runId, {
+      dispositions,
+      publicationStatus: 'succeeded',
+      now: Date.now(),
     });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    failRun(db, runId, `agent failed: ${msg}`, Date.now());
     return {
       skipped: false,
-      success: false,
+      success: true,
       runId,
-      error: `agent failed: ${msg}`,
       durationMs: Date.now() - startTime,
     };
   }
 
-  // 6. Success — mark all claimed inputs as consumed (absorbed) so they are
-  // not re-picked by queryEligibleInputs on a later run.
-  const dispositions: InputDisposition[] = inputs.map((i) => ({
-    inputKind: i.inputKind,
-    inputKey: i.inputKey,
-    contentHash: i.contentHash,
-    disposition: 'absorbed' as const,
-  }));
+  // Partial or full failure — mark as failed. Inputs are still recorded
+  // (with `uncertain` disposition) so the next cycle can pick them up.
+  const errMsg =
+    result.error ??
+    (result.errors.length > 0
+      ? `${result.errors.length} action(s) failed: ${result.errors[0].error}`
+      : 'curation cycle failed without a top-level error');
+  failRun(db, runId, `agent failed: ${errMsg}`, Date.now());
   completeRun(db, runId, {
     dispositions,
-    publicationStatus: 'succeeded',
+    publicationStatus: 'failed',
     now: Date.now(),
   });
-
   return {
     skipped: false,
-    success: true,
+    success: false,
     runId,
+    error: `agent failed: ${errMsg}`,
     durationMs: Date.now() - startTime,
   };
 }

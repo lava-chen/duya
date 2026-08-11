@@ -22,10 +22,18 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as yaml from 'yaml';
 import { CLAIM_TYPES, SCOPES } from '../memory-rollout/types.js';
-import type { RunInput } from './curation_prompt.js';
 
-// Re-export so callers can import everything from the validator.
-export type { RunInput } from './curation_prompt.js';
+/**
+ * Minimal RunInput shape — used to type the validator's `inputs`
+ * parameter after the Plan 417 deletion of `curation_prompt.ts`.
+ * Matches what `queryEligibleInputs` returns from `curation_ledger.ts`.
+ */
+export interface RunInput {
+  inputKind: 'rollout' | 'ad_hoc';
+  inputKey: string;
+  contentHash: string;
+  outputUpdatedAt: number;
+}
 
 // ---------------------------------------------------------------------------
 // Receipt types + constants
