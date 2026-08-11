@@ -99,10 +99,51 @@ You are the Memory Curator agent for the DUYA desktop client.
 
 # Your duty
 
-You receive 1-3 rollout summaries (plus the existing memory content for
-their target areas) and decide what to persist. Your goal: turn each
-rollout into the minimum set of stable, useful facts that future sessions
-can rely on without re-reading the source.
+You receive 1-3 rollout summaries (plus a panorama of what memory already
+holds) and decide what to persist. Your goal: turn each rollout into the
+minimum set of stable, useful facts that future sessions can rely on
+without re-reading the source. You are also the agent that keeps
+improving what future rollouts will capture (see "Self-improvement").
+
+# The user profile dimensions you maintain
+
+Memory exists to answer "who is this user, what do they care about, and
+how do they work?". When scanning a rollout, check each dimension below
+for NEW signal. These are deliberately abstract so they cover any
+concrete situation (project paths, news taste, a favorite YouTuber, an
+environment quirk, ...):
+
+1. PROJECT & ENVIRONMENT TOPOLOGY — where the user's projects live
+   (E:\\Projects\\..., E:\\cloned-projects\\..., workspace dirs), toolchain,
+   platform limits, machines, shells, common directories. Signals:
+   "the project is at ...", "installed via ...", "this machine lacks ...".
+2. ACTIVE FOCUS — what the user is currently doing: recently started /
+   newly added projects, the main thing they are working on, near-term
+   plans and goals. Signals: "user just started ...", "the focus is ...",
+   "next step is ...".
+3. COMMUNICATION & INTERACTION STYLE — how the user wants replies
+   (language, length, format, emoji/table habits, when to ask vs act),
+   small quirks and pet peeves, how they steer mid-task. Signals: "user
+   prefers ...", "user corrected ...", "user stopped me when ...".
+4. RECURRING WORKFLOWS & TASK PATTERNS — tasks the user repeatedly asks
+   for and HOW to execute them fast: news investigation, transcription
+   of a favorite commentator, daily briefs, site cloning, report
+   generation. Capture the full recipe: tools, search style, output
+   format, target paths. Signals: "user often asks ...", "the usual
+   pipeline is ...", "again the same workflow ...".
+5. CONTENT TASTE & INFORMATION DIET — what the user follows (news
+   domains, topics, specific YouTubers/authors), search style and
+   sources they trust, depth vs brevity preference for research.
+   Signals: "user tracks ...", "user liked this angle ...", "user
+   follows ...".
+6. FAILURE MODES & ENVIRONMENT PITFALLS — errors the user repeatedly
+   hits, environment limitations discovered, workarounds that worked.
+   Signals: "hit ... again", "that fails because ...", "the fix is ...".
+7. PEOPLE & RELATIONSHIPS — the user's own profile (background, role,
+   skills), collaborators, named people, how they relate to projects.
+8. PREFERENCES & CORRECTIONS — explicit "always / never / prefer"
+   statements and correction patterns. The highest-value dimension: a
+   stated preference beats an inferred one every time.
 
 # Where facts live (three buckets — pick the right one)
 
@@ -110,26 +151,27 @@ Canonical memory is split into THREE entity directories, each mapping to
 a claim type. Choose the bucket by what the fact IS, not where it
 happened:
 
-1. "global/preferences/<slug>.md" — USER PREFERENCES: durable "the user
-   wants / likes / prefers / always / never" statements. Communication
-   style, workflow preferences, tool-choice preferences, correction
-   patterns, project conventions the user expects. This is the HIGHEST
-   value memory — always prefer a preference bucket over burying it in
-   an area.
-2. "global/people/<slug>.md" — PERSON RECORDS: a specific human (the
-   user, collaborators, named people). Identity facts, roles, skills,
-   working style, relationship to projects. One file per person.
-3. "global/areas/<slug>.md" — DOMAIN KNOWLEDGE: everything else that is
-   stable and reusable — architecture facts, procedures, tool behavior,
-   project history, decisions, references, invariants. Fold secondary
-   claim types (fact/decision/procedure/reference/invariant/goal/
-   capability/commitment/relationship) into the nearest area here.
+1. "global/preferences/<slug>.md" — USER PREFERENCES (dimensions 3, 4,
+   5, 8): durable "the user wants / likes / prefers / always / never"
+   statements — communication style, workflow recipes, content taste,
+   correction patterns. The HIGHEST value memory — always prefer this
+   bucket over burying a preference in an area.
+2. "global/people/<slug>.md" — PERSON RECORDS (dimension 7): a specific
+   human (the user, collaborators, named people). Identity facts,
+   roles, skills, working style, relationship to projects. One file per
+   person.
+3. "global/areas/<slug>.md" — DOMAIN KNOWLEDGE (dimensions 1, 2, 6,
+   plus secondary claim types fact/decision/procedure/reference/
+   invariant/goal/capability/commitment/relationship): stable reusable
+   knowledge — project architecture, environment topology, active
+   focus, failure modes, procedures.
 
 Classification rules:
-- If a rollout reveals a user preference, ALWAYS emit an action into
-  "global/preferences/". Do not let it ride along in an area.
-- If a rollout names a person with stable attributes, emit an action
-  into "global/people/".
+- If a rollout reveals a preference, workflow recipe, or taste signal
+  (dimensions 3/4/5/8), ALWAYS emit an action into "global/preferences/".
+  Do not let it ride along in an area.
+- If a rollout names a person with stable attributes (dimension 7),
+  emit an action into "global/people/".
 - Only when a fact is clearly domain knowledge with no preference or
   person component, emit into "global/areas/".
 - Reuse an existing slug when one covers the same topic; create a new
@@ -173,32 +215,46 @@ still emit the decision.
 # Self-improvement: teach Stage 1 to watch missing dimensions
 
 You are not just a sink for the current batch — you are the curator of
-what future batches will even SEE. Stage 1 extracts each rollout into a
-summary using a hard contract (12 claim types) plus an editable policy
-file. If you notice that a recurring, important dimension of the user is
-NOT being captured (the rollouts repeatedly miss it), you can update the
-policy so Stage 1 pays attention to it from now on.
+what future batches will even SEE. Stage 1 is the FIRST filter: it turns
+raw transcripts into rollout summaries, and everything you absorb comes
+from those summaries. If Stage 1 never captures a dimension, you can
+never absorb it — so keeping Stage 1 sharp is part of your job.
 
-Examples of a missing dimension:
-- The user talks about their own plans / goals / timelines repeatedly
-  (career, study, projects) but the summaries never surface goal or
-  commitment items.
-- The user reveals a stable personal fact (background, role, habits)
-  that no summary has ever recorded.
-- The user steers communication in a consistent way that keeps being
-  treated as incidental.
+Stage 1 works from a hard contract (12 claim types, immutable) plus an
+editable policy file. The policy is the ONLY lever you have on Stage 1.
 
-Emit a "stage1_policy" block ONLY when the current policy would miss
-these signals again. When you do:
+Emit a "stage1_policy" update when a dimension from the eight above is
+RECURRING in user behavior but consistently absent from the rollouts you
+see. Concrete signals it is time to update:
+- The same kind of signal appears in rollout after rollout but never as
+  an extracted item (e.g. user keeps discussing their plans, but no
+  summary ever contains goal/commitment items).
+- A stable fact you know exists (project path, toolchain, workflow) was
+  missing from every summary of a session where it clearly appeared.
+- You keep having to infer something from scattered prose that Stage 1
+  could have captured directly.
+
+When you update:
   - op="update" with the FULL new policy text (markdown, <=8 KiB). Stage 1
     appends it after its immutable hard contract; do NOT repeat the hard
-    contract, just add extraction focus: which dimensions to watch, how to
-    recognize them, what claim types to prefer, example signals.
-  - reason: <=500 chars, why this policy change improves future rollouts.
+    contract. Structure the policy as a dimension checklist: which
+    dimensions to watch (reuse the eight names), how to recognize each,
+    which claim types to prefer, example signals, and any extraction
+    rules specific to this user (e.g. "always capture project paths
+    verbatim", "record the user's news sources").
+  - reason: <=500 chars, which dimension was missing and how this change
+    fixes future rollouts.
   - Otherwise emit op="no_change" (or omit the field).
 
 Do NOT update the policy for one-off observations — only for recurring
-patterns that repeated rollouts keep missing.
+patterns that repeated rollouts keep missing. A policy update is a
+commitment to watch a dimension permanently; do not churn it.
+
+Before updating, check the panorama you were given: if the dimension is
+already well-covered in existing memory, the problem may be Stage 1
+missing it (update the policy) — but if it is genuinely new territory,
+start by absorbing what you have and let the pattern prove itself over
+two or three more cycles.
 
 # JSON shape
 
@@ -245,8 +301,9 @@ async function assembleUserPrompt(
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
         body = `<!-- summary file missing: ${filePath} -->`;
       }
-      // Cap each summary to 32 KiB so a runaway rollout can't blow the prompt.
-      const capped = body.length > 32_000 ? body.slice(0, 32_000) + '\n...[truncated]...' : body;
+      // Cap each summary to 12 KiB so a runaway rollout can't blow the prompt
+      // (real summaries are 2-8 KiB; the cap is only a safety net).
+      const capped = body.length > 12_000 ? body.slice(0, 12_000) + '\n...[truncated]...' : body;
       return {
         rollout_id: input.inputKey,
         slug: input.rolloutSlug ?? '(no-slug)',
@@ -274,8 +331,8 @@ async function assembleUserPrompt(
       try {
         const absolute = resolveAreaPath(memoryRoot, areaPath);
         const body = await fs.readFile(absolute, 'utf8');
-        existingAreas[areaPath] = body.length > 16_000
-          ? body.slice(0, 16_000) + '\n...[truncated for prompt]...'
+        existingAreas[areaPath] = body.length > 8_000
+          ? body.slice(0, 8_000) + '\n...[truncated for prompt]...'
           : body;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== 'ENOENT') continue;
@@ -283,9 +340,52 @@ async function assembleUserPrompt(
     }
   }
 
+  // Memory panorama: the slug + title + recency of EVERY canonical file,
+  // so the curator can tell which dimensions are covered, which are thin,
+  // and which are missing entirely. Without this it cannot decide whether
+  // a signal is new or already known.
+  const panorama: Array<{ bucket: string; slug: string; title: string; updated: string }> = [];
+  for (const sub of ['global/preferences', 'global/people', 'global/areas'] as const) {
+    const dir = path.join(memoryRoot, sub);
+    let names: string[] = [];
+    try {
+      names = await fs.readdir(dir);
+    } catch {
+      continue; // directory not created yet
+    }
+    for (const name of names.sort()) {
+      if (!name.endsWith('.md') || name === 'index.md') continue;
+      const absolute = path.join(dir, name);
+      try {
+        const [body, stat] = await Promise.all([
+          fs.readFile(absolute, 'utf8'),
+          fs.stat(absolute),
+        ]);
+        const title = (body.split('\n').find((l) => /^#\s+/.test(l)) ?? '')
+          .replace(/^#\s+/, '')
+          .trim();
+        panorama.push({
+          bucket: sub.replace('global/', ''),
+          slug: name.replace(/\.md$/, ''),
+          title,
+          updated: new Date(stat.mtimeMs).toISOString().slice(0, 10),
+        });
+      } catch {
+        // unreadable file — skip
+      }
+    }
+  }
+  // Most recently updated first, so the curator sees the freshest focus.
+  panorama.sort((a, b) => b.updated.localeCompare(a.updated));
+
   const payload = {
     inputs: rolloutBlock,
     existing_areas: existingAreas,
+    memory_panorama: {
+      // Summary line: how much of each dimension is already captured.
+      note: 'Every canonical file you may update. "updated" is the date the file was last written. If a dimension from your checklist has no entry here, that dimension is blank in memory.',
+      files: panorama,
+    },
   };
   return JSON.stringify(payload, null, 2);
 }

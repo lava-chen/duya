@@ -32,8 +32,11 @@ import { refreshProjections } from './curation_projection_refresh';
  * chat() path sidesteps that entirely.
  */
 
-const MIN_INPUTS_FOR_RUN = 2;
-const MAX_INPUTS = 3;
+// Token budget control (Plan 417 follow-up): batch more inputs per run so
+// the curator LLM is called less often. MIN_INPUTS_FOR_RUN 2 -> 3 avoids
+// firing a call for a single thin pair of summaries.
+const MIN_INPUTS_FOR_RUN = 3;
+const MAX_INPUTS = 6;
 const MAX_INPUT_BYTES = 512 * 1024;
 /** Default single-shot curator wall-clock budget (ms). 4 minutes. */
 const DEFAULT_CURATION_TIMEOUT_MS = 4 * 60_000;
