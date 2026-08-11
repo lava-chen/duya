@@ -614,7 +614,7 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           )}
 
           {projectGroupBy === 'singleList' && flatThreads.length > 0 && (
-            <div className="thread-list">
+            <div className="thread-list flat-thread-list">
               {flatThreads.map((thread) => (
                 <ThreadListItem
                   key={thread.id}

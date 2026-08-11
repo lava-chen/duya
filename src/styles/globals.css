@@ -1396,6 +1396,18 @@ a {
   overflow: hidden;
 }
 
+/* Single-list view: align session rows to the first-level inset shared by
+   the other sidebar buttons (`sidebar-primary-link`, `project-group-header`).
+   `width: auto` lets the grid row stretch to fill the track minus the side
+   margins (the base `.thread-item` `width: 100%` would otherwise overflow the
+   right edge when combined with a margin). `min-width: 0` lets the ellipsis
+   apply to the nowrap title. */
+.flat-thread-list .thread-item {
+  width: auto;
+  margin: 0 0.5rem;
+  min-width: 0;
+}
+
 .thread-item {
   box-sizing: border-box;
   position: relative;
@@ -1437,6 +1449,52 @@ a {
   transition: padding-left 0.15s ease;
 }
 
+.thread-item-actions {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.thread-item-actions-default {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  transition: opacity 0.15s ease;
+}
+
+/* The pin + menu buttons are a sibling of `.thread-item-actions`, positioned
+   against the row itself so they always sit inside its right padding and are
+   never clipped by the list's overflow. On hover they overlay the default
+   content (which fades out), giving a clean replace-not-overlap effect. */
+.thread-item-actions-hover {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.thread-item:hover .thread-item-actions-hover,
+.thread-item:focus-within .thread-item-actions-hover,
+.thread-item-actions-hover.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.thread-item:hover .thread-item-actions-default,
+.thread-item:focus-within .thread-item-actions-default,
+.thread-item:has(.thread-item-actions-hover.open) .thread-item-actions-default {
+  opacity: 0;
+}
+
 .thread-item.has-children:hover .thread-item-title {
   padding-left: 1.1rem;
 }
@@ -1457,7 +1515,6 @@ a {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  margin-left: auto;
   color: var(--accent);
 }
 
@@ -1485,7 +1542,6 @@ a {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
-  margin-left: auto;
   transition: background-color 0.15s ease, color 0.15s ease;
   padding: 0.15rem;
 }
@@ -1523,7 +1579,6 @@ a {
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-left: auto;
 }
 
 /* Thread rename input */
@@ -7465,7 +7520,6 @@ html[data-theme="light"] .ask-question-option.selected {
   align-items: center;
   gap: 0.35rem;
   flex-shrink: 0;
-  margin-left: auto;
 }
 
 .thread-item-sub-agent-name {
@@ -13663,12 +13717,11 @@ html[data-message-font-size="large"] .prose h3 {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 32px;
-  padding: 6px 8px;
-  border-top: 1px solid var(--command-menu-border);
+  min-height: 28px;
+  padding: 4px 8px;
   color: var(--text);
   font-size: 12px;
-  line-height: 1.3;
+  line-height: 1.4;
 }
 
 .inline-task-row-main {
@@ -13676,10 +13729,9 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 1 1 auto;
   min-width: 0;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 0;
   border: 0;
-  border-radius: 4px;
   background: transparent;
   color: inherit;
   font: inherit;
@@ -13694,28 +13746,25 @@ html[data-message-font-size="large"] .prose h3 {
 
 .inline-task-row-icon {
   flex: none;
-  color: var(--command-menu-muted);
+  color: inherit;
 }
 
 .inline-task-row-prefix {
   flex: none;
-  color: var(--command-menu-muted);
-  font-weight: 500;
+  color: inherit;
 }
 
 .inline-task-row-subject {
   flex: 1 1 auto;
   min-width: 0;
-  color: var(--text);
-  font-weight: 500;
+  color: inherit;
 }
 
-.inline-task-row-progress {
-  flex: none;
-  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
-  font-size: 11px;
-  color: var(--command-menu-muted);
-  white-space: nowrap;
+.inline-task-row-bottom-line {
+  width: calc(100% - 16px);
+  height: 1px;
+  margin: 2px auto 0;
+  background: var(--command-menu-border);
 }
 
 .inline-task-row-divider {
@@ -13762,17 +13811,17 @@ html[data-message-font-size="large"] .prose h3 {
 .inline-task-popover {
   position: absolute;
   left: 0;
-  right: 0;
+  right: auto;
   bottom: calc(100% + 6px);
-  margin: 0 auto;
+  margin: 0;
   width: min(420px, calc(100vw - 48px));
-  max-height: calc(28px * 6 + 24px);
+  max-height: calc(26px * 6 + 20px);
   overflow-y: auto;
-  padding: 3px;
+  padding: 2px;
   border: 1px solid var(--command-menu-border);
   border-radius: 10px;
   background: var(--command-menu-bg);
-  box-shadow: var(--command-menu-shadow);
+  box-shadow: none;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--command-menu-border) 70%, transparent) transparent;
 }
@@ -13806,12 +13855,12 @@ html[data-message-font-size="large"] .prose h3 {
 .inline-task-popover-item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 28px;
-  padding: 4px 10px;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 8px;
   border-radius: 6px;
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
 .inline-task-popover-item:hover {

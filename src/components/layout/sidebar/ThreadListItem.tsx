@@ -68,7 +68,6 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const { setActiveThread, deleteThread, updateThreadTitle, expandedThreads, toggleThreadExpanded, setThreadPinned } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
-  const [isHovered, setIsHovered] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [newTitle, setNewTitle] = useState(thread.title || "");
   const [isRunning, setIsRunning] = useState(false);
@@ -215,8 +214,6 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         onClick={handleClick}
         onContextMenu={handleContextMenu}
         title={thread.agentType === "sub-agent" ? t('thread.agentTitle', { name: displayTitle }) : thread.title}
-        onMouseEnter={() => setIsHovered(true)}
-        onMouseLeave={() => setIsHovered(false)}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -268,48 +265,55 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           </>
         )}
 
-        {/* Sub-agent badge or Running indicator, Time, or Three dots menu button */}
-        {subAgents.length > 0 && !isHovered && !showMenu ? (
-          <SubAgentBadges agents={subAgents} isRunning={isRunning} />
-        ) : isRunning ? (
-          <span className="thread-item-running-indicator" title={t('thread.running')}>
-            <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
-          </span>
-        ) : isHovered || showMenu ? (
-          <>
-            {/* Plan 331 Phase 4: quick pin toggle on hover. Pinned threads
-             * show a filled icon; unpinned show an outline icon. */}
-            <button
-              type="button"
-              className="thread-item-pin-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleTogglePin();
-              }}
-              aria-label={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
-              title={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
-            >
-              {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
-            </button>
-            <button
-              ref={buttonRef}
-              type="button"
-              className="thread-item-menu-btn"
-              onClick={handleMenuClick}
-              aria-label={t('thread.options')}
-            >
-              <DotsThreeIcon size={16} stroke={2.5} />
-            </button>
-          </>
-        ) : isPinned ? (
-          /* Pinned threads show a filled pin icon even when not hovered, so
-           * the user can see at a glance which threads are pinned. */
-          <PinFilledIcon size={12} className="thread-item-pinned-indicator" />
-        ) : (
-          <span className="thread-item-time">
-            {formatTimeAgo(t, thread.updatedAt)}
-          </span>
-        )}
+        {/* Default content (time / running / badges / pinned) stays in flow so
+            the title width stays stable. The pin + menu buttons are a sibling
+            overlay positioned against the row itself; on hover the default
+            content fades out and the buttons fade in over the same area. */}
+        <div className="thread-item-actions">
+          <div className="thread-item-actions-default">
+            {subAgents.length > 0 ? (
+              <SubAgentBadges agents={subAgents} isRunning={isRunning} />
+            ) : isRunning ? (
+              <span className="thread-item-running-indicator" title={t('thread.running')}>
+                <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
+              </span>
+            ) : isPinned ? (
+              /* Pinned threads show a filled pin icon even when not hovered, so
+               * the user can see at a glance which threads are pinned. */
+              <PinFilledIcon size={12} className="thread-item-pinned-indicator" />
+            ) : (
+              <span className="thread-item-time">
+                {formatTimeAgo(t, thread.updatedAt)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className={`thread-item-actions-hover${showMenu ? " open" : ""}`}>
+          {/* Plan 331 Phase 4: quick pin toggle on hover. Pinned threads
+           * show a filled icon; unpinned show an outline icon. */}
+          <button
+            type="button"
+            className="thread-item-pin-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleTogglePin();
+            }}
+            aria-label={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
+            title={isPinned ? t('thread.unpinThread') : t('thread.pinThread')}
+          >
+            {isPinned ? <PinFilledIcon size={14} /> : <PinIcon size={14} />}
+          </button>
+          <button
+            ref={buttonRef}
+            type="button"
+            className="thread-item-menu-btn"
+            onClick={handleMenuClick}
+            aria-label={t('thread.options')}
+          >
+            <DotsThreeIcon size={16} stroke={2.5} />
+          </button>
+        </div>
       </div>
 
       {/* Render child sub-agent threads */}
