@@ -2,8 +2,11 @@ import type { Message, MessageContent, ToolResultContent } from '../types.js'
 
 // WebSearch/WebFetch are retained only as historical wire names so old
 // persisted conversations still receive the same micro-compaction behavior.
-const COMPACTABLE_TOOLS = new Set([
+// The legacy capitalized names persist for old saved threads; the lowercase
+// edit/write names match the current tool names washed through the pipeline.
+export const COMPACTABLE_TOOLS = new Set([
   'Read', 'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write',
+  'edit', 'write',
 ])
 
 const MAX_RECENT_TO_KEEP = 15
