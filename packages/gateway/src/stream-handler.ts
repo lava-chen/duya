@@ -18,6 +18,13 @@ import {
 const TYPING_INDICATOR_INTERVAL = 4500;
 /** Minimum gap between live edits of the streaming placeholder (Telegram flood-control). */
 const STREAM_EDIT_INTERVAL = 900;
+/**
+ * Cap on how long finalizeSession waits for a still-in-flight placeholder
+ * before falling back to sending the final text as a fresh message. Covers
+ * the common retry-backoff window of sendMessageWithRetry (1s + 2s) while
+ * keeping a dead platform connection from delaying the answer indefinitely.
+ */
+const PLACEHOLDER_WAIT_TIMEOUT_MS = 5000;
 /** Default tool-input preview length for high-tier (streaming) platforms. */
 const TOOL_PREVIEW_LENGTH = 40;
 /** Platforms that stream replies by editing a single placeholder message in place. */
@@ -265,6 +272,13 @@ interface StreamState {
   pendingMediaPaths: string[];
   /** Message ID of the live-edited placeholder (streaming platforms only). */
   placeholderMsgId?: string;
+  /**
+   * Settles when the placeholder creation resolves (in-flight or done).
+   * finalizeSession awaits this before deciding edit-vs-fresh so a slow
+   * placeholder ACK (network retries) never leaks a stub message next to a
+   * separately-sent full reply. Never rejects.
+   */
+  placeholderReady?: Promise<void>;
   /** Timestamp of the last live edit, used to throttle Telegram flood-control. */
   lastEditTime: number;
 }
@@ -487,9 +501,9 @@ export class StreamHandler {
     let state = this.activeStreams.get(sessionId);
     if (state) {
       // Already streaming: ensure a placeholder exists for streaming-edit
-      // platforms (e.g. created by an earlier chat:thinking / chat:status).
-      if (!state.placeholderMsgId && isStreamingEditPlatform(adapter.platform)) {
-        await this.createPlaceholder(sessionId, chatId, adapter, state, seedText);
+      // platforms (idempotent — reuses the in-flight creation).
+      if (isStreamingEditPlatform(adapter.platform)) {
+        await this.ensurePlaceholder(sessionId, chatId, adapter, state, seedText);
       }
       return state;
     }
@@ -509,9 +523,32 @@ export class StreamHandler {
     this.activeStreams.set(sessionId, state);
 
     if (isStreamingEditPlatform(adapter.platform)) {
-      await this.createPlaceholder(sessionId, chatId, adapter, state, seedText);
+      await this.ensurePlaceholder(sessionId, chatId, adapter, state, seedText);
     }
     return state;
+  }
+
+  /**
+   * Kick off (or reuse) the stream_start placeholder creation for a
+   * streaming-edit platform. Idempotent: concurrent callers share the same
+   * in-flight promise so a slow platform ACK (network retries) never spawns
+   * duplicate placeholder messages. Never rejects — a failed placeholder
+   * simply falls back to fresh-message delivery at finalize time.
+   */
+  private ensurePlaceholder(
+    sessionId: string,
+    chatId: string,
+    adapter: PlatformAdapter,
+    state: StreamState,
+    seedText: string,
+  ): Promise<void> {
+    if (!state.placeholderReady) {
+      state.placeholderReady = this.createPlaceholder(sessionId, chatId, adapter, state, seedText).catch(() => {
+        // Best-effort: leave placeholderMsgId unset so finalize sends the
+        // final text as a fresh message instead of editing a ghost.
+      });
+    }
+    return state.placeholderReady;
   }
 
   /**
@@ -593,6 +630,23 @@ export class StreamHandler {
     directChatId?: string,
   ): Promise<void> {
     const state = this.activeStreams.get(sessionId);
+
+    // Streaming-edit platforms: if the placeholder message is still being
+    // created (slow platform ACK, retries in flight), wait briefly for it to
+    // settle so the final text can edit it in place instead of leaking a stub
+    // message next to a freshly-sent full reply. Bounded so a dead platform
+    // never delays finalization indefinitely; on failure the final text is
+    // delivered as a fresh message (the pre-fix behavior).
+    if (isStreamingEditPlatform(adapter.platform) && state?.placeholderReady) {
+      try {
+        await Promise.race([
+          state.placeholderReady,
+          new Promise<void>((resolve) => setTimeout(resolve, PLACEHOLDER_WAIT_TIMEOUT_MS)),
+        ]);
+      } catch {
+        // placeholderReady never rejects, but keep the fallback explicit.
+      }
+    }
 
     // Hermes-style intent silence: if the final response is exactly a silence
     // token, store nothing and suppress delivery, but still clean up the

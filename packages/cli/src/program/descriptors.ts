@@ -33,7 +33,7 @@ import { runStatusCommand, runStatusCommandCtx } from '../commands/status.js';
 import { runUpdateStatus, runUpdateCheck, runUpdateDownload, runUpdateInstall } from '../commands/update.js';
 import { runBackupPlan, runBackupCreate, runBackupVerify, runBackupRestore } from '../commands/backup.js';
 import { runSecurityAudit, runSecurityFix } from '../commands/security.js';
-import { runVoiceDoctorCommand, runVoiceSetupCommand } from '../commands/voice.js';
+import { runVoiceDoctorCommand, runVoiceSetupCommand, runVoiceEnableCommand, runVoiceDisableCommand, runVoiceSetCommand } from '../commands/voice.js';
 import {
   runMessageSend,
   runSkillInstall,
@@ -673,6 +673,31 @@ const subVoiceSetup: CliSubcommand = {
   run: (ctx) => adaptLegacy(runVoiceSetupCommand as LegacyFn, [])(ctx),
 };
 
+const subVoiceEnable: CliSubcommand = {
+  description: 'Enable voice input by writing `voice.enabled = true` to the config',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => adaptLegacy(runVoiceEnableCommand as LegacyFn, [])(ctx),
+};
+
+const subVoiceDisable: CliSubcommand = {
+  description: 'Disable voice input by writing `voice.enabled = false` to the config',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => adaptLegacy(runVoiceDisableCommand as LegacyFn, [])(ctx),
+};
+
+const subVoiceSet: CliSubcommand = {
+  description: 'Write a value under the `[voice]` config section (e.g. `duya voice set stt.engine local` / `duya voice set stt.local.model ggml-base.bin`)',
+  write: true,
+  args: [
+    { name: 'path', required: true, description: 'Dot path under voice (e.g. stt.engine)' },
+    { name: 'value', required: true, description: 'Value to write (string)' },
+  ],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => adaptLegacy(runVoiceSetCommand as LegacyFn, [0, 1])(ctx),
+};
+
 // ============================================================================
 // Plan 102 — `duya config …` subcommand tree. The single agent-side
 // (and terminal-side) entry point for desktop configuration that
@@ -1036,6 +1061,17 @@ export const CLI_DESCRIPTORS = defineDescriptors([
     subcommands: {
       audit: subSecurityAudit,
       fix: subSecurityFix,
+    },
+  },
+  {
+    name: 'voice',
+    description: 'Whisper environment diagnostics, first-use setup, and voice config writes (doctor / setup / enable / disable / set)',
+    subcommands: {
+      doctor: subVoiceDoctor,
+      setup: subVoiceSetup,
+      enable: subVoiceEnable,
+      disable: subVoiceDisable,
+      set: subVoiceSet,
     },
   },
   {

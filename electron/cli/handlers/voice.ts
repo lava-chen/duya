@@ -33,6 +33,32 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(text);
 }
 
+/** Read and parse a JSON object request body. */
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise<Record<string, unknown>>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf-8');
+      if (text.length === 0) {
+        resolve({});
+        return;
+      }
+      try {
+        const obj = JSON.parse(text) as unknown;
+        if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+          resolve(obj as Record<string, unknown>);
+        } else {
+          reject(new Error('request body must be a JSON object'));
+        }
+      } catch (err) {
+        reject(new Error(`malformed JSON body: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
 /** Resolve the resolved voice config + the model cache root. */
 function resolveVoiceContext(): { model: string; root: string } {
   const cfg = resolveVoiceConfig(
@@ -84,6 +110,29 @@ export async function handleVoiceSetup(req: http.IncomingMessage, res: http.Serv
       binaryPath: env.binaryPath,
       installSteps: env.installSteps,
     });
+  } catch (err) {
+    sendJson(res, 500, {
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/** POST /v1/voice/config — write a value under the `[voice]` config section. */
+export async function handleVoiceConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  try {
+    const body = await readBody(req);
+    const path = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!path) {
+      sendJson(res, 400, { ok: false, error: 'path is required (e.g. stt.engine)' });
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(body, 'value')) {
+      sendJson(res, 400, { ok: false, error: 'value is required' });
+      return;
+    }
+    getConfigStore().set(`voice.${path}`, body.value);
+    sendJson(res, 200, { ok: true, path, value: body.value });
   } catch (err) {
     sendJson(res, 500, {
       ok: false,
