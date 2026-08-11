@@ -101,8 +101,11 @@ export interface CreateCronBody {
     kind: ScheduleKind;
     at?: string;
     everyMs?: number;
+    every?: string;
     cronExpr?: string;
+    expr?: string;
     cronTz?: string;
+    tz?: string;
   };
   prompt: string;
   model?: string;
