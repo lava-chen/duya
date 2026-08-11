@@ -510,16 +510,14 @@ describe('db-handlers (core store thin forward)', () => {
   });
 
   describe('db:session:list', () => {
-    it('lists with excludeModes:["automation"] and maps each row (decision 5)', async () => {
+    it('lists all sessions (cron sessions are ordinary now) and maps each row', async () => {
       mocks.stores.sessions.list.mockReturnValueOnce([
         { id: 's1', status: 'active', updatedAt: 1000 },
         { id: 's2', status: 'active', updatedAt: 2000 },
       ]);
       const result = (await invokeHandler('db:session:list', {})) as unknown[];
 
-      expect(mocks.stores.sessions.list).toHaveBeenCalledWith({
-        excludeModes: ['automation'],
-      });
+      expect(mocks.stores.sessions.list).toHaveBeenCalledWith({});
       expect(mocks.adapters.coreSessionToIpcRow).toHaveBeenCalledTimes(2);
       expect(result).toHaveLength(2);
       expect((result[0] as Record<string, unknown>).id).toBe('s1');

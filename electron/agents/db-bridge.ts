@@ -740,16 +740,7 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         throw new Error('Automation scheduler is not initialized');
       }
       const id = p.id as string;
-      const patch = p.patch as {
-        name?: string;
-        description?: string | null;
-        schedule?: { kind: 'at' | 'every' | 'cron'; at?: string; everyMs?: number; cronExpr?: string; cronTz?: string | null; endAt?: string | null };
-        prompt?: string;
-        inputParams?: Record<string, unknown>;
-        concurrencyPolicy?: 'skip' | 'parallel' | 'queue' | 'replace';
-        maxRetries?: number;
-        status?: 'enabled' | 'disabled' | 'error';
-      };
+      const patch = p.patch as import('../automation/types').UpdateAutomationCronInput;
       return scheduler.updateCron(id, patch);
     }
 
