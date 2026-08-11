@@ -24,7 +24,7 @@ import {
   reentryReminder,
   exitReminder,
 } from './reminders.js';
-import { persistSnapshot } from './persistence.js';
+import { persistSnapshot, restoreTracker } from './persistence.js';
 
 /**
  * Duck-typed view of a plan-mode tracker (`PlanModeTracker`, plan 413b).
@@ -84,6 +84,17 @@ export class ModeCoordinator {
   injectTurnReminders(messages: unknown[], seqIndex: number): void {
     for (const tracker of this.engine.list()) {
       if (!isPlanReminderTracker(tracker)) continue;
+      // MVP enter path: the coordinator is built only when a tracker-bearing
+      // session mode is active this turn, so a tracker still `inactive` here
+      // means the mode just became active — advance it to `pending` so the
+      // pending case below activates it and injects the full/reentry reminder.
+      // A tracker that just completed a deferred exit (armed exit notice) stays
+      // out of plan mode until a fresh activation, so skip entering it.
+      // (Single registered tracker today, so this is exactly the active one;
+      // a multi-mode engine must scope this by the turn's active mode ids.)
+      if (tracker.state() === 'inactive' && !tracker.hasPendingExitReminder()) {
+        tracker.transition('enter');
+      }
       const state = tracker.state();
       if (state === 'pending' && !tracker.hasPendingActivation()) {
         const reentry = tracker.isReentry();
@@ -174,6 +185,20 @@ export class ModeCoordinator {
       .list()
       .filter((t) => t.shouldInjectReminder())
       .map((t) => t.id);
+  }
+
+  /**
+   * Restore each registered tracker from its persisted snapshot for this
+   * session (plan 413c read path). Called once per streamChat, after the
+   * coordinator is built and before any per-turn reminder injection, so a
+   * restart resumes plan mode where it left off. Best-effort: restoreTracker
+   * swallows DB/IPC failures and folds unstable states (`pending` /
+   * `exit_pending`) to `inactive`, leaving the tracker initial on any miss.
+   */
+  async restore(): Promise<void> {
+    for (const tracker of this.engine.list()) {
+      await restoreTracker(tracker, this.sessionId);
+    }
   }
 
   /** The engine backing this coordinator (exposed for tests / wiring). */
