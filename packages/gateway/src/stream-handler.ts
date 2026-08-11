@@ -284,8 +284,24 @@ const REASONING_MARKERS = [
   'i do not have',
 ] as const;
 
+// Tagless Chinese reasoning preamble, e.g.
+// "用户只是打招呼，保持简短友好回复即可。你好！有什么可以帮你的？"
+// Requires BOTH a user-action opener and a "保持/只需…即可" closer so legit
+// answers that merely start with "用户" are not stripped.
+const CHINESE_REASONING_RE =
+  /^(用户(?:只是|只|就|刚才|刚)?(?:打了个招呼|打个招呼|打招呼|问了问|问了|提问|发来消息|发消息|请求|想要)[^。！？]{0,40}(?:保持|只需|简单|直接|简短)[^。！？]{0,20}即可[。！？]?)/;
+
 export function stripReasoningPrefix(text: string): string {
   if (!text) return text;
+
+  // Tagless Chinese preamble first (first CJK char is at index 0, so the
+  // Latin-prefix rule below cannot fire).
+  const zhMatch = text.match(CHINESE_REASONING_RE);
+  if (zhMatch && zhMatch[0].length < text.length - 1) {
+    console.warn(`[StreamHandler] stripped Chinese reasoning prefix (${zhMatch[0].length} chars)`);
+    return text.slice(zhMatch[0].length).trimStart();
+  }
+
   const cjkIndex = text.search(CJK_RE);
   // No CJK answer, or the prefix is too short to be a preamble.
   if (cjkIndex < 10) return text;
