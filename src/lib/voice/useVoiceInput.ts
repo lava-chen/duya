@@ -10,6 +10,13 @@ export interface UseVoiceInputOptions {
   onText: (text: string, kind: 'interim' | 'final') => void;
   /** Called when the utterance is cancelled (no speech / user cancel). */
   onCancelled?: (reason: string) => void;
+  /**
+   * Called when the STT environment is not ready (model_not_ready) and the
+   * user taps the mic. Lets the UI auto-inject a setup-guide message so the
+   * agent configures whisper via the `voice-setup` skill. Fired per attempt;
+   * the caller is responsible for de-duplication.
+   */
+  onNeedsSetup?: () => void;
 }
 
 export interface UseVoiceInputResult {
@@ -22,15 +29,17 @@ export interface UseVoiceInputResult {
   cancel: () => Promise<void>;
 }
 
-export function useVoiceInput({ onText, onCancelled }: UseVoiceInputOptions): UseVoiceInputResult {
+export function useVoiceInput({ onText, onCancelled, onNeedsSetup }: UseVoiceInputOptions): UseVoiceInputResult {
   const [status, setStatus] = useState<VoiceStatus>('idle');
   const [errorCode, setErrorCode] = useState<VoiceErrorCode | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const onTextRef = useRef(onText);
   const onCancelledRef = useRef(onCancelled);
+  const onNeedsSetupRef = useRef(onNeedsSetup);
   onTextRef.current = onText;
   onCancelledRef.current = onCancelled;
+  onNeedsSetupRef.current = onNeedsSetup;
 
   const captureRef = useRef<import('./voice-capture').VoiceCapture | null>(null);
   const statusRef = useRef<VoiceStatus>('idle');
@@ -86,6 +95,9 @@ export function useVoiceInput({ onText, onCancelled }: UseVoiceInputOptions): Us
       setErrorCode('model_not_ready');
       setErrorMessage(`STT model not ready: ${cfg.model}`);
       setStatusSafe('error');
+      // Notify the UI that the environment needs setup so it can auto-inject
+      // a guide message (Phase 3 of Plan 411).
+      onNeedsSetupRef.current?.();
       return;
     }
 

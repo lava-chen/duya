@@ -11,11 +11,14 @@ import { IconButton } from '@/components/ui/IconButton';
 export interface VoiceButtonProps {
   onTranscription: (text: string, kind: 'interim' | 'final') => void;
   disabled?: boolean;
+  /** Called when the STT environment is not ready (model_not_ready). */
+  onNeedsSetup?: () => void;
 }
 
-export function VoiceButton({ onTranscription, disabled }: VoiceButtonProps) {
+export function VoiceButton({ onTranscription, disabled, onNeedsSetup }: VoiceButtonProps) {
   const { status, supported, errorCode, errorMessage, start, stop, cancel } = useVoiceInput({
     onText: onTranscription,
+    onNeedsSetup,
   });
 
   const recording = status === 'recording' || status === 'permission-pending';
