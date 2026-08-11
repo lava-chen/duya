@@ -115,6 +115,15 @@ interface MessageInputProps {
   conductorEnabled?: boolean;
   onConductorChange?: (enabled: boolean) => void;
   /**
+   * Plan 413e: plan-task is a session-level toggle persisted to
+   * `sessions.extensions.plan_mode_enabled` (mirrors conductor). The prop
+   * is the DB-restored value; changes flow up via `onPlanModeChange` so
+   * ChatView can persist them. The popover toggle keeps this state across
+   * messages — `clearMessageModes` preserves plan-task after each send.
+   */
+  planModeEnabled?: boolean;
+  onPlanModeChange?: (enabled: boolean) => void;
+  /**
    * Plan 224 follow-up: agent-initiated runtime plan mode (set by the
    * agent calling EnterPlanMode / SwitchMode tool). Visually merged
    * with the popover plan-task chip — both drive the same blue glow
@@ -142,27 +151,30 @@ interface EffortOption {
 }
 
 /**
- * Pick the first message-level mode from an activeModes set.
+ * Pick the sendable mode from an activeModes set.
  *
- * Message-level modes (plan-task, research) are passed to `onSend` as the
- * `mode` argument; the agent reads this to resolve its mode dispatch.
- * Session-level modes (conductor) are passed separately as `conductorMode`.
- * At most one message-level mode is active at a time (enforced by
- * `MODE_EXCLUSIVE_WITH`), so returning the first match is unambiguous.
+ * plan-task (session-level) and research (message-level) are passed to
+ * `onSend` as the `mode` argument; the agent reads this to resolve its
+ * mode dispatch. plan-task must travel with every send so the agent keeps
+ * activating its plan tracker. Conductor is excluded here — it is the only
+ * mode with its own flag (`conductorMode`).
+ * At most one sendable mode (plan-task | research) is active at a time
+ * (enforced by `MODE_EXCLUSIVE_WITH`), so returning the first non-conductor
+ * match is unambiguous.
  */
-function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
+export function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
   for (const mode of activeModes) {
-    if (MODE_KIND[mode] === 'message') return mode;
+    if (mode !== 'conductor') return mode;
   }
   return undefined;
 }
 
 /**
- * State updater that clears message-level modes (plan-task, research)
- * while keeping session-level modes (conductor). Used after each send
- * so per-message modes reset but conductor persists across messages.
+ * State updater that clears message-level modes (research) while keeping
+ * session-level modes (conductor, plan-task). Used after each send so
+ * per-message modes reset but session toggles persist across messages.
  */
-function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
+export function clearMessageModes(prev: Set<ModeModifierId>): Set<ModeModifierId> {
   const next = new Set<ModeModifierId>();
   for (const mode of prev) {
     if (MODE_KIND[mode] === 'session') {
@@ -265,6 +277,8 @@ export function MessageInput({
   messages = [],
   conductorEnabled,
   onConductorChange,
+  planModeEnabled,
+  onPlanModeChange,
   agentPlanMode = false,
   onCompact,
   isCompacting,
@@ -326,14 +340,17 @@ export function MessageInput({
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
   // Plan 224 Phase 5: unified activeModes set. Holds all active popover
-  // modes (plan-task | research | conductor). Conductor (session-level)
-  // is synced with the `conductorEnabled` prop via the effect below;
-  // plan-task/research (message-level) are pure local state cleared
-  // after each send.
+  // modes (plan-task | research | conductor). Conductor and plan-task
+  // (session-level) are synced with the `conductorEnabled` / `planModeEnabled`
+  // props via the effects below; research (message-level) is pure local
+  // state cleared after each send.
   const [activeModes, setActiveModes] = useState<Set<ModeModifierId>>(new Set());
   // Tracks the last known conductor slot state to prevent sync loops
   // between the `conductorEnabled` prop and `activeModes`.
   const conductorSlotRef = useRef<boolean>(false);
+  // Plan 413e: same slot guard for the plan-task session toggle
+  // (`planModeEnabled` prop ↔ activeModes).
+  const planModeSlotRef = useRef<boolean>(false);
   // Mirror activeModes in a ref so handleToggleMode can read the latest
   // value synchronously without adding activeModes to its dependency
   // array. This also lets us call onConductorChange OUTSIDE the
@@ -344,9 +361,9 @@ export function MessageInput({
   activeModesRef.current = activeModes;
 
   // Plan 224 follow-up: unified plan-mode indicator. Active when the
-  // user manually toggled Plan Mode in the popover (message-level
-  // plan-task) OR when the agent self-entered plan mode via the
-  // EnterPlanMode / SwitchMode tool (session-level, surfaced via the
+  // user toggled Plan Mode in the popover (plan 413e: now a session-level
+  // toggle persisted to DB) OR when the agent self-entered plan mode via
+  // the EnterPlanMode / SwitchMode tool (session-level, surfaced via the
   // agentPlanMode prop). Both paths drive the same blue glow + chip.
   const planModeActive = activeModes.has('plan-task') || agentPlanMode;
 
@@ -373,10 +390,29 @@ export function MessageInput({
     });
   }, [conductorEnabled]);
 
-  // Unified mode toggle — applies mutual-exclusion rules. Message-level
-  // modes (plan-task/research) are pure local state; conductor persistence
-  // is handled by explicitly calling `onConductorChange` here (user action)
-  // rather than via an effect, to avoid the render-frame race described above.
+  // Plan 413e: sync the plan-task slot from the prop (DB is the source of
+  // truth for the session-level plan toggle). Mirrors the conductor sync
+  // above — one-way (prop → state); the reverse path is handled in
+  // `handleToggleMode` via `onPlanModeChange`.
+  useEffect(() => {
+    const next = !!planModeEnabled;
+    if (next === planModeSlotRef.current) return;
+    planModeSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasPlan = prev.has('plan-task');
+      if (next === hasPlan) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('plan-task');
+      else updated.delete('plan-task');
+      return updated;
+    });
+  }, [planModeEnabled]);
+
+  // Unified mode toggle — applies mutual-exclusion rules. Research is pure
+  // local state; conductor and plan-task persistence is handled by
+  // explicitly calling `onConductorChange` / `onPlanModeChange` here (user
+  // action) rather than via an effect, to avoid the render-frame race
+  // described above.
   const handleToggleMode = useCallback((mode: ModeModifierId) => {
     const prev = activeModesRef.current;
     // Block activation if it conflicts with an already-active mode.
@@ -384,20 +420,25 @@ export function MessageInput({
       return;
     }
     const next = toggleModeInSet(prev, mode);
-    // Persist conductor changes to the parent (DB) immediately. We compare
-    // against `prev` (not `next`) to detect the actual toggle direction.
-    // NOTE: onConductorChange MUST be called outside the setActiveModes
-    // updater — updaters run during render, and calling a parent setState
-    // from inside one throws "Cannot update a component while rendering a
-    // different component".
+    // Persist conductor/plan-task changes to the parent (DB) immediately.
+    // We compare against `prev` (not `next`) to detect the actual toggle
+    // direction. NOTE: these callbacks MUST be called outside the
+    // setActiveModes updater — updaters run during render, and calling a
+    // parent setState from inside one throws "Cannot update a component
+    // while rendering a different component".
     if (mode === 'conductor') {
       const willEnable = !prev.has('conductor');
       conductorSlotRef.current = willEnable;
       onConductorChange?.(willEnable);
     }
+    if (mode === 'plan-task') {
+      const willEnable = !prev.has('plan-task');
+      planModeSlotRef.current = willEnable;
+      onPlanModeChange?.(willEnable);
+    }
     setActiveModes(next);
     textareaRef.current?.focus();
-  }, [onConductorChange]);
+  }, [onConductorChange, onPlanModeChange]);
 
   // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
   const [isDraggingOver, setIsDraggingOver] = useState(false);

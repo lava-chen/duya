@@ -59,8 +59,9 @@ import path from 'node:path';
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
-import { modeModifierRegistry } from '../modes/index.js';
+import { modeModifierRegistry, modeTrackerEngine } from '../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '../modes/index.js';
+import { ModeCoordinator } from '../modes/engine/index.js';
 import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
 
 import { ToolRegistry } from '../tool/registry.js';
@@ -213,6 +214,8 @@ export class duyaAgent {
    * `state` (read by mode prompt builders and hooks).
    */
   private modeCtx?: ModeModifierContext;
+  /** Mode state-machine coordinator (plan 413d). Rebuilt per streamChat call. */
+  private modeCoordinator?: ModeCoordinator;
   /**
    * Phase 2: optional ProviderRuntimeConfig delivered by the main
    * process. The agent currently does not consume it directly (the
@@ -611,6 +614,22 @@ export class duyaAgent {
       this.baseSystemPromptWithoutModes = undefined;
     }
 
+    // Plan 413d: build the mode state-machine coordinator only when a
+    // session-level mode with a tracker is active. Rebuilt per streamChat
+    // call (same lifecycle as modeCtx); the trackers themselves are engine
+    // singletons that survive across calls, so state persists between turns.
+    this.modeCoordinator =
+      this.resolvedModes && this.resolvedModes.modes.some((m) => m.tracker)
+        ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '')
+        : undefined;
+
+    // Plan 413c: restore persisted tracker state for this session before any
+    // per-turn reminder injection (crash/restart recovery). Best-effort —
+    // restoreTracker swallows DB/IPC failures and leaves the tracker initial.
+    if (this.modeCoordinator) {
+      await this.modeCoordinator.restore();
+    }
+
     let turnCount = 0;
     const maxTurns = options?.maxTurns ?? 100;
     let runtimePromptMessageId: string | null = null;
@@ -724,6 +743,10 @@ export class duyaAgent {
         }
         systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
       }
+
+      // Plan 413d: safe point to flush a buffered mid-turn mode activation
+      // reminder before this turn's per-turn reminders are injected below.
+      this.modeCoordinator?.refreshTurn(messages, seqIndex);
 
       // A discoverable tool receives the exact same full schema object that
       // an always-exposed tool receives. If its executor also provides a
@@ -947,6 +970,10 @@ export class duyaAgent {
       // hard_replace: the replacement runtime_context was already pushed by
       // _claimMailboxAtCheckpoint; fall through to the LLM call with it in
       // the message history.
+
+      // Plan 413d: inject per-turn mode reminders AFTER mailbox guidance so
+      // the model sees mode rules before any external instructions.
+      this.modeCoordinator?.injectTurnReminders(messages, seqIndex);
 
       // Optional per-request wall-clock timeout (curator + callers that opt
       // in via llmRequestTimeoutMs). Aborts a single LLM call that overruns
@@ -1369,6 +1396,12 @@ export class duyaAgent {
           if (finalMailboxDecision.action === 'continue' && finalMailboxDecision.absorbed) {
             continue;
           }
+
+          // Plan 413d: round-end mode transitions + snapshot persistence
+          // (e.g. plan's deferred exit landing now that the in-flight turn
+          // has ended). Runs before _commitMessages so persistence is not
+          // coupled to message commit.
+          await this.modeCoordinator?.onRoundEnd();
 
           // Todo gate: before finalizing, if pending/in-progress tasks remain,
           // inject a steering message asking the model to continue instead of

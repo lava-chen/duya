@@ -248,6 +248,41 @@ export const goalDb = {
     sendDbRequest('goal:listByStatus', { status }),
 };
 
+// ==================== Mode State Operations ====================
+// Plan 413c: per (session, mode) ModeTracker snapshot. The agent persists a
+// snapshot after a tracker state transition and restores it on session resume
+// (see modes/engine/persistence.ts). `snapshotJson` carries the full
+// `ModeStateSnapshot` payload; `status`/`reminderCount` mirror query columns.
+
+/** Row shape of the core-db `mode_state_snapshots` table (IPC view). */
+export interface ModeStateRow {
+  sessionId: string;
+  mode: string;
+  status: string;
+  reminderCount: number;
+  snapshotJson: string;
+  updatedAt: number;
+}
+
+export const modeStateDb = {
+  get: (sessionId: string, mode: string): Promise<ModeStateRow | null> =>
+    sendDbRequest('modeState:get', { sessionId, mode }) as Promise<ModeStateRow | null>,
+
+  upsert: (input: {
+    sessionId: string;
+    mode: string;
+    status: string;
+    snapshotJson: string;
+    reminderCount?: number;
+  }): Promise<void> => sendDbRequest('modeState:upsert', input) as Promise<void>,
+
+  setStatus: (input: { sessionId: string; mode: string; status: string }): Promise<void> =>
+    sendDbRequest('modeState:setStatus', input) as Promise<void>,
+
+  listBySession: (sessionId: string): Promise<ModeStateRow[]> =>
+    sendDbRequest('modeState:listBySession', { sessionId }) as Promise<ModeStateRow[]>,
+};
+
 // ==================== Task Operations ====================
 
 export const taskDb = {

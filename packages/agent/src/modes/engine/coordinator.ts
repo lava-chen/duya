@@ -1,21 +1,55 @@
 /**
  * ModeCoordinator — runtime orchestrator for mode trackers (plan 413).
  *
- * Plan 413a ships the skeleton: constructor and method signatures are
- * final, but the bodies are no-ops / pass-throughs until plan 413d wires
- * them into the `DuyaAgent.streamChat` turn loop. Keeping them
- * non-throwing means nothing crashes if a stub is invoked before 413d
- * lands, and the skeleton can be compiled and unit-tested independently.
- *
- * Responsibilities (implemented in 413d):
+ * Plan 413a shipped the skeleton; plan 413d implements the bodies and wires
+ * them into the `DuyaAgent.streamChat` turn loop. Responsibilities:
  *  - `injectTurnReminders` : per-turn `<system-reminder>` injection
  *  - `onRoundEnd`          : round-end transitions + persist
  *  - `refreshTurn`         : mid-turn buffered-reminder flush
  *  - `filterTools`         : state-based runtime tool gating
- *  - `resolveTurnMode`     : synthetic/user turn arbitration
+ *  - `resolveTurnMode`     : synthetic/user turn arbitration (MVP)
+ *
+ * MVP scope is plan-task only: `PlanModeTracker` (plan 413b) is the single
+ * registered tracker. Future state machines (e.g. goal) hook in by exposing
+ * the same reminder-tracker duck-type.
  */
 
+import { randomUUID } from 'crypto';
 import type { ModeTrackerEngine } from './engine.js';
+import type { ModeTracker } from './tracker.js';
+import {
+  renderReminder,
+  fullReminder,
+  sparseReminder,
+  reentryReminder,
+  exitReminder,
+} from './reminders.js';
+import { persistSnapshot, restoreTracker } from './persistence.js';
+
+/**
+ * Duck-typed view of a plan-mode tracker (`PlanModeTracker`, plan 413b).
+ * The {@link ModeTracker} contract only pins the base state machine; the
+ * reminder/gating surface below is plan-specific and detected at runtime.
+ */
+interface PlanReminderTracker extends ModeTracker<string, string, unknown> {
+  isReentry(): boolean;
+  shouldUseFullReminder(): boolean;
+  hasPendingExitReminder(): boolean;
+  hasPendingActivation(): boolean;
+  takePendingActivation(): string | null;
+  recordReminderInjected(): void;
+  clearPendingExitReminder(): void;
+  completeDeferredExit(): boolean;
+}
+
+function isPlanReminderTracker(
+  t: ModeTracker<string, string, unknown>,
+): t is PlanReminderTracker {
+  return typeof (t as PlanReminderTracker).shouldUseFullReminder === 'function';
+}
+
+/** Write/execute tools gated out while a tracker is `canGateTools()`-active. */
+const GATED_WRITE_TOOLS = new Set(['edit', 'write', 'bash', 'powershell', 'module']);
 
 export class ModeCoordinator {
   constructor(
@@ -24,41 +58,150 @@ export class ModeCoordinator {
   ) {}
 
   /**
+   * Append a transient `<system-reminder>` message to the working message
+   * array. Same shape as mailbox guidance: `role: 'user'`, `seq_index` set,
+   * filtered out of persistence by the `persistableMessages` path.
+   */
+  private pushReminder(messages: unknown[], seqIndex: number, content: string): void {
+    messages.push({
+      id: randomUUID(),
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+      seq_index: seqIndex,
+    });
+  }
+
+  /**
    * Per-turn LLM-call preamble: render and inject reminders for every
-   * active tracker (plan 413d). Skeleton in 413a — no-op.
+   * tracker, mirroring grok's `inject_plan_mode_reminders` three cases:
+   *  1. `pending` → activate + full/reentry reminder, persist the transition
+   *  2. `active`  → full/sparse by `shouldUseFullReminder()` alternation
+   *  3. armed exit notice → one-shot exit reminder
+   * Only runs for trackers currently due a reminder — each case is gated by
+   * tracker state, so no reminder is injected on an idle tracker.
    */
   injectTurnReminders(messages: unknown[], seqIndex: number): void {
-    // Implemented in plan 413d.
-    void messages;
-    void seqIndex;
+    for (const tracker of this.engine.list()) {
+      if (!isPlanReminderTracker(tracker)) continue;
+      // MVP enter path: the coordinator is built only when a tracker-bearing
+      // session mode is active this turn, so a tracker still `inactive` here
+      // means the mode just became active — advance it to `pending` so the
+      // pending case below activates it and injects the full/reentry reminder.
+      // A tracker that just completed a deferred exit (armed exit notice) stays
+      // out of plan mode until a fresh activation, so skip entering it.
+      // (Single registered tracker today, so this is exactly the active one;
+      // a multi-mode engine must scope this by the turn's active mode ids.)
+      if (tracker.state() === 'inactive' && !tracker.hasPendingExitReminder()) {
+        tracker.transition('enter');
+      }
+      const state = tracker.state();
+      if (state === 'pending' && !tracker.hasPendingActivation()) {
+        const reentry = tracker.isReentry();
+        if (tracker.transition('activate')) {
+          // Transition happened → persist so a restart resumes as active.
+          void persistSnapshot(tracker, this.sessionId);
+          this.pushReminder(
+            messages,
+            seqIndex,
+            renderReminder(reentry ? reentryReminder() : fullReminder()),
+          );
+          tracker.recordReminderInjected();
+        }
+      } else if (state === 'active') {
+        this.pushReminder(
+          messages,
+          seqIndex,
+          renderReminder(tracker.shouldUseFullReminder() ? fullReminder() : sparseReminder()),
+        );
+        tracker.recordReminderInjected();
+      }
+      if (tracker.hasPendingExitReminder()) {
+        this.pushReminder(messages, seqIndex, renderReminder(exitReminder()));
+        tracker.clearPendingExitReminder();
+      }
+    }
   }
 
   /**
-   * Round end: state transitions (e.g. plan's `exit_pending -> inactive`)
-   * + snapshot persistence (plan 413d). Skeleton in 413a — no-op.
+   * Round end: state transitions + snapshot persistence. MVP covers plan's
+   * `exit_pending → inactive` (the deferred exit completes now that the
+   * in-flight turn has ended). Persists only when a transition happened.
    */
-  onRoundEnd(): void {
-    // Implemented in plan 413d.
+  async onRoundEnd(): Promise<void> {
+    for (const tracker of this.engine.list()) {
+      if (!isPlanReminderTracker(tracker)) continue;
+      const before = tracker.state();
+      if (before === 'exit_pending') {
+        tracker.completeDeferredExit();
+      }
+      if (tracker.state() !== before) {
+        await persistSnapshot(tracker, this.sessionId);
+      }
+    }
   }
 
   /**
-   * Turn-loop top: flush buffered mid-turn activation reminders at a safe
-   * point (plan 413d). Skeleton in 413a — no-op.
+   * Turn-loop safe point: flush a buffered mid-turn activation reminder
+   * exactly once. `takePendingActivation` consumes the buffer, so a restart
+   * never replays it. Real UI triggering arrives with plan 413e; the flush
+   * path is covered here by unit tests.
    */
-  refreshTurn(): void {
-    // Implemented in plan 413d.
+  refreshTurn(messages: unknown[], seqIndex: number): void {
+    for (const tracker of this.engine.list()) {
+      if (!isPlanReminderTracker(tracker)) continue;
+      const buffered = tracker.takePendingActivation();
+      if (buffered) {
+        this.pushReminder(messages, seqIndex, buffered);
+        tracker.recordReminderInjected();
+      }
+    }
   }
 
   /**
    * State-based runtime tool gating: narrow the tool set when any active
-   * tracker has `canGateTools() === true` (plan 413d). Skeleton in 413a —
-   * pass-through until then.
+   * tracker has `canGateTools() === true`. Composes ON TOP of the static
+   * `tools.block` from `applyModes` — it only reduces the set further based
+   * on runtime state (e.g. releasing write tools when plan exits). MVP is
+   * implemented + unit-tested; wiring it into the LLM tool chain lands with
+   * the frontend session toggle (plan 413e).
    */
-  filterTools(tools: unknown[]): unknown[] {
-    return tools;
+  filterTools<T extends { name: string }>(tools: T[]): T[] {
+    const gated = this.engine.list().some((t) => t.canGateTools());
+    if (!gated) return tools;
+    return tools.filter((t) => !GATED_WRITE_TOOLS.has(t.name));
   }
 
-  /** The engine backing this coordinator (exposed for tests / 413d wiring). */
+  /**
+   * Synthetic/user turn arbitration (MVP simplified). Synthetic turns (goal
+   * continuation, background wake) inherit the session's active modes without
+   * reconciling tracker state; real user turns are driven by the frontend's
+   * `options.mode`, resolved by `DuyaAgent` before this coordinator is built.
+   * Full `_meta.mode` reconciliation is deferred. Returns the ids of trackers
+   * currently due a reminder — callers treat those as the active modes.
+   */
+  resolveTurnMode(_origin: 'user' | 'synthetic'): string[] {
+    return this.engine
+      .list()
+      .filter((t) => t.shouldInjectReminder())
+      .map((t) => t.id);
+  }
+
+  /**
+   * Restore each registered tracker from its persisted snapshot for this
+   * session (plan 413c read path). Called once per streamChat, after the
+   * coordinator is built and before any per-turn reminder injection, so a
+   * restart resumes plan mode where it left off. Best-effort: restoreTracker
+   * swallows DB/IPC failures and folds unstable states (`pending` /
+   * `exit_pending`) to `inactive`, leaving the tracker initial on any miss.
+   */
+  async restore(): Promise<void> {
+    for (const tracker of this.engine.list()) {
+      await restoreTracker(tracker, this.sessionId);
+    }
+  }
+
+  /** The engine backing this coordinator (exposed for tests / wiring). */
   getEngine(): ModeTrackerEngine {
     return this.engine;
   }
