@@ -1452,6 +1452,42 @@ the run control plane.
 - `projectionContent.ts` Phase 2 renderers — replaced by `curation_projection.ts`
 - `reconcile.ts` Phase 2 paths — downgraded to Stage 1 file-integrity check only
 
+**Curation architecture pivot (Plan 417, 2026-08-11): single-shot LLM**
+
+The streaming LLM-curator agent was the root cause of the Phase 2 hang:
+MiniMax-M3 emits a `result` SSE event (with usage) but never `message_stop`,
+leaving `for await ... streamChat` blocked until `withHardDeadline` fired
+20 min later. Plan 417 replaces it with a deterministic single-shot path:
+
+- `electron/memory/curation_single_shot.ts` — `runSingleShotCuration`: assembles
+  a JSON prompt (1-3 rollout summaries + existing target area files), calls
+  `llmClient.chat()` (non-streaming, 4 min `AbortController` timeout), parses
+  the LLM's JSON response, applies actions. Never touches the AgentProcessPool.
+- `electron/memory/curation_response_parser.ts` — Zod-validated response
+  contract: `decisions[]` (absorbed/no_signal/uncertain) + `actions[]`
+  (append/replace/no_op) with strict `area_path` whitelist.
+- `electron/memory/curation_file_writer.ts` — deterministic file writes with
+  path-traversal defense + atomic `.tmp`→rename.
+- `electron/memory/curation_projection_refresh.ts` + `curation_projection_live.ts`
+  — regenerate MEMORY.md / summary.md / global/{areas,people}/index.md from the
+  live `global/` layout after each successful cycle (fixes the Aug-3 freeze).
+- `curation_publish_orchestrator.ts` — cycle now: abandonExpiredRuns →
+  queryEligibleInputs → claimRun → git backup → single-shot → dispositions →
+  completeRun/failRun. `failRun` leaves inputs NULL (re-eligible).
+
+**Retired (Plan 417):**
+
+- `curation_agent_runner.ts` — streaming agent runner (deleted)
+- `curation_prompt.ts` — CURATOR_SYSTEM_PROMPT / buildCuratorInitialMessage
+  (deleted; the single-shot prompt lives in curation_single_shot.ts)
+- `curation_publisher.ts` / `curation_staging.ts` — Plan 404 staging publisher
+  (now unreferenced by the live flow; kept for historical reference)
+
+**Live layout (Plan 406 + 417):**
+
+- `memory/global/areas/<slug>.md` — area records (no YAML; key = `area:<slug>`)
+- `memory/global/people/<slug>.md` — person records (key = `person:<slug>`)
+
 **Consumers switched to file manifest:**
 
 - Stage 1 `queryExistingKeys` (`packages/agent/src/memory-rollout/extractor.ts`) — reads `canonical_key` from active files
