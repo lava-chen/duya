@@ -18,6 +18,7 @@ import {
   SquareHalfIcon,
   ArrowsInLineVerticalIcon,
   TelescopeIcon,
+  PinIcon,
 } from '@/components/icons';
 
 // Commands removed from the popover (handled elsewhere or deleted).
@@ -210,6 +211,15 @@ export function useSlashCommands(opts: {
         icon: SquareHalfIcon,
         kind: 'mode' as const,
         modeValue: 'conductor',
+        group: 'mode' as const,
+      },
+      {
+        label: 'Goal',
+        value: '__mode_goal',
+        description: isZh ? '自主多轮目标追踪与核验' : 'Self-driven multi-round goal tracking with verification',
+        icon: PinIcon,
+        kind: 'mode' as const,
+        modeValue: 'goal',
         group: 'mode' as const,
       },
     ];

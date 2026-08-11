@@ -248,6 +248,53 @@ export interface AgentModeChangedEvent {
   reason?: string;
 }
 
+/**
+ * Plan 411: emitted by goal tooling after a goal state transition or
+ * verification round. Carries the tracker's public state so the renderer
+ * can surface a goal status card (objective / status / tokens).
+ * Forwarded by router.ts as the SSE `goal_updated` event.
+ */
+export interface GoalUpdatedEvent {
+  type: 'chat:goal_updated';
+  sessionId: string;
+  state: string;
+  phase: string;
+  objective: string;
+  tokensUsed: number;
+  tokenBudget: number;
+  consecutiveNotAchieved: number;
+  gapsSummary?: string;
+  strategyProposal?: string;
+}
+
+/** Build the worker goal_updated payload from explicit tracker state. */
+export function buildGoalUpdatedEvent(
+  sessionId: string,
+  state: {
+    state: string;
+    phase: string;
+    objective: string;
+    tokensUsed: number;
+    tokenBudget: number;
+    consecutiveNotAchieved: number;
+    gapsSummary?: string;
+  },
+  extra?: { gapsSummary?: string; strategyProposal?: string },
+): GoalUpdatedEvent {
+  return {
+    type: 'chat:goal_updated',
+    sessionId,
+    state: state.state,
+    phase: state.phase,
+    objective: state.objective,
+    tokensUsed: state.tokensUsed,
+    tokenBudget: state.tokenBudget,
+    consecutiveNotAchieved: state.consecutiveNotAchieved,
+    gapsSummary: state.gapsSummary ?? extra?.gapsSummary,
+    strategyProposal: extra?.strategyProposal,
+  };
+}
+
 export interface AgentRetryEvent {
   type: 'chat:retry';
   sessionId: string;
@@ -369,6 +416,7 @@ export type WorkerEvent =
   | AgentErrorEvent
   | AgentStatusEvent
   | AgentModeChangedEvent
+  | GoalUpdatedEvent
   | AgentRetryEvent
   | AgentDbPersistedEvent
   | AgentTitleGeneratedEvent

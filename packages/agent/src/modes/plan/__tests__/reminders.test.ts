@@ -25,23 +25,27 @@ describe('renderReminder', () => {
 });
 
 describe('reminder templates', () => {
-  it('full reminder states the read-only contract and allowed tools', () => {
-    const text = fullReminder();
-    expect(text).toContain('read-only');
-    expect(text).toContain('Do NOT modify, create, or delete any files');
-    expect(text).toContain('read, glob, grep');
+  const PLAN_PATH = '/home/user/.duya/sessions/sess-1/plan.md';
+
+  it('full reminder points at the plan file and the only-editable rule', () => {
+    const text = fullReminder(PLAN_PATH);
+    expect(text).toContain('Plan Mode');
+    expect(text).toContain(PLAN_PATH);
+    expect(text).toContain('ONLY');
+    expect(text).toContain('file you are allowed to edit');
+    expect(text).toContain('exit_plan_mode');
   });
 
-  it('sparse reminder is a short read-only restatement', () => {
+  it('sparse reminder is a short plan-file restatement', () => {
     const text = sparseReminder();
-    expect(text.toLowerCase()).toContain('read-only');
     expect(text).toContain('Plan mode is still active');
+    expect(text).toContain('plan file');
   });
 
-  it('re-entry reminder announces a second entry into plan mode', () => {
-    const text = reentryReminder();
+  it('re-entry reminder announces a second entry and the plan path', () => {
+    const text = reentryReminder(PLAN_PATH);
     expect(text.toLowerCase()).toContain('plan mode again');
-    expect(text).toContain('read-only');
+    expect(text).toContain(PLAN_PATH);
   });
 
   it('exit reminder announces editing is allowed again', () => {
@@ -51,6 +55,6 @@ describe('reminder templates', () => {
   });
 
   it('sparse is meaningfully shorter than full (token saving)', () => {
-    expect(sparseReminder().length).toBeLessThan(fullReminder().length);
+    expect(sparseReminder().length).toBeLessThan(fullReminder(PLAN_PATH).length);
   });
 });

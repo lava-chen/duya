@@ -207,7 +207,20 @@ export type SSEEvent =
   | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number; diagnostic?: ParameterDiagnostic } }
   | { type: 'text_delta'; data: string }
   | { type: 'thinking_delta'; data: string }
-  | { type: 'mode_changed'; data: { mode: string; source: 'agent' | 'user'; reason?: string } };
+  | { type: 'mode_changed'; data: { mode: string; source: 'agent' | 'user'; reason?: string } }
+  | {
+      type: 'goal_updated';
+      data: {
+        state: string;
+        phase: string;
+        objective: string;
+        tokensUsed: number;
+        tokenBudget: number;
+        consecutiveNotAchieved: number;
+        gapsSummary?: string;
+        strategyProposal?: string;
+      };
+    };
 
 // ─── Message types (superset of packages/agent definitions) ───
 

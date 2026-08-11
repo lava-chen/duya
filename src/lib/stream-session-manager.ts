@@ -15,7 +15,7 @@ import type {
   ResearchPersistedSource,
   ResearchReportArtifact,
 } from '@/types/research';
-import type { PermissionRequestEvent, ModeChangedEvent } from '@/types/stream';
+import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions } from './agent-http-client';
@@ -402,6 +402,7 @@ interface SessionState {
   permissionListeners: Set<(request: PermissionRequestEvent) => void>;
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
+  goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
   dbPersistedListeners: Set<(event: PersistEvent) => void>;
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
@@ -481,7 +482,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -772,6 +773,7 @@ class StreamSessionManager {
         streamingEventsListeners: new Set(),
         permissionListeners: new Set(),
         modeChangedListeners: new Set(),
+        goalUpdatedListeners: new Set(),
         dbPersistedListeners: new Set(),
         idleTimeout: null,
         textEmitTimeout: null,
@@ -1270,6 +1272,16 @@ class StreamSessionManager {
           this.handleModeChangedEvent(sessionId, streamId, event.data as ModeChangedEvent | undefined);
           break;
 
+        case 'goal_updated':
+          // Plan 411: goal tracker state changed (start / verdict / pause /
+          // budget). Notify listeners so the UI can render a goal status card.
+          this.handleGoalUpdatedEvent(
+            sessionId,
+            streamId,
+            (event.data ?? event) as unknown as GoalUpdatedEvent | undefined,
+          );
+          break;
+
         case 'db:request':
           // Forward DB requests to agent server via IPC - don't handle here
           // The agent-server will route them to the database and forward responses
@@ -1666,6 +1678,29 @@ class StreamSessionManager {
     });
   }
 
+  /**
+   * Plan 411: goal tracker state broadcast (start / verdict / pause /
+   * budget). Notifies registered listeners so the UI can render a goal
+   * status card. The event carries the flat worker payload (state,
+   * objective, tokens, gaps…).
+   */
+  private handleGoalUpdatedEvent(
+    sessionId: string,
+    streamId: string,
+    data: GoalUpdatedEvent | undefined
+  ): void {
+    if (!data) return;
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.goalUpdatedListeners.forEach((listener) => {
+      try {
+        listener(data as GoalUpdatedEvent);
+      } catch (error) {
+        console.error(`[stream-session-manager] Goal updated listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
   private handleDoneEvent(sessionId: string, streamId: string): void {
     console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}`);
     const s = this.sessions.get(sessionId);
@@ -1992,6 +2027,22 @@ class StreamSessionManager {
     };
   }
 
+  /**
+   * Plan 411: subscribe to goal tracker state broadcasts (goal status
+   * card). Events are transient — a re-mount simply waits for the next
+   * transition.
+   */
+  subscribeToGoalUpdated(
+    sessionId: string,
+    listener: (event: GoalUpdatedEvent) => void
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.goalUpdatedListeners.add(listener);
+    return () => {
+      state.goalUpdatedListeners.delete(listener);
+    };
+  }
+
   subscribeToDbPersisted(
     sessionId: string,
     listener: (event: PersistEvent) => void
@@ -2041,6 +2092,7 @@ class StreamSessionManager {
       streamingEventsListeners: new Set(),
       permissionListeners: new Set(),
       modeChangedListeners: new Set(),
+      goalUpdatedListeners: new Set(),
       dbPersistedListeners: new Set(),
       idleTimeout: null,
       textEmitTimeout: null,
@@ -3083,6 +3135,9 @@ export const clearPendingPermission = (sessionId: string) =>
   streamSessionManager.clearPendingPermission(sessionId);
 export const subscribeToModeChanged = (sessionId: string, listener: (event: ModeChangedEvent) => void) =>
   streamSessionManager.subscribeToModeChanged(sessionId, listener);
+
+export const subscribeToGoalUpdated = (sessionId: string, listener: (event: GoalUpdatedEvent) => void) =>
+  streamSessionManager.subscribeToGoalUpdated(sessionId, listener);
 export const subscribeToDbPersisted = (sessionId: string, listener: (event: PersistEvent) => void) =>
   streamSessionManager.subscribeToDbPersisted(sessionId, listener);
 export const getSnapshot = (sessionId: string) => streamSessionManager.getSnapshot(sessionId);

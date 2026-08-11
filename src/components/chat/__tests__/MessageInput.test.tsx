@@ -45,6 +45,15 @@ vi.mock('@/components/icons', () => ({
   PlugIcon: () => null,
   SquareHalfIcon: () => null,
   ArrowsInLineVerticalIcon: () => null,
+  // Plan 416: InlineTaskRow renders these icons when there are
+  // tasks / git changes for the current turn.
+  CircleIcon: () => null,
+  SpinnerIcon: () => null,
+  GitBranchIcon: () => null,
+  // useSlashCommands references PinIcon in a popover item; the
+  // popover isn't open in any smoke test, but the icon is referenced
+  // during render so it must be in the mock.
+  PinIcon: () => null,
 }));
 
 vi.mock('@/components/chat/ModelSelector', () => ({
@@ -81,6 +90,15 @@ vi.mock('@/components/chat/FileAttachmentCard', () => ({
 
 vi.mock('@/components/chat/AttachmentBar', () => ({
   AttachmentBar: () => <div data-testid="attachment-bar" />,
+}));
+
+vi.mock('@/components/chat/InlineTaskRow', () => ({
+  // Plan 416: InlineTaskRow is rendered inside MessageInput when
+  // tasks/gitStatus props are passed. The smoke tests in this file
+  // don't exercise it, so we mock it out to keep the import chain
+  // slim (the real component pulls in usePanel → panels/registry →
+  // CanvasToolbar, which uses icons the icons mock doesn't define).
+  InlineTaskRow: () => null,
 }));
 
 vi.mock('@/components/chat/Popover', () => ({

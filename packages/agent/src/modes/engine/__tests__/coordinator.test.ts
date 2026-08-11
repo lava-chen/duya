@@ -17,7 +17,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ModeCoordinator } from '../coordinator.js';
 import { ModeTrackerEngine } from '../engine.js';
-import { PlanModeTracker } from '../plan-tracker.js';
+import { PlanModeTracker } from '../../plan/plan-tracker.js';
+import { resolvePlanFilePath } from '../../plan/plan-file-path.js';
 
 const mocks = vi.hoisted(() => ({
   modeStateDb: {
@@ -205,6 +206,51 @@ describe('ModeCoordinator', () => {
       const idle = new PlanModeTracker();
       const tools2 = [{ name: 'read' }, { name: 'write' }];
       expect(makeCoordinator(idle).filterTools(tools2)).toEqual(tools2);
+    });
+  });
+
+  describe('gateWriteTool', () => {
+    it('returns null when no tracker is gating', () => {
+      const idle = new PlanModeTracker();
+      const coordinator = makeCoordinator(idle);
+      expect(coordinator.gateWriteTool('write', { file_path: '/x/y.md' }, '/wd')).toBeNull();
+    });
+
+    it('returns null for non-write tools while plan mode is active', () => {
+      const gated = new PlanModeTracker();
+      activate(gated);
+      expect(makeCoordinator(gated).gateWriteTool('read', {}, '/wd')).toBeNull();
+      expect(makeCoordinator(gated).gateWriteTool('grep', {}, '/wd')).toBeNull();
+    });
+
+    it('allows edit/write only when the target resolves to the plan file', () => {
+      const gated = new PlanModeTracker();
+      activate(gated);
+      const coordinator = makeCoordinator(gated);
+      const planFile = resolvePlanFilePath('sess-1');
+      // Absolute path to the plan file → allow.
+      expect(coordinator.gateWriteTool('edit', { file_path: planFile, old_string: 'a', new_string: 'b' }, '/wd')).toBe('allow');
+      expect(coordinator.gateWriteTool('write', { file_path: planFile, content: 'x' }, '/wd')).toBe('allow');
+      // A different file → deny.
+      expect(coordinator.gateWriteTool('edit', { file_path: '/wd/src/main.ts', old_string: 'a', new_string: 'b' }, '/wd')).toBe('deny');
+      expect(coordinator.gateWriteTool('write', { file_path: '/other/plan.md', content: 'x' }, '/wd')).toBe('deny');
+    });
+
+    it('denies bash/powershell/module outright while plan mode is active', () => {
+      const gated = new PlanModeTracker();
+      activate(gated);
+      const coordinator = makeCoordinator(gated);
+      expect(coordinator.gateWriteTool('bash', { command: 'rm -rf /' }, '/wd')).toBe('deny');
+      expect(coordinator.gateWriteTool('powershell', { command: 'x' }, '/wd')).toBe('deny');
+      expect(coordinator.gateWriteTool('module', {}, '/wd')).toBe('deny');
+    });
+
+    it('denies edit/write with a missing or non-string file_path', () => {
+      const gated = new PlanModeTracker();
+      activate(gated);
+      const coordinator = makeCoordinator(gated);
+      expect(coordinator.gateWriteTool('edit', {}, '/wd')).toBe('deny');
+      expect(coordinator.gateWriteTool('write', { file_path: 42 }, '/wd')).toBe('deny');
     });
   });
 

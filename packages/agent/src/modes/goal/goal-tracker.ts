@@ -23,11 +23,12 @@
  *
  * Transitions are pure (no async I/O), idempotent, and return whether a
  * transition actually happened so the coordinator can decide whether to
- * persist. Snapshot restore folds the transient `verifying` state back
- * to `active` so a restart never resurrects a half-open verification.
+ * persist. Snapshot restore folds the transient `verifying` and self-driving
+ * `active` states to `user_paused` (grok safety model) so a restart never
+ * resurrects an unsupervised goal.
  */
 
-import type { ModeTracker } from './tracker.js';
+import type { ModeTracker } from '../engine/tracker.js';
 
 /** Goal lifecycle state (10 states, aligned with grok `goal_tracker.rs`). */
 export type GoalState =
@@ -78,6 +79,12 @@ export interface GoalSnapshot {
   gapsSummary?: string;
   gapFingerprint?: string;
   consecutiveNotAchieved: number;
+  /** Total verification runs attempted (plan 411 §2.3). */
+  classifierRunsAttempted: number;
+  /** Consecutive verifier rounds whose gap fingerprint did not change (stall detection). */
+  classifierStallCount: number;
+  /** Epoch millis of the last strategist run (throttles strategy reconstruction). */
+  lastStrategistFiredAt?: number;
   planFile?: string;
   changesBaselineCommit?: string;
 }
@@ -95,7 +102,7 @@ export type GoalEvent =
   | { type: 'stall' }
   | { type: 'infra_error' }
   | { type: 'pause'; message?: string }
-  | { type: 'resume' }
+  | { type: 'resume'; budget?: number }
   | { type: 'complete' }
   | { type: 'clear' };
 
@@ -145,6 +152,9 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
   private goalGapsSummary?: string;
   private goalGapFingerprint?: string;
   private notAchievedStreak = 0;
+  private classifierRuns = 0;
+  private stallCount = 0;
+  private strategistFiredAt?: number;
   private goalPlanFile?: string;
   private goalBaselineCommit?: string;
 
@@ -233,6 +243,12 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
       case 'blocked':
         switch (event.type) {
           case 'resume':
+            // Phase 4 polish: resuming from an automatic pause (stall / backoff /
+            // infra) or a user pause restarts the stall detector — the user's
+            // decision to continue is a fresh signal, so a resumed goal does not
+            // immediately re-pause on the same fingerprint. Budget carried over
+            // unchanged; `budget_limited` resume (below) can raise it.
+            this.stallCount = 0;
             return this.move('active', 'resume');
           case 'pause':
             // Already user_paused: idempotent no-op (message is refreshed
@@ -251,7 +267,19 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
         }
 
       case 'budget_limited':
-        // Terminal — only `clear` (or a fresh `start`) resets it.
+        // Terminal by default — but the user may raise the budget and resume
+        // (Phase 4 polish). `resume` with a new budget updates the cap first so
+        // the goal does not immediately re-trip the same exhausted budget.
+        if (event.type === 'resume') {
+          if (typeof event.budget === 'number' && event.budget > 0) {
+            this.goalTokenBudget = event.budget;
+          }
+          // If the budget was not raised, the coordinator will re-trip on the
+          // next usage report — that is the correct defense; the user must
+          // actually raise the budget to continue burning tokens.
+          this.stallCount = 0;
+          return this.move('active', 'resume');
+        }
         if (event.type === 'clear') return this.clear();
         if (event.type === 'start') return this.start(event.objective, event.budget);
         return false;
@@ -284,18 +312,30 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
       gapsSummary: this.goalGapsSummary,
       gapFingerprint: this.goalGapFingerprint,
       consecutiveNotAchieved: this.notAchievedStreak,
+      classifierRunsAttempted: this.classifierRuns,
+      classifierStallCount: this.stallCount,
+      lastStrategistFiredAt: this.strategistFiredAt,
       planFile: this.goalPlanFile,
       changesBaselineCommit: this.goalBaselineCommit,
     };
   }
 
   /**
-   * Restore from a snapshot with fold semantics (grok `from_snapshot`):
-   *  - `verifying` → `active` (a restart cannot resume an in-flight
-   *    verification panel; the goal continues working and the model can
-   *    re-report completion).
-   *  - everything else restores verbatim (paused / blocked / terminal
-   *    states are durable decisions the user made).
+   * Restore from a snapshot with grok `from_snapshot` fold semantics.
+   *
+   * Safety model (grok goal_tracker.rs): a restart must NEVER resurrect a
+   * self-driving goal. `Active` and the transient `verifying` both fold to
+   * `user_paused` so the user explicitly resumes after a crash — the goal
+   * never auto-continues burning tokens unsupervised. Other paused / blocked
+   * / terminal states restore verbatim (they are durable decisions).
+   *
+   * Same-process guard: `coordinator.restore()` runs at the START of every
+   * streamChat call, but this tracker is a process singleton whose in-memory
+   * state is authoritative across messages within one process. Restoring
+   * only applies on a cold start (current state still `idle`); otherwise the
+   * existing in-memory state is kept untouched so a mid-process restart of
+   * the coordinator cannot clobber a live goal.
+   *
    * Invalid snapshots throw so the persistence layer reports failure.
    */
   restore(raw: GoalSnapshot): void {
@@ -307,12 +347,24 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     ) {
       throw new Error(`invalid GoalSnapshot: ${JSON.stringify(raw)}`);
     }
+    // Same-process guard: the singleton already holds live state (a
+    // cross-message continuation), so a persisted snapshot is stale — do
+    // not clobber it. Only a cold start (state still idle) applies folds.
+    if (this.currentState !== 'idle') {
+      return;
+    }
     const state = raw.state as GoalState;
     const phase = raw.phase;
     if (typeof phase !== 'string' || !GOAL_PHASES.has(phase as GoalPhase)) {
       throw new Error(`invalid GoalSnapshot phase: ${JSON.stringify(raw.phase)}`);
     }
-    this.currentState = state === 'verifying' ? 'active' : state;
+    // Fold self-driving / in-flight states to a resumable pause (grok
+    // from_snapshot): a restart cannot resume an in-flight verification
+    // panel or an unsupervised active goal. Everything else is a durable
+    // user/terminal decision and restores verbatim.
+    const folded =
+      state === 'active' || state === 'verifying' ? 'user_paused' : state;
+    this.currentState = folded;
     this.currentPhase = this.currentState === 'idle' ? 'idle' : phase;
     this.goalObjective = typeof raw.objective === 'string' ? raw.objective : '';
     this.goalTokenBudget = numberOr(raw.tokenBudget, 0);
@@ -322,6 +374,9 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     this.workerRounds = numberOr(raw.totalWorkerRounds, 0);
     this.verifyRounds = numberOr(raw.totalVerifyRounds, 0);
     this.notAchievedStreak = numberOr(raw.consecutiveNotAchieved, 0);
+    this.classifierRuns = numberOr(raw.classifierRunsAttempted, 0);
+    this.stallCount = numberOr(raw.classifierStallCount, 0);
+    this.strategistFiredAt = numberOr(raw.lastStrategistFiredAt, 0) || undefined;
     this.historyLog = Array.isArray(raw.history)
       ? raw.history.slice(-GOAL_HISTORY_CAP)
       : [];
@@ -374,6 +429,22 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     return this.goalGapFingerprint;
   }
 
+  classifierRunsAttempted(): number {
+    return this.classifierRuns;
+  }
+
+  classifierStallCount(): number {
+    return this.stallCount;
+  }
+
+  lastStrategistFiredAt(): number | undefined {
+    return this.strategistFiredAt;
+  }
+
+  planFile(): string | undefined {
+    return this.goalPlanFile;
+  }
+
   history(): GoalHistoryEntry[] {
     return [...this.historyLog];
   }
@@ -401,10 +472,30 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     return this.goalTokenBudget > 0 && this.goalTokensHighWater >= this.goalTokenBudget;
   }
 
-  /** Record verifier gaps (Phase 2: `not_achieved` verdict output). */
-  setGaps(summary: string, fingerprint?: string): void {
+  /** Record verifier gaps (Phase 2: `not_achieved` verdict output).
+   *
+   * Phase 3 stall detection: when the new gap fingerprint equals the
+   * previous one, increment the stall counter (the same gaps keep
+   * coming back → likely whack-a-mole). A changed fingerprint resets
+   * the stall counter. Returns the updated stall count.
+   */
+  setGaps(summary: string, fingerprint?: string): number {
+    this.classifierRuns++;
     this.goalGapsSummary = summary;
-    if (fingerprint !== undefined) this.goalGapFingerprint = fingerprint;
+    if (fingerprint !== undefined) {
+      if (this.goalGapFingerprint === fingerprint) {
+        this.stallCount++;
+      } else {
+        this.stallCount = 0;
+      }
+      this.goalGapFingerprint = fingerprint;
+    }
+    return this.stallCount;
+  }
+
+  /** Mark a strategist run (throttled by `strategistEvery` in the evaluator). */
+  recordStrategistFired(): void {
+    this.strategistFiredAt = Date.now();
   }
 
   /** Pin the plan file the goal is executing against. */
@@ -432,6 +523,9 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     this.workerRounds = 0;
     this.verifyRounds = 0;
     this.notAchievedStreak = 0;
+    this.classifierRuns = 0;
+    this.stallCount = 0;
+    this.strategistFiredAt = undefined;
     this.goalPauseMessage = undefined;
     this.goalGapsSummary = undefined;
     this.goalGapFingerprint = undefined;
@@ -462,6 +556,9 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
     this.workerRounds = 0;
     this.verifyRounds = 0;
     this.notAchievedStreak = 0;
+    this.classifierRuns = 0;
+    this.stallCount = 0;
+    this.strategistFiredAt = undefined;
     this.goalPauseMessage = undefined;
     this.goalGapsSummary = undefined;
     this.goalGapFingerprint = undefined;

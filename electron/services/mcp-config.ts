@@ -65,3 +65,26 @@ export async function writeUserMcpToml(servers: readonly UserMcpTomlServer[]): P
   getConfigStore().set('mcp_servers', serverListToMcpServers(servers));
   await notifyMcpConfigChanged();
 }
+
+/**
+ * Wire up hot reload for MANUAL config.toml edits of `mcp_servers`.
+ *
+ * The GUI/CLI write paths already call `notifyMcpConfigChanged()` explicitly,
+ * but manually editing `~/.duya/config.toml` while DUYA is running bypasses
+ * them. ConfigStore now watches the file and reports the changed dotted paths;
+ * this handler forwards any `mcp_servers.*` change to the same reload path so
+ * the worker picks it up without a restart.
+ *
+ * Call once at startup. Returns an unsubscribe function.
+ */
+export function subscribeMcpConfigHotReload(): () => void {
+  const store = getConfigStore();
+  const handler = (changedPaths: string[]): void => {
+    const mcpChanged = changedPaths.some(
+      (p) => p === 'mcp_servers' || p.startsWith('mcp_servers.'),
+    );
+    if (mcpChanged) void notifyMcpConfigChanged();
+  };
+  store.setExternalChangeHandler(handler);
+  return () => store.setExternalChangeHandler(undefined);
+}

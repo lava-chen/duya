@@ -102,6 +102,7 @@ function mapEventType(eventType: string): string {
   if (eventType === 'chat:permission') return 'permission';
   if (eventType === 'chat:status') return 'status';
   if (eventType === 'chat:mode_changed') return 'mode_changed';
+  if (eventType === 'chat:goal_updated') return 'goal_updated';
   if (eventType === 'chat:retry') return 'retry';
   if (eventType === 'checkpoint') return 'checkpoint';
   if (eventType === 'ready') return 'ready';
@@ -702,6 +703,16 @@ function handlePostChatSSE(
               source: event.source,
               reason: event.reason,
             },
+          };
+        } else if (msgType === 'chat:goal_updated') {
+          // Plan 411: goal tracker state changed (start / verdict / pause /
+          // budget). Forward the flat payload so the renderer can render a
+          // goal status card. The payload already carries objective/state/
+          // tokens at the top level.
+          const { type: _t, ...rest } = event as Record<string, unknown>;
+          sseEvent = {
+            type: 'goal_updated',
+            data: rest,
           };
         } else if (msgType === 'ready') {
           // 'ready' type is already correct format

@@ -8,6 +8,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { GoalStatusCard } from './GoalStatusCard';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
@@ -39,7 +40,6 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
-import { FloatingTaskPanel } from '@/components/layout/FloatingTaskPanel';
 import { useTaskList } from '@/hooks/useTaskList';
 import { useGitStatus } from '@/hooks/useGitStatus';
 import { getGitStatus } from '@/lib/git-ipc';
@@ -1198,15 +1198,7 @@ export function ChatView({
                 {/* Input between selector and recent threads */}
                 <WorkspaceComposerLayer expanded={workspaceExpanded}>
                 <div className={`w-full welcome-message-input workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
-                  <FloatingTaskPanel
-                  tasks={floatingTasks}
-                  gitStatus={gitStatus}
-                  onToggleStatus={handleToggleFloatingTask}
-                  workingDirectory={activeThread?.workingDirectory ?? null}
-                  showFileChanges={showFileChanges}
-                />
-
-                <MessageInput
+                  <MessageInput
                     onSend={handleSend}
                     onRecapRequest={requestRecap}
                     onStop={handleStop}
@@ -1233,6 +1225,11 @@ export function ChatView({
                     // Welcome page: input sits in the middle, popup must open
                     // below so it doesn't cover the heading / selector above.
                     popoverPlacement="bottom"
+                    tasks={floatingTasks}
+                    gitStatus={gitStatus}
+                    onToggleTaskStatus={handleToggleFloatingTask}
+                    workingDirectory={activeThread?.workingDirectory ?? null}
+                    showFileChanges={showFileChanges}
                   />
 
                   {/* Bottom toolbar - outside input box */}
@@ -1282,6 +1279,8 @@ export function ChatView({
         <WorkspaceComposerLayer expanded={workspaceExpanded}>
         <div className={`p-4 pt-0 chat-composer-shell workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
           <div className="max-w-[800px] mx-auto chat-composer-inner">
+            {/* Plan 411: live goal status card (objective / status / tokens) */}
+            <GoalStatusCard sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
@@ -1315,15 +1314,8 @@ export function ChatView({
               <MailboxPanel sessionId={sessionId} />
             )}
 
-            {/* Floating task progress above the composer */}
-            <FloatingTaskPanel
-              tasks={floatingTasks}
-              gitStatus={gitStatus}
-              onToggleStatus={handleToggleFloatingTask}
-              workingDirectory={activeThread?.workingDirectory ?? null}
-              showFileChanges={showFileChanges}
-            />
-
+            {/* Plan 416: task progress row now renders inside the
+                composer (no longer a floating pill above it). */}
             {isAskUserQuestionPending ? (
               <PermissionPrompt
                 pendingPermission={pendingPermission}
@@ -1355,6 +1347,11 @@ export function ChatView({
                 onPlanModeChange={handlePlanModeChange}
                 onCompact={handleCompact}
                 isCompacting={isCompacting}
+                tasks={floatingTasks}
+                gitStatus={gitStatus}
+                onToggleTaskStatus={handleToggleFloatingTask}
+                workingDirectory={activeThread?.workingDirectory ?? null}
+                showFileChanges={showFileChanges}
               />
             )}
 

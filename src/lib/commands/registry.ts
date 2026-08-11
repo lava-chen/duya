@@ -177,6 +177,18 @@ const BUILT_IN_COMMANDS: CommandDef[] = [
     platforms: ['app'],
     requiresSession: true,
   },
+  {
+    name: 'goal',
+    label: 'Goal mode',
+    labelZh: '目标模式',
+    description: 'Track a long-running goal across multiple rounds: /goal <objective> | status | pause | resume | clear',
+    descriptionZh: '多轮自主目标追踪：/goal <目标> | status | pause | resume | clear',
+    category: 'tools',
+    argsHint: '<objective|status|pause|resume|clear>',
+    subcommands: ['status', 'pause', 'resume', 'clear'],
+    platforms: ['app'],
+    requiresSession: true,
+  },
 ];
 
 // ============================================================================

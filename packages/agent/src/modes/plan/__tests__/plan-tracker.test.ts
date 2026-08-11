@@ -9,7 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { PlanModeTracker } from '../plan-tracker.js';
-import { serializeSnapshot } from '../persistence.js';
+import { serializeSnapshot } from '../../engine/persistence.js';
 import type { PlanModeSnapshot } from '../plan-tracker.js';
 
 describe('PlanModeTracker', () => {

@@ -47,6 +47,9 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { RichTextInput } from './RichTextInput';
 import { VoiceButton } from './VoiceButton';
+import { InlineTaskRow } from './InlineTaskRow';
+import type { UseGitStatusResult } from '@/hooks/useGitStatus';
+import type { Task } from '@duya/agent';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
 
@@ -143,6 +146,17 @@ interface MessageInputProps {
   draftMode?: boolean;
   initialDraft?: { text: string; attachments: FileAttachment[] };
   onDraftChange?: (text: string, attachments: FileAttachment[]) => void;
+  /**
+   * Plan 416: in-input task progress. When provided, the composer
+   * grows a row above the textarea that surfaces the agent's todo
+   * list. Defaults to none — callers (ChatView) pass the active
+   * thread's tasks + git status.
+   */
+  tasks?: Task[];
+  gitStatus?: UseGitStatusResult;
+  onToggleTaskStatus?: (task: Task) => void;
+  workingDirectory?: string | null;
+  showFileChanges?: boolean;
 }
 
 interface EffortOption {
@@ -153,16 +167,18 @@ interface EffortOption {
 /**
  * Pick the sendable mode from an activeModes set.
  *
- * plan-task (session-level) and research (message-level) are passed to
- * `onSend` as the `mode` argument; the agent reads this to resolve its
- * mode dispatch. plan-task must travel with every send so the agent keeps
- * activating its plan tracker. Conductor is excluded here — it is the only
- * mode with its own flag (`conductorMode`).
- * At most one sendable mode (plan-task | research) is active at a time
- * (enforced by `MODE_EXCLUSIVE_WITH`), so returning the first non-conductor
- * match is unambiguous.
+ * plan-task (session-level), research (message-level) and goal are passed
+ * to `onSend` as the `mode` argument; the agent reads this to resolve its
+ * mode dispatch. Conductor is excluded here — it is the only mode with its
+ * own flag (`conductorMode`).
+ *
+ * Goal takes precedence when it coexists with plan-task: goal is a
+ * self-driven execution mode (plan 411) and must reach the agent even if
+ * plan-task (a parallel, non-exclusive tracker) is also toggled on.
+ * Otherwise the first non-conductor mode wins.
  */
 export function pickMessageMode(activeModes: Set<ModeModifierId>): string | undefined {
+  if (activeModes.has('goal')) return 'goal';
   for (const mode of activeModes) {
     if (mode !== 'conductor') return mode;
   }
@@ -285,6 +301,11 @@ export function MessageInput({
   draftMode = false,
   initialDraft,
   onDraftChange,
+  tasks,
+  gitStatus,
+  onToggleTaskStatus,
+  workingDirectory,
+  showFileChanges,
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
@@ -1598,6 +1619,19 @@ export function MessageInput({
               requestAnimationFrame(() => adjustTextareaHeight());
             }}
           />
+
+          {/* Plan 416: in-input task progress row above the textarea.
+              Renders nothing when there are no tasks and no git
+              changes, so the input box stays compact. */}
+          {tasks && gitStatus && onToggleTaskStatus && (
+            <InlineTaskRow
+              tasks={tasks}
+              gitStatus={gitStatus}
+              onToggleStatus={onToggleTaskStatus}
+              workingDirectory={workingDirectory ?? null}
+              showFileChanges={showFileChanges ?? true}
+            />
+          )}
 
           {/* Textarea */}
           <RichTextInput
