@@ -35,6 +35,8 @@ export interface Thread {
   agentName: string
   conductorModeEnabled?: number
   conductorCanvasId?: string | null
+  /** Plan 413e: 1 = plan-task session toggle on, 0 = off. */
+  planModeEnabled?: number
   /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
   pinned?: number
 }
@@ -156,6 +158,7 @@ interface DbThread {
   agent_name: string
   conductor_mode_enabled: number
   conductor_canvas_id: string | null
+  plan_mode_enabled?: number
   pinned: number
 }
 
@@ -256,6 +259,7 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
     agentName: db.agent_name || '',
     conductorModeEnabled: db.conductor_mode_enabled,
     conductorCanvasId: db.conductor_canvas_id,
+    planModeEnabled: db.plan_mode_enabled,
     pinned: db.pinned,
   }
 }
