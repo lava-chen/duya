@@ -105,6 +105,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [237-cron-shared-session](./active/237-cron-shared-session.md) | Cron `session_target='shared'` — single persistent session per cron, DB-authoritative history | P0 | Planning |
 | [231-skill-learning-inbox](./active/231-skill-learning-inbox.md) | Skill learning inbox | P1 | Planning |
 | [405-cron-definition-configstore](./active/405-cron-definition-configstore.md) | Cron 定义接入 ConfigStore — `cron.jobs`(TOML) 唯一权威源 + `automation_cron_state` 运行时状态 + `CronStore` 门面，读写侧切换，调用面零改动 | P0 | ✅ 验收通过（2026-08-09） |
+| [409-cron-single-source-refactor](./active/409-cron-single-source-refactor.md) | Cron 单一来源重构 — `~/.duya/cronjob.toml` 唯一权威源 + 普通 agent 会话执行（删 runs/state 表、mode 过滤、runInSession）+ 60s tick | P0 | 代码完成；DB 测试待 ABI 修复后验证 |
 
 ### Session / UI / UX
 
