@@ -6,7 +6,7 @@
 export * from './types.js';
 export * from './registry.js';
 export * from './loader.js';
-export * from './bundled.js';
+export * from './frontmatter.js';
 export * from './mcp.js';
 export * from './skillsSync.js';
 export {

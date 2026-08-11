@@ -15,6 +15,7 @@ import { getSkillRegistry } from './registry.js';
 import { scanSkillFile, shouldAllowInstall, type SkillFinding } from '../security/skillScanner.js';
 import { registerConditionalSkill, separateConditionalSkills } from './conditionalSkills.js';
 import { normalizeRequiredEnvVars } from './envVarCollector.js';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import { settingDb } from '../ipc/db-client.js';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
@@ -63,77 +64,6 @@ const CATEGORY_MAP: Record<string, SkillCategory> = {
   'system': 'system',
   'other': 'other',
 };
-
-// Frontmatter regex
-const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)---\s*\n?/;
-
-/**
- * Parse frontmatter from markdown content
- */
-function parseFrontmatter(
-  markdown: string,
-): { frontmatter: Record<string, unknown>; content: string } {
-  const match = markdown.match(FRONTMATTER_REGEX);
-
-  if (!match) {
-    return { frontmatter: {}, content: markdown };
-  }
-
-  const frontmatterText = match[1] || '';
-  const content = markdown.slice(match[0].length);
-
-  // Simple YAML parsing for basic fields
-  const frontmatter: Record<string, unknown> = {};
-  const lines = frontmatterText.split('\n');
-
-  for (const line of lines) {
-    const colonIndex = line.indexOf(':');
-    if (colonIndex === -1) continue;
-
-    const key = line.slice(0, colonIndex).trim();
-    let value: string = line.slice(colonIndex + 1).trim();
-
-    // Handle quoted strings
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-
-    // Handle boolean
-    if (value === 'true') {
-      frontmatter[key] = true;
-      continue;
-    }
-    if (value === 'false') {
-      frontmatter[key] = false;
-      continue;
-    }
-
-    // Handle arrays (comma-separated)
-    if (
-      value.includes(',') &&
-      !value.startsWith('[')
-    ) {
-      if (
-        key === 'allowed-tools' ||
-        key === 'arguments' ||
-        key === 'paths'
-      ) {
-        frontmatter[key] = value
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean);
-        continue;
-      }
-    }
-
-    frontmatter[key] = value;
-  }
-
-  return { frontmatter, content };
-}
 
 /**
  * Parse arguments from frontmatter
@@ -188,7 +118,7 @@ async function createSkillFromDirectory(
   }
 
   // Parse frontmatter and content
-  const { frontmatter, content: markdownContent } = parseFrontmatter(content);
+  const { frontmatter, content: markdownContent } = parseSkillFrontmatter(content);
 
   // ── Security scan ─────────────────────────────────────────────────────
   // Scan SKILL.md for injection/exfiltration/destructive patterns
@@ -197,7 +127,7 @@ async function createSkillFromDirectory(
   // Also skip if global security scan is disabled via settings
   const isBypassed = securityBypassSkills?.includes(skillName) ?? false;
   let findings: ReturnType<typeof scanSkillFile> = [];
-  if (source !== 'bundled' && !isBypassed && !skipSecurityScan) {
+  if (source !== 'bundled' && source !== 'system' && !isBypassed && !skipSecurityScan) {
     findings = scanSkillFile(markdownContent, 'SKILL.md');
     if (findings.length > 0) {
       // Determine verdict from findings
@@ -337,7 +267,7 @@ async function readCategoryDescription(dirPath: string): Promise<string | undefi
   const descPath = path.join(dirPath, 'DESCRIPTION.md');
   try {
     const content = await fs.readFile(descPath, 'utf-8');
-    const { frontmatter } = parseFrontmatter(content);
+    const { frontmatter } = parseSkillFrontmatter(content);
     const description = frontmatter.description as string | undefined;
     return description?.trim();
   } catch {
@@ -502,6 +432,49 @@ export function getBundledSkillsDir(): string {
 }
 
 /**
+ * Get the system-level skills directory (`<bundledSkillsDir>/.system`).
+ *
+ * System-level skills ship with the agent and are always loaded, regardless
+ * of whether bundled sync is enabled or the user installed anything. They are
+ * trusted (security scan skipped), cannot be disabled by user overrides, and
+ * are not synced to the user directory (the leading dot is skipped by
+ * `syncBundledSkills`). Modeled after Codex's `~/.codex/skills/.system/`.
+ */
+export function getSystemSkillsDir(): string {
+  return path.join(getBundledSkillsDir(), '.system');
+}
+
+/**
+ * Load system-level skills from `.system/` and register them directly.
+ *
+ * Called at the end of `loadSkills()` — after user/project skills and after
+ * disabled-filtering — so a system skill always wins any name collision with
+ * a user skill. System skills are trusted and must never be gated by the
+ * `skillEnabledOverrides` filter or conditional activation.
+ */
+export async function loadSystemSkills(skipSecurityScan?: boolean): Promise<PromptSkill[]> {
+  const systemDir = getSystemSkillsDir();
+  const skills = await loadSkillsFromDirectory(
+    systemDir,
+    'system',
+    undefined,
+    undefined,
+    undefined,
+    skipSecurityScan,
+  );
+
+  for (const skill of skills) {
+    getSkillRegistry().register(skill);
+  }
+
+  if (skills.length > 0) {
+    console.log(`[Skills] Loaded ${skills.length} system skill(s)`);
+  }
+
+  return skills;
+}
+
+/**
  * Load skills from standard directories
  *
  * Design principle: All built-in skills are synced to ~/.duya/skills/ first,
@@ -611,7 +584,13 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   }
   console.log(`[Skills] Loaded ${unconditionalSkills.length} unconditional + ${conditionalCount} conditional skills`);
 
-  return effectiveSkills;
+  // System-level skills are always loaded, independent of sync config and
+  // user overrides. Registered last so they win any name collision with a
+  // user skill. They are not part of `effectiveSkills` (which went through
+  // disabled filtering and conditional separation).
+  const systemSkills = await loadSystemSkills(skipSecurityScan);
+
+  return [...effectiveSkills, ...systemSkills];
 }
 
 /**

@@ -13,8 +13,10 @@
  */
 
 import { join } from 'node:path';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { readSkillProvenance } from './skillsSync.js';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import {
   resolveAvailable,
   effectivePrecedenceOf,
@@ -23,27 +25,6 @@ import {
 } from './resolver.js';
 import { scanSkillFile } from '../security/skillScanner.js';
 
-// Minimal frontmatter parser (mirrors electron/utils/skill-parser.ts)
-// Avoids a cross-package dependency on the Electron side's skill-parser.
-const FRONTMATTER_REGEX = /^---\s*\n([\s\S]*?)---\s*\n?/;
-function parseSkillFrontmatter(md: string): { frontmatter: Record<string, unknown>; content: string } {
-  const m = md.match(FRONTMATTER_REGEX);
-  if (!m) return { frontmatter: {}, content: md };
-  const yaml = m[1];
-  const frontmatter: Record<string, unknown> = {};
-  for (const line of yaml.split('\n')) {
-    const idx = line.indexOf(':');
-    if (idx < 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
-    if (!key) continue;
-    if (value === 'true') frontmatter[key] = true;
-    else if (value === 'false') frontmatter[key] = false;
-    else if (/^\d+$/.test(value)) frontmatter[key] = Number(value);
-    else frontmatter[key] = value.replace(/^['"]|['"]$/g, '');
-  }
-  return { frontmatter, content: md.slice(m[0].length) };
-}
 function parseAllowedTools(v: unknown): string[] {
   if (Array.isArray(v)) return v.filter((x): x is string => typeof x === 'string');
   if (typeof v === 'string') return v.split(',').map(s => s.trim()).filter(Boolean);
@@ -143,24 +124,23 @@ function isCustomizedBundled(skillName: string, userDir: string, manifestHash: s
 function computeDirHashForComparison(dir: string): string {
   // Lightweight hash for comparison (excludes hidden files like
   // the provenance marker, mirroring the IPC handler logic).
-  const { createHash } = require('node:crypto') as typeof import('node:crypto');
   const hash: string[] = [];
   const walk = (current: string) => {
-    const entries = require('node:fs').readdirSync(current, { withFileTypes: true });
+    const entries = readdirSync(current, { withFileTypes: true });
     for (const e of entries.sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name))) {
       if (e.name.startsWith('.')) continue;
-      const p = require('node:path').join(current, e.name);
+      const p = join(current, e.name);
       if (e.isFile()) {
-        const buf = require('node:fs').readFileSync(p);
+        const buf = readFileSync(p);
         hash.push(`${e.name}:${createHash('md5').update(buf).digest('hex')}`);
       } else if (e.isDirectory()) {
         const sub: string[] = [];
         const w = (cc: string) => {
-          for (const ee of require('node:fs').readdirSync(cc, { withFileTypes: true })) {
+          for (const ee of readdirSync(cc, { withFileTypes: true })) {
             if (ee.name.startsWith('.')) continue;
-            const pp = require('node:path').join(cc, ee.name);
+            const pp = join(cc, ee.name);
             if (ee.isFile()) {
-              sub.push(`${ee.name}:${createHash('md5').update(require('node:fs').readFileSync(pp)).digest('hex')}`);
+              sub.push(`${ee.name}:${createHash('md5').update(readFileSync(pp)).digest('hex')}`);
             } else if (ee.isDirectory()) {
               w(pp);
             }
@@ -184,7 +164,7 @@ function discoverCandidates(args: DiscoverArgs): InternalCandidate[] {
 
   // bundled: scan user dir, looking for entries with marker
   if (existsSync(userSkillsDir)) {
-    const entries = require('node:fs').readdirSync(userSkillsDir, { withFileTypes: true });
+    const entries = readdirSync(userSkillsDir, { withFileTypes: true });
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
       if (!e.isDirectory()) continue;
@@ -217,7 +197,7 @@ function discoverCandidates(args: DiscoverArgs): InternalCandidate[] {
 
   // user: scan user dir entries without marker
   if (existsSync(userSkillsDir)) {
-    const entries = require('node:fs').readdirSync(userSkillsDir, { withFileTypes: true });
+    const entries = readdirSync(userSkillsDir, { withFileTypes: true });
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
       if (!e.isDirectory()) continue;
@@ -248,7 +228,7 @@ function discoverCandidates(args: DiscoverArgs): InternalCandidate[] {
   for (const [pluginId, installPath] of Object.entries(pluginInstallPaths)) {
     const skillsDir = join(installPath, 'skills');
     if (!existsSync(skillsDir)) continue;
-    const entries = require('node:fs').readdirSync(skillsDir, { withFileTypes: true });
+    const entries = readdirSync(skillsDir, { withFileTypes: true });
     for (const e of entries) {
       if (e.name.startsWith('.')) continue;
       if (!e.isDirectory()) continue;
