@@ -1,14 +1,18 @@
 /**
- * ModeTracker persistence helpers — pure serialization (plan 413a).
+ * ModeTracker persistence — serialization (plan 413a) + disk persistence
+ * (plan 413c).
  *
- * These functions convert a {@link ModeTracker} to/from the unified
- * {@link ModeStateSnapshot} shape. They are deliberately pure: no file
- * system, no DB, no IPC. Disk persistence is layered on top in plan 413c
- * (`ModeStateStore` + `modeState:*` IPC + `persistSnapshot`/`restoreTracker`).
- * Keeping this layer pure makes the migration matrix trivially testable.
+ * The serialization helpers below convert a {@link ModeTracker} to/from the
+ * unified {@link ModeStateSnapshot} shape and are deliberately pure: no file
+ * system, no DB, no IPC — keeping the migration matrix trivially testable.
+ * Plan 413c layers IPC-bound `persistSnapshot` / `restoreTracker` on top: they
+ * serialize via the pure helpers and carry the blob over `modeStateDb` IPC to
+ * the core-db `mode_state_snapshots` table in the Electron main process.
  */
 
 import type { ModeStateSnapshot, ModeTracker } from './tracker.js';
+import { logger } from '../../utils/logger.js';
+import { modeStateDb, type ModeStateRow } from '../../ipc/db-client.js';
 
 /** Wrap a tracker's current state into a unified snapshot (plan 413c persists this). */
 export function serializeSnapshot(
@@ -49,4 +53,79 @@ export function applySnapshot(
     // Tracker rejected the snapshot shape — treat as not restorable.
     return false;
   }
+}
+
+// ─── Disk persistence (plan 413c) ───────────────────────────────────────────
+// IPC-bound wrappers layered on top of the pure serialization helpers above.
+// Both degrade on failure (`logger.warn`, never throw) so a DB/IPC hiccup can
+// never crash the agent turn loop — mirroring the mailbox claim degradation
+// style.
+
+/**
+ * Persist the tracker's current state to the `mode_state_snapshots` table.
+ * Called after a state transition (plan 413d coordinator round-end). The
+ * blob is the full {@link ModeStateSnapshot} (authoritative); `status` and
+ * `reminder_count` are mirrored as query redundancy. Any DB/IPC failure is
+ * logged and swallowed.
+ */
+export async function persistSnapshot(
+  tracker: ModeTracker<string, string, unknown>,
+  sessionId: string,
+): Promise<void> {
+  try {
+    const snap = serializeSnapshot(tracker, sessionId, Date.now());
+    await modeStateDb.upsert({
+      sessionId,
+      mode: snap.mode,
+      status: snap.status,
+      snapshotJson: JSON.stringify(snap),
+      reminderCount: snapshotReminderCount(snap),
+    });
+  } catch (err) {
+    logger.warn(
+      `[ModeTracker] persist failed for ${tracker.id}/${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Restore a tracker from the persisted snapshot for a session. Returns
+ * whether restoration succeeded. A missing row, unparseable blob, a snapshot
+ * the tracker refuses, or a DB/IPC failure all yield `false` and leave the
+ * tracker in its initial state.
+ */
+export async function restoreTracker(
+  tracker: ModeTracker<string, string, unknown>,
+  sessionId: string,
+): Promise<boolean> {
+  try {
+    const row: ModeStateRow | null = await modeStateDb.get(sessionId, tracker.id);
+    if (!row) return false;
+    let snap: ModeStateSnapshot;
+    try {
+      snap = JSON.parse(row.snapshotJson) as ModeStateSnapshot;
+    } catch {
+      // Corrupt blob — treat as not restorable.
+      return false;
+    }
+    return applySnapshot(tracker, snap);
+  } catch (err) {
+    logger.warn(
+      `[ModeTracker] restore failed for ${tracker.id}/${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return false;
+  }
+}
+
+/**
+ * Mirror the plan-specific `reminderCount` into the queryable
+ * `reminder_count` column when the snapshot payload carries one (plan modes
+ * do; other modes default to 0).
+ */
+function snapshotReminderCount(snap: ModeStateSnapshot): number {
+  if (snap.data && typeof snap.data === 'object' && 'reminderCount' in snap.data) {
+    const count = (snap.data as { reminderCount?: unknown }).reminderCount;
+    if (typeof count === 'number') return count;
+  }
+  return 0;
 }
