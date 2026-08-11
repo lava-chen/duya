@@ -171,7 +171,7 @@ describe('runCurationCycle', () => {
     );
   });
 
-  it('3. failure — failRun + completeRun(published=failed), dispositions=uncertain', async () => {
+  it('3. failure — failRun only, no completeRun, inputs stay eligible', async () => {
     const inputs = [rollout('r1', 1), rollout('r2', 2), rollout('r3', 3)];
     mocks.queryEligibleInputs.mockReturnValue(inputs);
     mocks.claimRun.mockReturnValue({ runId: 'run-3', lockToken: 'tok-3' });
@@ -200,9 +200,9 @@ describe('runCurationCycle', () => {
     expect(result.runId).toBe('run-3');
     expect(result.error).toContain('parse failed');
     expect(mocks.failRun).toHaveBeenCalledWith(expect.anything(), 'run-3', expect.stringContaining('parse failed'), expect.any(Number));
-    expect(mocks.completeRun).toHaveBeenCalledWith(expect.anything(), 'run-3', expect.objectContaining({
-      publicationStatus: 'failed',
-    }));
+    // failRun leaves inputs NULL; completeRun is NOT called (it would
+    // throw on a non-running run).
+    expect(mocks.completeRun).not.toHaveBeenCalled();
   });
 
   it('4. backup failure is non-fatal — run still proceeds', async () => {

@@ -218,19 +218,16 @@ export async function runCurationCycle(
     };
   }
 
-  // Partial or full failure — mark as failed. Inputs are still recorded
-  // (with `uncertain` disposition) so the next cycle can pick them up.
+  // Partial or full failure — mark the run failed. `failRun` leaves the
+  // claimed inputs with `disposition = NULL`, so `queryEligibleInputs`
+  // re-picks them on the next cycle. We must NOT call `completeRun` here:
+  // it requires status='running' and would throw after failRun flipped it.
   const errMsg =
     result.error ??
     (result.errors.length > 0
       ? `${result.errors.length} action(s) failed: ${result.errors[0].error}`
       : 'curation cycle failed without a top-level error');
   failRun(db, runId, `agent failed: ${errMsg}`, Date.now());
-  completeRun(db, runId, {
-    dispositions,
-    publicationStatus: 'failed',
-    now: Date.now(),
-  });
   return {
     skipped: false,
     success: false,
