@@ -13,6 +13,7 @@ import {
   StreamingStrategyRegistry,
   StreamingStrategy,
   stripMarkdown,
+  stripThinkTags,
 } from './stream/streaming-strategy.js';
 
 const TYPING_INDICATOR_INTERVAL = 4500;
@@ -27,10 +28,6 @@ const STREAM_EDIT_INTERVAL = 900;
 const PLACEHOLDER_WAIT_TIMEOUT_MS = 5000;
 /** Default tool-input preview length for high-tier (streaming) platforms. */
 const TOOL_PREVIEW_LENGTH = 40;
-/** Platforms that stream replies by editing a single placeholder message in place. */
-function isStreamingEditPlatform(platform: PlatformType): boolean {
-  return platform === 'telegram';
-}
 
 // -----------------------------------------------------------------------------
 // Tool progress presentation (hermes-style)
@@ -222,7 +219,8 @@ const ABSOLUTE_PATH_RE =
   /(?:(?:[A-Za-z]:[\\/])|(?:\/)|(?:~\/))([^\s"'<>|*?]+)\.(png|jpe?g|gif|webp|bmp|svg|tiff|mp4|mov|webm|mkv|avi|mp3|ogg|wav|m4a|opus|flac|aac|pdf|docx?|xlsx?|pptx?|odt|ods|odp|txt|md|csv|json|xml|html|yaml|yml|log|zip|rar|7z|tar|gz|bz2|epub|apk|ipa)\b/gi;
 
 // Hermes-style MEDIA:/path attachment tag, e.g. `MEDIA:/home/user/report.pdf`.
-const MEDIA_TAG_RE = /MEDIA:([^\s;"']+)/gi;
+// Trailing at newline/quote/semicolon; spaces allowed (Windows paths).
+const MEDIA_TAG_RE = /MEDIA:([^\n;"']+)/gi;
 
 function extractMediaPathsFromText(text: string): string[] {
   if (!text) return [];
@@ -252,6 +250,53 @@ function stripMediaTags(text: string): string {
   return text.replace(MEDIA_TAG_RE, '').replace(/[ \t]+/g, ' ').trim();
 }
 
+// -----------------------------------------------------------------------------
+// Reasoning-prefix stripping (MiniMax-M3 leaks its chain of thought as text)
+// -----------------------------------------------------------------------------
+// MiniMax-M3 streams reasoning into the text channel instead of thinking_delta,
+// even with thinking disabled (`effort: 'off'`). The leak looks like an
+// English meta-preamble before the actual (typically CJK, user-language)
+// answer, e.g. "The user just said hello again. Keep it brief and friendly.在的，有什么…".
+// We strip the leading Latin preamble when it (a) precedes the first CJK
+// character, (b) is long enough to be a preamble, and (c) reads like
+// meta-commentary about the task rather than content.
+
+const CJK_RE = /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff\uac00-\ud7af]/;
+
+const REASONING_MARKERS = [
+  'the user',
+  'the assistant',
+  'the question',
+  'this message',
+  'to respond',
+  'as per',
+  'according to',
+  'i should',
+  'i need',
+  'i will',
+  "i'll",
+  "i'm",
+  'i am',
+  'let me',
+  'keep it',
+  'my plan',
+  "i don't have",
+  'i do not have',
+] as const;
+
+export function stripReasoningPrefix(text: string): string {
+  if (!text) return text;
+  const cjkIndex = text.search(CJK_RE);
+  // No CJK answer, or the prefix is too short to be a preamble.
+  if (cjkIndex < 10) return text;
+  const prefix = text.slice(0, cjkIndex).toLowerCase();
+  if (REASONING_MARKERS.some((marker) => prefix.includes(marker))) {
+    console.warn(`[StreamHandler] stripped reasoning prefix (${cjkIndex} chars)`);
+    return text.slice(cjkIndex);
+  }
+  return text;
+}
+
 /**
  * Hermes intent-silence tokens. The final response is suppressed from delivery
  * when it is exactly one of these, but the turn is still stored in history.
@@ -279,6 +324,12 @@ interface StreamState {
    * separately-sent full reply. Never rejects.
    */
   placeholderReady?: Promise<void>;
+  /**
+   * Set when finalize gives up waiting for a still-in-flight placeholder.
+   * The late-resolving creation then deletes the message instead of leaving
+   * a stub behind.
+   */
+  placeholderAbandoned?: boolean;
   /** Timestamp of the last live edit, used to throttle Telegram flood-control. */
   lastEditTime: number;
 }
@@ -288,10 +339,11 @@ export class StreamHandler {
   private strategyRegistry: StreamingStrategyRegistry;
   private getChatIdForSession: (sessionId: string) => Promise<string | null> = async () => null;
   /** Resolves per-platform display config (toolProgress, showReasoning, ...). */
-  private displayConfigResolver: (platform: PlatformType) => { showReasoning: boolean; toolProgress: 'all' | 'new' | 'off'; toolPreviewLength: number } = () => ({
+  private displayConfigResolver: (platform: PlatformType) => { showReasoning: boolean; toolProgress: 'all' | 'new' | 'off'; toolPreviewLength: number; streaming: boolean | null } = () => ({
     showReasoning: false,
     toolProgress: 'all',
     toolPreviewLength: 0,
+    streaming: null,
   });
   /** Optional durable delivery ledger; when set, final replies are tracked for crash recovery. */
   private ledger: DeliveryLedger | null = null;
@@ -329,11 +381,23 @@ export class StreamHandler {
   }
 
   /**
+   * Platforms that stream replies by editing a single placeholder message in
+   * place. Requires both edit-capable infrastructure (telegram) and the
+   * per-platform `streaming` display setting not being disabled — the
+   * placeholder depends on a reliable sendMessage round-trip, which flaky
+   * links cannot provide (a lost response orphans the message forever).
+   */
+  private isStreamingEditPlatform(platform: PlatformType): boolean {
+    if (platform !== 'telegram') return false;
+    return this.displayConfigResolver(platform).streaming !== false;
+  }
+
+  /**
    * Set the per-platform display config resolver (showReasoning, toolProgress,
    * toolPreviewLength). Set by the gateway manager from user config.
    */
   setDisplayConfigResolver(
-    resolver: (platform: PlatformType) => { showReasoning: boolean; toolProgress: 'all' | 'new' | 'off'; toolPreviewLength: number },
+    resolver: (platform: PlatformType) => { showReasoning: boolean; toolProgress: 'all' | 'new' | 'off'; toolPreviewLength: number; streaming: boolean | null },
   ): void {
     this.displayConfigResolver = resolver;
   }
@@ -406,7 +470,7 @@ export class StreamHandler {
         // can also leak into the final answer. Let chat:text create the
         // placeholder, and just emit a typing indicator for status changes.
         const status = event.status ?? event.message ?? '';
-        if (status && !isStreamingEditPlatform(adapter.platform) && adapter.sendTyping) {
+        if (status && !this.isStreamingEditPlatform(adapter.platform) && adapter.sendTyping) {
           const chatId = state?.chatId ?? directChatId ?? await this.getChatIdForSession(sessionId);
           if (chatId) await adapter.sendTyping(chatId);
         }
@@ -502,7 +566,7 @@ export class StreamHandler {
     if (state) {
       // Already streaming: ensure a placeholder exists for streaming-edit
       // platforms (idempotent — reuses the in-flight creation).
-      if (isStreamingEditPlatform(adapter.platform)) {
+      if (this.isStreamingEditPlatform(adapter.platform)) {
         await this.ensurePlaceholder(sessionId, chatId, adapter, state, seedText);
       }
       return state;
@@ -522,7 +586,7 @@ export class StreamHandler {
     };
     this.activeStreams.set(sessionId, state);
 
-    if (isStreamingEditPlatform(adapter.platform)) {
+    if (this.isStreamingEditPlatform(adapter.platform)) {
       await this.ensurePlaceholder(sessionId, chatId, adapter, state, seedText);
     }
     return state;
@@ -570,6 +634,13 @@ export class StreamHandler {
       replyToMsgId,
     });
     if (result.ok && result.platformMsgId) {
+      // finalize may have abandoned the placeholder while its creation was
+      // still in flight (slow platform ACK): delete it so no stub message is
+      // left behind next to the freshly-delivered full reply.
+      if (state.placeholderAbandoned) {
+        await adapter.deleteMessage?.(chatId, result.platformMsgId);
+        return;
+      }
       state.placeholderMsgId = result.platformMsgId;
       state.lastEditTime = Date.now();
     }
@@ -603,7 +674,7 @@ export class StreamHandler {
     const now = Date.now();
     // Streaming-edit platforms: fold accumulated text into the placeholder,
     // throttled to respect Telegram flood-control limits.
-    if (state.placeholderMsgId && isStreamingEditPlatform(adapter.platform)) {
+    if (state.placeholderMsgId && this.isStreamingEditPlatform(adapter.platform)) {
       if (now - state.lastEditTime >= STREAM_EDIT_INTERVAL) {
         state.lastEditTime = now;
         await adapter.sendReply(state.chatId, {
@@ -635,17 +706,25 @@ export class StreamHandler {
     // created (slow platform ACK, retries in flight), wait briefly for it to
     // settle so the final text can edit it in place instead of leaking a stub
     // message next to a freshly-sent full reply. Bounded so a dead platform
-    // never delays finalization indefinitely; on failure the final text is
-    // delivered as a fresh message (the pre-fix behavior).
-    if (isStreamingEditPlatform(adapter.platform) && state?.placeholderReady) {
-      try {
-        await Promise.race([
-          state.placeholderReady,
-          new Promise<void>((resolve) => setTimeout(resolve, PLACEHOLDER_WAIT_TIMEOUT_MS)),
-        ]);
-      } catch {
-        // placeholderReady never rejects, but keep the fallback explicit.
+    // never delays finalization indefinitely; on timeout the placeholder is
+    // marked abandoned and deleted by its own creation when it finally lands.
+    if (this.isStreamingEditPlatform(adapter.platform) && state?.placeholderReady) {
+      const settled = await Promise.race([
+        state.placeholderReady.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), PLACEHOLDER_WAIT_TIMEOUT_MS)),
+      ]);
+      if (!settled) {
+        // Placeholder still in flight: deliver the final text fresh and have
+        // the late-resolving creation delete the placeholder message.
+        state.placeholderAbandoned = true;
+        console.warn(`[StreamHandler] finalize: placeholder abandoned (timeout ${PLACEHOLDER_WAIT_TIMEOUT_MS}ms), delivering fresh`);
+      } else if (state.placeholderMsgId) {
+        console.log(`[StreamHandler] finalize: editing placeholder msg_id=${state.placeholderMsgId}`);
+      } else {
+        console.warn('[StreamHandler] finalize: placeholder creation failed, delivering fresh');
       }
+    } else if (this.isStreamingEditPlatform(adapter.platform)) {
+      console.warn('[StreamHandler] finalize: no placeholder state (state absent or never created), delivering fresh');
     }
 
     // Hermes-style intent silence: if the final response is exactly a silence
@@ -662,8 +741,10 @@ export class StreamHandler {
       return;
     }
 
-    // Strip MEDIA:/path delivery tags from the prose shown to the user.
-    const displayText = stripMediaTags(finalText);
+    // Strip MEDIA:/path delivery tags and any leaked think tags (MiniMax
+    // emits </mm:think> into the text stream), then drop the reasoning
+    // preamble that preceded the tag so only the actual answer is delivered.
+    const displayText = stripReasoningPrefix(stripThinkTags(stripMediaTags(finalText)));
 
     // Aggregate media paths from three sources (union, de-duped, order-preserving):
     //   1. state.pendingMediaPaths — collected from chat:tool_result events
@@ -683,7 +764,7 @@ export class StreamHandler {
     // Streaming-edit platforms: the final text is folded into the placeholder
     // message (editMessageText), so the reply adopts the placeholder's quote
     // instead of sending a new quoted message.
-    const placeholderMsgId = isStreamingEditPlatform(adapter.platform) ? state?.placeholderMsgId : undefined;
+    const placeholderMsgId = this.isStreamingEditPlatform(adapter.platform) ? state?.placeholderMsgId : undefined;
 
     const sendReplies = async (chatId: string, replies: NormalizedReply[]): Promise<void> => {
       for (const reply of replies) {
@@ -691,6 +772,9 @@ export class StreamHandler {
           if (!reply.text) continue;
           if (placeholderMsgId) {
             reply.editTargetMsgId = placeholderMsgId;
+            // Final delivery: if the edit fails (e.g. flood control on a flaky
+            // link), fall back to a fresh message instead of losing the answer.
+            reply.freshOnEditFail = true;
           } else if (reply.replyToMsgId === undefined) {
             reply.replyToMsgId = replyToMsgId;
           }
@@ -706,6 +790,7 @@ export class StreamHandler {
           filePath: mediaPath,
           caption: undefined,
         };
+        console.warn(`[StreamHandler] delivering media: type=${mediaReply.mediaType} len=${mediaPath.length}`);
         await this.sendWithLedger(sessionId, adapter, chatId, mediaReply);
       }
     };

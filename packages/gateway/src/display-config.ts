@@ -96,7 +96,13 @@ const TIER_MINIMAL: DisplayConfig = {
 };
 
 const PLATFORM_DEFAULTS: Record<PlatformType, DisplayConfig> = {
-  telegram:     TIER_HIGH,
+  // Telegram defaults to non-streaming: the stream_start placeholder depends
+  // on a reliable sendMessage round-trip. On flaky links the response can be
+  // lost after the message lands, orphaning a stub message that can never be
+  // edited or deleted (no message_id). Non-streaming (typing + one final
+  // message) is stub-free; users with reliable networks can opt back in via
+  // the per-platform `streaming` display override.
+  telegram:     { ...TIER_HIGH, streaming: false },
   discord:       TIER_HIGH,
   feishu:        TIER_MEDIUM,
   whatsapp:      TIER_MEDIUM,

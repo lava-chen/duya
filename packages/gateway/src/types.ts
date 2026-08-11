@@ -86,6 +86,12 @@ export interface TextReply {
   replyToMsgId?: string;
   /** If set, edit an existing message instead of sending a new one */
   editTargetMsgId?: string;
+  /**
+   * When set with editTargetMsgId, a failed edit falls back to delivering
+   * the text as a fresh message (and removes the leftover placeholder).
+   * Used for the final answer so a flaky platform never loses the reply.
+   */
+  freshOnEditFail?: boolean;
   /** Disable link previews in the sent message */
   disableLinkPreview?: boolean;
 }
