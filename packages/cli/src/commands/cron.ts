@@ -42,9 +42,9 @@ import type { CliSubcommandContext, ExitCode } from '../program/registry.js';
 // ---------------------------------------------------------------------------
 
 export type ScheduleKind = 'at' | 'every' | 'cron';
-export type CronStatus = 'active' | 'paused' | 'disabled' | 'failed';
-export type ConcurrencyPolicy = 'skip' | 'parallel' | 'queue' | 'replace';
-export type RunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'skipped';
+export type CronStatus = 'enabled' | 'disabled' | 'error';
+export type ConcurrencyPolicy = 'skip' | 'parallel' | 'replace';
+export type RunStatus = 'success' | 'failed' | 'running' | 'pending' | 'cancelled' | 'skipped';
 
 export interface CronListItemDTO {
   id: string;
@@ -60,18 +60,14 @@ export interface CronListItemDTO {
 }
 
 export interface CronInfoItemDTO extends CronListItemDTO {
-  scheduleAt?: number;
+  scheduleAt?: string;
   scheduleEveryMs?: number;
   scheduleCronExpr?: string;
   scheduleCronTz?: string;
-  workflowId: string;
   prompt: string;
   model?: string;
   concurrencyPolicy: ConcurrencyPolicy;
   maxRetries: number;
-  inputParams?: Record<string, unknown>;
-  sessionTarget?: string;
-  deliveryMode?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -91,13 +87,12 @@ export interface CronRunItemDTO {
 /**
  * Body sent to `POST /v1/crons`. Mirrors the shape of
  * `CreateAutomationCronInput` from `electron/automation/types.ts`,
- * minus the `id` (which the server generates) and `model` /
- * `sessionTarget` / `deliveryMode` (which are server-side concerns
- * derived from the active provider and CLI defaults).
+ * minus the `id` (which the server generates) and `model` (which is
+ * a server-side concern derived from the active provider).
  *
- * Plan 99 P2 alignment: `at` is now a string (ISO8601) to match
- * `CronSchedule.at`; `workflowId` is dropped (cron routes by id
- * post-create); `enabled` defaults to true when absent.
+ * The wire `schedule` keeps the legacy flat shape (`at`/`everyMs`/
+ * `cronExpr`); the server maps it onto the nested cronjob.toml
+ * schedule. `enabled` defaults to true when absent.
  */
 export interface CreateCronBody {
   name: string;
@@ -111,7 +106,6 @@ export interface CreateCronBody {
   };
   prompt: string;
   model?: string;
-  inputParams?: Record<string, unknown>;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   enabled?: boolean;
@@ -129,7 +123,6 @@ export interface UpdateCronBody {
   schedule?: CreateCronBody['schedule'];
   prompt?: string;
   model?: string;
-  inputParams?: Record<string, unknown>;
   concurrencyPolicy?: ConcurrencyPolicy;
   maxRetries?: number;
   status?: CronStatus;
@@ -139,9 +132,9 @@ export interface UpdateCronBody {
 // Text renderers
 // ---------------------------------------------------------------------------
 
-function formatDate(ms?: number): string {
-  if (!ms) return '-';
-  const d = new Date(ms);
+function formatDate(value?: string | number): string {
+  if (value === undefined || value === null || value === '') return '-';
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) return '-';
   return d.toISOString().slice(0, 19).replace('T', ' ');
 }
@@ -183,7 +176,6 @@ function renderInfoText(j: CronInfoItemDTO): string {
     j.scheduleEveryMs ? `    everyMs:       ${j.scheduleEveryMs}` : '',
     j.scheduleCronExpr ? `    cronExpr:      ${j.scheduleCronExpr}` : '',
     j.scheduleCronTz ? `    cronTz:        ${j.scheduleCronTz}` : '',
-    `  workflowId:      ${j.workflowId}`,
     `  prompt:          ${j.prompt.slice(0, 80)}${j.prompt.length > 80 ? '...' : ''}`,
     `  model:           ${j.model ?? '-'}`,
     `  concurrency:     ${j.concurrencyPolicy}`,
