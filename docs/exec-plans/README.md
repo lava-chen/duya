@@ -40,7 +40,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [202-agent-mailbox](./active/202-agent-mailbox.md) | AgentMailbox — Codex-like runtime instruction injection (`agent_mailbox` + checkpoints + soft interrupt) | P0 | Planning |
 | [104-proactive-memory-enhancement](./active/104-proactive-memory-enhancement.md) | Proactive memory — RealTimeCapture hook + scoring + dual-path Recall + decay archival | P1 | Planning |
 | [336-memory-pipeline-unblock](./active/336-memory-pipeline-unblock.md) | Phase1 提取恢复 + Phase2 curation 不再卡死 + 数据清理（reconcile 脚本已落地） | P0 | Phase A–E 已完成；F Task 已 commit (65c6b3f3) |
-| [417-deterministic-curation](./active/417-deterministic-curation.md) | Replace streaming LLM-as-curator with single-shot non-streaming call + deterministic file writes (M3 'result' w/o 'message_stop' 阻塞根因修复) | P0 | Planning |
+| [417-deterministic-curation](./active/417-deterministic-curation.md) | Replace streaming LLM-as-curator with single-shot non-streaming call + deterministic file writes (M3 'result' w/o 'message_stop' 阻塞根因修复) | P0 | ✅ Tasks A–H 全部完成（9 commits, 2026-08-11）|
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
