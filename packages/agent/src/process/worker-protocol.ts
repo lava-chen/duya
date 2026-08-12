@@ -265,6 +265,8 @@ export interface GoalUpdatedEvent {
   consecutiveNotAchieved: number;
   gapsSummary?: string;
   strategyProposal?: string;
+  pauseMessage?: string;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
 }
 
 /** Build the worker goal_updated payload from explicit tracker state. */
@@ -278,6 +280,8 @@ export function buildGoalUpdatedEvent(
     tokenBudget: number;
     consecutiveNotAchieved: number;
     gapsSummary?: string;
+    pauseMessage?: string;
+    history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
   },
   extra?: { gapsSummary?: string; strategyProposal?: string },
 ): GoalUpdatedEvent {
@@ -292,6 +296,8 @@ export function buildGoalUpdatedEvent(
     consecutiveNotAchieved: state.consecutiveNotAchieved,
     gapsSummary: state.gapsSummary ?? extra?.gapsSummary,
     strategyProposal: extra?.strategyProposal,
+    pauseMessage: state.pauseMessage,
+    history: state.history,
   };
 }
 

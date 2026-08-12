@@ -71,6 +71,8 @@ export interface GoalUpdatedEvent {
   consecutiveNotAchieved: number;
   gapsSummary?: string;
   strategyProposal?: string;
+  pauseMessage?: string;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
 }
 
 /**

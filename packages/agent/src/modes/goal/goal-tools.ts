@@ -25,6 +25,8 @@ import { summarizeGoalCompletion } from './goal-summarizer.js';
 import { writeGoalPlan } from './goal-plan.js';
 import { captureBaselineCommit } from './goal-changes.js';
 import { sendEvent, buildGoalUpdatedEvent } from '../../process/worker-protocol.js';
+import { persistSnapshot } from '../engine/persistence.js';
+import type { ModeTracker } from '../engine/tracker.js';
 import * as path from 'path';
 
 export const UPDATE_GOAL_TOOL_NAME = 'update_goal';
@@ -54,6 +56,8 @@ function emitGoalUpdated(sessionId?: string, extra?: { strategyProposal?: string
         tokenBudget: goalModeTracker.tokenBudget(),
         consecutiveNotAchieved: goalModeTracker.consecutiveNotAchieved(),
         gapsSummary: goalModeTracker.gapsSummary(),
+        pauseMessage: goalModeTracker.pauseMessage(),
+        history: goalModeTracker.history().map((h) => ({ at: h.at, event: h.event, detail: h.detail })),
       },
       extra,
     ) as unknown as Record<string, unknown>,
@@ -354,6 +358,15 @@ const goalStartExecutor: ToolExecutor = {
         : undefined;
       if (baseline) {
         goalModeTracker.setBaselineCommit(baseline);
+      }
+      // Persist the active goal snapshot immediately so a cold session load
+      // can restore the goal even without a live SSE goal_updated event.
+      const sessionId = context?.options.sessionId;
+      if (sessionId) {
+        await persistSnapshot(
+          goalModeTracker as unknown as ModeTracker<string, string, unknown>,
+          sessionId,
+        );
       }
     }
     emitGoalUpdated(context?.options.sessionId);
