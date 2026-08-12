@@ -8,7 +8,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
-import { GoalStatusCard } from './GoalStatusCard';
+import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
@@ -1300,8 +1300,8 @@ export function ChatView({
         <WorkspaceComposerLayer expanded={workspaceExpanded}>
         <div className={`p-4 pt-0 chat-composer-shell workspace-floating-composer${workspaceExpanded ? ' workspace-floating-composer-expanded' : ''}`}>
           <div className="max-w-[800px] mx-auto chat-composer-inner">
-            {/* Plan 411: live goal status card (objective / status / tokens) */}
-            <GoalStatusCard sessionId={sessionId} />
+            {/* Plan 420: live goal status chip */}
+            <GoalStatusChip sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
