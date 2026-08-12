@@ -8,11 +8,12 @@
  * shouldInjectReminder / canGateTools contract.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { GoalTracker, GOAL_HISTORY_CAP } from '../goal-tracker.js';
 import { serializeSnapshot, applySnapshot } from '../../engine/persistence.js';
 import { ModeTrackerEngine } from '../../engine/engine.js';
 import type { ModeTracker } from '../../engine/tracker.js';
+import { logger } from '../../../utils/logger.js';
 
 describe('GoalTracker — happy path', () => {
   it('drives the lifecycle: idle → start → active/planning → report_completed → verifying → achieved → complete → clear → idle', () => {
@@ -351,3 +352,15 @@ function goalTrackerUpcast(): ModeTracker<string, string, unknown> {
   t.transition({ type: 'start', objective: 'Engine probe' });
   return t as unknown as ModeTracker<string, string, unknown>;
 }
+
+describe('GoalTracker logging', () => {
+  it('logs a state migration on start', () => {
+    const spy = vi.spyOn(logger, 'info').mockImplementation(() => {});
+    const t = new GoalTracker();
+    const changed = t.transition({ type: 'start', objective: 'ship it' });
+    expect(changed).toBe(true);
+    expect(spy).toHaveBeenCalled();
+    expect(spy.mock.calls.some(([msg]) => String(msg).includes('[Goal]'))).toBe(true);
+    spy.mockRestore();
+  });
+});

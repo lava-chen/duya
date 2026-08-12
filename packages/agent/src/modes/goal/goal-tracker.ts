@@ -29,6 +29,7 @@
  */
 
 import type { ModeTracker } from '../engine/tracker.js';
+import { logger } from '../../utils/logger.js';
 
 /** Goal lifecycle state (10 states, aligned with grok `goal_tracker.rs`). */
 export type GoalState =
@@ -179,9 +180,23 @@ export class GoalTracker implements ModeTracker<GoalState, GoalEvent, GoalSnapsh
 
   /**
    * Transition table (plan 411 §2.4). Returns whether the state actually
-   * changed; illegal/no-op events return false without throwing.
+   * changed; illegal/no-op events return false without throwing. Every
+   * real migration is logged so the state machine is observable.
    */
   transition(event: GoalEvent): boolean {
+    const before = this.currentState;
+    const changed = this.applyTransition(event);
+    if (changed) {
+      logger.info(`[Goal] state ${before} -> ${this.currentState}`, {
+        event: event.type,
+        objective: this.goalObjective || undefined,
+        phase: this.currentPhase,
+      });
+    }
+    return changed;
+  }
+
+  private applyTransition(event: GoalEvent): boolean {
     switch (this.currentState) {
       case 'idle':
         if (event.type === 'start') {
