@@ -100,6 +100,16 @@ export function useContextUsage(
       state: 'normal',
     };
 
+    // Latest usable usage block (scanned newest-first) drives the context
+    // ring. `input_tokens` already includes cache read + write, so
+    // `used = input_tokens + output_tokens` is the full context size with no
+    // double counting and no missing output.
+    let latestUsed: number | undefined;
+    let latestOutput = 0;
+    let latestCacheRead = 0;
+    let latestCacheCreation = 0;
+    let latestHitRate = 0;
+
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
@@ -109,41 +119,47 @@ export function useContextUsage(
         const cacheRead = usage.cache_hit_tokens || 0;
         const cacheCreation = usage.cache_creation_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
-        const used = inputTokens + cacheRead + cacheCreation;
-        const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
 
-        const estimatedNextTurn = used + outputTokens + 200;
-        const estimatedNextRatio = resolvedContextWindow
-          ? estimatedNextTurn / resolvedContextWindow
-          : 0;
-
-        const effectiveRatio = Math.max(ratio, estimatedNextRatio);
-        let state: ContextState = 'normal';
-        if (effectiveRatio >= 0.95) state = 'critical';
-        else if (effectiveRatio >= 0.8) state = 'warning';
-
-        const cacheHitRate =
-          cacheRead + cacheCreation > 0
-            ? cacheRead / (cacheRead + cacheCreation)
-            : 0;
-
-        return {
-          modelName: modelName || 'unknown',
-          contextWindow: resolvedContextWindow,
-          used,
-          ratio,
-          estimatedNextTurn,
-          estimatedNextRatio,
-          cacheReadTokens: cacheRead,
-          cacheCreationTokens: cacheCreation,
-          outputTokens,
-          cacheHitRate,
-          hasData: true,
-          state,
-        };
+        if (latestUsed === undefined) {
+          latestUsed = inputTokens + outputTokens;
+          latestOutput = outputTokens;
+          latestCacheRead = cacheRead;
+          latestCacheCreation = cacheCreation;
+          latestHitRate = inputTokens > 0 ? cacheRead / inputTokens : 0;
+        }
       } catch {
         continue;
       }
+    }
+
+    if (latestUsed !== undefined) {
+      const used = latestUsed;
+      const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
+
+      const estimatedNextTurn = used + 200;
+      const estimatedNextRatio = resolvedContextWindow
+        ? estimatedNextTurn / resolvedContextWindow
+        : 0;
+
+      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
+      let state: ContextState = 'normal';
+      if (effectiveRatio >= 0.95) state = 'critical';
+      else if (effectiveRatio >= 0.8) state = 'warning';
+
+      return {
+        modelName: modelName || 'unknown',
+        contextWindow: resolvedContextWindow,
+        used,
+        ratio,
+        estimatedNextTurn,
+        estimatedNextRatio,
+        cacheReadTokens: latestCacheRead,
+        cacheCreationTokens: latestCacheCreation,
+        outputTokens: latestOutput,
+        cacheHitRate: latestHitRate,
+        hasData: latestUsed > 0,
+        state,
+      };
     }
 
     // No assistant message with tokenUsage yet — fall back to a local

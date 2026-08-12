@@ -7,6 +7,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { SessionSelector } from "./SessionSelector";
 import { InputDialog } from "@/components/ui/InputDialog";
+import { useDefaultPermission } from "@/stores/default-permission-store";
 import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import type { FileAttachment } from "@/types/message";
 
@@ -18,8 +19,9 @@ interface WelcomeViewProps {
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
   const { projects, createThread, addProjectFolder, isHydrated } = useConversationStore();
   const { t } = useTranslation();
+  const defaultPermission = useDefaultPermission();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);

@@ -2,7 +2,7 @@
 
 'use client';
 
-import React, { useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
+import React, { useMemo, useState, useRef, useCallback, KeyboardEvent, FormEvent, useEffect } from 'react';
 import { ArrowUpIcon,
   SearchIcon,
   XIcon,
@@ -25,7 +25,7 @@ import {
   resolveDirectSlash,
   filterItems,
 } from '@/lib/message-input-logic';
-import { ModelSelector, type ModelOption } from './ModelSelector';
+import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
 import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
 import { getEffortOptionsForModel } from '@duya/ai';
 import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
@@ -320,6 +320,7 @@ export function MessageInput({
   const [selectedModel, setSelectedModel] = useState<string>(cleanInitialModel);
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(effort);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [hasProvider, setHasProvider] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [activeProviderId, setActiveProviderId] = useState<string | null>(null);
@@ -956,6 +957,7 @@ export function MessageInput({
         }
 
         setAvailableModels(allModels);
+        setProviders(providers.filter((p) => p.hasApiKey || p.providerType === 'ollama'));
         setModelProviderMap(providerMap);
         setModelsLoading(false);
         return;
@@ -1153,6 +1155,29 @@ export function MessageInput({
     }
   }, []);
 
+  // Group models by provider for the multi-level ModelProviderSelector.
+  const providerGroups: ProviderModelGroup[] = useMemo(() => {
+    return providers
+      .map((provider) => {
+        const providerName = provider.name || provider.providerType || provider.id;
+        const prefix = `[${providerName}] `;
+        const models = availableModels.filter((m) => m.id.startsWith(prefix));
+        return { id: provider.id, name: providerName, models };
+      })
+      .filter((g) => g.models.length > 0);
+  }, [providers, availableModels]);
+
+  // Raw model id (no provider prefix) used to resolve thinking-effort options.
+  const rawSelectedModelId = useMemo(() => {
+    const match = selectedModel.match(/^\[([^\]]+)\]\s*(.+)$/);
+    return match ? match[2] : selectedModel;
+  }, [selectedModel]);
+
+  const modelEffortOptions = useMemo(
+    () => useEffortOptions(t, rawSelectedModelId),
+    [t, rawSelectedModelId],
+  );
+
   // Handle model change
   const handleModelChange = useCallback((modelId: string) => {
     setSelectedModel(modelId);
@@ -1161,7 +1186,7 @@ export function MessageInput({
   }, [onModelChange, modelProviderMap]);
 
   // Handle effort change
-  const handleEffortChange = useCallback((value: string) => {
+  const handleEffortChange = useCallback((value: string | null) => {
     const newEffort = value || undefined;
     setSelectedEffort(newEffort);
     onEffortChange?.(newEffort);
@@ -1705,18 +1730,6 @@ export function MessageInput({
                 }}
               />
 
-              {/* Model Selector */}
-              {hasProvider && (
-                <ModelSelector
-                  models={availableModels}
-                  selectedModelId={selectedModel}
-                  onSelect={handleModelChange}
-                  disabled={isStreaming}
-                  loading={modelsLoading}
-                  variant="compact"
-                />
-              )}
-
               {/* Permission Mode Selector */}
               <PermissionModeSelector
                 value={permissionMode ?? 'ask'}
@@ -1743,11 +1756,12 @@ export function MessageInput({
                     key={mode}
                     type="button"
                     onClick={() => handleToggleMode(mode)}
-                    className="group flex min-w-0 max-w-24 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
+                    className="composer-mode-chip group"
+                    title={`${label} (click to disable)`}
                   >
                     <XIcon
                       size={14}
-                      className="hidden group-hover:block"
+                      className="hidden group-hover:block composer-mode-chip-x"
                     />
                     <span className="truncate">{label}</span>
                   </button>
@@ -1755,7 +1769,7 @@ export function MessageInput({
               })}
               {agentPlanMode && !activeModes.has('plan-task') && (
                 <span
-                  className="flex min-w-0 max-w-32 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#7db4ff] border border-[#7db4ff]/40 bg-[rgba(37,99,235,0.12)] cursor-default"
+                  className="composer-mode-chip composer-mode-chip--readonly"
                   title="Agent entered plan mode — it will exit automatically when done planning"
                 >
                   <span className="truncate">Agent Plan Mode</span>
@@ -1782,6 +1796,19 @@ export function MessageInput({
                 >
                   <StopIcon size={16} />
                 </IconButton>
+              )}
+              {/* Model / Provider / Effort selector — next to the voice button */}
+              {hasProvider && providerGroups.length > 0 && (
+                <ModelProviderSelector
+                  providerGroups={providerGroups}
+                  selectedModelId={selectedModel}
+                  onSelectModel={handleModelChange}
+                  effortValue={selectedEffort}
+                  effortOptions={modelEffortOptions}
+                  onSelectEffort={handleEffortChange}
+                  disabled={isStreaming}
+                  loading={modelsLoading}
+                />
               )}
               <VoiceButton
                 disabled={disabled || isStreaming}

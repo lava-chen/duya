@@ -6,6 +6,7 @@ import { ImagePreviewModal } from './ImagePreviewModal';
 import { FileIcon } from '../icons';
 import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
+import { useLinkOpener } from '@/hooks/useLinkOpener';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -108,6 +109,7 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
 const BARE_FILE_REFERENCE_RE = /^[^/\\:?#\s]+\.\w+(?::\d+)?$/;
 
 function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const { openLinksInExternalBrowser, openLink } = useLinkOpener();
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const threads = useConversationStore((s) => s.threads);
   const cwd = threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
@@ -126,9 +128,8 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   }
 
   const isLocalFile = typeof resolvedHref === 'string' && isLikelyLocalFileReference(resolvedHref);
-  // Localhost URLs (e.g. `http://localhost:8000/`) flow into the
-  // side-panel browser instead of an external tab. External http(s)
-  // keeps the default target=_blank behaviour.
+  // Localhost URLs (e.g. `http://localhost:8000/`) follow the same routing
+  // as other web links based on the `open_links_in_external_browser` config.
   const isLocalServer = typeof href === 'string' && isLocalhostUrl(href);
 
   if (isLocalServer && href) {
@@ -138,12 +139,8 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         variant="ghost"
         size="sm"
         className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors font-mono text-[13.5px] bg-blue-500/5 hover:bg-blue-500/10 px-1 py-0.5 rounded border border-blue-500/20 cursor-pointer"
-        onClick={() => {
-          window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
-            detail: { url: href },
-          }));
-        }}
-        title={`Open in DUYA browser: ${href}`}
+        onClick={() => openLink(href)}
+        title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
       >
         {children}
       </Button>
@@ -180,8 +177,13 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     <a
       href={href}
       className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors"
-      target='_blank'
-      rel='noopener noreferrer'
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => {
+        e.preventDefault();
+        if (href) openLink(href);
+      }}
+      title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
     >
       {children}
     </a>

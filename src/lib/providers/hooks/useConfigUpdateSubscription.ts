@@ -23,6 +23,7 @@
 
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { subscribeConfigUpdates } from '@/lib/config-port-bus';
 import {
   providersQueryKey,
   modelCapabilitiesQueryKey,
@@ -30,21 +31,10 @@ import {
   providerHealthQueryKey,
 } from './queryKeys';
 
-interface ConfigPortUpdateAPI {
-  onConfigUpdate(handler: (config: unknown) => void): () => void;
-}
-
-interface ElectronAPIWithConfigPort {
-  getConfigPort?(): ConfigPortUpdateAPI | null;
-}
-
 export function useConfigUpdateSubscription() {
   const qc = useQueryClient();
   useEffect(() => {
-    const api = window.electronAPI as unknown as ElectronAPIWithConfigPort | undefined;
-    const port = api?.getConfigPort?.();
-    if (!port?.onConfigUpdate) return;
-    const unsub = port.onConfigUpdate((_config) => {
+    const unsub = subscribeConfigUpdates((_config) => {
       // Phase 1: invalidate the broad providers key. We can refine
       // to diff-based invalidation in a later plan once the IPC
       // payload carries a structured diff.

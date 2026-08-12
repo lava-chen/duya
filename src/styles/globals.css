@@ -4499,14 +4499,16 @@ a {
  */
 .attachment-preview-sidebar-modal {
   display: flex;
-  width: min(92vw, 1080px);
-  height: min(86vh, 720px);
-  max-height: 720px;
+  flex-direction: row;
+  width: min(92vw, 1200px);
+  height: min(90vh, 860px);
+  max-width: calc(100vw - 3rem);
+  max-height: calc(100vh - 3rem);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
+  border-radius: 1rem;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   overflow: hidden;
-  flex-direction: row;
 }
 
 .attachment-preview-sidebar-image {
@@ -6785,20 +6787,21 @@ html.compact .panel-zone {
   z-index: 10;
 }
 
-/* Pending card: rounded top, flat bottom — matches the input box (rounded-3xl = 1.5rem) */
+/* Pending card: rounded top, flat bottom — matches the input box (rounded-3xl = 1.5rem).
+   Colors now mirror the composer popover (`--command-menu-*`). */
 .permission-prompt-panel {
   border-radius: 0.75rem 0.75rem 0 0;
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
   border-bottom: none;
-  box-shadow: 0 -1px 6px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--command-menu-shadow);
   overflow: hidden;
 }
 
 /* Resolved card: fully rounded, slightly muted (no input to bond with) */
 .permission-prompt-panel.resolved {
   border-radius: 0.75rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--command-menu-border);
   box-shadow: none;
 }
 
@@ -6811,8 +6814,8 @@ html.compact .panel-zone {
 
 .permission-prompt-panel.ask-user-question-panel {
   border-radius: 1.35rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  border-bottom: 1px solid var(--command-menu-border);
+  background: var(--command-menu-bg);
 }
 
 .ask-question-sheet {
@@ -7250,18 +7253,8 @@ html[data-theme="light"] .ask-question-option.selected {
 
 .permission-prompt-btn {
   font-size: 0.75rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  padding: 0.2rem 0.6rem;
-  border-radius: 0.35rem;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-}
-
-.permission-prompt-btn:hover:not(:disabled) {
-  background: var(--surface-hover);
-  border-color: var(--border-hover);
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.5rem;
 }
 
 .permission-prompt-btn:disabled {
@@ -7269,27 +7262,11 @@ html[data-theme="light"] .ask-question-option.selected {
   cursor: not-allowed;
 }
 
-.permission-prompt-btn-primary {
-  background: linear-gradient(140deg, #5f71ff, #7286ff);
-  color: #fff;
-  border-color: transparent;
-}
-
-.permission-prompt-btn-primary:hover:not(:disabled) {
-  background: linear-gradient(140deg, #6a7bff, #7d90ff);
-  border-color: transparent;
-  opacity: 0.95;
-}
-
+.permission-prompt-btn-primary,
 .permission-prompt-btn-danger {
-  color: #ef4444;
-  border-color: rgba(239, 68, 68, 0.4);
-}
-
-.permission-prompt-btn-danger:hover:not(:disabled) {
-  background: rgba(239, 68, 68, 0.08);
-  border-color: rgba(239, 68, 68, 0.6);
-  color: #ef4444;
+  /* Appearance is fully driven by the shared Button variants (primary /
+     danger); no per-state color overrides here so the popover style stays
+     consistent across the app. */
 }
 
 .permission-prompt-status-spinner {
@@ -7701,20 +7678,24 @@ html[data-theme="light"] .ask-question-option.selected {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(4px);
+  padding: 1.5rem;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px) saturate(1.05);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
   animation: fadeIn 0.2s ease-out;
 }
 
 .attachment-preview-modal {
   display: flex;
   flex-direction: column;
-  width: 720px;
-  max-width: calc(100vw - 2rem);
-  max-height: calc(100vh - 4rem);
+  width: min(92vw, 1200px);
+  height: min(90vh, 900px);
+  max-width: calc(100vw - 3rem);
+  max-height: calc(100vh - 3rem);
   border-radius: 1rem;
   background: var(--main-bg);
   border: 1px solid var(--border);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   overflow: hidden;
   animation: slideUp 0.25s ease-out;
 }
@@ -7788,12 +7769,13 @@ html[data-theme="light"] .ask-question-option.selected {
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  min-height: 300px;
+  height: 100%;
+  min-height: 0;
 }
 
 .attachment-preview-image-img {
   max-width: 100%;
-  max-height: calc(100vh - 12rem);
+  max-height: 100%;
   object-fit: contain;
   border-radius: 0.5rem;
 }
@@ -7846,13 +7828,14 @@ html[data-theme="light"] .ask-question-option.selected {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 2rem;
-  min-height: 300px;
+  padding: 1.5rem;
+  min-height: 0;
+  overflow: auto;
 }
 
 .attachment-preview-pdf-thumbnail {
   max-width: 100%;
-  max-height: calc(100vh - 14rem);
+  max-height: 100%;
   object-fit: contain;
   border-radius: 0.5rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -7971,7 +7954,7 @@ html[data-theme="light"] .ask-question-option.selected {
   flex: 1;
   padding: 1.25rem;
   overflow: auto;
-  min-height: 300px;
+  min-height: 0;
 }
 
 .attachment-preview-doc-text {
@@ -7986,7 +7969,7 @@ html[data-theme="light"] .ask-question-option.selected {
 
 .attachment-preview-doc-thumbnail {
   max-width: 100%;
-  max-height: calc(100vh - 14rem);
+  max-height: 100%;
   object-fit: contain;
   border-radius: 0.5rem;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -13971,29 +13954,65 @@ html[data-message-font-size="large"] .prose h3 {
   cursor: pointer;
 }
 
-/* ── Plan 411: Goal status card (live goal tracker state) ───────────── */
+/* ── Plan 411: Goal status card (live goal tracker state) ─────────────
+   Mirrors the chat composer popover (`--command-menu-*`) visual language:
+   flat surface, hairline border, shared shadow, and a left status nub
+   colored by state instead of a full colored outline. */
 .goal-status-card {
+  position: relative;
   max-width: 800px;
   margin: 0 auto 8px;
-  padding: 10px 14px;
-  border: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+  padding: 10px 14px 10px 17px;
+  border: 1px solid var(--command-menu-border);
   border-radius: 10px;
-  background: var(--bg-elevated, rgba(30, 34, 42, 0.92));
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  background: var(--command-menu-bg);
+  box-shadow: var(--command-menu-shadow);
   font-size: 13px;
 }
+
+/* Left status bar — colored by state via data-state. */
+.goal-status-card::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--command-menu-muted);
+}
+
+.goal-status-card-nub {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* State colors — same semantic mapping as the old STATE_STYLES map. */
+.goal-status-card[data-state='active']::before,
+.goal-status-card-nub[data-state='active'] { background: var(--accent); }
+.goal-status-card[data-state='verifying']::before,
+.goal-status-card-nub[data-state='verifying'] { background: var(--accent); }
+.goal-status-card[data-state='complete']::before,
+.goal-status-card-nub[data-state='complete'] { background: var(--success, #22c55e); }
+.goal-status-card[data-state='blocked']::before,
+.goal-status-card-nub[data-state='blocked'],
+.goal-status-card[data-state='budget_limited']::before,
+.goal-status-card-nub[data-state='budget_limited'] { background: var(--error, #ef4444); }
+.goal-status-card[data-state='user_paused']::before,
+.goal-status-card-nub[data-state='user_paused'],
+.goal-status-card[data-state='backoff_paused']::before,
+.goal-status-card-nub[data-state='backoff_paused'],
+.goal-status-card[data-state='no_progress_paused']::before,
+.goal-status-card-nub[data-state='no_progress_paused'],
+.goal-status-card[data-state='infra_paused']::before,
+.goal-status-card-nub[data-state='infra_paused'] { background: var(--warning, #f59e0b); }
 
 .goal-status-card-header {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.goal-status-card-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 .goal-status-card-title {
@@ -14003,7 +14022,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .goal-status-card-tokens {
   margin-left: auto;
-  color: var(--text-muted);
+  color: var(--command-menu-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -14015,14 +14034,55 @@ html[data-message-font-size="large"] .prose h3 {
 
 .goal-status-card-gaps {
   margin-top: 6px;
-  color: var(--text-muted);
+  color: var(--command-menu-muted);
 }
 
 .goal-status-card-gaps-label {
   font-weight: 600;
-  color: var(--danger, #e5484d);
+  color: var(--error, #ef4444);
 }
 
 .goal-status-card-gaps-text {
   word-break: break-word;
+}
+
+/* ── Composer mode chips (goal / plan-task / research / conductor) ────
+   Mirrors the command-menu item look: flat surface, hairline border,
+   selected-tone hover. Replaces the old hardcoded blue chip. */
+.composer-mode-chip {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 6rem;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--command-menu-border);
+  border-radius: 8px;
+  background: var(--command-menu-bg);
+  color: var(--command-menu-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.composer-mode-chip:hover {
+  background: var(--command-menu-selected);
+  color: var(--text);
+}
+
+.composer-mode-chip-x {
+  flex-shrink: 0;
+}
+
+.composer-mode-chip--readonly {
+  max-width: 8rem;
+  cursor: default;
+}
+
+.composer-mode-chip--readonly:hover {
+  background: var(--command-menu-bg);
+  color: var(--command-menu-muted);
 }

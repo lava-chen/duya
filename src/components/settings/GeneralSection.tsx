@@ -1,6 +1,7 @@
 "use client";
 
 import { useSettings } from "@/hooks/useSettings";
+import { useLinkOpener } from "@/hooks/useLinkOpener";
 import { useIPC } from "@/hooks/useIPC";
 import {
   SpinnerGapIcon,
@@ -42,6 +43,7 @@ interface MigrationInfo {
 export function GeneralSection() {
   const { t, locale, setLocale } = useTranslation();
   const { settings, loading, error, save, saving } = useSettings();
+  const { openLinksInExternalBrowser, setOpenLinksInExternalBrowser } = useLinkOpener();
   const { listProviders } = useIPC();
 
   const [autoStart, setAutoStart] = useState(false);
@@ -511,6 +513,12 @@ export function GeneralSection() {
                 )}
               </div>
             }
+          />
+          <SettingsToggle
+            label={t("settings.general.openLinksInExternalBrowser")}
+            description={t("settings.general.openLinksInExternalBrowserDesc")}
+            checked={openLinksInExternalBrowser}
+            onCheckedChange={setOpenLinksInExternalBrowser}
           />
           </SettingsCard>
       </SettingsSection>
