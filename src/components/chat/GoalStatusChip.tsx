@@ -42,32 +42,37 @@ export function GoalStatusChip({ sessionId }: GoalStatusChipProps) {
     const unsubscribe = subscribeToGoalUpdated(sessionId, setGoal);
 
     // Cold-load seed: restore a persisted goal snapshot so the chip
-    // survives a session reload before the next SSE event arrives.
+    // survives a session reload before the next SSE event arrives. The
+    // stored snapshot is `{ mode, sessionId, status, data, updatedAt }`
+    // where `data` is the GoalSnapshot.
     window.electronAPI?.modeState?.get?.(sessionId, 'goal')
       .then((row) => {
         if (!row?.snapshotJson) return;
-        const data = JSON.parse(row.snapshotJson) as {
-          state?: string;
-          phase?: string;
-          objective?: string;
-          tokensUsedHighWater?: number;
-          tokenBudget?: number;
-          consecutiveNotAchieved?: number;
-          gapsSummary?: string;
-          pauseMessage?: string;
-          history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+        const parsed = JSON.parse(row.snapshotJson) as {
+          data?: {
+            state?: string;
+            phase?: string;
+            objective?: string;
+            tokensUsedHighWater?: number;
+            tokenBudget?: number;
+            consecutiveNotAchieved?: number;
+            gapsSummary?: string;
+            pauseMessage?: string;
+            history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+          };
         };
-        if (!data.state || data.state === 'idle') return;
+        const snap = parsed?.data;
+        if (!snap?.state || snap.state === 'idle') return;
         setGoal({
-          state: data.state,
-          phase: data.phase ?? '',
-          objective: data.objective ?? '',
-          tokensUsed: data.tokensUsedHighWater ?? 0,
-          tokenBudget: data.tokenBudget ?? 0,
-          consecutiveNotAchieved: data.consecutiveNotAchieved ?? 0,
-          gapsSummary: data.gapsSummary,
-          pauseMessage: data.pauseMessage,
-          history: data.history ?? [],
+          state: snap.state,
+          phase: snap.phase ?? '',
+          objective: snap.objective ?? '',
+          tokensUsed: snap.tokensUsedHighWater ?? 0,
+          tokenBudget: snap.tokenBudget ?? 0,
+          consecutiveNotAchieved: snap.consecutiveNotAchieved ?? 0,
+          gapsSummary: snap.gapsSummary,
+          pauseMessage: snap.pauseMessage,
+          history: snap.history ?? [],
         });
       })
       .catch(() => {});
