@@ -60,6 +60,19 @@ export interface MCPCandidate {
     allowedAgentIds?: string[];
     /** Optional reserved-for-future cross-source override key. Not consulted this round. */
     overrideTarget?: string;
+    /**
+     * Per-server short prefix used for model-visible tool names. When set,
+     * provider names become `mcp_<nameOverride>_<toolName>` instead of the
+     * longer `mcp_<scopedServerName>_<toolName>`. Keeps tool names short and
+     * stable even for deeply-scoped plugin servers.
+     */
+    nameOverride?: string;
+    /** Startup (spawn + handshake + listTools) timeout in seconds. */
+    startupTimeoutSec?: number;
+    /** Default per-tool-call timeout in seconds for this server. */
+    toolTimeoutSec?: number;
+    /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
+    toolTimeouts?: Record<string, number>;
   };
 }
 
@@ -97,6 +110,10 @@ export interface MCPServerInventoryEntry {
     url?: string;
     headers?: Record<string, string>;
     allowedAgentIds?: string[];
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   };
   discoveryStatus: MCPDiscoveryStatus;
   allowedAgentIds?: string[];
@@ -126,6 +143,10 @@ export interface ResolvedMCPServerConfig {
     env: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   };
   allowedAgentIds?: string[];
 }

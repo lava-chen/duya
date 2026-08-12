@@ -148,4 +148,16 @@ describe('harvestDiscoveredTools', () => {
     expect(added).toBe(3);
     expect([...acc]).toEqual(['a', 'b', 'c']);
   });
+
+  it('marks discovered tool names on the carrier message (Plan 418)', () => {
+    const acc = new Set<string>();
+    const msg = makeToolResultMessage(['canvas_manage'], 'tool');
+    harvestDiscoveredTools([msg], acc);
+    // The durable carrier now carries addedToolNames so the provider layer
+    // can emit tool_reference blocks on later turns.
+    expect(msg.addedToolNames).toEqual(['canvas_manage']);
+    // Repeated harvests do not duplicate the marker.
+    harvestDiscoveredTools([msg], acc);
+    expect(msg.addedToolNames).toEqual(['canvas_manage']);
+  });
 });

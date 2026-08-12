@@ -131,10 +131,6 @@ vi.mock('../../src/mcp/index.js', async () => {
       }),
     // Each `new MCPManager()` returns a freshly-built stub with
     };
-  // its own `instances` array. The factory function captures
-  // `globalFailureNames` from the closure so test code can
-  // inject failure names without having to patch a specific
-  // stub after apply has allocated a fresh manager.
   const stubs: any[] = [];
   function MCPManagerCtor() {
     const instances: Array<{ scopedServerName: string; tools: any[] }> = [];
@@ -153,6 +149,7 @@ vi.mock('../../src/mcp/index.js', async () => {
               input_schema: { type: 'object' },
             },
           ],
+          config,
         });
       }),
       getAllClients: vi.fn(() =>
@@ -160,6 +157,7 @@ vi.mock('../../src/mcp/index.js', async () => {
           isConnected: () => true,
           getName: () => s.scopedServerName,
           getTools: () => s.tools,
+          getConfig: () => s.config,
         })),
       ),
       getClient: vi.fn((name: string) => {
@@ -169,6 +167,7 @@ vi.mock('../../src/mcp/index.js', async () => {
           isConnected: () => true,
           getName: () => inst.scopedServerName,
           getTools: () => inst.tools,
+          getConfig: () => inst.config,
           callTool: vi.fn(async (toolName: string) => ({
             id: `${inst.scopedServerName}-${toolName}`,
             name: toolName,
@@ -191,6 +190,7 @@ vi.mock('../../src/mcp/index.js', async () => {
           toolName: string;
           description: string;
           input_schema: Record<string, unknown>;
+          source?: string;
         };
         const pending: Pending[] = [];
         for (const inst of instances) {
@@ -200,6 +200,7 @@ vi.mock('../../src/mcp/index.js', async () => {
               toolName: t.name,
               description: t.description,
               input_schema: t.input_schema,
+              source: inst.config?.source,
             });
           }
         }
@@ -219,19 +220,51 @@ vi.mock('../../src/mcp/index.js', async () => {
             input_schema: p.input_schema,
             internalKey,
             providerName,
-            mcpInfo: { serverName: p.scopedServerName, toolName: p.toolName },
+            mcpInfo: {
+              serverName: p.scopedServerName,
+              toolName: p.toolName,
+              // Mirrors the real MCPManager: the permission gate reads
+              // `mcpInfo.source` to bucket provenance (bundled / plugin /
+              // settings). The instance config carries the stamped source.
+              source: p.source ?? 'bundled',
+            },
             serverName: p.scopedServerName,
           };
         });
       }),
       disconnectAll: vi.fn(async () => undefined),
+      extract: vi.fn((name: string) => {
+        const i = instances.findIndex((s: any) => s.scopedServerName === name);
+        if (i >= 0) return instances.splice(i, 1)[0];
+        return undefined;
+      }),
+      adopt: vi.fn((client: any, config: any) => {
+        instances.push({
+          scopedServerName: client.getName(),
+          tools: client.getTools(),
+          config,
+        });
+        return client;
+      }),
     };
     stubs.push(stub);
     consumeStubOverride(stub);
     return stub;
   }
   return {
-    MCPManager: MCPManagerCtor,
+    MCPManager: Object.assign(MCPManagerCtor, {
+      // The real MCPManager static used by apply.ts's incremental
+      // reconnect (signature-compare before adopt/extract).
+      configSignature: (config: any) =>
+        JSON.stringify({
+          transport: config.transport ?? 'stdio',
+          command: config.command,
+          args: config.args,
+          env: config.env,
+          url: config.url,
+          headers: config.headers,
+        }),
+    }),
     MCPClient: vi.fn(),
     __getLastStub: () => stubs[stubs.length - 1],
     __stubs: stubs,
@@ -323,7 +356,7 @@ function makeTool(
  */
 function makeFakeAgent() {
   const activeMCPRegistry = new ToolRegistry();
-  let activeManager: { disconnectAll: () => Promise<void> } | null = null;
+  let activeManager: any = null;
   let activeMCPRuntimeSnapshot: ActiveMCPRuntimeSnapshot | null = null;
   const providerNameToInternalKey = new Map<string, string>();
   const toolEntries = new Map<string, { definition: Tool; executor: ToolExecutor }>();
@@ -336,6 +369,9 @@ function makeFakeAgent() {
     },
     getActiveAgentProfileId() { return activeAgentProfileId; },
     setActiveAgentProfileId(id: string | undefined) { activeAgentProfileId = id; },
+    // Plan 418 incremental reconnect: apply.ts asks the host for the
+    // previously active manager to reuse unchanged clients.
+    getActiveMCPManager() { return activeManager; },
     async setActiveMCPRuntime(install: {
       manager: { disconnectAll: () => Promise<void> };
       providerNameToInternalKey: Map<string, string>;
@@ -1071,5 +1107,187 @@ describe('Case 11: per-server connect failure records issue, continues', () => {
     expect(bBadIssues[0].error.type).toBe('mcp-spawn-failed');
     // Snapshot commits.
     expect(agent._activeMCPRuntimeSnapshot()).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Case 12: MCP default exposure + runtime permission gate
+// ---------------------------------------------------------------------------
+
+describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
+  /** Apply one settings-sourced server ("cg" with tool "query"). */
+  async function applySettingsServer(agent: ReturnType<typeof makeFakeAgent>) {
+    setNextCollection([
+      { source: 'settings', rawConfig: { name: 'cg', command: 'node', args: [] } },
+    ]);
+    setNextResolution(
+      [makeInventoryEntry('settings:cg', 'cg', 'settings')],
+      [makeResolved('settings:cg', 'cg', 'settings', 'settings:cg')],
+    );
+    await applyMCPConfiguration({ agent, reason: 'initialization' });
+    return {
+      internalKey: 'mcp__settings:cg__query',
+      providerName: 'mcp_settings_cg_query',
+    };
+  }
+
+  function gateContext(
+    toolUseId: string,
+    requestPermission?: (r: unknown) => Promise<'allow' | 'deny'>,
+  ) {
+    return {
+      toolUseId,
+      getAppState: () => ({}),
+      ...(requestPermission ? { requestPermission } : {}),
+    } as unknown as import('../../src/types.js').ToolUseContext;
+  }
+
+  it('registers MCP tools as always-exposed (no tool_search needed)', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey, providerName } = await applySettingsServer(agent);
+    expect(agent._toolEntries().get(internalKey)).toBeDefined();
+    // Default exposure: the tool is in the base LLM tool list without a
+    // tool_search discovery round-trip.
+    expect(agent._activeMCPRegistry().getExposeMode(providerName)).toBe('always');
+  });
+
+  it('bypassPermissions mode bypasses the gate (no prompt)', async () => {
+    const agent = {
+      ...makeFakeAgent(),
+      getPermissionMode: () => 'bypassPermissions' as const,
+    };
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-bypass-1', requestPermission),
+    );
+    // The real mode is read via getPermissionMode() — the old dead
+    // `activePermissionMode` lookup always blocked even bypass sessions.
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('default mode prompts via requestPermission; allow executes the call', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-allow-1', requestPermission),
+    );
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    const payload = requestPermission.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.toolName).toBe('query');
+    expect(payload.mode).toBe('generic');
+    expect(payload.id).toBe('tu-allow-1');
+    expect(String(payload.decisionReason)).toMatch(/explicit user approval/);
+  });
+
+  it('user deny produces a gate error and the call does not run', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const requestPermission = vi.fn(async () => 'deny' as const);
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-deny-1', requestPermission),
+    );
+    expect(r.error).toBe(true);
+    expect(r.result).toMatch(/Permission denied by user/);
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('no approval channel degrades to the hard gate error (headless)', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-headless-1'),
+    );
+    expect(r.error).toBe(true);
+    expect(r.result).toMatch(/requires explicit user approval/);
+    expect(r.result).toMatch(/bypassPermissions/);
+  });
+
+  it('an already-approved toolUseId skips the prompt on re-entry', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const ctx = gateContext('tu-approve-1', requestPermission);
+    const r1 = await entry.executor.execute({ q: 1 }, undefined, ctx);
+    expect(r1.error).toBeFalsy();
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    // Executor re-entry with the same toolUseId (e.g. StreamingToolExecutor
+    // retry after approval) must not prompt again.
+    const r2 = await entry.executor.execute({ q: 2 }, undefined, ctx);
+    expect(r2.error).toBeFalsy();
+    expect(r2.result).toBe('stub result');
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes the approval into appState _approvedToolUses (shared channel)', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    // Mutable appState + real setAppState, mirroring the P0-fixed
+    // DuyaAgent toolUseContext (plan 419).
+    let appState: Record<string, unknown> = {};
+    const ctx = {
+      toolUseId: 'tu-appstate-1',
+      getAppState: () => appState,
+      setAppState: (f: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+        appState = f(appState);
+      },
+      requestPermission: vi.fn(async () => 'allow' as const),
+    } as unknown as import('../../src/types.js').ToolUseContext;
+    const r = await entry.executor.execute({ q: 1 }, undefined, ctx);
+    expect(r.error).toBeFalsy();
+    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    expect(approved['tu-appstate-1']).toBe(true);
+    // A second entry through a context with a NO-OP setAppState (hosts
+    // not yet migrated) still falls back to the module-level set: no
+    // second prompt.
+    const requestPermission2 = vi.fn(async () => 'allow' as const);
+    const r2 = await entry.executor.execute(
+      { q: 2 },
+      undefined,
+      gateContext('tu-appstate-1', requestPermission2),
+    );
+    expect(r2.error).toBeFalsy();
+    expect(requestPermission2).not.toHaveBeenCalled();
+  });
+
+  it('bundled MCP tools stay trusted (no gate, no prompt)', async () => {
+    const agent = makeFakeAgent();
+    setNextCollection([
+      { source: 'bundled', rawConfig: { name: 'a', command: 'node', args: [] } },
+    ]);
+    setNextResolution(
+      [makeInventoryEntry('bundled:a', 'a', 'bundled')],
+      [makeResolved('bundled:a', 'a', 'bundled', 'bundled:a')],
+    );
+    await applyMCPConfiguration({ agent, reason: 'initialization' });
+    const entry = agent._toolEntries().get('mcp__bundled:a__query')!;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-bundled-1', requestPermission),
+    );
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
+    expect(requestPermission).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import type { ToolExecutor } from '../registry.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, getPrompt } from './prompt.js'
 import { isReadOnlyMode, setAgentMode } from '../SwitchModeTool/SwitchModeTool.js'
+import { planModeTracker } from '../../modes/plan/plan-tracker.js'
 
 export class ExitPlanModeTool implements Tool, ToolExecutor {
   readonly name = EXIT_PLAN_MODE_TOOL_NAME;
@@ -39,6 +40,10 @@ export class ExitPlanModeTool implements Tool, ToolExecutor {
     }
 
     setAgentMode('general');
+    // Sync the 413 PlanModeTracker so the runtime plan-file gate / reminders
+    // release on tool exit (grok: exit_plan_mode drives the single tracker).
+    // `exit_approved` is a no-op unless the tracker is active.
+    planModeTracker.transition('exit_approved');
 
     return {
       id: crypto.randomUUID(),

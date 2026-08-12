@@ -300,6 +300,34 @@ export function classifyError(error: unknown): APIErrorType {
 }
 
 /**
+ * Detect a schema-mismatch rejection: the endpoint's content-block schema
+ * does not accept one of the blocks duya emitted (e.g. standard Anthropic
+ * `tool_result` on the DeepSeek /anthropic compat surface, which only knows
+ * `text | tool_reference | image | document`). These rejections are
+ * deterministic per endpoint — retrying the same payload never succeeds — so
+ * the caller should degrade the tool transport instead (Plan 418).
+ */
+export function isToolSchemaMismatchError(error: unknown): boolean {
+  const statusCode = extractStatusCode(error);
+  if (statusCode !== undefined && statusCode !== 400) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  // Without an HTTP 400 status, only the strong deserialization markers
+  // count — a local error that merely mentions "unknown variant" is not an
+  // endpoint schema rejection and must not trigger a transport degrade.
+  if (statusCode === undefined) {
+    return (
+      message.includes('deserializ') ||
+      message.includes('Failed to parse JSON body')
+    );
+  }
+  return (
+    message.includes('unknown variant') ||
+    message.includes('deserializ') ||
+    message.includes('Failed to parse JSON body')
+  );
+}
+
+/**
  * Determine if an error is retryable
  */
 export function isRetryableError(error: unknown): boolean {

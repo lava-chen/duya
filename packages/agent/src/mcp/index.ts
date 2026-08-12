@@ -12,6 +12,32 @@ import { logger } from '../utils/logger.js';
 import { getCircuitBreakerManager, type CircuitBreaker } from './circuit-breaker.js';
 import { buildSafeEnv, sanitizeSecrets, scanMcpDescription } from './security.js';
 
+// Three-level timeout defaults (seconds). A server may override each
+// level via config: `startupTimeoutSec`, `toolTimeoutSec`, and
+// `toolTimeouts` (per-tool). These are the fallbacks when unset.
+const DEFAULT_STARTUP_TIMEOUT_MS = 30_000; // 30s: spawn + handshake + listTools
+const DEFAULT_TOOL_TIMEOUT_MS = 120_000;   // 120s: default per-tool-call cap
+
+/** Convert an optional seconds value to ms, falling back to `fallback`. */
+function timeoutMs(seconds: number | undefined, fallback: number): number {
+  if (seconds === undefined) return fallback;
+  return Math.max(1, Math.round(seconds * 1000));
+}
+
+/** Race `promise` against a timer; rejects with a descriptive error on expiry. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    timer = setTimeout(() => {
+      reject(new Error(`MCP ${label} timed out after ${ms}ms`));
+    }, ms);
+    promise.then(
+      (v) => { if (timer) clearTimeout(timer); resolve(v); },
+      (e) => { if (timer) clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /**
  * MCP Client - Manages connection to a single MCP server.
  * Internal to this module — only `MCPManager` is used externally.
@@ -36,6 +62,46 @@ class MCPClient {
    */
   getSource(): 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown' {
     return this.config.source ?? 'unknown';
+  }
+
+  /** The short, stable prefix used for model-visible tool names. */
+  getNameOverride(): string | undefined {
+    return this.config.nameOverride;
+  }
+
+  /** The underlying config (name + transport + timeouts). */
+  getConfig(): MCPServerConfig {
+    return this.config;
+  }
+
+  /**
+   * Apply a config update in place WITHOUT reconnecting. Only fields
+   * that do not affect the transport/spawn are safe to update here;
+   * everything else requires a reconnect. Currently that is the
+   * three-level timeout set plus the name override.
+   */
+  applyConfigUpdate(next: MCPServerConfig): void {
+    this.config.nameOverride = next.nameOverride;
+    this.config.startupTimeoutSec = next.startupTimeoutSec;
+    this.config.toolTimeoutSec = next.toolTimeoutSec;
+    this.config.toolTimeouts = next.toolTimeouts;
+  }
+
+  /**
+   * Return the effective startup timeout in ms for this server.
+   */
+  getStartupTimeoutMs(): number {
+    return timeoutMs(this.config.startupTimeoutSec, DEFAULT_STARTUP_TIMEOUT_MS);
+  }
+
+  /**
+   * Return the effective per-tool-call timeout in ms for `toolName`.
+   * Precedence: per-tool override (`toolTimeouts`) → server default
+   * (`toolTimeoutSec`) → global default.
+   */
+  getToolTimeoutMs(toolName: string): number {
+    const perTool = this.config.toolTimeouts?.[toolName];
+    return timeoutMs(perTool ?? this.config.toolTimeoutSec, DEFAULT_TOOL_TIMEOUT_MS);
   }
 
   /**
@@ -121,10 +187,19 @@ class MCPClient {
         }
       );
 
-      await this.client.connect(this.transport);
+      const startupMs = this.getStartupTimeoutMs();
+      await withTimeout(
+        this.client.connect(this.transport),
+        startupMs,
+        `connect to "${this.config.name}"`,
+      );
 
       // List available tools
-      const toolsResponse = await this.client.listTools();
+      const toolsResponse = await withTimeout(
+        this.client.listTools(),
+        startupMs,
+        `listTools for "${this.config.name}"`,
+      );
       this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown }) => {
         // Security layer 3 (prompt injection scan): warn on suspicious tool
         // descriptions. Does not block — false positives would break legit
@@ -183,12 +258,16 @@ class MCPClient {
     }
 
     try {
-      const result = await this.client.callTool(
-        {
-          name,
-          arguments: args,
-        },
-        CallToolResultSchema
+      const result = await withTimeout(
+        this.client.callTool(
+          {
+            name,
+            arguments: args,
+          },
+          CallToolResultSchema
+        ),
+        this.getToolTimeoutMs(name),
+        `callTool "${this.config.name}.${name}"`,
       );
 
       this.circuitBreaker.recordSuccess();
@@ -278,12 +357,53 @@ export class MCPManager {
   private clients: Map<string, MCPClient> = new Map();
 
   /**
+   * Stable fingerprint of the connect-relevant fields of a config.
+   * Two configs with the same signature spawn an identical transport,
+   * so an existing client can be reused without reconnecting.
+   */
+  static configSignature(config: MCPServerConfig): string {
+    return JSON.stringify({
+      transport: config.transport ?? 'stdio',
+      command: config.command,
+      args: config.args,
+      env: config.env,
+      url: config.url,
+      headers: config.headers,
+    });
+  }
+
+  /**
    * Add and connect to an MCP server
    */
   async addServer(config: MCPServerConfig): Promise<MCPClient> {
     const client = new MCPClient(config);
     await client.connect();
     this.clients.set(config.name, client);
+    return client;
+  }
+
+  /**
+   * Adopt an existing, already-connected client into this manager
+   * WITHOUT reconnecting. Applies the new config in place (currently
+   * the timeout set + name override) so a hot-reload that only
+   * changes timeouts does not need to respawn the server process.
+   * The client is keyed by its existing name.
+   */
+  adopt(client: MCPClient, newConfig: MCPServerConfig): MCPClient {
+    client.applyConfigUpdate(newConfig);
+    this.clients.set(client.getName(), client);
+    return client;
+  }
+
+  /**
+   * Remove a client from this manager and return it WITHOUT
+   * disconnecting. Used to hand a still-valid client to the next
+   * generation manager during an incremental reload. Returns
+   * `undefined` if `name` is not present.
+   */
+  extract(name: string): MCPClient | undefined {
+    const client = this.clients.get(name);
+    if (client) this.clients.delete(name);
     return client;
   }
 
@@ -345,7 +465,7 @@ export class MCPManager {
    * providerNames across reloads.
    */
   getAllToolsWithIdentity(
-    allocateProviderName: (internalKey: string) => string,
+    allocateProviderName: (internalKey: string, nameOverride?: string) => string,
   ): Array<Tool & { serverName: string }> {
     type Pending = {
       scopedServerName: string;
@@ -353,12 +473,14 @@ export class MCPManager {
       description: string;
       input_schema: Record<string, unknown>;
       source: 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown';
+      nameOverride?: string;
     };
     const pending: Pending[] = [];
     for (const client of this.clients.values()) {
       if (!client.isConnected()) continue;
       const scopedServerName = client.getName();
       const source = client.getSource();
+      const nameOverride = client.getNameOverride();
       for (const tool of client.getTools()) {
         pending.push({
           scopedServerName,
@@ -366,6 +488,7 @@ export class MCPManager {
           description: tool.description,
           input_schema: tool.input_schema,
           source,
+          nameOverride,
         });
       }
     }
@@ -379,7 +502,7 @@ export class MCPManager {
     const tools: Array<Tool & { serverName: string }> = [];
     for (const p of pending) {
       const internalKey = `mcp__${p.scopedServerName}__${p.toolName}`;
-      const providerName = allocateProviderName(internalKey);
+      const providerName = allocateProviderName(internalKey, p.nameOverride);
       tools.push({
         name: providerName,
         description: p.description,

@@ -123,6 +123,12 @@ export type AskUserQuestionInput = z.infer<typeof askUserQuestionInputSchema>;
 // Answer Storage (module-level, persists across retries)
 // ============================================================
 
+// Plan 419: this is the PAYLOAD channel for AskUserQuestion answers,
+// distinct from the approval-marker channel (`_approvedToolUses` in
+// ToolUseContext appState, written by StreamingToolExecutor's pre-check
+// / handlePermissionRequest). Both are keyed by the same permission
+// request id (= toolUseId): the approval marker gates the retry, this
+// map carries the answer data the retried Phase-2 execute() reads.
 const pendingAnswers = new Map<string, Record<string, string>>();
 
 /**

@@ -202,6 +202,61 @@ describe('computeProviderName — purity', () => {
   });
 });
 
+describe('computeProviderName — nameOverride short prefix', () => {
+  it('substitutes the scoped-server segment with the override, keeping the tool name', () => {
+    const out = computeProviderName(
+      'mcp__plugin:com.duya.lit:literature__add_source',
+      new Set(),
+      AnthropicToolNamePolicy,
+      'lit',
+    );
+    expect(out).toBe('mcp_lit_add_source');
+  });
+
+  it('keeps the default long form when nameOverride is omitted', () => {
+    const out = computeProviderName(
+      'mcp__plugin:com.duya.lit:literature__add_source',
+      new Set(),
+      AnthropicToolNamePolicy,
+    );
+    expect(out).toBe('mcp_plugin_com_duya_lit_literature_add_source');
+  });
+
+  it('still allocates a unique name when the override collides', () => {
+    const used = new Set(['mcp_lit_add_source']);
+    const out = computeProviderName(
+      'mcp__plugin:com.duya.lit:literature__add_source',
+      used,
+      AnthropicToolNamePolicy,
+      'lit',
+    );
+    expect(out).toBe('mcp_lit_add_source__2');
+  });
+
+  it('satisfies the length and charset constraints with an override', () => {
+    const out = computeProviderName(
+      'mcp__plugin:very.long.server.name:with.extras__tool',
+      new Set(),
+      AnthropicToolNamePolicy,
+      'short',
+    );
+    expect(out.length).toBeLessThanOrEqual(AnthropicToolNamePolicy.maxLength);
+    for (const ch of out) {
+      expect(ch).toMatch(AnthropicToolNamePolicy.allowedCharRegex);
+    }
+  });
+
+  it('treats a no-separator internal key as a bare override', () => {
+    const out = computeProviderName(
+      'mcp__bare',
+      new Set(),
+      AnthropicToolNamePolicy,
+      'short',
+    );
+    expect(out).toBe('mcp_short');
+  });
+});
+
 describe('computeProviderName — input without mcp__ prefix (defensive)', () => {
   it('still produces a mcp_-prefixed name and treats the input as raw', () => {
     // The engine should only feed keys with the mcp__ prefix. If a

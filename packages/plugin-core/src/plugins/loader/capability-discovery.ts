@@ -91,6 +91,14 @@ export interface McpServerCapability {
   env?: Record<string, string>
   url?: string
   headers?: Record<string, string>
+  /** Short, stable prefix for model-visible tool names (`mcp_<nameOverride>_<tool>`). */
+  nameOverride?: string
+  /** Startup (spawn + handshake + listTools) timeout in seconds. */
+  startupTimeoutSec?: number
+  /** Default per-tool-call timeout in seconds for this server. */
+  toolTimeoutSec?: number
+  /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
+  toolTimeouts?: Record<string, number>
 }
 
 /**
@@ -147,6 +155,16 @@ export function discoverMcpServers(pluginDir: string): McpServerCapability[] {
         if (typeof v === 'string') headers[k] = v
       }
       server.headers = headers
+    }
+    if (typeof entry.nameOverride === 'string') server.nameOverride = entry.nameOverride
+    if (typeof entry.startupTimeoutSec === 'number') server.startupTimeoutSec = entry.startupTimeoutSec
+    if (typeof entry.toolTimeoutSec === 'number') server.toolTimeoutSec = entry.toolTimeoutSec
+    if (isObjectRecord(entry.toolTimeouts)) {
+      const toolTimeouts: Record<string, number> = {}
+      for (const [k, v] of Object.entries(entry.toolTimeouts)) {
+        if (typeof v === 'number') toolTimeouts[k] = v
+      }
+      server.toolTimeouts = toolTimeouts
     }
     servers.push(server)
   }

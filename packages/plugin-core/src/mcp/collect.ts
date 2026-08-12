@@ -1,4 +1,4 @@
-﻿// packages/plugin-core/src/mcp/collect.ts
+// packages/plugin-core/src/mcp/collect.ts
 // Environment-agnostic MCP candidate collector.
 //
 // Pure transforms + a single `buildMCPCandidates(input)` assembly.
@@ -24,6 +24,10 @@ export interface MCPCollectorSettingsItem {
   headers?: Record<string, string>;
   enabled?: boolean;
   allowedAgentIds?: string[];
+  nameOverride?: string;
+  startupTimeoutSec?: number;
+  toolTimeoutSec?: number;
+  toolTimeouts?: Record<string, number>;
 }
 
 /** A plugin's MCP server declarations, narrowed from the manifest. */
@@ -43,6 +47,10 @@ export interface MCPCollectorPluginEntry {
         env?: Record<string, string>;
         url?: string;
         headers?: Record<string, string>;
+        nameOverride?: string;
+        startupTimeoutSec?: number;
+        toolTimeoutSec?: number;
+        toolTimeouts?: Record<string, number>;
       }>;
     };
   };
@@ -87,6 +95,10 @@ export function buildCandidatesFromPluginEntry(
         env: server.env,
         url: server.url,
         headers: server.headers,
+        nameOverride: server.nameOverride,
+        startupTimeoutSec: server.startupTimeoutSec,
+        toolTimeoutSec: server.toolTimeoutSec,
+        toolTimeouts: server.toolTimeouts,
       },
     });
   }
@@ -113,6 +125,10 @@ export function buildCandidatesFromSettingsEntries(
         url: item.url,
         headers: item.headers,
         allowedAgentIds: item.allowedAgentIds,
+        nameOverride: item.nameOverride,
+        startupTimeoutSec: item.startupTimeoutSec,
+        toolTimeoutSec: item.toolTimeoutSec,
+        toolTimeouts: item.toolTimeouts,
       },
     });
   }

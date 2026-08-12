@@ -19,6 +19,7 @@ import type {
   FileAttachment,
   Message,
   MessageContent,
+  ToolUseContent,
   Tool,
   ToolUse,
   SSEEvent,
@@ -26,6 +27,7 @@ import type {
   ToolUseContext,
   ToolResultContent,
   AgentProgressEvent,
+  AppState,
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
@@ -65,9 +67,11 @@ import { ModeCoordinator } from '../modes/engine/index.js';
 import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
 import { matchedStopPattern, prematureStopNudge } from '../modes/goal/goal-stop-detector.js';
 import { goalModeTracker } from '../modes/goal/goal-tracker.js';
+import { planModeTracker } from '../modes/plan/plan-tracker.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
+import { matchedToolIntent, toolIntentNudge } from './tool-intent-detector.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
 import {
@@ -624,11 +628,22 @@ export class duyaAgent {
     // dormant tracker (e.g. planModeTracker while only goal mode is on)
     // would be auto-activated and injected by the coordinator (plan 411
     // follow-up: goal mode must not wake plan mode).
+    //
+    // Also include trackers the AGENT activated this session via tool
+    // (EnterPlanModeTool → `activate_from_tool`), not just the frontend's
+    // `options.mode` — otherwise a tool-entered plan mode would be invisible
+    // to the coordinator and its write-gate/reminders never fire (grok:
+    // tracker state is authoritative; the prompt mode reconciles to it).
     const activeTrackerIds = new Set<string>(
       (this.resolvedModes?.modes ?? [])
         .filter((m) => m.tracker)
         .map((m) => m.tracker!.id),
     );
+    for (const tracker of modeTrackerEngine.list()) {
+      if (tracker.id === 'plan-task' && planModeTracker.state() === 'active') {
+        activeTrackerIds.add(tracker.id);
+      }
+    }
     this.modeCoordinator =
       activeTrackerIds.size > 0
         ? new ModeCoordinator(modeTrackerEngine, this.sessionId ?? '', activeTrackerIds)
@@ -660,6 +675,16 @@ export class duyaAgent {
     // remain, inject a steering message instead of stopping.
     const todoGateEnabled = options?.todoGate?.enabled ?? true;
     let todoGatePrompted = false;
+
+    // Plan 418 L2: tool-intent / action-consistency guard. When the model
+    // ends its turn with a tool-intent statement but no tool_use was emitted,
+    // nudge it to follow through. Capped so a model that keeps announcing
+    // without acting cannot spin forever.
+    const toolIntentNudgeMax = options?.toolIntentNudgeMax ?? 2;
+    let toolIntentNudgeCount = 0;
+    // The LLM's native stop reason for the current turn (end_turn / max_tokens
+    // / tool_use / stop_sequence), captured from the stream's done event.
+    let turnStopReason: string | undefined = undefined;
 
     // Plan 241 Phase 3: tools discovered via `tool_search` during this
     // streamChat call are added to the next turn's tool list so the LLM
@@ -838,12 +863,19 @@ export class duyaAgent {
         }
       }
 
-      // Create executor for this turn
+      // Create executor for this turn.
+      // Plan 419 P0: the tool-use AppState lives here as a real per-call
+      // object. StreamingToolExecutor marks `_approvedToolUses[toolUseId]`
+      // into it after a user approves a permission prompt, and the
+      // throw-path re-entry reads it back to skip a second prompt. The
+      // previous no-op implementations (`() => ({})` / `() => {}`) made
+      // "approve then retry" semantics silently dead on the main path.
+      let turnAppState: AppState = {};
       const toolUseContext: ToolUseContext = {
         toolUseId: crypto.randomUUID(),
         abortController: this.abortController,
-        getAppState: () => ({}),
-        setAppState: () => {},
+        getAppState: () => turnAppState,
+        setAppState: (updater) => { turnAppState = updater(turnAppState); },
         widgetStyleHistory: this.widgetStyleHistory,
         canvasFreshness: this.canvasFreshness,
         options: {
@@ -1150,6 +1182,10 @@ export class duyaAgent {
               continue;
             }
             doneEventHandled = true;
+            // Plan 418 L2: capture the model's native stop reason (end_turn /
+            // max_tokens / tool_use / stop_sequence) for turn-termination
+            // decisions below (intent-consistency nudge, length guard).
+            turnStopReason = (event as { reason?: string }).reason;
             // LLM stream is done for this turn
             // IMPORTANT: Add assistant message BEFORE tool results for OpenAI API compatibility
             // OpenAI requires: assistant (tool_calls) -> tool (result) message order
@@ -1171,6 +1207,36 @@ export class duyaAgent {
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
               this._pushDurable(messages, { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
+            }
+
+            // Plan 418 L2 (pi parity): a max_tokens/length stop means every
+            // tool call in this turn may carry truncated arguments. Fail them
+            // all instead of executing potentially borked calls (pi
+            // `failToolCallsFromTruncatedMessage`). The model retries next
+            // turn with complete arguments.
+            if (
+              turnStopReason === 'max_tokens' &&
+              assistantContent.some((b) => b.type === 'tool_use')
+            ) {
+              const truncatedUses = assistantContent.filter(
+                (b): b is ToolUseContent => b.type === 'tool_use',
+              );
+              logger.warn(
+                `[Agent] Turn ${turnCount}: LLM stopped at max_tokens with ${truncatedUses.length} tool call(s); failing them to avoid truncated arguments`,
+              );
+              executor.discard();
+              for (const use of truncatedUses) {
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'tool',
+                  tool_call_id: use.id,
+                  content:
+                    '<tool_error>output truncated (max_tokens); tool call arguments may be incomplete. Retry the call with complete arguments.</tool_error>',
+                  timestamp: Date.now(),
+                  seq_index: seqIndex,
+                });
+              }
+              needsFollowUp = true;
             }
 
             // Now get remaining tool results and add them after assistant message
@@ -1439,6 +1505,40 @@ export class duyaAgent {
                   id: crypto.randomUUID(),
                   role: 'user',
                   content: `[System] ${prematureStopNudge(pattern)}`,
+                  timestamp: Date.now(),
+                  seq_index: seqIndex,
+                });
+                continue;
+              }
+            }
+          }
+
+          // Plan 418 L2: tool-intent / action-consistency nudge. The model
+          // announced a tool action but ended its turn without emitting any
+          // tool_use (lossy third-party endpoints / weak tool generation).
+          // Stop only when the model explicitly concludes; otherwise steer it
+          // to follow through. Capped so a model that keeps announcing
+          // without acting cannot spin forever. Goal/todo guards above take
+          // precedence when they already decide to continue.
+          if (
+            toolIntentNudgeCount < toolIntentNudgeMax &&
+            (turnStopReason === undefined ||
+              turnStopReason === 'end_turn' ||
+              turnStopReason === 'completed' ||
+              turnStopReason === 'stop_sequence')
+          ) {
+            const lastAssistantText = lastAssistantTextOf(messages);
+            if (lastAssistantText) {
+              const intent = matchedToolIntent(lastAssistantText);
+              if (intent) {
+                toolIntentNudgeCount++;
+                logger.info(
+                  `[Agent] Turn ${turnCount}: Tool intent without tool_use (intent=${intent}); nudging to continue (${toolIntentNudgeCount}/${toolIntentNudgeMax})`,
+                );
+                messages.push({
+                  id: crypto.randomUUID(),
+                  role: 'user',
+                  content: `[System] ${toolIntentNudge(intent)}`,
                   timestamp: Date.now(),
                   seq_index: seqIndex,
                 });
@@ -2534,6 +2634,24 @@ export class duyaAgent {
       }
     }
     return names;
+  }
+
+  /**
+   * Current permission mode (default / auto / plan / bypassPermissions /
+   * dontAsk / ...). The MCP runtime gate consults this so sessions that
+   * opted into bypass modes are not blocked by the third-party tool gate.
+   */
+  getPermissionMode(): PermissionMode {
+    return this.permissionMode;
+  }
+
+  /**
+   * The currently active MCPManager, or `null` when no MCP runtime
+   * has been installed yet. Consumed by `applyMCPConfiguration` to
+   * reuse still-valid clients across incremental reloads.
+   */
+  getActiveMCPManager(): MCPManager | null {
+    return this.mcpManager;
   }
 
   /**

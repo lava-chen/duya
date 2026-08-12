@@ -15,7 +15,7 @@ interface CatalogServer {
 function displaySource(source: MCPSource): string {
   switch (source) {
     case 'settings':
-      return 'user mcp.toml';
+      return 'user config.toml';
     case 'plugin':
       return 'plugin';
     case 'bundled':

@@ -220,11 +220,27 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
       const ctx = this.buildContext(sessionId);
       console.log('[BrowserTool.execute] built context, about to execute:', operation);
       const result = await this.actionRegistry.execute(operation, input, ctx);
+      const resultPayload = { operation, mode: this.mode, ...result };
+
+      // For parallel_fetch, preserve a structured result list so the UI can
+      // render a search-result card without having to parse markdown.
+      const metadata: ToolResult['metadata'] | undefined =
+        operation === 'parallel_fetch' && Array.isArray(result.results)
+          ? {
+              browserResults: result.results.map((item: Record<string, unknown>) => ({
+                url: String(item.url ?? ''),
+                title: typeof item.title === 'string' && item.title ? item.title : undefined,
+                success: item.success === true,
+                error: typeof item.error === 'string' ? item.error : undefined,
+              })),
+            }
+          : undefined;
 
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: formatResult(operation, { operation, mode: this.mode, ...result }),
+        result: formatResult(operation, resultPayload),
+        metadata,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

@@ -1217,11 +1217,32 @@ max_not_achieved_rounds = 5
 
 Phase 1 改动要点:`ToolMeta` 扩两个 optional 字段(`inputSchemaSummary`、`exposeMode`,均独立导出 `ExposeMode` 类型),`ToolSearchTool.execute` 返回带稳定 marker 和工具标题的 Markdown 结果,`DuyaAgent.streamChat` 通过 `toolSearchTool.setSearchFn(searchToolsFromRegistry)` 注入关键词搜索实现。
 
-Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research 工具按需发现。MCP runtime 注册条目也固定为 `discoverable`，不会把整套外部 schema 塞进首轮请求。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
+Phase 2 改动要点:`ToolRegistry.register` 重载接受第三参数 `ToolMetaInput`(`{ inputSchemaSummary?, exposeMode? }`),新增 `getMeta(name)` / `getExposeMode(name)` accessor(后者在未持久化时默认 `'always'`);`searchToolsFromRegistry` 从 registry meta 字段填充 result 的 `exposeMode` / `inputSchemaSummary`;`createBuiltinRegistry` 默认暴露平台原生 shell、read/write/edit/grep/glob、Agent、Task 与 ToolSearch,其余 mode/browser/memory/session/vision/widget/module/skill/CLI/research 工具按需发现。**MCP runtime 注册条目固定为 `always`**(2026-08-11 调整:原 `discoverable` 会让所有 MCP 工具被排除在首轮 tool 列表外,agent 必须多一轮 `tool_search` 才能使用;`always` 直接进 base tools)。`DuyaAgent._resolveTools` 在 Layer 0/1/2 过滤之前按 `exposeMode !== 'internal'` 裁剪 baseTools。
 
 Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredTools: Set<string>`,每轮 while 开头把 `registry.getTool(name)` 合并到局部 `tools` 数组,实现"LLM 调 `tool_search` 后下一轮 LLM 请求的工具列表自动包含搜到的工具";扫描由 [packages/agent/src/agent/tool-search-discovery.ts](./packages/agent/src/agent/tool-search-discovery.ts) 提供 (`extractToolNamesFromSearchResult` + `harvestDiscoveredTools`),在每次 `executor.getRemainingResults()` 完成后从 messages 末尾 batch 抽取带稳定 marker 的 `## Tool: \`name\`` 标题。MCP 用 internal key 存储而搜索返回 provider-visible name，registry accessor 会双向解析这两种名称，确保搜到的 MCP 工具的 metadata、schema 与 executor 都能进入下一轮。首轮 system prompt 另加一个有上限的 MCP capability directory（server、来源、工具数量和少量示例），让 Agent 先知道每个已连接 server 的能力边界，再针对性调用 `tool_search`。边界:`Set` 自动去重;`registry.getTool(name)` 返回 undefined 时静默 skip(MCP server 断开 / plugin 卸载后)。
 
 27 个单测覆盖 Phase 1/2/3 全链路([packages/agent/tests/unit/ToolSearchTool.test.ts](./packages/agent/tests/unit/ToolSearchTool.test.ts) 17 条 + [packages/agent/tests/unit/tool-search-discovery.test.ts](./packages/agent/tests/unit/tool-search-discovery.test.ts) 10 条),全绿。
+
+## 工具协议适配层 + Deferred Tools (Plan 418)
+
+`tool_search`(Plan 241) 解决**应用层**的按需工具发现;Plan 418 解决**传输层**的协议兼容——不同 Anthropic 兼容端点的 content 块 schema 不同,直接按 Anthropic 标准发送 `tool_use`/`tool_result` 块会被拒绝(例:DeepSeek `/anthropic` 端点只接受 `text | tool_reference | image | document`)。详见 [docs/exec-plans/active/418-tool-protocol-adaptation.md](./docs/exec-plans/active/418-tool-protocol-adaptation.md)。
+
+**能力声明**(`packages/ai/src/types.ts` `ModelCompat`):
+
+- `toolResultTransport: 'tool-result-block' | 'text-user-message' | 'none'` —— 工具结果回传形态。`text-user-message` 把工具结果折叠为纯文本 user 消息(`tool_use` 保留);`none` 完全不传 tools 并在 system 提示工具不可用。
+- `supportsToolReferences?: boolean` —— 是否支持 Anthropic tool-search 式延迟加载(`tool_reference` 块)。默认 false,仅显式声明开启。
+
+**端点推导**（`packages/ai/src/api/anthropic-messages.ts`）:`isDeepSeekAnthropicEndpoint(baseURL)` 识别 DeepSeek `/anthropic` 兼容面;`resolveToolResultTransport(baseURL, compat)` 按「compat 显式 > 端点推导 > 默认 `tool-result-block`」解析。
+
+**序列化适配**:`transform-messages.ts` 的 `textifyToolResults(messages)` 把 `role:'tool'` 消息(及遗留 `tool_result` 块)转成带 `[Tool result: ...]`/`[Tool result ended]` 标记的文本 user 消息,错误(`<tool_error>`)显式标记;`createAnthropicClient.streamChat` 按 transport 选择转换路径,`none` 时 tools 参数置空。
+
+**渐进降级**(L0 标准块 → L1 文本回传 → L2 无工具):`streamChat` 内按「初始声明 + 会话级记忆」构建阶梯,捕获 400 反序列化错误(`isToolSchemaMismatchError`,`packages/ai/src/utils/errors.ts`)时降级重试一次并记住(closure 状态跨 turn 存活),避免每轮重复失败。
+
+**Deferred tools**(对齐 pi / Claude Code):`packages/ai/src/utils/deferred-tools.ts` 提供 `getDeferredToolNames`(从历史 tool 消息的 `Message.addedToolNames` 收集)与 `splitDeferredTools`(把已加载工具从 tools 参数拆出);`toAnthropicMessages` 对 `supportsToolReferences` 端点在 tool_result content 内输出 `tool_reference` 块、普通内容移到 sibling text 块(Anthropic 拒绝引用与普通内容混排),同一工具只引用一次。agent 侧 `harvestDiscoveredTools`(plan 241) 把发现的工具名写回 tool 消息的 `addedToolNames`,打通「应用层发现 → 传输层引用」链路。
+
+**测试**:`packages/ai/test/tool-protocol-adaptation.test.ts`(18 条,含 mock SDK 的降级阶梯集成测试 + SSE 坏帧跳过/修复 + start 事件 input 保真 + partial JSON 恢复)+ `packages/ai/test/deferred-tools.test.ts`(8 条)+ `packages/ai/test/json-repair.test.ts`(9 条,自 pi 移植的容错 JSON 解析)+ `packages/agent/tests/unit/tool-intent-detector.test.ts`(8 条,L2 意图-动作一致性)+ `tool-search-discovery.test.ts` 增量断言,全绿;`npm run typecheck:all` 通过。
+
+**L2 意图-动作一致性**(`packages/agent`):`tool-intent-detector.ts` 检测 turn 结束文本中的强工具意图(中英文,保守锚定)但无 tool_use → 注入继续 nudge(上限 2 次);`max_tokens` 停止时 fail 全部工具(对齐 pi,防截断参数)。与 goal/todo/mailbox nudge 正交叠加。
 
 ## First-Party Plugin Catalog (Plan 313)
 

@@ -1,7 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { StreamingToolExecutor } from '../../src/tool/StreamingToolExecutor.js';
 import { ToolRegistry } from '../../src/tool/registry.js';
+import { PermissionRequiredError } from '../../src/tool/BaseTool.js';
 import type { ToolUseContext, ToolUse, SSEEvent } from '../../src/types.js';
+
+
+/**
+ * Extract the tool-result text from a MessageUpdate, supporting both the
+ * legacy array-of-blocks shape and the plan-315 string-content tool message
+ * (role: 'tool', content: string).
+ */
+function toolResultText(update: {
+  message?: { role?: string; content?: unknown };
+}): string | null {
+  const msg = update.message;
+  if (!msg) return null;
+  const content = msg.content;
+  if (Array.isArray(content)) {
+    const first = content[0] as { type?: string; content?: unknown } | undefined;
+    if (first?.type === 'tool_result') return String(first.content);
+    return null;
+  }
+  if (msg.role === 'tool' && typeof content === 'string') return content;
+  return null;
+}
 
 describe('StreamingToolExecutor', () => {
   let registry: ToolRegistry;
@@ -109,13 +131,9 @@ describe('StreamingToolExecutor', () => {
 
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
-        if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]) {
-            if (content[0].type === 'tool_result') {
-              results.push(String(content[0].content));
-            }
-          }
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
         }
       }
 
@@ -142,11 +160,9 @@ describe('StreamingToolExecutor', () => {
 
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
-        if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
-          }
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
         }
       }
 
@@ -171,11 +187,9 @@ describe('StreamingToolExecutor', () => {
 
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
-        if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
-          }
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
         }
       }
 
@@ -279,11 +293,9 @@ describe('StreamingToolExecutor', () => {
 
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
-        if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
-          }
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
         }
       }
 
@@ -323,11 +335,9 @@ describe('StreamingToolExecutor', () => {
 
       const results: string[] = [];
       for await (const update of executor.getRemainingResults()) {
-        if (update.message) {
-          const content = update.message.content;
-          if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-            results.push(String(content[0].content));
-          }
+        const toolText = toolResultText(update);
+        if (toolText !== null) {
+          results.push(toolText);
         }
       }
 
@@ -418,11 +428,9 @@ describe('Tool use loop simulation', () => {
     // 3. Collect results
     const toolResults: string[] = [];
     for await (const update of executor.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          toolResults.push(String(content[0].content));
-        }
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        toolResults.push(toolText);
       }
     }
 
@@ -466,11 +474,9 @@ describe('Tool use loop simulation', () => {
 
     const results: string[] = [];
     for await (const update of executor.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
       }
     }
 
@@ -520,15 +526,151 @@ describe('Tool use loop simulation', () => {
 
     const results: string[] = [];
     for await (const update of executor.getRemainingResults()) {
-      if (update.message) {
-        const content = update.message.content;
-        if (Array.isArray(content) && content[0]?.type === 'tool_result') {
-          results.push(String(content[0].content));
-        }
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
       }
     }
 
     // Should have error for bash and error/cancelled for the read
     expect(results.some(r => r.includes('error') || r.includes('Error'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plan 419 P0: approval-marker channel (_approvedToolUses in appState)
+// ---------------------------------------------------------------------------
+// These tests use a REAL mutable appState context (the P0-fixed DuyaAgent
+// shape). They pin the "approve once, then retry without a second prompt"
+// semantics that was dead when getAppState/setAppState were no-ops.
+
+describe('permission approval channel (plan 419 P0)', () => {
+  interface MutableContext {
+    appState: Record<string, unknown>;
+    toolUseContext: ToolUseContext;
+  }
+
+  function makeMutableContext(requestPermission?: (r: unknown) => Promise<'allow' | 'deny'>): MutableContext {
+    const appState: Record<string, unknown> = {};
+    return {
+      appState,
+      toolUseContext: {
+        toolUseId: 'ctx-419',
+        abortController: new AbortController(),
+        getAppState: () => appState,
+        setAppState: (f) => { Object.assign(appState, f(appState)); },
+        requestPermission,
+        options: {
+          tools: [],
+          commands: [],
+          mainLoopModel: 'test-model',
+          mcpClients: [],
+        },
+      } as ToolUseContext,
+    };
+  }
+
+  async function drain(executor: StreamingToolExecutor): Promise<string[]> {
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const toolText = toolResultText(update);
+      if (toolText !== null) {
+        results.push(toolText);
+      }
+    }
+    return results;
+  }
+
+  it('pre-check approval is visible to execute via _approvedToolUses', async () => {
+    const registry = new ToolRegistry();
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const { appState, toolUseContext } = makeMutableContext(requestPermission);
+
+    const execute = vi.fn(async () => ({ id: 'use-1', name: 'needs-ok', result: 'executed' }));
+    registry.register(
+      { name: 'needs-ok', description: 'Needs confirmation', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute,
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-1', name: 'needs-ok', input: {} });
+    const results = await drain(executor);
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(results.some((r) => r.includes('executed'))).toBe(true);
+    // The approval marker lands on the SHARED channel (plan 419 P0).
+    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    expect(approved['use-1']).toBe(true);
+  });
+
+  it('PermissionRequiredError retry does not prompt twice when pre-check approved', async () => {
+    const registry = new ToolRegistry();
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const { appState, toolUseContext } = makeMutableContext(requestPermission);
+
+    // Two-phase tool (AskUserQuestion pattern): phase 1 throws
+    // PermissionRequiredError; the post-approval retry succeeds.
+    let calls = 0;
+    registry.register(
+      { name: 'two-phase', description: 'Two phase', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute: async () => {
+          calls++;
+          if (calls === 1) {
+            throw new PermissionRequiredError({
+              id: 'use-2',
+              toolName: 'two-phase',
+              toolInput: {},
+              mode: 'generic',
+              expiresAt: Date.now() + 5 * 60 * 1000,
+            });
+          }
+          return { id: 'use-2', name: 'two-phase', result: 'phase-2-ok' };
+        },
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-2', name: 'two-phase', input: {} });
+    const results = await drain(executor);
+
+    // Exactly ONE prompt: the pre-check approval marker in appState makes
+    // the throw-path retry directly instead of re-asking the user.
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+    expect(results.some((r) => r.includes('phase-2-ok'))).toBe(true);
+    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    expect(approved['use-2']).toBe(true);
+  });
+
+  it('deny finalizes with a permission error and never executes', async () => {
+    const registry = new ToolRegistry();
+    const canUse = vi.fn().mockResolvedValue(true);
+    const requestPermission = vi.fn(async () => 'deny' as const);
+    const { toolUseContext } = makeMutableContext(requestPermission);
+
+    const execute = vi.fn(async () => ({ id: 'use-3', name: 'needs-ok', result: 'never' }));
+    registry.register(
+      { name: 'needs-ok', description: 'Needs confirmation', input_schema: {} },
+      {
+        checkPermissions: () => ({ allowed: false, requiresUserConfirmation: true, reason: 'test' }),
+        execute,
+      },
+    );
+
+    const executor = new StreamingToolExecutor(registry, canUse, toolUseContext);
+    executor.addTool({ id: 'use-3', name: 'needs-ok', input: {} });
+    const results = await drain(executor);
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(execute).not.toHaveBeenCalled();
+    expect(results.some((r) => r.includes('Permission denied'))).toBe(true);
   });
 });

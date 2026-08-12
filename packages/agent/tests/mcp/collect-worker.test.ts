@@ -180,11 +180,20 @@ vi.mock('../../src/ipc/db-client.js', () => ({
   },
 }));
 
+// The worker reads user MCPs from the unified config store. Mock it so
+// these tests do not depend on the developer's real ~/.duya/config.toml.
+vi.mock('../../src/mcp/config.js', () => ({
+  readUserMcpToml: vi.fn().mockResolvedValue([]),
+}));
+
 import * as dbClient from '../../src/ipc/db-client.js';
+import * as mcpConfig from '../../src/mcp/config.js';
 
 describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
   beforeEach(() => {
     vi.mocked(dbClient.pluginDb.registryList).mockReset();
+    vi.mocked(mcpConfig.readUserMcpToml).mockReset();
+    vi.mocked(mcpConfig.readUserMcpToml).mockResolvedValue([]);
   });
 
   it('returns an empty MCPCollectionResult when all IPC calls fail', async () => {
@@ -205,5 +214,16 @@ describe('collectWorkerMCPCandidates (IPC wrapper)', () => {
     const sources = new Set(r.candidates.map((c) => c.source));
     expect(sources.has('plugin')).toBe(true);
     expect(sources.has('settings')).toBe(false);
+  });
+
+  it('includes user MCPs from the unified config store', async () => {
+    vi.mocked(dbClient.pluginDb.registryList).mockResolvedValue([] as never);
+    vi.mocked(mcpConfig.readUserMcpToml).mockResolvedValue([
+      { name: 'codegraph', command: 'codegraph', args: ['serve'], enabled: true },
+    ]);
+    const r = await collectWorkerMCPCandidates();
+    const settings = r.candidates.filter((c) => c.source === 'settings');
+    expect(settings).toHaveLength(1);
+    expect(settings[0].rawConfig.name).toBe('codegraph');
   });
 });

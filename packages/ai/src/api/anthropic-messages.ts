@@ -26,16 +26,21 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
+import { _iterSSEMessages } from '@anthropic-ai/sdk/core/streaming.js';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type {
   AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
-  Message, MessageContent, Model, SSEEvent,
-  TextContent, ThinkingContent, ToolUseContent,
+  Message, MessageContent, Model, ModelCompat, SSEEvent,
+  TextContent, ThinkingContent, ToolResultTransport, ToolUseContent,
 } from '../types.js';
-import { transformMessages } from './transform-messages.js';
+import { transformMessages, textifyToolResults } from './transform-messages.js';
+import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tools.js';
 import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem } from '../utils/prompt-caching.js';
+import { isToolSchemaMismatchError } from '../utils/errors.js';
+import { parseJsonWithRepair } from '../utils/json-repair.js';
+import { parsePartialJsonSafe } from '../utils/partial-json.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 
@@ -156,6 +161,41 @@ export function isMiniMaxEndpoint(baseURL?: string): boolean {
     normalized.startsWith('https://api.minimax.io/anthropic') ||
     normalized.startsWith('https://api.minimaxi.com/anthropic')
   );
+}
+
+/**
+ * Check if a base URL is a DeepSeek Anthropic-compatible endpoint.
+ *
+ * The DeepSeek `/anthropic` compat surface only accepts content blocks of
+ * `text | tool_reference | image | document` — it rejects standard Anthropic
+ * `tool_use`/`tool_result` blocks (Plan 418). The OpenAI-compatible DeepSeek
+ * surface (`/v1`/`/chat/completions`) is unaffected and keeps the standard
+ * transport.
+ */
+export function isDeepSeekAnthropicEndpoint(baseURL?: string): boolean {
+  if (!baseURL) {
+    return false;
+  }
+  const normalized = baseURL.replace(/\/$/, '').toLowerCase();
+  return (
+    normalized.includes('deepseek.com') &&
+    (normalized.includes('/anthropic') || normalized.includes('/anthropic/'))
+  );
+}
+
+/**
+ * Resolve the tool-result transport for an Anthropic-protocol request.
+ *
+ * Precedence (Plan 418): explicit ModelCompat declaration > base-URL feature
+ * inference > protocol default ('tool-result-block').
+ */
+export function resolveToolResultTransport(
+  baseURL: string | undefined,
+  compat: ModelCompat | undefined,
+): ToolResultTransport {
+  if (compat?.toolResultTransport) return compat.toolResultTransport;
+  if (isDeepSeekAnthropicEndpoint(baseURL)) return 'text-user-message';
+  return 'tool-result-block';
 }
 
 /**
@@ -1060,11 +1100,20 @@ export function parseAnthropicEvent(
             synthId,
           });
         }
+        // Plan 418 L1: some Anthropic-compatible endpoints (DeepSeek
+        // /anthropic) deliver the complete tool input on content_block_start
+        // instead of (or in addition to) streaming `input_json_delta`
+        // deltas. Preserve it as the initial value so arguments are never
+        // lost — the stop handler only overwrites it when deltas parsed.
+        const startInput = (block as unknown as { input?: unknown }).input;
         const toolBlock: ToolUseContent = {
           type: 'tool_use',
           id: synthId,
           name: block.name || '',
-          input: {},
+          input:
+            typeof startInput === 'object' && startInput !== null
+              ? (startInput as Record<string, unknown>)
+              : {},
         };
         assistantMsg.content.push(toolBlock);
         return { type: 'toolcall_start', contentIndex: state.currentBlockIdx, partial: assistantMsg };
@@ -1141,7 +1190,22 @@ export function parseAnthropicEvent(
           try {
             block.input = JSON.parse(raw) as Record<string, unknown>;
           } catch {
-            block.input = {};
+            // Plan 418 L1: recover arguments from truncated/unclosed JSON
+            // instead of silently replacing them with {}.
+            const partial = parsePartialJsonSafe(raw);
+            if (partial !== undefined && typeof partial === 'object' && partial !== null) {
+              block.input = partial as Record<string, unknown>;
+              console.warn(
+                '[duya-ai] Recovered partial tool input via partial-json parse',
+                { name: block.name, rawLength: raw.length },
+              );
+            } else {
+              block.input = {};
+              console.warn(
+                '[duya-ai] Tool input could not be parsed; arguments lost',
+                { name: block.name, raw: raw.slice(0, 200) },
+              );
+            }
           }
           delete (block as ToolUseContent & { _rawInput?: string })._rawInput;
         }
@@ -1288,6 +1352,7 @@ export function toAnthropicMessages(
   messages: Message[],
   model: Model<'anthropic'>,
   synthesizeMissingToolResults = false,
+  deferredToolNames?: ReadonlySet<string>,
 ): MessageParam[] {
   // Step 0: Pair empty tool IDs before the main conversion pass.
   const messagesWithToolIds = assignEmptyToolIds(messages);
@@ -1298,6 +1363,9 @@ export function toAnthropicMessages(
   const result: MessageParam[] = [];
   let emptyToolUseCounter = 0;
   let emptyToolResultCounter = 0;
+  // Plan 418 Phase 4: track which deferred tools have already been
+  // referenced so a tool loaded once is not re-referenced every turn.
+  const loadedToolNames = new Set<string>();
 
   for (const msg of messagesWithToolIds) {
     if (msg.role === 'system') continue; // System goes in the `system` param.
@@ -1321,14 +1389,37 @@ export function toAnthropicMessages(
         toolContent = JSON.stringify(msg.content);
       }
       const toolUseId = sanitizeToolId(msg.tool_call_id || '', emptyToolResultCounter++);
-      result.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: toolUseId,
-          content: toolContent,
-        } as ContentBlockParam],
-      });
+      // Plan 418 Phase 4: deferred tool references. When this tool was loaded
+      // on-demand and the endpoint supports `tool_reference` blocks, the
+      // reference replaces the result content inside the tool_result and the
+      // ordinary content moves to a sibling text block — Anthropic rejects
+      // references mixed with ordinary tool-result content.
+      const references: ContentBlockParam[] = [];
+      if (deferredToolNames && msg.addedToolNames?.length) {
+        for (const name of msg.addedToolNames) {
+          if (!deferredToolNames.has(name) || loadedToolNames.has(name)) continue;
+          loadedToolNames.add(name);
+          references.push({
+            type: 'tool_reference',
+            tool_name: name,
+          } as unknown as ContentBlockParam);
+        }
+      }
+      const contentBlocks: ContentBlockParam[] = [{
+        type: 'tool_result',
+        tool_use_id: toolUseId,
+        content: references.length > 0 ? references : toolContent,
+      } as ContentBlockParam];
+      if (references.length > 0) {
+        if (typeof toolContent === 'string') {
+          if (toolContent.trim().length > 0) {
+            contentBlocks.push({ type: 'text', text: toolContent });
+          }
+        } else if (toolContent.length > 0) {
+          contentBlocks.push(...toolContent);
+        }
+      }
+      result.push({ role: 'user', content: contentBlocks });
       continue;
     }
 
@@ -1527,6 +1618,11 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
     isMiniMaxEndpoint(options.baseURL) ||
     !!options.modelCapabilities?.forceAdaptiveThinking;
 
+  // Plan 418: per-client memory of the last working tool-result transport.
+  // The client instance lives across turns (DuyaAgent holds it), so a
+  // degraded endpoint stays degraded instead of re-failing every turn.
+  let lastToolResultTransport: ToolResultTransport | undefined;
+
   return {
     async *streamChat(messages, chatOptions) {
       // 1. Build model from options + capabilities.
@@ -1546,12 +1642,46 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         maxTokens: 8192,
       };
 
+      // Plan 418: progressive tool-transport ladder (L0 standard blocks →
+      // L1 textified tool results → L2 no tools) with per-client memory so a
+      // degraded endpoint stays degraded across turns without re-failing.
+      const LADDER: ToolResultTransport[] = ['tool-result-block', 'text-user-message', 'none'];
+      const initialTransport = resolveToolResultTransport(
+        options.baseURL,
+        options.modelCapabilities,
+      );
+      const rememberedIdx = lastToolResultTransport
+        ? LADDER.indexOf(lastToolResultTransport)
+        : -1;
+      const startIdx = Math.max(LADDER.indexOf(initialTransport), rememberedIdx);
+      const transportLadder = LADDER.slice(startIdx >= 0 ? startIdx : 0);
+
+      // Inner generator: build + stream one full request for a transport.
+      const streamChatOnce = async function* (
+        transport: ToolResultTransport,
+      ): AsyncGenerator<SSEEvent, AssistantMessage, unknown> {
       // 2. Transform messages (isSameModel guard — downgrades cross-model
       // thinking to plain text and discards signatures).
       const transformed = transformMessages(messages, model);
 
+      // 2.5. Plan 418: fold tool results into text when the endpoint's
+      // content-block schema rejects `tool_result` (e.g. the DeepSeek
+      // /anthropic compat surface); 'none' additionally drops the tools param.
+      const textified =
+        transport === 'tool-result-block'
+          ? transformed
+          : textifyToolResults(transformed);
+
+      // Plan 418 Phase 4: deferred tools. When the endpoint declares
+      // supportsToolReferences, tools loaded on-demand in earlier turns are
+      // omitted from the tools param and referenced via tool_reference blocks.
+      const supportsToolReferences = !!options.modelCapabilities?.supportsToolReferences;
+      const deferredNames = supportsToolReferences
+        ? getDeferredToolNames(textified)
+        : undefined;
+
       // 3. Convert to Anthropic MessageParam[] format.
-      let anthropicMessages = toAnthropicMessages(transformed, model);
+      let anthropicMessages = toAnthropicMessages(textified, model, false, deferredNames);
 
       // 3.5. Apply prompt caching breakpoints when the provider supports it.
       if (cacheEligibility.eligible) {
@@ -1624,13 +1754,32 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       if (invalidToolNames.length > 0) {
         console.warn('[duya-ai] Excluded tools with invalid Anthropic-compatible names', { invalidToolNames });
       }
-      const tools = compatibleTools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.input_schema as Anthropic.Tool.InputSchema,
-      }));
+      // Plan 418 L2: endpoints that cannot represent tool calls at all (the
+      // DeepSeek /anthropic surface rejects both tool_use and tool_result)
+      // must not receive the tools param — the model cannot act on them.
+      const tools =
+        transport === 'none'
+          ? []
+          : compatibleTools.map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              input_schema: tool.input_schema as Anthropic.Tool.InputSchema,
+            }));
+      // Plan 418 Phase 4: deferred (already-loaded) tools keep their schema
+      // out of the request — the provider references them instead. This only
+      // runs when the endpoint declared supportsToolReferences.
+      const { immediate: requestTools } = splitDeferredTools(
+        tools,
+        deferredNames ?? new Set(),
+      );
 
-      const systemPromptForRequest = chatOptions?.systemPrompt || '';
+      const baseSystemPrompt = chatOptions?.systemPrompt || '';
+      // Plan 418 L2: tell the model tools are unavailable so it does not ask
+      // for a tool surface the endpoint cannot expose.
+      const systemPromptForRequest =
+        transport === 'none'
+          ? `${baseSystemPrompt}\n\nNote: the current model endpoint does not support tool calling. Do not request tools; answer directly using the available context.`
+          : baseSystemPrompt;
       // The `system` field is the stable prefix of every request — the most
       // valuable cache breakpoint. Apply the marker directly (Plan 408 Phase 4);
       // applyCacheControl above can no longer see it because toAnthropicMessages
@@ -1661,7 +1810,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         temperature: chatOptions?.temperature ?? 1,
         system: systemForRequest,
         messages: anthropicMessages,
-        tools: tools.length ? tools : undefined,
+        tools: requestTools.length ? requestTools : undefined,
         ...(thinking ? { thinking } : {}),
         stream: true,
       };
@@ -1703,16 +1852,31 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // MiniMax 2013 or a tool-result ordering error, rebuild the history
       // with synthesized failure results for unclosed tool rounds and
       // retry exactly once.
-      let stream: Awaited<ReturnType<typeof client.messages.stream>>;
+      //
+      // Stream transport note (Plan 418): we deliberately bypass the SDK's
+      // high-level `messages.stream()` — it JSON.parses every SSE `data:`
+      // line and crashes the whole stream on the first malformed event — and
+      // instead read the raw SSE frames via the SDK's exported
+      // `_iterSSEMessages` + `client.post(..., __binaryResponse)`. Malformed
+      // events are skipped with a warning so third-party Anthropic-compatible
+      // endpoints (e.g. DeepSeek /anthropic) cannot kill a turn mid-stream.
+      let rawResponse: Response | undefined;
+      let streamController: AbortController | undefined;
+      const openStream = async (
+        openParams: Anthropic.MessageCreateParams,
+      ): Promise<Response> => {
+        return client.post('/v1/messages', {
+          body: { ...openParams, stream: true },
+          // __binaryResponse returns the raw fetch Response (the SDK's
+          // `stream: true` option would pre-parse every event instead).
+          __binaryResponse: true,
+          timeout: 600000,
+          ...(chatOptions?.signal ? { signal: chatOptions.signal } : {}),
+        });
+      };
       try {
-        // MessageStream is an AsyncIterable, not a Promise. Awaiting it returns
-        // it immediately; abort and idle-timeout are enforced by the SDK's
-        // `{ signal }` option and the `withIdleTimeout` drain loop below. Do not
-        // wrap it in a helper that calls `.then` on a non-thenable.
-        stream = await client.messages.stream(
-          params,
-          chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
-        );
+        rawResponse = await openStream(params);
+        streamController = new AbortController();
       } catch (streamError) {
         const isMiniMax2013 = isMiniMax && isMiniMaxInvalidParameters2013(streamError);
         const isToolOrderingFailure = isToolResultOrderingError(streamError);
@@ -1723,7 +1887,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         // Some Anthropic-compatible providers identify the broken tool round
         // precisely, while MiniMax reports only `invalid params, 400 (2013)`.
         // Recover once with an exact, strict tool-result pairing repair.
-        anthropicMessages = toAnthropicMessages(transformed, model, true);
+        anthropicMessages = toAnthropicMessages(textified, model, true, deferredNames);
         console.warn(
           '[duya-ai] Retrying once with repaired tool history after provider rejected tool-result ordering',
           { messageCount: anthropicMessages.length, isMiniMax2013 },
@@ -1739,14 +1903,12 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           temperature: chatOptions?.temperature ?? 1,
           system: systemForRequest,
           messages: anthropicMessages,
-          tools: tools.length ? tools : undefined,
+          tools: requestTools.length ? requestTools : undefined,
           stream: true,
         };
         // A second failure is thrown to the caller.
-        stream = await client.messages.stream(
-          retryParams,
-          chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
-        );
+        rawResponse = await openStream(retryParams);
+        streamController = new AbortController();
       }
 
       // 8. Drain events (with idle timeout), parse, and yield SSE.
@@ -1756,11 +1918,22 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       // assistant message, executing tools); if `result` arrives after
       // `done`, usage tracking may be attributed to the wrong turn.
       let pendingDone: SSEEvent | null = null;
-      for await (const event of withIdleTimeout<Anthropic.MessageStreamEvent>(
-        stream,
+      for await (const sse of withIdleTimeout(
+        _iterSSEMessages(rawResponse!, streamController!),
         undefined,
         chatOptions?.signal,
       )) {
+        // Tolerant parse: repair common malformed string literals first
+        // (raw control chars / bad escapes, e.g. DeepSeek /anthropic); skip
+        // frames that cannot be repaired instead of killing the turn.
+        const event = parseJsonWithRepair(sse.data) as Anthropic.MessageStreamEvent | null;
+        if (event === null || typeof event !== 'object' || !('type' in event)) {
+          console.warn(
+            '[duya-ai] Skipping malformed SSE event from endpoint',
+            { event: sse.event, data: String(sse.data).slice(0, 200) },
+          );
+          continue;
+        }
         const internalEvents = parseAnthropicEvent(event, assistantMsg, state);
         const events = Array.isArray(internalEvents) ? internalEvents : [internalEvents];
         for (const internalEvent of events) {
@@ -1808,7 +1981,35 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         yield pendingDone;
       }
 
-      return assistantMsg;
+        return assistantMsg;
+      }; // end streamChatOnce
+
+      // Outer ladder: try transports in order, degrading on schema mismatch.
+      // Degradation only happens before any content event was yielded (the
+      // inner generator throws before its first yield when the provider
+      // rejects the payload), so consumers never see partial output twice.
+      for (let i = 0; i < transportLadder.length; i++) {
+        const transport = transportLadder[i];
+        try {
+          const result = yield* streamChatOnce(transport);
+          lastToolResultTransport = transport;
+          return result;
+        } catch (err) {
+          const canDegrade =
+            isToolSchemaMismatchError(err) && i < transportLadder.length - 1;
+          if (canDegrade) {
+            console.warn(
+              '[duya-ai] Endpoint rejected tool payload; degrading tool-result transport',
+              { from: transport, to: transportLadder[i + 1] },
+            );
+            lastToolResultTransport = transportLadder[i + 1];
+            continue;
+          }
+          throw err;
+        }
+      }
+      // Unreachable: transportLadder always contains at least one entry.
+      throw new Error('[duya-ai] Tool-transport ladder exhausted without a result');
     },
 
     async chat(messages, chatOptions) {
@@ -1826,6 +2027,19 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         maxTokens: 8192,
       };
 
+      // Plan 418: honor the endpoint's tool-result transport on the
+      // non-streaming path too (chat() carries no tools, but the message
+      // history may contain tool_use/tool_result blocks that the endpoint
+      // schema rejects).
+      const chatTransport = resolveToolResultTransport(
+        options.baseURL,
+        options.modelCapabilities,
+      );
+      const chatMessages =
+        chatTransport === 'tool-result-block'
+          ? messages
+          : textifyToolResults(messages);
+
       const response = await client.messages.create({
         model: options.model,
         max_tokens: chatOptions?.maxTokens ?? 1024,
@@ -1836,7 +2050,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           'short',
           options.baseURL,
         ) as Anthropic.MessageCreateParams['system'],
-        messages: toAnthropicMessages(messages, model),
+        messages: toAnthropicMessages(chatMessages, model),
       });
 
       const content = response.content

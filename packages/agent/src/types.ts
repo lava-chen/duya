@@ -229,6 +229,13 @@ export interface ChatOptions {
   todoGate?: {
     enabled?: boolean;
   };
+  /**
+   * Plan 418 L2: tool-intent / action-consistency guard. When the model ends
+   * a turn with a tool-intent statement but emitted no tool_use, a steering
+   * message is injected so the turn continues instead of finalizing. Capped
+   * per streamChat call. Default: 2.
+   */
+  toolIntentNudgeMax?: number;
   /** Message history for context. If provided, uses this instead of internal messages */
   messages?: Message[];
   /**
@@ -376,6 +383,19 @@ export interface MCPServerConfig {
    * See `buildSafeEnv` in `mcp/security.ts`.
    */
   envPassthrough?: 'allowlist' | 'inherit';
+  /**
+   * Short, stable prefix used for model-visible tool names. When set,
+   * provider names become `mcp_<nameOverride>_<toolName>` instead of the
+   * longer `mcp_<scopedServerName>_<toolName>`. Keeps tool names short and
+   * stable even for deeply-scoped plugin servers.
+   */
+  nameOverride?: string;
+  /** Startup (spawn + handshake + listTools) timeout in seconds. */
+  startupTimeoutSec?: number;
+  /** Default per-tool-call timeout in seconds for this server. */
+  toolTimeoutSec?: number;
+  /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
+  toolTimeouts?: Record<string, number>;
   /**
    * Sampling rate limit config. Applied when an MCP server requests
    * `sampling/createMessage` (reverse LLM call). Defaults are conservative

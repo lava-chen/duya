@@ -120,6 +120,27 @@ function validateRawConfig(raw: MCPCandidate['rawConfig']): ValidationResult {
   if (raw.overrideTarget !== undefined && typeof raw.overrideTarget !== 'string') {
     return { ok: false, reason: 'rawConfig.overrideTarget must be a string when present' };
   }
+  if (raw.nameOverride !== undefined && typeof raw.nameOverride !== 'string') {
+    return { ok: false, reason: 'rawConfig.nameOverride must be a string when present' };
+  }
+  const checkTimeoutSec = (v: unknown): boolean =>
+    v === undefined || (typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (!checkTimeoutSec(raw.startupTimeoutSec)) {
+    return { ok: false, reason: 'rawConfig.startupTimeoutSec must be a positive finite number when present' };
+  }
+  if (!checkTimeoutSec(raw.toolTimeoutSec)) {
+    return { ok: false, reason: 'rawConfig.toolTimeoutSec must be a positive finite number when present' };
+  }
+  if (raw.toolTimeouts !== undefined) {
+    if (typeof raw.toolTimeouts !== 'object' || raw.toolTimeouts === null) {
+      return { ok: false, reason: 'rawConfig.toolTimeouts must be an object when present' };
+    }
+    for (const [k, v] of Object.entries(raw.toolTimeouts)) {
+      if (!checkTimeoutSec(v)) {
+        return { ok: false, reason: `rawConfig.toolTimeouts.${k} must be a positive finite number` };
+      }
+    }
+  }
   return { ok: true };
 }
 
@@ -154,6 +175,10 @@ function expandCandidate(
     env: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   };
   missingVars: string[];
   missingKeys: string[];
@@ -167,6 +192,10 @@ function expandCandidate(
       env: c.rawConfig.env,
       url: c.rawConfig.url,
       headers: c.rawConfig.headers,
+      nameOverride: c.rawConfig.nameOverride,
+      startupTimeoutSec: c.rawConfig.startupTimeoutSec,
+      toolTimeoutSec: c.rawConfig.toolTimeoutSec,
+      toolTimeouts: c.rawConfig.toolTimeouts,
     },
     {
       environment: ctx.environment,
@@ -390,6 +419,10 @@ function staticPathCheck(
     env: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   },
   inventoryId: string,
 ): PathCheckResult {
@@ -474,6 +507,10 @@ interface ProcessedCandidate {
     env: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   };
   /** Set only when staticPathCheck reported an issue. */
   pathIssue?: MCPIssue;
@@ -530,6 +567,10 @@ function processCandidate(
       url: c.rawConfig.url,
       headers: c.rawConfig.headers,
       allowedAgentIds: c.rawConfig.allowedAgentIds,
+      nameOverride: c.rawConfig.nameOverride,
+      startupTimeoutSec: c.rawConfig.startupTimeoutSec,
+      toolTimeoutSec: c.rawConfig.toolTimeoutSec,
+      toolTimeouts: c.rawConfig.toolTimeouts,
     },
     discoveryStatus: status,
     allowedAgentIds: c.rawConfig.allowedAgentIds,

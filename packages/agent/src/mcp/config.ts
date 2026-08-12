@@ -4,6 +4,7 @@
  */
 
 import { join } from 'path';
+import * as os from 'os';
 import { readFile } from 'fs/promises';
 import { parseUserMcpToml, type UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
 
@@ -54,15 +55,35 @@ export function getSettingsPath(): string | null {
   return null;
 }
 
+/**
+ * Config root: `~/.duya` (or `~/.duya/test-namespaces/<ns>` in test
+ * mode). Mirrors the pattern used by goal-config.ts for the unified
+ * config store (plan 334).
+ */
+function resolveConfigRoot(): string {
+  const base = join(os.homedir(), '.duya');
+  if (process.env.DUYA_TEST === '1') {
+    const ns = process.env.DUYA_TEST_NAMESPACE;
+    if (ns && /^[a-zA-Z0-9_-]+$/.test(ns)) return join(base, 'test-namespaces', ns);
+  }
+  return base;
+}
+
 /** The sole user-managed MCP source. Plugin MCPs do not read this file. */
 export function getUserMcpTomlPath(): string | null {
   const settingsPath = getSettingsPath();
   return settingsPath ? join(settingsPath, '..', 'mcp.toml') : null;
 }
 
+/**
+ * Read user-managed MCP servers from the unified config store
+ * (`config.toml` → `[mcp_servers.*]`). Plan 334 moved user MCPs out of
+ * the legacy `mcp.toml`; the worker MUST read the same source the main
+ * process reads, otherwise configured servers (e.g. codegraph) never
+ * reach the agent tool list.
+ */
 export async function readUserMcpToml(): Promise<UserMcpTomlServer[]> {
-  const filePath = getUserMcpTomlPath();
-  if (!filePath) return [];
+  const filePath = join(resolveConfigRoot(), 'config.toml');
   try {
     return parseUserMcpToml(await readFile(filePath, 'utf8'));
   } catch (error) {

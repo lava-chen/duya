@@ -73,7 +73,7 @@ export function shortStableHash(input: string): string {
  * If the input is not a well-formed internal key, it is returned
  * unchanged (best effort).
  */
-function stripInternalKey(internalKey: string): string {
+export function stripInternalKey(internalKey: string): string {
   if (!internalKey.startsWith(MCP_INTERNAL_PREFIX)) return internalKey;
   const rest = internalKey.slice(MCP_INTERNAL_PREFIX.length);
   const sep = rest.lastIndexOf(MCP_INTERNAL_SEP);
@@ -207,6 +207,14 @@ export const MCP_PROVIDER_PREFIX = 'mcp_';
  * Compute a model-visible, globally-unique provider name for an MCP
  * tool given its internal key. Pure: does not mutate `usedNames`.
  *
+ * When `nameOverride` is provided, the scoped-server-name portion of
+ * the internal key is replaced by that short, stable prefix before
+ * sanitization. This yields short provider names
+ * (`mcp_<nameOverride>_<toolName>`) even for deeply-scoped plugin
+ * servers, while keeping the tool name intact for disambiguation.
+ * When `nameOverride` is omitted, the default long form
+ * (`mcp_<scopedServerName>_<toolName>`) is produced.
+ *
  * @param internalKey MCP internal key, shape
  *   `mcp__<scopedServerName>__<toolName>`. The `mcp__` prefix is
  *   stripped before sanitization; both the scoped server name AND
@@ -216,6 +224,8 @@ export const MCP_PROVIDER_PREFIX = 'mcp_';
  *   (typically: builtin tool names + mode-specific non-MCP names).
  *   The returned name is guaranteed not to be in this set.
  * @param policy Provider policy (Anthropic / OpenAI / etc.).
+ * @param nameOverride Optional short server prefix to substitute for
+ *   the scoped-server-name segment.
  * @returns A provider-visible name starting with `mcp_`, fitting
  *   `policy.maxLength`, matching `policy.allowedCharRegex` on every
  *   char, and unique within `usedNames`.
@@ -224,6 +234,7 @@ export function computeProviderName(
   internalKey: string,
   usedNames: ReadonlySet<string>,
   policy: ProviderToolNamePolicy,
+  nameOverride?: string,
 ): string {
   // 1) Strip only the internal `mcp__` prefix. If the input does
   //    not have the prefix, we still treat it as a raw internal key
@@ -232,12 +243,27 @@ export function computeProviderName(
     ? internalKey.slice(MCP_INTERNAL_PREFIX.length)
     : internalKey;
 
+  // 1b) When a short prefix is configured, substitute the
+  //     scoped-server-name segment (everything before the last `__`
+  //     separator) with `nameOverride`. The tool name is preserved so
+  //     two tools from different servers never collapse to one name.
+  let segment = stripped;
+  if (nameOverride) {
+    const sep = stripped.lastIndexOf(MCP_INTERNAL_SEP);
+    if (sep !== -1) {
+      const toolName = stripped.slice(sep + MCP_INTERNAL_SEP.length);
+      segment = `${nameOverride}${MCP_INTERNAL_SEP}${toolName}`;
+    } else {
+      segment = nameOverride;
+    }
+  }
+
   // 2) Sanitize disallowed characters. We invoke the inner loop
   //    directly (not the public `sanitizeProviderToolName`) because
   //    that function calls `stripInternalKey` which would also drop
   //    the tool-name suffix — losing the per-tool granularity we
   //    need here.
-  const sanitized = sanitizeRawSegment(stripped, policy);
+  const sanitized = sanitizeRawSegment(segment, policy);
 
   // 3) Prepend the provider-visible `mcp_` prefix. This guarantees
   //    the result is distinct from any builtin tool name that does

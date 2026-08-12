@@ -99,6 +99,12 @@ export function harvestDiscoveredTools(
         accumulator.add(name);
         added++;
       }
+      // Plan 418 Phase 4: mark the discovered tool on the tool-result
+      // carrier so the provider layer can emit a `tool_reference` block on
+      // later turns instead of resending the schema (endpoints that declare
+      // supportsToolReferences). Dedupe per message.
+      if (!msg.addedToolNames) msg.addedToolNames = [];
+      if (!msg.addedToolNames.includes(name)) msg.addedToolNames.push(name);
     }
   }
   return added;

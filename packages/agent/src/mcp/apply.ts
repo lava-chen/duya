@@ -38,7 +38,7 @@ import type {
   MCPServerInventoryEntry,
   ResolvedMCPServerConfig,
 } from '@duya/plugin-core';
-import type { MCPServerConfig, Tool } from '../types.js';
+import type { MCPServerConfig, Tool, ToolUseContext } from '../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
 import { MCPManager } from './index.js';
 import { ToolRegistry, MCPRegistryReplaceError } from '../tool/registry.js';
@@ -88,6 +88,19 @@ export interface MCPApplyResult {
 interface DuyaAgentLike {
   activeMCPRuntimeSnapshot: ActiveMCPRuntimeSnapshot | null;
   activeMCPRegistry: ToolRegistry;
+  /**
+   * Current permission mode of the host agent (default / auto / plan /
+   * bypassPermissions / dontAsk / ...). Absent in unit-test fakes; the
+   * gate then treats the mode as undefined (safest default).
+   */
+  getPermissionMode?(): PermissionMode;
+  /**
+   * The currently active MCPManager, or `null` when no MCP runtime
+   * has been installed yet. Used by the incremental-reconnect path
+   * to reuse still-valid clients across reloads instead of
+   * respawning every server process.
+   */
+  getActiveMCPManager(): MCPManager | null;
   /**
    * Get the model-visible tool names of all currently active
    * non-MCP tool providers (builtin + mode-specific non-MCP).
@@ -146,6 +159,16 @@ export interface ActiveMCPRuntimeSnapshot {
 
 let lastMCPLoadResult: MCPLoadResult | null = null;
 
+/**
+ * Module-scope: toolUseIds whose MCP permission prompt the user already
+ * approved in this process. Recorded by the executor after an inline
+ * `requestPermission` allow; consulted on re-entry so an already-approved
+ * tool use is never prompted twice. Per-process, bounded by tool-use
+ * lifetimes (the agent process reuses ids across turns only in the same
+ * session; entries are tiny).
+ */
+const approvedMcpToolUseIds = new Set<string>();
+
 export function getLastMCPLoadResult(): MCPLoadResult | null {
   return lastMCPLoadResult;
 }
@@ -189,13 +212,14 @@ function pickRegistrationIssues(loadResult: MCPLoadResult): MCPIssue[] {
  */
 function buildProviderNameAllocator(
   initialUsedNames: ReadonlySet<string>,
-): (internalKey: string) => string {
+): (internalKey: string, nameOverride?: string) => string {
   const used = new Set<string>(initialUsedNames);
-  return (internalKey: string): string => {
+  return (internalKey: string, nameOverride?: string): string => {
     const name = computeProviderName(
       internalKey,
       used,
       AnthropicToolNamePolicy,
+      nameOverride,
     );
     used.add(name);
     return name;
@@ -288,6 +312,10 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     url: resolved.rawConfig.url,
     headers: resolved.rawConfig.headers,
     allowedAgentIds: resolved.allowedAgentIds,
+    nameOverride: resolved.rawConfig.nameOverride,
+    startupTimeoutSec: resolved.rawConfig.startupTimeoutSec,
+    toolTimeoutSec: resolved.rawConfig.toolTimeoutSec,
+    toolTimeouts: resolved.rawConfig.toolTimeouts,
     // Stamp the source bucket for the runtime permission gate.
     // The engine resolves every `ResolvedMCPServerConfig.source`
     // to one of the three MCPSource literals; we only need to
@@ -299,17 +327,39 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       : 'unknown',
   }));
 
-  // Parallel connect: MCPManager.addServer creates an independent
-  // MCPClient (own child process + state) per call; clients.set is
-  // synchronous, so there is no shared-state race across await
-  // points. A single server failure does not block the others.
+  // Incremental reconnect (hot-reload granularity): reuse the
+  // previously active clients whose connect-relevant config is
+  // unchanged, so a reload that only toggles a server, tweaks
+  // timeouts, or renames a prefix does not respawn every process.
+  // Extracting a client from the old manager removes it from that
+  // manager's map, so the later `disconnectAll()` on the old
+  // manager (in `setActiveMCPRuntime`) skips reused clients.
+  const previousManager = agent.getActiveMCPManager();
+  type ExistingClient = ReturnType<MCPManager['getAllClients']>[number];
+  const previousClientsByName = new Map<string, ExistingClient>(
+    previousManager?.getAllClients().map((c) => [c.getName(), c]) ?? [],
+  );
+  const toConnect: MCPServerConfig[] = [];
+  for (const cfg of nextConfigs) {
+    const old = previousClientsByName.get(cfg.name);
+    if (old && MCPManager.configSignature(old.getConfig()) === MCPManager.configSignature(cfg)) {
+      // Transport unchanged — remove from the previous manager (so its
+      // `disconnectAll()` skips it) and adopt into the next (no spawn).
+      previousManager?.extract(cfg.name);
+      nextManager.adopt(old, cfg);
+    } else {
+      toConnect.push(cfg);
+    }
+  }
+
+  // Parallel connect only the servers that need (re)spawning.
   const settleResults = await Promise.allSettled(
-    nextConfigs.map((cfg) => nextManager.addServer(cfg)),
+    toConnect.map((cfg) => nextManager.addServer(cfg)),
   );
 
   // Walk results in config order so issue ordering matches the
   // serial implementation (deterministic for tests/snapshots).
-  nextConfigs.forEach((cfg, i) => {
+  toConnect.forEach((cfg, i) => {
     const result = settleResults[i];
     if (result.status === 'rejected') {
       const err = result.reason;
@@ -392,38 +442,113 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     }
     const capturedClient = scopedClient;
     const capturedMcpInfo = t.mcpInfo;
+    const gateErrorResult = (
+      decision: { kind: 'deny' | 'prompt'; reason: string },
+      message: string,
+    ) => ({
+      id: capturedMcpInfo.toolName + '-gate',
+      name: capturedMcpInfo.toolName,
+      result: message,
+      error: true,
+      metadata: {
+        source: (capturedMcpInfo.source ?? 'unknown') as McpToolSource,
+        gateKind: decision.kind,
+      },
+    });
     const executor: ToolExecutor = {
-      execute: async (input: Record<string, unknown>) => {
+      execute: async (
+        input: Record<string, unknown>,
+        _workingDirectory?: string,
+        context?: ToolUseContext,
+      ) => {
         // BLOCKER B (audit 2026-06-03): runtime permission gate.
         // Pure predicate, runs BEFORE the underlying client call so
         // third-party MCP tools can never execute silently.
         const source: McpToolSource = (capturedMcpInfo.source
           ?? 'unknown') as McpToolSource;
-        // `activePermissionMode` is provided by the host (the long-lived
-        // Agent instance) when available. When it is absent (e.g. unit
-        // tests, or callers that have not yet wired the property) we
-        // fall through with `undefined`, which causes the gate to treat
-        // every third-party tool as needing user approval — the safest
-        // default for v0.1.3.
-        const activeMode = (agent as unknown as { activePermissionMode?: PermissionMode }).activePermissionMode;
+        // Read the host agent's ACTUAL permission mode. (The old lookup
+        // `agent.activePermissionMode` never existed on DuyaAgent, so the
+        // gate always saw `undefined` and even bypassPermissions / dontAsk
+        // sessions were blocked.) Falls back to `undefined` in unit-test
+        // fakes, which the gate treats as "always needs approval" — the
+        // safest default.
+        const activeMode = agent.getPermissionMode ? agent.getPermissionMode() : undefined;
         const decision = evaluateMcpToolPermission(
           source,
           activeMode,
           capturedMcpInfo.toolName,
         );
-        if (decision.kind === 'deny' || decision.kind === 'prompt') {
+        if (decision.kind === 'deny') {
           logger.warn(
-            '[MCP] tool call blocked by permission gate',
+            '[MCP] tool call denied by permission gate',
             { toolName: capturedMcpInfo.toolName, source, kind: decision.kind, reason: decision.reason },
           );
-          return {
-            id: capturedMcpInfo.toolName + '-gate',
-            name: capturedMcpInfo.toolName,
-            result: '[MCP permission gate] ' + decision.reason +
-              '. Switch the session to bypassPermissions or dontAsk to allow this tool.',
-            error: true,
-            metadata: { source, gateKind: decision.kind },
-          };
+          return gateErrorResult(decision, '[MCP permission gate] ' + decision.reason);
+        }
+        if (decision.kind === 'prompt') {
+          logger.warn(
+            '[MCP] tool call requires user approval',
+            { toolName: capturedMcpInfo.toolName, source, kind: decision.kind, reason: decision.reason },
+          );
+          // Skip the gate when this tool use was already approved: either
+          // StreamingToolExecutor's pre-check marked `_approvedToolUses`
+          // in appState, or we recorded it below on a prior entry with
+          // the same toolUseId (e.g. executor re-entry after approval).
+          const toolUseId = context?.toolUseId;
+          const appState = context?.getAppState ? context.getAppState() : undefined;
+          const appApproved = toolUseId
+            ? ((appState?._approvedToolUses as Record<string, boolean> | undefined) ?? {})[toolUseId]
+            : undefined;
+          if (!appApproved && !(toolUseId && approvedMcpToolUseIds.has(toolUseId))) {
+            // No approval channel (headless CLI / sub-agent / unit test):
+            // keep the hard gate error instead of dead-locking on a prompt
+            // nobody can answer.
+            if (!context?.requestPermission) {
+              return gateErrorResult(
+                decision,
+                '[MCP permission gate] ' + decision.reason +
+                  '. Switch the session to bypassPermissions or dontAsk to allow this tool.',
+              );
+            }
+            // Ask the user through the standard permission_request flow
+            // (chat:permission event -> renderer Allow/Deny prompt). This
+            // runs INSIDE the executor on purpose: the pre-check path in
+            // StreamingToolExecutor records the outcome in appState, but
+            // the executor cannot observe that write from its own entry
+            // point, so prompting here keeps allow/deny + execution in a
+            // single synchronous flow with no retry loop.
+            const userDecision = await context.requestPermission({
+              id: toolUseId ?? crypto.randomUUID(),
+              toolName: capturedMcpInfo.toolName,
+              toolInput: input,
+              mode: 'generic',
+              expiresAt: Date.now() + 5 * 60 * 1000,
+              decisionReason: decision.reason,
+            });
+            if (userDecision === 'deny') {
+              logger.warn(
+                '[MCP] tool call denied by user',
+                { toolName: capturedMcpInfo.toolName, source },
+              );
+              return gateErrorResult(decision, '[MCP permission gate] Permission denied by user');
+            }
+            // Plan 419 P0: record the approval on the SAME channel
+            // StreamingToolExecutor uses (`_approvedToolUses` in appState),
+            // so a re-entry with this toolUseId skips the gate even when
+            // the module-level fallback set is cleared. `setAppState` may
+            // be absent on hosts that still pass a no-op context; the
+            // module-level `approvedMcpToolUseIds` stays as the fallback.
+            if (toolUseId) {
+              approvedMcpToolUseIds.add(toolUseId);
+              context?.setAppState?.((prev) => ({
+                ...prev,
+                _approvedToolUses: {
+                  ...((prev._approvedToolUses as Record<string, boolean> | undefined) ?? {}),
+                  [toolUseId]: true,
+                },
+              }));
+            }
+          }
         }
         // Capture-bound dispatch. After PHASE B2 swaps the
         // active manager, the old executor's capturedClient is the
@@ -438,8 +563,11 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       definition: t,
       executor,
       meta: {
-        exposeMode: 'discoverable',
-        inputSchemaSummary: 'Full MCP input schema loads after discovery.',
+        // Plan 241: MCP tools are part of the user's toolset — expose them
+        // in the default tool list. (Previously 'discoverable', which hid
+        // every MCP tool behind a tool_search round-trip.)
+        exposeMode: 'always',
+        inputSchemaSummary: 'Input schema from the connected MCP server.',
       },
     });
     providerNameToInternalKey.set(t.providerName, t.internalKey);
