@@ -14046,6 +14046,44 @@ html[data-message-font-size="large"] .prose h3 {
   word-break: break-word;
 }
 
+/* ── Goal status chip (plan 420) ─────────────────────────────────────
+   Compact pill above the composer while a goal is active. Mirrors the
+   input-box chip look: flat surface, hairline border, rounded full. */
+.goal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-solid, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.goal-chip:hover {
+  background: var(--surface-hover, var(--surface));
+}
+.goal-chip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.goal-chip-dot[data-state="active"] { background: var(--accent); }
+.goal-chip-dot[data-state="verifying"],
+.goal-chip-dot[data-state="user_paused"],
+.goal-chip-dot[data-state="backoff_paused"],
+.goal-chip-dot[data-state="no_progress_paused"],
+.goal-chip-dot[data-state="infra_paused"] { background: var(--warning, #eab308); }
+.goal-chip-dot[data-state="budget_limited"],
+.goal-chip-dot[data-state="blocked"] { background: var(--error, #ef4444); }
+.goal-chip-dot[data-state="complete"] { background: var(--success, #22c55e); }
+.goal-chip-label { font-weight: 500; }
+.goal-chip-tokens { color: var(--muted); font-variant-numeric: tabular-nums; }
+
 /* ── Composer mode chips (goal / plan-task / research / conductor) ────
    Mirrors the command-menu item look: flat surface, hairline border,
    selected-tone hover. Replaces the old hardcoded blue chip. */
