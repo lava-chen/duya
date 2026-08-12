@@ -248,6 +248,17 @@ export function ChatView({
     setPlanModeEnabledState(next);
   }, []);
 
+  // Plan 420: goal mode is a session-level toggle persisted to
+  // `sessions.extensions.goal_mode_enabled`. Mirrors plan-task's ref pattern
+  // so `handleGoalModeChange` reads the latest value synchronously and the
+  // DB write is skipped when the requested state already matches.
+  const [goalModeEnabled, setGoalModeEnabledState] = useState(false);
+  const goalModeEnabledRef = useRef<boolean>(false);
+  const setGoalModeEnabled = useCallback((next: boolean) => {
+    goalModeEnabledRef.current = next;
+    setGoalModeEnabledState(next);
+  }, []);
+
   // Plan 224 follow-up: agent-initiated runtime mode (e.g. via
   // EnterPlanMode / ExitPlanMode / SwitchMode tool). When the agent
   // switches to 'plan' we surface it as a virtual plan-task mode on
@@ -593,6 +604,7 @@ export function ChatView({
             // restarts. MessageInput syncs this prop back into its
             // activeModes set.
             setPlanModeEnabled(!!data.thread.planModeEnabled);
+            setGoalModeEnabled(!!data.thread.goalModeEnabled);
           }
         })
         .catch(console.error);
