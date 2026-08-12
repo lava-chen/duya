@@ -917,6 +917,27 @@ export function ChatView({
     [sessionId],
   );
 
+  // Plan 413e: persist the goal mode session toggle to the DB. Mirrors the
+  // plan-task handler — just the boolean flag in
+  // sessions.extensions.goal_mode_enabled, written through the dedicated IPC
+  // and mirrored into the store thread for cross-component reads.
+  const handleGoalModeChange = useCallback(
+    async (enabled: boolean) => {
+      if (!sessionId) return;
+      // Avoid redundant DB writes when the requested state already matches
+      // (e.g. both the popover toggle and the session-restore prop fire).
+      if (enabled === goalModeEnabledRef.current) return;
+      setGoalModeEnabled(enabled);
+      try {
+        await window.electronAPI.session.setGoalMode(sessionId, enabled);
+        useConversationStore.getState().setThreadGoalMode(sessionId, enabled);
+      } catch (err) {
+        console.error('[ChatView] setGoalMode IPC failed', err);
+      }
+    },
+    [sessionId],
+  );
+
   // Auto-enable conductor mode when the user switches canvases inside an
   // already-open conductor panel while conductor mode is off. Subscribes
   // to the conductor store's `activeCanvasId` — when it transitions to a
@@ -1345,6 +1366,8 @@ export function ChatView({
                 onConductorChange={handleConductorChange}
                 planModeEnabled={planModeEnabled}
                 onPlanModeChange={handlePlanModeChange}
+                goalModeEnabled={goalModeEnabled}
+                onGoalModeChange={handleGoalModeChange}
                 onCompact={handleCompact}
                 isCompacting={isCompacting}
                 tasks={floatingTasks}

@@ -197,7 +197,7 @@ export function registerDbHandlers(): void {
     if (existing) {
       const patch = ipcSessionToUpdate(data);
       sessions.update(data.id as string, patch);
-      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'plan_mode_enabled', 'source'] as const;
+      const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'plan_mode_enabled', 'goal_mode_enabled', 'source'] as const;
       for (const key of extKeys) {
         if (data[key] !== undefined) {
           sessions.setExtension(data.id as string, key, data[key]);
@@ -247,7 +247,7 @@ export function registerDbHandlers(): void {
     const patch = ipcSessionToUpdate(data);
     sessions.update(sessionId, patch);
     // Extension-bound fields — write via setExtension.
-    const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'plan_mode_enabled', 'source'] as const;
+    const extKeys = ['system_prompt', 'conductor_mode_enabled', 'conductor_canvas_id', 'context_summary', 'context_summary_updated_at', 'plan_mode_enabled', 'goal_mode_enabled', 'source'] as const;
     for (const key of extKeys) {
       if (data[key] !== undefined) {
         sessions.setExtension(sessionId, key, data[key]);
@@ -1204,6 +1204,18 @@ export function registerDbHandlers(): void {
     (_event, payload: { sessionId: string; enabled: boolean }) => {
       const { sessions } = getCoreStores();
       sessions.setExtension(payload.sessionId, 'plan_mode_enabled', payload.enabled ? 1 : 0);
+      const updated = sessions.get(payload.sessionId);
+      return updated ? coreSessionToIpcRow(updated) : undefined;
+    },
+  );
+
+  // Plan 413e: persist the goal mode session toggle. Mirrors the
+  // set_conductor_mode pattern — goal_mode_enabled lives in extensions.
+  ipcMain.handle(
+    'db:session:set_goal_mode',
+    (_event, payload: { sessionId: string; enabled: boolean }) => {
+      const { sessions } = getCoreStores();
+      sessions.setExtension(payload.sessionId, 'goal_mode_enabled', payload.enabled ? 1 : 0);
       const updated = sessions.get(payload.sessionId);
       return updated ? coreSessionToIpcRow(updated) : undefined;
     },

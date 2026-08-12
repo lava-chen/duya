@@ -37,6 +37,8 @@ export interface Thread {
   conductorCanvasId?: string | null
   /** Plan 413e: 1 = plan-task session toggle on, 0 = off. */
   planModeEnabled?: number
+  /** Plan 413e: 1 = goal mode session toggle on, 0 = off. */
+  goalModeEnabled?: number
   /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
   pinned?: number
 }
@@ -159,6 +161,7 @@ interface DbThread {
   conductor_mode_enabled: number
   conductor_canvas_id: string | null
   plan_mode_enabled?: number
+  goal_mode_enabled?: number
   pinned: number
 }
 
@@ -260,6 +263,7 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
     conductorModeEnabled: db.conductor_mode_enabled,
     conductorCanvasId: db.conductor_canvas_id,
     planModeEnabled: db.plan_mode_enabled,
+    goalModeEnabled: db.goal_mode_enabled,
     pinned: db.pinned,
   }
 }

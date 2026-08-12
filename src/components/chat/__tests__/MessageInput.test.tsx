@@ -54,6 +54,10 @@ vi.mock('@/components/icons', () => ({
   // popover isn't open in any smoke test, but the icon is referenced
   // during render so it must be in the mock.
   PinIcon: () => null,
+  // MessageInput's render tree pulls in icons via the tools/registry
+  // chain (working-tree WIP); mock them so the smoke tests mount.
+  ChalkboardIcon: () => null,
+  TargetArrowIcon: () => null,
 }));
 
 vi.mock('@/components/chat/ModelSelector', () => ({
@@ -164,6 +168,29 @@ describe('MessageInput plan-task session toggle (plan 413e)', () => {
     expect(await screen.findByText('Plan Mode')).toBeInTheDocument();
     rerender(<MessageInput onSend={() => {}} planModeEnabled={false} />);
     expect(screen.queryByText('Plan Mode')).not.toBeInTheDocument();
+  });
+});
+
+describe('MessageInput goal mode session toggle (plan 413e)', () => {
+  it('restores goal mode from the goalModeEnabled prop as a chip', async () => {
+    render(<MessageInput onSend={() => {}} goalModeEnabled />);
+    // The sync effect surfaces the persisted toggle as a Goal chip.
+    const chip = await screen.findByText('goal');
+    expect(chip).toBeInTheDocument();
+  });
+
+  it('reports toggle-off for goal mode via onGoalModeChange', async () => {
+    const onGoalModeChange = vi.fn();
+    render(
+      <MessageInput
+        onSend={() => {}}
+        goalModeEnabled
+        onGoalModeChange={onGoalModeChange}
+      />,
+    );
+    const chip = await screen.findByText('goal');
+    fireEvent.click(chip);
+    expect(onGoalModeChange).toHaveBeenCalledWith(false);
   });
 });
 
