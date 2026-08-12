@@ -14050,6 +14050,7 @@ html[data-message-font-size="large"] .prose h3 {
    Compact pill above the composer while a goal is active. Mirrors the
    input-box chip look: flat surface, hairline border, rounded full. */
 .goal-chip {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -14083,6 +14084,141 @@ html[data-message-font-size="large"] .prose h3 {
 .goal-chip-dot[data-state="complete"] { background: var(--success, #22c55e); }
 .goal-chip-label { font-weight: 500; }
 .goal-chip-tokens { color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ── Goal status detail panel (option-panel style) ─────────────────── */
+.goal-panel {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 50;
+  width: min(360px, 80vw);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: 12px;
+  background: var(--surface-solid, var(--surface));
+  box-shadow: var(--shadow-resting);
+  color: var(--text);
+  font-size: 12px;
+}
+.goal-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.goal-panel-objective {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.goal-panel-close {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px;
+}
+.goal-panel-body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.goal-panel-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.goal-panel-status .goal-chip-dot { flex: none; }
+.goal-panel-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--warning);
+  border-top-color: transparent;
+  border-radius: 50%;
+  flex: none;
+  animation: goal-panel-spin 0.8s linear infinite;
+}
+@keyframes goal-panel-spin {
+  to { transform: rotate(360deg); }
+}
+.goal-panel-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.goal-panel-progress {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-hover, var(--surface));
+  overflow: hidden;
+}
+.goal-panel-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.2s ease;
+}
+.goal-panel-progress-pct {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+.goal-panel-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 2px 0;
+}
+.goal-panel-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text-secondary, var(--muted));
+}
+.goal-panel-history-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.goal-panel-history-time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.goal-panel-gaps {
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.goal-panel-action-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 2px;
+}
+.goal-panel-btn {
+  flex: 1;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover, var(--surface));
+  color: var(--text);
+  font-size: 11px;
+  cursor: pointer;
+}
+.goal-panel-btn:hover {
+  background: var(--accent-soft, var(--surface));
+}
 
 /* ── Composer mode chips (goal / plan-task / research / conductor) ────
    Mirrors the command-menu item look: flat surface, hairline border,

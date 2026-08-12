@@ -11,6 +11,7 @@
 import { useEffect, useState } from 'react';
 import { subscribeToGoalUpdated } from '@/lib/stream-session-manager';
 import type { GoalUpdatedEvent } from '@/types/stream';
+import { GoalStatusPanel } from './GoalStatusPanel';
 
 interface GoalStatusChipProps {
   sessionId?: string;
@@ -30,9 +31,25 @@ const STATE_LABELS: Record<string, string> = {
   idle: 'Idle',
 };
 
-export function GoalStatusChip({ sessionId }: GoalStatusChipProps) {
+export function GoalStatusChip({ sessionId, onSendCommand }: GoalStatusChipProps) {
   const [goal, setGoal] = useState<GoalUpdatedEvent | null>(null);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest('[data-goal-chip],[data-goal-panel]')) return;
+      setOpen(false);
+    };
+    const timer = window.setTimeout(() => {
+      document.addEventListener('mousedown', handlePointerDown, true);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('mousedown', handlePointerDown, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     setGoal(null);
@@ -92,17 +109,23 @@ export function GoalStatusChip({ sessionId }: GoalStatusChipProps) {
     : `${goal.tokensUsed}`;
 
   return (
-    <button
-      type="button"
-      className="goal-chip"
-      data-state={goal.state}
-      onClick={() => setOpen((v) => !v)}
-      aria-expanded={open}
-      title="Toggle goal details"
-    >
-      <span className="goal-chip-dot" data-state={goal.state} />
-      <span className="goal-chip-label">{label}</span>
-      <span className="goal-chip-tokens">{tokens}</span>
-    </button>
+    <>
+      <button
+        type="button"
+        className="goal-chip"
+        data-state={goal.state}
+        data-goal-chip
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title="Toggle goal details"
+      >
+        <span className="goal-chip-dot" data-state={goal.state} />
+        <span className="goal-chip-label">{label}</span>
+        <span className="goal-chip-tokens">{tokens}</span>
+      </button>
+      {open && (
+        <GoalStatusPanel goal={goal} onClose={() => setOpen(false)} onSendCommand={onSendCommand} />
+      )}
+    </>
   );
 }
