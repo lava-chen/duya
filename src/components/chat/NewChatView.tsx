@@ -5,6 +5,9 @@
 // thread is created or shown in the sidebar until the user sends. Text +
 // attachments are kept in a global draft (conversation-store) that survives
 // navigation and app restarts, so the user can resume an unsent draft.
+//
+// Layout mirrors WelcomeView (SessionSelector + project picker + recent
+// threads) so the composer is not a bare, unconstrained input box.
 
 'use client';
 
@@ -13,6 +16,9 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { MessageInput } from './MessageInput';
+import { SessionSelector } from '@/components/home/SessionSelector';
+import { InputDialog } from '@/components/ui/InputDialog';
+import { useDefaultPermission } from '@/stores/default-permission-store';
 import type { PermissionMode } from './PermissionModeSelector';
 import type { FileAttachment } from '@/types/message';
 
@@ -33,9 +39,12 @@ interface NewChatViewProps {
 export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const { t } = useTranslation();
   const {
+    projects,
+    isHydrated,
     newChatDraft,
     createThread,
     setActiveThread,
+    addProjectFolder,
     updateNewChatDraft,
     clearNewChatDraft,
   } = useConversationStore();
@@ -43,7 +52,10 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [isSending, setIsSending] = useState(false);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask');
+  const defaultPermission = useDefaultPermission();
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
+  const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
+  const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
 
   // Refs to always read the latest values inside stable callbacks.
   const sessionModelRef = useRef(sessionModel);
@@ -52,6 +64,18 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   providerIdRef.current = providerId;
   const onSendMessageRef = useRef(onSendMessage);
   onSendMessageRef.current = onSendMessage;
+
+  // Default to the first project so the composer mirrors WelcomeView, but
+  // never block sending when no project exists (new-chat supports drafting
+  // against an auto-resolved working directory / no-project session).
+  useEffect(() => {
+    if (projects.length > 0 && !selectedProject) {
+      setSelectedProject({
+        workingDirectory: projects[0].workingDirectory,
+        projectName: projects[0].projectName,
+      });
+    }
+  }, [projects, selectedProject]);
 
   const parseModelName = useCallback((model: string): { providerName: string | null; modelName: string } => {
     const match = model.match(/^\[([^\]]+)\]\s*(.+)$/);
@@ -123,6 +147,64 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
     [updateNewChatDraft],
   );
 
+  const handleSelectProject = useCallback((project: { workingDirectory: string; projectName: string }) => {
+    setSelectedProject(project);
+  }, []);
+
+  const handleUseExistingFolder = useCallback(() => {
+    if (window.electronAPI?.dialog?.openFolder) {
+      window.electronAPI.dialog.openFolder({
+        title: t('project.selectNewProjectFolder'),
+      }).then(async (result: { canceled: boolean; filePaths: string[] }) => {
+        if (!result.canceled && result.filePaths.length > 0) {
+          const workingDirectory = result.filePaths[0];
+          const project = await addProjectFolder(workingDirectory);
+          if (project) {
+            setSelectedProject({
+              workingDirectory: project.workingDirectory,
+              projectName: project.projectName,
+            });
+          }
+        }
+      });
+    }
+  }, [addProjectFolder, t]);
+
+  const handleNewBlankProject = useCallback(() => {
+    setIsNameProjectDialogOpen(true);
+  }, []);
+
+  const handleCreateNamedProject = useCallback(
+    async (name: string) => {
+      setIsNameProjectDialogOpen(false);
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      try {
+        if (window.electronAPI?.app?.createProjectFolder) {
+          const result = await window.electronAPI.app.createProjectFolder(trimmed);
+          if (result.success && result.path) {
+            const project = await addProjectFolder(result.path);
+            setSelectedProject({
+              workingDirectory: project?.workingDirectory ?? result.path,
+              projectName: trimmed,
+            });
+          }
+        }
+      } catch (error) {
+        console.error('[NewChatView] Failed to create blank project:', error);
+      }
+    },
+    [addProjectFolder],
+  );
+
+  const handleNewNoProjectSession = useCallback(async () => {
+    const thread = await createThread({ noProject: true });
+    if (thread) {
+      clearNewChatDraft();
+      setActiveThread(thread.id);
+    }
+  }, [createThread, setActiveThread, clearNewChatDraft]);
+
   // Synchronous fallback: resolve the default provider model when the async
   // effect hasn't finished yet, so the first send never passes an empty model.
   const resolveDefaultModelSync = useCallback(async (): Promise<{ modelName: string; providerId: string } | null> => {
@@ -176,29 +258,32 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         }
         const { modelName: actualModel } = parseModelName(effectiveModel || '');
 
-        // Resolve a working directory so the new session is grouped under a
-        // project when possible. Fall back to the most recent folder, then the
-        // default workspace, then a no-project session.
-        let workingDirectory: string | undefined;
-        let projectName: string | undefined;
-        try {
-          const folders = await ((window.electronAPI?.projects?.getRecentFolders?.()) ?? Promise.resolve([]));
-          if (Array.isArray(folders) && folders.length > 0) {
-            workingDirectory = folders[0];
-          }
-        } catch {
-          // ignore
-        }
+        // Prefer the project picked in the SessionSelector; otherwise resolve
+        // a working directory so the new session is grouped under a project when
+        // possible (most recent folder, then default workspace, then no-project).
+        let workingDirectory = selectedProject?.workingDirectory;
+        let projectName = selectedProject?.projectName;
         if (!workingDirectory) {
           try {
-            const ws = await window.electronAPI?.app?.getDefaultWorkspace?.();
-            if (ws) workingDirectory = ws;
+            const folders = await ((window.electronAPI?.projects?.getRecentFolders?.()) ?? Promise.resolve([]));
+            if (Array.isArray(folders) && folders.length > 0) {
+              workingDirectory = folders[0];
+              projectName = workingDirectory.split(/[\\/]/).pop() || undefined;
+            }
           } catch {
             // ignore
           }
         }
-        if (workingDirectory) {
-          projectName = workingDirectory.split(/[\\/]/).pop() || undefined;
+        if (!workingDirectory) {
+          try {
+            const ws = await window.electronAPI?.app?.getDefaultWorkspace?.();
+            if (ws) {
+              workingDirectory = ws;
+              projectName = ws.split(/[\\/]/).pop() || undefined;
+            }
+          } catch {
+            // ignore
+          }
         }
 
         const thread = await createThread({
@@ -228,29 +313,50 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, permissionMode],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, permissionMode],
   );
 
   return (
-    <div className="new-chat-view">
-      <div className="new-chat-content">
-        <div className="w-full max-w-[800px] flex flex-col items-center">
-          <MessageInput
-            onSend={handleSend}
-            disabled={isSending}
-            isStreaming={false}
-            modelName={sessionModel}
-            onModelChange={handleModelChange}
-            permissionMode={permissionMode}
-            onPermissionModeChange={handlePermissionModeChange}
-            placeholder={t('chat.describeWhatToBuild')}
-            popoverPlacement="bottom"
-            draftMode
-            initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
-            onDraftChange={handleDraftChange}
-          />
-        </div>
+    <div className="welcome-view">
+      <div className="welcome-content">
+        <SessionSelector
+          selectedProject={selectedProject}
+          onSelectProject={handleSelectProject}
+          onNewBlankProject={handleNewBlankProject}
+          onUseExistingFolder={handleUseExistingFolder}
+          onNewNoProjectSession={handleNewNoProjectSession}
+          onSelectThread={setActiveThread}
+        >
+          {/* Message Input rendered between selector and recent threads */}
+          <div className="welcome-message-input">
+            <MessageInput
+              onSend={handleSend}
+              disabled={isSending}
+              isStreaming={false}
+              modelName={sessionModel}
+              onModelChange={handleModelChange}
+              permissionMode={permissionMode}
+              onPermissionModeChange={handlePermissionModeChange}
+              placeholder={t('chat.describeWhatToBuild')}
+              popoverPlacement="bottom"
+              draftMode
+              initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
+              onDraftChange={handleDraftChange}
+            />
+          </div>
+        </SessionSelector>
       </div>
+
+      <InputDialog
+        isOpen={isNameProjectDialogOpen}
+        title={t('project.nameProject')}
+        description={t('project.nameProjectDescription')}
+        placeholder={t('project.nameProjectPlaceholder')}
+        onConfirm={(value) => {
+          handleCreateNamedProject(value);
+        }}
+        onCancel={() => setIsNameProjectDialogOpen(false)}
+      />
     </div>
   );
 }

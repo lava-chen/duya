@@ -237,7 +237,7 @@ export const RichTextInput = forwardRef<HTMLDivElement, RichTextInputProps>(
     return (
       <div
         ref={innerRef}
-        className="w-full bg-transparent px-2 pt-2 pb-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[56px] max-h-[150px] overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
+        className="w-full bg-transparent px-2 pt-2 pb-1 text-left text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-h-[56px] max-h-[150px] overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-muted-foreground"
         contentEditable={!disabled}
         role="textbox"
         aria-multiline="true"

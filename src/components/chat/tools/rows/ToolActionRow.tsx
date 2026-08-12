@@ -22,6 +22,7 @@ import type { ToolUseInfo, ToolResultInfo } from '@/types';
 import { renderToolResult } from '../../ToolResultRenderer';
 import {
   isAskUserQuestionTool,
+  isBrowserTool,
   isLegacySubAgentToolAction,
   isMessageSessionTool,
   isModuleTool,
@@ -47,6 +48,7 @@ import { ModuleToolRow } from './ModuleToolRow';
 import { TaskToolRow } from './TaskToolRow';
 import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
+import { BrowserToolRow } from './BrowserToolRow';
 
 interface ToolActionRowProps {
   tool: ToolAction;
@@ -148,6 +150,12 @@ const ROUTES: RouteEntry[] = [
     // opens the full analysis in ToolImagePreviewModal.
     match: (t) => t.name.toLowerCase() === 'vision_analyze',
     render: (tool) => <VisionToolRow tool={tool} />,
+  },
+  {
+    // Browser tools (parallel_fetch, navigate, etc.) render as a
+    // search-result card with a magnifier header and expandable link list.
+    match: (t) => isBrowserTool(t.name),
+    render: (tool) => <BrowserToolRow tool={tool} />,
   },
   {
     // Canvas Conductor tools (canvas_*) are rendered by a dedicated
