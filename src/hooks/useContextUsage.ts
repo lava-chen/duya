@@ -13,6 +13,7 @@ import {
   estimateTokens,
   type ContextBreakdown,
 } from '@/lib/context-usage-utils';
+import { useContextUsageStore } from '@/stores/context-usage-store';
 
 export type ContextState = 'normal' | 'warning' | 'critical';
 
@@ -82,7 +83,13 @@ export function useContextUsage(
   messages: Message[],
   modelName?: string,
   contextWindow?: number,
+  sessionId?: string,
 ): ContextUsage {
+  // Live context-usage snapshot pushed by the worker during streaming. When
+  // present it reflects the real prompt size (plus trailing tool-result
+  // estimates) as of the last `result` event, so the ring is live mid-turn.
+  const live = useContextUsageStore((s) => (sessionId ? s.liveBySession[sessionId] : undefined));
+
   return useMemo(() => {
     const resolvedContextWindow = getContextWindowForModel(modelName, contextWindow);
     const noData: ContextUsage = {
@@ -99,6 +106,40 @@ export function useContextUsage(
       hasData: false,
       state: 'normal',
     };
+
+    // When the worker has broadcast live usage, prefer it over the persisted
+    // message scan so the ring reflects the in-flight context.
+    if (live && live.usedTokens > 0) {
+      const used = live.usedTokens;
+      const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
+      const estimatedNextTurn = used + 200;
+      const estimatedNextRatio = resolvedContextWindow
+        ? estimatedNextTurn / resolvedContextWindow
+        : 0;
+      const inputTokens = live.inputTokens || 0;
+      const cacheRead = live.cacheHitTokens || 0;
+      const cacheCreation = live.cacheCreationTokens || 0;
+      const outputTokens = live.outputTokens || 0;
+      const cacheHitRate = inputTokens > 0 ? cacheRead / inputTokens : 0;
+      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
+      let state: ContextState = 'normal';
+      if (effectiveRatio >= 0.95) state = 'critical';
+      else if (effectiveRatio >= 0.8) state = 'warning';
+      return {
+        modelName: modelName || 'unknown',
+        contextWindow: resolvedContextWindow,
+        used,
+        ratio,
+        estimatedNextTurn,
+        estimatedNextRatio,
+        cacheReadTokens: cacheRead,
+        cacheCreationTokens: cacheCreation,
+        outputTokens,
+        cacheHitRate,
+        hasData: true,
+        state,
+      };
+    }
 
     // Latest usable usage block (scanned newest-first) drives the context
     // ring. `input_tokens` already includes cache read + write, so
@@ -202,7 +243,7 @@ export function useContextUsage(
     }
 
     return noData;
-  }, [messages, modelName, contextWindow]);
+  }, [messages, modelName, contextWindow, live]);
 }
 
 /** Per-message source breakdown for the popover grid + detail modal.

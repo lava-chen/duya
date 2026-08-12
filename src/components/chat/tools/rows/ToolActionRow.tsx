@@ -49,6 +49,7 @@ import { TaskToolRow } from './TaskToolRow';
 import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
+import { McpToolRow } from './McpToolRow';
 
 interface ToolActionRowProps {
   tool: ToolAction;
@@ -163,6 +164,14 @@ const ROUTES: RouteEntry[] = [
     // user sees "正在绘制画布元素" instead of the raw JSON payload.
     match: (t) => t.name.toLowerCase().startsWith('canvas_') || t.name.toLowerCase() === 'database_manage',
     render: (tool) => <CanvasConductorToolRow tool={tool} />,
+  },
+  {
+    // MCP-provided tools (any name starting with the `mcp_` provider
+    // prefix) render with the AiGateway icon + bare tool name instead
+    // of the generic catch-all. Must be checked before the catch-all
+    // fallthrough below.
+    match: (t) => t.name.toLowerCase().startsWith('mcp_'),
+    render: (tool) => <McpToolRow tool={tool} />,
   },
 ];
 

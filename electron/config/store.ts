@@ -47,6 +47,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   conductorFeatureFlags: 'auxiliary.conductor_feature_flags',
   openLinksInExternalBrowser: 'browser.open_links_in_external_browser',
   defaultPermissionMode: 'agent.default_permission_mode',
+  defaultIde: 'ide.default',
 };
 
 type PortRole = 'renderer' | 'agent' | 'main';

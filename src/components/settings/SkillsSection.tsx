@@ -17,6 +17,7 @@ import {
   InfoIcon,
   DotsThreeIcon,
   CaretDownIcon,
+  AiGatewayIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -81,7 +82,7 @@ const CATEGORY_COLORS: Record<string, { bg: string; text: string; border: string
   automation: { bg: "rgba(245, 158, 11, 0.1)", text: "#f59e0b", border: "rgba(245, 158, 11, 0.3)", icon: "🤖" },
   communication: { bg: "rgba(14, 165, 233, 0.1)", text: "#0ea5e9", border: "rgba(14, 165, 233, 0.3)", icon: "💬" },
   media: { bg: "rgba(239, 68, 68, 0.1)", text: "#ef4444", border: "rgba(239, 68, 68, 0.3)", icon: "🎬" },
-  mcp: { bg: "rgba(99, 102, 241, 0.1)", text: "#6366f1", border: "rgba(99, 102, 241, 0.3)", icon: "🔌" },
+  mcp: { bg: "rgba(99, 102, 241, 0.1)", text: "#6366f1", border: "rgba(99, 102, 241, 0.3)", icon: "" },
   system: { bg: "rgba(107, 114, 128, 0.1)", text: "#6b7280", border: "rgba(107, 114, 128, 0.3)", icon: "⚙️" },
   other: { bg: "rgba(156, 163, 175, 0.1)", text: "#9ca3af", border: "rgba(156, 163, 175, 0.3)", icon: "📦" },
 };
@@ -97,6 +98,7 @@ function SkillIcon({ category, size = "md" }: { category?: string; size?: "sm" |
     md: "w-9 h-9 text-lg rounded-xl",
     lg: "w-12 h-12 text-2xl rounded-xl",
   };
+  const svgSize = size === "lg" ? 24 : size === "sm" ? 16 : 18;
 
   return (
     <div
@@ -106,7 +108,9 @@ function SkillIcon({ category, size = "md" }: { category?: string; size?: "sm" |
         color: categoryColor.text,
       }}
     >
-      {categoryColor.icon}
+      {category === "mcp"
+        ? <AiGatewayIcon size={svgSize} />
+        : categoryColor.icon}
     </div>
   );
 }

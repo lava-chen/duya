@@ -5,6 +5,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { getActiveProviderIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
+import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from "@/components/chat/AgentModeSelector";
 import { SessionSelector } from "./SessionSelector";
 import { InputDialog } from "@/components/ui/InputDialog";
 import { useDefaultPermission } from "@/stores/default-permission-store";
@@ -24,6 +25,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
+  const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
 
   // Refs to always read the latest values inside useCallback closures.
@@ -163,6 +165,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
         projectName: selectedProject.projectName,
         providerId: effectiveProviderId || undefined,
         model: actualModel || undefined,
+        agentProfileId,
       });
 
       if (thread) {
@@ -174,12 +177,12 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           // Double rAF ensures the ChatView mount effects (subscribeSession, etc.) have fired
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, permissionMode, actualModel, files, undefined, outputStyleConfig);
+            send?.(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
           });
         });
       }
     },
-    [selectedProject, createThread, onSelectThread, permissionMode, parseModelName, resolveDefaultModelSync]
+    [selectedProject, createThread, onSelectThread, permissionMode, parseModelName, resolveDefaultModelSync, agentProfileId]
   );
 
   const handleNewNoProjectSession = useCallback(async () => {
@@ -269,6 +272,14 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               onPermissionModeChange={handlePermissionModeChange}
               placeholder={t('chat.describeWhatToBuild')}
             />
+            {/* Agent chosen once at session creation; fixed afterwards. */}
+            <div className="flex items-center justify-between mt-2 px-1">
+              <AgentModeSelector
+                value={getModeForProfileId(agentProfileId) ?? 'main'}
+                onChange={(mode) => setAgentProfileId(getProfileIdForMode(mode))}
+                disabled={!isHydrated || !selectedProject}
+              />
+            </div>
           </div>
         </SessionSelector>
       </div>

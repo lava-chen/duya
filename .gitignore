@@ -180,3 +180,8 @@ output/
 
 # Brainstorm visual companion scratch
 .superpowers/
+
+# Transient agent-session backups and scratch staging (never commit)
+.duya-backup-*
+.duya-stage/
+.serena/

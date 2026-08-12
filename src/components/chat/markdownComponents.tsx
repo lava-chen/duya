@@ -155,10 +155,8 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     const displayName = fileNameFromPath(resolvedHref);
     const TypeIcon = getFileTypeIcon(fileExtensionFromName(displayName));
     return (
-      <Button
+      <button
         type="button"
-        variant="ghost"
-        size="sm"
         className="markdown-file-link"
         onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
         title={resolvedHref}
@@ -169,7 +167,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
           <FileIcon size={16} aria-hidden="true" />
         )}
         <span className="markdown-file-link__name">{displayName}</span>
-      </Button>
+      </button>
     );
   }
 

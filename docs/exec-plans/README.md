@@ -59,6 +59,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [413c-mode-state-persistence](./active/413c-mode-state-persistence.md) | mode 状态快照落盘：core-db `mode_state_snapshots` 表 + `modeState:*` IPC + `modeStateDb` | P1 | ✅ 完成（2026-08-11） |
 | [413d-agent-loop-wiring](./active/413d-agent-loop-wiring.md) | agent 侧接线：DuyaAgent 四处检查点 + coordinator 主体（注入/仲裁/门控/buffer）+ e2e | P1 | ✅ 完成（2026-08-11） |
 | [413e-plan-mode-frontend-session](./active/413e-plan-mode-frontend-session.md) | plan-task session 化前端：extensions key + set_plan_mode IPC + store/ChatView/MessageInput + mode-id | P1 | Planning |
+| [420-goal-observability-persistence](./active/420-goal-observability-persistence.md) | Goal 可观测性+持久化：迁移日志 / goal_mode_enabled 标签恢复 / start 立即落盘 + 富事件 + 渲染端 modeState.get | P1 | ✅ 完成（2026-08-12） |
+| [421-goal-ui](./active/421-goal-ui.md) | Goal UI 重设计（对齐 OptionPanel）：GoalStatusChip + GoalStatusPanel + 删旧 GoalStatusCard | P1 | ✅ 完成（2026-08-12） |
 
 ### Conductor / Canvas
 

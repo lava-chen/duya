@@ -667,6 +667,20 @@ export class StreamingToolExecutor {
   }
 
   /**
+   * Release the listener that `siblingAbortController` registered on the
+   * run-level abort signal. Called when the executor's turn completes
+   * (normally or via `discard`) so the per-turn listener does not accumulate
+   * on the run-level controller across turns. Idempotent and safe to call
+   * after `discard()`.
+   */
+  dispose(): void {
+    const ctrl = this.siblingAbortController as AbortController & {
+      dispose?: () => void
+    }
+    ctrl.dispose?.()
+  }
+
+  /**
    * Discards all pending and in-progress tools
    */
   discard(): void {

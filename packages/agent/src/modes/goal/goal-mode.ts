@@ -78,7 +78,7 @@ When you believe the objective is fully achieved, call \`update_goal\` with \`co
 export const goalMode: ModeModifier = {
   id: 'goal',
   kind: 'session',
-  display: { label: 'Goal', icon: 'Pin', description: '自主多轮目标追踪与核验' },
+  display: { label: 'Goal', icon: 'TargetArrow', description: '自主多轮目标追踪与核验' },
 
   // Goal events carry payloads (objects), unlike plan's string events, so
   // the narrowed tracker needs an explicit upcast to the shared

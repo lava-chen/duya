@@ -543,16 +543,20 @@ html[data-font="system"] .message-content li {
 .markdown-file-link {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.15rem;
+  margin-left: 0.2rem;
   max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
   color: #2563eb;
   cursor: pointer;
+  font-size: 15px; /* match .message-content body text */
   font-weight: 500;
-  line-height: 1.35;
+  line-height: 1.5;
   text-align: left;
   text-decoration: none;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
   transition: color 150ms ease, text-decoration-color 150ms ease;
   vertical-align: middle;
 }
@@ -560,6 +564,9 @@ html[data-font="system"] .message-content li {
 .markdown-file-link:hover {
   color: #1d4ed8;
   text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
 }
 
 .markdown-file-link:focus-visible {
@@ -10779,7 +10786,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-workspace-controls button,
-.file-preview-actions button:not(.file-preview-open-button) {
+.file-preview-actions > button:not(.file-preview-open-ide):not(.file-preview-open-caret) {
   display: inline-flex;
   width: 30px;
   height: 30px;
@@ -10796,7 +10803,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .file-workspace-controls button:hover,
 .file-workspace-controls button.active,
-.file-preview-actions button:not(.file-preview-open-button):hover {
+.file-preview-actions > button:not(.file-preview-open-ide):not(.file-preview-open-caret):hover {
   background: var(--surface-hover);
   color: var(--text);
 }
@@ -11061,43 +11068,6 @@ html[data-message-font-size="large"] .prose h3 {
 
 .file-preview-open-dropdown svg.rotate-180 {
   transform: rotate(180deg);
-}
-
-.file-preview-open-menu {
-  position: absolute;
-  z-index: 1000;
-  top: calc(100% + 6px);
-  right: 0;
-  display: flex;
-  width: max-content;
-  min-width: 170px;
-  flex-direction: column;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--sidebar-bg);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
-}
-
-.file-preview-open-menu button {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 12px;
-  text-align: left;
-  white-space: nowrap;
-  transition: background 0.12s ease;
-}
-
-.file-preview-open-menu button:hover {
-  background: var(--surface-hover);
 }
 
 .file-preview-canvas {

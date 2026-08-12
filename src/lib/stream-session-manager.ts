@@ -20,6 +20,7 @@ import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions } from './agent-http-client';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useContextUsageStore } from '@/stores/context-usage-store';
 
 // Provider config interface
 interface ProviderConfig {
@@ -1024,7 +1025,11 @@ class StreamSessionManager {
     state.toolUses = [];
     state.toolResults = [];
     state.streamingToolOutput = '';
-    state.statusText = undefined;
+    // Immediate "preparing" feedback so the UI shows activity the moment the
+    // user hits send — before the worker is even contacted. The worker's own
+    // status / turn_start events, or the first text/thinking event, replace it
+    // as the run progresses (handleTextEvent clears statusText on first text).
+    state.statusText = '@i18n:streaming.preparing';
     state.startedAt = Date.now();
     state.completedAt = null;
     state.error = null;
@@ -1224,7 +1229,23 @@ class StreamSessionManager {
           }
           break;
 
+        case 'token_usage':
+          // Live context-usage snapshot pushed by the worker during streaming.
+          // Updates the ring in real time without waiting for turn-end persist.
+          if (event.data && typeof event.data === 'object') {
+            const d = event.data as { usedTokens?: number; inputTokens?: number; outputTokens?: number; cacheHitTokens?: number; cacheCreationTokens?: number };
+            useContextUsageStore.getState().setLive(sessionId, {
+              usedTokens: d.usedTokens ?? 0,
+              inputTokens: d.inputTokens ?? 0,
+              outputTokens: d.outputTokens ?? 0,
+              cacheHitTokens: d.cacheHitTokens,
+              cacheCreationTokens: d.cacheCreationTokens,
+            });
+          }
+          break;
+
         case 'done':
+          useContextUsageStore.getState().clearLive(sessionId);
           this.handleDoneEvent(sessionId, streamId);
           break;
 

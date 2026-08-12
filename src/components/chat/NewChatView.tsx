@@ -16,6 +16,7 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { MessageInput } from './MessageInput';
+import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { useDefaultPermission } from '@/stores/default-permission-store';
@@ -52,6 +53,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [isSending, setIsSending] = useState(false);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
+  const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const defaultPermission = useDefaultPermission();
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
@@ -292,6 +294,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
           noProject: !workingDirectory,
           providerId: effectiveProviderId || undefined,
           model: actualModel || undefined,
+          agentProfileId,
         });
         if (!thread) return;
 
@@ -304,7 +307,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, permissionMode, actualModel, files, undefined, outputStyleConfig);
+            send?.(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
           });
         });
       } catch (error) {
@@ -313,7 +316,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, permissionMode],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, permissionMode, agentProfileId],
   );
 
   return (
@@ -343,6 +346,14 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
               initialDraft={{ text: newChatDraft.text, attachments: newChatDraft.attachments }}
               onDraftChange={handleDraftChange}
             />
+            {/* Agent chosen once at session creation; fixed afterwards. */}
+            <div className="flex items-center justify-between mt-2 px-1">
+              <AgentModeSelector
+                value={getModeForProfileId(agentProfileId) ?? 'main'}
+                onChange={(mode) => setAgentProfileId(getProfileIdForMode(mode))}
+                disabled={isSending}
+              />
+            </div>
           </div>
         </SessionSelector>
       </div>

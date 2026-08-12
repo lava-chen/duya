@@ -86,16 +86,22 @@
   color: var(--accent);
 }
 
+.option-panel-check.has-icon {
+  color: var(--text);
+}
+
 .option-panel-copy {
-  display: grid;
+  display: flex;
   min-width: 0;
-  flex: 1;
+  flex: 1 1 0%;
+  flex-direction: column;
   gap: 2px;
 }
 
 .option-panel-label,
 .option-panel-description,
 .option-panel-meta {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

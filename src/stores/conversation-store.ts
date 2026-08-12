@@ -158,7 +158,7 @@ interface ConversationState {
   clearProviderEdit: () => void;
   enterSettings: () => void;
   exitSettings: () => void;
-  createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string; noProject?: boolean }) => Promise<Thread | null>;
+  createThread: (options?: { workingDirectory?: string; projectName?: string; providerId?: string; model?: string; noProject?: boolean; agentProfileId?: string | null }) => Promise<Thread | null>;
   deleteThread: (id: string) => void;
   setActiveThread: (id: string) => void;
   goToParentSession: () => void;
@@ -372,6 +372,7 @@ export const useConversationStore = create<ConversationState>()(
         // Treat empty strings as "not provided" so the fallback triggers.
         let providerId = options?.providerId || undefined;
         let model = options?.model || undefined;
+        const agentProfileId = options?.agentProfileId || null;
 
         // If not provided, get from active provider
         if (!providerId) {
@@ -409,6 +410,7 @@ export const useConversationStore = create<ConversationState>()(
           updatedAt: now,
           providerId,
           model,
+          agentProfileId,
         };
 
         set((state) => ({

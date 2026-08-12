@@ -36,6 +36,7 @@ import { toLegacyApiProvider } from '../src/lib/providers/legacy';
 
 // IPC handlers (extracted from main.ts)
 import { registerSystemHandlers } from './ipc/system-handlers';
+import { registerIdeHandlers } from './ipc/ide-handlers';
 import { registerSettingsHandlers } from './ipc/settings-handlers';
 import { registerSkillsHandlers } from './ipc/skills-handlers';
 import { registerFilesHandlers } from './ipc/files-handlers';
@@ -690,6 +691,7 @@ if (gotTheLock) {
 
 // Register IPC handlers
 registerSystemHandlers();
+registerIdeHandlers();
 registerSettingsHandlers();
 registerSkillsHandlers();
 registerFilesHandlers();

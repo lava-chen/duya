@@ -75,6 +75,12 @@ export function classifyTool(toolName: string): ToolBatch {
   const batch = TOOL_BATCH_MAP[toolName]
   if (batch !== undefined) return batch
 
+  // MCP-derived tools (provider names always start with the `mcp_` prefix,
+  // see computeProviderName) are external server calls. They are not in the
+  // static map, but treat them as READ so independent MCP queries can run in
+  // parallel and no misleading "Unknown tool" warning is logged per call.
+  if (toolName.startsWith('mcp_')) return ToolBatch.READ
+
   // Fail-closed: unknown tools default to SYSTEM (most restrictive)
   console.warn(
     `[ToolOrchestration] Unknown tool "${toolName}" — classifying as SYSTEM batch (fail-closed)`,
