@@ -5,8 +5,8 @@
  */
 
 import { readdir, readFile } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
-import { exec, execFile } from 'node:child_process';
+import { join, isAbsolute, relative, basename } from 'node:path';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
@@ -18,7 +18,11 @@ import { sanitizeWorkingDirectory } from './sanitize.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 
 const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
+
+// Long matching lines are truncated so one pathological line cannot blow up
+// the model context. Mirrors the default used by grok-build's grep tool.
+const MAX_LINE_LENGTH = 1000;
+const LONG_LINE_SUFFIX = ' ...(line truncated)';
 
 // ============================================================
 // Types
@@ -146,7 +150,7 @@ export class GrepTool extends BaseTool {
 
   private workingDirectory: string;
   private readonly allowedRoots?: readonly string[];
-  private defaultMaxResults = 50;
+  private defaultMaxResults = 100;
 
   constructor(options: GrepToolOptions = {}) {
     super();
@@ -201,6 +205,10 @@ export class GrepTool extends BaseTool {
 
     const args = [
       '--hidden',
+      // Always emit the file path, even for single-file searches. Without
+      // --with-filename, ripgrep omits the path when scanning one file and
+      // the `path:line:col:content` parser can no longer anchor line/column.
+      '--with-filename',
       '--line-number',
       '--column',
       '--no-heading',
@@ -216,22 +224,51 @@ export class GrepTool extends BaseTool {
       searchPath,
     ].filter(Boolean);
 
-    try {
-      // Use execFile (no shell) so user-controlled pattern/path cannot inject
-      // shell metacharacters. Args are passed as an array, never concatenated.
-      const { stdout } = await execFileAsync('rg', args, {
+    return new Promise<GrepMatch[]>((resolve, reject) => {
+      // Use spawn (no shell) so user-controlled pattern/path cannot inject
+      // shell metacharacters. Reading stdout incrementally lets us kill rg as
+      // soon as we have enough results instead of waiting for a full repo scan.
+      const child = spawn('rg', args, {
         cwd: this.workingDirectory,
-        maxBuffer: 50 * 1024 * 1024, // Increased buffer for large directories
-        timeout: 30000, // 30 second timeout
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
-      return this.parseRipgrepOutput(stdout, maxResults);
-    } catch (error) {
-      if (error instanceof Error && 'code' in error && (error as { code: number }).code === 1) {
-        return [];
-      }
-      throw error;
-    }
+      let buffer = '';
+      let stderr = '';
+      let settled = false;
+      let killedForLimit = false;
+      const settle = (fn: () => void) => {
+        if (!settled) {
+          settled = true;
+          fn();
+        }
+      };
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+        // Re-parse incrementally; once the result budget is filled, kill rg
+        // so it stops walking the tree. Final parsing happens on 'close'.
+        if (maxResults && this.parseRipgrepOutput(buffer, maxResults).length >= maxResults) {
+          killedForLimit = true;
+          child.kill();
+        }
+      });
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on('error', (error) => settle(() => reject(error)));
+      child.on('close', (code) => {
+        settle(() => {
+          // Exit code 0 = success, 1 = no matches; a kill due to hitting the
+          // result limit is also a successful short-circuit.
+          if (!killedForLimit && code !== 0 && code !== 1) {
+            reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
+            return;
+          }
+          resolve(this.parseRipgrepOutput(buffer, maxResults));
+        });
+      });
+    });
   }
 
   /**
@@ -259,10 +296,19 @@ export class GrepTool extends BaseTool {
       const column = parseInt(match[3], 10);
       if (isNaN(lineNum) || isNaN(column)) continue;
 
-      matches.push({ file: match[1], line: lineNum, column, content: match[4].trim() });
+      matches.push({ file: match[1], line: lineNum, column, content: this.truncateLine(match[4].trim()) });
     }
 
     return matches;
+  }
+
+  /**
+   * Truncate an over-long matching line so a single pathological line cannot
+   * blow up the model context.
+   */
+  private truncateLine(content: string): string {
+    if (content.length <= MAX_LINE_LENGTH) return content;
+    return content.slice(0, MAX_LINE_LENGTH) + LONG_LINE_SUFFIX;
   }
 
   /**
@@ -296,7 +342,7 @@ export class GrepTool extends BaseTool {
                 file: filePath,
                 line: i + 1,
                 column: match.index + 1,
-                content: line,
+                content: this.truncateLine(line),
               });
 
               if (maxResults && matches.length >= maxResults) break;
@@ -351,11 +397,19 @@ export class GrepTool extends BaseTool {
   /**
    * Convert to relative path
    */
-  private toRelativePath(filePath: string): string {
-    if (isAbsolute(filePath)) {
+  private toRelativePath(filePath: string, baseDir: string): string {
+    // Files already reported relative (rg emits paths relative to cwd) pass
+    // through unchanged. Absolute paths under the search base are shortened to
+    // a relative path so tool output stays compact and model-friendly.
+    if (!isAbsolute(filePath)) {
       return filePath;
     }
-    return filePath;
+    const rel = relative(baseDir, filePath);
+    if (rel === '') {
+      // The file IS the search target (e.g. single-file search).
+      return basename(filePath);
+    }
+    return rel && !rel.startsWith('..') ? rel : filePath;
   }
 
   /**
@@ -438,7 +492,7 @@ export class GrepTool extends BaseTool {
       }
 
       const formattedResults = results.map((m) => ({
-        file: this.toRelativePath(m.file).replace(/\\/g, '/'),
+        file: this.toRelativePath(m.file, searchPath).replace(/\\/g, '/'),
         line: m.line,
         column: m.column,
         content: m.content,

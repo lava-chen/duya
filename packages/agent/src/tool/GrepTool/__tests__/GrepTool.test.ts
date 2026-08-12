@@ -72,3 +72,66 @@ describe('GrepTool allowedRoots sandbox', () => {
     expect(parsed.success).toBe(true);
   });
 });
+
+describe('GrepTool single-file search', () => {
+  it('returns matches when searching a single file path (--with-filename)', async () => {
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const singleFile = join(root, 'memory', 'a.md');
+    const result = await tool.execute({ pattern: 'needle', path: singleFile });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.total).toBeGreaterThan(0);
+    expect(parsed.matches[0].content).toContain('needle');
+    expect(parsed.matches[0].file).toBe('a.md');
+  });
+});
+
+describe('GrepTool long line truncation', () => {
+  it('truncates matching lines that exceed the max length', async () => {
+    const longLine = 'needle ' + 'x'.repeat(5000);
+    writeFileSync(join(root, 'memory', 'long.md'), longLine + '\n');
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    const content = parsed.matches[0].content as string;
+    expect(content.length).toBeLessThan(1200);
+    expect(content).toContain('line truncated');
+  });
+});
+
+describe('GrepTool result limit', () => {
+  it('caps results and marks truncated when max_results is exceeded', async () => {
+    const manyLines = Array.from({ length: 50 }, (_, i) => `needle line ${i}`).join('\n');
+    writeFileSync(join(root, 'memory', 'many.md'), manyLines + '\n');
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', max_results: 10 });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.total).toBeLessThanOrEqual(10);
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it('defaults to 100 results matching the documented schema', async () => {
+    const manyLines = Array.from({ length: 150 }, (_, i) => `needle line ${i}`).join('\n');
+    writeFileSync(join(root, 'memory', 'many.md'), manyLines + '\n');
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.total).toBeLessThanOrEqual(100);
+  });
+});
+
+describe('GrepTool relative paths', () => {
+  it('returns paths relative to the search base (no drive letter)', async () => {
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    const file = parsed.matches[0].file as string;
+    expect(file).toBe('a.md');
+    expect(file).not.toMatch(/^[A-Za-z]:/);
+  });
+});

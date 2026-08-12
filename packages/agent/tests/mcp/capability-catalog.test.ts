@@ -25,7 +25,7 @@ describe('buildMCPCapabilityCatalog', () => {
 
     expect(catalog).toContain('## MCP Capability Directory');
     expect(catalog).toContain('`notion` (plugin, 2 tools): search_pages, create_page');
-    expect(catalog).toContain('`github` (user mcp.toml, 1 tools): list_pull_requests');
+    expect(catalog).toContain('`github` (user config.toml, 1 tools): list_pull_requests');
     expect(catalog).toContain('call `tool_search` with the server name');
     expect(catalog).not.toContain('input_schema');
   });

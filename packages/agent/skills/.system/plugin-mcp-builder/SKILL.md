@@ -1,6 +1,6 @@
 ---
 name: plugin-mcp-builder
-description: "Build DUYA plugins and MCP servers. Use when the user wants to extend DUYA's capabilities — create a first-party or local plugin (skills, MCP, hooks, CLI, UI), wire a new MCP server (stdio or streamable-http), or scaffold a plugin with the duya.plugin.v1 manifest. Complement to /plugin-development (full workflow) and /mcp-management (managing installed servers). Trigger on '做个插件', '接个 MCP', '写个 MCP server', '怎么扩展 duya', 'add a plugin', 'add an MCP server'."
+description: "Build DUYA plugins and MCP servers. Use when the user wants to extend DUYA's capabilities — create a first-party or local plugin (skills, MCP, hooks, CLI, UI), wire a new MCP server (stdio or streamable-http), or scaffold a plugin with the duya.plugin.v1 manifest. Complement to /plugin-development (full workflow) and /self-config (managing installed servers). Trigger on '做个插件', '接个 MCP', '写个 MCP server', '怎么扩展 duya', 'add a plugin', 'add an MCP server'."
 when-to-use: "When the task is about extending DUYA itself via plugins or MCP, not about consuming an existing server."
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash]
 ---
@@ -11,7 +11,7 @@ How to extend DUYA with plugins and MCP servers. This skill gives the
 overview and the MCP-specific path; for the full plugin workflow (scaffold,
 marketplace, hooks, validation, cachebuster) read `/plugin-development` and
 follow its scripts. For managing already-installed MCP servers, read
-`/mcp-management`.
+`/self-config`.
 
 ## Plugin system overview
 
@@ -60,7 +60,7 @@ A server can be wired two ways:
 2. **Registered in config** — an entry in `~/.duya/config.toml` under
    `mcp_servers` (fields: `transport`, `command`, `args`, `env`, `url`,
    `headers`, `enabled`, `allowedAgentIds`). This is the "user-managed" path
-   (see `/mcp-management`).
+   (see `/self-config`).
 
 ### Building a new MCP server
 

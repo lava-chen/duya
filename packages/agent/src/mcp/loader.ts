@@ -68,6 +68,10 @@ export function resolvedToLegacyConfig(r: ResolvedMCPServerConfig): MCPServerCon
     url: r.rawConfig.url,
     headers: r.rawConfig.headers,
     allowedAgentIds: r.allowedAgentIds,
+    nameOverride: r.rawConfig.nameOverride,
+    startupTimeoutSec: r.rawConfig.startupTimeoutSec,
+    toolTimeoutSec: r.rawConfig.toolTimeoutSec,
+    toolTimeouts: r.rawConfig.toolTimeouts,
   };
 }
 

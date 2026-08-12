@@ -45,6 +45,8 @@ const FLAT_TO_PATH: Record<string, string> = {
   securityBypassSkills: 'agent.security_bypass_skills',
   skill_path: 'agent.skill_path',
   conductorFeatureFlags: 'auxiliary.conductor_feature_flags',
+  openLinksInExternalBrowser: 'browser.open_links_in_external_browser',
+  defaultPermissionMode: 'agent.default_permission_mode',
 };
 
 type PortRole = 'renderer' | 'agent' | 'main';

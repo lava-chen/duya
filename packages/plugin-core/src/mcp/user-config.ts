@@ -14,6 +14,14 @@ export interface UserMcpTomlServer {
   headers?: Record<string, string>;
   enabled: boolean;
   allowedAgentIds?: string[];
+  /** Short, stable prefix for model-visible tool names (`mcp_<nameOverride>_<tool>`). */
+  nameOverride?: string;
+  /** Startup (spawn + handshake + listTools) timeout in seconds. */
+  startupTimeoutSec?: number;
+  /** Default per-tool-call timeout in seconds for this server. */
+  toolTimeoutSec?: number;
+  /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
+  toolTimeouts?: Record<string, number>;
 }
 
 function stringRecord(value: unknown, field: string): Record<string, string> | undefined {
@@ -35,6 +43,29 @@ function stringArray(value: unknown, field: string): string[] | undefined {
     throw new Error(`${field} must be an array of strings`);
   }
   return value.slice() as string[];
+}
+
+function positiveNumber(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`${field} must be a positive number`);
+  }
+  return value;
+}
+
+function numberRecord(value: unknown, field: string): Record<string, number> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${field} must be a table of positive numbers`);
+  }
+  const out: Record<string, number> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item !== 'number' || !Number.isFinite(item) || item <= 0) {
+      throw new Error(`${field}.${key} must be a positive number`);
+    }
+    out[key] = item;
+  }
+  return out;
 }
 
 /** Parse the canonical `[mcp_servers.<name>]` TOML structure. */
@@ -69,6 +100,11 @@ export function parseUserMcpToml(text: string): UserMcpTomlServer[] {
       headers: stringRecord(entry.headers, `mcp_servers.${name}.headers`),
       enabled: entry.enabled !== false,
       allowedAgentIds: stringArray(entry.allowed_agent_ids, `mcp_servers.${name}.allowed_agent_ids`),
+      nameOverride:
+        typeof entry.name_override === 'string' ? entry.name_override : undefined,
+      startupTimeoutSec: positiveNumber(entry.startup_timeout_sec, `mcp_servers.${name}.startup_timeout_sec`),
+      toolTimeoutSec: positiveNumber(entry.tool_timeout_sec, `mcp_servers.${name}.tool_timeout_sec`),
+      toolTimeouts: numberRecord(entry.tool_timeouts, `mcp_servers.${name}.tool_timeouts`),
     });
   }
   return result;
@@ -87,6 +123,10 @@ export function stringifyUserMcpToml(servers: readonly UserMcpTomlServer[]): str
       ...(server.headers && Object.keys(server.headers).length ? { headers: server.headers } : {}),
       enabled: server.enabled !== false,
       ...(server.allowedAgentIds?.length ? { allowed_agent_ids: server.allowedAgentIds } : {}),
+      ...(server.nameOverride ? { name_override: server.nameOverride } : {}),
+      ...(server.startupTimeoutSec !== undefined ? { startup_timeout_sec: server.startupTimeoutSec } : {}),
+      ...(server.toolTimeoutSec !== undefined ? { tool_timeout_sec: server.toolTimeoutSec } : {}),
+      ...(server.toolTimeouts && Object.keys(server.toolTimeouts).length ? { tool_timeouts: server.toolTimeouts } : {}),
     };
   }
   return `# User-managed MCP servers for DUYA. Plugin MCPs are configured separately.\n# Changes are detected and reloaded automatically.\n\n${TOML.stringify({ version: 1, mcp_servers: mcpServers } as TOML.JsonMap)}`;

@@ -231,6 +231,13 @@ export interface Message {
   name?: string;
   tool_call_id?: string;
   timestamp?: number;
+  /**
+   * Tool names loaded at runtime (Plan 418 Phase 4 deferred tools). Set on
+   * tool-result carriers when a tool was discovered on-demand (duya
+   * tool_search / plan 241). Providers that support `tool_reference` blocks
+   * emit a reference instead of resending the tool schema.
+   */
+  addedToolNames?: string[];
   /** UI-only: whether this message renders in the transcript. Hidden messages
    * (runtime context, notifications) are model/persistence only. */
   visibility?: 'visible' | 'hidden';
@@ -299,6 +306,20 @@ export type OpenAIThinkingFormat =
   | 'glm-style'
   | 'think-tag-fallback';
 
+/**
+ * How tool results are transported back to the model on Anthropic-protocol
+ * wire formats (Plan 418).
+ *
+ * - 'tool-result-block' (default): standard Anthropic `tool_result` content
+ *   blocks, supported by first-party Anthropic and most compatible endpoints.
+ * - 'text-user-message': fold tool results into plain-text `user` messages
+ *   while keeping `tool_use` blocks on the assistant side. Used for endpoints
+ *   whose content-block schema rejects `tool_result` entirely (e.g. the
+ *   DeepSeek `/anthropic` compat surface, which only accepts
+ *   `text | tool_reference | image | document`).
+ */
+export type ToolResultTransport = 'tool-result-block' | 'text-user-message' | 'none';
+
 export interface ModelCompat {
   openAIThinkingFormat?: OpenAIThinkingFormat;
   forceAdaptiveThinking?: boolean;
@@ -306,6 +327,18 @@ export interface ModelCompat {
   ignoredParameters?: string[];
   rejectedParameters?: string[];
   streamOnly?: boolean;
+  /**
+   * Tool-result transport for Anthropic-protocol endpoints. Defaults to
+   * 'tool-result-block' when unset (see resolveToolResultTransport in
+   * packages/ai/src/api/anthropic-messages.ts).
+   */
+  toolResultTransport?: ToolResultTransport;
+  /**
+   * Whether the endpoint supports Anthropic tool-search style deferred tools
+   * loaded by `tool_reference` blocks (Plan 418 Phase 4). Defaults to false
+   * for third-party endpoints; only explicitly declared models opt in.
+   */
+  supportsToolReferences?: boolean;
 }
 
 // ─── Model pricing (per million tokens, USD) ───

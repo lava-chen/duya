@@ -1966,14 +1966,23 @@ export class StreamingToolExecutor {
         !this.hasPendingProgress() &&
         this.hasUnfinishedTools()
       ) {
-        // Background tools are waiting for completion; wait for progress events
-        const progressPromise = new Promise<void>(resolve => {
-          this.progressAvailableResolve = resolve
-        })
-        await Promise.race([
-          progressPromise,
-          new Promise(resolve => setTimeout(resolve, 5000)),
-        ])
+        // Tools still queued (blocked on a concurrency slot) never emit
+        // progress events — poll briefly so they start as soon as the slot
+        // frees instead of sleeping a fixed 5s per tool (a burst of N
+        // non-concurrency-safe tools took N*5s). Backgrounded workers keep
+        // waiting on progress events, with the 5s race as a safety net.
+        if (this.tools.some(t => t.status === 'queued')) {
+          await new Promise(resolve => setTimeout(resolve, 10))
+        } else {
+          // Background tools are waiting for completion; wait for progress events
+          const progressPromise = new Promise<void>(resolve => {
+            this.progressAvailableResolve = resolve
+          })
+          await Promise.race([
+            progressPromise,
+            new Promise(resolve => setTimeout(resolve, 5000)),
+          ])
+        }
       }
     }
 

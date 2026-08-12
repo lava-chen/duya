@@ -45,6 +45,8 @@ export interface AgentConfig {
   sandbox_enabled: boolean;
   max_concurrent_tools: number;
   default_timeout: number;
+  /** Default permission mode for new sessions ('ask' | 'auto' | 'bypass'). */
+  default_permission_mode: string;
 }
 
 /**
@@ -166,6 +168,14 @@ export interface McpServerEntry {
   headers?: Record<string, string>;
   enabled: boolean;
   allowedAgentIds?: string[];
+  /** Short, stable prefix for model-visible tool names (`mcp_<nameOverride>_<tool>`). */
+  nameOverride?: string;
+  /** Startup (spawn + handshake + listTools) timeout in seconds. */
+  startupTimeoutSec?: number;
+  /** Default per-tool-call timeout in seconds for this server. */
+  toolTimeoutSec?: number;
+  /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
+  toolTimeouts?: Record<string, number>;
 }
 
 export interface PluginEntry {
@@ -256,9 +266,14 @@ export const DEFAULT_CONFIG: DuyaConfig = {
     sandbox_enabled: true,
     max_concurrent_tools: 3,
     default_timeout: 60000,
+    default_permission_mode: 'ask',
   },
   terminal: {},
-  browser: {},
+  browser: {
+    // When true, web links clicked inside DUYA open in the system default
+    // browser. When false, they open in DUYA's built-in side-panel browser.
+    open_links_in_external_browser: true,
+  },
   checkpoints: {},
   compression: {},
   auxiliary: {},

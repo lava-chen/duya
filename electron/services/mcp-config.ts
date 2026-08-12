@@ -28,6 +28,10 @@ export function mcpServersToServerList(
     headers: entry.headers ? { ...entry.headers } : undefined,
     enabled: entry.enabled,
     allowedAgentIds: entry.allowedAgentIds ? [...entry.allowedAgentIds] : undefined,
+    nameOverride: entry.nameOverride,
+    startupTimeoutSec: entry.startupTimeoutSec,
+    toolTimeoutSec: entry.toolTimeoutSec,
+    toolTimeouts: entry.toolTimeouts ? { ...entry.toolTimeouts } : undefined,
   }));
 }
 
@@ -47,6 +51,10 @@ export function serverListToMcpServers(
       headers: s.headers ? { ...s.headers } : undefined,
       enabled: s.enabled,
       allowedAgentIds: s.allowedAgentIds ? [...s.allowedAgentIds] : undefined,
+      nameOverride: s.nameOverride,
+      startupTimeoutSec: s.startupTimeoutSec,
+      toolTimeoutSec: s.toolTimeoutSec,
+      toolTimeouts: s.toolTimeouts ? { ...s.toolTimeouts } : undefined,
     };
   }
   return out;

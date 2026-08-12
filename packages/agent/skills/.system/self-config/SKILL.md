@@ -62,10 +62,43 @@ Start any config task by locating the real root for this machine.
   `[model] default/provider/base_url`, and store the key in `secrets.json`.
 - **Add an MCP server**: add an entry to `mcp_servers` (stdio: `command`+`args`;
   remote: `url`+`headers`). Enable it, scope with `allowedAgentIds` if desired.
+  **Do not guess the `command` alone.** For a stdio server, the exact
+  `command` plus `args` is what makes it enter MCP mode — a bare `command`
+  (e.g. `codegraph` without `args: ["serve", "--mcp"]`) starts the server's
+  interactive CLI instead of speaking MCP over stdio, so the agent never sees
+  its tools. Always obtain the exact `command` + `args` from the server's own
+  documentation or its installer:
+  - Run the server's official install/print subcommand when available, e.g.
+    `codegraph install --print-config claude` (prints the exact
+    `command`+`args` snippet), then copy those values verbatim.
+  - Otherwise consult the server's README / MCP page for the canonical
+    stdio invocation rather than inferring it.
+  After adding the entry, verify the server actually connects and yields
+  tools (see "Verify an MCP server" below) before telling the user it works.
 - **Enable/disable a skill**: add `{ name = "<skill>", enabled = false }` to the
   `skills` array (or remove it to re-enable).
 - **Schedule a cron job**: edit `~/.duya/cronjob.toml`.
 - **Change voice input**: set `[voice] stt.engine` and device/model fields.
+
+## Verify an MCP server
+
+A config entry that parses is not proof the server works. "Configured" only
+means the static fields are valid; the server may still fail to connect or
+yield zero tools. After adding/editing a stdio server, verify it before
+reporting success:
+
+1. Confirm the `command` resolves on PATH for the process DUYA spawns
+   (`Get-Command <cmd>` on Windows, `which <cmd>` on Unix). A PowerShell
+   shim (`<cmd>.ps1`) is what a bare `command` resolves to — prefer the args
+   form that enters MCP mode.
+2. Spawn the server with the exact `command` + `args` and confirm it speaks
+   MCP over stdio — a bare `command` that drops into an interactive CLI will
+   time out on the handshake instead of listing tools.
+3. Confirm the tool count is non-zero; a server that connects but exposes no
+   tools is still not useful to the agent.
+4. If it fails, inspect the MCP apply log / `app.log` for the connection
+   error and fix the `command`+`args` (or transport/url) rather than
+   assuming the config is correct.
 
 ## Security boundaries
 

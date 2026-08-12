@@ -226,6 +226,10 @@ export function expandMcpServerConfig(
     env?: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   },
   ctx: {
     environment: Record<string, string>;
@@ -240,6 +244,10 @@ export function expandMcpServerConfig(
     env: Record<string, string>;
     url?: string;
     headers?: Record<string, string>;
+    nameOverride?: string;
+    startupTimeoutSec?: number;
+    toolTimeoutSec?: number;
+    toolTimeouts?: Record<string, number>;
   };
   missingVars: string[];
   missingKeys: string[];
@@ -285,6 +293,10 @@ export function expandMcpServerConfig(
       env,
       url: url?.expanded,
       headers: Object.keys(headers).length > 0 ? headers : undefined,
+      nameOverride: config.nameOverride,
+      startupTimeoutSec: config.startupTimeoutSec,
+      toolTimeoutSec: config.toolTimeoutSec,
+      toolTimeouts: config.toolTimeouts,
     },
     missingVars,
     missingKeys,
