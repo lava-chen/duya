@@ -81,6 +81,7 @@ export async function persistSnapshot(
       snapshotJson: JSON.stringify(snap),
       reminderCount: snapshotReminderCount(snap),
     });
+    logger.debug(`[ModeTracker] persisted ${tracker.id}/${sessionId} status=${snap.status}`);
   } catch (err) {
     logger.warn(
       `[ModeTracker] persist failed for ${tracker.id}/${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
