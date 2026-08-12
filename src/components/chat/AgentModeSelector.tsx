@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
-  ChatCircleTextIcon,
+  CircleDottedIcon,
   CodeIcon,
   BrainIcon,
   RobotIcon,
@@ -30,7 +30,7 @@ export const PROFILE_TO_MODE_MAP: Record<string, AgentMode> = {
 };
 
 export const AGENT_ICON_MAP: Record<string, React.ElementType> = {
-  'general-purpose': ChatCircleTextIcon,
+  'general-purpose': CircleDottedIcon,
   'code-expert': CodeIcon,
   'research': BrainIcon,
   'explore': RobotIcon,
@@ -100,7 +100,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
         console.error('[AgentModeSelector] Failed to load favorites:', err);
         if (isMounted) {
           setModes([
-            { id: 'main', label: 'General', icon: ChatCircleTextIcon, description: 'General purpose assistant', profileId: 'general-purpose' },
+            { id: 'main', label: 'General', icon: CircleDottedIcon, description: 'General purpose assistant', profileId: 'general-purpose' },
             { id: 'code', label: 'Code', icon: CodeIcon, description: 'Code development', profileId: 'code-expert' },
             { id: 'plan', label: 'Research', icon: BrainIcon, description: 'Research and analysis', profileId: 'research' },
           ]);

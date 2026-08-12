@@ -287,7 +287,6 @@ async function handlePostChat(
       // listeners from worker-manager.ts and the per-request listeners below
       // attached to the original child, so they must not be re-registered.
       let child: ChildProcess;
-      const stdoutChunks: string[] = [];
       const existingChild = workerManager.getWorker(sessionId);
       if (existingChild && existingChild.exitCode === null && !existingChild.killed) {
         httpLogger.info('Reusing existing worker for session', { sessionId, pid: existingChild.pid });
@@ -301,7 +300,6 @@ async function handlePostChat(
         // Log ALL worker stdout for debugging - capture everything
         child.stdout?.setEncoding('utf8');
         child.stdout?.on('data', (data: string) => {
-          stdoutChunks.push(data.toString().substring(0, 200));
           // M7: Route worker stdout to debug logger instead of console
           httpLogger.debug('Worker stdout', { sessionId, preview: data.toString().substring(0, 300) });
         });
@@ -359,105 +357,6 @@ async function handlePostChat(
         });
       }
 
-      // Helper to wait for ready signal from worker.
-      // Subscribes to BOTH child.stdout line-scanning AND the IPC channel
-      // because worker sendToMain emits on both — stdout can lose frames on
-      // Windows + Electron child stdio pipes, but IPC is always reliable.
-      const waitForReady = (timeoutMs = 30000): Promise<void> => {
-        return new Promise((resolve, reject) => {
-          const startedAt = Date.now();
-          let recentStdout = '';
-          let lineBuffer = '';
-          let settled = false;
-          let timer: ReturnType<typeof setTimeout> | undefined;
-
-          const onStdout = (data: Buffer): void => {
-            const text = data.toString();
-            recentStdout += text;
-            if (recentStdout.length > 4096) {
-              recentStdout = recentStdout.slice(-4096);
-            }
-            lineBuffer += text;
-            const lines = lineBuffer.split('\n');
-            lineBuffer = lines.pop() || '';
-            for (const rawLine of lines) {
-              const line = rawLine.trim();
-              if (!line || !line.startsWith('{')) continue;
-              try {
-                const msg = JSON.parse(line);
-                if (
-                  (msg.type === 'ready' || msg.type === 'conductor:ready') &&
-                  (!msg.sessionId || msg.sessionId === sessionId)
-                ) {
-                  const waitedMs = Date.now() - startedAt;
-                  if (msg.status === 'error') {
-                    const errorMsg = typeof msg.error === 'string' ? msg.error : 'Worker initialization failed';
-                    logger.error('Worker init failed via stdout', new Error(errorMsg), { sessionId, waitedMs });
-                    finish(() => reject(new Error(`Worker initialization failed: ${errorMsg}`)));
-                    return;
-                  }
-                  logger.info('Worker ready via stdout', {
-                    sessionId,
-                    waitedMs,
-                    readyType: msg.type,
-                  });
-                  finish(resolve);
-                  return;
-                }
-              } catch {
-                // Continue
-              }
-            }
-          };
-
-          const onIpc = (msg: Record<string, unknown>): void => {
-            if (
-              (msg.type === 'ready' || msg.type === 'conductor:ready') &&
-              (!msg.sessionId || msg.sessionId === sessionId)
-            ) {
-              const waitedMs = Date.now() - startedAt;
-              if (msg.status === 'error') {
-                const errorMsg = typeof msg.error === 'string' ? msg.error : 'Worker initialization failed';
-                logger.error('Worker init failed via IPC', new Error(errorMsg), { sessionId, waitedMs });
-                finish(() => reject(new Error(`Worker initialization failed: ${errorMsg}`)));
-                return;
-              }
-              logger.info('Worker ready via IPC', {
-                sessionId,
-                waitedMs,
-                readyType: msg.type,
-              });
-              finish(resolve);
-            }
-          };
-
-          const finish = (fn: () => void): void => {
-            if (settled) return;
-            settled = true;
-            if (timer) clearTimeout(timer);
-            child.stdout?.removeListener('data', onStdout);
-            child.removeListener('message', onIpc);
-            fn();
-          };
-
-          timer = setTimeout(() => {
-            const waitedMs = Date.now() - startedAt;
-            const tail = recentStdout.slice(-500).replace(/\s+/g, ' ');
-            logger.warn('Worker ready timeout', {
-              sessionId,
-              waitedMs,
-              recentStdoutTail: recentStdout.slice(-2000),
-            });
-            finish(() => reject(new Error(
-              `Worker ready timeout (${waitedMs}ms); last stdout: ${tail}`,
-            )));
-          }, timeoutMs);
-
-          child.stdout!.on('data', onStdout);
-          child.on('message', onIpc);
-        });
-      };
-
       // Reject early if provider config is missing or incomplete so the
       // worker does not crash with a misleading initialization timeout.
       if (!providerConfig || !providerConfig.model) {
@@ -485,24 +384,17 @@ async function handlePostChat(
         permissionRules: parsed.options?.permissionRules,
       });
 
-      try {
-        httpLogger.debug('Waiting for worker ready...', { sessionId });
-        await waitForReady();
-        httpLogger.info('Worker ready signal received', { sessionId });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // M7: console.error removed — logger.error below covers this
-        logger.error('Worker ready timeout', err instanceof Error ? err : new Error(msg), {
-          sessionId,
-          stdoutPreview: stdoutChunks.slice(-10),
-        });
-        revertStreamingLock();
-        sendJson(res, 500, { error: 'Worker initialization timeout' });
-        return;
-      }
-
       const wantsSSE = req.headers.accept?.includes('text/event-stream') ?? false;
 
+      // Open the SSE stream and send chat:start immediately instead of
+      // blocking the HTTP response on waitForReady. The worker queues
+      // chat:start while it is still initializing, and surfaces init failures
+      // through the stream itself (a `ready` error frame, a queued chat:start
+      // emitting `chat:error` when the agent is null, or the process-level
+      // error/exit handlers in handlePostChatSSE). Removing the gate lets the
+      // client connect and show immediate feedback while the worker spins up,
+      // which is what makes the start feel responsive (pi-style) rather than a
+      // multi-second blank wait.
       try {
         if (wantsSSE) {
           handlePostChatSSE(sessionId, req, res, child, deps);

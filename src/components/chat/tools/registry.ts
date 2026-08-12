@@ -19,6 +19,7 @@ import {
   TablerMessageCircleIcon,
   EyeIcon,
   SquaresFourIcon,
+  AiGatewayIcon,
 } from '@/components/icons';
 import {
   isBrowserTool,
@@ -287,6 +288,26 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
         return targetId.length > 24 ? targetId.slice(0, 21) + '…' : targetId;
       }
       return toolBase || 'canvas';
+    },
+  },
+  {
+    // MCP-provided tools — any name starting with the `mcp_` provider
+    // prefix (see computeProviderName in
+    // packages/plugin-core/src/mcp/provider-tool-name.ts). The summary
+    // surfaces the *MCP server name* (one server exposes many tools)
+    // instead of the raw envelope or the per-tool name. The dedicated
+    // McpToolRow owns the visible chrome; this entry keeps the registry
+    // icon/label consistent for any path that bypasses it (e.g. group
+    // summary).
+    match: (n) => n.toLowerCase().startsWith('mcp_'),
+    icon: AiGatewayIcon,
+    labelKey: 'streaming.toolAction.label.mcp',
+    getSummary: (input, name?: string) => {
+      const prefix = name || '';
+      if (!prefix.toLowerCase().startsWith('mcp_')) return prefix || 'mcp';
+      const rest = prefix.slice('mcp_'.length);
+      const lastSep = rest.lastIndexOf('_');
+      return lastSep !== -1 ? rest.slice(0, lastSep) : rest;
     },
   },
   {

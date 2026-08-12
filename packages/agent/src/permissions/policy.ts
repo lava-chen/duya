@@ -818,7 +818,12 @@ export function analyzeCommandSafety(command: string): SecurityCheckResult {
     warnings.push({ message: 'Command will run in background', severity: 'low' });
   }
 
-  if (/>\s*[|&]/.test(normalized)) {
+  // Flag genuinely abnormal redirect syntax but NOT the extremely common
+  // "2>&1" / "1>&2" form: there `&` is followed by a file descriptor number,
+  // so `>|` (pipe redirect) or `>&` followed by anything other than a digit
+  // is what deserves a warning. Before this fix the regex matched "2>&1 |"
+  // and spammed every well-formed command with a false "abnormal redirect".
+  if (/>\s*[|&](?!\d)/.test(normalized)) {
     warnings.push({ message: 'Command contains abnormal redirect syntax', severity: 'medium' });
   }
 

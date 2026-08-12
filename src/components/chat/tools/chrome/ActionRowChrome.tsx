@@ -28,6 +28,10 @@ interface ActionRowChromeProps {
    *  string when undefined — useful for the Group header, whose
    *  summary text is already a complete sentence. */
   verbKey?: TranslationKey;
+  /** Optional leading icon rendered before the verb. Used by rows that
+   *  want a glyph next to the status text (e.g. MCP tool rows). Kept
+   *  optional so existing rows are unaffected. */
+  icon?: React.ReactNode;
   canExpand: boolean;
   expanded: boolean;
   hovered: boolean;
@@ -50,6 +54,7 @@ interface ActionRowChromeProps {
 export function ActionRowChrome({
   status,
   verbKey,
+  icon,
   canExpand,
   expanded,
   hovered,
@@ -110,6 +115,11 @@ export function ActionRowChrome({
           </motion.span>
         )}
       </AnimatePresence>
+      {icon && (
+        <span className="shrink-0 mr-1.5 flex items-center text-muted-foreground/70">
+          {icon}
+        </span>
+      )}
       {verb && (
         <span className="font-medium text-muted-foreground/80 shrink-0 mr-2">{verb}</span>
       )}

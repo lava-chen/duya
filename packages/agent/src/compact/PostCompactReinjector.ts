@@ -10,8 +10,74 @@
  */
 
 import type { Message } from '../types.js'
-import { extractFileState, type FileStateEntry } from './strategies/MicroCompactStrategy.js'
 import type { FileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
+
+/**
+ * File state captured from Read tool calls before compaction, so the reinjector
+ * can restore recently-read file contents after the history is compressed.
+ */
+export interface FileStateEntry {
+  filePath: string
+  content: string
+  timestamp: number
+  isPartialView?: boolean
+  offset?: number
+  limit?: number
+}
+
+/**
+ * Extract file state (recently read files + their content) from a message list.
+ * Used by the reinjector to restore critical file context lost during compaction.
+ */
+export function extractFileState(messages: Message[]): Map<string, FileStateEntry> {
+  const fileState = new Map<string, FileStateEntry>()
+
+  for (const msg of messages) {
+    if (!Array.isArray(msg.content)) continue
+
+    for (const block of msg.content) {
+      const b = block as unknown as Record<string, unknown>
+      if (b.type === 'tool_use' && b.name === 'Read') {
+        const input = b.input as Record<string, unknown> | undefined
+        if (input?.file_path && typeof input.file_path === 'string') {
+          fileState.set(input.file_path, {
+            filePath: input.file_path,
+            content: '',
+            timestamp: Date.now(),
+            offset: input.offset as number | undefined,
+            limit: input.limit as number | undefined,
+          })
+        }
+      }
+
+      if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
+        const toolUseId = b.tool_use_id
+        for (const prevMsg of messages) {
+          if (!Array.isArray(prevMsg.content)) continue
+          for (const prevBlock of prevMsg.content) {
+            const pb = prevBlock as unknown as Record<string, unknown>
+            if (
+              pb.type === 'tool_use' &&
+              pb.id === toolUseId &&
+              pb.name === 'Read'
+            ) {
+              const filePath = (pb.input as Record<string, unknown> | undefined)?.file_path
+              if (typeof filePath === 'string' && fileState.has(filePath)) {
+                const entry = fileState.get(filePath)!
+                entry.content = typeof b.content === 'string'
+                  ? b.content
+                  : JSON.stringify(b.content)
+                entry.timestamp = Date.now()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return fileState
+}
 
 /**
  * Configuration for the reinjector

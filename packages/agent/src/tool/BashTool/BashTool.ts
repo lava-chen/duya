@@ -6,6 +6,7 @@
 import { execa, ExecaError, type Options } from 'execa';
 import { spawn } from 'child_process';
 import { open } from 'fs/promises';
+import { writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ToolResult, ToolUseContext } from '../../types.js';
@@ -61,6 +62,59 @@ function getWindowsEncodingEnv(): Record<string, string> {
     LANG: 'en_US.UTF-8',
     LC_ALL: 'en_US.UTF-8',
   };
+}
+
+// ============================================================
+// Output Truncation
+// ============================================================
+
+/**
+ * Shell output is unbounded by nature (a single `find`/`ls`/build can emit
+ * hundreds of KB). Feeding it straight into the tool result both bloats the
+ * persisted rollout and, more importantly, floods the CURRENT model context
+ * (projection offload only trims historical messages). Root fix: cap the
+ * output at the tool boundary — keep a readable tail, spill the full output to
+ * a temp file, and tell the model where it is so it can read more on demand.
+ */
+export const BASH_MAX_OUTPUT_CHARS = 30_000;
+export const BASH_MAX_OUTPUT_LINES = 1_000;
+
+export interface TruncatedShellOutput {
+  output: string;
+  fullOutputPath?: string;
+}
+
+export function truncateShellOutput(content: string): TruncatedShellOutput {
+  const trimmed = content.trim();
+  const lines = trimmed.split('\n');
+  const tooLarge = trimmed.length > BASH_MAX_OUTPUT_CHARS || lines.length > BASH_MAX_OUTPUT_LINES;
+  if (!tooLarge) return { output: trimmed };
+
+  const totalBytes = Buffer.byteLength(trimmed, 'utf8');
+  const totalLines = lines.length;
+  let fullOutputPath: string | undefined;
+  try {
+    fullOutputPath = join(tmpdir(), `duya-bash-full-${crypto.randomUUID()}.log`);
+    writeFileSync(fullOutputPath, trimmed, 'utf8');
+  } catch {
+    fullOutputPath = undefined;
+  }
+
+  // Keep the tail (errors / final results live at the end). Prefer a line-aligned
+  // tail when the char budget allows, otherwise slice the char tail.
+  let tail = trimmed.slice(-BASH_MAX_OUTPUT_CHARS);
+  const newlineIdx = tail.indexOf('\n');
+  if (newlineIdx > 0) tail = tail.slice(newlineIdx + 1); // drop a partial first line
+
+  const sizeHint = `${(totalBytes / 1024).toFixed(1)}KB`;
+  const fullHint = fullOutputPath
+    ? `Full output saved to: ${fullOutputPath}\nUse read("${fullOutputPath}") to read the full output.`
+    : 'Full output was too large to spill to disk.';
+  const marker =
+    `\n\n[Output truncated: showing last ${tail.length.toLocaleString()} of ` +
+    `${totalLines.toLocaleString()} lines / ${sizeHint} total. ${fullHint}]`;
+
+  return { output: tail + marker, fullOutputPath };
 }
 
 // ============================================================
@@ -342,16 +396,18 @@ export class BashTool extends BaseTool implements ToolExecutor {
             const warningMsg = `[Warning] ${nonCriticalWarnings.map(w => w.message).join('; ')}`;
             resultOutput = `${warningMsg}\n\n${resultOutput}`;
           }
+          const { output: boundedResult, fullOutputPath: dockerFullPath } = truncateShellOutput(resultOutput);
 
           return {
             id: crypto.randomUUID(),
             name: this.name,
-            result: resultOutput,
+            result: boundedResult,
             error: sandboxResult.exitCode !== 0,
             metadata: {
               exitCode: sandboxResult.exitCode,
               sandboxed: true,
               provider: 'docker',
+              ...(dockerFullPath ? { fullOutputPath: dockerFullPath } : {}),
             },
           };
         } catch (dockerError) {
@@ -415,13 +471,15 @@ export class BashTool extends BaseTool implements ToolExecutor {
         output = `[Shell] ${executionPlan.reason}\n\n${output}`;
       }
 
+      const { output: boundedOutput, fullOutputPath } = truncateShellOutput(output);
       return {
         id: crypto.randomUUID(),
         name: this.name,
-        result: output || '(no output)',
+        result: boundedOutput || '(no output)',
         metadata: {
           exitCode: result.exitCode,
           durationMs: result.durationMs,
+          ...(fullOutputPath ? { fullOutputPath } : {}),
         },
       };
     } catch (error: unknown) {
@@ -488,12 +546,16 @@ export class BashTool extends BaseTool implements ToolExecutor {
           finalOutput = `${finalOutput}\n\nHints:\n- ${failureAnalysis.hints.join('\n- ')}`;
         }
 
+        const { output: boundedError, fullOutputPath: errFullPath } = truncateShellOutput(finalOutput);
         return {
           id: crypto.randomUUID(),
           name: this.name,
-          result: finalOutput,
+          result: boundedError,
           error: true,
-          metadata: { exitCode: error.exitCode },
+          metadata: {
+            exitCode: error.exitCode,
+            ...(errFullPath ? { fullOutputPath: errFullPath } : {}),
+          },
         };
       }
 

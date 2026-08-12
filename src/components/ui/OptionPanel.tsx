@@ -18,6 +18,8 @@ export interface OptionPanelItem {
   meta?: string;
   searchText?: string;
   disabled?: boolean;
+  /** Optional leading icon rendered in the left slot (e.g. an IDE brand mark). */
+  icon?: React.ReactNode;
 }
 
 interface OptionPanelProps {
@@ -32,6 +34,8 @@ interface OptionPanelProps {
   className?: string;
   style?: CSSProperties;
   maxListHeight?: number;
+  /** Hide the search input header. Defaults to `true` (show search). */
+  showSearch?: boolean;
 }
 
 export type OptionPanelPlacement = 'above' | 'below';
@@ -93,6 +97,7 @@ export function OptionPanel({
   className,
   style,
   maxListHeight = DEFAULT_LIST_MAX_HEIGHT,
+  showSearch = true,
 }: OptionPanelProps) {
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -112,8 +117,8 @@ export function OptionPanel({
   }, [items, query]);
 
   useEffect(() => {
-    searchRef.current?.focus();
-  }, []);
+    if (showSearch) searchRef.current?.focus();
+  }, [showSearch]);
 
   useEffect(() => {
     setActiveIndex(-1);
@@ -131,35 +136,37 @@ export function OptionPanel({
       aria-label={title ?? searchPlaceholder}
       style={style}
     >
-      <div className="option-panel-search">
-        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <circle cx="11" cy="11" r="6" />
-          <path d="m16 16 4 4" />
-        </svg>
-        <input
-          ref={searchRef}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'ArrowDown') {
-              event.preventDefault();
-              setActiveIndex((index) => Math.min(index + 1, filteredItems.length - 1));
-            } else if (event.key === 'ArrowUp') {
-              event.preventDefault();
-              setActiveIndex((index) => Math.max(index - 1, 0));
-            } else if (event.key === 'Enter') {
-              event.preventDefault();
-              selectActiveItem();
-            } else if (event.key === 'Escape') {
-              event.preventDefault();
-              onClose?.();
-            }
-          }}
-          placeholder={searchPlaceholder}
-          aria-label={searchPlaceholder}
-        />
-        {title && <span className="option-panel-title">{title}</span>}
-      </div>
+      {showSearch && (
+        <div className="option-panel-search">
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="6" />
+            <path d="m16 16 4 4" />
+          </svg>
+          <input
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                setActiveIndex((index) => Math.min(index + 1, filteredItems.length - 1));
+              } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                setActiveIndex((index) => Math.max(index - 1, 0));
+              } else if (event.key === 'Enter') {
+                event.preventDefault();
+                selectActiveItem();
+              } else if (event.key === 'Escape') {
+                event.preventDefault();
+                onClose?.();
+              }
+            }}
+            placeholder={searchPlaceholder}
+            aria-label={searchPlaceholder}
+          />
+          {title && <span className="option-panel-title">{title}</span>}
+        </div>
+      )}
 
       <div className="option-panel-list" role="listbox" style={{ maxHeight: maxListHeight }}>
         {filteredItems.length === 0 ? (
@@ -180,8 +187,8 @@ export function OptionPanel({
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => onSelect(item)}
               >
-                <span className="option-panel-check" aria-hidden="true">
-                  {isSelected && <CheckIcon size={14} />}
+                <span className={`option-panel-check ${item.icon ? 'has-icon' : ''}`} aria-hidden="true">
+                  {item.icon ?? (isSelected && <CheckIcon size={14} />)}
                 </span>
                 <span className="option-panel-copy">
                   <span className="option-panel-label">{item.label}</span>

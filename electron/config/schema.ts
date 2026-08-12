@@ -33,6 +33,13 @@ export interface MemoryConfig {
   model: string;
 }
 
+/** `[ide]` — external IDE integration for the file preview "Open" action.
+ *  `default` holds the id of the preferred IDE (e.g. `vscode`, `cursor`,
+ *  `trae`, `zed`). Leave empty to auto-pick the first detected IDE. */
+export interface IdeConfig {
+  default: string;
+}
+
 export interface AgentConfig {
   max_turns: number;
   gateway_timeout: number;
@@ -214,6 +221,7 @@ export interface DuyaConfig {
   memory: MemoryConfig;
 
   agent: AgentConfig;
+  ide: IdeConfig;
   terminal: Record<string, unknown>;
   browser: Record<string, unknown>;
   checkpoints: Record<string, unknown>;
@@ -268,6 +276,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
     default_timeout: 60000,
     default_permission_mode: 'ask',
   },
+  ide: { default: '' },
   terminal: {},
   browser: {
     // When true, web links clicked inside DUYA open in the system default

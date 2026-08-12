@@ -1116,6 +1116,14 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 | **Mode** | `ModeModifier.id`（plan-task / research / conductor / goal） | 输入框 popover "Mode" 项 | 在 profile 之上叠加：注入/屏蔽工具、追加 prompt 前缀/后缀、注入 ToolUseContext 字段 |
 | **Permission** | `PermissionMode`（ask / auto / bypass） | 权限选择器（输入框右侧） | 工具执行前的授权检查策略 |
 
+> **Profile 固定于会话创建（2026-08-12）**：agent profile 是每会话不可变属性。新建会话时在
+> NewChat/Welcome 视图选择并写入 `chat_sessions.agent_profile_id`（经 `createThread` →
+> `syncThreadToDatabase` → `createThreadIPC` 持久化），此后会话内不再提供切换 UI
+> （底部 `AgentModeSelector` 已移除，改为只读 `AgentProfileBadge`）。ChatView 加载会话时
+> 从 DB 读取该 profile 并固定，首轮与后续 turn 经 `handleSendMessage` 把它作为
+> per-turn override 传给 `streamChat`。子会话（cron/gateway 等）仍由各自子系统显式指定
+> profile，不受此约束。
+
 三层的运行时合成由 `DuyaAgent.streamChat` 在 `_resolveAgentProfile` → `_buildSystemPrompt` → `applyModes` → `_buildPermissionContext` 顺序完成。Profile 与 Mode 通过 `applyModes` 合并工具集和 prompt；Permission 独立作用于 `canUseTool` 检查函数。
 
 ### ModeModifier 双范式架构

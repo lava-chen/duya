@@ -13,6 +13,7 @@ import { ContextBreakdownModal } from './ContextBreakdownModal';
 
 interface ContextUsageRingProps {
   messages: Message[];
+  sessionId?: string;
   modelName?: string;
   contextWindow?: number;
   onCompress?: () => void;
@@ -33,12 +34,13 @@ const HIDE_DELAY_MS = 200;
  */
 export function ContextUsageRing({
   messages,
+  sessionId,
   modelName,
   contextWindow,
   onCompress,
   isCompacting = false,
 }: ContextUsageRingProps) {
-  const usage = useContextUsage(messages, modelName, contextWindow);
+  const usage = useContextUsage(messages, modelName, contextWindow, sessionId);
   const [hovered, setHovered] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const shouldBuildBreakdown = hovered || detailsOpen;

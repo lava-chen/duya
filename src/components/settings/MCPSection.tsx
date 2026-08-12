@@ -7,7 +7,7 @@ import {
   NotePencilIcon,
   PowerIcon,
   PowerOffIcon,
-  ServerIcon,
+  AiGatewayIcon,
   XIcon,
   CheckIcon,
   DownloadSimpleIcon,
@@ -408,7 +408,7 @@ export function MCPSection() {
       {servers.length === 0 ? (
         <SettingsCard>
           <div className="flex flex-col items-center justify-center py-12 px-4">
-            <ServerIcon className="h-12 w-12 text-muted-foreground mb-4" size={48} />
+            <AiGatewayIcon className="h-12 w-12 text-muted-foreground mb-4" size={48} />
             <p className="text-muted-foreground text-center">
               No manually configured MCP servers yet.
               <br />
@@ -453,7 +453,7 @@ export function MCPSection() {
                           : "bg-muted text-muted-foreground"
                       )}
                     >
-                      <ServerIcon size={20} />
+                      <AiGatewayIcon size={20} />
                     </div>
                     <div>
                       <h3 className="font-medium text-foreground">{server.name}</h3>
@@ -548,7 +548,7 @@ export function MCPSection() {
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600">
-                      <ServerIcon size={20} />
+                      <AiGatewayIcon size={20} />
                     </div>
                     <div>
                       <div className="flex items-center gap-2">

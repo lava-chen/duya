@@ -1,10 +1,10 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import {
   PlusIcon,
   GearSixIcon,
-  ServerIcon,
+  AiGatewayIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
@@ -42,7 +42,7 @@ function ServerRow({
       )}
     >
       <div className="flex items-center gap-3 min-w-0">
-        <ServerIcon size={18} className="shrink-0 text-muted-foreground" />
+        <AiGatewayIcon size={18} className="shrink-0 text-muted-foreground" />
         <span className="truncate text-sm font-medium text-foreground">{name}</span>
       </div>
       {actions && <div className="flex items-center gap-1 shrink-0">{actions}</div>}

@@ -49,6 +49,13 @@ const abortedTaskIds = new Set<string>();
 // Output size safety limit (500MB)
 const MAX_OUTPUT_BYTES = 500 * 1024 * 1024;
 
+// Line cap for the result that is actually handed to the model. Without this,
+// a single `ls -la` over a large tree (e.g. target/) can return hundreds of KB
+// of output that the model has to swallow whole. Truncating at the tool layer
+// (not just the render layer) keeps the model-facing payload bounded and tells
+// the model how to resume.
+const MAX_RESULT_LINES = 200;
+
 // Progress reporting interval
 const PROGRESS_INTERVAL_MS = 1000;
 const BG_PROGRESS_INTERVAL_MS = 5000;
@@ -120,8 +127,16 @@ async function cleanupOutputFile(): Promise<void> {
 
 /**
  * Read the tail of the output file (up to maxBytes). Returns empty string
- * if file doesn't exist or can't be read.
+ * if file doesn't exist or can't be read. The returned text is additionally
+ * capped at MAX_RESULT_LINES lines so the model-facing result stays bounded.
  */
+function applyLineCap(text: string): string {
+  const lines = text.split('\n');
+  if (lines.length <= MAX_RESULT_LINES) return text;
+  const kept = lines.slice(-MAX_RESULT_LINES).join('\n');
+  return `[Output truncated: ${lines.length - MAX_RESULT_LINES} more lines not shown. Use a more specific command (e.g. head/grep) or redirect to a file to see the full output.]\n\n${kept}`;
+}
+
 function readOutputTail(maxBytes: number): string {
   if (!outputFilePath) return '';
   try {
@@ -139,9 +154,9 @@ function readOutputTail(maxBytes: number): string {
       const bytesRead = readSync(fd, buf, 0, length, readStart);
       const text = buf.slice(0, bytesRead).toString('utf-8');
       if (readStart > 0) {
-        return `(truncated - ${stat.size} bytes total)\n\n` + text;
+        return applyLineCap(`(truncated - ${stat.size} bytes total)\n\n` + text);
       }
-      return text;
+      return applyLineCap(text);
     } finally {
       closeSync(fd);
     }

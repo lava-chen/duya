@@ -13,17 +13,32 @@ import type {
   TokenBudget,
   CompactOptions,
 } from './types.js'
-import { COMPACTION_THRESHOLDS, DEFAULT_CONTEXT_WINDOW } from './types.js'
+import { DEFAULT_CONTEXT_WINDOW } from './types.js'
 import { TokenBudgetManager, estimateMessagesTokens } from './tokenBudget.js'
 import { logger } from '../utils/logger.js'
-import {
-  MicroCompactStrategy,
-  SessionMemoryCompactStrategy,
-  SnipCompactStrategy,
-  ReactiveCompactStrategy,
-} from './strategies/index.js'
+import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
+
+/**
+ * Compaction Manager Configuration
+ */
+export interface CompactionManagerConfig {
+  /** Maximum context window size */
+  maxTokens?: number
+  /** System prompt token allocation */
+  systemPromptTokens?: number
+  /** Reserved tokens for human interaction */
+  reservedTokens?: number
+  /** Enable post-compact reinjection */
+  enableReinjection?: boolean
+  /** Reinjection configuration */
+  reinjectionConfig?: Partial<ReinjectorConfig>
+  /** Number of recent tokens to keep (not summarize) */
+  keepRecentTokens?: number
+  /** Enable iterative summary updates */
+  enableIterativeSummary?: boolean
+}
 
 /**
  * Compaction Manager Configuration

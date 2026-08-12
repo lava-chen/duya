@@ -6,7 +6,6 @@
 // which gives a lighter visual weight than tabler's default 2px.
 import {
   forwardRef,
-  type ComponentPropsWithoutRef,
   type RefAttributes,
   type ForwardRefExoticComponent,
 } from "react";
@@ -159,6 +158,7 @@ import {
   IconVector,
   IconQuote,
   IconFiles,
+  IconFolders,
   IconZoomIn,
   IconZoomOut,
   IconMarkdown,
@@ -201,6 +201,16 @@ import {
   // Plan 331 Phase 4: pin/unpin icon for thread list
   IconPin,
   IconPinFilled,
+  // MCP tool row — integrated gateway icon for external tool calls
+  IconAiGateway,
+  // Goal mode icon
+  IconTargetArrow,
+  // Conductor canvas mode icon
+  IconChalkboard,
+  // Deep research mode icon
+  IconTelescope,
+  // Main agent profile icon
+  IconCircleDotted,
 } from "@tabler/icons-react";
 
 // Thin wrapper around tabler icons. Defaults stroke to 1.25 for a lighter
@@ -250,6 +260,7 @@ export const UserIcon = wrapIcon(IconUser);
 export const HouseIcon = wrapIcon(IconHome);
 export const CpuIcon = wrapIcon(IconCpu);
 export const CubeIcon = wrapIcon(IconCube);
+export const AiGatewayIcon = wrapIcon(IconAiGateway);
 export const SpinnerGapIcon = wrapIcon(IconLoader2);
 export const InfoIcon = wrapIcon(IconInfoCircle);
 export const ShieldIcon = wrapIcon(IconShield);
@@ -384,6 +395,7 @@ export const CameraIcon = wrapIcon(IconCamera);
 export const PathIcon = wrapIcon(IconVector);
 export const QuotesIcon = wrapIcon(IconQuote);
 export const FilesIcon = wrapIcon(IconFiles);
+export const FoldersIcon = wrapIcon(IconFolders);
 export const MagnifyingGlassPlusIcon = wrapIcon(IconZoomIn);
 export const MagnifyingGlassMinusIcon = wrapIcon(IconZoomOut);
 export const FileMdIcon = wrapIcon(IconMarkdown);
@@ -434,6 +446,14 @@ export const TriangleIcon = wrapIcon(IconTriangle);
 // variant (currently pinned).
 export const PinIcon = wrapIcon(IconPin);
 export const PinFilledIcon = wrapIcon(IconPinFilled);
+// Goal mode icon — target arrow denotes self-driven goal tracking.
+export const TargetArrowIcon = wrapIcon(IconTargetArrow);
+// Conductor canvas mode icon — chalkboard denotes the drawing canvas.
+export const ChalkboardIcon = wrapIcon(IconChalkboard);
+// Deep research mode icon — telescope observes the wider web.
+export const TelescopeIcon = wrapIcon(IconTelescope);
+// Main agent profile icon — dotted circle denotes the default agent.
+export const CircleDottedIcon = wrapIcon(IconCircleDotted);
 export const ImageSquareIcon = wrapIcon(IconPhoto);
 export const FilePlusIcon = wrapIcon(TablerIconFilePlus);
 export const GridFourIcon = wrapIcon(IconLayoutGrid);
@@ -465,47 +485,5 @@ export const SidebarRightIcon = wrapIcon(TablerIconLayoutSidebarRight);
 export const FilePyIcon = wrapIcon(TablerIconFileCode);
 // FileIniIcon: Tabler has no INI file-type icon, use generic text file icon
 export const FileIniIcon = wrapIcon(IconFileText);
-
-// TelescopeIcon has no equivalent in @tabler/icons-react, so we ship a small
-// inline SVG instead. Shape: a tilted telescope tube on a tripod stand.
-// Matches the IconProps contract used by every other icon in this file so
-// `size`, `color`, and standard SVG attributes pass through unchanged.
-type TelescopeIconProps = ComponentPropsWithoutRef<'svg'> & RefAttributes<SVGSVGElement> & {
-  size?: string | number;
-  color?: string;
-};
-export const TelescopeIcon = forwardRef<SVGSVGElement, TelescopeIconProps>(
-  ({ size = 16, color = 'currentColor', stroke = 1.25, ...rest }, ref) => (
-    <svg
-      ref={ref}
-      xmlns="http://www.w3.org/2000/svg"
-      width={size}
-      height={size}
-      viewBox="0 0 256 256"
-      fill="none"
-      stroke={color}
-      strokeWidth={typeof stroke === 'number' ? (stroke * 12.8) : stroke}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      {...rest}
-    >
-      {/* Tube — diagonal cylinder from upper-left to lower-right */}
-      <line x1="120" y1="116" x2="56" y2="52" />
-      <line x1="160" y1="156" x2="96" y2="92" />
-      <line x1="120" y1="116" x2="160" y2="156" />
-      <line x1="56" y1="52" x2="96" y2="92" />
-      {/* Eyepiece */}
-      <line x1="160" y1="156" x2="184" y2="180" />
-      <line x1="120" y1="116" x2="144" y2="140" />
-      {/* Tripod legs converging at the eyepiece base */}
-      <line x1="152" y1="168" x2="104" y2="216" />
-      <line x1="152" y1="168" x2="200" y2="216" />
-      <line x1="152" y1="168" x2="152" y2="216" />
-      {/* Ground line under the tripod feet */}
-      <line x1="80" y1="216" x2="224" y2="216" />
-    </svg>
-  ),
-);
-TelescopeIcon.displayName = 'TelescopeIcon';
 
 export type { Icon, IconProps } from "@tabler/icons-react";

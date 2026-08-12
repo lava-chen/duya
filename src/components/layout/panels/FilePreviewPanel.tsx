@@ -2,12 +2,11 @@
 
 import {
   ArrowSquareOutIcon,
-  CameraIcon,
   CaretDownIcon,
   CopyIcon,
   FileTextIcon,
-  FilesIcon,
   FolderOpenIcon,
+  FoldersIcon,
   SparkleIcon,
   WarningCircleIcon,
 } from "@/components/icons";
@@ -18,10 +17,16 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
+import { getFileTypeIcon } from "@/components/file-tree/file-type-icon";
+import { IdeBrandIcon } from "@/components/ide/ide-brand-icons";
+import {
+  OptionPanel,
+  type OptionPanelItem,
+  useOptionPanelPlacement,
+} from "@/components/ui/OptionPanel";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useTheme } from "@/hooks/useTheme";
 import { useTranslation } from "@/hooks/useTranslation";
-import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import type { PageTab } from "./registry";
 
 interface PreviewPayload {
@@ -237,8 +242,24 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<SelectionContext | null>(null);
   const [openMenuOpen, setOpenMenuOpen] = useState(false);
-  const openMenuRef = useRef<HTMLDivElement>(null);
+  const openContainerRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
+  const { placement, maxListHeight } = useOptionPanelPlacement(openMenuOpen, openContainerRef);
+  // Detected external IDEs (from `ide:list`) and the effective default used
+  // by the "Open" action (`ide:get-default`, honors config `ide.default`).
+  const [ides, setIdes] = useState<Array<{ id: string; name: string; executable: string }>>([]);
+  const [defaultIde, setDefaultIde] = useState<{ id: string; name: string; executable: string } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    window.electronAPI?.ide?.getDefault?.()
+      .then((ide) => { if (active) setDefaultIde(ide); })
+      .catch(() => {});
+    window.electronAPI?.ide?.list?.()
+      .then((list) => { if (active) setIdes(Array.isArray(list) ? list : []); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const { t } = useTranslation();
@@ -258,15 +279,12 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return null;
   });
 
-  // Close the "Open" dropdown when clicking outside.
+  // Close the "Open" dropdown when clicking outside the trigger/panel.
   useEffect(() => {
     if (!openMenuOpen) return;
     const handler = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (
-        !openMenuRef.current?.contains(target) &&
-        !openButtonRef.current?.contains(target)
-      ) {
+      if (openContainerRef.current && !openContainerRef.current.contains(target)) {
         setOpenMenuOpen(false);
       }
     };
@@ -478,68 +496,8 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return `data:${preview.mediaType};base64,${preview.data}`;
   }, [preview?.data, preview?.mediaType]);
 
-  // Screenshot capture: images reuse the already-decoded data URL; text
-  // (code/markdown) is captured via html2canvas. PDF iframes are
-  // cross-origin and cannot be captured — the button stays disabled.
-  const canScreenshot = !!preview?.success && !preview.tooLarge && (preview.kind === "image" || preview.kind === "text");
-
-  const handleScreenshot = useCallback(async () => {
-    const canvasEl = canvasRef.current;
-    if (!canvasEl || !preview?.success || !filePath || !canScreenshot) return;
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const attachmentId = crypto.randomUUID();
-    const fileLabel = preview.name || tab.title || "file";
-    let screenshotUrl = "";
-
-    try {
-      if (preview.kind === "image" && dataUrl) {
-        screenshotUrl = dataUrl;
-      } else if (preview.kind === "text") {
-        const html2canvas = (await import("html2canvas")).default;
-        const rect = canvasEl.getBoundingClientRect();
-        const renderCanvas = await html2canvas(canvasEl, {
-          backgroundColor: null,
-          scale: window.devicePixelRatio || 1,
-          useCORS: true,
-          logging: false,
-          width: rect.width,
-          height: rect.height,
-          windowWidth: canvasEl.scrollWidth,
-          windowHeight: canvasEl.scrollHeight,
-        });
-        screenshotUrl = renderCanvas.toDataURL("image/png");
-      }
-    } catch {
-      return;
-    }
-
-    if (!screenshotUrl) return;
-    const base64 = screenshotUrl.split(",", 2)[1] ?? "";
-    dispatchAddAttachment({
-      kind: "browser-ref",
-      reference: {
-        kind: "screenshot",
-        label: "Screenshot",
-        title: fileLabel,
-        url: filePath,
-        content: [
-          "File preview screenshot reference:",
-          `- File: ${fileLabel}`,
-          `- Path: ${filePath}`,
-          "Use the attached screenshot as visual context.",
-        ].join("\n"),
-      },
-      attachment: {
-        id: attachmentId,
-        name: `preview-screenshot-${stamp}.png`,
-        type: "image/png",
-        url: screenshotUrl,
-        size: Math.round((base64.length * 3) / 4),
-      },
-    });
-  }, [canScreenshot, dataUrl, filePath, preview, tab.title]);
-
+  // Screenshot capture was removed from the preview header (see plan); the
+  // data URL above is still needed for image/PDF rendering.
   const language = useMemo(
     () => languageFromExtension(preview?.extension),
     [preview?.extension],
@@ -570,10 +528,54 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return idx >= 0 ? normalized.slice(idx + 1) : normalized;
   }, [workingDirectory]);
 
+  // File name shown prominently in the header (from the preview payload or
+  // the full path fallback), plus the extension-specific type icon.
+  const fileName = useMemo(
+    () => preview?.name || filePath.replace(/\\/g, "/").split("/").filter(Boolean).pop() || tab.title || "",
+    [preview?.name, filePath, tab.title],
+  );
+  const FileTypeIcon = useMemo(() => getFileTypeIcon(preview?.extension), [preview?.extension]);
+  // Breadcrumb segments for the *directory* path (all but the file name).
+  const pathBreadcrumb = useMemo(() => breadcrumb?.slice(0, -1), [breadcrumb]);
+
   const handleOpenWithDefault = useCallback(() => {
     setOpenMenuOpen(false);
     void window.electronAPI?.shell?.openPath(filePath);
   }, [filePath]);
+
+  const handleOpenInIde = useCallback((id: string) => {
+    setOpenMenuOpen(false);
+    void window.electronAPI?.ide?.open?.(id, filePath);
+  }, [filePath]);
+
+  // Primary action of the "Open" trigger: launch the default IDE when one is
+  // detected, otherwise fall back to the OS default application.
+  const handleOpenDefaultIde = useCallback(() => {
+    if (defaultIde) {
+      handleOpenInIde(defaultIde.id);
+    } else {
+      handleOpenWithDefault();
+    }
+  }, [defaultIde, handleOpenInIde, handleOpenWithDefault]);
+
+  // Menu items for the "Open" dropdown (reuses OptionPanel like the model
+  // picker): detected IDEs first, then the utility actions. When no IDE is
+  // detected we just skip the IDE section — the placeholder row used to
+  // squat at the top of the menu and confused the layout.
+  const openItems = useMemo<OptionPanelItem[]>(() => {
+    const ideItems: OptionPanelItem[] = ides.map((ide) => ({
+      id: `ide:${ide.id}`,
+      label: t('filePreview.openInIde', { name: ide.name }),
+      icon: <IdeBrandIcon id={ide.id} size={14} />,
+      searchText: ide.name,
+    }));
+    return [
+      ...ideItems,
+      { id: 'default', label: t('filePreview.openWithDefault'), icon: <ArrowSquareOutIcon size={14} stroke={1.5} /> },
+      { id: 'reveal', label: t('filePreview.revealInFolder'), icon: <FolderOpenIcon size={14} stroke={1.5} /> },
+      { id: 'copy', label: t('filePreview.copyPath'), icon: <CopyIcon size={14} stroke={1.5} /> },
+    ];
+  }, [ides, t]);
 
   const handleRevealInFolder = useCallback(() => {
     setOpenMenuOpen(false);
@@ -593,11 +595,24 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     }
   }, [filePath]);
 
+  const handleOpenItem = useCallback((item: OptionPanelItem) => {
+    setOpenMenuOpen(false);
+    if (item.id.startsWith('ide:')) {
+      handleOpenInIde(item.id.slice(4));
+    } else if (item.id === 'default') {
+      handleOpenWithDefault();
+    } else if (item.id === 'reveal') {
+      handleRevealInFolder();
+    } else if (item.id === 'copy') {
+      handleCopyPath();
+    }
+  }, [handleOpenInIde, handleOpenWithDefault, handleRevealInFolder, handleCopyPath]);
+
   if (!filePath) {
     return (
       <PanelFileTreeSplit workingDirectory={workingDirectory}>
       <div className="file-preview-empty">
-        <FolderOpenIcon size={32} />
+        <FolderOpenIcon size={32} stroke={1.25} />
         <strong>{t('filePreview.openFile')}</strong>
         <span>{t('filePreview.selectFileHint')}</span>
       </div>
@@ -610,92 +625,78 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     <div className="file-preview-panel">
       <div className="file-preview-toolbar">
         <div className="file-preview-title">
-          <div className="file-preview-name-stack">
-            <div className="file-preview-breadcrumb">
-              {rootName && (
-                <span className="file-preview-breadcrumb-root">{rootName}</span>
-              )}
-              {breadcrumb?.map((segment, index) => {
-                const isLast = index === breadcrumb.length - 1;
-                return (
-                  <span key={segment.fullPath} className="file-preview-breadcrumb-segment">
-                    <span className="file-preview-breadcrumb-separator">›</span>
-                    <span className={isLast ? "file-preview-breadcrumb-current" : "file-preview-breadcrumb-part"}>
-                      {segment.name}
-                    </span>
-                  </span>
-                );
-              })}
-            </div>
-          </div>
+          {FileTypeIcon && (
+            <span className="file-preview-filetype"><FileTypeIcon size={16} stroke={1.5} /></span>
+          )}
+          <span className="file-preview-filename" title={fileName}>{fileName}</span>
+          {(rootName || (pathBreadcrumb && pathBreadcrumb.length > 0)) && (
+            <span className="file-preview-path" title={filePath}>
+              {rootName && <span className="file-preview-path-root">{rootName}</span>}
+              {pathBreadcrumb?.map((segment) => (
+                <span key={segment.fullPath} className="file-preview-path-segment">
+                  <span className="file-preview-path-separator">›</span>
+                  {segment.name}
+                </span>
+              ))}
+            </span>
+          )}
         </div>
         <div className="file-preview-actions">
-          {panel && workingDirectory && (
-            <IconButton
-            type="button"
-            variant="default"
-            shape="square"
-            size="md"
-            className={workspaceTreeOpen ? "active" : undefined}
-            onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
-            title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
-            aria-label={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
-            aria-pressed={workspaceTreeOpen}
-            data-testid="file-tree-toggle"
-          >
-              <FilesIcon size={16} />
-            </IconButton>
-          )}
-          <IconButton
-            type="button"
-            variant="default"
-            shape="square"
-            size="md"
-            className="file-preview-screenshot-btn"
-            onClick={() => void handleScreenshot()}
-            disabled={!canScreenshot || loading}
-            title={t('filePreview.screenshot')}
-            aria-label={t('filePreview.screenshot')}
-          >
-            <CameraIcon size={16} />
-          </IconButton>
-          <div className="file-preview-open-dropdown">
-            <Button
-              ref={openButtonRef}
-              type="button"
-              variant="accent"
-              size="sm"
-              onClick={() => setOpenMenuOpen((prev) => !prev)}
-              aria-haspopup="menu"
-              aria-expanded={openMenuOpen}
-              aria-label={t('filePreview.open')}
-              title={t('filePreview.open')}
-            >
-              <ArrowSquareOutIcon size={14} />
-              <span>{t('filePreview.open')}</span>
-              <CaretDownIcon size={12} className={openMenuOpen ? "rotate-180" : ""} />
-            </Button>
-            {openMenuOpen && (
-              <div
-                ref={openMenuRef}
-                className="file-preview-open-menu"
-                role="menu"
+          <div ref={openContainerRef} className="file-preview-open-dropdown">
+            <div className="file-preview-open-group">
+              <button
+                ref={openButtonRef}
+                type="button"
+                className="file-preview-open-ide"
+                onClick={handleOpenDefaultIde}
+                aria-label={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
+                title={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
               >
-                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleOpenWithDefault}>
-                  <ArrowSquareOutIcon size={14} />
-                  {t('filePreview.openWithDefault')}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleRevealInFolder}>
-                  <FolderOpenIcon size={14} />
-                  {t('filePreview.revealInFolder')}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" role="menuitem" onClick={handleCopyPath}>
-                  <CopyIcon size={14} />
-                  {t('filePreview.copyPath')}
-                </Button>
-              </div>
+                {defaultIde ? <IdeBrandIcon id={defaultIde.id} size={16} /> : <ArrowSquareOutIcon size={16} stroke={1.5} />}
+              </button>
+              <button
+                type="button"
+                className="file-preview-open-caret"
+                onClick={() => setOpenMenuOpen((prev) => !prev)}
+                aria-haspopup="menu"
+                aria-expanded={openMenuOpen}
+                aria-label={t('filePreview.open')}
+                title={t('filePreview.open')}
+              >
+                <CaretDownIcon size={12} stroke={1.75} className={openMenuOpen ? "rotate-180" : ""} />
+              </button>
+            </div>
+            {openMenuOpen && (
+              <OptionPanel
+                className={`file-preview-open-menu absolute right-0 z-50 w-64 ${placement === 'below' ? 'top-full mt-1' : 'bottom-full mb-1'}`}
+                title={t('filePreview.open')}
+                items={openItems}
+                selectedId={defaultIde ? `ide:${defaultIde.id}` : undefined}
+                onSelect={handleOpenItem}
+                onClose={() => setOpenMenuOpen(false)}
+                maxListHeight={maxListHeight}
+                showSearch={false}
+                searchPlaceholder={t('filePreview.open')}
+                emptyMessage={t('filePreview.noIdeDetected')}
+              />
             )}
           </div>
+          {panel && workingDirectory && (
+            <IconButton
+              type="button"
+              variant="default"
+              shape="square"
+              size="md"
+              className={workspaceTreeOpen ? "active" : undefined}
+              onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
+              title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+              aria-label={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+              aria-pressed={workspaceTreeOpen}
+              data-testid="file-tree-toggle"
+            >
+              <FoldersIcon size={16} stroke={1.5} />
+            </IconButton>
+          )}
         </div>
       </div>
 

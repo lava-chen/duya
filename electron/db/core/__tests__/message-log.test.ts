@@ -166,6 +166,38 @@ describe('MessageLog', () => {
     const rows = db.prepare('SELECT id FROM message_index WHERE session_id = ?').all(sessionId) as Array<{ id: string }>;
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe('m-1');
+
+    // The rollout FILE must also stay append-once — a re-append of an already
+    // indexed id must NOT add a duplicate line (regression: compaction re-appends
+    // the full message list, which used to bloat the file ~Nx while the index
+    // INSERT OR IGNORE silently deduped).
+    const rel = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    const fileLines = fs.readFileSync(path.join(rootDir, rel.rollout_path), 'utf8').trim().split('\n').filter(Boolean);
+    expect(fileLines).toHaveLength(1);
+  });
+
+  it('re-appending a mixed batch writes only the fresh ids to the file', () => {
+    const sessionId = 'sess-1';
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'a', t)),
+      makeEvent(sessionId, makeUserMessage('m-2', 'b', t + 1)),
+    ]);
+
+    // Re-send m-1 (already indexed) alongside a brand-new m-3 in one batch.
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'a', t)),
+      makeEvent(sessionId, makeUserMessage('m-3', 'c', t + 2)),
+    ]);
+
+    expect(log.getCount(sessionId)).toBe(3);
+    const bySeq = db.prepare('SELECT id FROM message_index WHERE session_id = ? ORDER BY seq').all(sessionId) as Array<{ id: string }>;
+    expect(bySeq.map((r) => r.id)).toEqual(['m-1', 'm-2', 'm-3']);
+
+    const rel = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    const fileLines = fs.readFileSync(path.join(rootDir, rel.rollout_path), 'utf8').trim().split('\n').filter(Boolean);
+    expect(fileLines).toHaveLength(3);
   });
 
   it('file_offset is monotonically increasing across appends', () => {

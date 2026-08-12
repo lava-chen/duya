@@ -1,7 +1,7 @@
 // src/components/layout/PanelHeader.tsx
 "use client";
 
-import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type RefObject } from "react";
 import { PlusIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
@@ -129,7 +129,7 @@ export function PanelHeader() {
               open={addMenuOpen}
               onClick={() => setAddMenuOpen((value) => !value)}
             />
-            {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
+            {addMenuOpen && <AddPageMenu ref={addMenuRef} anchorRef={addButtonRef} onSelect={openPage} />}
           </div>
         </div>
       </div>
@@ -180,22 +180,24 @@ export function PanelHeader() {
                   onError={(event) => { event.currentTarget.style.display = "none"; }}
                 />
               ) : (
-                <Icon size={12} fill={active ? "currentColor" : "none"} />
+                <Icon size={14} stroke={1.5} />
               )}
               <span className="panel-header-tab-title">{tab.title}</span>
               <CloseTabButton tabId={tab.id} onClose={() => closePanel(tab.id)} />
             </button>
           );
         })}
+        <div className="panel-header-add-wrap">
+          <AddPageButton
+            ref={addButtonRef}
+            open={addMenuOpen}
+            onClick={() => setAddMenuOpen((value) => !value)}
+          />
+        </div>
       </div>
-      <div className="panel-header-add-wrap">
-        <AddPageButton
-          ref={addButtonRef}
-          open={addMenuOpen}
-          onClick={() => setAddMenuOpen((value) => !value)}
-        />
-        {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
-      </div>
+      {addMenuOpen && (
+        <AddPageMenu ref={addMenuRef} anchorRef={addButtonRef} onSelect={openPage} />
+      )}
     </div>
   );
 }
@@ -226,15 +228,24 @@ const AddPageButton = forwardRef<
       aria-expanded={open}
       aria-haspopup="menu"
     >
-      <PlusIcon size={16} stroke={2.5} />
+      <PlusIcon size={16} stroke={1.5} />
     </button>
   );
 });
 
 const AddPageMenu = forwardRef<
   HTMLDivElement,
-  { onSelect: (pageId: PageId) => void }
->(function AddPageMenu({ onSelect }, ref) {
+  { onSelect: (pageId: PageId) => void; anchorRef: RefObject<HTMLButtonElement | null> }
+>(function AddPageMenu({ onSelect, anchorRef }, ref) {
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    const el = anchorRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPos({ top: rect.bottom + 6, right: window.innerWidth - rect.right });
+  }, [anchorRef]);
+
   // `office` is a passive surface — opened by the agent / external
   // events, not chosen from the menu. Hide it here so the picker only
   // surfaces pages the user can launch themselves.
@@ -243,7 +254,12 @@ const AddPageMenu = forwardRef<
   );
 
   return (
-    <div ref={ref} className="panel-add-menu" role="menu">
+    <div
+      ref={ref}
+      className="panel-add-menu"
+      role="menu"
+      style={pos ? { position: "fixed", top: pos.top, right: pos.right, left: "auto" } : undefined}
+    >
       {entries.map((entry) => (
         <AddPageMenuRow
           key={entry.id}
@@ -283,7 +299,7 @@ function AddPageMenuRow({
     >
       <span className="panel-add-menu-main">
         <span className="panel-add-menu-icon">
-          <Icon size={16} />
+          <Icon size={15} stroke={1.5} />
         </span>
         <span className="panel-add-menu-name">{label}</span>
       </span>
@@ -307,7 +323,7 @@ function CloseTabButton({ tabId, onClose }: { tabId: string; onClose: () => void
         onClose();
       }}
     >
-      <XIcon size={10} stroke={2.5} />
+      <XIcon size={11} stroke={2} />
     </span>
   );
 }

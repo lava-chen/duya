@@ -48,7 +48,7 @@ export const conductorMode: ModeModifier = {
   id: 'conductor',
   kind: 'session',
   exclusiveWith: ['plan-task'],
-  display: { label: 'Conductor 画布', icon: 'SquareHalf' },
+  display: { label: 'Conductor 画布', icon: 'Chalkboard' },
 
   tools: {
     // Canvas element, layout, perception, knowledge, and multi-canvas tools.

@@ -4,8 +4,15 @@ import type { Message, MessageContent, ToolResultContent } from '../types.js'
 // persisted conversations still receive the same micro-compaction behavior.
 // The legacy capitalized names persist for old saved threads; the lowercase
 // edit/write names match the current tool names washed through the pipeline.
+//
+// `Read` is deliberately EXCLUDED: stubbing early Read results to a fixed
+// placeholder makes the model "forget" files it already read and forces it
+// to re-read the same files every turn (the repeated-debugging symptom seen
+// in long sessions). Read results are left intact so the model can reference
+// earlier content; real compaction (session_memory/snip) is what reclaims
+// that space when the context genuinely exceeds the budget.
 export const COMPACTABLE_TOOLS = new Set([
-  'Read', 'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write',
+  'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write',
   'edit', 'write',
 ])
 

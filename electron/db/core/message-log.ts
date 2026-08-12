@@ -125,14 +125,30 @@ export class MessageLog {
     }
 
     for (const [sessionId, sessionEvents] of bySession) {
+      // File-level idempotency: skip events whose id is already indexed so the
+      // rollout file never accumulates duplicate lines. appendLines below writes
+      // unconditionally, so without this filter the INSERT OR IGNORE on the index
+      // alone would still bloat the file when callers re-send the full message
+      // list (e.g. after compaction, onMessagesCompacted re-appends the entire
+      // currentMessages). Keep first occurrence within the batch too.
+      const indexedIds = this.getIndexedIds(sessionId);
+      const seenIds = new Set<string>();
+      const freshEvents: NewEvent[] = [];
+      for (const ev of sessionEvents) {
+        if (indexedIds.has(ev.id) || seenIds.has(ev.id)) continue;
+        seenIds.add(ev.id);
+        freshEvents.push(ev);
+      }
+      if (freshEvents.length === 0) continue;
+
       // Bucket by the session's last activity (newest event in this batch) so a
       // cross-midnight session's rollout lives under the day it was last active.
-      const lastActivity = sessionEvents.reduce((max, ev) => (ev.createdAt > max ? ev.createdAt : max), 0);
+      const lastActivity = freshEvents.reduce((max, ev) => (ev.createdAt > max ? ev.createdAt : max), 0);
       const relativePath = this.getOrCreateRolloutPath(sessionId, lastActivity);
       const absolutePath = this.resolvePathOnDisk(relativePath);
 
       // Append all payload lines to the rollout file, recording per-line offset/len.
-      const payloads = sessionEvents.map((ev) => ev.payload);
+      const payloads = freshEvents.map((ev) => ev.payload);
       const lineMeta = this.appendLines(absolutePath, payloads);
 
       // Single transaction: INSERT OR IGNORE index rows.
@@ -143,8 +159,8 @@ export class MessageLog {
           (?, ?, COALESCE((SELECT MAX(seq) FROM message_index WHERE session_id = ?), 0) + 1, ?, ?, ?, ?, ?)
       `);
       const txn = this.db.transaction(() => {
-        for (let i = 0; i < sessionEvents.length; i++) {
-          const ev = sessionEvents[i];
+        for (let i = 0; i < freshEvents.length; i++) {
+          const ev = freshEvents[i];
           const meta = lineMeta[i];
           insert.run(
             ev.id,
@@ -564,6 +580,15 @@ export class MessageLog {
       // sessions table might not exist in isolated tests
       return null;
     }
+  }
+
+  /** Ids already indexed for a session — used to make file writes idempotent. */
+  private getIndexedIds(sessionId: string): Set<string> {
+    return new Set(
+      (this.db
+        .prepare('SELECT id FROM message_index WHERE session_id = ?')
+        .all(sessionId) as Array<{ id: string }>).map((r) => r.id),
+    );
   }
 
   /** Get the cached rollout path, or resolve + write back + cache on first access. */

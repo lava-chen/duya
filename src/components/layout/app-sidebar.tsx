@@ -806,7 +806,7 @@ function SidebarProjectHeader({
           onClick={handleToggleAll}
           title={allCollapsed ? t('project.expandAll') : t('project.collapseAll')}
         >
-          {allCollapsed ? <CornersOutIcon size={14} /> : <CornersInIcon size={14} />}
+          {allCollapsed ? <CornersOutIcon size={14} stroke={1.5} /> : <CornersInIcon size={14} stroke={1.5} />}
         </button>
         <button
           type="button"

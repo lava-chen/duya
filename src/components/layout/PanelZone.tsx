@@ -6,7 +6,7 @@ import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_CHAT_WIDTH, MIN_PANEL_WIDTH, useP
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
-import { SidebarRightIcon, ArrowsInSimpleIcon, ArrowsOutSimpleIcon } from "@/components/icons";
+import { SidebarRightIcon, CornersInIcon, CornersOutIcon } from "@/components/icons";
 import { useConversationStore } from "@/stores/conversation-store";
 import {
   setTaskDrawerOpen,
@@ -141,8 +141,8 @@ export function PanelZone() {
               data-testid="workspace-expand"
             >
               {workspaceExpanded
-                ? <ArrowsInSimpleIcon size={16} />
-                : <ArrowsOutSimpleIcon size={16} />}
+                ? <CornersInIcon size={20} stroke={1.5} />
+                : <CornersOutIcon size={20} stroke={1.5} />}
             </button>
           )}
         </>
@@ -240,7 +240,7 @@ function EmptyPanelLauncherRow({
     >
       <span className="panel-empty-launcher-main">
         <span className="panel-empty-launcher-icon">
-          <Icon size={16} />
+          <Icon size={15} stroke={1.5} />
         </span>
         <span className="panel-empty-launcher-name">{label}</span>
       </span>

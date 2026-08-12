@@ -1002,6 +1002,22 @@ export interface ElectronAPI {
   }
   import: ImportAPI
   voice: VoiceAPI
+  ide: IdeAPI
+}
+
+export interface IdeInfo {
+  id: 'vscode' | 'cursor' | 'trae' | 'zed'
+  name: string
+  executable: string
+}
+
+export interface IdeAPI {
+  /** List installed external IDEs (executables resolved at call time). */
+  list: () => Promise<IdeInfo[]>
+  /** Resolve the effective default IDE (honors config `ide.default`). */
+  getDefault: () => Promise<IdeInfo | null>
+  /** Open a file/folder in the given IDE. Resolves to an error string (empty on success). */
+  open: (id: string, target: string) => Promise<string>
 }
 
 export interface VoiceAPI {
@@ -1931,6 +1947,11 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('voice:auto-stop', handler)
       return () => ipcRenderer.removeListener('voice:auto-stop', handler)
     },
+  },
+  ide: {
+    list: () => ipcRenderer.invoke('ide:list'),
+    getDefault: () => ipcRenderer.invoke('ide:get-default'),
+    open: (id: string, target: string) => ipcRenderer.invoke('ide:open', id, target),
   },
 }
 

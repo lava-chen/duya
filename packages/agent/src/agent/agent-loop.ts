@@ -428,6 +428,11 @@ export async function runAgentLoop(
         }
       }
 
+      // Release the turn's executor abort listener on the run-level signal.
+      // The executor is rebuilt every turn; without this, each turn leaks one
+      // listener onto the run-level abort controller (MaxListenersExceeded).
+      executor.dispose();
+
       // Max-turns boundary.
       if (state.turnCount >= maxTurns) {
         await emit({ type: 'done', reason: 'max_turns' });

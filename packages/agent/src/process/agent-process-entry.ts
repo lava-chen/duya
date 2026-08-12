@@ -67,6 +67,7 @@ import { detectModelCapability } from '../utils/model-capability-cache.js';
 import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
+import { estimateMessageTokens } from '../compact/tokenBudget.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
 
 // Polyfill globalThis.crypto for Node.js
@@ -1520,6 +1521,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         : '';
       sendStatus(`@i18n:${key}${encodedParams}`);
     };
+    // Emit an immediate "preparing" status so the client shows activity right
+    // away (before the MCP gate, image processing, capability probe, and first
+    // LLM round-trip run). This is what makes the start feel responsive
+    // instead of a silent blank wait after the user hits send.
+    sendI18nStatus('streaming.preparing');
     // Use session system prompt if available, fallback to options.systemPrompt
     const effectiveSystemPrompt = sessionSystemPrompt || msg.options?.systemPrompt;
     // Resolve permission mode from session row, with explicit override allowed.
@@ -2013,6 +2019,24 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // without an incremental counter.
     const turnStartMessageCount = agent.getMessages().length;
 
+    // Live context-usage tracker. The last real `result` usage reflects the
+    // full prompt size at that point; afterwards each new tool_result adds a
+    // small trailing estimate. This mirrors pi's `usage + trailing` model and
+    // lets the renderer stream live context growth without a full message
+    // recount on every event.
+    let liveBaseInput = 0;          // last `result` input_tokens (covers cache)
+    let liveTrailingTokens = 0;     // tokens added since that `result`
+    let liveHasBase = false;        // whether a real usage has been seen
+    const emitTokenUsage = (data: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheHitTokens?: number;
+      cacheCreationTokens?: number;
+      usedTokens: number;
+    }) => {
+      sendToMain({ type: 'chat:token_usage', sessionId: msg.sessionId, ...data });
+    };
+
     for await (const event of eventGen) {
       eventCount++;
       if (eventCount <= 5) {
@@ -2041,7 +2065,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
 
       if (event.type === 'result' && event.data) {
-        const candidateUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number };
+        const candidateUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number };
         // Ignore all-zero usage: persisting it would make the context ring show
         // hasData=true but used=0, which renders as an empty ring.
         const meaningfulUsage =
@@ -2051,8 +2075,35 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         if (meaningfulUsage) {
           tokenUsage = candidateUsage;
           log(`[Agent-Process] Received result event, tokenUsage set: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}`);
+          // Live context: the `result` input_tokens is the authoritative
+          // prompt size (covers cache read + write), so reset the trailing
+          // estimate and broadcast the current context.
+          liveHasBase = true;
+          liveBaseInput = candidateUsage.input_tokens ?? 0;
+          liveTrailingTokens = 0;
+          emitTokenUsage({
+            inputTokens: candidateUsage.input_tokens ?? 0,
+            outputTokens: candidateUsage.output_tokens ?? 0,
+            cacheHitTokens: candidateUsage.cache_hit_tokens ?? candidateUsage.cache_read_input_tokens,
+            cacheCreationTokens: candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens,
+            usedTokens: liveBaseInput + liveTrailingTokens,
+          });
         } else {
           warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
+        }
+      } else if (event.type === 'tool_result' && event.data) {
+        // A tool result is appended to the context and will be sent to the
+        // model on the next request. Estimate its tokens and broadcast the
+        // growing context so the renderer stays live between `result` events.
+        const resultData = event.data as { result?: unknown };
+        const content = typeof resultData.result === 'string' ? resultData.result : '';
+        if (content.length > 0) {
+          liveTrailingTokens += estimateMessageTokens({ role: 'tool', content });
+          emitTokenUsage({
+            inputTokens: 0,
+            outputTokens: 0,
+            usedTokens: liveBaseInput + liveTrailingTokens,
+          });
         }
       }
 
