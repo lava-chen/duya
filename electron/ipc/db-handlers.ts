@@ -296,6 +296,14 @@ export function registerDbHandlers(): void {
     return sessions.getDraft(sessionId);
   });
 
+  // Read a mode tracker snapshot (mode_state_snapshots) back for a session so
+  // the renderer can restore goal/plan state on cold load via the same core
+  // store the agent persistence layer writes to.
+  ipcMain.handle('db:session:get_mode_state', (_event, sessionId: string, mode: string) => {
+    const { modeState } = getCoreStores();
+    return modeState.get(sessionId, mode);
+  });
+
   // ==================== Message Handlers (core store thin forward) ====================
   // Plan 328 Phase 2: all message IPC handlers forward to MessageLog via
   // core-db-adapters. Decision 3: message:replace → appendBatch (INSERT OR

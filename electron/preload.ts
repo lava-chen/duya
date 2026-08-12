@@ -99,6 +99,10 @@ export interface SessionAPI {
   setGoalMode: (sessionId: string, enabled: boolean) => Promise<unknown>
 }
 
+export interface ModeStateAPI {
+  get: (sessionId: string, mode: string) => Promise<{ snapshotJson?: string } | null>
+}
+
 export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
   getBySession: (sessionId: string) => Promise<unknown[]>
@@ -917,6 +921,7 @@ export interface ElectronAPI {
   projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
   session: SessionAPI
+  modeState: ModeStateAPI
   message: MessageAPI
   settingsDb: SettingsAPI
   migration: MigrationAPI
@@ -1478,6 +1483,10 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:session:set_plan_mode', { sessionId, enabled }),
     setGoalMode: (sessionId: string, enabled: boolean) =>
       ipcRenderer.invoke('db:session:set_goal_mode', { sessionId, enabled }),
+  },
+  modeState: {
+    get: (sessionId: string, mode: string) =>
+      ipcRenderer.invoke('db:session:get_mode_state', sessionId, mode),
   },
   message: {
     add: (data: Record<string, unknown>) => ipcRenderer.invoke('db:message:add', data),
