@@ -127,6 +127,14 @@ interface MessageInputProps {
   planModeEnabled?: boolean;
   onPlanModeChange?: (enabled: boolean) => void;
   /**
+   * Plan 413e: goal mode is a session-level toggle persisted to
+   * `sessions.extensions.goal_mode_enabled` (mirrors plan-task). The prop
+   * is the DB-restored value; changes flow up via `onGoalModeChange` so
+   * ChatView can persist them.
+   */
+  goalModeEnabled?: boolean;
+  onGoalModeChange?: (enabled: boolean) => void;
+  /**
    * Plan 224 follow-up: agent-initiated runtime plan mode (set by the
    * agent calling EnterPlanMode / SwitchMode tool). Visually merged
    * with the popover plan-task chip — both drive the same blue glow
@@ -295,6 +303,8 @@ export function MessageInput({
   onConductorChange,
   planModeEnabled,
   onPlanModeChange,
+  goalModeEnabled,
+  onGoalModeChange,
   agentPlanMode = false,
   onCompact,
   isCompacting,
@@ -373,6 +383,9 @@ export function MessageInput({
   // Plan 413e: same slot guard for the plan-task session toggle
   // (`planModeEnabled` prop ↔ activeModes).
   const planModeSlotRef = useRef<boolean>(false);
+  // Plan 413e: same slot guard for the goal mode session toggle
+  // (`goalModeEnabled` prop ↔ activeModes).
+  const goalModeSlotRef = useRef<boolean>(false);
   // Mirror activeModes in a ref so handleToggleMode can read the latest
   // value synchronously without adding activeModes to its dependency
   // array. This also lets us call onConductorChange OUTSIDE the
@@ -430,6 +443,24 @@ export function MessageInput({
     });
   }, [planModeEnabled]);
 
+  // Plan 413e: sync the goal mode slot from the prop (DB is the source of
+  // truth for the session-level goal toggle). Mirrors the plan-task sync —
+  // one-way (prop → state); the reverse path is handled in
+  // `handleToggleMode` via `onGoalModeChange`.
+  useEffect(() => {
+    const next = !!goalModeEnabled;
+    if (next === goalModeSlotRef.current) return;
+    goalModeSlotRef.current = next;
+    setActiveModes((prev) => {
+      const hasGoal = prev.has('goal');
+      if (next === hasGoal) return prev;
+      const updated = new Set(prev);
+      if (next) updated.add('goal');
+      else updated.delete('goal');
+      return updated;
+    });
+  }, [goalModeEnabled]);
+
   // Unified mode toggle — applies mutual-exclusion rules. Research is pure
   // local state; conductor and plan-task persistence is handled by
   // explicitly calling `onConductorChange` / `onPlanModeChange` here (user
@@ -458,9 +489,14 @@ export function MessageInput({
       planModeSlotRef.current = willEnable;
       onPlanModeChange?.(willEnable);
     }
+    if (mode === 'goal') {
+      const willEnable = !prev.has('goal');
+      goalModeSlotRef.current = willEnable;
+      onGoalModeChange?.(willEnable);
+    }
     setActiveModes(next);
     textareaRef.current?.focus();
-  }, [onConductorChange, onPlanModeChange]);
+  }, [onConductorChange, onPlanModeChange, onGoalModeChange]);
 
   // Drag-and-drop state — counter ref avoids flicker when crossing child boundaries
   const [isDraggingOver, setIsDraggingOver] = useState(false);

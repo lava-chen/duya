@@ -49,6 +49,8 @@ export interface Thread {
   conductorCanvasId?: string | null;
   /** Plan 413e: 1 = plan-task session toggle on (persisted to sessions.extensions.plan_mode_enabled), 0 = off */
   planModeEnabled?: number;
+  /** Plan 413e: 1 = goal mode session toggle on (persisted to sessions.extensions.goal_mode_enabled), 0 = off */
+  goalModeEnabled?: number;
   /** Plan 331 Phase 4: 1 = pinned to sidebar top, 0 = normal. */
   pinned?: number;
 }
@@ -180,6 +182,8 @@ interface ConversationState {
   setThreadConductorBinding: (id: string, enabled: boolean, canvasId: string | null) => void;
   /** Plan 413e: update the plan-task session toggle on the thread (local state only; DB persistence via session.setPlanMode IPC). */
   setThreadPlanMode: (id: string, enabled: boolean) => void;
+  /** Plan 413e: update the goal mode session toggle on the thread (local state only; DB persistence via session.setGoalMode IPC). */
+  setThreadGoalMode: (id: string, enabled: boolean) => void;
   /** Plan 331 Phase 4: pin/unpin a thread (local + DB IPC). Pinned threads
    *  surface to the top of the sidebar across restarts. */
   setThreadPinned: (id: string, pinned: boolean) => void;
@@ -759,6 +763,21 @@ export const useConversationStore = create<ConversationState>()(
           ),
         }));
         // DB persistence is handled by the caller via session.setPlanMode IPC.
+      },
+
+      setThreadGoalMode: (id, enabled) => {
+        set((state) => ({
+          threads: state.threads.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  goalModeEnabled: enabled ? 1 : 0,
+                  updatedAt: Date.now(),
+                }
+              : t
+          ),
+        }));
+        // DB persistence is handled by the caller via session.setGoalMode IPC.
       },
 
       setThreadPinned: (id, pinned) => {
