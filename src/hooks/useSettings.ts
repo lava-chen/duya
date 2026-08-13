@@ -49,7 +49,7 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Built-in browser default download directory
     browserDownloadPath: undefined,
     // Favorite agent profiles for quick access (max 3)
-    favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
+    favoriteAgentIds: ['general-purpose', 'code-expert', 'research'],
     // Agent prompt language preference
     agentLanguage: undefined,
     // Security settings
@@ -235,7 +235,7 @@ export function useSettings(): {
     // Built-in browser default download directory
     browserDownloadPath: undefined,
     // Favorite agent profiles for quick access (max 3)
-    favoriteAgentIds: ['general-purpose', 'code-expert', 'plan'],
+    favoriteAgentIds: ['general-purpose', 'code-expert', 'research'],
     // Agent prompt language preference
     agentLanguage: undefined,
     // Security settings

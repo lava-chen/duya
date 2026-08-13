@@ -3,6 +3,8 @@
  * Wrapper for agent profile database operations
  */
 
+export type AgentProfileKind = 'main' | 'subagent' | 'special';
+
 export interface AgentProfile {
   id: string;
   name: string;
@@ -10,6 +12,8 @@ export interface AgentProfile {
   allowedTools?: string[];
   disallowedTools?: string[];
   defaultModel?: string;
+  /** Structural grouping: 'main' = user-facing main agents, others internal */
+  kind: AgentProfileKind;
   userVisible: boolean;
   isPreset: boolean;
   isEnabled: boolean;
@@ -24,6 +28,7 @@ interface RawAgentProfile {
   allowed_tools?: string;
   disallowed_tools?: string;
   default_model?: string;
+  profile_kind?: string;
   user_visible?: number;
   is_preset?: number;
   is_enabled?: number;
@@ -39,6 +44,7 @@ function parseAgentProfile(raw: RawAgentProfile): AgentProfile {
     allowedTools: raw.allowed_tools ? JSON.parse(raw.allowed_tools) : undefined,
     disallowedTools: raw.disallowed_tools ? JSON.parse(raw.disallowed_tools) : undefined,
     defaultModel: raw.default_model,
+    kind: (raw.profile_kind as AgentProfileKind) ?? 'main',
     userVisible: raw.user_visible === 1,
     isPreset: raw.is_preset === 1,
     isEnabled: raw.is_enabled !== 0,

@@ -76,9 +76,10 @@ export function AgentProfileSelector({
     }
   };
 
-  // Only show enabled profiles, presets first
+  // Only main-agent profiles are selectable for a new session. Subagent and
+  // special-purpose profiles (explore/plan/gateway/...) never appear here.
   const enabledProfiles = profiles
-    .filter((p) => p.isEnabled)
+    .filter((p) => p.isEnabled && p.kind === 'main')
     .sort((a, b) => {
       if (a.isPreset !== b.isPreset) return a.isPreset ? -1 : 1;
       return a.name.localeCompare(b.name);
