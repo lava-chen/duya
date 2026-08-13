@@ -364,6 +364,8 @@ function runtimeSource(message: Message): RuntimeContextSource | undefined {
   if (type === 'attachment') return 'attachment';
   if (type === 'mode' || type === 'mode_changed') return 'mode';
   if (type === 'memory') return 'memory';
+  if (type === 'goal_summary') return 'goal_summary';
+  if (type === 'research_continuation') return 'research_continuation';
   if (isRuntimeMetadata(message.metadata)) return 'custom';
   return undefined;
 }
