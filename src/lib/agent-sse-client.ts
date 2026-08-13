@@ -624,6 +624,39 @@ export async function interruptChat(sessionId: string): Promise<void> {
   }
 }
 
+export interface SideQuestionResult {
+  id: string;
+  answer: string;
+}
+
+/**
+ * Ask a one-shot side question (`/btw`) against a session. The agent server
+ * snapshots the current conversation, issues a no-tool single LLM call, and
+ * returns a JSON `{ id, answer }` payload. This never mutates the durable
+ * transcript.
+ */
+export async function askSideQuestion(
+  sessionId: string,
+  question: string,
+): Promise<SideQuestionResult> {
+  const port = await getPort();
+  const url = `http://127.0.0.1:${port}/sessions/${sessionId}/btw`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => '');
+    throw new Error(`Side question failed: ${response.status} ${errorBody}`);
+  }
+
+  const data = (await response.json()) as SideQuestionResult;
+  return data;
+}
+
 export interface CompactResult {
   success: boolean;
   removedCount?: number;

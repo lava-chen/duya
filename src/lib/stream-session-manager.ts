@@ -1096,6 +1096,28 @@ class StreamSessionManager {
       }
     }
 
+    // Inject compact model config into providerConfig if available
+    if (providerConfig) {
+      try {
+        const compactApi = (window.electronAPI as unknown as Record<string, unknown>)?.compact as
+          { get: () => Promise<{ provider: string; model: string; baseUrl: string; apiKey: string; enabled: boolean } | null> } | undefined;
+        if (compactApi?.get) {
+          const cm = await compactApi.get();
+          if (cm?.enabled && cm.model) {
+            (providerConfig as unknown as Record<string, unknown>).compactModelConfig = {
+              provider: cm.provider,
+              model: cm.model,
+              baseURL: cm.baseUrl,
+              apiKey: cm.apiKey,
+              enabled: cm.enabled,
+            };
+          }
+        }
+      } catch {
+        // Compact model config is best-effort; ignore failures.
+      }
+    }
+
     let titleGenerationModelConfig = titleGenConfigParam;
     console.log(`[stream-session-manager] titleGenerationModel raw value: "${titleGenerationModel}"`);
     if (!titleGenerationModelConfig && titleGenerationModel) {

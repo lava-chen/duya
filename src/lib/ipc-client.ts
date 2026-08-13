@@ -1025,3 +1025,32 @@ export async function getGatewaySessionIPC(id: string): Promise<GatewaySession |
 export async function listMemoryIPC(): Promise<{ entries: MemoryEntry[]; enabled: boolean }> {
   return window.electronAPI!.memory.list()
 }
+
+/**
+ * Fetch the memory system log (Phase 1 + Phase 2 activity) for the
+ * Settings → Memory → Activity view.
+ */
+export interface MemorySystemLogEntry {
+  ts: number;
+  phase: 'phase1' | 'phase2' | 'system';
+  event_type: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  detail: Record<string, unknown> | null;
+  rollout_id?: string | null;
+  run_id?: string | null;
+  session_id?: string | null;
+}
+
+export interface ListMemorySystemLogIPCArgs {
+  limit?: number;
+  phase?: 'phase1' | 'phase2' | 'system';
+  runId?: string;
+  since?: number;
+}
+
+export async function listMemorySystemLogIPC(
+  opts?: ListMemorySystemLogIPCArgs
+): Promise<{ entries: MemorySystemLogEntry[]; total: number }> {
+  return window.electronAPI!.memory.systemLog({ ...(opts ?? {}) })
+}
