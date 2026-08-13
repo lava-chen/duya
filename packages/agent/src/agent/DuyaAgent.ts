@@ -34,8 +34,8 @@ import type { PromptSystem } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
-import { createAIClient, createAIClientWithRetry, inferProvider } from '@duya/ai';
-import type { AIClient, AIClientOptions, RetryConfig } from '@duya/ai';
+import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
+import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
@@ -58,6 +58,9 @@ import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxRow } from '../session/db.js';
 import { getDatabaseTaskStore } from '../session/task-store.js';
 import path from 'node:path';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import { isMemoryEnabled } from '../memory-rollout/wakeup.js';
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
@@ -72,6 +75,7 @@ import { planModeTracker } from '../modes/plan/plan-tracker.js';
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { matchedToolIntent, toolIntentNudge } from './tool-intent-detector.js';
+import { renderSystemReminder } from './reminders.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
 import {
@@ -101,6 +105,7 @@ import {
   adaptAttachmentContext,
   adaptBackgroundNotification,
   adaptMailboxRows,
+  adaptTodoGateContext,
   projectRuntimeContextToProviderMessage,
   RUNTIME_CONTEXT_METADATA_KEYS,
 } from '../message/runtime-context-adapters.js';
@@ -110,6 +115,7 @@ import {
   extractTextFromContent,
   collectRecentImageAttachments,
   persistableMessages,
+  lastRealUserQuery,
   computeCachePlanFingerprint,
   chooseMailboxApplyMode,
   buildAgentIdentityBlock,
@@ -123,6 +129,8 @@ import { VisualAnalysisService } from './visual-analysis.js';
  */
 export class duyaAgent {
   private llmClient: AIClient;
+  /** Dedicated compaction client when a `compact_model` is configured. */
+  private compactClient?: AIClient;
   /**
    * Plan 315: durable persistence projection derived from the append-only
    * timeline (single source of truth). Recomputes on every read and excludes
@@ -351,6 +359,9 @@ export class duyaAgent {
       resolveDefaultBaseURL,
     );
 
+    // Initialize a dedicated compaction client when a compact_model is enabled.
+    this.compactClient = buildCompactClient(options.compactModelConfig);
+
     // AGENTS.md is loaded eagerly in streamChat via refreshForTask so it is
     // always available before the first provider request and before any prompt
     // section is resolved.
@@ -383,7 +394,7 @@ export class duyaAgent {
       const childController = this.abortController
         ? createChildAbortController(this.abortController)
         : new AbortController();
-      const stream = this.llmClient.streamChat(summaryMessages, {
+      const stream = (this.compactClient ?? this.llmClient).streamChat(summaryMessages, {
         systemPrompt: prompt,
         maxTokens: 4096,
         temperature: 0.3,
@@ -407,6 +418,27 @@ export class duyaAgent {
       }
 
       return result.join('').trim();
+    });
+
+    // Wire a memory-flush sink: after each compaction, persist the summary to
+    // the DUYA memory store so important context survives the history drop.
+    // Best-effort — gated by the same memory enable flag used by the wakeup
+    // helper, and failures are swallowed (they never break compaction).
+    this.compactionManager.setMemoryFlushFn(async (summary: string) => {
+      if (!isMemoryEnabled()) return
+      const session = this.sessionId
+      if (!session) return
+      const memoryRoot = this.memoryRootPath()
+      if (!memoryRoot) return
+      const dir = path.join(memoryRoot, 'sessions')
+      fs.mkdirSync(dir, { recursive: true })
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const file = path.join(dir, `${session}-${stamp}-compaction.md`)
+      fs.writeFileSync(
+        file,
+        `# Compaction summary\n\n${summary}\n`,
+        'utf8',
+      )
     });
 
     // Initialize permission system
@@ -455,6 +487,18 @@ export class duyaAgent {
     this._model = value;
     // Model id is read by _buildSystemPrompt → promptSystem.buildContext({ modelId: this.model })
     // on every turn, so no separate prompt-manager sync is needed here.
+  }
+
+  /**
+   * Resolve the DUYA memory root (default `~/.duya/memory`), honouring an
+   * optional override via the `DUYA_MEMORY_ROOT` env var. Returns null when
+   * the home directory is unavailable.
+   */
+  private memoryRootPath(): string | null {
+    if (process.env.DUYA_MEMORY_ROOT) return process.env.DUYA_MEMORY_ROOT;
+    const home = os.homedir();
+    if (!home) return null;
+    return path.join(home, '.duya', 'memory');
   }
 
   /**
@@ -1085,6 +1129,14 @@ export class duyaAgent {
         } catch (error) {
           logger.warn('[Agent] System prompt observer failed; continuing without observer', { error });
         }
+
+        // Kick off the background prefire summary pass (pass 1) while the main
+        // turn streams. Fire-and-forget: failures are ignored, and the cached
+        // result seeds pass 2 when compaction later triggers.
+        if (this.compactionController.shouldPrefire()) {
+          this.compactionController.prefire().catch(() => {});
+        }
+
         const streamGenerator = this.llmClient.streamChat(llmMessages, {
           systemPrompt: systemPromptContent,
           tools,
@@ -1389,7 +1441,9 @@ export class duyaAgent {
               messages.push({
                 id: crypto.randomUUID(),
                 role: 'user',
-                content: `[System] Detected ${deadLoopNudgeAt} consecutive identical calls to tool "${toolName}". If this is not making progress, change your approach or state explicitly that this step is complete.`,
+                content: renderSystemReminder(
+                  `Detected ${deadLoopNudgeAt} consecutive identical calls to tool "${toolName}". If this is not making progress, change your approach or state explicitly that this step is complete.`,
+                ),
                 timestamp: Date.now(),
                 seq_index: seqIndex,
               });
@@ -1504,7 +1558,7 @@ export class duyaAgent {
                 messages.push({
                   id: crypto.randomUUID(),
                   role: 'user',
-                  content: `[System] ${prematureStopNudge(pattern)}`,
+                  content: renderSystemReminder(prematureStopNudge(pattern)),
                   timestamp: Date.now(),
                   seq_index: seqIndex,
                 });
@@ -1538,7 +1592,7 @@ export class duyaAgent {
                 messages.push({
                   id: crypto.randomUUID(),
                   role: 'user',
-                  content: `[System] ${toolIntentNudge(intent)}`,
+                  content: renderSystemReminder(toolIntentNudge(intent)),
                   timestamp: Date.now(),
                   seq_index: seqIndex,
                 });
@@ -1560,16 +1614,31 @@ export class duyaAgent {
               );
               if (pending.length > 0) {
                 todoGatePrompted = true;
+                // The user's last real request that started this run. Anchor the
+                // final answer to it so the model does not reply to the injected
+                // directive below as if it were a fresh user turn. Skips transient
+                // synthetic turns (aligned with grok's synthetic_reason handling).
+                const lastUserText = lastRealUserQuery(messages);
+                const originalRequest =
+                  (lastUserText ?? (typeof prompt === 'string' ? prompt : '')).trim();
                 // Transient steering message (same pattern as mailbox guidance).
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'user',
-                  content: `[System] There ${pending.length === 1 ? 'is 1 unfinished task' : `are ${pending.length} unfinished tasks`} that should be completed before finishing:\n${pending
-                    .map((t) => `- ${t.subject}`)
-                    .join('\n')}\nContinue working to complete ${pending.length === 1 ? 'it' : 'them'} now.`,
-                  timestamp: Date.now(),
-                  seq_index: seqIndex,
-                });
+                // Wrapped in <system-reminder> so the model treats it as an
+                // internal directive to keep working, not a user question to answer.
+                // Flows through the shared RuntimeContextMessage framework so the
+                // mark is carried on a runtime_context message and projected to the
+                // provider as a user turn (mirrors grok's synthetic_reason).
+                const todoGateCtx = adaptTodoGateContext(
+                  renderSystemReminder(
+                    `<goal-state>\nObjective: ${originalRequest}\nStatus: Active\n</goal-state>\n\n` +
+                      `Internal system directive — NOT a new user question. Do not reply to this message.\n` +
+                      `There ${pending.length === 1 ? 'is 1 unfinished task' : `are ${pending.length} unfinished tasks`} that should be completed:\n` +
+                      pending.map((t) => `- ${t.subject}`).join('\n') +
+                      `\nContinue working to complete ${pending.length === 1 ? 'it' : 'them'}. ` +
+                      `When everything is done, give your final answer to the user's ORIGINAL request above.`,
+                  ),
+                  { seqIndex },
+                );
+                messages.push(projectRuntimeContextToProviderMessage(todoGateCtx));
                 continue;
               }
             } catch (err) {
@@ -1603,7 +1672,7 @@ export class duyaAgent {
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.error(`[Agent] Turn ${turnCount}: Error in LLM stream`, error instanceof Error ? error : new Error(errorMessage));
 
-        // Check for context length exceeded errors and attempt reactive compaction
+        // Check for context length exceeded errors and attempt compaction
         const isContextLengthError =
           errorMessage.includes('context_length_exceeded') ||
           errorMessage.includes('context window exceeds limit') ||
@@ -1611,14 +1680,11 @@ export class duyaAgent {
           errorMessage.includes('exceeds limit');
 
         if (isContextLengthError && !this.compactionManager.isCircuitBreakerTriggered()) {
-          logger.warn(`[Agent] Turn ${turnCount}: Context length exceeded, attempting reactive compaction`);
+          logger.warn(`[Agent] Turn ${turnCount}: Context length exceeded, attempting compaction`);
           try {
-            const triggerError = errorMessage.includes('prompt_too_long')
-              ? 'prompt_too_long' as const
-              : 'context_length_exceeded' as const;
-            const compactEntry = await this.compactionController.compactReactive(triggerError);
+            const compactEntry = await this.compactionController.compactProactive();
             if (compactEntry) {
-              logger.info(`[Agent] Turn ${turnCount}: Reactive compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
+              logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
               const reProjected = this._projectModelMessages(systemPromptContent);
               systemPromptContent = reProjected.systemPromptContent;
               messages = reProjected.messages;
@@ -1627,9 +1693,9 @@ export class duyaAgent {
               turnCount--; // Decrement so the next iteration uses the same turn number
               continue;
             }
-          } catch (reactiveError) {
-            const reactiveErrorMsg = reactiveError instanceof Error ? reactiveError.message : String(reactiveError);
-            logger.error(`[Agent] Turn ${turnCount}: Reactive compaction failed: ${reactiveErrorMsg}`);
+          } catch (compactError) {
+            const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
+            logger.error(`[Agent] Turn ${turnCount}: Compaction failed: ${compactErrorMsg}`);
           }
         }
 
@@ -2455,6 +2521,82 @@ export class duyaAgent {
   }
 
   /**
+   * Ask a side question without interrupting the running agent (grok-style
+   * `/btw`). Snapshot the current conversation, append a no-tool one-shot
+   * question, and return the final text answer.
+   *
+   * This deliberately bypasses the main turn loop: it does NOT mutate the
+   * timeline / `this.messages`, does NOT register or expose tools, and does
+   * NOT enter the prompt queue. It runs one independent `llmClient.streamChat`
+   * call with the projected history, so it can complete while the primary
+   * agent turn is still streaming.
+   */
+  async sideQuestion(question: string): Promise<string> {
+    const trimmed = question.trim();
+    if (!trimmed) {
+      throw new Error('Side question cannot be empty');
+    }
+
+    // Build a system prompt with no tools — side questions never call tools.
+    const profile = this._resolveAgentProfile({});
+    const systemPromptBase = await this._buildSystemPrompt([], {}, profile);
+
+    // Project the current timeline to the model boundary (user/assistant/tool
+    // roles only) and merge projected system context.
+    const { systemPromptContent, messages } = this._projectModelMessages(systemPromptBase);
+
+    // Trim any trailing tool_use that has no matching tool_result so the
+    // provider message list ends cleanly for a tool-less one-shot call.
+    let llmMessages = messages;
+    while (
+      llmMessages.length > 0 &&
+      llmMessages[llmMessages.length - 1].role === 'assistant' &&
+      Array.isArray(llmMessages[llmMessages.length - 1].content) &&
+      (llmMessages[llmMessages.length - 1].content as MessageContent[]).some(
+        (block) => block.type === 'tool_use',
+      )
+    ) {
+      llmMessages = llmMessages.slice(0, -1);
+    }
+
+    // Append the side question as a fresh user message with a strict
+    // single-turn, no-tool instruction (mirrors grok's side-question prompt).
+    const sidePrompt = [
+      trimmed,
+      '',
+      'This is a side question. Respond with a concise, direct text answer only.',
+      'Do not call any tools. Do not promise follow-up actions. Answer once, then stop.',
+    ].join('\n');
+    const llmMessagesWithQuestion: Message[] = [
+      ...llmMessages,
+      { role: 'user', content: sidePrompt },
+    ];
+
+    const abortController = new AbortController();
+    let answer = '';
+    try {
+      const stream = this.llmClient.streamChat(llmMessagesWithQuestion, {
+        systemPrompt: systemPromptContent,
+        tools: [],
+        maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        temperature: 0.7,
+        signal: abortController.signal,
+      });
+      for await (const event of stream) {
+        if (event.type === 'text' || event.type === 'text_delta') {
+          answer += event.data;
+        } else if (event.type === 'error') {
+          throw new Error(event.data);
+        }
+      }
+    } finally {
+      abortController.abort();
+    }
+
+    return answer.trim();
+  }
+
+  /**
    * Set the entire message history from persistence. Converts the legacy
    * Message[] to timeline entries via the legacy adapter.
    */
@@ -2844,7 +2986,7 @@ export class duyaAgent {
 
   /**
    * 使用新的 CompactionManager 压缩消息历史
-   * 支持多种压缩策略: micro, session_memory, snip, reactive
+   * 单一 grok 式策略: session_memory
    */
   async compact(options?: CompactOptions): Promise<{
     strategy: string;
@@ -2877,6 +3019,32 @@ export class duyaAgent {
 function goalActive(): boolean {
   const s = goalModeTracker.state();
   return s === 'active' || s === 'verifying';
+}
+
+/**
+ * Build a dedicated compaction client from `compact_model` config. Returns
+ * undefined when disabled or unconfigured so callers fall back to the main
+ * client. Failures degrade to undefined (best-effort).
+ */
+function buildCompactClient(
+  config: import('../types.js').CompactModelConfig | undefined,
+): AIClient | undefined {
+  if (!config?.enabled) return undefined;
+  const provider = inferProvider(config.baseURL || '', config.provider);
+  const apiFormat: ApiFormat = provider === 'anthropic' ? 'anthropic' : 'openai-chat';
+  const modelCapabilities = findModelCompat(apiFormat, config.model);
+  try {
+    return createAIClient({
+      apiKey: config.apiKey,
+      baseURL: config.baseURL || resolveDefaultBaseURL(provider),
+      model: config.model,
+      apiFormat,
+      providerId: config.provider,
+      modelCapabilities,
+    });
+  } catch {
+    return undefined;
+  }
 }
 
 /** Text of the last assistant message in the working message array. */

@@ -255,7 +255,6 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           tokensRetained: 5,
           strategy: 'test',
         })),
-        reactiveCompact: vi.fn(),
         updateContextTokens: vi.fn(),
         shouldCompact: vi.fn(() => true),
       };
@@ -545,12 +544,10 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
 
       // Runtime notifications are contributors, never ledger entries.
       const internal = (agent as unknown as {
-        history: {
-          getTimeline: () => {
-            snapshot: () => Array<{ message?: { metadata?: Record<string, unknown> } }>;
-          };
+        timeline: {
+          snapshot: () => Array<{ message?: { metadata?: Record<string, unknown> } }>;
         };
-      }).history.getTimeline().snapshot();
+      }).timeline.snapshot();
       const hasNotification = internal.some(
         (entry) => entry.message?.metadata?.taskId === 'child-1',
       );
@@ -732,10 +729,10 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
     it('still invokes the provider after a proactive compaction entry is appended', async () => {
       const agent = newAgent();
 
-      // Force the compaction store to report that compaction is needed
-      // for the first turn only. The store is private, so we cast.
+      // Force the compaction controller to report that compaction is needed
+      // for the first turn only. The controller is private, so we cast.
       const controller = agent as unknown as {
-        compactionStore: {
+        compactionController: {
           shouldCompact: () => boolean;
           compactProactive: () => Promise<{
             strategy: string;
@@ -744,14 +741,14 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
           } | null>;
         };
       };
-      const store = controller.compactionStore;
+      const store = controller.compactionController;
       const realShould = store.shouldCompact;
       const realCompact = store.compactProactive;
       let compactCalled = false;
       store.shouldCompact = () => !compactCalled;
       store.compactProactive = async () => {
         compactCalled = true;
-        return { strategy: 'snip', tokensBefore: 1000, tokensAfter: 500 };
+        return { strategy: 'session_memory', tokensBefore: 1000, tokensAfter: 500 };
       };
 
       streamState.current = {
@@ -779,39 +776,33 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
   });
 
   // ---------------------------------------------------------------
-  // 6b. Reactive compaction (context_length_exceeded) also goes
-  // through the append-only controller, not the legacy manager.
+  // 6b. Overflow compaction (context_length_exceeded) still goes
+  // through the append-only controller via compactProactive.
   // ---------------------------------------------------------------
-  describe('reactive compaction continuation', () => {
-    it('routes context_length_exceeded through compactionController.compactReactive and appends an entry', async () => {
+  describe('overflow compaction continuation', () => {
+    it('routes context_length_exceeded through compactionController.compactProactive and retries the turn', async () => {
       const agent = newAgent();
 
-      // Stub the store so we can observe the call without depending
+      // Stub the controller so we can observe the call without depending
       // on the real CompactionManager strategy selection.
       const controller = agent as unknown as {
-        compactionStore: {
-          compactReactive: (trigger?: string) => Promise<{
-            strategy: string;
-            tokensBefore: number;
-            tokensAfter?: number;
-          } | null>;
+        compactionController: {
+          compactProactive: (options?: { strategy?: string }) => Promise<unknown>;
         };
       };
-      const store = controller.compactionStore;
-      const realCompactReactive = store.compactReactive.bind(store);
-      let reactiveTrigger: string | undefined;
-      let reactiveCalls = 0;
-      store.compactReactive = async (trigger?: string) => {
-        reactiveCalls += 1;
-        reactiveTrigger = trigger;
-        return { strategy: 'snip', tokensBefore: 2000, tokensAfter: 800 };
+      const store = controller.compactionController;
+      const realCompactProactive = store.compactProactive.bind(store);
+      let compactCallCount = 0;
+      store.compactProactive = async () => {
+        compactCallCount += 1;
+        return { strategy: 'session_memory', tokensBefore: 2000, tokensAfter: 800 };
       };
 
       streamState.current = {
         responses: [
           // Round 1 has no events — it throws before yielding anything.
           [],
-          // Round 2 (after reactive compaction retried the same turn):
+          // Round 2 (after overflow compaction retried the same turn):
           // provider recovers and finishes.
           [
             { type: 'text', data: 'recovered after compaction' },
@@ -824,11 +815,10 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
         ],
       };
 
-      const events = await drainStream(agent, 'trigger reactive compaction');
+      const events = await drainStream(agent, 'trigger overflow compaction');
 
-      // The reactive path was invoked exactly once with the right trigger.
-      expect(reactiveCalls).toBe(1);
-      expect(reactiveTrigger).toBe('context_length_exceeded');
+      // The compaction path was invoked exactly once.
+      expect(compactCallCount).toBe(1);
 
       // The provider was called again after compaction (retry + completion).
       expect(streamState.callCount).toBe(2);
@@ -837,7 +827,7 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       expect(eventTypes).toContain('done');
 
       // Restore the original method so other tests are unaffected.
-      store.compactReactive = realCompactReactive;
+      store.compactProactive = realCompactProactive;
     });
   });
 });

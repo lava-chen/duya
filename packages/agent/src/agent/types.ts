@@ -192,15 +192,15 @@ export interface LoopRegistryPort {
 }
 
 /**
- * Port: compaction controller. Bridges proactive/reactive context compaction
- * into the loop.
+ * Port: compaction controller. Bridges context compaction into the loop.
  */
 export interface LoopCompactionControllerPort {
   shouldCompact(): boolean;
   compactProactive(options?: { strategy?: string }): Promise<unknown>;
-  compactReactive(
-    triggerError?: 'prompt_too_long' | 'context_length_exceeded' | 'manual_trigger',
-  ): Promise<unknown>;
+  /** Whether a background prefire summary pass should run now. */
+  shouldPrefire(): boolean;
+  /** Fire-and-forget background prefix summary; resolves '' when unavailable. */
+  prefire(): Promise<string>;
 }
 
 /**

@@ -119,6 +119,17 @@ export interface VisionConfig {
   enabled: boolean;
 }
 
+// Dedicated compaction model configuration (grok `compact_model`).
+// When enabled, compaction summaries run on this model instead of the main
+// model; otherwise the main client is used.
+export interface CompactModelConfig {
+  provider: string;
+  model: string;
+  baseURL: string;
+  apiKey: string;
+  enabled: boolean;
+}
+
 // Agent 配置选项
 export interface AgentOptions {
   apiKey: string;
@@ -147,6 +158,9 @@ export interface AgentOptions {
   retryConfig?: import('@duya/ai').RetryConfig;
   /** Vision model configuration for image understanding */
   visionConfig?: VisionConfig;
+  /** Dedicated compaction model configuration. When enabled, compaction uses
+   *  this model instead of the main model. */
+  compactModelConfig?: CompactModelConfig;
   /** Blocked domains for browser tool */
   blockedDomains?: string[];
   /** Browser backend mode: 'auto' | 'extension' | 'built-in' | 'human-like' */
