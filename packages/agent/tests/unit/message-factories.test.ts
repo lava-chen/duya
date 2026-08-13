@@ -3,6 +3,7 @@ import type { MessageContent, TokenUsage } from '../../src/types.js';
 import {
   AGENT_MESSAGE_METADATA_KEYS,
   AgentMessageFactory,
+  ingestMessage,
   type AgentMessageIdGenerator,
 } from '../../src/message/message-factories.js';
 
@@ -317,5 +318,30 @@ describe('AgentMessageFactory', () => {
 
       expect(message.tokensAfter).toBeUndefined();
     });
+  });
+});
+
+describe('runtimeSource round-trip for goal/research sources', () => {
+  it('ingest round-trips a persisted goal_summary message', () => {
+    const persisted = {
+      id: 'g1', role: 'user', timestamp: 1,
+      content: '<system-reminder>goal</system-reminder>',
+      msg_type: 'goal_summary',
+      metadata: { runtimeContext: true, source: 'goal_summary' },
+    } as unknown as import('../../src/message/message-framework.js').RuntimeContextMessage;
+    const ingested = ingestMessage(persisted);
+    expect(ingested.role).toBe('runtime_context');
+    expect((ingested as unknown as { source?: string }).source).toBe('goal_summary');
+  });
+  it('ingest round-trips a persisted research_continuation message', () => {
+    const persisted = {
+      id: 'r1', role: 'user', timestamp: 1,
+      content: 'research state',
+      msg_type: 'research_continuation',
+      metadata: { runtimeContext: true, source: 'research_continuation' },
+    } as unknown as import('../../src/message/message-framework.js').RuntimeContextMessage;
+    const ingested = ingestMessage(persisted);
+    expect(ingested.role).toBe('runtime_context');
+    expect((ingested as unknown as { source?: string }).source).toBe('research_continuation');
   });
 });
