@@ -96,6 +96,7 @@ interface InitMessage {
     provider: 'anthropic' | 'openai' | 'ollama';
     authStyle?: 'api_key' | 'auth_token';
     visionConfig?: VisionConfig;
+    compactModelConfig?: VisionConfig;
     /**
      * Phase 2: optional ProviderRuntimeConfig. When present, the agent
      * prefers the apiFormat and headers from this object over the legacy
@@ -1071,6 +1072,7 @@ async function initAgent(
     communicationPlatform: (communicationPlatform as 'cli' | 'duya-app' | 'weixin' | 'feishu' | 'telegram' | 'web' | 'api') ?? 'duya-app',
     workingDirectory: workDir,
     visionConfig: config.visionConfig,
+    compactModelConfig: config.compactModelConfig,
     blockedDomains,
     browserBackendMode,
     language,
@@ -2991,6 +2993,40 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             const errorMessage = error instanceof Error ? error.message : String(error);
             log('[Agent-Process] Compaction failed:', errorMessage);
             sendToMain({ type: 'compact:error', sessionId, message: errorMessage });
+          }
+          break;
+        }
+
+        case 'side:question': {
+          const sideMsg = msg as unknown as import('./worker-protocol.js').SideQuestionCommand;
+          log('[Agent-Process] Received side:question for session:', sideMsg.sessionId);
+          if (!agent) {
+            sendToMain({
+              type: 'side:answer',
+              sessionId: sideMsg.sessionId,
+              id: sideMsg.id,
+              answer: '',
+              error: 'Agent not initialized',
+            } satisfies import('./worker-protocol.js').SideQuestionResponse);
+            break;
+          }
+          try {
+            const answer = await agent.sideQuestion(sideMsg.question);
+            sendToMain({
+              type: 'side:answer',
+              sessionId: sideMsg.sessionId,
+              id: sideMsg.id,
+              answer,
+            } satisfies import('./worker-protocol.js').SideQuestionResponse);
+          } catch (err) {
+            warn('[Agent-Process] side:question failed:', err);
+            sendToMain({
+              type: 'side:answer',
+              sessionId: sideMsg.sessionId,
+              id: sideMsg.id,
+              answer: '',
+              error: err instanceof Error ? err.message : String(err),
+            } satisfies import('./worker-protocol.js').SideQuestionResponse);
           }
           break;
         }

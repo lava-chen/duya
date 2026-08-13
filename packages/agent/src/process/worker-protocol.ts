@@ -16,6 +16,13 @@ export interface InitCommand {
       apiKey: string;
       enabled: boolean;
     };
+    compactModelConfig?: {
+      provider: string;
+      model: string;
+      baseURL: string;
+      apiKey: string;
+      enabled: boolean;
+    };
   };
   workingDirectory?: string;
   systemPrompt?: string;
@@ -101,6 +108,22 @@ export interface CompactCommand {
   sessionId: string;
 }
 
+export interface SideQuestionCommand {
+  type: 'side:question';
+  sessionId: string;
+  id: string;
+  question: string;
+}
+
+/** Response sent by the worker after a `side:question` one-shot completes. */
+export interface SideQuestionResponse {
+  type: 'side:answer';
+  sessionId: string;
+  id: string;
+  answer: string;
+  error?: string;
+}
+
 export interface ConfigUpdateCommand {
   type: 'config:update';
   sessionId: string;
@@ -144,6 +167,7 @@ export type WorkerCommand =
   | ChatStartCommand
   | ChatInterruptCommand
   | CompactCommand
+  | SideQuestionCommand
   | ConfigUpdateCommand
   | PermissionResolveCommand
   | DbResponseCommand

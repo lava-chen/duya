@@ -13,10 +13,9 @@
  * convention `agentsmd/loader.ts` uses for AGENTS.md injection, plan 408).
  */
 
-/** Wrap inner text in a `<system-reminder>` block (plan 408 convention). */
-export function renderReminder(inner: string): string {
-  return `<system-reminder>\n${inner}\n</system-reminder>`;
-}
+// Shared wrapper lives in `agent/reminders.ts`; re-exported here so existing
+// plan/goal/coordinator importers keep working under one canonical source.
+export { renderSystemReminder as renderReminder } from '../../agent/reminders.js';
 
 /** Full template — injected on activation or on even reminder counts. */
 export function fullReminder(planPath: string): string {

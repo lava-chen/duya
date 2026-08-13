@@ -935,7 +935,7 @@ export function isCatastrophicToolCall(
 
 function isFileTool(toolName: string): boolean {
   const lower = toolName.toLowerCase();
-  return lower === 'write' || lower === 'edit' || lower === 'read';
+  return lower === 'write' || lower === 'edit' || lower === 'read' || lower === 'apply_patch';
 }
 
 function isShellTool(toolName: string): boolean {
@@ -956,7 +956,7 @@ export function isToolWithinWorkspace(
   input: Record<string, unknown>,
   context: ToolPermissionContext,
 ): boolean {
-  const fileSystemTools = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep']
+  const fileSystemTools = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep', 'apply_patch']
   if (!fileSystemTools.includes(toolName)) {
     return false
   }
