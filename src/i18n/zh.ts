@@ -433,6 +433,11 @@ const zh: Record<TranslationKey, string> = {
   'settings.memory.areas': '领域',
   'settings.memory.empty': '暂无任何记忆条目。',
   'settings.memory.updated': '更新于 {date}',
+  'settings.memory.activityTitle': '记忆系统活动日志',
+  'settings.memory.activityDesc': '查看记忆系统 Phase 1（提取）与 Phase 2（整理）的运行记录，包括什么时间做了什么、更新了什么、新增了哪些 rollout、Phase 2 改动了哪些文件。',
+  'settings.memory.viewActivity': '查看活动日志',
+  'settings.memory.hideActivity': '收起活动日志',
+  'settings.memory.noActivity': '暂无活动记录。',
 
   'settings.agents.quickAccessTitle': '快捷访问 Agents',
   'settings.agents.quickAccessDesc': '选择最多 3 个 agent 显示在聊天快捷选择器中',

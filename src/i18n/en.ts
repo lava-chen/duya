@@ -442,6 +442,11 @@ const en = {
   'settings.memory.areas': 'Areas',
   'settings.memory.empty': 'No memory entries yet.',
   'settings.memory.updated': 'Updated {date}',
+  'settings.memory.activityTitle': 'Memory System Activity Log',
+  'settings.memory.activityDesc': 'View the memory system Phase 1 (extraction) and Phase 2 (curation) run records, including what was done when, what was updated, which rollouts were added, and which files Phase 2 changed.',
+  'settings.memory.viewActivity': 'View activity log',
+  'settings.memory.hideActivity': 'Hide activity log',
+  'settings.memory.noActivity': 'No activity records yet.',
 
   'settings.agents.quickAccessTitle': 'Quick Access Agents',
   'settings.agents.quickAccessDesc': 'Choose up to 3 agents to display in the chat quick selector',

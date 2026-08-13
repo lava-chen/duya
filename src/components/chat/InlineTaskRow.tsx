@@ -85,6 +85,10 @@ export function InlineTaskRow({
 
   const completed = tasks.filter((t) => t.status === 'completed').length;
   const activeTask = tasks.find((t) => t.status === 'in_progress');
+  // All tasks done: the row stays visible with an `N/N` progress label, but
+  // the prefix switches from "进行中:" to a completed state (mirrors grok's
+  // done badge rather than leaving a misleading in-progress label).
+  const allDone = tasks.length > 0 && completed === tasks.length;
   const subject =
     activeTask?.activeForm ??
     activeTask?.subject ??
@@ -119,7 +123,9 @@ export function InlineTaskRow({
             }
           >
             <ListChecksIcon size={14} className="inline-task-row-icon" />
-            <span className="inline-task-row-prefix">进行中:</span>
+            <span className="inline-task-row-prefix">
+              {allDone ? '已完成:' : '进行中:'}
+            </span>
             <span className="inline-task-row-subject truncate">
               {subject} {progressText}
             </span>

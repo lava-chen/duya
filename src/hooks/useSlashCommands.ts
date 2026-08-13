@@ -19,6 +19,7 @@ import {
   ArrowsInLineVerticalIcon,
   TelescopeIcon,
   TargetArrowIcon,
+  ChatCircleIcon,
 } from '@/components/icons';
 
 // Commands removed from the popover (handled elsewhere or deleted).
@@ -177,6 +178,15 @@ export function useSlashCommands(opts: {
         description: isZh ? '摘要历史以节省 token' : 'Summarize history to save tokens',
         icon: ArrowsInLineVerticalIcon,
         kind: 'settings_action' as const,
+        group: 'settings' as const,
+      },
+      {
+        label: isZh ? '中途聊天' : 'Side chat',
+        value: '__btw',
+        description: isZh ? '旁侧问答，不打断当前对话' : 'Side Q&A without interrupting the conversation',
+        icon: ChatCircleIcon,
+        kind: 'settings_submenu' as const,
+        submenu: 'btw' as const,
         group: 'settings' as const,
       },
     ];

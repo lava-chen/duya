@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button';
 import type { ModeModifierId } from '@/types/mode-id';
 import { isModeExcludedByActive } from '@/types/mode-id';
 import { getEffortOptionsForModel } from '@duya/ai';
+import { BtwChatPanel } from './BtwChatPanel';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -136,6 +137,9 @@ interface SlashCommandPopoverProps {
   // Session action sub-views
   onRequestRecap: () => Promise<RecapRequestResult>;
 
+  // Side chat (中途聊天 / btw) sub-view — session context for the panel.
+  sessionId?: string;
+
   // Mode state — unified activeModes set (plan 224 Phase 5).
   // Toggling a mode applies mutual-exclusion rules (see `toggleModeInSet`).
   // The popover reads `activeModes` to render active/disabled states and
@@ -182,6 +186,8 @@ export function SlashCommandPopover({
   isCompacting,
 
   onRequestRecap,
+
+  sessionId,
 
   activeModes,
   onToggleMode,
@@ -559,6 +565,7 @@ export function SlashCommandPopover({
       style: 'Output style',
       mcp: 'MCP',
       recap: '回顾对话',
+      btw: '中途聊天',
     }[subView];
 
     return (
@@ -777,6 +784,12 @@ export function SlashCommandPopover({
                 {recapState.status === 'ready' ? '重新生成回顾' : '生成回顾'}
               </Button>
             )}
+          </section>
+        )}
+
+        {subView === 'btw' && (
+          <section className="px-2.5 pb-2 pt-1">
+            <BtwChatPanel sessionId={sessionId} />
           </section>
         )}
       </div>

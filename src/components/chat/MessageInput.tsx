@@ -1638,6 +1638,7 @@ export function MessageInput({
           onCompact={onCompact}
           isCompacting={isCompacting}
           onRequestRecap={requestRecap}
+          sessionId={sessionId}
           // Mode state (unified activeModes set, plan 224 Phase 5)
           activeModes={activeModes}
           onToggleMode={handleToggleMode}
