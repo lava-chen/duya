@@ -426,6 +426,20 @@ export class SubagentTool extends BaseTool {
           abortController: new AbortController(),
         })
 
+        // Bridge the per-task abort controller into the sub-agent's execution.
+        // The lifecycle record's controller is otherwise orphaned: runAgent only
+        // listens to toolUseContext.abortController, so a kill_task that merely
+        // flipped the record would leave the sub-agent running to completion
+        // (wasted tokens, possible stray file edits) and then crash the drain
+        // path on an illegal 'killed' -> terminal transition. Linking both the
+        // task controller and the parent signal keeps parent-abort cancellation
+        // and adds kill_task cancellation through a single channel.
+        const taskAbort = new AbortController()
+        const onTaskAbort = () => { try { taskAbort.abort() } catch { /* ignore */ } }
+        record.abortController.signal.addEventListener('abort', onTaskAbort, { once: true })
+        context.abortController.signal.addEventListener('abort', onTaskAbort, { once: true })
+        const runContext: ToolUseContext = { ...context, abortController: taskAbort }
+
         logger.info('[SubAgent] background task registered', {
           taskId,
           parentSessionId,
@@ -486,7 +500,7 @@ export class SubagentTool extends BaseTool {
         const agentGenerator = runAgent({
           agentDefinition,
           promptMessages,
-          toolUseContext: context,
+          toolUseContext: runContext,
           isAsync: true,
           model: agentInput.model,
           maxTurns: agentInput.maxTurns,
@@ -526,6 +540,8 @@ export class SubagentTool extends BaseTool {
             // The terminal notification is already durable in the queue. The
             // in-memory lifecycle record is no longer needed after DB status
             // persistence and would otherwise accumulate for the process life.
+            // Drop the parent-signal link now that the run is over.
+            try { context.abortController.signal.removeEventListener('abort', onTaskAbort) } catch { /* ignore */ }
             backgroundAgentLifecycle.markDrained([taskId])
             removeBackgroundSpawn(taskId)
           }

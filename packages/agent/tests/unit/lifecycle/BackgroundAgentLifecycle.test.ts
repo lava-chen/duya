@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { BackgroundAgentLifecycle } from '../../../src/lifecycle/BackgroundAgentLifecycle.js'
 import type { TaskRecord } from '../../../src/lifecycle/TaskState.js'
 import type { AgentProgressEvent } from '../../../src/tool/AgentTool/runAgent.js'
 import type { Message } from '../../../src/types.js'
+
+// The mailbox notification path calls process.send() to reach the Main
+// Process. In the vitest worker pool process.send is the tinypool channel,
+// so the write crashes the worker with an unhandled rejection. Neutralize it:
+// unit tests here only assert lifecycle state, not IPC delivery.
+vi.mock('../../../src/lifecycle/mailboxBackgroundNotification.js', () => ({
+  sendBackgroundNotification: vi.fn(async () => {}),
+}))
 
 function makeInput(overrides: Partial<Parameters<BackgroundAgentLifecycle['register']>[0]> = {}) {
   return {
@@ -196,5 +204,70 @@ describe('BackgroundAgentLifecycle.run', () => {
     const r = lc.getSnapshot('t-1')!
     expect(r.status).toBe('failed')
     expect(r.error).toBe('LLM API down')
+  })
+
+  it('kill mid-run: kill aborts the sub-agent and a drained generator must not throw or lose the killed state', async () => {
+    const lc = new BackgroundAgentLifecycle()
+    const ac = new AbortController()
+    lc.register(makeInput({ abortController: ac }))
+    lc.getSnapshot('t-1')!.status = 'running'
+    // Simulate KillTaskTool: lifecycle.kill while the generator is still live.
+    lc.kill('t-1', 'user_kill')
+    // The kill must abort the underlying sub-agent, not just flip the record.
+    expect(ac.signal.aborted).toBe(true)
+    // The generator drains to a natural end (the sub-agent could not be stopped
+    // in time). run() must tolerate the already-killed state instead of throwing
+    // on the illegal 'killed' -> completed transition.
+    async function* gen() {
+      yield { type: 'text', data: 'hi' } as AgentProgressEvent
+      yield { role: 'assistant', content: [{ type: 'text', text: 'final' }] } as unknown as Message
+    }
+    await expect(lc.run('t-1', gen())).resolves.toBeUndefined()
+    const snap = lc.getSnapshot('t-1')!
+    expect(snap.status).toBe('killed')
+    expect(snap.error).toBe('killed: user_kill')
+  })
+
+  it('kill on a pending task (before run starts) does not throw and aborts the controller', () => {
+    const lc = new BackgroundAgentLifecycle()
+    const ac = new AbortController()
+    lc.register(makeInput({ abortController: ac }))
+    // KillTaskTool can fire while the record is still 'pending' (register and
+    // run are split across a fire-and-forget boundary). 'pending' -> 'killed'
+    // is not a legal transition, so kill() must force the state instead of
+    // throwing an illegal-transition error out of the tool call.
+    expect(() => lc.kill('t-1', 'user_kill')).not.toThrow()
+    const snap = lc.getSnapshot('t-1')!
+    expect(snap.status).toBe('killed')
+    expect(snap.error).toBe('killed: user_kill')
+    expect(ac.signal.aborted).toBe(true)
+  })
+
+  it('kill on an already-terminal task is idempotent (TOCTOU window in KillTaskTool.execute)', () => {
+    const lc = new BackgroundAgentLifecycle()
+    lc.register(makeInput())
+    lc.getSnapshot('t-1')!.status = 'running'
+    lc.complete('t-1', { content: [{ type: 'text', text: 'ok' }], totalDurationMs: 1, totalToolUseCount: 0 })
+    // The race: KillTaskTool checked isTerminalStatus on a snapshot (still
+    // 'running') then the run() loop completed before kill() executed. A
+    // second kill must not throw an illegal 'completed' -> 'killed' transition.
+    expect(() => lc.kill('t-1', 'user_kill')).not.toThrow()
+    expect(lc.getSnapshot('t-1')!.status).toBe('completed')
+    expect(lc.getSnapshot('t-1')!.error).toBeUndefined()
+  })
+
+  it('run() tolerates a task killed while pending: no throw, notification emitted, state stays killed', async () => {
+    const lc = new BackgroundAgentLifecycle()
+    const ac = new AbortController()
+    lc.register(makeInput({ abortController: ac }))
+    lc.kill('t-1', 'user_kill')
+    async function* gen() {
+      yield { type: 'text', data: 'hi' } as AgentProgressEvent
+      yield { role: 'assistant', content: [{ type: 'text', text: 'final' }] } as unknown as Message
+    }
+    // run() skips the pending -> running transition (record already 'killed')
+    // and must not throw on the drained generator.
+    await expect(lc.run('t-1', gen())).resolves.toBeUndefined()
+    expect(lc.getSnapshot('t-1')!.status).toBe('killed')
   })
 })

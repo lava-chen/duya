@@ -100,7 +100,37 @@ export class BackgroundAgentLifecycle {
   }
 
   kill(taskId: string, reason: 'user_kill' | 'parent_abort' | 'app_exit'): void {
-    this.transition(taskId, 'killed', (r) => { r.error = `killed: ${reason}` })
+    const r = this.tasks.get(taskId)
+    if (!r) throw new Error(`unknown taskId ${taskId}`)
+    // Idempotent: killing an already-terminal task is a no-op (the record was
+    // already marked drained/completed). Race window in KillTaskTool.execute():
+    // the isTerminalStatus check is done on a snapshot before calling kill(),
+    // so the record may transition here. Refuse to re-kill instead of throwing
+    // an illegal-transition error that would surface as an unhandled rejection.
+    if (r.status === 'killed') return
+    if (r.status === 'completed' || r.status === 'failed') {
+      logger.debug('[SubAgent] lifecycle kill ignored, task already terminal', {
+        taskId,
+        status: r.status,
+        reason,
+      }, 'SubAgent')
+      return
+    }
+    // 'pending' -> 'killed' is not a legal transition (run() owns pending ->
+    // running), so force the record and set the error/terminal bookkeeping the
+    // transition would have applied. run() tolerates an already-killed record.
+    if (r.status === 'pending') {
+      r.status = 'killed'
+      r.completedAt = Date.now()
+      r.error = `killed: ${reason}`
+    } else {
+      this.transition(taskId, 'killed', (rr) => { rr.error = `killed: ${reason}` })
+    }
+    // Abort the underlying sub-agent so the kill actually stops the running
+    // work (LLM request + tool loop) instead of only flipping the record.
+    // Mirrors killAll(); runAgent's abort channel is wired to this controller
+    // by SubagentTool for background runs.
+    try { r.abortController.abort() } catch { /* ignore */ }
   }
 
   getCompleted(): TaskRecord[] {
@@ -190,6 +220,15 @@ export class BackgroundAgentLifecycle {
           lastMessage = ev as Message
         }
       }
+      // A kill (user_kill / parent_abort) may have transitioned the record to
+      // 'killed' while the generator was still draining (e.g. KillTaskTool
+      // fired while the sub-agent was mid-LLM-call). Transitioning again would
+      // be illegal and throw, dropping the terminal notification. Emit the
+      // kill notification instead so the parent still learns the task ended.
+      if (r.status === 'killed') {
+        await this.enqueueTaskNotification(taskId, 'killed', { error: r.error })
+        return
+      }
       const result = extractResultFromLastMessage(lastMessage)
       const taskError = progressError ?? extractAgentError(lastMessage)
       if (taskError) {
@@ -206,11 +245,17 @@ export class BackgroundAgentLifecycle {
     } catch (err) {
       if ((err as Error).name === 'AbortError') {
         logger.warn('[SubAgent] lifecycle aborted', { taskId, err }, 'SubAgent')
-        this.kill(taskId, 'parent_abort')
-        await this.enqueueTaskNotification(taskId, 'killed', { error: 'parent_abort' })
+        if (r.status !== 'killed') {
+          this.kill(taskId, 'parent_abort')
+        }
+        await this.enqueueTaskNotification(taskId, 'killed', { error: r.error ?? 'parent_abort' })
       } else {
         const message = (err as Error).message ?? 'Unknown error'
         logger.error('[SubAgent] lifecycle failed', err as Error, { taskId }, 'SubAgent')
+        if (r.status === 'killed') {
+          await this.enqueueTaskNotification(taskId, 'killed', { error: r.error })
+          return
+        }
         this.fail(taskId, message)
         if (terminalProgress !== 'error') {
           onProgress?.({ type: 'error', data: message, agentId: taskId })
