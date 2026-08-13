@@ -18,7 +18,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ModeCoordinator } from '../coordinator.js';
 import { ModeTrackerEngine } from '../engine.js';
 import { PlanModeTracker } from '../../plan/plan-tracker.js';
+import { ResearchTracker } from '../../research-mode/research-tracker.js';
 import { resolvePlanFilePath } from '../../plan/plan-file-path.js';
+import type { ModeTracker } from '../tracker.js';
 
 const mocks = vi.hoisted(() => ({
   modeStateDb: {
@@ -27,7 +29,7 @@ const mocks = vi.hoisted(() => ({
     setStatus: vi.fn(),
     listBySession: vi.fn(),
   },
-  logger: { warn: vi.fn() },
+  logger: { warn: vi.fn(), info: vi.fn() },
 }));
 
 vi.mock('../../../ipc/db-client.js', () => ({ modeStateDb: mocks.modeStateDb }));
@@ -45,6 +47,11 @@ function activate(tracker: PlanModeTracker): void {
   tracker.transition('activate');
 }
 
+/** Upcast a concrete ResearchTracker to the engine's existential tracker shape. */
+function upcast(tracker: ResearchTracker): ModeTracker<string, string, unknown> {
+  return tracker as unknown as ModeTracker<string, string, unknown>;
+}
+
 describe('ModeCoordinator', () => {
   beforeEach(() => {
     mocks.modeStateDb.upsert.mockReset();
@@ -58,6 +65,49 @@ describe('ModeCoordinator', () => {
   });
 
   describe('injectTurnReminders', () => {
+    it('injects the research continuation while a research run is active', () => {
+      const research = new ResearchTracker();
+      research.transition({ type: 'start', query: 'Compare RAG frameworks' });
+      research.transition({ type: 'search' });
+      const coordinator = makeCoordinator(upcast(research));
+      const messages: unknown[] = [];
+
+      coordinator.injectTurnReminders(messages, 7);
+
+      expect(messages).toHaveLength(1);
+      const msg = messages[0] as { role: string; content: string; seq_index: number };
+      expect(msg.role).toBe('user');
+      expect(msg.content).toContain('<system-reminder>');
+      expect(msg.content).toContain('<research-state>');
+      expect(msg.content).toContain('Query: Compare RAG frameworks');
+      expect(msg.seq_index).toBe(7);
+    });
+
+    it('injects research continuation marked as runtime_context source=research_continuation', () => {
+      const research = new ResearchTracker();
+      research.transition({ type: 'start', query: 'Compare RAG frameworks' });
+      research.transition({ type: 'search' });
+      const coordinator = makeCoordinator(upcast(research));
+      const messages: unknown[] = [];
+
+      coordinator.injectTurnReminders(messages, 7);
+
+      expect(messages).toHaveLength(1);
+      const msg = messages[0] as Record<string, unknown>;
+      expect(msg.role).toBe('user');
+      expect((msg.metadata as Record<string, unknown>).runtimeContext).toBe(true);
+      expect((msg.metadata as Record<string, unknown>).source).toBe('research_continuation');
+      expect(msg.seq_index).toBe(7);
+    });
+
+    it('does not inject a research reminder on an idle research tracker', () => {
+      const research = new ResearchTracker();
+      const coordinator = makeCoordinator(upcast(research));
+      const messages: unknown[] = [];
+      coordinator.injectTurnReminders(messages, 1);
+      expect(messages).toHaveLength(0);
+    });
+
     it('activates a pending tracker and injects the full reminder', async () => {
       const tracker = new PlanModeTracker();
       tracker.transition('enter'); // inactive → pending
@@ -162,6 +212,22 @@ describe('ModeCoordinator', () => {
       await coordinator.onRoundEnd();
       expect(mocks.modeStateDb.upsert).not.toHaveBeenCalled();
     });
+
+    it('persists an active research run on round end', async () => {
+      const research = new ResearchTracker();
+      research.transition({ type: 'start', query: 'X' });
+      research.transition({ type: 'search' });
+      const coordinator = makeCoordinator(upcast(research));
+      await coordinator.onRoundEnd();
+      await vi.waitFor(() => expect(mocks.modeStateDb.upsert).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not persist an idle research run on round end', async () => {
+      const research = new ResearchTracker();
+      const coordinator = makeCoordinator(upcast(research));
+      await coordinator.onRoundEnd();
+      expect(mocks.modeStateDb.upsert).not.toHaveBeenCalled();
+    });
   });
 
   describe('refreshTurn', () => {
@@ -206,6 +272,39 @@ describe('ModeCoordinator', () => {
       const idle = new PlanModeTracker();
       const tools2 = [{ name: 'read' }, { name: 'write' }];
       expect(makeCoordinator(idle).filterTools(tools2)).toEqual(tools2);
+    });
+
+    it('gates research web tools by state: readonly blocks web, gathering releases them', () => {
+      const tools = [
+        { name: 'read' },
+        { name: 'web_search' },
+        { name: 'web_fetch' },
+        { name: 'browser' },
+        { name: 'glob' },
+      ];
+
+      // clarifying → readonly gate: web tools blocked, read/glob pass.
+      const clarifying = new ResearchTracker();
+      clarifying.transition({ type: 'start', query: 'X' });
+      expect(makeCoordinator(upcast(clarifying)).filterTools(tools)).toEqual([
+        { name: 'read' },
+        { name: 'glob' },
+      ]);
+
+      // gathering → web tools released.
+      const gathering = new ResearchTracker();
+      gathering.transition({ type: 'start', query: 'X' });
+      gathering.transition({ type: 'search' });
+      expect(makeCoordinator(upcast(gathering)).filterTools(tools)).toEqual(tools);
+
+      // awaiting_input → waiting gate: web + write frozen, read/glob pass.
+      const waiting = new ResearchTracker();
+      waiting.transition({ type: 'start', query: 'X' });
+      waiting.transition({ type: 'ask_user' });
+      expect(makeCoordinator(upcast(waiting)).filterTools(tools)).toEqual([
+        { name: 'read' },
+        { name: 'glob' },
+      ]);
     });
   });
 
