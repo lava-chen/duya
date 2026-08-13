@@ -235,6 +235,37 @@ describe('selectEligible', () => {
     expect(eligibleIds(db)).toContain('never-retry-now');
   });
 
+  it("10d. re-extract (source advanced) + failed lease in future backoff → excluded so it does not starve fresh rollouts", () => {
+    // A previously-succeeded rollout whose source advanced (so it is due
+    // for re-extraction) but whose last attempt failed and is still backing
+    // off. It must be excluded while backing off, otherwise it is selected
+    // every tick, acquireLease returns busy, and it is skipped as a noop —
+    // permanently occupying a concurrency slot and starving the fresh
+    // rollout below.
+    insertCatalogRow(db, {
+      rollout_id: 'rextract-backoff',
+      last_message_at: BASE_LAST_MESSAGE_AT - HOUR, // older → would sort first
+      source_fingerprint: 'fp-new',
+    });
+    insertStage1Output(db, {
+      rollout_id: 'rextract-backoff',
+      content_outcome: 'success',
+      source_updated_at: BASE_LAST_MESSAGE_AT - 2 * HOUR,
+      source_content_hash: 'fp-old',
+    });
+    insertFailedLease(db, 'rextract-backoff', T0 + HOUR);
+
+    insertCatalogRow(db, {
+      rollout_id: 'fresh-never2',
+      last_message_at: BASE_LAST_MESSAGE_AT,
+      source_fingerprint: 'fp-fresh2',
+    });
+
+    const ids = eligibleIds(db);
+    expect(ids).not.toContain('rextract-backoff');
+    expect(ids).toContain('fresh-never2');
+  });
+
   it('11. retired rollout is hard-excluded', () => {
     insertCatalogRow(db, { rollout_id: 'retired', last_message_at: BASE_LAST_MESSAGE_AT });
     db.prepare(

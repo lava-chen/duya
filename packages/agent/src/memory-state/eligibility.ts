@@ -44,22 +44,11 @@ WHERE r.agent_type = 'main'
   AND r.last_message_at < :now - :idleMs
   AND r.last_message_at > :now - :windowMs
   AND (
-    -- Case 1: never successfully extracted, as long as a previous failed
-    -- attempt is not still in its retry backoff. Without this guard, a
-    -- small number of permanently-failing old rollouts would sit at the
-    -- front of the idle-time ordering and starve newer sessions.
-    (
-      NOT EXISTS (
-        SELECT 1 FROM stage1_outputs s
-        WHERE s.rollout_id = r.rollout_id
-          AND s.job_status IN ('succeeded','succeeded_no_output'))
-      AND NOT EXISTS (
-        SELECT 1 FROM rollout_leases l
-        WHERE l.rollout_id = r.rollout_id
-          AND l.job_status = 'failed'
-          AND l.next_retry_at IS NOT NULL
-          AND l.next_retry_at > :now)
-    )
+    -- Case 1: never successfully extracted.
+    NOT EXISTS (
+      SELECT 1 FROM stage1_outputs s
+      WHERE s.rollout_id = r.rollout_id
+        AND s.job_status IN ('succeeded','succeeded_no_output'))
     OR EXISTS (
       SELECT 1 FROM stage1_outputs s
       WHERE s.rollout_id = r.rollout_id
@@ -72,6 +61,18 @@ WHERE r.agent_type = 'main'
         AND l.job_status = 'failed'
         AND (l.next_retry_at IS NULL OR l.next_retry_at <= :now))
   )
+  -- Backoff guard (applies to every case above): while a rollout has a
+  -- failed lease still in its retry backoff, it must NOT be selected. The
+  -- re-extract branch (Case 2) has no inline guard, so without this global
+  -- clause a permanently-failing re-extract would be picked every tick,
+  -- acquireLease would return busy, and it would be skipped as a noop —
+  -- occupying a concurrency slot forever and starving every other rollout.
+  AND NOT EXISTS (
+    SELECT 1 FROM rollout_leases l
+    WHERE l.rollout_id = r.rollout_id
+      AND l.job_status = 'failed'
+      AND l.next_retry_at IS NOT NULL
+      AND l.next_retry_at > :now)
   AND NOT EXISTS (SELECT 1 FROM rollout_retired t WHERE t.rollout_id = r.rollout_id)
 ORDER BY (:now - r.last_message_at) DESC
 LIMIT :limit

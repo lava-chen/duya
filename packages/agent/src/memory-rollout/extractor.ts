@@ -35,6 +35,7 @@ import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import { messageDb } from '../ipc/db-client.js';
 import { parseCanonicalFile } from '../memory-state/memory_entries_rebuild.js';
+import { writeSystemLog } from '../memory-state/system_log.js';
 import {
   TASK_OUTCOMES,
   CONFIDENCE_LEVELS,
@@ -583,6 +584,70 @@ export class Stage1Extractor {
   }
 
   async extract(input: ExtractInput): Promise<ExtractResult> {
+    const result = await this.extractInner(input);
+    this.logExtractResult(input.rolloutId, result);
+    return result;
+  }
+
+  /**
+   * Log a stage-1 extraction outcome to the memory system log. Best-effort
+   * (a logging failure must not affect extraction). The `rollout_slug` is
+   * resolved from the catalog when available so the UI can name the rollout.
+   */
+  private logExtractResult(rolloutId: string, result: ExtractResult): void {
+    try {
+      const slugRow = this.memoryDb
+        .prepare('SELECT rollout_slug FROM rollout_catalog WHERE rollout_id = ?')
+        .get(rolloutId) as { rollout_slug: string | null } | undefined;
+      const slug = slugRow?.rollout_slug ?? null;
+      const detail = { rollout_slug: slug, content_outcome: result.contentOutcome, duration_ms: result.durationMs };
+      switch (result.status) {
+        case 'committed':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_committed',
+            message: `Extracted rollout ${rolloutId} (${slug ?? 'no-slug'})`,
+            detail,
+            rolloutId,
+          });
+          break;
+        case 'succeeded_no_output':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_no_output',
+            message: `Rollout ${rolloutId} extracted with no memory output`,
+            detail,
+            rolloutId,
+          });
+          break;
+        case 'noop_skipped':
+        case 'stale_source':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_skipped',
+            level: 'warn',
+            message: `Rollout ${rolloutId} skipped (${result.status})`,
+            detail: { ...detail, error: result.errorMessage ?? null },
+            rolloutId,
+          });
+          break;
+        case 'failed':
+          writeSystemLog({
+            phase: 'phase1',
+            eventType: 'extract_failed',
+            level: 'error',
+            message: `Rollout ${rolloutId} extraction failed (${result.errorMessage ?? 'unknown'})`,
+            detail: { ...detail, error: result.errorMessage ?? null },
+            rolloutId,
+          });
+          break;
+      }
+    } catch {
+      // Best-effort logging.
+    }
+  }
+
+  private async extractInner(input: ExtractInput): Promise<ExtractResult> {
     const startTime = Date.now();
     const ttlMs = input.leaseTtlMs ?? DEFAULT_LEASE_TTL_MS;
     const { rolloutId, claimedBy } = input;

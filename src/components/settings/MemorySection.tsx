@@ -15,7 +15,7 @@ import {
   SettingsRow,
   SettingsToggle,
 } from "@/components/settings/ui";
-import { listMemoryIPC } from "@/lib/ipc-client";
+import { listMemoryIPC, listMemorySystemLogIPC, type MemorySystemLogEntry } from "@/lib/ipc-client";
 import type { MemoryEntry } from "@/types";
 
 interface GroupedEntries {
@@ -158,6 +158,8 @@ export function MemorySection() {
           />
         </>
       )}
+
+      <ActivityLog />
     </div>
   );
 }
@@ -206,6 +208,165 @@ function MemoryGroup({
             </button>
           );
         })}
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
+
+type LogPhaseFilter = "all" | "phase1" | "phase2";
+
+const PHASE_FILTERS: { value: LogPhaseFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "phase1", label: "Phase 1" },
+  { value: "phase2", label: "Phase 2" },
+];
+
+const EVENT_LABELS: Record<string, string> = {
+  extract_committed: "Extract committed",
+  extract_no_output: "Extract no output",
+  extract_skipped: "Extract skipped",
+  extract_failed: "Extract failed",
+  catalog_sync: "Catalog sync",
+  curation_run_started: "Curation started",
+  curation_run_succeeded: "Curation succeeded",
+  curation_run_failed: "Curation failed",
+  curation_run_abandoned: "Curation abandoned",
+  curation_file_changed: "File changed",
+  curation_policy_updated: "Policy updated",
+};
+
+function formatLogTime(ts: number, locale: string): string {
+  const date = new Date(ts);
+  try {
+    return date.toLocaleString(locale === "zh" ? "zh-CN" : "en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  } catch {
+    return date.toLocaleString();
+  }
+}
+
+function ActivityLog() {
+  const { t, locale } = useTranslation();
+  const [entries, setEntries] = useState<MemorySystemLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [phase, setPhase] = useState<LogPhaseFilter>("all");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const result = await listMemorySystemLogIPC({
+        limit: 150,
+        phase: phase === "all" ? undefined : phase,
+      });
+      setEntries(result.entries);
+    } catch (err) {
+      console.error("Failed to load memory system log:", err);
+      setEntries([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (open) load();
+  }, [open, phase]);
+
+  return (
+    <SettingsSection
+      title={t("settings.memory.activityTitle")}
+      description={t("settings.memory.activityDesc")}
+    >
+      <SettingsCard>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          {PHASE_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setPhase(f.value)}
+              className={`px-3 py-1.5 text-xs rounded-full transition-colors ${
+                phase === f.value
+                  ? "bg-accent text-accent-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/70"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setOpen((v) => !v);
+              if (!open) load();
+            }}
+          >
+            {open ? t("settings.memory.hideActivity") : t("settings.memory.viewActivity")}
+          </Button>
+        </div>
+
+        {open && (
+          <div className="mt-4">
+            {loading ? (
+              <div className="flex items-center justify-center gap-2 py-8">
+                <SpinnerGapIcon size={16} className="animate-spin" />
+                <span className="text-sm text-muted-foreground">{t("common.loading")}</span>
+              </div>
+            ) : entries.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                {t("settings.memory.noActivity")}
+              </div>
+            ) : (
+              <ul className="divide-y divide-border rounded-md border border-border overflow-hidden">
+                {entries.map((entry, i) => (
+                  <li
+                    key={`${entry.ts}-${i}`}
+                    className="flex items-start gap-3 px-3 py-2.5 text-sm"
+                  >
+                    <span
+                      className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                        entry.level === "error"
+                          ? "bg-destructive"
+                          : entry.level === "warn"
+                          ? "bg-warning"
+                          : entry.phase === "phase2"
+                          ? "bg-accent"
+                          : "bg-primary/50"
+                      }`}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">
+                          {formatLogTime(entry.ts, locale)}
+                        </span>
+                        <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                          {entry.phase}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {EVENT_LABELS[entry.event_type] ?? entry.event_type}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-foreground break-words">{entry.message}</div>
+                      {entry.event_type === "curation_file_changed" && entry.detail && (
+                        <div className="mt-1 text-xs text-muted-foreground font-mono break-all">
+                          {String(entry.detail.area_path ?? "")}
+                          {entry.detail.content_preview
+                            ? ` — ${String(entry.detail.content_preview)}`
+                            : ""}
+                        </div>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </SettingsCard>
     </SettingsSection>
   );
