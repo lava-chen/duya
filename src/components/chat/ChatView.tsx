@@ -9,7 +9,6 @@ import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
-import { ResearchStatusCard } from './ResearchStatusCard';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
@@ -30,10 +29,9 @@ import type { FileAttachment } from '@/types/message';
 import { MailboxPanel } from './MailboxPanel';
 import { compactContext } from '@/lib/agent-sse-client';
 import { projectMessageTranscript } from '@/lib/project-message-transcript';
-import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
-import type { AgentMode } from './AgentModeSelector';
+import { getProfileIdForMode } from './AgentModeSelector';
+import { AgentProfileBadge } from './AgentProfileBadge';
 import { ContextUsageRing } from './ContextUsageRing';
-import { setSessionAgentProfile } from '@/lib/agent-profile-ipc';
 import { ArrowLeftIcon } from '@/components/icons';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
@@ -140,7 +138,6 @@ export function ChatView({
   const [capabilityContextWindow, setCapabilityContextWindow] = useState<number | undefined>(undefined);
   const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null);
   const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
-  const [agentMode, setAgentMode] = useState<AgentMode>('main');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
 
@@ -563,20 +560,9 @@ export function ChatView({
               setPermissionMode('ask');
             }
 
-            // Load agent profile binding and sync to mode
-            const agentProfileIdFromDb = data.thread.agentProfileId;
-            if (agentProfileIdFromDb) {
-              setAgentProfileId(agentProfileIdFromDb);
-              // Sync mode to match loaded profile
-              const mode = getModeForProfileId(agentProfileIdFromDb);
-              if (mode) {
-                setAgentMode(mode);
-              }
-            } else {
-              // Reset to main when session has no profile set
-              setAgentMode('main');
-              setAgentProfileId(getProfileIdForMode('main'));
-            }
+            // Load agent profile binding. The profile is fixed at session
+            // creation (no in-session agent switching), so only sync the id.
+            setAgentProfileId(data.thread.agentProfileId ?? getProfileIdForMode('main'));
 
             // Restore conductor mode state from the session row. When the
             // session has a bound canvas, reopen the sidebar conductor panel
@@ -1268,22 +1254,7 @@ export function ChatView({
 
                   {/* Bottom toolbar - outside input box */}
                   <div className="flex items-center justify-between mt-2 px-1">
-                    <AgentModeSelector
-                      value={agentMode}
-                      onChange={async (mode) => {
-                        setAgentMode(mode);
-                        const profileId = getProfileIdForMode(mode);
-                        setAgentProfileId(profileId);
-                        if (sessionId) {
-                          try {
-                            await setSessionAgentProfile(sessionId, profileId);
-                          } catch (error) {
-                            console.error('[ChatView] Failed to set agent profile:', error);
-                          }
-                        }
-                      }}
-                      disabled={isStreaming}
-                    />
+                    <AgentProfileBadge profileId={agentProfileId} />
                   </div>
                 </div>
                 </WorkspaceComposerLayer>
@@ -1315,8 +1286,6 @@ export function ChatView({
           <div className="max-w-[800px] mx-auto chat-composer-inner">
             {/* Plan 420: live goal status chip */}
             <GoalStatusChip sessionId={sessionId} />
-            {/* Plan 423 Phase 3: live deep-research status card */}
-            <ResearchStatusCard sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
@@ -1395,24 +1364,8 @@ export function ChatView({
 
             {/* Bottom toolbar - outside input box */}
             <div className="flex items-center justify-between mt-2 px-1">
-              {/* Left: Agent Mode Selector */}
-              <AgentModeSelector
-                value={agentMode}
-                onChange={async (mode) => {
-                  setAgentMode(mode);
-                  const profileId = getProfileIdForMode(mode);
-                  setAgentProfileId(profileId);
-                  // Persist to session
-                  if (sessionId) {
-                    try {
-                      await setSessionAgentProfile(sessionId, profileId);
-                    } catch (error) {
-                      console.error('[ChatView] Failed to set agent profile:', error);
-                    }
-                  }
-                }}
-                disabled={isStreaming}
-              />
+              {/* Left: session-bound Agent Profile Badge (no in-session switching) */}
+              <AgentProfileBadge profileId={agentProfileId} />
 
               {/* Right: Context Usage Ring */}
               {messages.length > 0 && (

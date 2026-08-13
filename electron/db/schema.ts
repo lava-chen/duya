@@ -63,6 +63,7 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       subagent_max_concurrent INTEGER DEFAULT 3,
       is_preset INTEGER DEFAULT 0,
       is_enabled INTEGER DEFAULT 1,
+      profile_kind TEXT DEFAULT 'main',
       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
       updated_at INTEGER NOT NULL DEFAULT (unixepoch())
     )
@@ -2421,6 +2422,25 @@ const migrations: Migration[] = [
         DROP TABLE IF EXISTS automation_cron_runs;
         DROP TABLE IF EXISTS automation_cron_state;
       `);
+    },
+  },
+  {
+    id: 51,
+    name: 'add_profile_kind_to_agent_profiles',
+    migrate(db: BetterSqlite3Db): void {
+      // Structural grouping for agent profiles: 'main' (user-facing main
+      // agents) vs 'subagent' (read-only sub-agent profiles) vs 'special'
+      // (infrastructure agents). Main agents are what user-facing pickers
+      // show; the legacy `user_visible` boolean stays for compatibility.
+      try {
+        db.exec(`ALTER TABLE agent_profiles ADD COLUMN profile_kind TEXT DEFAULT 'main'`);
+      } catch {
+        // Column already exists.
+      }
+      db.prepare(`UPDATE agent_profiles SET profile_kind = 'main' WHERE id IN ('general-purpose', 'code-expert', 'research') AND is_preset = 1`).run();
+      db.prepare(`UPDATE agent_profiles SET profile_kind = 'subagent' WHERE id IN ('explore', 'plan') AND is_preset = 1`).run();
+      // gateway / cron / conductor-refine / memory-curator live only in the
+      // agent-process in-memory presets, not in this table.
     },
   },
 ];

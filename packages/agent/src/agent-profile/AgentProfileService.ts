@@ -34,6 +34,7 @@ function rowToAgentProfile(row: AgentProfileDbRow): AgentProfile {
     disallowedTools: parseJson<string[] | undefined>(row.disallowed_tools, undefined),
     defaultModel: row.default_model ?? undefined,
     promptSystem: (row.prompt_system as AgentProfile['promptSystem']) ?? undefined,
+    kind: (row.profile_kind as AgentProfile['kind']) ?? 'main',
     userVisible: row.user_visible === 1,
     isPreset: row.is_preset === 1,
     isEnabled: row.is_enabled === 1,
@@ -51,6 +52,7 @@ function profileToRow(profile: AgentProfile): Omit<AgentProfileDbRow, 'created_a
     disallowed_tools: profile.disallowedTools ? JSON.stringify(profile.disallowedTools) : null,
     default_model: profile.defaultModel ?? null,
     prompt_system: profile.promptSystem ?? null,
+    profile_kind: profile.kind ?? 'main',
     user_visible: profile.userVisible ? 1 : 0,
     is_preset: profile.isPreset ? 1 : 0,
     is_enabled: profile.isEnabled ? 1 : 0,
@@ -130,7 +132,7 @@ export class InMemoryAgentProfileService implements AgentProfileService {
   }
 
   listUserVisible(): AgentProfile[] {
-    return this.listEnabled().filter(p => p.userVisible);
+    return this.listEnabled().filter(p => (p.kind ?? 'main') === 'main');
   }
 
   update(id: string, patch: Partial<AgentProfile>): AgentProfile | undefined {

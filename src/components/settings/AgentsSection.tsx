@@ -94,9 +94,10 @@ export function AgentsSection() {
     async function loadProfiles() {
       try {
         const data = await listAgentProfiles();
-        // Only show enabled profiles, presets first
+        // Only main-agent profiles are user-selectable. Subagent and
+        // special-purpose profiles are internal and hidden from this grid.
         const sorted = data
-          .filter((p) => p.isEnabled)
+          .filter((p) => p.isEnabled && p.kind === 'main')
           .sort((a, b) => {
             if (a.isPreset !== b.isPreset) return a.isPreset ? -1 : 1;
             return a.name.localeCompare(b.name);

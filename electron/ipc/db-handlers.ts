@@ -1110,10 +1110,10 @@ export function registerDbHandlers(): void {
     database.prepare(`
       INSERT INTO agent_profiles (
         id, name, description, allowed_tools, disallowed_tools, prompt_system, default_model,
-        user_visible, is_preset, is_enabled, created_at, updated_at
+        profile_kind, user_visible, is_preset, is_enabled, created_at, updated_at
       ) VALUES (
         @id, @name, @description, @allowed_tools, @disallowed_tools, @prompt_system, @default_model,
-        @user_visible, @is_preset, @is_enabled, @created_at, @updated_at
+        @profile_kind, @user_visible, @is_preset, @is_enabled, @created_at, @updated_at
       )
     `).run({
       id,
@@ -1123,6 +1123,7 @@ export function registerDbHandlers(): void {
       disallowed_tools: data.disallowed_tools ? JSON.stringify(data.disallowed_tools) : null,
       prompt_system: (data.prompt_system as string) ?? null,
       default_model: data.default_model ?? null,
+      profile_kind: (data.profile_kind as string) ?? 'main',
       user_visible: data.user_visible !== undefined ? (data.user_visible ? 1 : 0) : 1,
       is_preset: data.is_preset !== undefined ? (data.is_preset ? 1 : 0) : 0,
       is_enabled: data.is_enabled !== undefined ? (data.is_enabled ? 1 : 0) : 1,
@@ -1144,6 +1145,7 @@ export function registerDbHandlers(): void {
       disallowed_tools: ['disallowed_tools', v => v ? JSON.stringify(v) : null],
       prompt_system: ['prompt_system', v => (v as string) ?? null],
       default_model: ['default_model', v => v ?? null],
+      profile_kind: ['profile_kind', v => (v as string) ?? 'main'],
       is_enabled: ['is_enabled', v => v !== undefined ? (v ? 1 : 0) : 1],
     };
 

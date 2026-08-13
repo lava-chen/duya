@@ -64,6 +64,15 @@ export interface AgentProfile {
   isPreset: boolean;
   /** Whether this profile is enabled */
   isEnabled: boolean;
+  /**
+   * Structural grouping of the profile. 'main' are the user-facing main
+   * agents (general-purpose / code-expert / research); 'subagent' are the
+   * read-only sub-agent profiles; 'special' are infrastructure agents
+   * (gateway / cron / conductor-refine / memory-curator) that never appear
+   * in user-facing pickers. This is the canonical grouping — `userVisible`
+   * is a legacy boolean kept for compatibility.
+   */
+  kind?: 'main' | 'subagent' | 'special';
   /** Creation timestamp */
   createdAt: number;
   /** Last update timestamp */
@@ -82,6 +91,7 @@ export interface AgentProfileDbRow {
   disallowed_tools: string | null;
   default_model: string | null;
   prompt_system: string | null;
+  profile_kind: string | null;
   user_visible: number;
   is_preset: number;
   is_enabled: number;
@@ -91,11 +101,19 @@ export interface AgentProfileDbRow {
 
 // ============================================================
 // Preset Definitions
+//
+// Presets are grouped structurally by `kind`:
+//   - MAIN_AGENT_PROFILES    user-facing main agents (main / code / research)
+//   - SUBAGENT_AGENT_PROFILES read-only sub-agent profiles (explore / plan)
+//   - SPECIAL_AGENT_PROFILES  infrastructure agents (gateway / cron / ...)
+// PRESET_AGENT_PROFILES is the flat union kept for consumers that want the
+// full registry at once.
 // ============================================================
 
-export const PRESET_AGENT_PROFILES: AgentProfile[] = [
+export const MAIN_AGENT_PROFILES: AgentProfile[] = [
   {
     id: 'general-purpose',
+    kind: 'main',
     name: 'General',
     description: 'General purpose assistant for most tasks',
     allowedTools: ['*'],
@@ -125,6 +143,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'code-expert',
+    kind: 'main',
     name: 'Code',
     description: 'Code development and software engineering',
     allowedTools: ['*'],
@@ -138,6 +157,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'research',
+    kind: 'main',
     name: 'Research',
     description: 'Research, investigation and deep analysis',
     allowedTools: ['*'],
@@ -155,8 +175,12 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     createdAt: 0,
     updatedAt: 0,
   },
+];
+
+export const SUBAGENT_AGENT_PROFILES: AgentProfile[] = [
   {
     id: 'explore',
+    kind: 'subagent',
     name: 'Explore',
     description: 'Read-only exploration — sub-agent only',
     // Tool names must match the actual registered names (lowercase for
@@ -176,6 +200,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'plan',
+    kind: 'subagent',
     name: 'Plan',
     description: 'Planning and architecture design — sub-agent only',
     allowedTools: ['read', 'glob', 'grep'],
@@ -189,8 +214,12 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     createdAt: 0,
     updatedAt: 0,
   },
+];
+
+export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
   {
     id: 'gateway',
+    kind: 'special',
     name: 'Gateway',
     description: 'Channel agent for messaging platforms — handles tasks directly and can consult other sessions when useful',
     // Gateway is a capable channel agent. It allows ['*'] then denies:
@@ -236,6 +265,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'cron',
+    kind: 'special',
     name: 'Cron',
     description: 'Cron agent for scheduled tasks — no user interaction available',
     // Cron runs without a user to answer questions. Deny interactive/UI
@@ -267,6 +297,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'conductor-refine',
+    kind: 'special',
     name: 'Conductor Refine',
     description:
       'Side-panel agent that iteratively refines a single Conductor widget’s data from a screenshot + user instruction. Returns strict JSON only — the renderer applies the result via widget.update_data.',
@@ -306,6 +337,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
   },
   {
     id: 'memory-curator',
+    kind: 'special',
     name: 'Memory Curator',
     description:
       'Phase 2 memory curation agent — root-bound file tools only, no shell/MCP/skills',
@@ -345,4 +377,15 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     createdAt: 0,
     updatedAt: 0,
   },
+];
+
+/**
+ * Flat union of every preset (main + subagent + special). Consumers that
+ * need the full registry at once use this; consumers that care about the
+ * grouping should import from the specific arrays above.
+ */
+export const PRESET_AGENT_PROFILES: AgentProfile[] = [
+  ...MAIN_AGENT_PROFILES,
+  ...SUBAGENT_AGENT_PROFILES,
+  ...SPECIAL_AGENT_PROFILES,
 ];
