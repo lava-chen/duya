@@ -178,7 +178,7 @@ export type ToolCategory =
   | 'search'
   | 'agent'
   | 'team'
-  | 'task'
+  | 'todo'
   | 'mcp'
   | 'system'
   | 'other';

@@ -443,7 +443,7 @@ export class WorkerPool {
           resolve({
             taskId: task.id,
             success: true,
-            result: `Command moved to background (PID: ${msg.pid}). Use task_output to check progress.`,
+            result: `Command moved to background (PID: ${msg.pid}). Use get_task_output with task_ids=["${task.id}"] to check progress.`,
             backgrounded: true,
             outputFile: msg.outputFile as string,
             pid: msg.pid as number,

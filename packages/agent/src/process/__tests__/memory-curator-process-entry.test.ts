@@ -42,6 +42,7 @@ describe('createCuratorTools', () => {
     expect(registry.has('bash')).toBe(false);
     expect(registry.has('powershell')).toBe(false);
     expect(registry.has('Agent')).toBe(false);
+    expect(registry.has('task')).toBe(false);
     expect(registry.has('browser')).toBe(false);
     expect(registry.has('duya_cli')).toBe(false);
   });

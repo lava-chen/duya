@@ -25,7 +25,12 @@ export type PublicationStatus =
   | 'succeeded'
   | 'failed';
 export type CacheStatus = 'pending' | 'ok' | 'cache_pending' | 'failed';
-export type Disposition = 'absorbed' | 'no_change' | 'rejected' | 'deferred';
+export type Disposition =
+  | 'absorbed'
+  | 'no_change'
+  | 'rejected'
+  | 'no_signal'
+  | 'deferred';
 
 export interface CurationInput {
   inputKind: InputKind;
@@ -330,7 +335,7 @@ interface EligibleRow {
  * An input is eligible when ALL of:
  *   - stage1_outputs.job_status = 'succeeded'
  *   - No curation_run_inputs row with disposition IN ('absorbed','no_change',
- *     'rejected') exists on a succeeded run for the same (input_key, content_hash)
+ *     'rejected','no_signal') exists on a succeeded run for the same (input_key, content_hash)
  *   - No deferred row with deferred_until > now exists
  *
  * Results are ordered by generated_at ASC (oldest first), then truncated
@@ -356,7 +361,7 @@ export function queryEligibleInputs(db: Database, opts: QueryEligibleOpts): Elig
            WHERE cri.input_kind = 'rollout'
              AND cri.input_key = s.rollout_id
              AND cri.content_hash = s.source_content_hash
-             AND cri.disposition IN ('absorbed','no_change','rejected')
+             AND cri.disposition IN ('absorbed','no_change','rejected','no_signal')
              AND cr.status = 'succeeded'
          )
          AND NOT EXISTS (

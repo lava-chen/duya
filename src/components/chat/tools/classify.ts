@@ -42,12 +42,12 @@ export const ASK_USER_QUESTION_TOOLS = new Set(['askuserquestion']);
 export const MODULE_TOOLS = new Set(['read_module']);
 
 /**
- * Task tool — manages an internal task list with action subcommands
- * (`create` / `get` / `list` / `update` / `output` / `stop`). Single
- * canonical name (`task`) registered on the agent side (see
- * TASK_TOOL_NAME in packages/agent/src/tool/TaskTool).
+ * Todo tools — manage an internal task list (aligned to Grok
+ * `todo_write`). Single canonical name (`todo`); `TodoWrite` is the
+ * Grok-compatible legacy alias. Registered on the agent side (see
+ * TODO_TOOL_NAME in packages/agent/src/tool/TodoTool).
  */
-export const TASK_TOOLS = new Set(['task']);
+export const TASK_TOOLS = new Set(['todo', 'todowrite']);
 
 /**
  * MessageSession tool — sends a message to another session's agent and
@@ -108,20 +108,16 @@ export function isTaskToolAction(input: unknown): boolean {
 }
 
 /**
- * Legacy `task` tool sometimes carries subagent-shaped input or result;
- * detect that so the router can dispatch it through SubAgentToolRow
- * instead of the generic catch-all. New code uses `agent` / `subagent`
- * directly; this branch is kept for old sessions whose history still
- * contains the legacy task tool.
+ * The subagent tool's canonical wire name is `task` (aligned to Grok).
+ * A `task` call is a subagent dispatch when it carries scheduling
+ * inputs (`prompt` / `subagent_type`); a todo-list update is named
+ * `todo` and shaped like `{todos: [...]}`. This predicate lets the
+ * router dispatch `task` (and legacy `agent`/`subagent`) payloads
+ * through SubAgentToolRow instead of the generic catch-all.
  */
 export function isLegacySubAgentToolAction(tool: ToolAction): boolean {
   const lowerName = tool.name.toLowerCase();
-  if (lowerName !== 'task') return false;
-  // The TaskTool now owns the `task` name and carries `input.action`.
-  // A legacy subagent payload never had an `action` field, so a
-  // present-and-valid `action` means this is the new TaskTool and we
-  // must NOT claim it for SubAgentToolRow.
-  if (isTaskToolAction(tool.input)) return false;
+  if (lowerName !== 'task' && lowerName !== 'agent' && lowerName !== 'subagent' && lowerName !== 'sub_agent') return false;
   const input = tool.input as Record<string, unknown> | undefined;
   if (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string') {
     return true;
@@ -165,7 +161,7 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (isBrowserTool(name)) {
     return { count: 1, categoryKey: 'browser' };
   }
-  if (['agent', 'subagent', 'sub_agent'].includes(name)) {
+  if (['task', 'agent', 'subagent', 'sub_agent'].includes(name)) {
     return { count: 1, categoryKey: 'agent' };
   }
   // MessageSession is inter-agent messaging — bucketed with `agent`
@@ -179,7 +175,7 @@ export function classifyToolForSummary(tool: ToolAction): { count: 1; categoryKe
   if (name === 'skill') {
     return { count: 1, categoryKey: 'skill' };
   }
-  if (name === 'task' && isTaskToolAction(tool.input)) {
+  if (name === 'todo' || name === 'todowrite') {
     return { count: 1, categoryKey: 'tasks' };
   }
   if (isModuleTool(name)) {

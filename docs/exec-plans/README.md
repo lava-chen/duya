@@ -198,6 +198,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [406-memory-curation-rebuild-adhoc-retire](./completed/406-memory-curation-rebuild-adhoc-retire.md) | Memory Phase 2 Plan 406 — memory_entries rebuild cache + ad-hoc input chain + Phase D retire (migration 0009 drops legacy tables, consolidator.ts deleted) | 2026-08-04 |
 | [410-voice-library](./completed/410-voice-library.md) | 语音库 `@duya/voice`：麦克风→流式STT→文本进框，对齐 grok 纯听写（不接 xAI API），本地 whisper.cpp 默认 + 云端 OpenAI 兼容可选，独立 workspace 包 + 首次配置指引 | 2026-08-11 |
 | [411-goal-mode](./completed/411-goal-mode.md) | Goal 模式：自主多轮目标追踪与核验 — 10 态 GoalTracker + N-skeptic 对抗面板 + strategist + 停滞检测 + `goal_updated` 事件流 + 前端 GoalStatusCard | 2026-08-11 |
+| [423-deep-research-state-machine](./completed/423-deep-research-state-machine.md) | Deep Research 状态机化：research 从纯提示词 modifier 改造为 session 状态机（9 态 ResearchTracker + 按状态门控 + research_start/report/continue/fanout 工具 + 迭代停转自动收敛 + research_updated 卡片 + [research] 配置） | 2026-08-13 |
 | [411-agent-voice-setup](./completed/411-agent-voice-setup.md) | 语音首次使用 Agent 自动配置 — `duya voice` 配置写入子命令 + 内置 voice-setup skill + 首次点击麦自动注入引导消息（Phase 1-3 全部完成） | 2026-08-11 |
 
 ### Canvas / Conductor

@@ -1,7 +1,9 @@
 /**
  * SubagentTool Constants
  *
- * The wire name is still `'Agent'` for backward compat with:
+ * The wire name is `'task'` (aligned to Grok's `task` tool for sub-agent
+ * scheduling). The legacy wire name `'Agent'` is retained for backward
+ * compat with:
  *   - existing session history (tool_use.name = 'Agent')
  *   - saved permission rules
  *   - claude-code alignment contract
@@ -10,11 +12,10 @@
  * the LLM (this spawns a *sub*-agent, not a top-level agent loop).
  */
 
-export const SUBAGENT_TOOL_NAME = 'Agent'
+export const SUBAGENT_TOOL_NAME = 'task'
 // Legacy wire name for backward compat (permission rules, hooks, resumed sessions).
-// Retained for the upcoming P0-γ split (TaskTool → BackgroundTask suite) — old
-// sessions whose history used `Task` should continue to be handled correctly.
-export const LEGACY_SUBAGENT_TOOL_NAME = 'Task'
+// Old sessions whose history used `Agent` should continue to be handled correctly.
+export const LEGACY_SUBAGENT_TOOL_NAME = 'Agent'
 export const VERIFICATION_AGENT_TYPE = 'verification'
 
 // Built-in agents that run once and return a report — the parent never

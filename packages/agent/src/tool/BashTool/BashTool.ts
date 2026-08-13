@@ -32,6 +32,7 @@ import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
 import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
 import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
+import { GET_TASK_OUTPUT_TOOL_NAME } from '../BackgroundTaskTool/GetTaskOutputTool.js';
 import {
   analyzeCommandSafety,
   isReadOnlyCommand,
@@ -141,7 +142,8 @@ export interface ShellCommandToolConfig {
 
 const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
   name: 'bash',
-  description: 'Execute a bash command. Returns the stdout and stderr output.',
+  description:
+    'Execute a bash command. Returns the stdout and stderr output. For long-running commands, set run_in_background=true and you will be notified on completion; use get_task_output with the returned task ID to fetch results, and kill_task to terminate a background task if needed.',
   providerKind: 'bash',
   commandLabel: 'bash command',
   securityCheck: analyzeCommandSafety,
@@ -692,7 +694,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
       }
       lines.push(`Background process started (PID: ${pid})`);
       lines.push(`Output file: ${outputFile}`);
-      lines.push(`Use task_output("${toolUseId}") to check progress later.`);
+      lines.push(`Use ${GET_TASK_OUTPUT_TOOL_NAME} with task_ids=["${toolUseId}"] to check progress later.`);
+      lines.push(`You will be notified automatically when it completes. Do not wait or poll for it.`);
 
       return {
         id: crypto.randomUUID(),

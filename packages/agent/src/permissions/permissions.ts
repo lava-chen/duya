@@ -72,6 +72,7 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
   'SessionSearch',
   'ToolSearch',
   'LSP',
+  'todo',
   'task',
   'Agent',
   'Task',

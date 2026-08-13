@@ -35,6 +35,7 @@ import {
   type ShellExecutionPlan,
 } from '../utils/shell/intelligence.js'
 import { logger } from '../utils/logger.js'
+import { TODO_TOOL_NAME, LEGACY_TODO_WIRE_NAMES } from './TodoTool/TodoTool.js'
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -318,8 +319,22 @@ function isShellCommandToolName(toolName: string): boolean {
 
 function isSubagentToolCall(toolName: string, input: Record<string, unknown> | undefined): boolean {
   const normalized = toolName.toLowerCase()
-  if (normalized === 'agent' || normalized === 'subagent' || normalized === 'sub_agent') return true
-  return normalized === 'task' && (typeof input?.prompt === 'string' || typeof input?.subagent_type === 'string')
+  // Canonical subagent wire name is `task`; keep legacy `Agent` / `Task`
+  // / `subagent` accepted for historical sessions.
+  if (normalized === 'task' || normalized === 'agent' || normalized === 'subagent' || normalized === 'sub_agent') {
+    // A `task` call is a subagent only when it carries scheduling inputs
+    // (prompt / subagent_type / run_in_background); a todo-list update
+    // shaped like `{todos: [...]}` is not a subagent call.
+    if (normalized === 'task') {
+      return (
+        typeof input?.prompt === 'string' ||
+        typeof input?.subagent_type === 'string' ||
+        input?.run_in_background === true
+      )
+    }
+    return true
+  }
+  return false
 }
 
 export function normalizeWorkerInput(
@@ -554,6 +569,12 @@ export class StreamingToolExecutor {
     // identity function when no resolver is set (legacy / test
     // mode where MCP tools register under their own names).
     this.resolveToolKey = (name: string): string => {
+      // Normalize Grok-compatible legacy todo wire names (`TodoWrite`) to
+      // the canonical `todo` tool so such tool_use still resolve to the
+      // current executor.
+      if (LEGACY_TODO_WIRE_NAMES.includes(name as (typeof LEGACY_TODO_WIRE_NAMES)[number])) {
+        return TODO_TOOL_NAME;
+      }
       const resolver = this.toolUseContext.options.resolveMCPProviderToolName;
       return resolver ? resolver(name) : name;
     };
@@ -1017,7 +1038,7 @@ export class StreamingToolExecutor {
 
       if (result.success) {
         const content = result.backgrounded
-          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- Use task_output("${tool.id}") to check progress later.`
+          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- Use get_task_output with task_ids=["${tool.id}"] to check progress later.`
           : [
               executionPlan?.reason ? `[Shell] ${executionPlan.reason}` : undefined,
               typeof result.result === 'string'

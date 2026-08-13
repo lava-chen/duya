@@ -334,6 +334,57 @@ export interface AgentRetryEvent {
   message: string;
 }
 
+/**
+ * Plan 423 Phase 3: emitted by research tooling after a research state
+ * transition or fan-out. Carries the tracker's public state so the renderer
+ * can surface a research status card (query / state / sub-questions /
+ * sources / gaps). Forwarded by router.ts as the SSE `research_updated`
+ * event (via the `chat:research_*` branch).
+ */
+export interface ResearchUpdatedEvent {
+  type: 'chat:research_updated';
+  sessionId: string;
+  state: string;
+  phase: string;
+  query: string;
+  subQuestions: string[];
+  sourcesGathered: string[];
+  coverageGaps: string[];
+  rounds: number;
+  stallRounds: number;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+}
+
+/** Build the worker research_updated payload from explicit tracker state. */
+export function buildResearchUpdatedEvent(
+  sessionId: string,
+  state: {
+    state: string;
+    phase: string;
+    query: string;
+    subQuestions: string[];
+    sourcesGathered: string[];
+    coverageGaps: string[];
+    rounds: number;
+    stallRounds: number;
+    history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+  },
+): ResearchUpdatedEvent {
+  return {
+    type: 'chat:research_updated',
+    sessionId,
+    state: state.state,
+    phase: state.phase,
+    query: state.query,
+    subQuestions: state.subQuestions,
+    sourcesGathered: state.sourcesGathered,
+    coverageGaps: state.coverageGaps,
+    rounds: state.rounds,
+    stallRounds: state.stallRounds,
+    history: state.history,
+  };
+}
+
 export interface AgentDbPersistedEvent {
   type: 'chat:db_persisted';
   sessionId: string;

@@ -13,7 +13,7 @@ export function getToolsSection(
   ctx: PromptContext,
   toolContributions: ToolPromptContribution[],
 ): string {
-  const hasTaskTool = ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
+  const hasTodoTool = ctx.enabledTools.has(TOOL_NAMES.TODO) || ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
   const hasPowerShellTool = ctx.enabledTools.has('powershell')
@@ -23,8 +23,8 @@ export function getToolsSection(
 
   if (isReplModeEnabled) {
     const items = [
-      hasTaskTool
-        ? `Break down and manage your work with the ${TOOL_NAMES.TASK} tool. These tools are helpful for planning your work and helping the user track your progress.`
+      hasTodoTool
+        ? `Break down and manage your work with the ${TOOL_NAMES.TODO} tool. These tools are helpful for planning your work and helping the user track your progress.`
         : null,
     ].filter(item => item !== null)
     if (items.length === 0) return ''
@@ -49,8 +49,8 @@ ${items.map(item => ` - ${item}`).join('\n')}`
   const items = [
     `Do NOT use ${shellToolsLabel} when a relevant dedicated tool is provided. This helps the user understand and review your work:`,
     providedToolSubitems,
-    hasTaskTool
-      ? `Break down and manage your work with the ${TOOL_NAMES.TASK} tool.`
+    hasTodoTool
+      ? `Break down and manage your work with the ${TOOL_NAMES.TODO} tool.`
       : null,
     `You can call multiple tools in parallel when they are independent.`,
   ].filter(item => item !== null)

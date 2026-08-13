@@ -1,37 +1,49 @@
 /**
- * researchMode — modifier-paradigm ModeModifier for Deep Research.
+ * researchMode — modifier-paradigm ModeModifier for Deep Research (plan 423).
  *
  * Research mode shapes agent behavior through a prompt prefix (research
- * methodology) and a tool block list (no writes, no canvas). It does
- * NOT take over the stream — the standard DuyaAgent.streamChat loop
- * drives the entire workflow. Every search, fetch, and source
- * evaluation is a normal tool_use/tool_result pair visible in chat.
+ * methodology), a tool block list (no writes, no canvas), and a session-level
+ * state machine {@link ResearchTracker} that drives lifecycle state, per-round
+ * reminders, and runtime tool gating. It does NOT take over the stream — the
+ * standard DuyaAgent.streamChat loop drives the entire workflow. Every search,
+ * fetch, and source evaluation is a normal tool_use/tool_result pair visible
+ * in chat.
  *
- * Symmetric with plan-task-mode.ts: both use prompt.prefix + tools.block
- * instead of an orchestrator. Clarification uses the standard
- * ask_user_question tool — no bespoke IPC channel.
+ * Since plan 423 the mode is session-typed (`kind: 'session'`) and carries a
+ * {@link ResearchTracker}: the state machine survives across messages, persists
+ * via plan 413c `mode_state_snapshots`, and enables state-based runtime tool
+ * gating (plan 423 §3.4, coordinator `filterTools` research branch).
  *
- * Migration (plan 224 follow-up): the previous orchestrator-paradigm
- * implementation (research-mode/ directory + researchRunDb.ts) is
- * deleted. The Orchestrator paradigm itself is retained in
- * ModeModifierOrchestrator for future modes.
+ * Symmetric with plan-task-mode.ts / goal-mode.ts: modifier paradigm, no
+ * orchestrator. Clarification uses the standard ask_user_question tool.
  */
 
-import type { ModeModifier } from './types.js';
+import type { ModeModifier, ModeModifierContext, StreamOptionsPatch } from './types.js';
+import { researchModeTracker } from './research-mode/research-tracker.js';
+import { getResearchTools } from './research-mode/research-tools.js';
+import { getResearchConfig } from './research-mode/research-config.js';
+import type { ModeTracker } from './engine/tracker.js';
+
+/** Cap on research iterations per streamChat call (aligned with the agent's
+ * default `maxTurns = 100`; consumed via `beforeStream`). */
+const RESEARCH_MAX_ITERATIONS = 100;
 
 /**
  * System prompt prefix prepended in research mode.
  *
  * Instructs the agent to follow a research methodology
- * (clarify -> plan -> search -> evaluate -> iterate -> synthesize)
- * without hardcoding a state machine. The agent uses existing
- * read-only tools (web_search, web_fetch, read, glob, grep,
- * session_search, ask_user_question, vision)
- * and produces a structured markdown report.
+ * (clarify -> plan -> search -> evaluate -> iterate -> synthesize). The state
+ * machine enforces the lifecycle and gates tools; the prompt keeps the
+ * methodology legible to the model.
  */
 const RESEARCH_MODE_PROMPT = `# Deep Research Mode Active
 
 You are now in **Deep Research Mode**. Your goal is to conduct a rigorous research investigation using the available tools (web_search, web_fetch, read, glob, grep, session_search, ask_user_question, vision) and produce a comprehensive research report.
+
+## Starting & Finalizing
+
+- When the user asks you to research a topic, call \`research_start\` with the query to begin the research run.
+- When you have written the report, call \`research_report(completed: true)\` to finalize the run. It is only accepted while you are synthesizing.
 
 ## Research Workflow
 
@@ -47,6 +59,7 @@ You are now in **Deep Research Mode**. Your goal is to conduct a rigorous resear
    - Use multiple query formulations when initial results are sparse
    - Cross-reference claims across at least 2 independent sources when factual accuracy matters
    - Fetch full pages for promising leads (don't rely on snippets alone)
+   - When you have several independent sub-questions, call \`research_fanout\` (while gathering) to spawn parallel Research sub-agents and aggregate their findings
 
 4. **Evaluate** — For each source, consider:
    - Authority: who published this, and why should I trust them?
@@ -107,18 +120,30 @@ Do not stop early just because the first search returned results. Depth matters 
 `;
 
 /**
- * Research mode modifier — per-message, read-only, mutually exclusive
- * with plan-task. Composes with conductor at the registry level, but
- * all canvas tools are blocked so conductor's injections are inert
- * under research mode (intentional — research is read-only).
+ * Research mode modifier — session-level, read-only, mutually exclusive
+ * with plan-task. Composes with conductor at the registry level, but all
+ * canvas tools are blocked so conductor's injections are inert under
+ * research mode (intentional — research is read-only).
  */
 export const researchMode: ModeModifier = {
   id: 'research',
-  kind: 'message',
+  kind: 'session',
   exclusiveWith: ['plan-task'],
-  display: { label: 'Deep Research', icon: 'Telescope' },
+  display: { label: 'Deep Research', icon: 'Telescope', description: '多轮深度调研与报告' },
+
+  // Research events carry payloads (objects) and the gate is state-dependent,
+  // mirroring the goal tracker's explicit upcast to the shared existential
+  // `ModeTracker<string, string, unknown>` shape (same rationale as
+  // modes/index.ts).
+  tracker: researchModeTracker as unknown as ModeTracker<string, string, unknown>,
 
   tools: {
+    // `research_start` / `research_report` must survive profile filtering so
+    // the model can start and finalize a research run under any base profile.
+    // Gated by `[research] enabled` — when disabled, inject nothing.
+    inject: () => (getResearchConfig().enabled ? getResearchTools() : []),
+    overrideFilter: true,
+
     // Block write/execute/side-effect tools (same set as plan-task) plus
     // all conductor canvas tools. Uses `block` (blacklist) instead of
     // `allow` (whitelist) so read-only tools added in the future remain
@@ -149,5 +174,12 @@ export const researchMode: ModeModifier = {
 
   prompt: {
     prefix: RESEARCH_MODE_PROMPT,
+  },
+
+  hooks: {
+    // Deep research is a long, multi-round loop — raise the per-call cap.
+    beforeStream: (_ctx: ModeModifierContext): StreamOptionsPatch => ({
+      maxIterations: RESEARCH_MAX_ITERATIONS,
+    }),
   },
 };

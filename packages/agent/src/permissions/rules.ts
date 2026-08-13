@@ -28,14 +28,15 @@ import type {
 
 // Maps legacy tool names to their current canonical names.
 const LEGACY_TOOL_NAME_ALIASES: Record<string, string> = {
-  Task: 'Agent',
-  KillShell: 'Task', // Unified task tool with action "stop"
-  TaskStop: 'Task', // Legacy TaskStop -> unified Task tool
-  TaskCreate: 'Task', // Legacy TaskCreate -> unified Task tool
-  TaskGet: 'Task', // Legacy TaskGet -> unified Task tool
-  TaskList: 'Task', // Legacy TaskList -> unified Task tool
-  TaskUpdate: 'Task', // Legacy TaskUpdate -> unified Task tool
-  TaskOutput: 'Task', // Legacy TaskOutput -> unified Task tool
+  Task: 'task', // Legacy Task (and Agent) -> subagent task tool
+  Agent: 'task', // Legacy Agent wire -> subagent task tool
+  KillShell: 'task', // Unified subagent task tool with action "stop"
+  TaskStop: 'task', // Legacy TaskStop -> unified task tool
+  TaskCreate: 'task', // Legacy TaskCreate -> unified task tool
+  TaskGet: 'task', // Legacy TaskGet -> unified task tool
+  TaskList: 'task', // Legacy TaskList -> unified task tool
+  TaskUpdate: 'task', // Legacy TaskUpdate -> unified task tool
+  TaskOutput: 'task', // Legacy TaskOutput -> unified task tool
 }
 
 export function normalizeLegacyToolName(name: string): string {

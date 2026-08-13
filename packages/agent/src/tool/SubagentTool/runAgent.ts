@@ -231,9 +231,10 @@ export async function* runAgent({
     ? allTools.filter(t => toolNames.has(t.name))
     : allTools
 
-  // Prevent recursive agent calls - exclude the Agent tool from sub-agents
-  // to avoid infinite recursion where a sub-agent spawns another sub-agent
-  toolsToUse = toolsToUse.filter(t => t.name !== 'Agent')
+  // Prevent recursive agent calls - exclude the subagent task tool (and its
+  // legacy `Agent` wire name) from sub-agents to avoid infinite recursion
+  // where a sub-agent spawns another sub-agent.
+  toolsToUse = toolsToUse.filter(t => t.name !== 'task' && t.name !== 'Agent')
 
   const omitAgentsMd =
     agentDefinition.omitClaudeMd === true &&

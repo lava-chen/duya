@@ -76,6 +76,23 @@ export interface GoalUpdatedEvent {
 }
 
 /**
+ * Research tracker state broadcast (plan 423 Phase 3), delivered via SSE
+ * as `research_updated`. Surfaces query / state / sub-questions / sources /
+ * gaps so the UI can render a research status card.
+ */
+export interface ResearchUpdatedEvent {
+  state: string;
+  phase: string;
+  query: string;
+  subQuestions: string[];
+  sourcesGathered: string[];
+  coverageGaps: string[];
+  rounds: number;
+  stallRounds: number;
+  history?: ReadonlyArray<{ at: number; event: string; detail?: string }>;
+}
+
+/**
  * Permission request event sent via SSE
  */
 export interface PermissionRequestEvent {

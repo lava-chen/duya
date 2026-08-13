@@ -1,11 +1,12 @@
 /**
  * SubagentTool - Tool for spawning sub-agents
  *
- * Internally renamed from `AgentTool` to `SubagentTool` so the LLM
- * sees clearer intent ("this spawns a sub-agent, not a top-level
- * agent loop"). The wire name remains `'Agent'` for backward compat
- * with existing session history and saved permission rules — see
- * `SUBAGENT_TOOL_NAME` in `./constants.ts`.
+ * Internally named `SubagentTool` so the LLM sees clearer intent
+ * ("this spawns a sub-agent, not a top-level agent loop"). The wire
+ * name is `'task'` (aligned to Grok's `task` tool); the legacy wire
+ * name `'Agent'` is still accepted for backward compat with existing
+ * session history and saved permission rules — see `SUBAGENT_TOOL_NAME`
+ * and `LEGACY_SUBAGENT_TOOL_NAME` in `./constants.ts`.
  *
  * Enhanced: extends BaseTool with full Tool interface
  */
@@ -21,12 +22,17 @@ import type { AgentDefinition } from './loadAgentsDir.js';
 import { getBuiltInAgents } from './builtInAgents.js';
 import { formatAgentLine, getPrompt } from './prompt.js';
 import { runAgent, runAgentSync, type AgentProgressEvent } from './runAgent.js';
-import { sessionDb } from '../../ipc/db-client.js';
+import { sessionDb, messageDb } from '../../ipc/db-client.js';
 import { sendEvent } from '../../process/worker-protocol.js';
 import { buildChatAgentProgressPayload, type AgentProgressPayloadMeta } from './subagentLifecycleBridge.js';
 import { backgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
 import { logger } from '../../utils/logger.js';
 import { SUBAGENT_TOOL_NAME } from './constants.js';
+import {
+  BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK,
+  BACKGROUND_SUBAGENT_IDLE_NOTICE,
+  shouldContinueParentWork,
+} from './continueParentWork.js';
 
 export { formatAgentLine }
 export { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME, VERIFICATION_AGENT_TYPE, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
@@ -37,6 +43,8 @@ export interface SubagentToolInput {
   subagent_type?: string
   prompt: string
   run_in_background?: boolean
+  auto_wake?: boolean
+  resume_from?: string
   isolation?: 'worktree'
   model?: string
 }
@@ -113,6 +121,69 @@ function removeBackgroundSpawn(taskId: string): void {
   }
 }
 
+/** Most recent parent user texts (oldest → newest), used to decide whether the
+ * parent still has unfinished exec work besides the delegated child job. */
+async function getRecentUserAsks(parentSessionId: string): Promise<string[]> {
+  try {
+    const rows = (await messageDb.getBySession(parentSessionId)) as
+      | Array<{ role?: string; content?: unknown }>
+      | undefined;
+    if (!Array.isArray(rows)) return [];
+    const asks: string[] = [];
+    for (const row of rows) {
+      if (row.role !== 'user') continue;
+      const text = extractMessageText(row.content);
+      if (text) asks.push(text);
+    }
+    return asks;
+  } catch {
+    return [];
+  }
+}
+
+function extractMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (typeof block === 'string') return block;
+        if (block && typeof block === 'object') {
+          const b = block as { type?: string; text?: string };
+          if (b.type === 'text' && typeof b.text === 'string') return b.text;
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return '';
+}
+
+/** Render the model-facing background-spawn notice, aligned to Grok
+ * `format_subagent_started_background`. When the parent still has unfinished
+ * work we tell it to keep going; otherwise we tell it to yield the turn and
+ * rely on the async completion notification instead of polling. */
+function formatSubagentStartedBackground(
+  subagentId: string,
+  agentType: string,
+  description: string,
+  continueParentWork: boolean,
+): string {
+  const guide = continueParentWork
+    ? BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK
+    : BACKGROUND_SUBAGENT_IDLE_NOTICE;
+  return [
+    `Subagent started in background.`,
+    `subagent_id: ${subagentId}`,
+    `type: ${agentType}`,
+    `description: ${description}`,
+    ``,
+    `Use get_task_output with task_ids=["${subagentId}"] and timeout_ms to wait for results.`,
+    ``,
+    guide,
+  ].join('\n');
+}
+
 export class SubagentTool extends BaseTool {
   readonly name = SUBAGENT_TOOL_NAME;
   readonly description = 'Launch a new agent to handle complex, multi-step tasks autonomously.';
@@ -139,6 +210,15 @@ export class SubagentTool extends BaseTool {
         type: 'boolean',
         description: 'Whether to run the agent in the background. Defaults to true; pass false only when the caller must wait for the result before continuing.',
         default: true,
+      },
+      auto_wake: {
+        type: 'boolean',
+        description: 'When running in the background, whether to automatically resume/wake the parent session when the sub-agent completes. Defaults to true.',
+        default: true,
+      },
+      resume_from: {
+        type: 'string',
+        description: 'A subagent_id / session id to resume an existing sub-agent conversation instead of starting a new one.',
       },
       isolation: {
         type: 'string',
@@ -355,11 +435,23 @@ export class SubagentTool extends BaseTool {
           outputFilePath: record.outputFilePath,
         }, 'SubAgent')
 
+        const userAsks = await getRecentUserAsks(parentSessionId ?? '');
+        const continueParentWork = shouldContinueParentWork(
+          userAsks,
+          agentInput.description || agentInput.name || subAgentName,
+          agentInput.prompt,
+        );
+        const spawnNotice = formatSubagentStartedBackground(
+          taskId,
+          agentDefinition.agentType,
+          agentInput.description || agentInput.name || subAgentName,
+          continueParentWork,
+        );
         const backgroundResult: BackgroundSpawnRecord['result'] = {
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
           description: agentInput.description || agentInput.name,
-          content: `[Agent running in background: ${subAgentName}. Do not poll or respawn it; a task notification will arrive when it finishes.]`,
+          content: spawnNotice,
           sessionId: subAgentSessionId,
           taskId,
           agentId: taskId,
@@ -570,26 +662,35 @@ export class SubagentTool extends BaseTool {
         return { type: 'error', content: parsed.error, metadata: result.metadata };
       }
 
-      const agentType = parsed.resolvedAgentType || parsed.agentType || 'Agent';
-      const description = parsed.description || '';
+      // Background spawn returns a running notice (not a completion block).
+      // Render its structured spawn text verbatim — no completion meta/footer.
+      if (parsed.status === 'running' || parsed.background === true) {
+        return {
+          type: 'markdown',
+          content: parsed.content || 'Background subagent started.',
+          metadata: {
+            ...result.metadata,
+            agentType: parsed.resolvedAgentType || parsed.agentType || 'task',
+            sessionId: parsed.sessionId || '',
+          },
+        };
+      }
+
+      const agentType = parsed.resolvedAgentType || parsed.agentType || 'task';
       const content = parsed.content || '';
       const sessionId = parsed.sessionId || '';
 
-      const header = description
-        ? `${agentType} Agent: ${description}`
-        : `${agentType} Agent`;
-
-      const lines = content.split('\n');
-      const previewLines = lines.length > 30
-        ? lines.slice(0, 20).join('\n') + `\n\n[... ${lines.length - 20} more lines]`
-        : content;
-
-      const output = `[${header}]\n${sessionId ? `Session: ${sessionId}\n` : ''}\n${previewLines}`;
+      // Aligned to Grok SubagentCompletedOutput.to_model_text(): inline the
+      // full output verbatim (no preview truncation) plus a metadata tag and
+      // a resume footer, so the model can continue the subagent later.
+      const meta = `<subagent_meta>id=${sessionId}, type=${agentType}, turns=1</subagent_meta>`;
+      const footer = `<subagent_result>\nsubagent_id: ${sessionId}\nsubagent_type: ${agentType}\nTo continue this subagent's conversation, use resume_from="${sessionId}"\n</subagent_result>`;
+      const output = `${content}\n\n${meta}\n\n${footer}`;
 
       return {
         type: 'markdown',
         content: output,
-        metadata: { ...result.metadata, agentType, sessionId, lineCount: lines.length },
+        metadata: { ...result.metadata, agentType, sessionId, lineCount: content.split('\n').length },
       };
     } catch {
       return {
@@ -603,7 +704,7 @@ export class SubagentTool extends BaseTool {
   generateUserFacingDescription(input: unknown): string {
     if (typeof input === 'object' && input !== null) {
       const obj = input as Record<string, unknown>;
-      const agentType = (obj.subagent_type as string) || 'Agent';
+      const agentType = (obj.subagent_type as string) || 'task';
       if (obj.name) {
         return `${agentType}: ${obj.name}`;
       }
@@ -613,7 +714,7 @@ export class SubagentTool extends BaseTool {
         return `${agentType}: ${preview}`;
       }
     }
-    return 'Agent';
+    return 'task';
   }
 }
 

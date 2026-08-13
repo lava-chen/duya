@@ -25,9 +25,10 @@ export const TOOL_NAMES = {
   EDIT: 'Edit',
   GLOB: 'Glob',
   GREP: 'Grep',
-  SUBAGENT: 'Agent', // wire name kept as 'Agent' for backward compat — see packages/agent/src/tool/SubagentTool/constants.ts
+  SUBAGENT: 'task', // wire name aligned to Grok `task`; legacy 'Agent' still accepted — see packages/agent/src/tool/SubagentTool/constants.ts
   SKILL: 'Skill',
   TASK: 'Task', // Unified task tool with actions: create, get, list, update, output, stop
+  TODO: 'todo', // Todo list tool aligned to Grok todo_write
   TODO_WRITE: 'TodoWrite',
   ASK_USER_QUESTION: 'AskUserQuestion',
   DISCOVER_SKILLS: 'DiscoverSkills',

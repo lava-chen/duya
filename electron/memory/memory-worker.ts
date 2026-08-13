@@ -35,12 +35,15 @@ import type { AIClient } from '@duya/ai';
 import { Stage1Extractor, type MessageRowShape } from '../../packages/agent/src/memory-rollout/extractor.js';
 import {
   selectEligible,
+  diagnoseEligibility,
+  type EligibilityDiagnostic,
   DEFAULT_IDLE_MS,
   DEFAULT_WINDOW_MS,
 } from '../../packages/agent/src/memory-state/eligibility.js';
 import { drainOutbox } from '../../packages/agent/src/memory-state/outbox.js';
 import { reconcileProjections } from '../../packages/agent/src/memory-state/reconcile.js';
 import { queryEligibleInputs } from '../../packages/agent/src/memory-state/curation_ledger.js';
+import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log.js';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
 import { runCurationCycle } from './curation_publish_orchestrator';
 import type { ProviderConfig } from './curation_publish_orchestrator';
@@ -348,6 +351,7 @@ interface WorkerState {
   shutdownSignal: boolean;
   lastCatalogSyncAt: number;
   lastExtractAt: number;
+  lastPhase1ExplainAt: number;
 }
 
 function createWorker(
@@ -383,6 +387,7 @@ function createWorker(
     shutdownSignal: false,
     lastCatalogSyncAt: 0,
     lastExtractAt: 0,
+    lastPhase1ExplainAt: 0,
   };
 
   const tickIntervalMs = Math.max(1_000, Math.floor(60_000 / Math.max(1, cfg.instancesPerMinute)));
@@ -617,6 +622,45 @@ function createWorker(
     }
     if (extracted > 0) {
       state.lastExtractAt = Date.now();
+    }
+
+    // Explain (to the system log, throttled) why no new rollout was
+    // produced this tick. Without this, an idle phase1 is indistinguishable
+    // from a broken one: `selectEligible` returns [] silently and the
+    // extractor never runs, so no extract_* event is ever written.
+    if (extracted === 0 && Date.now() - state.lastPhase1ExplainAt > cfg.consolidatorIntervalMs) {
+      const explainAt = Date.now();
+      if (cooldownActive) {
+        state.lastPhase1ExplainAt = explainAt;
+        const remainingMs = Math.max(0, cfg.extractCooldownMs - (explainAt - state.lastExtractAt));
+        writeSystemLog({
+          phase: 'phase1',
+          eventType: 'extract_delayed_cooldown',
+          message: `Extraction delayed by cooldown (${Math.ceil(remainingMs / 1000)}s remaining)`,
+          detail: { remaining_ms: remainingMs },
+        });
+      } else if (eligible.length === 0) {
+        state.lastPhase1ExplainAt = explainAt;
+        let diag: EligibilityDiagnostic | null = null;
+        try {
+          diag = diagnoseEligibility(memoryDb, {
+            now: explainAt,
+            idleMs: cfg.idleMs,
+            windowMs: cfg.windowMs,
+            minMessageCount: cfg.minMessageCount,
+          });
+        } catch {
+          diag = null;
+        }
+        writeSystemLog({
+          phase: 'phase1',
+          eventType: 'extract_no_eligible',
+          message: diag
+            ? `No rollouts eligible for extraction (activeMain=${diag.activeMain}/${diag.total}, enoughMessages=${diag.enoughMessages}, idleReady=${diag.idleReady}, alreadyExtracted=${diag.alreadyExtracted})`
+            : 'No rollouts eligible for extraction',
+          detail: diag ?? { note: 'diagnostic query unavailable' },
+        });
+      }
     }
 
     // Drain outbox. Pass the configured rootDir as an allowed root so

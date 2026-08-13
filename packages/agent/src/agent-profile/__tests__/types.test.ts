@@ -16,7 +16,7 @@ describe('PRESET_AGENT_PROFILES', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator')!;
     expect(curator.disallowedTools).toContain('bash');
     expect(curator.disallowedTools).toContain('powershell');
-    expect(curator.disallowedTools).toContain('Agent');
+    expect(curator.disallowedTools).toContain('task');
     expect(curator.disallowedTools).toContain('canvas:*');
     expect(curator.disallowedTools).toContain('duya_cli');
     expect(curator.disallowedTools).toContain('tool_search');
@@ -37,14 +37,14 @@ describe('PRESET_AGENT_PROFILES', () => {
     const curator = PRESET_AGENT_PROFILES.find((p) => p.id === 'memory-curator')!;
     const allTools = [
       'read', 'write', 'edit', 'grep', 'glob',
-      'bash', 'powershell', 'Agent', 'browser', 'canvas_create',
+      'bash', 'powershell', 'task', 'browser', 'canvas_create',
       'show_widget', 'AskUserQuestion', 'duya_cli', 'tool_search',
-      'skill', 'task', 'vision_analyze',
+      'skill', 'todo', 'vision_analyze',
     ];
     const result = resolveAllowedTools(curator, allTools);
     expect(result.allowed.sort()).toEqual(['edit', 'glob', 'grep', 'read', 'write']);
     expect(result.denied).toContain('bash');
-    expect(result.denied).toContain('Agent');
+    expect(result.denied).toContain('task');
     expect(result.isValid).toBe(true);
   });
 

@@ -1130,8 +1130,10 @@ DUYA 的"agent 配置"由三个正交层组合而成。每一层独立选择、�
 
 `ModeModifier` 接口（`packages/agent/src/modes/types.ts`）支持两种范式，一个 mode 选其一：
 
-- **Modifier 范式**（声明式叠加）：声明 `tools` / `prompt` / `hooks`，由 `applyModes` 在 agent loop 之上组合。适合"修饰型" mode。示例：`conductor`（注入 11 个 canvas 工具 + 前置 prompt + 注入 canvasId）、`plan-task`（block 写工具 + 前置只读规划 prompt）、`research`（block 写工具 + canvas 工具 + 前置研究方法论 prompt）。
-- **Orchestrator 范式**（接管整个 stream）：声明 `orchestrator.execute`，自己管 LLM 调用、工具执行、SSE 流、多阶段逻辑。适合"流程型" mode。（当前无 mode 使用此范式；`research` 已迁移为 Modifier 范式）
+- **Modifier 范式**（声明式叠加）：声明 `tools` / `prompt` / `hooks`，由 `applyModes` 在 agent loop 之上组合。适合"修饰型" mode。示例：`conductor`（注入 11 个 canvas 工具 + 前置 prompt + 注入 canvasId）、`plan-task`（block 写工具 + 前置只读规划 prompt）、`research`（session 级状态机，声明 `tracker` + tools + 门控，见下）。
+- **Orchestrator 范式**（接管整个 stream）：声明 `orchestrator.execute`，自己管 LLM 调用、工具执行、SSE 流、多阶段逻辑。适合"流程型" mode。（当前无 mode 使用此范式）
+
+`research`（plan 423）与 `goal`（plan 411）是**状态机 session 模式**：除 modifier 声明外，额外声明一个 `tracker`（实现 `ModeTracker` 接口）挂到 `ModeTrackerEngine`，由 `ModeCoordinator` 每轮注入 `<research-state>`/`<goal-state>` continuation、round-end 持久化快照、按状态运行时工具门控。二者生命周期均跨消息存活，崩溃后折叠为 `awaiting_input` 供用户显式续做。
 
 两种范式共享 `modeModifierRegistry` 的注册、互斥（`exclusiveWith`）、UI 元数据（`display`）机制。
 
@@ -1200,7 +1202,13 @@ max_not_achieved_rounds = 5
 | `packages/agent/src/modes/apply-modes.ts` | `applyModes`：单入口执行 onEnter hooks → prompt prefix/suffix → tools 合并 → toolUseContextPatch → beforeStream hooks；`collectActiveModes` 从 ChatOptions 提取激活 mode ids |
 | `packages/agent/src/modes/conductor-mode.ts` | Conductor modifier（session 级，注入 canvas 工具） |
 | `packages/agent/src/modes/plan/plan-task-mode.ts` | Plan-task modifier（message 级，只读规划） |
-| `packages/agent/src/modes/research-mode.ts` | Research modifier（message 级，prompt + tool block） |
+| `packages/agent/src/modes/research-mode.ts` | Research modifier（session 级，状态机驱动 deep research，plan 423） |
+| `packages/agent/src/modes/research-mode/research-tracker.ts` | ResearchTracker 9 态状态机（实现 `ModeTracker` 接口，挂 ModeTrackerEngine；session 化跨消息续做） |
+| `packages/agent/src/modes/research-mode/research-reminders.ts` | research continuation 渲染（research-state / sentinel / 状态指导） |
+| `packages/agent/src/modes/research-mode/research-tools.ts` | `research_start` / `research_report` / `research_continue` 工具（显式迁移 + 稳定错误码） |
+| `packages/agent/src/modes/research-mode/research-fanout.ts` | `research_fanout` 工具：gathering 按子问题并行调研（复用 SubagentTool + researchAgent） |
+| `packages/agent/src/modes/research-mode/research-config.ts` | `[research]` config.toml 配置读取（enabled / max_converge_rounds） |
+| `src/components/chat/ResearchStatusCard.tsx` | 前端 research 状态卡片（订阅 `research_updated` SSE） |
 | `packages/agent/src/modes/goal/goal-mode.ts` | Goal modifier（session 级，自主多轮目标追踪 + 核验，plan 411） |
 | `packages/agent/src/modes/goal/goal-tracker.ts` | GoalTracker 10 态状态机（实现 `ModeTracker` 接口，挂 ModeTrackerEngine） |
 | `packages/agent/src/modes/goal/goal-reminders.ts` | goal continuation 渲染（goal-state / sentinel / gaps） |

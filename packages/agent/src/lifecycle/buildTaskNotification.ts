@@ -26,6 +26,7 @@ import {
   WORKTREE_TAG,
   type TaskNotificationStatus,
 } from '../constants/taskNotificationXml.js'
+import { GET_TASK_OUTPUT_TOOL_NAME } from '../tool/BackgroundTaskTool/GetTaskOutputTool.js'
 
 /** Default inlined budget for <result>. ~4 KB keeps a 200K-context
  * conversation safe even with a dozen concurrent subagent completions. */
@@ -111,7 +112,7 @@ export function buildResultXml(input: BuildTaskNotificationInput): string | unde
   if (cap <= 0 || raw.length <= cap) {
     return `<result>${escape(raw)}</result>`
   }
-  const pointer = `Output is ${raw.length} chars; see <${OUTPUT_FILE_TAG}>${escape(input.outputFilePath)}</${OUTPUT_FILE_TAG}> for full transcript. Use the Read tool to load specific sections as needed.`
+  const pointer = `Background subagent completed. Use ${GET_TASK_OUTPUT_TOOL_NAME}("${input.taskId}") to see the full output.`
   return `<result>${escape(pointer)}</result>`
 }
 
