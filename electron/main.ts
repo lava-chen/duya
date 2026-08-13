@@ -4,7 +4,7 @@ import { platform as getPlatform, tmpdir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemoryWakeupHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryWakeupHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -724,6 +724,7 @@ registerBrowserWebviewHandlers();
 registerBrowserCookieHandlers();
 registerGitHandlers();
 registerMemoryListHandlers();
+registerMemorySystemLogHandlers();
 registerMemoryWakeupHandlers();
 registerVoiceHandlers();
 

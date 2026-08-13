@@ -32,6 +32,14 @@ const DEFAULT_VISION_SETTINGS: Record<string, string | boolean> = {
   enabled: false,
 };
 
+const DEFAULT_COMPACT_SETTINGS: Record<string, string | boolean> = {
+  provider: '',
+  model: '',
+  baseUrl: '',
+  apiKey: '',
+  enabled: false,
+};
+
 const DEFAULT_OUTPUT_STYLES: Record<string, unknown> = {
   normal: {
     id: 'normal',
@@ -497,6 +505,27 @@ export function registerAgentHandlers(): void {
     delete (merged as Record<string, unknown>).baseURL;
     store.set('auxiliary.vision', merged);
     return (store.getByPath('auxiliary.vision') as Record<string, string | boolean> | undefined) ?? merged;
+  });
+
+  // ==================== Compact model handlers ====================
+  ipcMain.handle('config:compact:get', () => {
+    const store = getConfigStore();
+    return (store.getByPath('auxiliary.compact') as Record<string, unknown> | undefined) ?? DEFAULT_COMPACT_SETTINGS;
+  });
+
+  ipcMain.handle('config:compact:set', (_event, data: { provider?: string; model?: string; baseUrl?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
+    const store = getConfigStore();
+    const current = (store.getByPath('auxiliary.compact') as Record<string, string | boolean> | undefined) ?? DEFAULT_COMPACT_SETTINGS;
+    const merged = {
+      ...current,
+      ...data,
+      // Normalize baseURL/baseUrl -> baseUrl for ConfigStore
+      baseUrl: data.baseUrl || data.baseURL || (current.baseUrl as string),
+    };
+    // Remove baseURL from merged since ConfigStore uses baseUrl
+    delete (merged as Record<string, unknown>).baseURL;
+    store.set('auxiliary.compact', merged);
+    return (store.getByPath('auxiliary.compact') as Record<string, string | boolean> | undefined) ?? merged;
   });
 
   getLogger().info('Agent handlers registered', undefined, LogComponent.AgentCommunicator);

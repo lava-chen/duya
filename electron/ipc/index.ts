@@ -19,7 +19,7 @@ import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerGitHandlers } from './git-handlers';
 import { registerMemoryWakeupHandlers } from './memory-wakeup';
-import { registerMemoryListHandlers } from './memory-handlers';
+import { registerMemoryListHandlers, registerMemorySystemLogHandlers } from './memory-handlers';
 
 export {
   registerSystemHandlers,
@@ -40,4 +40,5 @@ export {
   registerGitHandlers,
   registerMemoryWakeupHandlers,
   registerMemoryListHandlers,
+  registerMemorySystemLogHandlers,
 };
