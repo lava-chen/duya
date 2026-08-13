@@ -1,8 +1,8 @@
 /**
- * packages/agent/src/cli/commands/doctor.ts
+ * packages/cli/src/commands/doctor.ts
  *
  * `duya doctor` — read-only diagnostic that checks the health of DUYA's
- * local runtime, CLI API server, and data stores.
+ * local runtime, CLI API server, data stores, and config files.
  *
  * Design principles (from phase-2a-doctor-audit.md):
  * - Never throws; always produces output (text or JSON)
@@ -15,10 +15,11 @@ import { CliApiClient, type ProbeResult } from '../api/client.js';
 import { readCliApiRuntime } from '../api/runtime-config.js';
 import { isPidAlive } from '../api/runtime-config.js';
 import { renderJson, type OutputFormat } from '../api/format.js';
+import { runConfigChecks } from './doctor-config.js';
 
 export interface CheckResult {
   id: string;
-  category: 'runtime' | 'desktop' | 'database' | 'plugin' | 'session';
+  category: 'config' | 'runtime' | 'desktop' | 'database' | 'plugin' | 'session';
   status: 'ok' | 'warning' | 'error' | 'skipped';
   message: string;
   hint?: string;
@@ -45,6 +46,12 @@ export interface DoctorResult {
 async function runDiagnostics(): Promise<DoctorResult> {
   const checks: CheckResult[] = [];
   let profile: 'production' | 'development' | 'unknown' = 'unknown';
+
+  // ── Phase 0: Offline config checks ──────────────────────────────────────
+  // Reads ~/.duya/config.toml + secrets.json directly from disk so config
+  // diagnostics still work when the desktop app is not running.
+
+  runConfigChecks(checks);
 
   // ── Phase 1: Local runtime checks ───────────────────────────────────────
 
@@ -327,7 +334,7 @@ function renderText(result: DoctorResult): string {
   ];
 
   // Group by category
-  const categories = ['runtime', 'desktop', 'plugin', 'session'] as const;
+  const categories = ['config', 'runtime', 'desktop', 'plugin', 'session'] as const;
   for (const cat of categories) {
     const catChecks = result.checks.filter(c => c.category === cat);
     if (catChecks.length === 0) continue;
