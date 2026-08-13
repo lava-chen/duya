@@ -34,7 +34,7 @@ import type {
 } from './types.js';
 import { getDiscoveredToolPrompts, harvestDiscoveredTools } from './tool-search-discovery.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
-import { collectRecentImageAttachments } from './utils/agent-helpers.js';
+import { collectRecentImageAttachments, appendAutoContinueMessage } from './utils/agent-helpers.js';
 import { isToolVisible } from '../agent-profile/ToolFilter.js';
 import { logger } from '../utils/logger.js';
 
@@ -233,6 +233,7 @@ export async function runAgentLoop(
             `[Agent] Turn ${state.turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`,
           );
           state.messages = await config.convertToLlm(state.messages);
+          appendAutoContinueMessage(state.messages);
         }
       } catch (compactError) {
         const compactErrorMsg =
@@ -268,6 +269,13 @@ export async function runAgentLoop(
 
       // Inject transient deferred tool contexts into the provider payload.
       await injectDeferredContexts(llmMessages, state);
+
+      // Kick off the background prefire summary pass (pass 1) while the main
+      // turn streams. Fire-and-forget: failures are ignored, and the cached
+      // result seeds pass 2 when compaction later triggers.
+      if (deps.compactionController.shouldPrefire()) {
+        deps.compactionController.prefire().catch(() => {});
+      }
 
       const streamGenerator = config.streamFunction(llmMessages, {
         systemPrompt: state.systemPromptContent,
@@ -478,29 +486,25 @@ export async function runAgentLoop(
 
       if (isContextLengthError) {
         logger.warn(
-          `[Agent] Turn ${state.turnCount}: Context length exceeded, attempting reactive compaction`,
+          `[Agent] Turn ${state.turnCount}: Context length exceeded, attempting compaction`,
         );
         try {
-          const triggerError = errorMessage.includes('prompt_too_long')
-            ? ('prompt_too_long' as const)
-            : ('context_length_exceeded' as const);
-          const compactEntry = (await deps.compactionController.compactReactive(
-            triggerError,
-          )) as CompactEntryLike | null | undefined;
+          const compactEntry = (await deps.compactionController.compactProactive()) as CompactEntryLike | null | undefined;
           if (compactEntry) {
             logger.info(
-              `[Agent] Turn ${state.turnCount}: Reactive compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`,
+              `[Agent] Turn ${state.turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`,
             );
             state.messages = await config.convertToLlm(state.messages);
+            appendAutoContinueMessage(state.messages);
             executor.discard();
             state.turnCount--; // Retry with the same turn number.
             continue;
           }
-        } catch (reactiveError) {
-          const reactiveErrorMsg =
-            reactiveError instanceof Error ? reactiveError.message : String(reactiveError);
+        } catch (compactError) {
+          const compactErrorMsg =
+            compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(
-            `[Agent] Turn ${state.turnCount}: Reactive compaction failed: ${reactiveErrorMsg}`,
+            `[Agent] Turn ${state.turnCount}: Compaction failed: ${compactErrorMsg}`,
           );
         }
       }

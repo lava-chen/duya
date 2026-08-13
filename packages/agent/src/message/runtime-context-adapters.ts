@@ -61,6 +61,8 @@ export const RUNTIME_CONTEXT_METADATA_KEYS = {
   attachmentIds: 'attachmentIds',
   /** string[] — attachment names that contributed to the context. */
   attachmentNames: 'attachmentNames',
+  /** number — monotonic cwd "generation" identifying a working-directory switch. */
+  cwdGeneration: 'cwdGeneration',
 } as const;
 
 // ─── Shared options ──────────────────────────────────────────────────────
@@ -250,6 +252,80 @@ export function adaptCustomRuntimeContext(
   });
 }
 
+// ─── 6. Incomplete-todo steering -> source='todo_gate' ───────────────────
+
+/**
+ * Adapts the todo-gate steering directive (injected before finalizing when
+ * unfinished tasks remain) into a runtime_context message with
+ * `source='todo_gate'`. Symmetric to the other runtime adapters so every
+ * synthetic harness message flows through the same RuntimeContextMessage
+ * framework. Defaults to visibility='hidden': the directive is model-only and
+ * must not be re-rendered as a user turn.
+ */
+export function adaptTodoGateContext(
+  content: string,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source: 'todo_gate',
+    content,
+    visibility: options.visibility ?? 'hidden',
+    seqIndex: options.seqIndex,
+    metadata: options.metadata,
+  });
+}
+
+// ─── 7. Working-directory switch -> source='working_directory_switch' ────
+
+/**
+ * Adapts a working-directory switch notice into a runtime_context message.
+ * The monotonic `cwdGeneration` is carried on metadata so consumers can dedupe
+ * and correlate switches without parsing content (mirrors grok's
+ * `cwd_generation`). Defaults to visibility='hidden': a harness directive, not
+ * a user turn.
+ */
+export function adaptWorkingDirectorySwitch(
+  content: string,
+  cwdGeneration: number,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source: 'working_directory_switch',
+    content,
+    visibility: options.visibility ?? 'hidden',
+    seqIndex: options.seqIndex,
+    metadata: {
+      ...options.metadata,
+      [RUNTIME_CONTEXT_METADATA_KEYS.cwdGeneration]: cwdGeneration,
+    },
+  });
+}
+
+// ─── 8. Post-compaction continuation -> source='auto_continue' ───────────
+
+/**
+ * Adapts the post-compaction "keep working" directive into a runtime_context
+ * message. Mirrors grok's `AutoContinue`: after history is collapsed to a
+ * summary, this nudges the model to continue the active task off the summary
+ * instead of stopping or re-acknowledging the compaction boundary. Transient
+ * (excluded from persistence) and mid-turn (does not start a new turn).
+ */
+export function adaptAutoContinueContext(
+  content: string,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source: 'auto_continue',
+    content,
+    visibility: options.visibility ?? 'hidden',
+    seqIndex: options.seqIndex,
+    metadata: options.metadata,
+  });
+}
+
 // ─── Deduplication ───────────────────────────────────────────────────────
 
 /**
@@ -272,6 +348,7 @@ export function dedupeRuntimeContextMessages<T extends AgentMessage>(
 ): T[] {
   const seenMailboxRowIds = new Set<string>();
   const seenTaskIds = new Set<string>();
+  const seenCwdGenerations = new Set<number>();
   const result: T[] = [];
 
   for (const message of messages) {
@@ -305,6 +382,21 @@ export function dedupeRuntimeContextMessages<T extends AgentMessage>(
       }
       if (taskId) {
         seenTaskIds.add(taskId);
+      }
+      result.push(message);
+      continue;
+    }
+
+    if (message.source === 'working_directory_switch') {
+      const gen = readNumber(
+        message.metadata,
+        RUNTIME_CONTEXT_METADATA_KEYS.cwdGeneration,
+      );
+      if (gen !== undefined) {
+        if (seenCwdGenerations.has(gen)) {
+          continue;
+        }
+        seenCwdGenerations.add(gen);
       }
       result.push(message);
       continue;
@@ -380,4 +472,12 @@ function readString(
 ): string | undefined {
   const value = metadata?.[key];
   return typeof value === 'string' ? value : undefined;
+}
+
+function readNumber(
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): number | undefined {
+  const value = metadata?.[key];
+  return typeof value === 'number' ? value : undefined;
 }

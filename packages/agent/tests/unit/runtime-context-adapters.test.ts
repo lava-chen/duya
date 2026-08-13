@@ -7,9 +7,11 @@ import { projectPersistenceMessages } from '../../src/message/message-projectors
 import {
   RUNTIME_CONTEXT_METADATA_KEYS,
   adaptAttachmentContext,
+  adaptAutoContinueContext,
   adaptCustomRuntimeContext,
   adaptMailboxRows,
   adaptTaskNotificationXml,
+  adaptWorkingDirectorySwitch,
   dedupeRuntimeContextMessages,
   projectRuntimeContextToProviderMessage,
   type RuntimeContextAdapterOptions,
@@ -306,6 +308,28 @@ describe('dedupeRuntimeContextMessages', () => {
     expect(result[0].id).toBe('tn-1');
   });
 
+  it('drops a working-directory switch with a repeated cwdGeneration', () => {
+    const ids = deterministicIds('cwd');
+    const first = adaptWorkingDirectorySwitch('cwd -> /a', 5, options(ids.next));
+    const second = adaptWorkingDirectorySwitch('cwd -> /a', 5, options(ids.next));
+
+    const result = dedupeRuntimeContextMessages([first, second]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('cwd-1');
+  });
+
+  it('keeps distinct cwdGenerations', () => {
+    const ids = deterministicIds('cwd');
+    const g1 = adaptWorkingDirectorySwitch('cwd -> /a', 1, options(ids.next));
+    const g2 = adaptWorkingDirectorySwitch('cwd -> /b', 2, options(ids.next));
+    const g1again = adaptWorkingDirectorySwitch('cwd -> /a', 1, options(ids.next));
+
+    const result = dedupeRuntimeContextMessages([g1, g2, g1again]);
+
+    expect(result.map((m) => m.id)).toEqual(['cwd-1', 'cwd-2']);
+  });
+
   it('keeps distinct task notifications and drops only the duplicate', () => {
     const ids = deterministicIds('tn');
     const a1 = adaptTaskNotificationXml(makeNotificationXml('task-a'), options(ids.next));
@@ -440,6 +464,77 @@ describe('adaptCustomRuntimeContext', () => {
   });
 });
 
+// ─── Working directory switch ────────────────────────────────────────────
+
+describe('adaptWorkingDirectorySwitch', () => {
+  it('produces a hidden runtime_context carrying cwdGeneration', () => {
+    const ids = deterministicIds('cwd');
+    const msg = adaptWorkingDirectorySwitch(
+      'Working directory changed to /repo/sub',
+      3,
+      options(ids.next),
+    );
+
+    expect(msg.role).toBe('runtime_context');
+    expect(msg.source).toBe('working_directory_switch');
+    expect(msg.visibility).toBe('hidden');
+    expect(msg.content).toBe('Working directory changed to /repo/sub');
+    expect(msg.metadata).toMatchObject({
+      [RUNTIME_CONTEXT_METADATA_KEYS.cwdGeneration]: 3,
+    });
+  });
+
+  it('projects to a user-role provider message with runtimeContext mark', () => {
+    const ids = deterministicIds('cwd');
+    const msg = adaptWorkingDirectorySwitch('cwd -> /x', 1, options(ids.next));
+
+    const projected = projectRuntimeContextToProviderMessage(msg);
+
+    expect(projected.role).toBe('user');
+    expect(projected.metadata).toEqual({
+      runtimeContext: true,
+      source: 'working_directory_switch',
+    });
+  });
+
+  it('records seqIndex in metadata', () => {
+    const ids = deterministicIds('cwd');
+    const msg = adaptWorkingDirectorySwitch('cwd -> /y', 2, options(ids.next, { seqIndex: 7 }));
+
+    expect(msg.metadata).toMatchObject({ seqIndex: 7 });
+  });
+});
+
+// ─── AutoContinue (post-compaction continuation) ─────────────────────────
+
+describe('adaptAutoContinueContext', () => {
+  it('produces a hidden runtime_context with source=auto_continue', () => {
+    const ids = deterministicIds('ac');
+    const msg = adaptAutoContinueContext(
+      'Compaction done. Keep working.',
+      options(ids.next),
+    );
+
+    expect(msg.role).toBe('runtime_context');
+    expect(msg.source).toBe('auto_continue');
+    expect(msg.visibility).toBe('hidden');
+    expect(msg.content).toBe('Compaction done. Keep working.');
+  });
+
+  it('projects to a user-role provider message with runtimeContext mark', () => {
+    const ids = deterministicIds('ac');
+    const msg = adaptAutoContinueContext('keep going', options(ids.next));
+
+    const projected = projectRuntimeContextToProviderMessage(msg);
+
+    expect(projected.role).toBe('user');
+    expect(projected.metadata).toEqual({
+      runtimeContext: true,
+      source: 'auto_continue',
+    });
+  });
+});
+
 // ─── Runtime context is persisted ───────────────────────────────────────
 
 describe('runtime context is persisted', () => {
@@ -483,6 +578,35 @@ describe('runtime context is persisted', () => {
     for (const message of persisted) {
       expect(message.role).toBe('user');
     }
+  });
+
+  it('preserves cwdGeneration through the persistence projection', () => {
+    const ids = deterministicIds('cwd');
+    const msg = adaptWorkingDirectorySwitch('cwd -> /z', 9, options(ids.next));
+
+    const persisted = projectPersistenceMessages([msg]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].role).toBe('user');
+    expect(persisted[0].metadata).toMatchObject({
+      runtimeContext: true,
+      source: 'working_directory_switch',
+      [RUNTIME_CONTEXT_METADATA_KEYS.cwdGeneration]: 9,
+    });
+  });
+
+  it('persists auto_continue as a user-role transient runtime message', () => {
+    const ids = deterministicIds('ac');
+    const msg = adaptAutoContinueContext('keep working', options(ids.next));
+
+    const persisted = projectPersistenceMessages([msg]);
+
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0].role).toBe('user');
+    expect(persisted[0].metadata).toMatchObject({
+      runtimeContext: true,
+      source: 'auto_continue',
+    });
   });
 });
 

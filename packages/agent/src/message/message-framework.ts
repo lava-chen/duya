@@ -12,6 +12,9 @@ export type RuntimeContextSource =
   | 'memory'
   | 'mode'
   | 'system'
+  | 'todo_gate'
+  | 'working_directory_switch'
+  | 'auto_continue'
   | 'custom';
 
 /**
@@ -219,6 +222,23 @@ export interface PromptSegment {
 
 export function isVisibleAgentMessage(message: AgentMessage): boolean {
   return message.visibility === 'visible';
+}
+
+/**
+ * Whether a synthetic {@link RuntimeContextMessage} starts a new prompt turn
+ * or is a mid-turn injection. Aligns with grok's `starts_prompt_turn()`:
+ * only server/background wake-ups (task/subagent completed, notification
+ * drain) consume a turn boundary; steering directives (system reminders,
+ * todo gate, working-directory switch, project instructions) are mid-turn and
+ * must not change the turn relationship with neighbouring real user turns.
+ */
+export function runtimeContextStartsPromptTurn(source: RuntimeContextSource): boolean {
+  switch (source) {
+    case 'background_notification':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**

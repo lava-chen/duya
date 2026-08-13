@@ -643,7 +643,10 @@ export function buildAgentsMdPrompt(files: AgentsFileInfo[]): string {
   // gives the prompt-injection guard (stripSystemReminder) a strippable
   // boundary on the outgoing payload.
   const inner = `${MEMORY_INSTRUCTION_PROMPT}\n\n${memories.join('\n\n')}`
-  return `<system-reminder>\n${inner}\n</system-reminder>`
+  // Align with grok's subagent_prompt.md: project instructions are wrapped in
+  // a <project_instructions_spec> block. The outer <system-reminder> wrapper is
+  // kept so the outgoing strip guard and the model training slot stay intact.
+  return `<system-reminder>\n<project_instructions_spec>\n${inner}\n</project_instructions_spec>\n</system-reminder>`
 }
 
 // =============================================================================
