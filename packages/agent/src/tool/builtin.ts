@@ -14,6 +14,7 @@ import { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.j
 import { WriteTool } from './WriteTool/WriteTool.js';
 import { GrepTool } from './GrepTool/GrepTool.js';
 import { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
+import { ApplyPatchTool, applyPatchTool } from './ApplyPatchTool/ApplyPatchTool.js';
 import { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 import { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 import { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
@@ -65,14 +66,6 @@ export function createBuiltinRegistry(
     enabledPluginIds?: Set<string>;
     // Browser backend mode: 'auto' (degradation chain) | 'extension' | 'built-in'
     browserBackendMode?: BrowserBackendMode;
-    /**
-     * @deprecated Plan 224 Phase 3: canvas tools are now injected by
-     * `conductorMode.tools.inject` via `applyModes` in `DuyaAgent.streamChat`.
-     * This flag is no longer read by `createBuiltinRegistry` and is kept
-     * only to avoid breaking callers that still pass it. Remove in a
-     * future cleanup phase.
-     */
-    conductorMode?: boolean;
   }
 ): ToolRegistry {
   const registry = new ToolRegistry();
@@ -115,6 +108,10 @@ export function createBuiltinRegistry(
   // Edit tool
   const editToolInstance = new EditTool();
   registry.register(editToolInstance.toTool(), editToolInstance, { exposeMode: 'always' });
+
+  // Apply patch tool - unified diff application (Codex format)
+  const applyPatchToolInstance = new ApplyPatchTool();
+  registry.register(applyPatchToolInstance.toTool(), applyPatchToolInstance, { exposeMode: 'always' });
 
   // Glob tool
   const globToolInstance = new GlobTool();

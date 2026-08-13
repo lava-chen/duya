@@ -240,6 +240,17 @@ function createPermissionRequiredMessage(
 }
 
 /**
+ * Wrap a successful tool result in a model-visible envelope (borrowed from
+ * Codex): a deterministic status header at the START (cache-friendly, since it
+ * only depends on the tool name, not on timing) and a duration footer at the
+ * END (so the variable wall-time token sits at the very tail of the block and
+ * invalidates only the trailing cache, not the bulk of the result content).
+ */
+function buildToolResultEnvelope(toolName: string, durationMs: number, content: string): string {
+  return `[completed] ${toolName}\n${content}\n[Duration: ${durationMs}ms]`
+}
+
+/**
  * Creates a detailed progress message for tool execution
  */
 function createDetailedProgressMessage(
@@ -1447,7 +1458,7 @@ export class StreamingToolExecutor {
         messages.push(
           createErrorMessage(
             tool.id,
-            result.result,
+            `[failed] ${tool.block.name}\n${result.result}`,
             true,
           ),
         )
@@ -1466,14 +1477,14 @@ export class StreamingToolExecutor {
       tool.stage = 'finalizing'
       this.updateProgress(tool, { stage: 'finalizing', currentOperation: 'Finalizing...', percentComplete: 95 })
 
-      const resultContent = typeof result.result === 'string'
+      const rawContent = typeof result.result === 'string'
         ? result.result
         : JSON.stringify(result.result)
 
       if (isSubagentTool) {
         let parsedResult: Record<string, unknown> | null = null
         try {
-          parsedResult = JSON.parse(resultContent) as Record<string, unknown>
+          parsedResult = JSON.parse(rawContent) as Record<string, unknown>
         } catch {
           parsedResult = null
         }
@@ -1484,15 +1495,15 @@ export class StreamingToolExecutor {
           background: parsedResult?.background === true,
           taskId: parsedResult?.taskId,
           subAgentSessionId: parsedResult?.sessionId,
-          resultLength: resultContent.length,
+          resultLength: rawContent.length,
         }, 'SubAgent')
       }
 
       // Check if result indicates a permission is required
       // (legacy string-sentinel path, kept as a fallback for tools that have
       // not been migrated to throw PermissionRequiredError).
-      if (resultContent.includes('<tool_use_permission_required>')) {
-        const match = resultContent.match(/<tool_use_permission_required>(.*?)<\/tool_use_permission_required>/);
+      if (rawContent.includes('<tool_use_permission_required>')) {
+        const match = rawContent.match(/<tool_use_permission_required>(.*?)<\/tool_use_permission_required>/);
         if (match) {
           try {
             const permissionInfo = JSON.parse(match[1]);
@@ -1504,6 +1515,11 @@ export class StreamingToolExecutor {
         }
       }
 
+      // Wrap the result in a status/duration envelope so the model can tell
+      // whether the step succeeded and how expensive it was (Codex-style).
+      const durationMs = Date.now() - startTime;
+      const resultContent = buildToolResultEnvelope(tool.block.name, durationMs, rawContent);
+
       // Build the tool_result message. When the tool returned inline images
       // (e.g. ReadTool on a pure image file), attach them as ImageContent
       // blocks so vision-capable main models see the image directly in the
@@ -1514,7 +1530,7 @@ export class StreamingToolExecutor {
         role: 'tool',
         content: resultContent,
         tool_call_id: tool.id,
-        duration_ms: Date.now() - startTime,
+        duration_ms: durationMs,
       };
       if (result.images && result.images.length > 0) {
         toolMessage.content = [

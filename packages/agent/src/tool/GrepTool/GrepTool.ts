@@ -19,9 +19,10 @@ import { isPathWithinRoots } from '../allowedRoots.js';
 
 const execAsync = promisify(exec);
 
-// Long matching lines are truncated so one pathological line cannot blow up
-// the model context. Mirrors the default used by grok-build's grep tool.
-const MAX_LINE_LENGTH = 1000;
+// Long matching lines are truncated to 500 chars so one pathological line
+// cannot blow up the model context, and identical reads keep a stable prefix
+// (cache-friendly). Mirrors the compactness goal of grok-build's grep tool.
+const MAX_LINE_LENGTH = 500;
 const LONG_LINE_SUFFIX = ' ...(line truncated)';
 
 // ============================================================
@@ -34,6 +35,8 @@ export interface GrepInput {
   case_sensitive?: boolean;
   max_results?: number;
   file_pattern?: string;
+  literal?: boolean;
+  context?: number;
   [key: string]: unknown;
 }
 
@@ -47,6 +50,14 @@ export interface GrepMatch {
 export interface GrepToolOptions {
   workingDirectory?: string;
   allowedRoots?: string[];
+}
+
+export interface GrepSearchResult {
+  matches: GrepMatch[];
+  /** True total number of matching lines found across all files. */
+  total: number;
+  /** True when more matches exist than were returned (total > matches.length). */
+  truncated: boolean;
 }
 
 // ============================================================
@@ -71,11 +82,14 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
     return { valid: false, error: 'pattern cannot be empty' };
   }
 
-  // Validate regex
-  try {
-    new RegExp(obj.pattern as string);
-  } catch {
-    return { valid: false, error: 'pattern is not a valid regex' };
+  // Validate regex (skip when literal matching is enabled, since a literal
+  // string may legally contain regex metacharacters)
+  if (!obj.literal) {
+    try {
+      new RegExp(obj.pattern as string);
+    } catch {
+      return { valid: false, error: 'pattern is not a valid regex' };
+    }
   }
 
   if (obj.path !== undefined && typeof obj.path !== 'string') {
@@ -84,6 +98,16 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
 
   if (obj.case_sensitive !== undefined && typeof obj.case_sensitive !== 'boolean') {
     return { valid: false, error: 'case_sensitive must be a boolean' };
+  }
+
+  if (obj.literal !== undefined && typeof obj.literal !== 'boolean') {
+    return { valid: false, error: 'literal must be a boolean' };
+  }
+
+  if (obj.context !== undefined) {
+    if (typeof obj.context !== 'number' || !Number.isInteger(obj.context) || obj.context < 0) {
+      return { valid: false, error: 'context must be a non-negative integer' };
+    }
   }
 
   if (obj.max_results !== undefined) {
@@ -107,6 +131,8 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
       case_sensitive: obj.case_sensitive as boolean | undefined,
       max_results: obj.max_results as number | undefined,
       file_pattern: obj.file_pattern as string | undefined,
+      literal: obj.literal as boolean | undefined,
+      context: obj.context as number | undefined,
     },
   };
 }
@@ -120,7 +146,7 @@ export function validateGrepInput(input: unknown): { valid: true; data: GrepInpu
  */
 export class GrepTool extends BaseTool {
   readonly name = 'grep';
-  readonly description = 'Search for content matching a pattern in the specified directory. Returns matching lines with position information. Supports regular expressions.';
+  readonly description = 'Search file contents for a pattern in the specified directory. Returns matching lines with file paths and line numbers. Supports regular expressions or literal strings (literal=true), and optional context lines. Respects .gitignore. Output is capped at `max_results` matches (default 100); long matching lines are truncated to 500 characters — use read to see a full line. The result includes `total` (the true number of matching lines across all files) and `truncated` (true when more matches exist than were returned) so you know whether the result was cut off and can narrow the search or page through with a file_pattern.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -143,6 +169,14 @@ export class GrepTool extends BaseTool {
       file_pattern: {
         type: 'string',
         description: 'File filter pattern, e.g. *.ts, *.js',
+      },
+      literal: {
+        type: 'boolean',
+        description: 'Treat the pattern as a literal string instead of a regex (default: false)',
+      },
+      context: {
+        type: 'number',
+        description: 'Number of context lines to show before and after each match (default: 0)',
       },
     },
     required: ['pattern'],
@@ -194,8 +228,10 @@ export class GrepTool extends BaseTool {
     searchPath: string,
     caseSensitive: boolean,
     filePattern?: string,
-    maxResults?: number
-  ): Promise<GrepMatch[]> {
+    maxResults?: number,
+    literal = false,
+    context = 0
+  ): Promise<GrepSearchResult> {
     // Directories to skip (common heavy directories that are unlikely to contain relevant code)
     const skipDirs = [
       'node_modules', '.git', '.next', 'dist', 'build', 'coverage',
@@ -213,30 +249,34 @@ export class GrepTool extends BaseTool {
       '--column',
       '--no-heading',
       caseSensitive ? '' : '--ignore-case',
-      // Exclude common heavy directories
+      literal ? '--fixed-strings' : '',
       ...skipDirs.flatMap(dir => ['--glob', `!${dir}`]),
       // Exclude hidden directories
       '--glob', '!.*/',
       filePattern ? '--glob' : '',
       filePattern || '',
+      ...(context > 0 ? ['--context', String(context)] : []),
       '--',
       pattern,
       searchPath,
     ].filter(Boolean);
 
-    return new Promise<GrepMatch[]>((resolve, reject) => {
+    return new Promise<GrepSearchResult>((resolve, reject) => {
       // Use spawn (no shell) so user-controlled pattern/path cannot inject
-      // shell metacharacters. Reading stdout incrementally lets us kill rg as
-      // soon as we have enough results instead of waiting for a full repo scan.
+      // shell metacharacters. We stream stdout line-by-line: every match line
+      // increments the total counter so the report stays accurate even when
+      // the result budget is exceeded, but only the first `maxResults` matches
+      // are retained (bounded memory). rg runs to completion.
       const child = spawn('rg', args, {
         cwd: this.workingDirectory,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
-      let buffer = '';
+      let lineBuf = '';
       let stderr = '';
       let settled = false;
-      let killedForLimit = false;
+      const matches: GrepMatch[] = [];
+      let total = 0;
       const settle = (fn: () => void) => {
         if (!settled) {
           settled = true;
@@ -244,13 +284,30 @@ export class GrepTool extends BaseTool {
         }
       };
 
+      // ripgrep emits `path:line:column:content`. On Windows the path contains
+      // a drive-letter colon (e.g. `C:\...`), so a naive `split(':')` on the
+      // first colon breaks. A greedy `.*` in the prefix captures the whole path
+      // (including the drive colon) while the trailing `:digits:digits:` anchors
+      // the line/column numbers.
+      const linePattern = /^(.*):(\d+):(\d+):(.*)$/;
+      const handleLine = (line: string): void => {
+        if (!line.trim()) return;
+        const m = line.match(linePattern);
+        if (!m) return;
+        total++;
+        if (maxResults && matches.length >= maxResults) return;
+        const lineNum = parseInt(m[2], 10);
+        const column = parseInt(m[3], 10);
+        if (isNaN(lineNum) || isNaN(column)) return;
+        matches.push({ file: m[1], line: lineNum, column, content: this.truncateLine(m[4].trim()) });
+      };
+
       child.stdout?.on('data', (chunk: Buffer) => {
-        buffer += chunk.toString();
-        // Re-parse incrementally; once the result budget is filled, kill rg
-        // so it stops walking the tree. Final parsing happens on 'close'.
-        if (maxResults && this.parseRipgrepOutput(buffer, maxResults).length >= maxResults) {
-          killedForLimit = true;
-          child.kill();
+        lineBuf += chunk.toString();
+        let idx: number;
+        while ((idx = lineBuf.indexOf('\n')) !== -1) {
+          handleLine(lineBuf.slice(0, idx));
+          lineBuf = lineBuf.slice(idx + 1);
         }
       });
       child.stderr?.on('data', (chunk: Buffer) => {
@@ -259,13 +316,13 @@ export class GrepTool extends BaseTool {
       child.on('error', (error) => settle(() => reject(error)));
       child.on('close', (code) => {
         settle(() => {
-          // Exit code 0 = success, 1 = no matches; a kill due to hitting the
-          // result limit is also a successful short-circuit.
-          if (!killedForLimit && code !== 0 && code !== 1) {
+          if (lineBuf.trim()) handleLine(lineBuf);
+          // Exit code 0 = success, 1 = no matches.
+          if (code !== 0 && code !== 1) {
             reject(new Error(stderr.trim() || `ripgrep exited with code ${code}`));
             return;
           }
-          resolve(this.parseRipgrepOutput(buffer, maxResults));
+          resolve({ matches, total, truncated: total > matches.length });
         });
       });
     });
@@ -318,9 +375,11 @@ export class GrepTool extends BaseTool {
     pattern: string,
     searchPath: string,
     caseSensitive: boolean,
-    maxResults?: number
-  ): Promise<GrepMatch[]> {
+    maxResults?: number,
+    literal = false
+  ): Promise<GrepSearchResult> {
     const matches: GrepMatch[] = [];
+    let total = 0;
 
     try {
       await this.walkDirectory(searchPath, async (filePath) => {
@@ -334,18 +393,21 @@ export class GrepTool extends BaseTool {
             if (maxResults && matches.length >= maxResults) break;
 
             const line = lines[i];
-            const localRegex = new RegExp(pattern, caseSensitive ? 'g' : 'gi');
+            const effectivePattern = literal
+              ? pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+              : pattern;
+            const localRegex = new RegExp(effectivePattern, caseSensitive ? 'g' : 'gi');
             let match;
 
             while ((match = localRegex.exec(line)) !== null) {
+              total++;
+              if (maxResults && matches.length >= maxResults) break;
               matches.push({
                 file: filePath,
                 line: i + 1,
                 column: match.index + 1,
                 content: this.truncateLine(line),
               });
-
-              if (maxResults && matches.length >= maxResults) break;
             }
           }
         } catch {
@@ -356,7 +418,7 @@ export class GrepTool extends BaseTool {
       // Directory not found, etc.
     }
 
-    return matches;
+    return { matches, total, truncated: total > matches.length };
   }
 
   /**
@@ -428,7 +490,7 @@ export class GrepTool extends BaseTool {
       };
     }
 
-    const { pattern, path, case_sensitive = false, max_results, file_pattern } = validation.data;
+    const { pattern, path, case_sensitive = false, max_results, file_pattern, literal = false, context = 0 } = validation.data;
     const effectiveMaxResults = max_results ?? this.defaultMaxResults;
 
     // Per-call working directory: prefer the live one passed in from the
@@ -471,11 +533,11 @@ export class GrepTool extends BaseTool {
 
     try {
       const hasRipgrep = await this.isRipgrepAvailable();
-      const results = hasRipgrep
-        ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults)
-        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults);
+      const searchResult = hasRipgrep
+        ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults, literal, context)
+        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal);
 
-      const truncated = results.length >= effectiveMaxResults;
+      const { matches: results, total, truncated } = searchResult;
 
       if (results.length === 0) {
         return {
@@ -484,10 +546,11 @@ export class GrepTool extends BaseTool {
           result: JSON.stringify({
             success: true,
             matches: [],
-            total: 0,
+            total,
+            truncated,
             message: 'No matches found',
           }),
-          metadata: { matchCount: 0, engine: hasRipgrep ? 'ripgrep' : 'node' },
+          metadata: { matchCount: 0, total, truncated, engine: hasRipgrep ? 'ripgrep' : 'node' },
         };
       }
 
@@ -504,12 +567,12 @@ export class GrepTool extends BaseTool {
         result: JSON.stringify({
           success: true,
           matches: formattedResults,
-          total: results.length,
+          total,
           truncated,
           searchPath,
           engine: hasRipgrep ? 'ripgrep' : 'node',
         }),
-        metadata: { matchCount: results.length, truncated, engine: hasRipgrep ? 'ripgrep' : 'node' },
+        metadata: { matchCount: results.length, total, truncated, engine: hasRipgrep ? 'ripgrep' : 'node' },
       };
     } catch (error) {
       return {
