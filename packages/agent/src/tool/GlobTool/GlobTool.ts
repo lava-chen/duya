@@ -24,7 +24,7 @@ import { isPathWithinRoots } from '../allowedRoots.js';
 
 export class GlobTool extends BaseTool {
   readonly name = 'glob';
-  readonly description = 'Search for files matching a glob pattern. Use glob patterns like **/*.ts to find all TypeScript files recursively, or *.json for files in the current directory only.';
+  readonly description = 'Search for files matching a glob pattern. Use glob patterns like **/*.ts to find all TypeScript files recursively, or *.json for files in the current directory only. Respects .gitignore (and falls back to skipping heavy dirs like node_modules when no .gitignore is present). Returns paths relative to the search directory, capped at max_results (default 100).';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -318,6 +318,35 @@ export function isPatternSafe(pattern: string): { safe: boolean; reason?: string
 // Glob Execution
 // ============================================================
 
+type GlobMatcher = (str: string) => boolean;
+
+interface GitignoreRules {
+  ignore: GlobMatcher[];
+  negate: GlobMatcher[];
+}
+
+/**
+ * Parses .gitignore content into a list of non-blank, non-comment
+ * patterns. A trailing slash (directory-only marker) is stripped so the
+ * remaining pattern still matches the directory path itself. Negation
+ * patterns (leading `!`) are preserved for the caller to split out.
+ */
+export function parseGitignore(content: string): string[] {
+  const patterns: string[] = [];
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) {
+      continue;
+    }
+    let pattern = line;
+    if (pattern.endsWith('/')) {
+      pattern = pattern.slice(0, -1);
+    }
+    patterns.push(pattern);
+  }
+  return patterns;
+}
+
 /**
  * Execute glob search
  */
@@ -392,13 +421,6 @@ export async function executeGlob(
   const results: string[] = [];
   let truncated = false;
 
-  // Directories to skip (common heavy directories that are unlikely to contain relevant code)
-  const skipDirs = new Set([
-    'node_modules', '.git', '.next', 'dist', 'build', 'coverage',
-    '__pycache__', '.cache', '.parcel-cache', '.turbo',
-    'vendor', 'target', 'bin', 'obj',
-  ]);
-
   // Hard ceiling on recursion depth. A well-formed source repo rarely
   // exceeds 15 levels; 30 catches pathological inputs (cyclic symlink
   // chains that survived path resolution, or arbitrarily-deep
@@ -406,6 +428,100 @@ export async function executeGlob(
   // cap, walkDir would follow a symlink loop until the JS stack
   // overflowed.
   const MAX_WALK_DEPTH = 30;
+
+  // Heavy directories ignored only as a fallback (when no .gitignore
+  // governs a subtree). Well-formed repos rely on their own .gitignore
+  // instead.
+  const defaultIgnoreDirs = new Set([
+    'node_modules', '.git', '.next', 'dist', 'build', 'coverage',
+    '__pycache__', '.cache', '.parcel-cache', '.turbo',
+    'vendor', 'target', 'bin', 'obj',
+  ]);
+
+  // Per-directory .gitignore matcher cache, scoped to this call so
+  // repeated executeGlob calls do not leak rules across runs.
+  const gitignoreCache = new Map<string, GitignoreRules | null>();
+
+  async function loadGitignoreRules(dir: string): Promise<GitignoreRules | null> {
+    if (gitignoreCache.has(dir)) {
+      return gitignoreCache.get(dir) as GitignoreRules | null;
+    }
+    let rules: GitignoreRules | null = null;
+    try {
+      const content = await fs.promises.readFile(path.join(dir, '.gitignore'), 'utf8');
+      const ignore: GlobMatcher[] = [];
+      const negate: GlobMatcher[] = [];
+      for (const pattern of parseGitignore(content)) {
+        if (pattern.startsWith('!')) {
+          negate.push(picomatch(pattern.slice(1), { dot: true }));
+        } else {
+          ignore.push(picomatch(pattern, { dot: true }));
+        }
+      }
+      rules = { ignore, negate };
+    } catch {
+      rules = null;
+    }
+    gitignoreCache.set(dir, rules);
+    return rules;
+  }
+
+  // Returns whether `targetPath` (a file or directory) is ignored by any
+  // .gitignore from the search root down to its parent directory, and
+  // whether any .gitignore provided rules for that subtree (used to
+  // decide the hardcoded fallback). Rules are evaluated against the path
+  // relative to each .gitignore's own directory.
+  async function getIgnoreDecision(targetPath: string): Promise<{ ignored: boolean; hasGitignore: boolean }> {
+    // Ancestor directories from the search root down to targetPath's
+    // parent (targetPath itself is included when it is a directory, which
+    // is harmless since no pattern matches the empty relative path).
+    const dirs: string[] = [];
+    let current = targetPath;
+    while (current !== searchDir) {
+      dirs.unshift(current);
+      const parent = path.dirname(current);
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+    dirs.unshift(searchDir);
+
+    let hasGitignore = false;
+    for (const dir of dirs) {
+      const rules = await loadGitignoreRules(dir);
+      if (!rules) {
+        continue;
+      }
+      hasGitignore = true;
+
+      const relToDir = path.relative(dir, targetPath);
+      let ignoredByRule = false;
+      for (const m of rules.ignore) {
+        if (m(relToDir)) {
+          ignoredByRule = true;
+          break;
+        }
+      }
+      if (!ignoredByRule) {
+        continue;
+      }
+
+      // A matching negation pattern re-includes the path.
+      let negated = false;
+      for (const n of rules.negate) {
+        if (n(relToDir)) {
+          negated = true;
+          break;
+        }
+      }
+      if (!negated) {
+        return { ignored: true, hasGitignore };
+      }
+    }
+
+    return { ignored: false, hasGitignore };
+  }
 
   async function walkDir(dir: string, currentDepth: number = 0): Promise<void> {
     if (currentDepth >= MAX_WALK_DEPTH) {
@@ -438,8 +554,16 @@ export async function executeGlob(
         continue;
       }
 
-      // Skip common heavy directories
-      if (entry.isDirectory() && skipDirs.has(entry.name)) {
+      const isDir = entry.isDirectory();
+
+      // Respect .gitignore rules for both files and directories; fall
+      // back to the hardcoded heavy-directory list only when no
+      // .gitignore governs a directory subtree.
+      const decision = await getIgnoreDecision(fullPath);
+      if (decision.ignored) {
+        continue;
+      }
+      if (isDir && !decision.hasGitignore && defaultIgnoreDirs.has(entry.name)) {
         continue;
       }
 
@@ -447,7 +571,7 @@ export async function executeGlob(
         results.push(relativePath);
       }
 
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+      if (isDir && !entry.name.startsWith('.')) {
         await walkDir(fullPath, currentDepth + 1);
       }
     }

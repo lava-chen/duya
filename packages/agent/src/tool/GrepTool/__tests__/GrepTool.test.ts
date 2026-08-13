@@ -109,8 +109,10 @@ describe('GrepTool result limit', () => {
     const result = await tool.execute({ pattern: 'needle', max_results: 10 });
     expect(result.error).toBeFalsy();
     const parsed = JSON.parse(result.result);
-    expect(parsed.total).toBeLessThanOrEqual(10);
+    // total is the true count (50 lines in many.md + 1 line in a.md = 51), matches are capped at 10
+    expect(parsed.total).toBe(51);
     expect(parsed.truncated).toBe(true);
+    expect(parsed.matches.length).toBe(10);
   });
 
   it('defaults to 100 results matching the documented schema', async () => {
@@ -120,7 +122,10 @@ describe('GrepTool result limit', () => {
     const result = await tool.execute({ pattern: 'needle' });
     expect(result.error).toBeFalsy();
     const parsed = JSON.parse(result.result);
-    expect(parsed.total).toBeLessThanOrEqual(100);
+    // total is the true count (150 lines in many.md + 1 line in a.md = 151), matches are capped at 100
+    expect(parsed.total).toBe(151);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.matches.length).toBe(100);
   });
 });
 

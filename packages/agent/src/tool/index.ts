@@ -8,6 +8,7 @@ export { ReadTool, createReadTool, readFileContent } from './ReadTool/ReadTool.j
 export { WriteTool, type WriteToolInput } from './WriteTool/WriteTool.js';
 export { GrepTool, type GrepInput, type GrepMatch } from './GrepTool/GrepTool.js';
 export { EditTool, editTool, executeEdit } from './EditTool/EditTool.js';
+export { ApplyPatchTool, applyPatchTool, parseCodexPatch, applyHunkToLines } from './ApplyPatchTool/ApplyPatchTool.js';
 export { GlobTool, globTool, executeGlob } from './GlobTool/GlobTool.js';
 export { ToolRegistry } from './registry.js';
 export type { ToolExecutor } from './registry.js';

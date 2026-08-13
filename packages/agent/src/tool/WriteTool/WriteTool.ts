@@ -20,6 +20,7 @@ import type { ToolPermissionContext } from '../../permissions/types.js';
 import { checkPathWritePermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
+import { withFileMutationQueue } from '../file-mutation-queue.js';
 
 // ============================================================
 // Input Validation
@@ -164,37 +165,41 @@ export class WriteTool extends BaseTool {
       // Use expandPath for cross-platform compatibility
       const absolutePath = expandPath(file_path, workingDirectory);
 
-      const dirPath = dirname(absolutePath);
-      if (!existsSync(dirPath)) {
-        await mkdir(dirPath, { recursive: true });
-      }
-
-      if (existsSync(absolutePath)) {
-        try {
-          await access(absolutePath, constants.W_OK);
-        } catch {
-          return {
-            id,
-            name: this.name,
-            result: `Error: File exists but is not writable: ${absolutePath}`,
-            error: true,
-          };
+      // Serialize writes to the same file so they run in order, while
+      // different files still mutate in parallel.
+      return withFileMutationQueue(absolutePath, async () => {
+        const dirPath = dirname(absolutePath);
+        if (!existsSync(dirPath)) {
+          await mkdir(dirPath, { recursive: true });
         }
-      }
 
-      await writeFile(absolutePath, content, encoding as BufferEncoding);
+        if (existsSync(absolutePath)) {
+          try {
+            await access(absolutePath, constants.W_OK);
+          } catch {
+            return {
+              id,
+              name: this.name,
+              result: `Error: File exists but is not writable: ${absolutePath}`,
+              error: true,
+            };
+          }
+        }
 
-      const lineCount = content.split('\n').length;
-      return {
-        id,
-        name: this.name,
-        result: `Successfully wrote ${content.length} characters (${lineCount} lines) to '${absolutePath}'`,
-        metadata: {
-          filePath: absolutePath,
-          charCount: content.length,
-          lineCount,
-        },
-      };
+        await writeFile(absolutePath, content, encoding as BufferEncoding);
+
+        const lineCount = content.split('\n').length;
+        return {
+          id,
+          name: this.name,
+          result: `Successfully wrote ${content.length} characters (${lineCount} lines) to '${absolutePath}'`,
+          metadata: {
+            filePath: absolutePath,
+            charCount: content.length,
+            lineCount,
+          },
+        };
+      });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown error';
 

@@ -481,7 +481,11 @@ describe('Tool use loop simulation', () => {
     }
 
     expect(results.length).toBe(3);
-    expect(results).toEqual(['call 1', 'call 2', 'call 3']);
+    // Each result is wrapped in the status/duration envelope.
+    expect(results.map((r) => r.replace(/^\[completed\] counter\n/, '').replace(/\n\[Duration: \d+ms\]$/, '')))
+      .toEqual(['call 1', 'call 2', 'call 3']);
+    expect(results[0]).toContain('[completed] counter');
+    expect(results[0]).toContain('[Duration:');
   });
 
   /**
