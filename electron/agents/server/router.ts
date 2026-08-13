@@ -1636,6 +1636,103 @@ function handleGetHistory(
   sendJson(res, 200, { sessionId, events, sinceEventId });
 }
 
+/**
+ * Handle a one-shot side question (`/btw`) for a session. The worker snapshots
+ * the current conversation, issues a no-tool single LLM call, and returns one
+ * text answer. Unlike `chat`, this never mutates the durable transcript — it
+ * is a pure side Q&A layered on top of the live agent.
+ */
+async function handlePostSideQuestion(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+  workerDbRequests: Map<string, ChildProcess>,
+): Promise<void> {
+  const { sessionManager, workerManager, httpLogger } = deps;
+
+  const session = sessionManager.getSession(sessionId);
+  if (!session) {
+    sendJson(res, 404, { error: `Session not found: ${sessionId}` });
+    return;
+  }
+
+  const body = await readRequestBody(req);
+  let payload: { id?: string; question?: string };
+  try {
+    payload = body ? JSON.parse(body) : {};
+  } catch {
+    sendJson(res, 400, { error: 'Invalid JSON body' });
+    return;
+  }
+
+  const question = typeof payload.question === 'string' ? payload.question.trim() : '';
+  if (!question) {
+    sendJson(res, 400, { error: 'Question is required' });
+    return;
+  }
+  const id = typeof payload.id === 'string' ? payload.id : randomUUID();
+
+  // Lazy-spawn a worker if none is alive for this session, mirroring compact.
+  if (!workerManager.hasWorker(sessionId)) {
+    const result = await lazySpawnWorkerForCompact(sessionId, deps, workerDbRequests, res);
+    if (!result.ok) return;
+  }
+
+  const child = workerManager.getWorker(sessionId);
+  if (!child) {
+    sendJson(res, 503, { error: 'Worker became unavailable' });
+    return;
+  }
+
+  const sent = workerManager.sendCommand(sessionId, {
+    type: 'side:question',
+    sessionId,
+    id,
+    question,
+  });
+  if (!sent) {
+    sendJson(res, 503, { error: 'Failed to reach worker' });
+    return;
+  }
+
+  let settled = false;
+  const cleanup = (): void => {
+    child.removeListener('message', onMessage);
+    child.removeListener('exit', onExit);
+  };
+  const finish = (status: number, data: unknown): void => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    sendJson(res, status, data);
+  };
+  const onMessage = (msg: Record<string, unknown>): void => {
+    if (msg.type !== 'side:answer' || msg.id !== id) return;
+    if (msg.error) {
+      finish(500, { error: String(msg.error) });
+    } else {
+      finish(200, { id, answer: typeof msg.answer === 'string' ? msg.answer : '' });
+    }
+  };
+  const onExit = (): void => {
+    finish(503, { error: 'Worker exited before answering' });
+  };
+  child.on('message', onMessage);
+  child.on('exit', onExit);
+
+  // Safety timeout so a hung worker cannot hold the connection forever.
+  const timeout = setTimeout(() => finish(504, { error: 'Side question timed out' }), 120_000);
+  timeout.unref();
+
+  req.on('close', () => {
+    clearTimeout(timeout);
+    finish(503, { error: 'Request aborted' });
+  });
+
+  httpLogger.info('Side question issued', { sessionId, id, charCount: question.length });
+}
+
 function handleSessionsRoute(
   method: string,
   sessionId: string,
@@ -1654,6 +1751,10 @@ function handleSessionsRoute(
     }
     if (pathParts.length === 3 && pathParts[2] === 'compact') {
       handlePostCompact(sessionId, req, res, deps, workerDbRequests);
+      return;
+    }
+    if (pathParts.length === 3 && pathParts[2] === 'btw') {
+      void handlePostSideQuestion(sessionId, req, res, deps, workerDbRequests);
       return;
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission') {

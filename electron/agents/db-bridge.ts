@@ -897,6 +897,23 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       return { ok: true };
     }
 
+    case 'config:compact:get': {
+      return getConfigStore().getByPath('auxiliary.compact');
+    }
+
+    case 'config:compact:set': {
+      const current = getConfigStore().getByPath('auxiliary.compact') as Record<string, unknown>;
+      const pObj = p as Record<string, unknown>;
+      const merged = {
+        ...current,
+        ...pObj,
+        baseUrl: (pObj.baseUrl || pObj.baseURL) ?? current.baseUrl,
+      };
+      delete merged.baseURL;
+      getConfigStore().set('auxiliary.compact', merged);
+      return { ok: true };
+    }
+
     case 'config:outputStyles:get': {
       return getConfigStore().getByPath('auxiliary.output_styles');
     }

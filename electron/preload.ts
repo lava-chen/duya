@@ -285,10 +285,47 @@ export interface VisionAPI {
   }>
 }
 
+export interface CompactAPI {
+  get: () => Promise<{
+    provider: string
+    model: string
+    baseUrl: string
+    apiKey: string
+    enabled: boolean
+  }>
+  set: (config: {
+    provider?: string
+    model?: string
+    baseUrl?: string
+    apiKey?: string
+    enabled?: boolean
+  }) => Promise<{
+    provider: string
+    model: string
+    baseUrl: string
+    apiKey: string
+    enabled: boolean
+  }>
+}
+
 export interface MemoryAPI {
   list: () => Promise<{
     entries: import('../src/types').MemoryEntry[]
     enabled: boolean
+  }>
+  systemLog: (opts?: Record<string, unknown>) => Promise<{
+    entries: Array<{
+      ts: number
+      phase: 'phase1' | 'phase2' | 'system'
+      event_type: string
+      level: 'info' | 'warn' | 'error'
+      message: string
+      detail: Record<string, unknown> | null
+      rollout_id?: string | null
+      run_id?: string | null
+      session_id?: string | null
+    }>
+    total: number
   }>
 }
 
@@ -959,6 +996,8 @@ export interface ElectronAPI {
   }
   // Vision API
   vision: VisionAPI
+  // Compact model API
+  compact: CompactAPI
   // Memory API
   memory: MemoryAPI
   // Session management
@@ -1578,8 +1617,14 @@ const electronAPI: ElectronAPI = {
     set: (config: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) =>
       ipcRenderer.invoke('config:vision:set', config),
   },
+  compact: {
+    get: () => ipcRenderer.invoke('config:compact:get'),
+    set: (config: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) =>
+      ipcRenderer.invoke('config:compact:set', config),
+  },
   memory: {
     list: () => ipcRenderer.invoke('memory:list'),
+    systemLog: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:system-log', opts ?? {}),
   },
   permission: {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:permission:create', data),
