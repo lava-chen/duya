@@ -4,9 +4,11 @@ import {
   buildAgentContext,
   findSafeCompactionBoundary,
   isVisibleAgentMessage,
+  runtimeContextStartsPromptTurn,
   type AgentMessage,
   type CompactionEntry,
   type MessageEntry,
+  type RuntimeContextSource,
 } from '../../src/message/message-framework.js';
 import { projectModelMessages } from '../../src/message/message-projectors.js';
 
@@ -115,6 +117,27 @@ describe('message policy helpers', () => {
 
     expect(isVisibleAgentMessage(runtimeMessage)).toBe(false);
     expect(projectModelMessages([runtimeMessage]).messages).toHaveLength(1);
+  });
+});
+
+describe('runtimeContextStartsPromptTurn', () => {
+  it('returns true only for background wake-ups', () => {
+    expect(runtimeContextStartsPromptTurn('background_notification')).toBe(true);
+  });
+
+  it.each<[RuntimeContextSource, boolean]>([
+    ['working_directory_switch', false],
+    ['auto_continue', false],
+    ['todo_gate', false],
+    ['mailbox', false],
+    ['attachment', false],
+    ['memory', false],
+    ['mode', false],
+    ['system', false],
+    ['agents_md', false],
+    ['custom', false],
+  ])('returns false for mid-turn injection source %s', (source, expected) => {
+    expect(runtimeContextStartsPromptTurn(source)).toBe(expected);
   });
 });
 

@@ -61,6 +61,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [413e-plan-mode-frontend-session](./active/413e-plan-mode-frontend-session.md) | plan-task session 化前端：extensions key + set_plan_mode IPC + store/ChatView/MessageInput + mode-id | P1 | Planning |
 | [420-goal-observability-persistence](./active/420-goal-observability-persistence.md) | Goal 可观测性+持久化：迁移日志 / goal_mode_enabled 标签恢复 / start 立即落盘 + 富事件 + 渲染端 modeState.get | P1 | ✅ 完成（2026-08-12） |
 | [421-goal-ui](./active/421-goal-ui.md) | Goal UI 重设计（对齐 OptionPanel）：GoalStatusChip + GoalStatusPanel + 删旧 GoalStatusCard | P1 | ✅ 完成（2026-08-12） |
+| [422-compaction-strategy-consolidation](./active/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model） | P0 | Implementation |
 
 ### Conductor / Canvas
 

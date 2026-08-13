@@ -12,6 +12,8 @@ import type {
   MessageContent,
   Tool,
 } from '../../types.js';
+import { adaptAutoContinueContext } from '../../message/runtime-context-adapters.js';
+import { projectRuntimeContextToProviderMessage } from '../../message/message-projectors.js';
 
 /** Empty set used by _resolveTools (no tools discovered yet at startup). */
 export const EMPTY_DISCOVERED: ReadonlySet<string> = new Set();
@@ -36,6 +38,26 @@ export function extractTextFromContent(content: string | readonly MessageContent
     }
   }
   return parts.join('\n')
+}
+
+/**
+ * Extract the last *real* user query from a message list, skipping transient
+ * synthetic turns (mailbox, todo gate, background notifications, etc.) that
+ * the harness injected rather than the user typed. Mirrors grok's
+ * `extract_last_real_user_query` / `last_user_anchor`: synthetic messages are
+ * identified purely by `metadata.runtimeContext`, never by parsing text.
+ * Returns undefined when no real user message with text exists.
+ */
+export function lastRealUserQuery(messages: Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m.role !== 'user') continue;
+    const meta = m.metadata as Record<string, unknown> | undefined;
+    if (meta?.runtimeContext === true) continue;
+    const text = extractTextFromContent(m.content).trim();
+    if (text.length > 0) return text;
+  }
+  return undefined;
 }
 
 export function collectRecentImageAttachments(messages: Message[]): Array<{
@@ -99,13 +121,32 @@ export function persistableMessages(messages: Message[]): Message[] {
       if (
         source === 'mailbox' ||
         source === 'background_notification' ||
-        source === 'custom'
+        source === 'custom' ||
+        source === 'todo_gate' ||
+        source === 'auto_continue'
       ) {
         return false;
       }
     }
     return true;
   });
+}
+
+/**
+ * Push a transient AutoContinue directive onto the working message array.
+ * Called right after a successful compaction so the next LLM call reads the
+ * summary and keeps working instead of stopping or re-summarising. Mirrors
+ * grok's `AutoContinue`. The message is excluded from persistence by
+ * {@link persistableMessages} (source='auto_continue').
+ */
+export function appendAutoContinueMessage(messages: Message[]): void {
+  messages.push(
+    projectRuntimeContextToProviderMessage(
+      adaptAutoContinueContext(
+        'Context compaction completed — continue working on the active task using the summary context above. Do not stop or summarize; keep making progress toward completing the request.',
+      ),
+    ),
+  );
 }
 
 /**
