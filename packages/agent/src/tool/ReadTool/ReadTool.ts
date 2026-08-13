@@ -10,7 +10,8 @@
  *   - device files (/dev/zero, /proc/fd/0, ...) blocked at validation
  *   - magic-byte detection: a binary renamed to .txt is refused
  *   - ENOENT suggests a similar file or thin-space macOS fix
- *   - mtime-based dedup returns a stub when content didn't change
+ *   - every read returns the full deterministic content (no dedup stub,
+ *     so identical reads hit the provider prompt cache)
  *   - truncation respects paragraph/sentence boundaries
  *   - DUYA_FILE_PARSER_DISABLED kill switch on the document path
  */
@@ -51,12 +52,6 @@ import {
   findSimilarFile,
   suggestPathUnderCwd,
 } from './path-suggest.js';
-import {
-  getReadStateStore,
-  setReadState,
-  getFileFingerprint,
-  type ReadState,
-} from './file-state.js';
 import { serializeParseResult } from './result-builder.js';
 
 // Re-export ReadInput + validateReadInput for tests / external callers
@@ -80,8 +75,6 @@ const TEXT_EXTENSIONS = new Set([
   '.ini', '.conf', '.config', '.log',
 ]);
 const BINARY_SNIFF_BYTES = 16;
-const FILE_UNCHANGED_STUB =
-  'File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.';
 // Image files are not read directly by this tool. They are routed to the
 // dedicated `vision_analyze` tool so pixels are never fed to a model that
 // can't see them, and analysis stays on the vision tool (not duplicated here).
@@ -187,7 +180,7 @@ export function _resetSharedParser(): void {
 
 export class ReadTool extends BaseTool {
   readonly name = 'read';
-  readonly description = 'Read the contents of a file from the file system. Supports text files (with optional line ranges), PDFs, Word documents (.docx), and PowerPoint files (.pptx). Use the `pages` parameter for PDFs to read specific page ranges. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content.';
+  readonly description = 'Read the contents of a file from the file system. Supports text files, PDFs, Word documents (.docx), and PowerPoint files (.pptx). For text files the output is truncated to 2000 lines or 50KB (whichever is hit first); use `line_range` to read large files in chunks and keep advancing the range until the file is complete. Use the `pages` parameter for PDFs to read specific page ranges. Image files (png, jpg, gif, webp, etc.) are NOT read directly by this tool — use the `vision_analyze` tool to analyze image content. Prefer read over cat or sed to examine files.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -209,7 +202,7 @@ export class ReadTool extends BaseTool {
       },
       max_tokens: {
         type: 'number',
-        description: 'Optional token cap for the returned content (default 25000). Documents exceeding this limit include read metadata explaining the truncation.',
+        description: 'Optional token cap for the returned content (default output is capped at 50KB). Documents exceeding the limit include read metadata explaining the truncation.',
       },
     },
     required: ['file_path'],
@@ -563,39 +556,6 @@ export async function readFileContent(
   try {
     const resolvedPath = expandPath(file_path, workingDirectory);
 
-    // mtime+size dedup: if the model has already read this exact
-    // range and the file hasn't been modified, return a stub.
-    // Bypass when the read itself is a partial view (line_range
-    // with end != -1 means "I only want a slice" — those don't
-    // dedup because the model might have meant a different slice
-    // by mistake, and the stub would hide the bug).
-    //
-    // Both mtime AND size must match. mtime alone collides on fast
-    // filesystems (ext4 with tail-packing, Windows FAT, any fs with
-    // >1ms granularity) where two writes inside the same tick produce
-    // the same timestamp. A same-tick content change almost always
-    // changes the size, so requiring both eliminates the stale-return
-    // false positive without resorting to a full content hash.
-    const requestedOffset = line_range?.start ?? 1;
-    const requestedLimit = line_range?.end;
-    const isPartialView = line_range !== undefined && line_range.end !== -1;
-    // Fingerprint captured BEFORE any await. Used both for the dedup
-    // check and (after the read) for TOCTOU detection: if the file
-    // changed during `await readFile`, we must not write the stale
-    // content under the new fingerprint — that would poison the cache
-    // and cause a later read to return a "File unchanged" stub for
-    // content that no longer matches the file.
-    const fpBeforeRead = getFileFingerprint(resolvedPath);
-    if (!isPartialView) {
-      const existing = getReadStateStore().get(resolvedPath);
-      if (existing && fpBeforeRead && existing.timestamp === fpBeforeRead.mtimeMs && existing.size === fpBeforeRead.size) {
-        return {
-          id, name: 'read', result: FILE_UNCHANGED_STUB,
-          metadata: { filePath: normalizePath(resolvedPath), unchanged: true, charCount: existing.content.length },
-        };
-      }
-    }
-
     try {
       const stats = await stat(resolvedPath);
       if (stats.isDirectory()) {
@@ -642,41 +602,22 @@ export async function readFileContent(
       const resultLines = lines.slice(startIdx, endLine);
       output = resultLines.map((line, i) => `${range.start + i}: ${line}`).join('\n');
       startLine = range.start;
+      // Explicitly tell the model how much of the file remains unread so it
+      // can decide whether to continue with line_range (P0-2). Without this
+      // a partial view is indistinguishable from the whole file, which is
+      // exactly how a model ends up editing against truncated content.
+      const omittedBefore = startIdx; // lines 1..start-1
+      const omittedAfter = Math.max(0, lines.length - endLine); // lines end+1..N
+      const notes: string[] = [];
+      if (omittedBefore > 0) notes.push(`${omittedBefore} line(s) before the read range (lines 1-${startLine - 1})`);
+      if (omittedAfter > 0) notes.push(`${omittedAfter} line(s) after the read range (lines ${endLine + 1}-${lines.length})`);
+      if (notes.length > 0) {
+        output += `\n\n[Read metadata: read ${endLine - startIdx} of ${lines.length} lines. Omitted: ${notes.join('; ')}. Use line_range to read the remaining lines.]`;
+      }
     } else {
       output = content;
       startLine = 1;
       endLine = lines.length;
-    }
-
-    // Cache for next time (mtime + size + content). Two guards:
-    //   1. isPartialView: a slice (line_range with end !== -1) must
-    //      NOT write the cache. The dedup check skips partial views,
-    //      but if we wrote here anyway, a later full-file read would
-    //      match the same mtime+size and return a "File unchanged"
-    //      stub pointing back at the slice — hiding the rest of the
-    //      file from the model.
-    //   2. TOCTOU: if the file's mtime+size changed between the
-    //      start of this read (fpBeforeRead) and now, the content we
-    //      just read may be stale. Skip the cache write so a later
-    //      read re-reads the file instead of trusting a cached entry
-    //      whose content doesn't match its fingerprint.
-    // Use setReadState instead of raw store.set so the LRU bound in
-    // file-state.ts is enforced — otherwise long-running sessions
-    // would accumulate entries without limit.
-    if (!isPartialView && fpBeforeRead) {
-      const fpAfterRead = getFileFingerprint(resolvedPath);
-      if (fpAfterRead
-        && fpAfterRead.mtimeMs === fpBeforeRead.mtimeMs
-        && fpAfterRead.size === fpBeforeRead.size) {
-        const state: ReadState = {
-          content: output,
-          timestamp: fpAfterRead.mtimeMs,
-          size: fpAfterRead.size,
-          offset: requestedOffset,
-          limit: requestedLimit,
-        };
-        setReadState(resolvedPath, state);
-      }
     }
 
     return {

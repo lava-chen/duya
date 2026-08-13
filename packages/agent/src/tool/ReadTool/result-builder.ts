@@ -18,6 +18,13 @@ import type { ParseResult, ImageChunk, TextChunk } from '../../file-parser/index
 
 const APPROX_CHARS_PER_TOKEN = 4;
 const DEFAULT_MAX_TOKENS = 25_000;
+// Fixed output ceiling for deterministic reads (pi-style). The default
+// budget is no longer model-passed max_tokens * 4 — it's a stable 50KB
+// cap so identical documents produce byte-identical output, maximizing
+// provider prompt-cache hits. An explicit max_tokens may only tighten
+// this cap (never loosen it).
+const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
+const DEFAULT_MAX_LINES = 2000;
 
 /**
  * Truncate a chunk at the nearest paragraph break within the budget.
@@ -83,7 +90,9 @@ export function serializeParseResult(
   options: SerializeOptions,
 ): SerializedResult {
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
-  const maxChars = maxTokens * APPROX_CHARS_PER_TOKEN;
+  // Deterministic byte ceiling: min(model cap, fixed 50KB). The fixed
+  // floor keeps output stable across calls so identical reads cache well.
+  const maxChars = Math.min(maxTokens * APPROX_CHARS_PER_TOKEN, DEFAULT_MAX_BYTES);
   const textChunks = parsed.chunks.filter((c): c is TextChunk => c.type === 'text');
   const imageChunks = parsed.chunks.filter((c): c is ImageChunk => c.type === 'image');
 
@@ -96,14 +105,21 @@ export function serializeParseResult(
   // Body: truncate at paragraph/sentence boundaries
   const bodyLines: string[] = [];
   let accumulated = 0;
+  let accumulatedLines = 0;
   let lastFullyIncludedIdx = -1;
   for (let i = 0; i < textChunks.length; i++) {
     const chunk = textChunks[i];
     const remaining = maxChars - accumulated;
     if (remaining <= 0) break;
     const { text, truncated } = truncateChunk(chunk.text, remaining);
+    const linesInText = text.split('\n').length;
+    // Line ceiling guard: once the body crosses the fixed line cap, stop
+    // so output stays bounded and deterministic. The current chunk is
+    // dropped (counted as omitted) rather than partially included.
+    if (accumulatedLines + linesInText > DEFAULT_MAX_LINES) break;
     bodyLines.push(text);
     accumulated += text.length;
+    accumulatedLines += linesInText;
     lastFullyIncludedIdx = i;
     if (truncated) {
       // Stop after the first truncation; we don't try to fit more
@@ -130,8 +146,11 @@ export function serializeParseResult(
   // Tail reminders
   const reminders: string[] = [];
   if (omittedChunks > 0) {
+    const capLabel = options.maxTokens !== undefined
+      ? `max_tokens=${maxTokens}`
+      : `${Math.round(DEFAULT_MAX_BYTES / 1024)}KB`;
     reminders.push(
-      `[Read metadata: truncated ${omittedChunks} of ${textChunks.length} text chunks to stay within max_tokens=${maxTokens}. Use the pages parameter (PDF) or line_range (text files) for smaller portions.]`,
+      `[Read metadata: truncated ${omittedChunks} of ${textChunks.length} text chunks to stay within the ${capLabel} output limit. Use the pages parameter (PDF) or line_range (text files) for smaller portions.]`,
     );
   }
   if (imageChunks.length > 0) {

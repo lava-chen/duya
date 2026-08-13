@@ -85,10 +85,11 @@ describe('ReadTool text mode (legacy)', () => {
     expect(result.result).toMatch(/not found|ENOENT/);
   });
 
-  it('returns file_unchanged stub on second read of the same unmodified file', async () => {
-    const { clearReadStateStore } = await import('../file-state.js');
-    clearReadStateStore();
-    const f = join(tmpDir, 'cache.txt');
+  it('re-reads the same unmodified file deterministically (no dedup stub)', async () => {
+    // Every read returns the full content — no "file unchanged" stub. This
+    // keeps output byte-identical across calls so identical reads hit the
+    // provider prompt cache instead of a short stub that breaks the prefix.
+    const f = join(tmpDir, 'repeat.txt');
     writeFileSync(f, 'cached content\n');
     const first = await tool.execute({ file_path: f });
     expect(first.error).toBeFalsy();
@@ -96,28 +97,21 @@ describe('ReadTool text mode (legacy)', () => {
 
     const second = await tool.execute({ file_path: f });
     expect(second.error).toBeFalsy();
-    expect(second.result).toContain('File unchanged since last read');
-    expect((second.metadata as Record<string, unknown>).unchanged).toBe(true);
+    expect(second.result).toContain('cached content');
+    expect(second.result).not.toContain('File unchanged');
+    expect(second.result).toBe(first.result);
   });
 
-  it('re-reads after the file mtime changes (no false cache hits)', async () => {
-    const { clearReadStateStore } = await import('../file-state.js');
-    const { utimesSync, statSync } = await import('node:fs');
-    clearReadStateStore();
+  it('returns fresh content after the file changes', async () => {
     const f = join(tmpDir, 'mod.txt');
     writeFileSync(f, 'first version');
-    await tool.execute({ file_path: f });
-
-    // Bump mtime to a known future value so the second read sees a
-    // different timestamp than what we cached.
-    const future = Math.floor(Date.now() / 1000) + 60;
-    utimesSync(f, future, future);
-    expect(statSync(f).mtimeMs).toBeGreaterThan(0);
+    const first = await tool.execute({ file_path: f });
+    expect(first.result).toContain('first version');
 
     writeFileSync(f, 'second version');
     const second = await tool.execute({ file_path: f });
     expect(second.result).toContain('second version');
-    expect(second.result).not.toContain('File unchanged');
+    expect(second.result).not.toContain('first version');
   });
 
   it('blocks device files at validation time', async () => {
