@@ -24,7 +24,7 @@ describe('CompactionManager', () => {
     it('should create manager with default config', () => {
       const m = createCompactionManager();
       expect(m).toBeDefined();
-      expect(m.getAvailableStrategies()).toContain('micro');
+      expect(m.getAvailableStrategies()).toEqual(['session_memory']);
     });
 
     it('should create manager with custom config', () => {
@@ -36,9 +36,9 @@ describe('CompactionManager', () => {
       expect(m).toBeDefined();
     });
 
-    it('should enable reactive strategy when configured', () => {
-      const m = createCompactionManager({ enableReactive: true });
-      expect(m.getAvailableStrategies()).toContain('reactive');
+    it('has a single grok-aligned strategy (no micro/snip/reactive)', () => {
+      const m = createCompactionManager();
+      expect(m.getAvailableStrategies()).toEqual(['session_memory']);
     });
   });
 
@@ -65,35 +65,35 @@ describe('CompactionManager', () => {
   });
 
   describe('compact', () => {
-    it('should compact messages using micro strategy', async () => {
+    it('should compact messages using the session_memory strategy', async () => {
       const messages: Message[] = [
         createMessage('user', 'Hello'),
         createMessage('assistant', 'Hi there!'),
       ];
 
       const result = await manager.compact(messages);
-      expect(result.strategy).toBe('micro');
+      expect(result.strategy).toBe('session_memory');
       expect(result.tokensRemoved).toBeGreaterThanOrEqual(0);
       expect(result.tokensRetained).toBeGreaterThanOrEqual(0);
     });
 
-    it('should use specified strategy', async () => {
+    it('should use session_memory when explicitly specified', async () => {
       const messages: Message[] = [
         createMessage('user', 'Hello'),
         createMessage('assistant', 'Hi there!'),
       ];
 
-      const result = await manager.compact(messages, { strategy: 'snip' });
-      expect(result.strategy).toBe('snip');
+      const result = await manager.compact(messages, { strategy: 'session_memory' });
+      expect(result.strategy).toBe('session_memory');
     });
 
-    it('should use default strategy for unknown strategy name', async () => {
+    it('should fall back to session_memory for unknown or legacy strategy names (micro/snip/reactive)', async () => {
       const messages: Message[] = [createMessage('user', 'Hello')];
 
-      // Unknown strategy falls back to default selection
-      const result = await manager.compact(messages, { strategy: 'unknown' as any });
-      // Should not throw, just uses default strategy
-      expect(result.strategy).toBeDefined();
+      for (const legacy of ['micro', 'snip', 'reactive', 'unknown']) {
+        const result = await manager.compact(messages, { strategy: legacy as any });
+        expect(result.strategy).toBe('session_memory');
+      }
     });
   });
 
@@ -122,6 +122,92 @@ describe('CompactionManager', () => {
     it('should set summarizer function', () => {
       const summarizer = vi.fn(async (text: string) => 'summarized: ' + text);
       manager.setSummarizer(summarizer);
+      expect(true).toBe(true);
+    });
+  });
+
+  describe('prefire (two-pass)', () => {
+    const manyMessages = (n: number): Message[] =>
+      Array.from({ length: n }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `msg ${i} `.repeat(20)),
+      );
+
+    it('shouldPrefire returns false below the prefire threshold', () => {
+      manager.updateContextTokens(manyMessages(2));
+      expect(manager.shouldPrefire(manyMessages(2))).toBe(false);
+    });
+
+    it('shouldPrefire returns false above the compaction threshold', () => {
+      // Force usage into the compact band by setting a large token count.
+      manager.updateContextTokens(manyMessages(12));
+      // Overwrite the computed count so the ratio lands above SESSION_MEMORY.
+      (manager as unknown as { contextTokens: number }).contextTokens = 90000;
+      expect(manager.shouldPrefire(manyMessages(12))).toBe(false);
+    });
+
+    it('shouldPrefire returns true in the prefire band and no cache hit', async () => {
+      const longSummary = 'prefire summary '.repeat(40);
+      const summarizer = vi.fn(async () => longSummary);
+      manager.setSummarizer(summarizer);
+      const messages = manyMessages(12);
+      (manager as unknown as { contextTokens: number }).contextTokens = 70000;
+      expect(manager.shouldPrefire(messages)).toBe(true);
+      const summary = await manager.prefire(messages);
+      expect(summary).toBe(longSummary.trim());
+      // Cache satisfied — no longer triggers.
+      expect(manager.shouldPrefire(messages)).toBe(false);
+    });
+
+    it('prefire returns empty string when no summarizer is set', async () => {
+      const messages = manyMessages(12);
+      (manager as unknown as { contextTokens: number }).contextTokens = 70000;
+      expect(await manager.prefire(messages)).toBe('');
+    });
+
+    it('cached prefire summary seeds the strategy on the next compaction', async () => {
+      const longSummary = 'seeded prefire summary '.repeat(40);
+      const summarizer = vi.fn(async () => longSummary);
+      manager.setSummarizer(summarizer);
+      const messages = [
+        ...manyMessages(10),
+        createMessage('user', 'final user turn'),
+      ];
+      const summary = await manager.prefire(messages);
+      expect(summary).toBe(longSummary.trim());
+      // getPrefireSummary returns the cached value for the same content.
+      expect(manager.getPrefireSummary(messages)).toBe(longSummary.trim());
+      // A different content set invalidates the cache.
+      expect(manager.getPrefireSummary(manyMessages(3))).toBe('');
+    });
+  });
+
+  describe('memory flush', () => {
+    it('invokes the configured sink after compaction with the summary', async () => {
+      const flush = vi.fn(async () => {});
+      const summarizer = vi.fn(async () => {
+        // A long, non-degenerate summary so the strategy stores it.
+        return 'memory flush '.repeat(100);
+      });
+      manager.setMemoryFlushFn(flush);
+      manager.setSummarizer(summarizer);
+
+      const messages: Message[] = Array.from({ length: 40 }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `turn ${i} ` + 'detail '.repeat(300)),
+      );
+      await manager.compact(messages);
+      expect(flush).toHaveBeenCalledTimes(1);
+      const arg = flush.mock.calls[0][0] as string;
+      expect(arg.length).toBeGreaterThan(0);
+    });
+
+    it('does not invoke the sink when none is configured', async () => {
+      const summarizer = vi.fn(async () => 'short - degenerate, no summary stored');
+      manager.setSummarizer(summarizer);
+      const messages: Message[] = Array.from({ length: 30 }, (_, i) =>
+        createMessage(i % 2 === 0 ? 'user' : 'assistant', `turn ${i} ` + 'detail '.repeat(30)),
+      );
+      await manager.compact(messages);
+      // No sink → nothing to assert beyond not throwing.
       expect(true).toBe(true);
     });
   });

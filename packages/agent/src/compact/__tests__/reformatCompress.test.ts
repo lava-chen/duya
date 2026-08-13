@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Message, MessageContent, ToolResultContent } from '../../types.js'
-import { reformatGrepResult, reformatGlobResult, reformatTransform } from '../transforms/reformatCompress.js'
+import { reformatGrepResult, reformatGlobResult, reformatTransform, stripToolResultEnvelope } from '../transforms/reformatCompress.js'
 
 describe('reformatCompress', () => {
   it('reformats a grep result into a table, preserving the envelope', () => {
@@ -19,6 +19,24 @@ describe('reformatCompress', () => {
     expect(reformatGrepResult('not json')).toBeNull()
     expect(reformatGrepResult('{"foo":1}')).toBeNull()
     expect(reformatGrepResult('{"matches":[]}')).toBeNull()
+  })
+
+  it('strips the status/duration envelope before reformatting', () => {
+    const result = '[completed] grep\n' + JSON.stringify({
+      success: true, total: 1, truncated: false, searchPath: '.', engine: 'ripgrep',
+      matches: [{ file: 'src/a.ts', line: 12, column: 3, content: 'const x = 1' }],
+    }) + '\n[Duration: 42ms]'
+    const rebuilt = reformatGrepResult(result)
+    expect(rebuilt).not.toBeNull()
+    expect(JSON.parse(rebuilt!)).toEqual({
+      success: true, total: 1, truncated: false, searchPath: '.', engine: 'ripgrep',
+      matches: '[1]{file,line:int,column:int,content}\nsrc/a.ts,12,3,const x = 1',
+    })
+  })
+
+  it('leaves input unchanged when no envelope is present', () => {
+    expect(stripToolResultEnvelope('[completed] grep\nhello')).toBe('hello')
+    expect(stripToolResultEnvelope('plain text')).toBe('plain text')
   })
 
   it('reformats a glob output into a filename list table', () => {

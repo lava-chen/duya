@@ -130,31 +130,24 @@ function buildStrategyResult(
 }
 
 /**
- * Fake `CompactionManager` whose `compact` / `reactiveCompact` delegate to a
- * result builder that receives the projected input `Message[]`. This lets each
- * test control exactly which messages the strategy "retains" while keeping ids
- * consistent with the timeline.
+ * Fake `CompactionManager` whose `compact` delegates to a result builder that
+ * receives the projected input `Message[]`. This lets each test control exactly
+ * which messages the strategy "retains" while keeping ids consistent with the
+ * timeline. Conforming to the single-strategy `CompactionManagerLike`.
  */
 function createFakeManager(
   buildResult: (input: Message[]) => EnhancedCompactionResult,
-): CompactionManagerLike & { compactCalls: number; reactiveCalls: number } {
-  const calls = { compactCalls: 0, reactiveCalls: 0 };
+): CompactionManagerLike & { compactCalls: number } {
+  const calls = { compactCalls: 0 };
   return {
     compact: vi.fn(async (messages: Message[]) => {
       calls.compactCalls += 1;
-      return buildResult(messages);
-    }),
-    reactiveCompact: vi.fn(async (messages: Message[]) => {
-      calls.reactiveCalls += 1;
       return buildResult(messages);
     }),
     updateContextTokens: vi.fn(),
     shouldCompact: vi.fn(() => true),
     get compactCalls() {
       return calls.compactCalls;
-    },
-    get reactiveCalls() {
-      return calls.reactiveCalls;
     },
   };
 }
@@ -409,43 +402,6 @@ describe('MessageCompactionController', () => {
     });
   });
 
-  describe('reactive compaction', () => {
-    it('appends a CompactionEntry via reactiveCompact with the reactive strategy name', async () => {
-      const timeline = new MessageTimeline();
-      timeline.appendMessage(messageEntry('e-u1', user('u1', 'old')));
-      timeline.appendMessage(messageEntry('e-a1', assistant('a1', 'old reply')));
-      timeline.appendMessage(messageEntry('e-u2', user('u2', 'kept')));
-      timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'kept reply')));
-
-      const manager = createFakeManager((input) =>
-        buildStrategyResult(input, 2, 'Reactive summary.', 'reactive_snip'),
-      );
-      const controller = createController(timeline, manager);
-
-      const entry = (await controller.compactReactive('prompt_too_long'))!;
-
-      expect(entry).not.toBeNull();
-      expect(entry.strategy).toBe('reactive_snip');
-      expect(entry.firstKeptMessageId).toBe('u2');
-      expect(entry.compactedMessageIds).toEqual(['u1', 'a1']);
-
-      // The reactive path must call reactiveCompact, not compact.
-      expect(manager.reactiveCalls).toBe(1);
-      expect(manager.compactCalls).toBe(0);
-
-      // Original entries preserved.
-      const messageEntries = timeline
-        .snapshot()
-        .filter((e): e is MessageEntry => e.type === 'message');
-      expect(messageEntries.map((e) => e.message.id)).toEqual([
-        'u1',
-        'a1',
-        'u2',
-        'a2',
-      ]);
-    });
-  });
-
   describe('multiple compactions — traceability', () => {
     it('chains previousCompactionId and preserves every original message across two compactions', async () => {
       const timeline = new MessageTimeline();
@@ -534,15 +490,15 @@ describe('MessageCompactionController', () => {
       timeline.appendMessage(messageEntry('e-u2', user('u2', 'kept')));
       timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'kept reply')));
 
-      // Reactive strategy produces a marker without compactedMessageIds.
+      // Strategy produces a marker without compactedMessageIds.
       const manager = createFakeManager((input) =>
-        buildStrategyResult(input, 2, 'Reactive summary.', 'reactive_snip', {
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory', {
           withCompactedIds: false,
         }),
       );
       const controller = createController(timeline, manager);
 
-      const entry = (await controller.compactReactive('context_length_exceeded'))!;
+      const entry = (await controller.compactProactive())!;
 
       // Controller derives compactedMessageIds from the timeline boundary.
       expect(entry.compactedMessageIds).toEqual(['u1', 'a1']);

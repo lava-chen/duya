@@ -7,9 +7,9 @@
  * operations `DuyaAgent` previously invoked directly on those two objects.
  *
  * Contract:
- * - `shouldCompact` / `compactProactive` / `compactReactive` delegate to the
- *   controller, which projects the timeline to provider messages and appends a
- *   `CompactionEntry` (never mutating existing entries).
+ * - `shouldCompact` / `compactProactive` delegate to the controller, which
+ *   projects the timeline to provider messages and appends a `CompactionEntry`
+ *   (never mutating existing entries).
  * - `updateContextTokens` / `getStats` delegate to the manager.
  * - `setOnMessagesCompacted` wires the controller's `onCompacted` hook, which
  *   fires with the ids of newly compacted messages so the host can mark the
@@ -22,7 +22,6 @@ import type { CompactionEntry } from '../../message/index.js';
 import {
   MessageCompactionController,
   type CompactProactiveOptions,
-  type CompactReactiveTrigger,
 } from '../../message/message-compaction-controller.js';
 import type { CompactionManager } from '../../compact/CompactionManager.js';
 import type { CompactionStats } from '../../compact/types.js';
@@ -83,12 +82,19 @@ export class CompactionStore {
   }
 
   /**
-   * Run reactive compaction for emergency situations (`prompt_too_long`,
-   * `context_length_exceeded`, manual). Same bridging as proactive but
-   * delegates to `CompactionManager.reactiveCompact`.
+   * Whether a background prefire summary pass should run now (usage above the
+   * prefire lead, below the compaction threshold).
    */
-  compactReactive(triggerError?: CompactReactiveTrigger): Promise<CompactionEntry | null> {
-    return this.controller.compactReactive(triggerError);
+  shouldPrefire(): boolean {
+    return this.controller.shouldPrefire();
+  }
+
+  /**
+   * Background two-pass prefix summary. Fire-and-forget: the returned promise
+   * resolves to '' when unavailable, and callers should not await it.
+   */
+  prefire(): Promise<string> {
+    return this.controller.prefire();
   }
 
   /**

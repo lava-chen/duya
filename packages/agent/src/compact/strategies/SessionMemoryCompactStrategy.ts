@@ -1,23 +1,26 @@
 /**
- * Session Memory Compact Strategy (Enhanced)
+ * Session Memory Compact Strategy
  * Uses LLM to generate a comprehensive session summary that preserves
  * key decisions, tool calls, and conclusions.
  *
- * Enhanced features:
+ * Features:
  * 1. Structured memory extraction with key sections
  * 2. File change tracking for post-compact restoration
  * 3. Skill invocation tracking
- * 4. Agent state preservation
- * 5. Token budget cut point algorithm (from pi)
- * 6. Iterative summary updates with previous summary injection (from pi)
- * 7. Split turn handling for oversized turns (from pi)
- * 8. Cross-compaction file operation tracking (from pi)
+ * 4. Token budget cut point algorithm
+ * 5. Iterative summary updates with previous summary injection
+ * 6. Last user query re-injection
+ * 7. Tool-call invariant enforcement
+ * 8. Degenerate summary detection with retry
+ * 9. Wall-clock budget for summarization
  */
 
 import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
 import { adjustSliceBoundary } from '../compact.js'
+import { sanitizeCompactedHistory } from '../historySanitize.js'
+import { cleanSummaryText, isDegenerateSummary } from '../summaryGuard.js'
 import {
   findCutPoint,
   buildSummarizationPrompt,
@@ -51,6 +54,8 @@ export interface SessionMemoryCompactConfig {
   previousSummary?: string
   /** Accumulated file operations from previous compactions */
   accumulatedFileOps?: FileOperations
+  /** Wall-clock budget (ms) for a single summarization call. Defaults to none. */
+  wallClockBudgetMs?: number
 }
 
 /**
@@ -165,8 +170,32 @@ function extractToolInvocations(messages: Message[]): Map<string, number> {
 }
 
 /**
- * Extract file operations from messages
+ * Extract the last real user query (a user message that is not a tool_result
+ * carrier) from the message list, re-injected into the compacted history so the
+ * successor retains the user's most recent intent.
  */
+function extractLastUserQuery(messages: Message[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i]
+    if (msg.role !== 'user') continue
+    if (Array.isArray(msg.content)) {
+      // Skip tool_result carriers (user messages wrapping tool results).
+      if (msg.content.some((b) => (b as unknown as Record<string, unknown>).type === 'tool_result')) {
+        continue
+      }
+      const text = msg.content
+        .filter((b): b is { type: 'text'; text: string } => (b as unknown as Record<string, unknown>).type === 'text')
+        .map((b) => b.text)
+        .filter(Boolean)
+        .join('\n')
+      if (text.trim()) return text
+    } else if (typeof msg.content === 'string' && msg.content.trim()) {
+      return msg.content
+    }
+  }
+  return undefined
+}
+
 function extractFileOperations(messages: Message[]): FileChangeRecord[] {
   const operations: FileChangeRecord[] = []
 
@@ -383,6 +412,47 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   }
 
   /**
+   * Run the summarizer with an optional wall-clock budget.
+   */
+  private async summarize(text: string, prompt: string): Promise<string> {
+    if (!this.summarizer) return ''
+    const budgetMs = this.config.wallClockBudgetMs
+    if (!budgetMs || budgetMs <= 0) return this.summarizer(text, prompt)
+
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Summary generation exceeded wall-clock budget (${budgetMs}ms)`))
+      }, budgetMs)
+      this.summarizer!(text, prompt)
+        .then((result) => {
+          clearTimeout(timer)
+          resolve(result)
+        })
+        .catch((error: unknown) => {
+          clearTimeout(timer)
+          reject(error)
+        })
+    })
+  }
+
+  /**
+   * Generate a standalone summary for the given messages. Used as a background
+   * prefire pass so an up-to-date summary is ready before a real compaction.
+   * Returns cleaned text, or '' when unavailable/degenerate.
+   */
+  async summarizeConversation(messages: Message[]): Promise<string> {
+    if (!this.summarizer || messages.length === 0) return ''
+    const text = serializeMessagesForSummary(this.stripImagesFromMessages(messages))
+    const prompt = buildSummarizationPrompt(text, this.config.previousSummary)
+    try {
+      const result = cleanSummaryText(await this.summarize(text, prompt))
+      return isDegenerateSummary(result) ? '' : result
+    } catch {
+      return ''
+    }
+  }
+
+  /**
    * Extract text content from messages for summarization.
    * Enhanced to include tool_use details and tool_result summaries so the
    * compaction summary preserves actionable context — file paths, command
@@ -505,7 +575,7 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       }
     }
 
-    // Use token budget cut point algorithm (from pi)
+    // Use token budget cut point algorithm
     const keepRecentTokens = this.config.keepRecentTokens ?? DEFAULT_CUT_CONFIG.keepRecentTokens
     const cutPoint = findCutPoint(conversationMessages, 0, conversationMessages.length, keepRecentTokens)
 
@@ -558,39 +628,39 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
     // Generate comprehensive session memory with iterative update support
     let summaryText = ''
     if (this.summarizer && olderMessages.length > 0) {
+      const cleanedMessages = this.stripImagesFromMessages(olderMessages)
+      const conversationText = serializeMessagesForSummary(cleanedMessages)
+      const prompt = buildSummarizationPrompt(
+        conversationText,
+        this.config.previousSummary,
+        undefined, // customInstructions
+      )
+
+      const toolCount = countToolCalls(olderMessages)
+      const fileOpsList = extractFileOperations(olderMessages)
+      const hasRecentToolCalls = hasToolCallsInLastTurn(olderMessages)
+      const enhancedPrompt = `${prompt}\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOpsList.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
+
+      // Retry once when the first summary is degenerate.
+      let rawSummary = ''
       try {
-        const cleanedMessages = this.stripImagesFromMessages(olderMessages)
-        const conversationText = serializeMessagesForSummary(cleanedMessages)
+        rawSummary = cleanSummaryText(await this.summarize(conversationText, enhancedPrompt))
+        if (isDegenerateSummary(rawSummary)) {
+          rawSummary = cleanSummaryText(await this.summarize(conversationText, enhancedPrompt))
+        }
+      } catch {
+        rawSummary = ''
+      }
 
-        // Build prompt with previous summary for iterative updates
-        const prompt = buildSummarizationPrompt(
-          conversationText,
-          this.config.previousSummary,
-          undefined, // customInstructions
-        )
-
-        // Add metadata about the conversation to help the summarizer
-        const toolCount = countToolCalls(olderMessages)
-        const fileOpsList = extractFileOperations(olderMessages)
-        const hasRecentToolCalls = hasToolCallsInLastTurn(olderMessages)
-
-        const enhancedPrompt = `${prompt}\n\n---\n\nConversation Statistics:\n- Total older messages: ${olderMessages.length}\n- Tool calls: ${toolCount}\n- File operations: ${fileOpsList.length}\n- Has tool calls in last turn: ${hasRecentToolCalls}`
-
-        const rawSummary = await this.summarizer(conversationText, enhancedPrompt)
+      if (isDegenerateSummary(rawSummary)) {
+        summaryText = `[Session memory unavailable - ${olderMessages.length} messages truncated]`
+      } else {
         summaryText = formatSessionMemorySummary(rawSummary)
-
-        // Append file operations to summary
         summaryText += formatFileOperations(readFiles, modifiedFiles)
-
-        // Merge with turn prefix summary if split turn
         if (turnPrefixSummary) {
           summaryText = `${summaryText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
         }
-
-        // Update previous summary for next iteration
         this.config.previousSummary = summaryText
-      } catch {
-        summaryText = `[Session memory unavailable - ${olderMessages.length} messages truncated]`
       }
     } else {
       summaryText = `[${olderMessages.length} messages from earlier in the conversation]`
@@ -598,9 +668,13 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
 
     // Create summary message with continuation instruction
     const compactedIds = olderMessages.map(m => m.id).filter((id): id is string => !!id)
+    const lastUserQuery = extractLastUserQuery(recentMessages.length > 0 ? recentMessages : olderMessages)
+    const userQueryPreamble = lastUserQuery
+      ? `\n\n<user_query>\n${lastUserQuery}\n</user_query>\n\n`
+      : ''
     const summaryMessage: Message = {
       role: 'system',
-      content: `This session is being continued from a previous conversation that ran out of context. The session memory below covers the earlier portion of the conversation.
+      content: `This session is being continued from a previous conversation that ran out of context. The session memory below covers the earlier portion of the conversation.${userQueryPreamble}
 
 ${summaryText}
 
@@ -622,11 +696,11 @@ Continue the conversation from where it left off without asking the user any fur
     }
 
     // Build compressed history
-    const compressedMessages: Message[] = [
+    const compressedMessages = sanitizeCompactedHistory([
       ...systemMessages,
       summaryMessage,
       ...recentMessages,
-    ]
+    ])
 
     return {
       messages: compressedMessages,
