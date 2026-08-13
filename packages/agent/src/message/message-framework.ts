@@ -15,6 +15,8 @@ export type RuntimeContextSource =
   | 'todo_gate'
   | 'working_directory_switch'
   | 'auto_continue'
+  | 'goal_summary'
+  | 'research_continuation'
   | 'custom';
 
 /**
@@ -225,6 +227,27 @@ export function isVisibleAgentMessage(message: AgentMessage): boolean {
 }
 
 /**
+ * Exhaustive per-source turn classification. Adding a source to
+ * `RuntimeContextSource` without a key here is a compile error (Record
+ * type), mirroring grok's exhaustive `match` in `starts_prompt_turn()`.
+ */
+export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
+  agents_md: false,
+  mailbox: false,
+  background_notification: true, // subagent / bash completion wake-up
+  attachment: false,
+  memory: false,
+  mode: false,
+  system: false,
+  todo_gate: false,
+  working_directory_switch: false,
+  auto_continue: false,
+  goal_summary: false, // dual-tag turn+directive; counts as mid-turn (grok GoalSummary)
+  research_continuation: false,
+  custom: false,
+};
+
+/**
  * Whether a synthetic {@link RuntimeContextMessage} starts a new prompt turn
  * or is a mid-turn injection. Aligns with grok's `starts_prompt_turn()`:
  * only server/background wake-ups (task/subagent completed, notification
@@ -233,12 +256,7 @@ export function isVisibleAgentMessage(message: AgentMessage): boolean {
  * must not change the turn relationship with neighbouring real user turns.
  */
 export function runtimeContextStartsPromptTurn(source: RuntimeContextSource): boolean {
-  switch (source) {
-    case 'background_notification':
-      return true;
-    default:
-      return false;
-  }
+  return STARTS_PROMPT_TURN[source];
 }
 
 /**

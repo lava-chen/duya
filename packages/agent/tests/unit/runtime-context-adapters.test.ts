@@ -3,13 +3,16 @@ import type { FileAttachment } from '../../src/types.js';
 import type { MailboxRow } from '../../src/session/db.js';
 import { buildTaskNotificationXml } from '../../src/lifecycle/buildTaskNotification.js';
 import type { AgentMessage } from '../../src/message/message-framework.js';
+import { runtimeContextStartsPromptTurn } from '../../src/message/message-framework.js';
 import { projectPersistenceMessages } from '../../src/message/message-projectors.js';
 import {
   RUNTIME_CONTEXT_METADATA_KEYS,
   adaptAttachmentContext,
   adaptAutoContinueContext,
   adaptCustomRuntimeContext,
+  adaptGoalSummaryContext,
   adaptMailboxRows,
+  adaptResearchContinuationContext,
   adaptTaskNotificationXml,
   adaptWorkingDirectorySwitch,
   dedupeRuntimeContextMessages,
@@ -715,5 +718,50 @@ describe('option overrides', () => {
     );
 
     expect(msg.metadata).toMatchObject({ seqIndex: 42 });
+  });
+});
+
+// ─── Exhaustive turn-semantics map ───────────────────────────────────────
+
+describe('runtimeContextStartsPromptTurn (exhaustive)', () => {
+  it('maps every RuntimeContextSource to a boolean (no silent default)', () => {
+    const sources = [
+      'agents_md', 'mailbox', 'background_notification', 'attachment', 'memory',
+      'mode', 'system', 'todo_gate', 'working_directory_switch',
+      'auto_continue', 'goal_summary', 'research_continuation', 'custom',
+    ] as const;
+    for (const source of sources) {
+      expect(typeof runtimeContextStartsPromptTurn(source)).toBe('boolean');
+    }
+  });
+
+  it('starts a new turn only for background_notification', () => {
+    const sources = [
+      'agents_md', 'mailbox', 'background_notification', 'attachment', 'memory',
+      'mode', 'system', 'todo_gate', 'working_directory_switch',
+      'auto_continue', 'goal_summary', 'research_continuation', 'custom',
+    ] as const;
+    for (const source of sources) {
+      expect(runtimeContextStartsPromptTurn(source)).toBe(source === 'background_notification');
+    }
+  });
+});
+
+// ─── Goal / research continuation adapters ───────────────────────────────
+
+describe('goal / research continuation adapters', () => {
+  it('adapts goal continuation with source=goal_summary, visible', () => {
+    const ids = deterministicIds('goal');
+    const msg = adaptGoalSummaryContext('<system-reminder>goal</system-reminder>', options(ids.next));
+    expect(msg.role).toBe('runtime_context');
+    expect(msg.source).toBe('goal_summary');
+    expect(msg.visibility).toBe('visible');
+  });
+  it('adapts research continuation with source=research_continuation, visible', () => {
+    const ids = deterministicIds('res');
+    const msg = adaptResearchContinuationContext('research state', options(ids.next));
+    expect(msg.source).toBe('research_continuation');
+    expect(msg.visibility).toBe('visible');
+    expect(msg.role).toBe('runtime_context');
   });
 });
