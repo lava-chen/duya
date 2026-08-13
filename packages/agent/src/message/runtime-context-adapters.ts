@@ -326,6 +326,50 @@ export function adaptAutoContinueContext(
   });
 }
 
+// ─── 9. Goal per-round continuation -> source='goal_summary' ─────────────
+
+/**
+ * Adapts the goal-mode per-round continuation (goal-state + sentinel +
+ * verifier gaps) into a runtime_context message. Mirrors grok's
+ * `GoalSummary`: a durable progress check-in that is user-visible but is
+ * NOT a real user query — `runtimeContext:true` lets `lastRealUserQuery`
+ * skip it when anchoring the final response. Defaults to visible so the
+ * progress summary renders in the transcript.
+ */
+export function adaptGoalSummaryContext(
+  content: string,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source: 'goal_summary',
+    content,
+    visibility: options.visibility ?? 'visible',
+    seqIndex: options.seqIndex,
+    metadata: options.metadata,
+  });
+}
+
+// ─── 10. Research per-round continuation -> source='research_continuation'
+
+/**
+ * Same shape as {@link adaptGoalSummaryContext} for the research-mode
+ * continuation. Durable, user-visible, mid-turn.
+ */
+export function adaptResearchContinuationContext(
+  content: string,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source: 'research_continuation',
+    content,
+    visibility: options.visibility ?? 'visible',
+    seqIndex: options.seqIndex,
+    metadata: options.metadata,
+  });
+}
+
 // ─── Deduplication ───────────────────────────────────────────────────────
 
 /**
