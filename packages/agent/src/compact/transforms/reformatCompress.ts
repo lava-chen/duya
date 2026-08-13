@@ -4,11 +4,32 @@ import { findLastUserIndex, buildToolNameByUseId, contentToStr } from './shared.
 /** Tools whose JSON output is reformatted losslessly into a compact table. */
 export const REFORMAT_TOOLS = new Set(['grep', 'glob'])
 
+/**
+ * Strip the model-visible status/duration envelope that StreamingToolExecutor
+ * prepends to every tool result (a leading `[completed] <tool>` / `[failed]
+ * <tool>` header line and a trailing `[Duration: Nms]` line), so the remaining
+ * body can be parsed as JSON. Returns the input unchanged when no envelope is
+ * present.
+ */
+export function stripToolResultEnvelope(result: string): string {
+  const lines = result.split('\n')
+  if (
+    lines.length > 0 &&
+    (lines[0].startsWith('[completed] ') || lines[0].startsWith('[failed] '))
+  ) {
+    lines.shift()
+  }
+  if (lines.length > 0 && /^\[Duration: \d+ms\]$/.test(lines[lines.length - 1].trim())) {
+    lines.pop()
+  }
+  return lines.join('\n')
+}
+
 /** Reformat a grep result JSON string into a table; null when not applicable. */
 export function reformatGrepResult(result: string): string | null {
   let parsed: unknown
   try {
-    parsed = JSON.parse(result)
+    parsed = JSON.parse(stripToolResultEnvelope(result))
   } catch {
     return null
   }
@@ -31,7 +52,7 @@ export function reformatGrepResult(result: string): string | null {
 export function reformatGlobResult(result: string): string | null {
   let parsed: unknown
   try {
-    parsed = JSON.parse(result)
+    parsed = JSON.parse(stripToolResultEnvelope(result))
   } catch {
     return null
   }

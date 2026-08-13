@@ -1,5 +1,5 @@
 /**
- * Unit tests for token budget cut point algorithm (from pi)
+ * Unit tests for token budget cut point algorithm
  */
 
 import { describe, it, expect } from 'vitest'
@@ -99,7 +99,7 @@ describe('tokenBudgetCut', () => {
       expect(prompt).toContain('<conversation>')
       expect(prompt).toContain(conversationText)
       // Initial prompt: asks for a fresh structured summary
-      expect(prompt).toContain('a conversation to summarize')
+      expect(prompt).toContain('concise summary of the conversation so far')
       expect(prompt).not.toContain('<previous-summary>')
     })
 

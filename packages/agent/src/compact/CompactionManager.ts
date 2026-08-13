@@ -4,7 +4,7 @@
  * with post-compact reinjection support
  */
 
-import type { Message, ToolUse } from '../types.js'
+import type { Message } from '../types.js'
 import type {
   CompactionResult,
   CompactionStats,
@@ -13,31 +13,43 @@ import type {
   TokenBudget,
   CompactOptions,
 } from './types.js'
-import { DEFAULT_CONTEXT_WINDOW } from './types.js'
+import { DEFAULT_CONTEXT_WINDOW, COMPACTION_THRESHOLDS } from './types.js'
 import { TokenBudgetManager, estimateMessagesTokens } from './tokenBudget.js'
 import { logger } from '../utils/logger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
+import {
+  classifyCompactFailure,
+  CompactSuppression,
+  isRetryableCompactFailure,
+} from './compactErrors.js'
+import { fitCompactedToBudget } from './historySanitize.js'
 
 /**
- * Compaction Manager Configuration
+ * Compute a stable fingerprint of the messages that must change when the
+ * conversation content changes. Used to invalidate a cached prefire summary.
  */
-export interface CompactionManagerConfig {
-  /** Maximum context window size */
-  maxTokens?: number
-  /** System prompt token allocation */
-  systemPromptTokens?: number
-  /** Reserved tokens for human interaction */
-  reservedTokens?: number
-  /** Enable post-compact reinjection */
-  enableReinjection?: boolean
-  /** Reinjection configuration */
-  reinjectionConfig?: Partial<ReinjectorConfig>
-  /** Number of recent tokens to keep (not summarize) */
-  keepRecentTokens?: number
-  /** Enable iterative summary updates */
-  enableIterativeSummary?: boolean
+export function fingerprintMessages(messages: readonly Message[]): string {
+  let h = 2166136261
+  const mix = (n: number) => {
+    h ^= n
+    h = Math.imul(h, 16777619)
+  }
+  for (const msg of messages) {
+    mix(msg.id?.length ?? 0)
+    // Fold a sample of the content into the hash so content edits invalidate it.
+    const content = typeof msg.content === 'string'
+      ? msg.content
+      : Array.isArray(msg.content)
+        ? msg.content.map((b) => (b as { type?: string }).type ?? '').join(',')
+        : ''
+    mix(content.length)
+    for (let i = 0; i < content.length && i < 256; i += 1) {
+      mix(content.charCodeAt(i))
+    }
+  }
+  return `pf:${(h >>> 0).toString(36)}`
 }
 
 /**
@@ -50,8 +62,6 @@ export interface CompactionManagerConfig {
   systemPromptTokens?: number
   /** Reserved tokens for human interaction */
   reservedTokens?: number
-  /** Enable reactive compaction */
-  enableReactive?: boolean
   /** Enable post-compact reinjection */
   enableReinjection?: boolean
   /** Reinjection configuration */
@@ -95,11 +105,13 @@ export class CompactionManager {
   private lastCompactionAt?: number
   private eventHandlers: Set<(event: CompactionManagerEvent) => void> = new Set()
   private summarizer?: (text: string, prompt: string) => Promise<string>
-  private reactiveStrategy?: ReactiveCompactStrategy
   private reinjector?: PostCompactReinjector
   private keepRecentTokens?: number
   private enableIterativeSummary: boolean
   private lastSummary?: string
+  private suppression = new CompactSuppression()
+  private prefireCache?: { fingerprint: string; summary: string }
+  private memoryFlush?: (summary: string) => Promise<void>
 
   constructor(config: CompactionManagerConfig = {}) {
     const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_WINDOW
@@ -120,12 +132,6 @@ export class CompactionManager {
     // Register default strategies
     this.registerDefaultStrategies()
 
-    // Initialize reactive strategy if enabled
-    if (config.enableReactive !== false) {
-      this.reactiveStrategy = new ReactiveCompactStrategy()
-      this.strategies.set('reactive', this.reactiveStrategy)
-    }
-
     // Initialize post-compact reinjector if enabled
     if (config.enableReinjection) {
       this.reinjector = new PostCompactReinjector(config.reinjectionConfig)
@@ -133,23 +139,14 @@ export class CompactionManager {
   }
 
   /**
-   * Register default compaction strategies
+   * Register the single compaction strategy.
    */
   private registerDefaultStrategies(): void {
-    // Micro Compact (lightest)
-    const micro = new MicroCompactStrategy()
-    this.strategies.set('micro', micro)
-
-    // Session Memory Compact (medium) - with iterative summary support
     const sessionMemory = new SessionMemoryCompactStrategy({
       keepRecentTokens: this.keepRecentTokens,
       previousSummary: this.enableIterativeSummary ? this.lastSummary : undefined,
     })
     this.strategies.set('session_memory', sessionMemory)
-
-    // Snip Compact (heaviest - last resort)
-    const snip = new SnipCompactStrategy()
-    this.strategies.set('snip', snip)
   }
 
   /**
@@ -164,6 +161,29 @@ export class CompactionManager {
         ;(strategy as any).setSummarizer(summarizer)
       }
     }
+  }
+
+  /**
+   * Register a memory-flush sink. After a compaction produces a summary, the
+   * summary text is handed to `fn` so the host can persist important context to
+   * the DUYA memory store before history is dropped. Best-effort: failures are
+   * swallowed and never break the compaction path.
+   */
+  setMemoryFlushFn(fn: (summary: string) => Promise<void>): void {
+    this.memoryFlush = fn
+  }
+
+  /**
+   * Fire the memory-flush sink with the latest compaction summary (best-effort,
+   * not awaited). No-op when no sink is configured.
+   */
+  private flushMemory(summary: string): void {
+    if (!this.memoryFlush || !summary) return
+    this.memoryFlush(summary).catch((err: unknown) => {
+      logger.warn('Memory flush after compaction failed (best-effort)', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   }
 
   /**
@@ -204,38 +224,66 @@ export class CompactionManager {
    * Check if compaction should be triggered
    */
   shouldCompact(): boolean {
+    if (this.suppression.isSuppressed('session')) return false
     const stats = this.getStats()
-
-    for (const [name, strategy] of this.strategies) {
-      if (name === 'reactive') continue
-
-      if (strategy.shouldCompact(stats)) {
-        return true
-      }
-    }
-
-    if (this.reactiveStrategy?.shouldCompact(stats)) {
-      return true
-    }
-
-    return false
+    const strategy = this.strategies.get('session_memory')
+    return strategy?.shouldCompact(stats) ?? false
   }
 
   /**
-   * Get the strategy to use for compaction
+   * Background prefire pass: generate an up-to-date summary for the current
+   * messages and cache it, keyed by a content fingerprint. The cached summary
+   * is injected as the previous summary on the next real compaction (pass 2),
+   * so the waiting pass summarizes only recent deltas, not the whole history.
+   * Fire-and-forget: failures return '' and are ignored.
+   */
+  async prefire(messages: Message[]): Promise<string> {
+    const strategy = this.strategies.get('session_memory')
+    if (!strategy || typeof (strategy as unknown as { summarizeConversation: unknown }).summarizeConversation !== 'function') {
+      return ''
+    }
+    const fingerprint = fingerprintMessages(messages)
+    if (this.prefireCache && this.prefireCache.fingerprint === fingerprint) {
+      return this.prefireCache.summary
+    }
+    const summary = await (strategy as unknown as { summarizeConversation(m: Message[]): Promise<string> })
+      .summarizeConversation(messages)
+    if (summary) {
+      this.prefireCache = { fingerprint, summary }
+    }
+    return summary
+  }
+
+  /**
+   * Return the cached prefire summary if it still matches the current messages.
+   */
+  getPrefireSummary(messages: Message[]): string {
+    if (!this.prefireCache) return ''
+    if (this.prefireCache.fingerprint !== fingerprintMessages(messages)) return ''
+    return this.prefireCache.summary
+  }
+
+  /**
+   * Whether a background prefire pass should run now: usage is above the
+   * prefire lead threshold but below the compaction threshold, and no valid
+   * cached summary matches the current messages yet.
+   */
+  shouldPrefire(messages: Message[]): boolean {
+    if (this.suppression.isSuppressed('session')) return false
+    const stats = this.getStats()
+    if (stats.totalTokens <= 0 || stats.maxTokens <= 0) return false
+    const ratio = stats.totalTokens / stats.maxTokens
+    if (ratio < COMPACTION_THRESHOLDS.PREFIRE) return false
+    if (ratio >= COMPACTION_THRESHOLDS.SESSION_MEMORY) return false
+    if (this.prefireCache && this.prefireCache.fingerprint === fingerprintMessages(messages)) return false
+    return true
+  }
+
+  /**
+   * Get the strategy to use for compaction.
    */
   private selectStrategy(): CompactionStrategy {
-    const stats = this.getStats()
-
-    if (stats.totalTokens > stats.maxTokens * COMPACTION_THRESHOLDS.SNIP) {
-      return this.strategies.get('snip')!
-    }
-
-    if (stats.totalTokens > stats.maxTokens * COMPACTION_THRESHOLDS.SESSION_MEMORY) {
-      return this.strategies.get('session_memory')!
-    }
-
-    return this.strategies.get('micro')!
+    return this.strategies.get('session_memory')!
   }
 
   /**
@@ -264,6 +312,14 @@ export class CompactionManager {
       // Cache state before compaction if reinjection is enabled
       if (this.reinjector) {
         this.reinjector.cacheFileState(messages)
+      }
+
+      // Pass 2: if a background prefire summary is cached and still matches
+      // the current messages, seed the strategy's previous summary so the
+      // waiting pass summarizes only recent deltas, not the whole history.
+      const prefireSummary = this.getPrefireSummary(messages)
+      if (prefireSummary && typeof (strategy as unknown as { setPreviousSummary?: (s: string) => void }).setPreviousSummary === 'function') {
+        ;(strategy as unknown as { setPreviousSummary(s: string): void }).setPreviousSummary(prefireSummary)
       }
 
       const baseResult = await strategy.compact(messages, this.getStats())
@@ -305,6 +361,14 @@ export class CompactionManager {
       this.budget.setContextTokens(this.contextTokens)
       this.consecutiveFailures = 0
 
+      // Degrade gracefully if the compacted history still overflows the budget.
+      const budgetTokens = this.budget.maxTokens - this.budget.reservedTokens
+      if (this.contextTokens > budgetTokens) {
+        finalMessages = fitCompactedToBudget(finalMessages, budgetTokens)
+        this.contextTokens = estimateMessagesTokens(finalMessages)
+        this.budget.setContextTokens(this.contextTokens)
+      }
+
       // Store summary for iterative updates (if session_memory strategy was used)
       if (strategy.name === 'session_memory' && this.enableIterativeSummary) {
         // Extract summary from the summary message
@@ -315,6 +379,10 @@ export class CompactionManager {
           const summaryMatch = content.match(/The session memory below covers the earlier portion of the conversation\.\n\n([\s\S]+?)\n\nContinue the conversation/)
           if (summaryMatch) {
             this.lastSummary = summaryMatch[1]
+          }
+          // Persist important context to the memory store before history drops.
+          if (this.lastSummary) {
+            this.flushMemory(this.lastSummary)
           }
         }
       }
@@ -329,51 +397,15 @@ export class CompactionManager {
       this.emit({ type: 'compaction_complete', result })
       return result
     } catch (error) {
-      this.consecutiveFailures++
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      this.emit({ type: 'compaction_error', error: errorMessage })
-      throw error
-    }
-  }
-
-  /**
-   * Execute reactive compaction (for emergency situations)
-   */
-  async reactiveCompact(
-    messages: Message[],
-    triggerError?: 'prompt_too_long' | 'context_length_exceeded' | 'manual_trigger',
-  ): Promise<EnhancedCompactionResult> {
-    if (!this.reactiveStrategy) {
-      throw new Error('Reactive compaction is not enabled')
-    }
-
-    if (this.summarizer) {
-      this.reactiveStrategy.setSummarizer(this.summarizer)
-    }
-
-    this.emit({ type: 'compaction_start', strategy: 'reactive' })
-
-    try {
-      const baseResult = await this.reactiveStrategy.compact(
-        messages,
-        this.getStats(),
-        triggerError,
-      )
-
-      this.lastCompactionAt = Date.now()
-      this.contextTokens = estimateMessagesTokens(baseResult.messages)
-      this.budget.setContextTokens(this.contextTokens)
-      this.consecutiveFailures = 0
-
-      const result: EnhancedCompactionResult = {
-        ...baseResult,
-        tokensRetained: estimateMessagesTokens(baseResult.messages),
+      const kind = classifyCompactFailure(error)
+      if (isRetryableCompactFailure(kind)) {
+        this.consecutiveFailures++
+      } else {
+        // Deterministic / cancelled failures won't succeed on retry — suppress
+        // auto-compaction for a window so the loop does not spin needlessly.
+        this.suppression.suppress('session')
+        this.consecutiveFailures = 0
       }
-
-      this.emit({ type: 'compaction_complete', result })
-      return result
-    } catch (error) {
-      this.consecutiveFailures++
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
       this.emit({ type: 'compaction_error', error: errorMessage })
       throw error
@@ -392,38 +424,6 @@ export class CompactionManager {
    */
   cacheToolState(toolName: string, status: 'active' | 'completed' | 'error', output?: string): void {
     this.reinjector?.cacheToolState(toolName, { status, lastOutput: output })
-  }
-
-  /**
-   * Register a file change handler for reactive compaction
-   */
-  onFileChange(handler: (path: string) => void): void {
-    if (this.reactiveStrategy) {
-      this.reactiveStrategy.registerFileChange('')
-    }
-  }
-
-  /**
-   * Register a tool call handler for reactive compaction
-   */
-  onToolCall(handler: (tool: ToolUse) => void): void {
-    if (this.reactiveStrategy) {
-      // Tool calls will be registered externally via registerToolCall
-    }
-  }
-
-  /**
-   * Register file change externally
-   */
-  registerFileChange(path: string): void {
-    this.reactiveStrategy?.registerFileChange(path)
-  }
-
-  /**
-   * Register tool call externally
-   */
-  registerToolCall(toolName: string): void {
-    this.reactiveStrategy?.registerToolCall(toolName)
   }
 
   /**

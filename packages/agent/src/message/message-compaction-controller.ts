@@ -7,7 +7,7 @@
  *
  * 1. Input  — projects the timeline's latest checkpoint to a provider
  *              `Message[]` via `buildAgentContext` + `projectModelMessages`.
- * 2. Run    — delegates to `CompactionManager.compact` / `reactiveCompact`.
+ * 2. Run    — delegates to `CompactionManager.compact`.
  * 3. Output — converts the returned `Message[]` (which contains a compaction
  *              marker plus retained messages) into a `CompactionEntry` and
  *              appends it to the timeline. The original `MessageEntry`s are
@@ -41,12 +41,12 @@ export interface CompactionManagerLike {
     messages: Message[],
     options?: Record<string, unknown>,
   ): Promise<EnhancedCompactionResult>;
-  reactiveCompact(
-    messages: Message[],
-    triggerError?: 'prompt_too_long' | 'context_length_exceeded' | 'manual_trigger',
-  ): Promise<EnhancedCompactionResult>;
   updateContextTokens(messages: Message[]): void;
   shouldCompact(): boolean;
+  /** Whether a background prefire summary pass should run (usage above lead). */
+  shouldPrefire(messages: Message[]): boolean;
+  /** Background two-pass prefix summary; fire-and-forget (returns '' on failure). */
+  prefire(messages: Message[]): Promise<string>;
 }
 
 export interface MessageCompactionControllerOptions {
@@ -77,11 +77,6 @@ export interface CompactProactiveOptions {
   readonly customReinjectContext?: string;
   readonly recentChanges?: readonly unknown[];
 }
-
-export type CompactReactiveTrigger =
-  | 'prompt_too_long'
-  | 'context_length_exceeded'
-  | 'manual_trigger';
 
 function defaultIdGenerator(): string {
   return crypto.randomUUID();
@@ -175,6 +170,26 @@ export class MessageCompactionController {
   }
 
   /**
+   * Whether a background prefire summary pass should run now. Uses the same
+   * timeline projection as compaction so the prefire cache stays consistent
+   * with what the next compaction pass will see.
+   */
+  shouldPrefire(): boolean {
+    const messages = this.projectInputMessages();
+    this.compactionManager.updateContextTokens(messages);
+    return this.compactionManager.shouldPrefire(messages);
+  }
+
+  /**
+   * Background two-pass prefix summary. Fire-and-forget: the returned promise
+   * resolves to '' when unavailable, and callers should not await it.
+   */
+  prefire(): Promise<string> {
+    const messages = this.projectInputMessages();
+    return this.compactionManager.prefire(messages);
+  }
+
+  /**
    * Proactive compaction. Projects the timeline, runs the manager, and appends
    * a `CompactionEntry` to the timeline. Returns the new entry, or `null` when
    * the strategy decided no compaction was needed (returned input unchanged
@@ -188,23 +203,6 @@ export class MessageCompactionController {
     const result = await this.compactionManager.compact(
       inputMessages,
       options as Record<string, unknown> | undefined,
-    );
-    return this.applyCompactionResult(result, inputMessages);
-  }
-
-  /**
-   * Reactive compaction for emergency situations (`prompt_too_long`,
-   * `context_length_exceeded`, manual). Same bridging as proactive but
-   * delegates to `CompactionManager.reactiveCompact`.
-   */
-  async compactReactive(
-    triggerError?: CompactReactiveTrigger,
-  ): Promise<CompactionEntry | null> {
-    const inputMessages = this.projectInputMessages();
-    this.compactionManager.updateContextTokens(inputMessages);
-    const result = await this.compactionManager.reactiveCompact(
-      inputMessages,
-      triggerError,
     );
     return this.applyCompactionResult(result, inputMessages);
   }

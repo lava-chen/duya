@@ -24,3 +24,18 @@ export { microCleanupMessages } from './microCompactCleanup.js'
 export { compressHistoricalCanvasToolCalls } from './canvasHistoryCompress.js'
 // Projection-layer tool compression pipeline (LLM-facing only)
 export { compressProjectedToolMessages, DEFAULT_TRANSFORMS, type ProjectionTransform } from './projectionCompress.js'
+
+// Tool-call invariant + budget fitting
+export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudget } from './historySanitize.js'
+
+// Summary quality guard
+export { cleanSummaryText, isDegenerateSummary, MIN_SUMMARY_CHARS } from './summaryGuard.js'
+
+// Failure classification + suppression
+export {
+  classifyCompactFailure,
+  CompactSuppression,
+  isRetryableCompactFailure,
+  SUPPRESS_WINDOW_MS,
+  type CompactFailureKind,
+} from './compactErrors.js'

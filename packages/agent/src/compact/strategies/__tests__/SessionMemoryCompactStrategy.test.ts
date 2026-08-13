@@ -11,7 +11,16 @@ describe('SessionMemoryCompactStrategy', () => {
   let mockSummarizer: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
-    mockSummarizer = vi.fn().mockResolvedValue('## Goal\nTest goal\n\n## Progress\n### Done\n- [x] Task 1')
+    mockSummarizer = vi.fn().mockResolvedValue(
+      '## Goal\nTest goal\n\n## Progress\n### Done\n- [x] Task 1\n\n' +
+        '## Decisions\n- Use TypeScript strict mode throughout the migration.\n\n' +
+        '## Technical Concepts\n- MessageTimeline is an append-only store; the compaction controller ' +
+        'bridges the legacy manager to it without mutating existing entries.\n\n' +
+        '## Current Work\n- Phase 2 hardening: tool-call invariant sanitation, degenerate summary ' +
+        'detection with retry, and error classification with suppression windows.\n\n' +
+        '## Pending Tasks\n- [ ] Wire the two-pass prefire summary into the next compaction.\n' +
+        '## Optional Next Step\n- Inject the cached prefire summary as the previous summary.\n'
+    )
     strategy = new SessionMemoryCompactStrategy({
       maxMessagesToKeep: 5,
       // Small budget so short test messages actually exceed it

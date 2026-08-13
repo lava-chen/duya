@@ -12,7 +12,7 @@ import type { Message, MessageContent, ToolResultContent } from '../types.js'
 // earlier content; real compaction (session_memory/snip) is what reclaims
 // that space when the context genuinely exceeds the budget.
 export const COMPACTABLE_TOOLS = new Set([
-  'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write',
+  'Bash', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Edit', 'Write', 'apply_patch',
   'edit', 'write',
 ])
 

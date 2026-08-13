@@ -99,14 +99,11 @@ export const DEFAULT_BUDGET_CONFIG: TokenBudgetConfig = {
  * (1.3x) provides additional buffer.
  */
 export const COMPACTION_THRESHOLDS = {
-  // Micro Compact: 65% of max — light, early compression
-  MICRO: 0.65,
-  // Session Memory Compact: 78% of max — moderate compression
+  // Session Memory Compact: 78% of max — single strategy
   SESSION_MEMORY: 0.78,
-  // Snip Compact: 88% of max — aggressive compression (last resort before reactive)
-  SNIP: 0.88,
-  // Reactive: 90% of max — emergency, but still before API limit
-  REACTIVE: 0.90,
+  // Prefire lead: begin the background summary pass at 68% so a fresh
+  // summary is ready before compaction (85%-equivalent) fires.
+  PREFIRE: 0.68,
 } as const
 
 /**
