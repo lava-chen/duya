@@ -143,13 +143,12 @@ describe('buildResultXml (truncation)', () => {
     expect(xml).toContain(`${RESULT_OPEN}short${RESULT_CLOSE}`)
   })
 
-  it('truncates long finalMessage into an output-file pointer', () => {
+  it('truncates long finalMessage into a get_task_output pointer', () => {
     const longText = 'x'.repeat(DEFAULT_MAX_RESULT_CHARS + 100)
     const xml = buildTaskNotificationXml({ ...baseInput, finalMessage: longText })
 
     expect(xml).not.toContain('x'.repeat(100))
-    expect(xml).toContain(`Output is ${longText.length} chars`)
-    expect(xml).toContain('<output-file>/tmp/o</output-file>')
+    expect(xml).toContain('Background subagent completed. Use get_task_output("t1") to see the full output.')
   })
 
   it('respects a custom maxResultChars cap', () => {
@@ -158,7 +157,7 @@ describe('buildResultXml (truncation)', () => {
       finalMessage: 'abcdefghij',
       maxResultChars: 3,
     })
-    expect(xml).toContain('Output is 10 chars')
+    expect(xml).toContain('Background subagent completed. Use get_task_output("t1") to see the full output.')
     expect(xml).not.toContain('abcdefghij')
   })
 

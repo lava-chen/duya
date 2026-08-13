@@ -27,7 +27,7 @@ export type {
 } from './StreamingToolExecutor.js';
 
 // Phase 5 tools exports
-export { taskTool } from './TaskTool/TaskTool.js';
+export { todoTool, TODO_TOOL_NAME, LEGACY_TODO_WIRE_NAMES } from './TodoTool/TodoTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';

@@ -97,10 +97,10 @@ function getToolVerb(toolName?: string): string {
   if (SEARCH_TOOLS.has(name)) return '搜索';
   if (SHELL_TOOLS.has(name)) return '执行命令';
   if (name.startsWith('browser_') || name.startsWith('browser-') || name === 'browser') return '浏览网页';
-  if (name === 'task') return '操作任务';
+  if (name === 'todo' || name === 'todowrite') return '操作任务';
   if (name === 'askuserquestion') return '询问用户';
   if (name === 'duya_cli' || name === 'duya-cli' || name === 'duyacli') return '运行 CLI';
-  if (name === 'agent' || name === 'subagent' || name === 'sub_agent') return '运行子代理';
+  if (name === 'task' || name === 'agent' || name === 'subagent' || name === 'sub_agent') return '运行子代理';
   if (name.startsWith('canvas_')) return '操作画布';
   return '运行工具';
 }

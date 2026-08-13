@@ -110,3 +110,70 @@ export function selectEligible(
     sourceFingerprint: row.source_fingerprint ?? '',
   }));
 }
+
+// ---------------------------------------------------------------------------
+// diagnoseEligibility
+// ---------------------------------------------------------------------------
+
+export interface EligibilityDiagnostic {
+  total: number;
+  activeMain: number;
+  enoughMessages: number;
+  idleReady: number;
+  alreadyExtracted: number;
+}
+
+/**
+ * Explain WHY no rollout is currently eligible for Stage 1 extraction.
+ *
+ * Phase 1 silently does nothing when `selectEligible` returns empty, which
+ * makes "no new rollout for a long time" hard to diagnose. This helper
+ * buckets the catalog by the `selectEligible` gates so the worker can log a
+ * concrete reason (e.g. "sessions not idle 12h yet" vs "already extracted").
+ *
+ * The counts are cumulative filters in the same order as `selectEligible`:
+ *   total            → all catalog rows
+ *   activeMain       → agent_type='main' AND source_status='active'
+ *   enoughMessages   → activeMain AND message_count >= minMessageCount
+ *   idleReady        → enoughMessages AND idle (idleMs) AND within windowMs
+ *   alreadyExtracted → activeMain with a succeeded stage1_outputs row
+ */
+export function diagnoseEligibility(
+  db: Database,
+  input: { now: number; idleMs?: number; windowMs?: number; minMessageCount?: number }
+): EligibilityDiagnostic {
+  const now = input.now;
+  const idleMs = input.idleMs ?? DEFAULT_IDLE_MS;
+  const windowMs = input.windowMs ?? DEFAULT_WINDOW_MS;
+  const minMessageCount = input.minMessageCount ?? DEFAULT_MIN_MESSAGE_COUNT;
+
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(*) AS total,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' THEN 1 ELSE 0 END) AS active_main,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND message_count >= ? THEN 1 ELSE 0 END) AS enough_messages,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND message_count >= ?
+                   AND last_message_at < ? - ? AND last_message_at > ? - ? THEN 1 ELSE 0 END) AS idle_ready,
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND EXISTS (
+               SELECT 1 FROM stage1_outputs s
+               WHERE s.rollout_id = r.rollout_id
+                 AND s.job_status IN ('succeeded','succeeded_no_output')) THEN 1 ELSE 0 END) AS already_extracted
+       FROM rollout_catalog r`
+    )
+    .get(minMessageCount, minMessageCount, now, idleMs, now, windowMs) as {
+    total: number;
+    active_main: number;
+    enough_messages: number;
+    idle_ready: number;
+    already_extracted: number;
+  };
+
+  return {
+    total: row.total || 0,
+    activeMain: row.active_main || 0,
+    enoughMessages: row.enough_messages || 0,
+    idleReady: row.idle_ready || 0,
+    alreadyExtracted: row.already_extracted || 0,
+  };
+}

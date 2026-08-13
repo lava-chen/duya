@@ -15,7 +15,7 @@ import type {
   ResearchPersistedSource,
   ResearchReportArtifact,
 } from '@/types/research';
-import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent } from '@/types/stream';
+import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions } from './agent-http-client';
@@ -404,6 +404,8 @@ interface SessionState {
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
+  /** Plan 423 Phase 3: listeners for research tracker state broadcasts. */
+  researchUpdatedListeners: Set<(event: ResearchUpdatedEvent) => void>;
   dbPersistedListeners: Set<(event: PersistEvent) => void>;
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
@@ -483,7 +485,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -775,6 +777,7 @@ class StreamSessionManager {
         permissionListeners: new Set(),
         modeChangedListeners: new Set(),
         goalUpdatedListeners: new Set(),
+        researchUpdatedListeners: new Set(),
         dbPersistedListeners: new Set(),
         idleTimeout: null,
         textEmitTimeout: null,
@@ -1325,6 +1328,16 @@ class StreamSessionManager {
           );
           break;
 
+        case 'research_updated':
+          // Plan 423 Phase 3: research tracker state changed (start / fan-out /
+          // finalize). Notify listeners so the UI can render a research status card.
+          this.handleResearchUpdatedEvent(
+            sessionId,
+            streamId,
+            (event.data ?? event) as unknown as ResearchUpdatedEvent | undefined,
+          );
+          break;
+
         case 'db:request':
           // Forward DB requests to agent server via IPC - don't handle here
           // The agent-server will route them to the database and forward responses
@@ -1744,6 +1757,29 @@ class StreamSessionManager {
     });
   }
 
+  /**
+   * Plan 423 Phase 3: research tracker state broadcast (start / fan-out /
+   * finalize). Notifies registered listeners so the UI can render a research
+   * status card. The event carries the flat worker payload (state, query,
+   * sub-questions, sources, gaps…).
+   */
+  private handleResearchUpdatedEvent(
+    sessionId: string,
+    streamId: string,
+    data: ResearchUpdatedEvent | undefined
+  ): void {
+    if (!data) return;
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.researchUpdatedListeners.forEach((listener) => {
+      try {
+        listener(data as ResearchUpdatedEvent);
+      } catch (error) {
+        console.error(`[stream-session-manager] Research updated listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
   private handleDoneEvent(sessionId: string, streamId: string): void {
     console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}`);
     const s = this.sessions.get(sessionId);
@@ -2086,6 +2122,22 @@ class StreamSessionManager {
     };
   }
 
+  /**
+   * Plan 423 Phase 3: subscribe to research tracker state broadcasts
+   * (research status card). Events are transient — a re-mount simply waits
+   * for the next transition.
+   */
+  subscribeToResearchUpdated(
+    sessionId: string,
+    listener: (event: ResearchUpdatedEvent) => void
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.researchUpdatedListeners.add(listener);
+    return () => {
+      state.researchUpdatedListeners.delete(listener);
+    };
+  }
+
   subscribeToDbPersisted(
     sessionId: string,
     listener: (event: PersistEvent) => void
@@ -2136,6 +2188,7 @@ class StreamSessionManager {
       permissionListeners: new Set(),
       modeChangedListeners: new Set(),
       goalUpdatedListeners: new Set(),
+        researchUpdatedListeners: new Set(),
       dbPersistedListeners: new Set(),
       idleTimeout: null,
       textEmitTimeout: null,
@@ -3181,6 +3234,8 @@ export const subscribeToModeChanged = (sessionId: string, listener: (event: Mode
 
 export const subscribeToGoalUpdated = (sessionId: string, listener: (event: GoalUpdatedEvent) => void) =>
   streamSessionManager.subscribeToGoalUpdated(sessionId, listener);
+export const subscribeToResearchUpdated = (sessionId: string, listener: (event: ResearchUpdatedEvent) => void) =>
+  streamSessionManager.subscribeToResearchUpdated(sessionId, listener);
 export const subscribeToDbPersisted = (sessionId: string, listener: (event: PersistEvent) => void) =>
   streamSessionManager.subscribeToDbPersisted(sessionId, listener);
 export const getSnapshot = (sessionId: string) => streamSessionManager.getSnapshot(sessionId);

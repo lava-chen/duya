@@ -126,7 +126,10 @@ export function InlineTaskRow({
             <span className="inline-task-row-prefix">
               {allDone ? '已完成:' : '进行中:'}
             </span>
-            <span className="inline-task-row-subject truncate">
+            <span
+              key={subject}
+              className="inline-task-row-subject inline-task-row-subject-swap truncate"
+            >
               {subject} {progressText}
             </span>
           </button>

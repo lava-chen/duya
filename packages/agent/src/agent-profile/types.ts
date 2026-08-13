@@ -99,6 +99,9 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'General',
     description: 'General purpose assistant for most tasks',
     allowedTools: ['*'],
+    // send_artifact is a gateway-channel delivery tool (no channel consumes
+    // it in desktop sessions) — keep it gateway-only.
+    disallowedTools: ['send_artifact'],
     // Conductor canvas tools are gated by the per-session conductorMode
     // toggle, not by the agent profile. Removing canvas_* from the default
     // denylist lets the tools appear when the user explicitly enables
@@ -125,7 +128,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     name: 'Code',
     description: 'Code development and software engineering',
     allowedTools: ['*'],
-    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory'],
+    disallowedTools: ['show_widget', 'cron', 'duya:*', 'canvas:*', 'memory', 'send_artifact'],
     promptSystem: 'code',
     userVisible: true,
     isPreset: true,
@@ -141,7 +144,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     // canvas_* removed: conductor canvas tools are gated by the session
     // conductorMode toggle. Research mode can still use canvas tools when
     // the user explicitly enables conductor mode.
-    disallowedTools: ['Agent', 'duya_*'],
+    disallowedTools: ['task', 'duya_*', 'send_artifact'],
     promptProfile: {
       disableSections: ['rules'],
     },
@@ -212,12 +215,12 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'show_widget',
       'AskUserQuestion',
       // Recursive subagent spawning — avoid runaway in a stateless channel.
-      'Agent',
+      'task',
       // Self-management — gateway has no desktop settings UI to drive.
       'duya_cli',
       'memory',
       'read_module',
-      'task',
+      'todo',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
       'vision_analyze',
     ],
@@ -243,9 +246,10 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
     disallowedTools: [
       'AskUserQuestion',
       'show_widget',
-      'Agent',
+      'task',
       'canvas:*',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
+      'send_artifact',
     ],
     promptProfile: {
       // The 'rules' chapter (which fuses the old 'doingTasks' and
@@ -268,7 +272,7 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       'Side-panel agent that iteratively refines a single Conductor widget’s data from a screenshot + user instruction. Returns strict JSON only — the renderer applies the result via widget.update_data.',
     allowedTools: ['Read', 'vision_analyze'],
     disallowedTools: [
-      'Agent',
+      'task',
       'canvas_*',
       'show_widget',
       'file:write*',
@@ -313,11 +317,11 @@ export const PRESET_AGENT_PROFILES: AgentProfile[] = [
       // No shell — the curator never executes commands.
       'bash', 'powershell',
       // No recursive subagent spawning.
-      'Agent',
+      'task',
       // No interactive / UI / canvas surface — curator runs headless.
       'canvas:*', 'show_widget', 'AskUserQuestion',
       // No browser, no self-management, no module loader.
-      'browser', 'duya_cli', 'read_module', 'task', 'tool_search', 'skill',
+      'browser', 'duya_cli', 'read_module', 'todo', 'tool_search', 'skill',
       // No mode-switching side effects.
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
       // No session-to-session messaging or vision.

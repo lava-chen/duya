@@ -3,12 +3,12 @@
 import type { PromptContext } from '../../types.js'
 import { TOOL_NAMES } from '../../types.js'
 
-function hasTaskTool(ctx: PromptContext): boolean {
-  return ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
+function hasTodoTool(ctx: PromptContext): boolean {
+  return ctx.enabledTools.has(TOOL_NAMES.TODO) || ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
 }
 
 export function getRulesSection(ctx: PromptContext): string {
-  const taskTool = hasTaskTool(ctx) ? TOOL_NAMES.TASK : null
+  const taskTool = hasTodoTool(ctx) ? TOOL_NAMES.TODO : null
   const searchTools = ctx.hasEmbeddedSearchTools
     ? 'the provided search tools'
     : `${TOOL_NAMES.GREP} and ${TOOL_NAMES.GLOB}`

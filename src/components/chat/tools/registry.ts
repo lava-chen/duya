@@ -123,7 +123,7 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    match: (n) => ['agent', 'subagent', 'sub_agent'].includes(n.toLowerCase()),
+    match: (n) => ['task', 'agent', 'subagent', 'sub_agent'].includes(n.toLowerCase()),
     icon: RobotIcon,
     labelKey: 'streaming.toolAction.label.agent',
     getSummary: (input) => {
@@ -187,35 +187,22 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
-    // TaskTool — manages an internal task list. The summary renders
-    // per-action wording so the chrome reads as natural language
-    // ("已创建 设计杂志风页面结构") instead of the raw JSON dump
-    // ("task {\"action\":\"create\", ...}"). Each task gets routed to
-    // TaskToolRow which renders the chrome summary and the JSON
-    // envelope body.
-    match: (n) => n.toLowerCase() === 'task',
+    // TodoTool — manages an internal task list (aligned to Grok
+    // `todo_write`). The summary renders the count of updated items so
+    // the chrome reads as natural language instead of the raw JSON dump.
+    // Each todo gets routed to TaskToolRow which renders the chrome
+    // summary and the JSON envelope body.
+    match: (n) => n.toLowerCase() === 'todo' || n.toLowerCase() === 'todowrite',
     icon: ListChecksIcon,
     labelKey: null,
     getSummary: (input) => {
       const inp = (input || {}) as Record<string, unknown>;
-      const action = typeof inp.action === 'string' ? inp.action : '';
-      const subject = typeof inp.subject === 'string' ? inp.subject.trim() : '';
-      const taskId = typeof inp.taskId === 'string' ? inp.taskId.trim() : '';
-      const status = typeof inp.status === 'string' ? inp.status : '';
-      switch (action) {
-        case 'create':
-          return subject || 'task';
-        case 'update':
-        case 'get':
-        case 'stop':
-          return taskId ? `task #${taskId}` : 'task';
-        case 'list':
-          return 'tasks';
-        case 'output':
-          return taskId ? `task #${taskId} output` : 'task output';
-        default:
-          return 'task';
-      }
+      const todos = Array.isArray(inp.todos) ? inp.todos : [];
+      if (todos.length === 0) return 'todo';
+      const first = todos[0] as Record<string, unknown> | undefined;
+      const firstContent = typeof first?.content === 'string' ? first.content.trim() : '';
+      if (firstContent) return firstContent.length > 60 ? `${firstContent.slice(0, 57)}...` : firstContent;
+      return todos.length === 1 ? 'todo' : `${todos.length} todos`;
     },
   },
   {

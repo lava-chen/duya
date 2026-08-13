@@ -22,7 +22,10 @@ import { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
 import { subagentTool } from './SubagentTool/index.js';
 
 // Phase 5 tools imports
-import { taskTool } from './TaskTool/TaskTool.js';
+import { todoTool } from './TodoTool/TodoTool.js';
+import { getTaskOutputTool } from './BackgroundTaskTool/index.js';
+import { killTaskTool } from './BackgroundTaskTool/index.js';
+import { waitTasksTool } from './BackgroundTaskTool/index.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 import { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 import { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
@@ -127,8 +130,14 @@ export function createBuiltinRegistry(
   const writeStage1PolicyTool = new WriteStage1PolicyTool();
   registry.register(writeStage1PolicyTool.toTool(), writeStage1PolicyTool, { exposeMode: 'discoverable' });
 
-  // Phase 5: Task tool (unified)
-  registry.register(taskTool.toTool(), taskTool, { exposeMode: 'always' });
+  // Phase 5: Todo tool (aligned to Grok todo_write)
+  registry.register(todoTool.toTool(), todoTool, { exposeMode: 'always' });
+
+  // Phase 5: Background sub-agent task polling tools (aligned to Grok).
+  // get_task_output / wait_tasks are read-only; kill_task is a write.
+  registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposeMode: 'always', riskTier: 'read' });
+  registry.register(waitTasksTool.toTool(), waitTasksTool, { exposeMode: 'always', riskTier: 'read' });
+  registry.register(killTaskTool.toTool(), killTaskTool, { exposeMode: 'always', riskTier: 'write' });
 
   // Plan mode controls are available through tool_search when needed.
   registry.register(enterPlanModeTool, enterPlanModeTool, { exposeMode: 'discoverable' });
@@ -287,7 +296,10 @@ export { getSubagentToolDefinition, getAgentDefinitions, getPrompt } from './Sub
 export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './SubagentTool/index.js';
 
 // Phase 5 tools exports
-export { taskTool } from './TaskTool/TaskTool.js';
+export { todoTool, TODO_TOOL_NAME, LEGACY_TODO_WIRE_NAMES } from './TodoTool/TodoTool.js';
+export { getTaskOutputTool, GET_TASK_OUTPUT_TOOL_NAME, DEFAULT_WAIT_TIMEOUT_MS, MAX_MULTI_WAIT_IDS, DEFAULT_TOOL_OUTPUT_BYTES } from './BackgroundTaskTool/GetTaskOutputTool.js';
+export { killTaskTool, KILL_TASK_TOOL_NAME } from './BackgroundTaskTool/KillTaskTool.js';
+export { waitTasksTool, WAIT_TASKS_TOOL_NAME } from './BackgroundTaskTool/WaitTasksTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';

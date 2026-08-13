@@ -24,7 +24,8 @@ const ALWAYS_ALLOWED_TOOLS = new Set([
   'Grep',
   'Bash', // Bash is allowed but limited to read-only commands in read-only modes
   'Agent',
-  'Task', // Unified task tool with actions: create, get, list, update, output, stop
+  'Task', // Legacy alias for the subagent task tool
+  'task', // Subagent task tool (wire name aligned to Grok)
   'EnterPlanMode',
   'ExitPlanMode',
   'SwitchMode',

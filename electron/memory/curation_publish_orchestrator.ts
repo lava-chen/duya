@@ -41,6 +41,12 @@ const MAX_INPUTS = 6;
 const MAX_INPUT_BYTES = 512 * 1024;
 /** Default single-shot curator wall-clock budget (ms). 4 minutes. */
 const DEFAULT_CURATION_TIMEOUT_MS = 4 * 60_000;
+/**
+ * How long an 'uncertain' input waits before it becomes claimable again.
+ * Uncertain means the curator could not decide safely; deferring (instead of
+ * re-claiming every 30-min cycle) keeps it from pinning the Phase 2 loop.
+ */
+const DEFER_UNCERTAIN_MS = 6 * 60 * 60_000;
 
 export interface ProviderConfig {
   apiKey: string;
@@ -202,13 +208,22 @@ export async function runCurationCycle(
   }
   const dispositions: InputDisposition[] = inputs.map((i) => {
     const explicit = dispositionByKey.get(i.inputKey);
-    const fallback: 'absorbed' | 'no_signal' | 'uncertain' =
-      result.success && explicit === undefined ? 'absorbed' : explicit ?? 'uncertain';
+    if (explicit === 'uncertain') {
+      // Defer instead of re-claiming every cycle so 'uncertain' inputs do
+      // not pin the Phase 2 loop. Retried after DEFER_UNCERTAIN_MS.
+      return {
+        inputKind: i.inputKind,
+        inputKey: i.inputKey,
+        contentHash: i.contentHash,
+        disposition: 'deferred',
+        deferredUntil: Date.now() + DEFER_UNCERTAIN_MS,
+      };
+    }
     return {
       inputKind: i.inputKind,
       inputKey: i.inputKey,
       contentHash: i.contentHash,
-      disposition: fallback,
+      disposition: explicit ?? 'absorbed', // 'absorbed' | 'no_signal'
     };
   });
 

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { Database } from 'better-sqlite3';
 import {
   selectEligible,
+  diagnoseEligibility,
   DEFAULT_ELIGIBILITY_LIMIT,
   DEFAULT_IDLE_MS,
   DEFAULT_WINDOW_MS,
@@ -309,6 +310,52 @@ describe('selectEligible', () => {
       rolloutId: 'shape',
       lastMessageAt: BASE_LAST_MESSAGE_AT,
       sourceFingerprint: 'fp-shape',
+    });
+  });
+});
+
+describe('diagnoseEligibility', () => {
+  let fixture: MemoryStateFixture;
+  let db: Database;
+
+  beforeEach(() => {
+    fixture = createMemoryStateFixture();
+    db = fixture.db;
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it('counts catalog rows bucketed by the selectEligible gates', () => {
+    // Eligible: idle 13h, main, active, 10 messages.
+    insertCatalogRow(db, { rollout_id: 'ready', last_message_at: BASE_LAST_MESSAGE_AT });
+    // Not idle: recent last_message_at.
+    insertCatalogRow(db, { rollout_id: 'fresh', last_message_at: T0 - 2 * HOUR });
+    // Too few messages.
+    insertCatalogRow(db, { rollout_id: 'thin', message_count: 2, last_message_at: BASE_LAST_MESSAGE_AT });
+    // Non-main agent.
+    insertCatalogRow(db, { rollout_id: 'gw', agent_type: 'gateway', last_message_at: BASE_LAST_MESSAGE_AT });
+    // Already extracted (succeeded stage1_outputs).
+    const extracted = insertCatalogRow(db, { rollout_id: 'done', last_message_at: BASE_LAST_MESSAGE_AT });
+    insertStage1Output(db, { rollout_id: extracted, job_status: 'succeeded' });
+
+    const diag = diagnoseEligibility(db, { now: T0 });
+
+    expect(diag.total).toBe(5);
+    expect(diag.activeMain).toBe(4); // ready, fresh, thin, done
+    expect(diag.enoughMessages).toBe(3); // ready, fresh, done
+    expect(diag.idleReady).toBe(2); // ready + done (both idle & enough, done already extracted)
+    expect(diag.alreadyExtracted).toBe(1); // done
+  });
+
+  it('returns zeroes on an empty catalog', () => {
+    expect(diagnoseEligibility(db, { now: T0 })).toEqual({
+      total: 0,
+      activeMain: 0,
+      enoughMessages: 0,
+      idleReady: 0,
+      alreadyExtracted: 0,
     });
   });
 });

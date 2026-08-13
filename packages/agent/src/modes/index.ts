@@ -7,6 +7,7 @@ import { goalMode } from './goal/goal-mode.js';
 import { ModeTrackerEngine } from './engine/index.js';
 import { planModeTracker } from './plan/plan-tracker.js';
 import { goalModeTracker } from './goal/goal-tracker.js';
+import { researchModeTracker } from './research-mode/research-tracker.js';
 import type { ModeTracker } from './engine/tracker.js';
 
 // Register declarative ModeModifiers (plan 224).
@@ -28,6 +29,8 @@ modeTrackerEngine.register(planModeTracker);
 // calls state()/snapshot()/restore() — never transition() — so the cast
 // is safe (same contract the 413a engine doc allows for upcasting).
 modeTrackerEngine.register(goalModeTracker as unknown as ModeTracker<string, string, unknown>);
+// Research events carry payloads (objects) too — same upcast rationale as goal.
+modeTrackerEngine.register(researchModeTracker as unknown as ModeTracker<string, string, unknown>);
 
 export { modeModifierRegistry } from './registry.js';
 export type {

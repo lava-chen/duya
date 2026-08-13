@@ -15,7 +15,11 @@ export type ModeModifierId = 'plan-task' | 'research' | 'conductor' | 'goal';
 
 /**
  * Mode lifecycle. Session-level modes persist across messages (conductor,
- * plan-task); message-level modes are cleared after each send (research).
+ * plan-task, goal, research); message-level modes are cleared after each send.
+ *
+ * Plan 423: research moved from `message` to `session` so its state machine
+ * (`ResearchTracker`) survives across messages and can drive multi-round
+ * research continuation.
  *
  * Mirrors `ModeModifier.kind` in `packages/agent/src/modes/types.ts`. Kept
  * in sync manually — the frontend cannot import from `@duya/agent` at runtime.
@@ -24,7 +28,7 @@ export type ModeModifierKind = 'message' | 'session';
 
 export const MODE_KIND: Record<ModeModifierId, ModeModifierKind> = {
   'plan-task': 'session',
-  'research': 'message',
+  'research': 'session',
   'conductor': 'session',
   // Plan 411: goal is a session-level mode like conductor — survives
   // across messages so the tracker keeps driving rounds.

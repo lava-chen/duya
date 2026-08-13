@@ -9,6 +9,7 @@ import type { Message } from '@/types';
 import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
+import { ResearchStatusCard } from './ResearchStatusCard';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
@@ -1314,6 +1315,8 @@ export function ChatView({
           <div className="max-w-[800px] mx-auto chat-composer-inner">
             {/* Plan 420: live goal status chip */}
             <GoalStatusChip sessionId={sessionId} />
+            {/* Plan 423 Phase 3: live deep-research status card */}
+            <ResearchStatusCard sessionId={sessionId} />
             {/* Scroll to bottom button - shown when not near bottom, floats above content */}
             {!isNearBottom && (
               <div className="flex justify-center absolute left-1/2 -translate-x-1/2" style={{ top: '-44px' }}>
