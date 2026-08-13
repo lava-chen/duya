@@ -26,7 +26,12 @@ import {
 } from '../plan/reminders.js';
 import { renderGoalContinuation } from '../goal/goal-reminders.js';
 import type { GoalTracker } from '../goal/goal-tracker.js';
+import { renderResearchContinuation } from '../research-mode/research-reminders.js';
+import type { ResearchTracker } from '../research-mode/research-tracker.js';
+import { getResearchConfig } from '../research-mode/research-config.js';
 import { persistSnapshot, restoreTracker } from './persistence.js';
+import { adaptGoalSummaryContext, adaptResearchContinuationContext } from '../../message/runtime-context-adapters.js';
+import { projectRuntimeContextToProviderMessage } from '../../message/message-projectors.js';
 import { expandPath } from '../../utils/path.js';
 import {
   resolvePlanFilePath,
@@ -77,8 +82,31 @@ function asGoalTracker(t: GoalReminderTracker): GoalTracker {
   return t as unknown as GoalTracker;
 }
 
+/**
+ * Duck-typed view of the research tracker (`ResearchTracker`, plan 423).
+ * The research branch is orthogonal to plan/goal: it gates web tools by
+ * lifecycle state via `researchGate()` and persists on round-end.
+ */
+interface ResearchReminderTracker extends ModeTracker<string, string, unknown> {
+  researchGate(): 'idle' | 'readonly' | 'gathering' | 'waiting' | 'complete';
+}
+
+function isResearchReminderTracker(
+  t: ModeTracker<string, string, unknown>,
+): t is ResearchReminderTracker {
+  return typeof (t as ResearchReminderTracker).researchGate === 'function';
+}
+
+/** Cast a research duck-type to the concrete tracker for payload events / renderers. */
+function asResearchTracker(t: ResearchReminderTracker): ResearchTracker {
+  return t as unknown as ResearchTracker;
+}
+
 /** Write/execute tools gated out while a tracker is `canGateTools()`-active. */
 const GATED_WRITE_TOOLS = new Set(['edit', 'write', 'bash', 'powershell', 'module']);
+
+/** Web tools released only in the gathering state (research mode). */
+const GATED_WEB_TOOLS = new Set(['web_search', 'web_fetch', 'browser']);
 
 export class ModeCoordinator {
   /**
@@ -118,6 +146,28 @@ export class ModeCoordinator {
   }
 
   /**
+   * Append a per-round continuation via the runtimeContext framework so the
+   * injected message carries `metadata.runtimeContext === true` and a
+   * `metadata.source` (goal_summary / research_continuation). This fixes the
+   * root bug where the synthetic continuation was treated as a real user
+   * query: `lastRealUserQuery` skips it when anchoring the final response.
+   * Returns void and pushes exactly one message.
+   */
+  private pushRuntimeContext(
+    messages: unknown[],
+    seqIndex: number,
+    source: 'goal_summary' | 'research_continuation',
+    content: string,
+  ): void {
+    const rc =
+      source === 'goal_summary'
+        ? adaptGoalSummaryContext(content, { visibility: 'visible' })
+        : adaptResearchContinuationContext(content, { visibility: 'visible' });
+    const provider = projectRuntimeContextToProviderMessage(rc);
+    messages.push({ ...provider, seq_index: seqIndex });
+  }
+
+  /**
    * Per-turn LLM-call preamble: render and inject reminders for every
    * tracker, mirroring grok's `inject_plan_mode_reminders` three cases:
    *  1. `pending` → activate + full/reentry reminder, persist the transition
@@ -135,10 +185,27 @@ export class ModeCoordinator {
       // no enter-path nudge is needed here. Persists on round-end, not here.
       if (isGoalReminderTracker(tracker)) {
         if (tracker.shouldInjectReminder()) {
-          this.pushReminder(
+          this.pushRuntimeContext(
             messages,
             seqIndex,
+            'goal_summary',
             renderReminder(renderGoalContinuation(asGoalTracker(tracker))),
+          );
+        }
+        continue;
+      }
+      // Research branch: while the research is active, inject the per-round
+      // continuation (research-state + sentinel + state-specific guidance).
+      // The research tracker self-activates via `research_start` (triggered by
+      // the model call), so no enter-path nudge is needed here. Persists on
+      // round-end, not here.
+      if (isResearchReminderTracker(tracker)) {
+        if (tracker.shouldInjectReminder()) {
+          this.pushRuntimeContext(
+            messages,
+            seqIndex,
+            'research_continuation',
+            renderReminder(renderResearchContinuation(asResearchTracker(tracker))),
           );
         }
         continue;
@@ -234,6 +301,25 @@ export class ModeCoordinator {
         }
         continue;
       }
+      // Research branch: persist the admin snapshot when a research run is
+      // active (state !== idle) so a restart resumes the investigation.
+      // Idle runs are skipped (no need to write a fresh idle snapshot).
+      // Stall detection: while evaluating, record the evaluate round and, if
+      // the coverage gaps have gone unchanged for `max_converge_rounds`
+      // consecutive rounds, auto-converge to synthesizing (plan 423 Phase 3).
+      if (isResearchReminderTracker(tracker)) {
+        const research = asResearchTracker(tracker);
+        if (research.state() === 'evaluating') {
+          research.recordEvaluationRound();
+          if (research.shouldAutoConverge(getResearchConfig().maxConvergeRounds)) {
+            research.transition({ type: 'synthesize' });
+          }
+        }
+        if (research.state() !== 'idle') {
+          await persistSnapshot(tracker, this.sessionId);
+        }
+        continue;
+      }
       if (!isPlanReminderTracker(tracker)) continue;
       const before = tracker.state();
       if (before === 'exit_pending') {
@@ -272,15 +358,39 @@ export class ModeCoordinator {
    * the frontend session toggle (plan 413e).
    */
   filterTools<T extends { name: string }>(tools: T[]): T[] {
-    // Plan-only gating (goal's canGateTools is also true while active — must
-    // not strip write tools from goal execution). Scoped to active plan tracker.
-    const gated = this.engine
+    // Plan-only write gating (goal's canGateTools is also true while active —
+    // must not strip write tools from goal execution). Scoped to active plan.
+    const planGated = this.engine
       .list()
       .some(
         (t) => this.isActive(t) && isPlanReminderTracker(t) && t.canGateTools(),
       );
-    if (!gated) return tools;
-    return tools.filter((t) => !GATED_WRITE_TOOLS.has(t.name));
+
+    // Research gating (plan 423 §3.4): gate web tools by lifecycle state.
+    // Composes on top of plan gating; research is mutually exclusive with
+    // plan-task so the two never double-filter the same tool set.
+    const research = this.engine
+      .list()
+      .find((t) => this.isActive(t) && isResearchReminderTracker(t));
+
+    const blocked = new Set<string>();
+    if (planGated) {
+      GATED_WRITE_TOOLS.forEach((n) => blocked.add(n));
+    }
+    if (research) {
+      const gate = (research as unknown as ResearchReminderTracker).researchGate();
+      if (gate === 'readonly' || gate === 'waiting') {
+        // Not gathering yet (or paused) — keep web tools out so the agent
+        // cannot skip ahead to searching before the lifecycle allows it.
+        GATED_WEB_TOOLS.forEach((n) => blocked.add(n));
+      }
+      if (gate === 'waiting') {
+        // Paused — freeze side-effect tools too; only ask_user_question stays.
+        GATED_WRITE_TOOLS.forEach((n) => blocked.add(n));
+      }
+    }
+    if (blocked.size === 0) return tools;
+    return tools.filter((t) => !blocked.has(t.name));
   }
 
   /**

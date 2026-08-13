@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
     setStatus: vi.fn(),
     listBySession: vi.fn(),
   },
-  logger: { warn: vi.fn() },
+  logger: { warn: vi.fn(), info: vi.fn() },
 }));
 
 vi.mock('../../../ipc/db-client.js', () => ({ modeStateDb: mocks.modeStateDb }));
@@ -85,6 +85,22 @@ describe('ModeCoordinator — goal branch', () => {
       expect(msg.content).toContain('Goal NOT complete — continue working');
       expect(msg.content).toContain('Objective: Migrate auth');
       expect(msg.seq_index).toBe(3);
+    });
+
+    it('injects goal continuation marked as runtime_context source=goal_summary', () => {
+      const tracker = new GoalTracker();
+      startGoal(tracker);
+      const coordinator = makeCoordinator(tracker);
+      const messages: unknown[] = [];
+
+      coordinator.injectTurnReminders(messages, 5);
+
+      expect(messages.length).toBe(1);
+      const msg = messages[0] as Record<string, unknown>;
+      expect(msg.role).toBe('user'); // provider shape
+      expect((msg.metadata as Record<string, unknown>).runtimeContext).toBe(true);
+      expect((msg.metadata as Record<string, unknown>).source).toBe('goal_summary');
+      expect(msg.seq_index).toBe(5);
     });
 
     it('injects nothing while the goal is idle', () => {
