@@ -16,6 +16,7 @@ import { runSingleShotCuration } from './curation_single_shot';
 import { backupMemoryBeforeRun } from './memory_git_backup';
 import { cleanStagingTmps } from './curation_file_writer';
 import { refreshProjections } from './curation_projection_refresh';
+import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log';
 
 /**
  * End-to-end curation cycle orchestrator (Plan 417 Task B).
@@ -90,7 +91,16 @@ export async function runCurationCycle(
 
   // Recover orphaned runs (expired lease while still 'running') before
   // claiming, so their pinned inputs become claimable again.
-  abandonExpiredRuns(db, now);
+  const abandonedCount = abandonExpiredRuns(db, now);
+  if (abandonedCount > 0) {
+    writeSystemLog({
+      phase: 'phase2',
+      eventType: 'curation_run_abandoned',
+      level: 'warn',
+      message: `Recovered ${abandonedCount} orphaned curation run(s) with expired lease`,
+      detail: { count: abandonedCount, now },
+    });
+  }
 
   // Best-effort cleanup of stale .tmp files left behind by a crashed
   // prior cycle. Non-fatal.
@@ -142,6 +152,19 @@ export async function runCurationCycle(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+
+  writeSystemLog({
+    phase: 'phase2',
+    eventType: 'curation_run_started',
+    message: `Curation run ${runId} claimed (${claimed.length} input(s))`,
+    detail: {
+      input_set_hash: inputSetHash,
+      input_count: claimed.length,
+      inputs: inputs.map((i) => i.inputKey),
+    },
+    runId,
+    sessionId: opts.sessionId,
+  });
 
   // 4. Git-backup the live memory root so the run is rollback-safe.
   const backedUp = await backupMemoryBeforeRun(opts.memoryRoot, runId);
@@ -209,6 +232,55 @@ export async function runCurationCycle(
       publicationStatus: 'succeeded',
       now: Date.now(),
     });
+    writeSystemLog({
+      phase: 'phase2',
+      eventType: 'curation_run_succeeded',
+      message: `Curation run ${runId} succeeded (${result.actionsApplied} action(s) applied)`,
+      detail: {
+        actions_applied: result.actionsApplied,
+        policy_updated: result.policyUpdated ?? false,
+        policy_version: result.policyVersion ?? 0,
+        decisions: dispositions.map((d) => ({
+          input_key: d.inputKey,
+          disposition: d.disposition,
+        })),
+      },
+      runId,
+      sessionId: opts.sessionId,
+    });
+
+    // Log each canonical file change so the user can see which files Phase 2
+    // touched and what was added, grouped under this run.
+    if (result.response?.actions) {
+      for (const action of result.response.actions) {
+        if (action.op === 'no_op') continue;
+        writeSystemLog({
+          phase: 'phase2',
+          eventType: 'curation_file_changed',
+          message: `${action.op === 'replace' ? 'Replaced' : 'Appended to'} ${action.area_path}`,
+          detail: {
+            op: action.op,
+            area_path: action.area_path,
+            reason: action.reason ?? null,
+            content_preview: (action.content ?? '').slice(0, 200),
+          },
+          runId,
+          sessionId: opts.sessionId,
+        });
+      }
+    }
+
+    // Log any stage1_policy / new-category side effects from this run.
+    if (result.policyUpdated) {
+      writeSystemLog({
+        phase: 'phase2',
+        eventType: 'curation_policy_updated',
+        message: `stage1_policy updated to v${result.policyVersion}`,
+        detail: { policy_version: result.policyVersion ?? 0 },
+        runId,
+        sessionId: opts.sessionId,
+      });
+    }
     return {
       skipped: false,
       success: true,
@@ -227,6 +299,15 @@ export async function runCurationCycle(
       ? `${result.errors.length} action(s) failed: ${result.errors[0].error}`
       : 'curation cycle failed without a top-level error');
   failRun(db, runId, `agent failed: ${errMsg}`, Date.now());
+  writeSystemLog({
+    phase: 'phase2',
+    eventType: 'curation_run_failed',
+    level: 'error',
+    message: `Curation run ${runId} failed (${errMsg})`,
+    detail: { error: errMsg, action_errors: result.errors },
+    runId,
+    sessionId: opts.sessionId,
+  });
   return {
     skipped: false,
     success: false,

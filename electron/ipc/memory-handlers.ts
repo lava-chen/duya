@@ -13,6 +13,10 @@ import type { MemoryEntry } from '../src/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDb } from '../memory-state/db';
 import { parseCanonicalFile } from '../../packages/agent/src/memory-state/memory_entries_rebuild';
+import {
+  listSystemLog,
+  type ListSystemLogOpts,
+} from '../../packages/agent/src/memory-state/system_log';
 
 const logger = getLogger();
 
@@ -113,6 +117,33 @@ export function registerMemoryListHandlers(): void {
       // disabled/empty state.
       logger.debug('memory:list returned empty: memory-state DB not available', { error: message }, LogComponent.DB);
       return { entries: [], enabled: false };
+    }
+  });
+}
+
+export interface MemorySystemLogResponse {
+  entries: ReturnType<typeof listSystemLog>['entries'];
+  total: number;
+}
+
+/**
+ * Register the `memory:system-log` IPC handler. Idempotent.
+ *
+ * Reads the JSONL memory system log (Phase 1 + Phase 2 activity) back to
+ * the renderer for the Settings → Memory → Activity view. Accepts optional
+ * `{ limit, phase, runId, since }` filters.
+ */
+export function registerMemorySystemLogHandlers(): void {
+  ipcMain.removeHandler('memory:system-log');
+  ipcMain.handle('memory:system-log', async (_event, opts?: ListSystemLogOpts) => {
+    try {
+      const memoryRoot = process.env.DUYA_MEMORY_ROOT ?? path.join(os.homedir(), '.duya');
+      const result = listSystemLog(opts ?? {}, memoryRoot);
+      return { entries: result.entries, total: result.total };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.debug('memory:system-log returned empty', { error: message }, LogComponent.DB);
+      return { entries: [], total: 0 };
     }
   });
 }

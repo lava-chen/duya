@@ -8,6 +8,7 @@ import {
 } from './sourceFingerprint';
 import type { AgentType, ScopeKind } from './schema';
 import type { SessionStore, CoreSession } from '../db/core';
+import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log';
 
 /**
  * Main-DB catalog sync (Plan 301 Phase C, updated for Plan 328 Phase 5).
@@ -419,6 +420,16 @@ export function syncAllFromMainDb(opts: {
     { inserted, updated, tombstoned, errors, durationMs, totalSessions: sessions.length },
     LogComponent.DB
   );
+
+  if (inserted > 0 || updated > 0 || tombstoned > 0) {
+    writeSystemLog({
+      phase: 'phase1',
+      eventType: 'catalog_sync',
+      message: `Catalog sync: ${inserted} new, ${updated} updated, ${tombstoned} tombstoned rollout(s)`,
+      detail: { inserted, updated, tombstoned, errors, durationMs },
+      level: errors > 0 ? 'warn' : 'info',
+    });
+  }
 
   return { inserted, updated, tombstoned, errors, durationMs };
 }
