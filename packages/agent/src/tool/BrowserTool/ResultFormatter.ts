@@ -17,7 +17,7 @@ export function formatResult(operation: string, result: Record<string, unknown>)
   switch (operation) {
     case 'navigate':
     case 'go_back':
-      return formatPageWithSnapshot(result);
+      return formatPage(result);
     case 'snapshot':
       return formatSnapshotResult(result);
     case 'click':
@@ -90,10 +90,9 @@ function withSafetyNote(line: string, result: Record<string, unknown>): string {
 
 // ─── Page / Navigation Formatters ──────────────────────────────────────────
 
-function formatPageWithSnapshot(result: Record<string, unknown>): string {
+function formatPage(result: Record<string, unknown>): string {
   const url = String(result.url || 'unknown');
   const title = String(result.title || '');
-  const mode = String(result.mode || '');
   const platformType = result.platformType ? String(result.platformType) : undefined;
 
   const lines: string[] = [];
@@ -104,38 +103,28 @@ function formatPageWithSnapshot(result: Record<string, unknown>): string {
   if (platformType) lines.push(`- Platform: ${platformType}`);
 
   const snapshot = extractSnapshot(result, 'compactSnapshot');
-  const interactiveElements = extractInteractiveElements(result);
   const summary = snapshot ? buildSnapshotSummary(snapshot, title, platformType) : null;
-  const visibleText = snapshot ? extractVisibleText(snapshot) : [];
-
   if (summary) {
     lines.push('');
     lines.push('### Summary');
     lines.push(summary);
   }
 
+  const visibleText = snapshot ? extractVisibleText(snapshot) : [];
   if (visibleText.length > 0) {
     lines.push('');
     lines.push('### Visible Text');
-    for (const t of visibleText) {
-      lines.push(`- ${t}`);
-    }
+    for (const t of visibleText) lines.push(`- ${t}`);
   }
 
-  if (snapshot) {
-    lines.push('');
-    lines.push('### Snapshot');
-    lines.push(snapshot);
-  } else if (result.snapshotNote) {
-    lines.push('');
-    lines.push(`> ${result.snapshotNote}`);
-  }
-
+  const interactiveElements = extractInteractiveElements(result);
   if (interactiveElements) {
     lines.push('');
     lines.push(interactiveElements);
   }
 
+  lines.push('');
+  lines.push('> 完整 DOM 请使用 snapshot 操作。');
   return lines.join('\n');
 }
 
@@ -680,32 +669,33 @@ function buildSnapshotSummary(snapshot: string, title: string, platformType?: st
   return parts.join(' ');
 }
 
+const VISIBLE_TEXT_ITEM_LIMIT = 30;
+const VISIBLE_TEXT_CHAR_LIMIT = 1500;
+
 function extractVisibleText(snapshot: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const lines = snapshot.split('\n');
+  let budget = VISIBLE_TEXT_CHAR_LIMIT;
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    const quoted = trimmed.match(/"([^"]{2,120})"/g) || [];
-    for (const q of quoted) {
-      const text = q.slice(1, -1).replace(/\s+/g, ' ').trim();
-      if (isUsefulVisibleText(text) && !seen.has(text)) {
-        seen.add(text);
-        out.push(text);
-        if (out.length >= 8) return out;
-      }
-    }
+  const matches = snapshot.match(/"([^"\n]{1,200})"/g) || [];
+  for (const m of matches) {
+    const text = m.slice(1, -1).replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (!isUsefulVisibleText(text)) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (out.length >= VISIBLE_TEXT_ITEM_LIMIT || budget <= 0) break;
+    budget -= text.length + 3; // "+ 3" accounts for the "- " list prefix
+    out.push(text);
   }
-
   return out;
 }
 
 function isUsefulVisibleText(text: string): boolean {
   if (!text || text.length < 2) return false;
-  if (/^[\W_]+$/.test(text)) return false;
+  if (!/[\p{L}\p{N}]/u.test(text)) return false;
   if (/^(html|body|div|span|svg|path|g|li|ul|ol|section|article)$/i.test(text)) return false;
+  if (/^https?:\/\/\S+$/i.test(text)) return false;
   return true;
 }
