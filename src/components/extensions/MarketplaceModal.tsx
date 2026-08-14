@@ -41,6 +41,8 @@ interface MarketplaceModalProps {
   onConfigureProvider: (provider: AppConnectionProviderDTO) => void;
   onDisconnectConnection: (connectionId: string) => void;
   busyProvider: ProviderId | null;
+  /** Called when the user clicks a skill chip in the plugin detail view. */
+  onSkillClick?: (skill: { name: string; description?: string }) => void;
 }
 
 const CATEGORY_META: Record<MarketCategory, { labelKey: string; icon: ReactNode }> = {
@@ -61,6 +63,7 @@ export function MarketplaceModal({
   onConfigureProvider,
   onDisconnectConnection,
   busyProvider,
+  onSkillClick,
 }: MarketplaceModalProps) {
   const { t } = useTranslation();
   const [category, setCategory] = useState<MarketCategory>("plugins");
@@ -204,6 +207,7 @@ export function MarketplaceModal({
                 onBack={() => setSelectedPlugin(null)}
                 onInstall={() => void handleInstall(selectedPlugin)}
                 busy={busyPluginId === selectedPlugin.id}
+                onSkillClick={onSkillClick}
               />
             </div>
           </div>

@@ -36,6 +36,7 @@ import {
   computeSegmentActionKeys,
 } from './tools/flatRenderer';
 import { formatDuration } from './tools/hooks/useTopLevelChrome';
+import { ResearchStageSections } from './ResearchStageSections';
 import type { ToolAction, ActionItem } from './tools/types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 
@@ -73,7 +74,7 @@ function ToolActionsGroupImpl({
   liveStartedAt,
   forceExpanded = false,
 }: ToolActionsGroupProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   // Build actions array from either new `actions` prop or legacy `tools` + `thinkingContent`
   const actions: ActionItem[] = React.useMemo(() => {
     if (actionsProp) return actionsProp;
@@ -107,8 +108,30 @@ function ToolActionsGroupImpl({
   const lastRunningTool = getLastRunningToolAction(actions);
   const segments = React.useMemo(() => computeSegments(actions), [actions]);
   const segmentActionKeys = React.useMemo(() => computeSegmentActionKeys(segments), [segments]);
+  const hasResearchStage = React.useMemo(
+    () => actions.some((a) => a.kind === 'tool' && !!a.tool.stage),
+    [actions],
+  );
+
+  // When the round carried research stages, render the tool actions grouped
+  // by lifecycle stage (clarifying → planning → gathering → evaluating →
+  // synthesizing) instead of the flat run. This applies to every render path
+  // (streaming, flat, force-expanded, and the collapsed summary body) so the
+  // user still sees the per-stage sub-groups after the agent finishes.
+  const renderResearchBody = () => (
+    <ResearchStageSections
+      actions={actions}
+      isStreaming={isStreaming}
+      streamingToolOutput={streamingToolOutput}
+      agentProgressEvents={agentProgressEvents}
+      locale={locale}
+    />
+  );
 
   if (flat) {
+    if (hasResearchStage) {
+      return renderResearchBody();
+    }
     return (
       <div className="w-full">
         <div className="border-l-2 border-border/50">
@@ -140,6 +163,9 @@ function ToolActionsGroupImpl({
   // tool rows stream out as plain prose. Group headers still wrap
   // runs of ≥2 tool calls but render collapsed by default.
   if (isStreaming) {
+    if (hasResearchStage) {
+      return renderResearchBody();
+    }
     return (
       <div className="w-full">
         <StreamingActionsBody
@@ -159,6 +185,9 @@ function ToolActionsGroupImpl({
   // appearance of the main interface. Every tool call shows directly
   // instead of hiding behind a "N tools · Worked for Xs" caret.
   if (forceExpanded) {
+    if (hasResearchStage) {
+      return renderResearchBody();
+    }
     return (
       <div className="w-full">
         <div className="mt-0.5 border-l-2 border-border/50">
@@ -214,7 +243,7 @@ function ToolActionsGroupImpl({
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
               <div className="mt-0.5 border-l-2 border-border/50">
-                {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
+                {hasResearchStage ? renderResearchBody() : renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
               </div>
             </motion.div>
           </motion.div>

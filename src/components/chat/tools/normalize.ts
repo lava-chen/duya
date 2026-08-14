@@ -47,6 +47,7 @@ export function buildToolAction(
   input: unknown,
   result?: { content?: string; is_error?: boolean; duration_ms?: number | null; metadata?: Record<string, unknown> },
   fallbackDurationMs?: number | null,
+  stage?: string,
 ): {
   id: string | undefined;
   name: string;
@@ -55,6 +56,7 @@ export function buildToolAction(
   isError?: boolean;
   durationMs?: number | null;
   metadata?: Record<string, unknown>;
+  stage?: string;
 } {
   return {
     id,
@@ -64,5 +66,6 @@ export function buildToolAction(
     isError: result?.is_error,
     durationMs: result?.duration_ms ?? fallbackDurationMs,
     metadata: result?.metadata,
+    stage,
   };
 }

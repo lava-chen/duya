@@ -52,6 +52,38 @@ function extractDomain(url: string): string {
   }
 }
 
+// Human-readable (Chinese) description per browser operation, rendered in the
+// plain one-line status row. Falls back to the raw operation name for
+// operations not listed here.
+const BROWSER_OPERATION_LABELS: Record<string, string> = {
+  navigate: '已打开页面',
+  go_back: '已返回上一页',
+  snapshot: '已获取页面结构',
+  screenshot: '已截图',
+  click: '已点击',
+  type: '已输入文本',
+  scroll: '已下滑页面',
+  press_key: '已按键',
+  hover: '已悬停',
+  select: '已选择',
+  wait: '已等待',
+  evaluate: '已执行脚本',
+  tabs_list: '已列出标签页',
+  tabs_new: '已新建标签页',
+  tabs_close: '已关闭标签页',
+  tabs_select: '已切换标签页',
+  file_upload: '已上传文件',
+  network_start: '已监听网络',
+  network_read: '已读取网络请求',
+  iframe_evaluate: '已在页面内执行',
+  cookies: '已读取 Cookie',
+  vision_analyze: '已分析截图',
+};
+
+export function describeBrowserOperation(operation: string): string {
+  return BROWSER_OPERATION_LABELS[operation] || operation;
+}
+
 function extractQueryText(input: unknown): string | undefined {
   const inp = (input || {}) as Record<string, unknown>;
   if (typeof inp.task === 'string' && inp.task.trim()) return inp.task.trim();
@@ -199,7 +231,7 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
       <div className="flex items-center gap-2 px-2 py-1 min-h-6 text-sm">
         <ChromeIcon size={14} className="shrink-0 text-muted-foreground/60" />
         <span className="text-foreground/90 flex-1 min-w-0 truncate text-left">
-          {operation || 'browser'}
+          {describeBrowserOperation(operation)}
         </span>
         {tool.durationMs != null && tool.durationMs > 0 && !isRunning && (
           <span className="text-muted-foreground/50 text-[11px] tabular-nums shrink-0 font-mono">

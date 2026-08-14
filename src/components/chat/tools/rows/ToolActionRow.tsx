@@ -50,6 +50,8 @@ import { VisionToolRow } from './VisionToolRow';
 import { CanvasConductorToolRow } from './CanvasConductorToolRow';
 import { BrowserToolRow } from './BrowserToolRow';
 import { McpToolRow } from './McpToolRow';
+import { ResearchReportStatusRow } from './ResearchReportStatusRow';
+import { ResearchStateToolRow } from './ResearchStateToolRow';
 
 interface ToolActionRowProps {
   tool: ToolAction;
@@ -112,6 +114,21 @@ const ROUTES: RouteEntry[] = [
     // path below from JSON-dumping the raw tool result envelope.
     match: (t) => t.name.toLowerCase() === 'skill',
     render: (tool) => <SkillToolRow tool={tool} />,
+  },
+  {
+    // research state-machine tools (research_start / research_advance /
+    // research_continue) only drive the lifecycle forward. Render a short
+    // natural-language cue instead of the raw tool name.
+    match: (t) => ['research_start', 'research_advance', 'research_continue'].includes(t.name.toLowerCase()),
+    render: (tool) => <ResearchStateToolRow tool={tool} />,
+  },
+  {
+    // research_report finalizes the research run. The report itself renders
+    // as a standalone card at the end of the reply (see ResearchReportCard);
+    // this tool action is a plain, non-expandable status row so it reads as
+    // "report finalized" without duplicating the document.
+    match: (t) => t.name.toLowerCase() === 'research_report',
+    render: (tool) => <ResearchReportStatusRow tool={tool} />,
   },
   {
     // ModuleTool (read_module) returns inlined design-spec READMEs as

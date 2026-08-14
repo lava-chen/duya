@@ -6,7 +6,6 @@ import { listProvidersIPC, upsertProviderIPC, activateProviderIPC } from "@/lib/
 import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { WelcomeStep } from "./steps/WelcomeStep";
-import { FeatureCarousel } from "./steps/FeatureCarousel";
 import { ConfigStep } from "./steps/ConfigStep";
 import { CompleteStep } from "./steps/CompleteStep";
 import type { QuickPreset } from "@/lib/provider-presets";
@@ -29,10 +28,12 @@ interface OnboardingFlowProps {
 
 const STEPS = [
   { key: "welcome", titleKey: "onboarding.stepWelcome" as const },
-  { key: "features", titleKey: "onboarding.stepFeatures" as const },
   { key: "config", titleKey: "onboarding.stepConfig" as const },
   { key: "complete", titleKey: "onboarding.stepComplete" as const },
 ];
+
+// Fixed dialog size: never reflows when step content changes.
+const DIALOG_SIZE = { width: 560, height: 560 };
 
 export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
   const { t, locale, setLocale } = useTranslation();
@@ -63,6 +64,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
     if (detected !== locale) {
       setLocale(detected);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const markComplete = useCallback(() => {
@@ -150,7 +152,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
       });
 
       if (provider) {
-        setCurrentStepIndex(3);
+        setCurrentStepIndex(2);
       } else {
         setError(t("onboarding.connectionFailed"));
       }
@@ -204,7 +206,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
 
       if (provider) {
         await activateProviderIPC(provider.id);
-        setCurrentStepIndex(3);
+        setCurrentStepIndex(2);
       } else {
         setError(t("onboarding.connectionFailed"));
       }
@@ -231,14 +233,30 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
   }
 
   const isLastStep = currentStepIndex === STEPS.length - 1;
-  const isConfigStep = currentStepIndex === 2;
 
   return (
-    <div className="fixed inset-0 bg-[var(--bg-canvas)] z-50 flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/50" />
+
+      {/* Fixed-size dialog — size never changes with step content */}
+      <div
+        className="relative flex flex-col overflow-hidden rounded-xl bg-[var(--main-bg)] border border-border/50 shadow-2xl"
+        style={{
+          width: DIALOG_SIZE.width,
+          height: DIALOG_SIZE.height,
+          maxWidth: "calc(100vw - 2rem)",
+          maxHeight: "calc(100vh - 2rem)",
+        }}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <span className="font-semibold text-lg" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>DUYA</span>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border/30 shrink-0">
+          <div className="flex items-center gap-2.5">
+            <img src="./icon.png" alt="DUYA" className="w-7 h-7 rounded-lg" />
+            <span className="font-semibold text-base" style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}>
+              DUYA
+            </span>
+          </div>
 
           {/* Skip button - show on all steps except last */}
           {!isLastStep && (
@@ -250,7 +268,7 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
         </div>
 
         {/* Progress dots */}
-        <div className="flex items-center justify-center gap-2 mb-8">
+        <div className="flex items-center justify-center gap-2 pt-4 pb-2 shrink-0">
           {STEPS.map((_, index) => (
             <div
               key={index}
@@ -265,28 +283,25 @@ export function OnboardingFlow({ onComplete, forceShow }: OnboardingFlowProps) {
           ))}
         </div>
 
-        {/* Main content card */}
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl shadow-xl overflow-hidden" style={{ maxHeight: 'calc(100vh - 200px)' }}>
-          <div className="p-8 h-full flex flex-col">
-            {currentStepIndex === 0 && <WelcomeStep onStart={handleNext} locale={locale} onSetLocale={setLocale} />}
-            {currentStepIndex === 1 && <FeatureCarousel onComplete={handleNext} />}
-            {currentStepIndex === 2 && (
-              <ConfigStep
-                state={state}
-                onUpdateState={updateState}
-                error={error}
-                isLoading={isLoading}
-                onConnect={handleConnect}
-                onBack={handleBack}
-                onConfigured={handleProviderSaved}
-              />
-            )}
-            {currentStepIndex === 3 && <CompleteStep onEnter={markComplete} />}
-          </div>
+        {/* Step content — scrolls internally, dialog stays fixed */}
+        <div className="flex-1 overflow-y-auto px-6 py-2">
+          {currentStepIndex === 0 && <WelcomeStep onStart={handleNext} locale={locale} onSetLocale={setLocale} />}
+          {currentStepIndex === 1 && (
+            <ConfigStep
+              state={state}
+              onUpdateState={updateState}
+              error={error}
+              isLoading={isLoading}
+              onConnect={handleConnect}
+              onBack={handleBack}
+              onConfigured={handleProviderSaved}
+            />
+          )}
+          {currentStepIndex === 2 && <CompleteStep onEnter={markComplete} />}
         </div>
 
-        {/* Step indicator text */}
-        <div className="text-center mt-4">
+        {/* Step indicator */}
+        <div className="text-center py-3 border-t border-border/30 shrink-0">
           <span className="text-xs text-muted-foreground">
             {t("onboarding.stepOf", { current: currentStepIndex + 1, total: STEPS.length })}
           </span>

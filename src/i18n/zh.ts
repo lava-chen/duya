@@ -1082,35 +1082,22 @@ const zh: Record<TranslationKey, string> = {
   'slashCommands.review': '审查',
   'slashCommands.terminal': '终端',
 
-  // Onboarding - 4 Step Design
+  // Onboarding - 3 Step Design
   'onboarding.stepWelcome': '欢迎',
-  'onboarding.stepFeatures': '功能',
   'onboarding.stepConfig': '配置',
   'onboarding.stepComplete': '完成',
   'onboarding.stepOf': '第 {current} 步，共 {total} 步',
   'onboarding.skip': '跳过',
   'onboarding.loading': '加载中...',
   'onboarding.getStarted': '开始使用',
-  'onboarding.next': '下一步',
   'onboarding.connect': '连接',
   'onboarding.connecting': '连接中...',
   'onboarding.errorNoApiKey': '请输入您的 API 密钥',
   'onboarding.connectionFailed': '连接失败。请检查您的 API 密钥。',
-  'onboarding.goToFeature': '跳转到功能 {index}',
 
   // Welcome Step
   'onboarding.welcomeTitle': '欢迎使用 DUYA',
   'onboarding.welcomeDesc': '您的 AI 编程助手。让我们开始设置，开启智能编程之旅。',
-
-  // Feature Carousel
-  'onboarding.feature1.title': '智能对话',
-  'onboarding.feature1.desc': '与 AI 自然交流代码问题。提问、获取解释、写出更好的代码。',
-  'onboarding.feature2.title': '项目感知',
-  'onboarding.feature2.desc': 'DUYA 理解您的代码库。它会读取文件并提供上下文感知的建议。',
-  'onboarding.feature3.title': '工具执行',
-  'onboarding.feature3.desc': '让 AI 运行命令、编辑文件、执行任务。真正帮您完成工作。',
-  'onboarding.feature4.title': '权限控制',
-  'onboarding.feature4.desc': '您掌控一切。每个敏感操作都需要您的批准才会执行。',
 
   // Config Step
   'onboarding.configTitle': '连接您的 AI 服务商',
@@ -1121,6 +1108,14 @@ const zh: Record<TranslationKey, string> = {
   'onboarding.apiKeyPlaceholder': '请输入您的 API 密钥...',
   'onboarding.privacyNotice': '您的 API 密钥仅存储在本地设备上，不会发送到我们的服务器。它仅用于向您选择的 AI 服务商进行身份验证。',
   'onboarding.localProvider': '本地 / 自托管',
+
+  // Workspace Selection
+  'onboarding.workspaceTitle': '选择工作目录（可选）',
+  'onboarding.workspaceDesc': '选择一个项目文件夹作为 DUYA 的工作目录，Agent 将基于它提供上下文。',
+  'onboarding.workspacePlaceholder': '尚未选择工作目录',
+  'onboarding.workspacePick': '选择文件夹',
+  'onboarding.workspaceClear': '清除选择',
+  'onboarding.workspacePickerTitle': '选择工作目录',
 
   // Complete Step
   'onboarding.completeTitle': '设置完成！',
@@ -1674,6 +1669,21 @@ const zh: Record<TranslationKey, string> = {
   'gateway.minutesAgo': '{minutes}分钟前',
   'gateway.hoursAgo': '{hours}小时前',
   'gateway.daysAgo': '{days}天前',
+
+  // Channel dashboard (upper/lower list layout)
+  'gateway.connecting': '连接中...',
+  'gateway.noConnectedChannels': '暂无已连接的频道',
+  'gateway.viewSessions': '查看会话',
+  'gateway.openSettings': '打开设置',
+  'gateway.connect': '连接',
+  'gateway.allChannelsConnected': '所有频道均已连接',
+  'gateway.connectChannel': '连接 {name}',
+  'gateway.scanToConnect': '使用手机扫码连接',
+  'gateway.enterCredentials': '填写连接凭证',
+  'gateway.saveAndConnect': '保存并连接',
+  'gateway.tokenRequired': '请输入 Bot Token',
+  'gateway.credentialsRequired': '请填写 App ID 和 App Secret',
+  'gateway.channelSessions': '{name} 的会话',
 
   // Import Flow
   'importFlow.skip': '跳过',

@@ -38,6 +38,8 @@ interface PluginDetailViewProps {
    * the chat view so `MessageInput` can consume the pending prefill.
    */
   onLaunchWorkflow?: (prompt: string) => void;
+  /** Called when the user clicks a skill chip to open its detail view. */
+  onSkillClick?: (skill: { name: string; description?: string }) => void;
 }
 
 function buildCapabilities(
@@ -172,6 +174,7 @@ export function PluginDetailView({
   onRemove,
   busy,
   onLaunchWorkflow,
+  onSkillClick,
 }: PluginDetailViewProps) {
   const isInstalled = !!installed;
   const [techExpanded, setTechExpanded] = useState(false);
@@ -719,12 +722,20 @@ export function PluginDetailView({
           </h3>
           <div className="flex flex-wrap gap-2">
             {skills.map((skill) => (
-              <span
+              <button
                 key={skill.id}
-                className="rounded-full border border-border/50 bg-[var(--chip)] px-3 py-1 text-sm text-foreground"
+                type="button"
+                onClick={() => onSkillClick?.(skill)}
+                title={skill.description || skill.name}
+                className={cn(
+                  "rounded-full border border-border/50 bg-[var(--chip)] px-3 py-1 text-sm text-foreground transition-colors",
+                  onSkillClick
+                    ? "hover:border-accent/50 hover:text-accent cursor-pointer"
+                    : "cursor-default",
+                )}
               >
                 {skill.name}
-              </span>
+              </button>
             ))}
           </div>
         </section>

@@ -5,7 +5,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { getActiveProviderIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MessageInput } from "@/components/chat/MessageInput";
-import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from "@/components/chat/AgentModeSelector";
+import { AgentModeSelector, getProfileIdForMode } from "@/components/chat/AgentModeSelector";
 import { SessionSelector } from "./SessionSelector";
 import { InputDialog } from "@/components/ui/InputDialog";
 import { useDefaultPermission } from "@/stores/default-permission-store";
@@ -23,6 +23,15 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   const defaultPermission = useDefaultPermission();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
+  const permissionTouchedRef = useRef(false);
+
+  // The global default (agent.default_permission_mode) may arrive asynchronously
+  // after mount; apply it unless the user already picked a mode in this view.
+  useEffect(() => {
+    if (!permissionTouchedRef.current) {
+      setPermissionMode(defaultPermission);
+    }
+  }, [defaultPermission]);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
@@ -169,7 +178,10 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       });
 
       if (thread) {
-        onSelectThread(thread.id);
+        // Wait for the session switch to settle (force-reloads the thread
+        // from the DB) before sending, so the first optimistic user message
+        // never races with the reload and is always rendered immediately.
+        await onSelectThread(thread.id);
 
         // Wait for React to render ChatView, then send via ref to avoid stale closure
         // Use requestAnimationFrame + microtask to ensure ChatView is mounted and streamingEffects are subscribed
@@ -246,6 +258,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
   }, []);
 
   const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
+    permissionTouchedRef.current = true;
     setPermissionMode(mode);
   }, []);
 
@@ -275,8 +288,8 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
             {/* Agent chosen once at session creation; fixed afterwards. */}
             <div className="flex items-center justify-between mt-2 px-1">
               <AgentModeSelector
-                value={getModeForProfileId(agentProfileId) ?? 'main'}
-                onChange={(mode) => setAgentProfileId(getProfileIdForMode(mode))}
+                value={agentProfileId ?? getProfileIdForMode('main')}
+                onChange={(profileId) => setAgentProfileId(profileId)}
                 disabled={!isHydrated || !selectedProject}
               />
             </div>

@@ -52,8 +52,10 @@ interface DynamicModeConfig {
 }
 
 interface AgentModeSelectorProps {
-  value: AgentMode;
-  onChange: (mode: AgentMode) => void;
+  /** Active agent profile id (e.g. 'general-purpose', 'code-expert'). */
+  value: string;
+  /** Reports the chosen agent profile id (not a legacy mode shorthand). */
+  onChange: (profileId: string) => void;
   disabled?: boolean;
 }
 
@@ -79,19 +81,27 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
         const profiles = await listAgentProfiles();
         const profileMap = new Map(profiles.map((p) => [p.id, p]));
 
-        const dynamicModes: DynamicModeConfig[] = favoriteIds
-          .slice(0, 3)
-          .map((profileId, index) => {
+        // Favorites first (max 3), then any remaining selectable main agents so
+        // the user can always pick a profile even when favorites are sparse.
+        const selectableIds = profiles
+          .filter((p) => p.userVisible && p.isEnabled && p.kind === 'main')
+          .map((p) => p.id);
+        const orderedIds = [...new Set([...favoriteIds.slice(0, 3), ...selectableIds])];
+
+        const dynamicModes: DynamicModeConfig[] = orderedIds
+          .map((profileId) => {
             const profile = profileMap.get(profileId);
-            const legacyMode = PROFILE_TO_MODE_MAP[profileId];
+            if (!profile) return null;
+            const id: string = PROFILE_TO_MODE_MAP[profileId] || profileId;
             return {
-              id: legacyMode || `slot-${index}`,
-              label: profile?.name || profileId,
+              id,
+              label: profile.name || profileId,
               icon: getIconForProfile(profileId),
-              description: profile?.description || '',
+              description: profile.description || '',
               profileId,
             };
-          });
+          })
+          .filter((m): m is DynamicModeConfig => m !== null);
 
         if (isMounted) {
           setModes(dynamicModes);
@@ -154,7 +164,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
       }}
     >
       {modes.map((mode) => {
-        const isActive = value === mode.id;
+        const isActive = value === mode.profileId;
         const Icon = mode.icon;
 
         return (

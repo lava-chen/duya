@@ -148,6 +148,9 @@ interface ConversationState {
   newChatDraft: NewChatDraft;
   /** True while the "new chat" composer is open with no backing thread. */
   isNewChatDrafting: boolean;
+  /** Project preselected for the next new-chat composer (from a project-group
+   *  "new thread" entry). Consumed by NewChatView as its initial project. */
+  newChatPresetProject: { workingDirectory: string; projectName: string } | null;
 
   // Actions
   setCurrentView: (view: ViewType) => void;
@@ -205,7 +208,9 @@ interface ConversationState {
   // Lazy new-chat draft actions.
   /** Open the blank "new chat" composer (no thread yet). Restores any
    *  previously saved draft. */
-  startNewChat: () => void;
+  startNewChat: (project?: { workingDirectory: string; projectName: string } | null) => void;
+  /** Consume (and clear) the preset project after NewChatView applied it. */
+  clearNewChatPresetProject: () => void;
   /** Persist the in-progress draft (text + attachments). */
   updateNewChatDraft: (draft: NewChatDraft) => void;
   /** Clear the saved draft after a successful send. */
@@ -307,6 +312,7 @@ export const useConversationStore = create<ConversationState>()(
       noProjectWorkspace: '',
       newChatDraft: EMPTY_NEW_CHAT_DRAFT,
       isNewChatDrafting: false,
+      newChatPresetProject: null,
       lastSyncAt: 0, // Initialize to 0 to force first sync
 
       setCurrentView: (view) => {
@@ -969,13 +975,18 @@ export const useConversationStore = create<ConversationState>()(
         await get().loadFromDatabase();
       },
 
-      startNewChat: () => {
+      startNewChat: (project) => {
         set({
           isNewChatDrafting: true,
           activeThreadId: null,
           currentView: 'chat',
           parentSessionId: null,
+          newChatPresetProject: project ?? null,
         });
+      },
+
+      clearNewChatPresetProject: () => {
+        set({ newChatPresetProject: null });
       },
 
       updateNewChatDraft: (draft) => {

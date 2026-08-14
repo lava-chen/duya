@@ -11,6 +11,7 @@ import {
   extractSources,
   normalizeAndBuildGrid,
   estimateTokens,
+  normalizeInputTokens,
   type ContextBreakdown,
 } from '@/lib/context-usage-utils';
 import { useContextUsageStore } from '@/stores/context-usage-store';
@@ -142,35 +143,63 @@ export function useContextUsage(
     }
 
     // Latest usable usage block (scanned newest-first) drives the context
-    // ring. `input_tokens` already includes cache read + write, so
-    // `used = input_tokens + output_tokens` is the full context size with no
-    // double counting and no missing output.
+    // ring, mirroring pi's `usage + trailing` model: the last authoritative
+    // `input + output` (total prompt at that request; `input_tokens` already
+    // covers cache read + write, so no double counting) plus the estimated
+    // tokens of every message appended after it (tool results, assistant
+    // tool_use blocks).
     let latestUsed: number | undefined;
     let latestOutput = 0;
     let latestCacheRead = 0;
     let latestCacheCreation = 0;
     let latestHitRate = 0;
+    let lastUsageIndex = -1;
 
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
       try {
         const usage = msg.tokenUsage;
-        const inputTokens = usage.input_tokens || 0;
+        const rawInput = usage.input_tokens || 0;
         const cacheRead = usage.cache_hit_tokens || 0;
         const cacheCreation = usage.cache_creation_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
+        // Cache-convention guard: some OpenAI-compatible gateways report
+        // input_tokens excluding cached tokens. Normalize so used reflects
+        // the full prompt volume regardless of the provider's convention.
+        const inputTokens = normalizeInputTokens(rawInput, cacheRead);
 
         if (latestUsed === undefined) {
-          latestUsed = inputTokens + outputTokens;
+          latestUsed = usage.total_tokens || inputTokens + outputTokens;
           latestOutput = outputTokens;
           latestCacheRead = cacheRead;
           latestCacheCreation = cacheCreation;
           latestHitRate = inputTokens > 0 ? cacheRead / inputTokens : 0;
+          lastUsageIndex = i;
         }
       } catch {
         continue;
       }
+    }
+
+    // Trailing estimate of messages appended after the last usage-bearing
+    // assistant (e.g. the last turn's tool results that have not yet been
+    // answered by the model).
+    if (latestUsed !== undefined) {
+      let trailing = 0;
+      for (let j = lastUsageIndex + 1; j < messages.length; j++) {
+        const msg = messages[j];
+        const text =
+          typeof msg.content === 'string'
+            ? msg.content
+            : msg.content
+                .map((b) =>
+                  typeof b === 'string' ? b : (b as { text?: string }).text || '',
+                )
+                .join(' ');
+        trailing += estimateTokens(text);
+      }
+      latestUsed += trailing;
     }
 
     if (latestUsed !== undefined) {

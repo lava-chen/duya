@@ -54,6 +54,10 @@ export interface ToolUseInfo {
   id: string;
   name: string;
   input: unknown;
+  /** Research lifecycle stage the tool ran in (e.g. gathering / evaluating),
+   *  stamped by the streaming manager in arrival order. Empty when not in a
+   *  research run. */
+  stage?: string;
 }
 
 export interface ToolResultInfo {

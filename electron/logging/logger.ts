@@ -76,6 +76,7 @@ export const LogComponent = {
   Gateway: 'Gateway',
   GatewayCommunicator: 'GatewayCommunicator',
   NetHandlers: 'NetHandlers',
+  LinkPreview: 'LinkPreview',
   BrowserDaemon: 'BrowserDaemon',
 
   // Automation

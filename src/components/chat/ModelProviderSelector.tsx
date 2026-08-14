@@ -13,10 +13,6 @@ import {
   CaretRightIcon,
   CheckIcon,
   SpinnerGapIcon,
-  GearSixIcon,
-  CpuIcon,
-  HardDrivesIcon,
-  LightbulbIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -160,7 +156,7 @@ export function ModelProviderSelector({
 
   const menuGridStyle: React.CSSProperties = {
     display: 'grid',
-    gridTemplateColumns: '20px 1fr auto 16px',
+    gridTemplateColumns: '1fr auto 16px',
     alignItems: 'center',
     gap: 8,
   };
@@ -222,7 +218,6 @@ export function ModelProviderSelector({
                   className="command-menu-row px-2.5 cursor-pointer select-none"
                   style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
                 >
-                  <HardDrivesIcon size={14} style={{ color: 'var(--muted)' }} />
                   <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.provider')}</span>
                   <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
                     {currentProvider?.name ?? ''}
@@ -238,7 +233,6 @@ export function ModelProviderSelector({
                   className="command-menu-row px-2.5 cursor-pointer select-none"
                   style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
                 >
-                  <CpuIcon size={14} style={{ color: 'var(--muted)' }} />
                   <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.model')}</span>
                   <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{modelLabel}</span>
                   <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
@@ -252,7 +246,6 @@ export function ModelProviderSelector({
                   className="command-menu-row px-2.5 cursor-pointer select-none"
                   style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
                 >
-                  <LightbulbIcon size={14} style={{ color: 'var(--muted)' }} />
                   <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.effort')}</span>
                   <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{effortLabel}</span>
                   <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
@@ -266,7 +259,6 @@ export function ModelProviderSelector({
                   className="command-menu-row px-2.5 cursor-pointer select-none"
                   style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
                 >
-                  <GearSixIcon size={14} style={{ color: 'var(--muted)' }} />
                   <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.manageProviders')}</span>
                   <span />
                   <span />

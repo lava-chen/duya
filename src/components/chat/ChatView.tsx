@@ -1371,6 +1371,7 @@ export function ChatView({
               {messages.length > 0 && (
                 <ContextUsageRing
                   messages={messages}
+                  sessionId={sessionId}
                   modelName={sessionModel}
                   contextWindow={capabilityContextWindow}
                   onCompress={handleCompact}

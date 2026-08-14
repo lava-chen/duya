@@ -169,6 +169,23 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
     },
   },
   {
+    // research_report — final deep-research report. The registry supplies
+    // icon + summary for the interaction chrome; the report document itself
+    // renders as a standalone card at the end of the reply (ResearchReportCard)
+    // and the tool action is a non-expandable status row (ResearchReportStatusRow).
+    match: (n) => n.toLowerCase() === 'research_report',
+    icon: BookOpenIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input as Record<string, unknown>) || {};
+      const title = typeof inp.title === 'string' ? inp.title.trim() : '';
+      if (title) return title.length > 60 ? title.slice(0, 57) + '...' : title;
+      const query = typeof inp.query === 'string' ? inp.query.trim() : '';
+      if (query) return query.length > 60 ? query.slice(0, 57) + '...' : query;
+      return 'Research report';
+    },
+  },
+  {
     // ModuleTool — loads design specification READMEs. The summary
     // parses `input.module` (string or array) and lists the modules
     // instead of dumping the raw JSON. The expanded body is rendered by

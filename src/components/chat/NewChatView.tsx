@@ -16,7 +16,7 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { MessageInput } from './MessageInput';
-import { AgentModeSelector, getProfileIdForMode, getModeForProfileId } from './AgentModeSelector';
+import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
 import { useDefaultPermission } from '@/stores/default-permission-store';
@@ -43,11 +43,13 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
     projects,
     isHydrated,
     newChatDraft,
+    newChatPresetProject,
     createThread,
     setActiveThread,
     addProjectFolder,
     updateNewChatDraft,
     clearNewChatDraft,
+    clearNewChatPresetProject,
   } = useConversationStore();
 
   const [isSending, setIsSending] = useState(false);
@@ -56,6 +58,15 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const defaultPermission = useDefaultPermission();
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
+  const permissionTouchedRef = useRef(false);
+
+  // The global default (agent.default_permission_mode) may arrive asynchronously
+  // after mount; apply it unless the user already picked a mode in this composer.
+  useEffect(() => {
+    if (!permissionTouchedRef.current) {
+      setPermissionMode(defaultPermission);
+    }
+  }, [defaultPermission]);
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
 
@@ -69,15 +80,21 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
 
   // Default to the first project so the composer mirrors WelcomeView, but
   // never block sending when no project exists (new-chat supports drafting
-  // against an auto-resolved working directory / no-project session).
+  // against an auto-resolved working directory / no-project session). A
+  // preset project (from a project-group "new thread" entry) wins over the
+  // first project and is consumed afterwards so it never re-asserts over a
+  // later manual selection in the same composer session.
   useEffect(() => {
-    if (projects.length > 0 && !selectedProject) {
+    if (newChatPresetProject) {
+      setSelectedProject(newChatPresetProject);
+      clearNewChatPresetProject();
+    } else if (projects.length > 0 && !selectedProject) {
       setSelectedProject({
         workingDirectory: projects[0].workingDirectory,
         projectName: projects[0].projectName,
       });
     }
-  }, [projects, selectedProject]);
+  }, [projects, selectedProject, newChatPresetProject, clearNewChatPresetProject]);
 
   const parseModelName = useCallback((model: string): { providerName: string | null; modelName: string } => {
     const match = model.match(/^\[([^\]]+)\]\s*(.+)$/);
@@ -135,6 +152,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   }, []);
 
   const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
+    permissionTouchedRef.current = true;
     setPermissionMode(mode);
   }, []);
 
@@ -300,7 +318,12 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
 
         // Draft consumed — clear it now that a real thread exists.
         clearNewChatDraft();
-        setActiveThread(thread.id);
+        // Wait for the session switch to fully settle (it force-reloads the
+        // thread from the DB) before sending. Without this, the async DB
+        // reload inside setActiveThread can race with the optimistic user
+        // message added by handleSendMessage, and the first message of a
+        // brand-new session never renders until the turn finishes.
+        await setActiveThread(thread.id);
 
         // Wait for React to render ChatView, then send via ref to avoid a
         // stale closure (mirrors WelcomeView's double-rAF handoff).
@@ -334,7 +357,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
           <div className="welcome-message-input">
             <MessageInput
               onSend={handleSend}
-              disabled={isSending}
+              disabled={!isHydrated || isSending}
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
@@ -349,9 +372,9 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
             {/* Agent chosen once at session creation; fixed afterwards. */}
             <div className="flex items-center justify-between mt-2 px-1">
               <AgentModeSelector
-                value={getModeForProfileId(agentProfileId) ?? 'main'}
-                onChange={(mode) => setAgentProfileId(getProfileIdForMode(mode))}
-                disabled={isSending}
+                value={agentProfileId ?? getProfileIdForMode('main')}
+                onChange={(profileId) => setAgentProfileId(profileId)}
+                disabled={!isHydrated || isSending}
               />
             </div>
           </div>

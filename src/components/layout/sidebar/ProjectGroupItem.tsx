@@ -18,7 +18,7 @@ const THREAD_COLLAPSE_THRESHOLD = 5;
 
 export function ProjectGroupItem({ project, threads, activeThreadId, threadChildren }: ProjectGroupItemProps) {
   const { t } = useTranslation();
-  const { deleteThread, createThread, setActiveThread, collapsedProjects, toggleProjectExpanded } = useConversationStore();
+  const { deleteThread, startNewChat, collapsedProjects, toggleProjectExpanded } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
@@ -110,16 +110,17 @@ export function ProjectGroupItem({ project, threads, activeThreadId, threadChild
     setShowMenu((prev) => !prev);
   }, []);
 
-  const handleNewThread = useCallback(async (e: React.MouseEvent) => {
+  const handleNewThread = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    const thread = await createThread({
+    // Unify with the sidebar "new chat" entry: open the lazy NewChatView
+    // composer with this project preselected instead of eagerly creating a
+    // thread. The real session appears in the sidebar only after the user
+    // sends, so an unsent draft never pollutes the project group.
+    startNewChat({
       workingDirectory: project.workingDirectory,
       projectName: project.projectName,
     });
-    if (thread) {
-      setActiveThread(thread.id);
-    }
-  }, [createThread, setActiveThread, project.workingDirectory, project.projectName]);
+  }, [startNewChat, project.workingDirectory, project.projectName]);
 
   // Close menu on click outside
   useEffect(() => {
