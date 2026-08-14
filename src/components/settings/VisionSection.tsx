@@ -8,14 +8,13 @@ import {
   SpinnerGapIcon,
   LightningIcon,
   GlobeIcon,
-  KeyIcon,
   CpuIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
-import { testProviderIPC } from "@/lib/ipc-client";
+import { testProviderIPC, getProviderIPC } from "@/lib/ipc-client";
 import { SettingsSection, SettingsCard, SettingsToggle } from "@/components/settings/ui";
 import type { VisionLLMConfig } from "@/types";
 
@@ -40,7 +39,6 @@ export function VisionSection() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [baseURL, setBaseURL] = useState("");
-  const [apiKey, setApiKey] = useState("");
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
 
   // Load settings
@@ -50,7 +48,6 @@ export function VisionSection() {
       setProvider(settings.visionLLMConfig.provider);
       setModel(settings.visionLLMConfig.model);
       setBaseURL(settings.visionLLMConfig.baseURL);
-      setApiKey(settings.visionLLMConfig.apiKey);
     }
   }, [settings.visionLLMConfig, settings.visionLLMEnabled]);
 
@@ -59,7 +56,6 @@ export function VisionSection() {
       provider,
       model,
       baseURL,
-      apiKey,
       enabled,
     };
 
@@ -67,7 +63,7 @@ export function VisionSection() {
       visionLLMConfig: config,
       visionLLMEnabled: enabled,
     });
-  }, [provider, model, baseURL, apiKey, enabled, save]);
+  }, [provider, model, baseURL, enabled, save]);
 
   const handlePresetSelect = useCallback((preset: typeof VISION_PRESETS[0]) => {
     setProvider(preset.provider);
@@ -82,24 +78,25 @@ export function VisionSection() {
         setTestStatus("error");
         return;
       }
+      // Vision creds come from the configured provider, not a per-feature key.
+      const providerConfig = provider ? await getProviderIPC(provider) : null;
       const result = await testProviderIPC({
         provider_type: provider,
         base_url: baseURL || undefined,
-        api_key: apiKey || undefined,
+        api_key: providerConfig?.apiKey || undefined,
         model,
       });
       setTestStatus(result.success ? "success" : "error");
     } catch {
       setTestStatus("error");
     }
-  }, [provider, model, baseURL, apiKey]);
+  }, [provider, model, baseURL]);
 
   const hasChanges =
     enabled !== settings.visionLLMEnabled ||
     provider !== (settings.visionLLMConfig?.provider || "") ||
     model !== (settings.visionLLMConfig?.model || "") ||
-    baseURL !== (settings.visionLLMConfig?.baseURL || "") ||
-    apiKey !== (settings.visionLLMConfig?.apiKey || "");
+    baseURL !== (settings.visionLLMConfig?.baseURL || "");
 
   return (
     <div className="settings-section">
@@ -199,20 +196,6 @@ export function VisionSection() {
                     value={baseURL}
                     onChange={(e) => setBaseURL(e.target.value)}
                     placeholder="https://api.example.com/v1"
-                  />
-                </div>
-
-                {/* API Key */}
-                <div>
-                  <label className="block text-xs font-medium mb-1.5 text-foreground">
-                    <KeyIcon size={12} className="inline mr-1" />
-                    {t(tKey('settings.apiKey')) || 'API Key'}
-                  </label>
-                  <Input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="sk-..."
                   />
                 </div>
 

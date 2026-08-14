@@ -881,7 +881,10 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     }
 
     case 'config:vision:get': {
-      return getConfigStore().getByPath('auxiliary.vision');
+      const vision = getConfigStore().getByPath('auxiliary.vision') as Record<string, unknown> | undefined;
+      // Vision creds come from the provider, not a per-feature key.
+      if (vision) delete vision.apiKey;
+      return vision;
     }
 
     case 'config:vision:set': {
@@ -893,6 +896,8 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         baseUrl: (pObj.baseUrl || pObj.baseURL) ?? current.baseUrl,
       };
       delete merged.baseURL;
+      // Vision creds come from the provider, not a per-feature key.
+      delete merged.apiKey;
       getConfigStore().set('auxiliary.vision', merged);
       return { ok: true };
     }

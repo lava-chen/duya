@@ -38,7 +38,6 @@ export interface VisionLLMConfig {
   provider: string;
   model: string;
   baseURL: string;
-  apiKey: string;
   enabled: boolean;
 }
 

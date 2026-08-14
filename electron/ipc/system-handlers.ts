@@ -31,7 +31,6 @@ interface VisionSettings {
   provider: string;
   model: string;
   baseUrl: string;
-  apiKey: string;
   enabled: boolean;
 }
 
@@ -39,7 +38,6 @@ const DEFAULT_VISION_SETTINGS: VisionSettings = {
   provider: '',
   model: '',
   baseUrl: '',
-  apiKey: '',
   enabled: false,
 };
 
@@ -389,12 +387,11 @@ export function registerSystemHandlers(): void {
       provider: settings.provider,
       model: settings.model,
       baseUrl: settings.baseUrl,
-      apiKey: settings.apiKey,
       enabled: settings.enabled,
     };
   });
 
-  ipcMain.handle('vision:set', async (_event, data: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) => {
+  ipcMain.handle('vision:set', async (_event, data: { provider?: string; model?: string; baseUrl?: string; enabled?: boolean }) => {
     const store = getConfigStore();
     const currentSettings = (store.getByPath('auxiliary.vision') ?? DEFAULT_VISION_SETTINGS) as VisionSettings;
     const newSettings = {
@@ -402,7 +399,6 @@ export function registerSystemHandlers(): void {
       provider: data.provider ?? currentSettings.provider,
       model: data.model ?? currentSettings.model,
       baseUrl: data.baseUrl ?? currentSettings.baseUrl,
-      apiKey: data.apiKey ?? currentSettings.apiKey,
       enabled: data.enabled ?? currentSettings.enabled,
     };
     store.set('auxiliary.vision', newSettings);

@@ -267,20 +267,17 @@ export interface VisionAPI {
     provider: string
     model: string
     baseUrl: string
-    apiKey: string
     enabled: boolean
   }>
   set: (config: {
     provider?: string
     model?: string
     baseUrl?: string
-    apiKey?: string
     enabled?: boolean
   }) => Promise<{
     provider: string
     model: string
     baseUrl: string
-    apiKey: string
     enabled: boolean
   }>
 }
@@ -1614,7 +1611,7 @@ const electronAPI: ElectronAPI = {
   },
   vision: {
     get: () => ipcRenderer.invoke('config:vision:get'),
-    set: (config: { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean }) =>
+    set: (config: { provider?: string; model?: string; baseUrl?: string; enabled?: boolean }) =>
       ipcRenderer.invoke('config:vision:set', config),
   },
   compact: {

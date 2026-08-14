@@ -242,7 +242,6 @@ function ModelSelectionCard({ providers }: { providers: Provider[] }) {
             provider: provider.name.toLowerCase(),
             model: parsed.model,
             baseURL: provider.baseUrl,
-            apiKey: provider.apiKey,
             enabled: true,
           },
           visionLLMEnabled: true,
