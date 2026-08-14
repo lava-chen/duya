@@ -23,6 +23,7 @@
     "longDescription": "Create, edit, inspect, render, verify, and export DOCX document artifacts locally. Reuses duya's bundled docx office skill. Use Documents when the durable output or target is a document, doc, docs, Word file, memo, report, or writing artifact.",
     "category": "productivity",
     "brandColor": "#2563EB",
+    "icon": "./assets/icon.svg",
     "screenshots": []
   }
 }

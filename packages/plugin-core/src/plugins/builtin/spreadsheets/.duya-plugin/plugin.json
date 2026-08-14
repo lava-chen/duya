@@ -26,6 +26,7 @@
     "longDescription": "Create, edit, inspect, render, verify, and export XLSX, CSV, and TSV spreadsheets locally. Reuses duya's bundled xlsx office skill. Use Spreadsheets when the durable output or target is a spreadsheet, workbook, sheet, Google Sheet, or CSV file.",
     "category": "productivity",
     "brandColor": "#107C41",
+    "icon": "./assets/icon.svg",
     "screenshots": []
   }
 }

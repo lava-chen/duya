@@ -12,6 +12,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { pathToFileURL } from 'url';
 import { app } from 'electron';
 import type { PluginCatalogEntry, PluginCategory, PluginManifest } from './types';
 import { readPluginManifest } from './manifest';
@@ -22,6 +23,20 @@ import { parseSkillFrontmatter } from '../utils/skill-parser';
 import { listBuiltinCacheRoots } from './cache/builtin-sync';
 
 const COMPONENT = 'PluginCatalog' as LogComponent;
+
+/**
+ * Resolve a plugin's manifest `interface.icon` (a path relative to the plugin
+ * root, e.g. `./assets/icon.svg`) into a `duya-file://` URL the renderer can
+ * load as an `<img src>`. Returns undefined when no icon is declared or the
+ * file does not exist.
+ */
+function resolveIconUrl(manifest: PluginManifest, pluginRoot: string): string | undefined {
+  const relIcon = manifest.interface?.icon;
+  if (!relIcon) return undefined;
+  const abs = path.resolve(pluginRoot, relIcon.replace(/^\.\//, ''));
+  if (!fs.existsSync(abs)) return undefined;
+  return pathToFileURL(abs).href.replace(/^file:\/\//, 'duya-file://');
+}
 
 interface LocalMarketplacePlugin {
   name: string;
@@ -73,6 +88,7 @@ function normalizeCategory(cat: string | undefined): PluginCategory {
 function buildLocalCatalogEntry(
   mpEntry: LocalMarketplacePlugin,
   manifest: Record<string, unknown>,
+  pluginDir: string,
 ): PluginCatalogEntry {
   const id = (manifest.id as string) || `com.duya.${mpEntry.name}`;
   const name = (manifest.name as string) || mpEntry.name;
@@ -85,6 +101,7 @@ function buildLocalCatalogEntry(
     name,
     version,
     description,
+    icon: resolveIconUrl(manifest as PluginManifest, pluginDir),
     source: 'local',
     category: normalizeCategory(mpEntry.category),
     trustLevel: 'local',
@@ -119,7 +136,7 @@ function getLocalCatalogEntries(): PluginCatalogEntry[] {
       }
 
       const manifest = readPluginManifest(pluginDir);
-      const entry = buildLocalCatalogEntry(mpEntry, manifest as unknown as Record<string, unknown>);
+      const entry = buildLocalCatalogEntry(mpEntry, manifest as unknown as Record<string, unknown>, pluginDir);
       entries.push(entry);
     } catch (err) {
       logger.warn('Failed to read local plugin manifest', {
@@ -158,6 +175,7 @@ function getBuiltinCatalogEntries(): PluginCatalogEntry[] {
         name: manifest.name,
         version: manifest.version,
         description: manifest.description,
+        icon: resolveIconUrl(manifest, pluginRoot),
         source: 'bundled',
         category,
         trustLevel: 'official',

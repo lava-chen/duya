@@ -32,6 +32,9 @@ export interface ProviderClientConfig {
   redirectPath: string;
   /** Default scopes; user can extend via manifest declaration. */
   defaultScopes: string[];
+  /** When false, the provider connects via manual credentials and needs no
+   * OAuth client_id; readiness is always true. Defaults to true (OAuth). */
+  requiresOAuthClient?: boolean;
   /** Optional userinfo endpoint for fetching account identity. */
   userinfoUrl?: string;
   /** Whether the provider requires a client_secret at the token endpoint. */
@@ -118,6 +121,24 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
   vercel: remoteMcpProvider('vercel', 'Vercel', 'https://mcp.vercel.com', 'V', 'Vercel deployments and projects'),
   notion: remoteMcpProvider('notion', 'Notion', 'https://mcp.notion.com/mcp', 'N', 'Notion pages and databases'),
   linear: remoteMcpProvider('linear', 'Linear', 'https://mcp.linear.app/mcp', 'L', 'Linear issues and projects'),
+  github: remoteMcpProvider('github', 'GitHub', 'https://api.githubcopilot.com/mcp', 'G', 'GitHub repositories, pull requests, issues, and CI'),
+  // WeCom is a custom-credential provider (corpid/corpsecret), not OAuth. It
+  // has no network OAuth endpoints; credentials are stored in the vault and
+  // injected into the `wecom-cli` child process by the connector.
+  wecom: {
+    id: 'wecom',
+    label: 'WeCom',
+    authUrl: '',
+    tokenUrl: '',
+    redirectPath: '/callback/wecom',
+    defaultScopes: [],
+    requiresClientSecret: false,
+    supportsManualConfiguration: true,
+    requiresOAuthClient: false,
+    clientId: '',
+    monogram: 'W',
+    description: 'WeCom (WeChat Work) enterprise messaging, docs, contacts, meetings, schedules, todos',
+  },
 };
 
 function remoteMcpProvider(
@@ -158,6 +179,11 @@ export function getProviderConfig(provider: ProviderId): ProviderClientConfig {
 export function getProviderReadiness(provider: ProviderId): ProviderReadiness {
   const config = getProviderConfig(provider);
   if (config.remoteMcpUrl) {
+    return { configured: true };
+  }
+  // Custom-credential providers (e.g. WeCom) never need an OAuth client;
+  // they are always connectable via manual credentials.
+  if (config.requiresOAuthClient === false) {
     return { configured: true };
   }
   if (!config.clientId.trim()) {

@@ -33,9 +33,11 @@ import {
   setClientSecret,
 } from './providers/registry.js';
 import type {
+  AppConnection,
   AppConnectionStatusDTO,
   AppConnectionProviderDTO,
   AppConnectionResult,
+  ManualProviderCredentials,
   ProviderId,
 } from './types.js';
 import { toStatusDTO } from './types.js';
@@ -177,6 +179,67 @@ export class AppConnectionService {
    *
    * Plan 312 Phase 4: if a provider block check is installed, it runs
    * BEFORE any network activity. Blocked providers throw immediately.
+   */
+  /**
+   * Connect a custom-credential provider (WeCom) with manual credentials.
+   *
+   * Unlike OAuth providers, WeCom has no authorization-code flow: the user
+   * supplies a self-built enterprise app's `corpid` + `corpsecret`. We store
+   * them in the vault's per-provider OAuth-client slot and upsert a connected
+   * AppConnection so the connector's descriptors come online after reload.
+   *
+   * The credentials never cross IPC into the renderer — only the idempotent
+   * status DTO is returned.
+   */
+  async connectWeCom(
+    credentials: ManualProviderCredentials,
+  ): Promise<AppConnectionStatusDTO> {
+    const corpid = credentials.clientId.trim();
+    const corpsecret = credentials.clientSecret.trim();
+    if (!corpid || !corpsecret) {
+      throw new FlowError('provider_not_configured', 'corpid and corpsecret are required');
+    }
+    if (this.providerBlockCheck) {
+      const gate = this.providerBlockCheck('wecom');
+      if (!gate.allowed) {
+        throw new FlowError('provider_blocked', gate.reason ?? 'wecom is blocked by enterprise policy');
+      }
+    }
+
+    // Persist the enterprise credentials in the encrypted vault (per-provider).
+    this.vault.setOAuthClient('wecom', { clientId: corpid, clientSecret: corpsecret });
+
+    // Upsert a connected connection for provider wecom so the connector's
+    // descriptors surface after reload. Reuse any existing wecom connection id.
+    const existing = this.store.listByProvider('wecom')[0];
+    const conn: AppConnection = {
+      id: existing?.id ?? `wecom-${crypto.randomUUID().slice(0, 8)}`,
+      provider: 'wecom',
+      accountLabel: `WeCom enterprise ${corpid}`,
+      accountId: corpid,
+      scopes: [],
+      status: 'connected',
+      expiresAt: null,
+      lastError: null,
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.store.upsert(conn);
+
+    this.logger.info(
+      'App Connection: connected wecom (manual credentials)',
+      { connectionId: conn.id, provider: 'wecom' },
+      COMPONENT,
+    );
+
+    await this.fireReload();
+    return toStatusDTO(this.store.get(conn.id)!);
+  }
+
+  /**
+   * Connect a provider via OAuth (authorization-code flow) or remote MCP.
+   * Dispatched for OAuth providers; custom-credential providers use
+   * {@link connectWeCom} instead.
    */
   async connect(
     provider: ProviderId,

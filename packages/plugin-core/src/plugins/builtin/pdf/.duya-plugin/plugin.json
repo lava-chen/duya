@@ -24,6 +24,7 @@
     "longDescription": "Read, create, inspect, render, verify, and extract content from PDF files locally. Reuses duya's bundled pdf office skill. Use PDF when the durable output or target is a PDF file and visual layout fidelity matters.",
     "category": "productivity",
     "brandColor": "#DC2626",
+    "icon": "./assets/icon.svg",
     "screenshots": []
   }
 }

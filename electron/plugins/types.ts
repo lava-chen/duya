@@ -186,6 +186,11 @@ export interface PluginInterface {
   category?: PluginCategory;
   brandColor?: string;
   screenshots?: string[];
+  /**
+   * Plugin brand icon, relative to the plugin root (e.g. `./assets/icon.svg`).
+   * The catalog resolves this to a `duya-file://` URL the renderer can load.
+   */
+  icon?: string;
 }
 
 // NOTE: mirrors zod schema in src/lib/plugin-types.ts — kept as the

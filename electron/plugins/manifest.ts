@@ -217,6 +217,8 @@ function parseInterfaceBlock(raw: unknown): PluginInterface | undefined {
   if (category) block.category = category as PluginInterface['category'];
   const brandColor = asOptionalString(raw.brandColor);
   if (brandColor) block.brandColor = brandColor;
+  const icon = asOptionalString(raw.icon);
+  if (icon) block.icon = icon;
   if (Array.isArray(raw.screenshots)) {
     block.screenshots = raw.screenshots.filter((s): s is string => typeof s === 'string');
   }

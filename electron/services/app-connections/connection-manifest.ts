@@ -21,7 +21,14 @@ import type { ProviderId } from './types.js';
 
 const COMPONENT = 'AppConnectionManifest' as LogComponent;
 
-const SUPPORTED_PROVIDERS: readonly ProviderId[] = ['google', 'slack', 'microsoft365'];
+const SUPPORTED_PROVIDERS: readonly ProviderId[] = [
+  'google',
+  'slack',
+  'microsoft365',
+  'wecom',
+  'notion',
+  'github',
+];
 
 /**
  * Parsed connection declaration. Plugin authors write the matching

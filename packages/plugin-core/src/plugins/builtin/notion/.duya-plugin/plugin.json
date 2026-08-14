@@ -1,0 +1,30 @@
+{
+  "name": "notion",
+  "version": "0.1.0",
+  "description": "Connect duya to Notion: search content, read pages and databases, and create or update pages and records through the official Notion remote MCP endpoint.",
+  "author": {
+    "name": "Duya"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "notion",
+    "wikis",
+    "pages",
+    "databases",
+    "docs",
+    "documentation",
+    "knowledge",
+    "notes",
+    "planning"
+  ],
+  "interface": {
+    "displayName": "Notion",
+    "shortDescription": "Search and edit your Notion workspace",
+    "longDescription": "Connect duya to your Notion workspace so it can search pages and databases, read content, and create or update pages and records. Uses the official Notion remote MCP endpoint (https://mcp.notion.com/mcp) with OAuth. Requires connecting the Notion account in the app connection settings.",
+    "category": "productivity",
+    "brandColor": "#FFFFFF",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}
