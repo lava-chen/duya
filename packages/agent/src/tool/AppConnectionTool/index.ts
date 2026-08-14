@@ -174,7 +174,7 @@ export function registerAppConnectionTools(
   // we still check and remove existing connector-prefixed tools.
   const _existingTools = registry.getAllTools();
   const newNames = new Set(descriptors.map((d) => d.name));
-  const connectorPrefixes = ['google_', 'slack_', 'microsoft_'];
+  const connectorPrefixes = ['google_', 'slack_', 'microsoft_', 'wecom_'];
   let removed = 0;
   for (const tool of _existingTools) {
     if (!newNames.has(tool.name) && connectorPrefixes.some((p) => tool.name.startsWith(p))) {

@@ -421,19 +421,20 @@ export class duyaAgent {
     });
 
     // Wire a memory-flush sink: after each compaction, persist the summary to
-    // the DUYA memory store so important context survives the history drop.
+    // the DUYA sessions root (alongside rollout files, mirroring Codex's
+    // `~/.codex/sessions/` layout) so important context survives the history
+    // drop — without polluting the memory store with raw compaction byproducts.
     // Best-effort — gated by the same memory enable flag used by the wakeup
     // helper, and failures are swallowed (they never break compaction).
     this.compactionManager.setMemoryFlushFn(async (summary: string) => {
       if (!isMemoryEnabled()) return
       const session = this.sessionId
       if (!session) return
-      const memoryRoot = this.memoryRootPath()
-      if (!memoryRoot) return
-      const dir = path.join(memoryRoot, 'sessions')
-      fs.mkdirSync(dir, { recursive: true })
+      const sessionsRoot = this.sessionsRootPath()
+      if (!sessionsRoot) return
+      fs.mkdirSync(sessionsRoot, { recursive: true })
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const file = path.join(dir, `${session}-${stamp}-compaction.md`)
+      const file = path.join(sessionsRoot, `${session}-${stamp}-compaction.md`)
       fs.writeFileSync(
         file,
         `# Compaction summary\n\n${summary}\n`,
@@ -487,6 +488,19 @@ export class duyaAgent {
     this._model = value;
     // Model id is read by _buildSystemPrompt → promptSystem.buildContext({ modelId: this.model })
     // on every turn, so no separate prompt-manager sync is needed here.
+  }
+
+  /**
+   * Resolve the DUYA sessions root (default `~/.duya/sessions`, mirroring
+   * Codex's `~/.codex/sessions/` rollout layout), honouring an optional
+   * override via the `DUYA_SESSIONS_ROOT` env var. Returns null when
+   * the home directory is unavailable.
+   */
+  private sessionsRootPath(): string | null {
+    if (process.env.DUYA_SESSIONS_ROOT) return process.env.DUYA_SESSIONS_ROOT;
+    const home = os.homedir();
+    if (!home) return null;
+    return path.join(home, '.duya', 'sessions');
   }
 
   /**
@@ -934,6 +948,7 @@ export class duyaAgent {
           provider: this.provider,
           sessionId: this.sessionId, // Pass sessionId for task persistence
           workingDirectory: this.workingDirectory, // Pass working directory for tool execution
+          language: this.language, // Propagate language preference to sub-agents
           agentDefinitions: {
             activeAgents: agentDefinitions,
             allAgents: agentDefinitions,

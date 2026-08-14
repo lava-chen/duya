@@ -598,6 +598,8 @@ export interface ToolUseContextOptions {
   sessionId?: string;
   // Working directory for tool execution (e.g., BashTool)
   workingDirectory?: string;
+  // Language preference for agent responses (propagated to sub-agents)
+  language?: string;
   // API configuration for sub-agent execution
   apiKey?: string;
   baseURL?: string;

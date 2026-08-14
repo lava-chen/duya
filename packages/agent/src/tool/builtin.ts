@@ -158,7 +158,7 @@ export function createBuiltinRegistry(
   // Inter-agent communication tool — message another session's agent
   registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
-  registry.register(visionTool, visionTool, { exposeMode: 'discoverable' });
+  registry.register(visionTool, visionTool, { exposeMode: 'always' });
   // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
   // See `docs/exec-plans/active/99-duya-cli-argv-and-deprecate-cron-tool.md`.
 
