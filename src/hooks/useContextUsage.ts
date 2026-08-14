@@ -12,6 +12,7 @@ import {
   normalizeAndBuildGrid,
   estimateTokens,
   normalizeInputTokens,
+  estimateCost,
   type ContextBreakdown,
 } from '@/lib/context-usage-utils';
 import { useContextUsageStore } from '@/stores/context-usage-store';
@@ -29,6 +30,15 @@ export interface ContextUsage {
   cacheReadTokens: number;
   cacheCreationTokens: number;
   outputTokens: number;
+  /** Normalized current-context input tokens (cache-convention aware). */
+  inputTokens: number;
+  /** Session-cumulative token totals across every persisted usage block. */
+  totalInput: number;
+  totalOutput: number;
+  totalCacheRead: number;
+  totalCacheWrite: number;
+  /** Session-cumulative estimated cost in USD. */
+  totalCost: number;
   /** 0..1 — actual / contextWindow */
   cacheHitRate: number;
   state: ContextState;
@@ -93,6 +103,31 @@ export function useContextUsage(
 
   return useMemo(() => {
     const resolvedContextWindow = getContextWindowForModel(modelName, contextWindow);
+
+    // Session-cumulative usage across every persisted assistant usage block —
+    // pi's footer shows cumulative ↑input / ↓output / R cache / $ cost, so the
+    // ring's stats line mirrors that. Cost is estimated on the raw (uncached)
+    // input + separate cache rates; the displayed input total is normalized
+    // for the cache convention.
+    let totalInput = 0;
+    let totalOutput = 0;
+    let totalCacheRead = 0;
+    let totalCacheWrite = 0;
+    let totalCost = 0;
+    for (const msg of messages) {
+      if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
+      const usage = msg.tokenUsage;
+      const rawInput = usage.input_tokens || 0;
+      const output = usage.output_tokens || 0;
+      const cacheRead = usage.cache_hit_tokens || 0;
+      const cacheWrite = usage.cache_creation_tokens || 0;
+      totalInput += normalizeInputTokens(rawInput, cacheRead);
+      totalOutput += output;
+      totalCacheRead += cacheRead;
+      totalCacheWrite += cacheWrite;
+      totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite);
+    }
+
     const noData: ContextUsage = {
       modelName: modelName || 'unknown',
       contextWindow: resolvedContextWindow,
@@ -103,6 +138,12 @@ export function useContextUsage(
       cacheReadTokens: 0,
       cacheCreationTokens: 0,
       outputTokens: 0,
+      inputTokens: 0,
+      totalInput,
+      totalOutput,
+      totalCacheRead,
+      totalCacheWrite,
+      totalCost,
       cacheHitRate: 0,
       hasData: false,
       state: 'normal',
@@ -136,6 +177,12 @@ export function useContextUsage(
         cacheReadTokens: cacheRead,
         cacheCreationTokens: cacheCreation,
         outputTokens,
+        inputTokens,
+        totalInput,
+        totalOutput,
+        totalCacheRead,
+        totalCacheWrite,
+        totalCost,
         cacheHitRate,
         hasData: true,
         state,
@@ -149,6 +196,7 @@ export function useContextUsage(
     // tokens of every message appended after it (tool results, assistant
     // tool_use blocks).
     let latestUsed: number | undefined;
+    let latestInput = 0;
     let latestOutput = 0;
     let latestCacheRead = 0;
     let latestCacheCreation = 0;
@@ -171,6 +219,7 @@ export function useContextUsage(
 
         if (latestUsed === undefined) {
           latestUsed = usage.total_tokens || inputTokens + outputTokens;
+          latestInput = inputTokens;
           latestOutput = outputTokens;
           latestCacheRead = cacheRead;
           latestCacheCreation = cacheCreation;
@@ -226,6 +275,12 @@ export function useContextUsage(
         cacheReadTokens: latestCacheRead,
         cacheCreationTokens: latestCacheCreation,
         outputTokens: latestOutput,
+        inputTokens: latestInput,
+        totalInput,
+        totalOutput,
+        totalCacheRead,
+        totalCacheWrite,
+        totalCost,
         cacheHitRate: latestHitRate,
         hasData: latestUsed > 0,
         state,

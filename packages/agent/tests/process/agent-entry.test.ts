@@ -656,4 +656,61 @@ describe('Agent Process Entry', () => {
       expect(result).toBeNull();
     });
   });
+
+  // =========================================================================
+  // Live context usage — cache-convention guard
+  // (reproduced from agent-process-entry.ts result handler)
+  // =========================================================================
+
+  describe('cache-convention guard', () => {
+    // Reproduced from agent-process-entry.ts:
+    //   normalizedInput = cacheHit > rawInput ? rawInput + cacheHit : rawInput
+    function normalizeCacheInput(usage: {
+      input_tokens?: number;
+      cache_hit_tokens?: number;
+      cache_read_input_tokens?: number;
+    }): number {
+      const rawInput = usage.input_tokens ?? 0;
+      const cacheHitTokens =
+        usage.cache_hit_tokens ?? usage.cache_read_input_tokens ?? 0;
+      return cacheHitTokens > rawInput ? rawInput + cacheHitTokens : rawInput;
+    }
+
+    // Reproduced from agent-process-entry.ts meaningfulUsage check: cache hits
+    // count toward meaningful usage (fully cache-served request can report
+    // input=0 while hits are large).
+    function isMeaningfulUsage(usage: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      cache_hit_tokens?: number;
+      cache_read_input_tokens?: number;
+    }): boolean {
+      const rawInput = usage.input_tokens ?? 0;
+      const outputTokens = usage.output_tokens ?? 0;
+      const cacheHitTokens =
+        usage.cache_hit_tokens ?? usage.cache_read_input_tokens ?? 0;
+      return rawInput + outputTokens + cacheHitTokens + (usage.total_tokens ?? 0) > 0;
+    }
+
+    it('keeps input unchanged when cache hits are within input (Anthropic)', () => {
+      // Anthropic input_tokens already includes cache-read tokens.
+      expect(normalizeCacheInput({ input_tokens: 1000, cache_hit_tokens: 800 })).toBe(1000);
+      expect(normalizeCacheInput({ input_tokens: 1000, cache_hit_tokens: 0 })).toBe(1000);
+      expect(normalizeCacheInput({ input_tokens: 1000, cache_read_input_tokens: 1000 })).toBe(1000);
+    });
+
+    it('adds cache hits back when input excludes cache (OpenAI-compatible)', () => {
+      // Gateway reports only the uncached delta; hits are separate and larger.
+      expect(normalizeCacheInput({ input_tokens: 128, cache_hit_tokens: 3000 })).toBe(3128);
+      expect(normalizeCacheInput({ input_tokens: 0, cache_hit_tokens: 3000 })).toBe(3000);
+      expect(normalizeCacheInput({ input_tokens: 500, cache_read_input_tokens: 2000 })).toBe(2500);
+    });
+
+    it('treats a fully cache-served request as meaningful usage', () => {
+      expect(isMeaningfulUsage({ input_tokens: 0, output_tokens: 0, cache_hit_tokens: 3000 })).toBe(true);
+      expect(isMeaningfulUsage({ input_tokens: 0, output_tokens: 0, cache_hit_tokens: 0, total_tokens: 0 })).toBe(false);
+      expect(isMeaningfulUsage({ input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, total_tokens: 3000 })).toBe(true);
+    });
+  });
 });

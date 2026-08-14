@@ -144,6 +144,41 @@ export function normalizeInputTokens(
   return cacheHit > input ? input + cacheHit : input;
 }
 
+/**
+ * Claude-style cost estimation (USD) for a token usage block. Same rates the
+ * usage dashboard uses; kept here as a pure function so the context ring can
+ * show pi-style `$cost` without importing the hook.
+ */
+export function estimateCost(
+  inputTokens: number,
+  outputTokens: number,
+  cacheReadTokens: number,
+  cacheWriteTokens: number,
+): number {
+  const inputRate = 2.5 / 1_000_000;
+  const outputRate = 10.0 / 1_000_000;
+  const cacheReadRate = 0.625 / 1_000_000;
+  const cacheWriteRate = 1.25 / 1_000_000;
+  return (
+    inputTokens * inputRate +
+    outputTokens * outputRate +
+    cacheReadTokens * cacheReadRate +
+    cacheWriteTokens * cacheWriteRate
+  );
+}
+
+/**
+ * pi-style compact token formatting for the ring's stats line:
+ * `<1000` → integer, `<10k` → 1-dp k, `<1M` → integer k, `<10M` → 1-dp M, else integer M.
+ */
+export function formatTokensPi(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1000000) return `${Math.round(count / 1000)}k`;
+  if (count < 10000000) return `${(count / 1000000).toFixed(1)}M`;
+  return `${Math.round(count / 1000000)}M`;
+}
+
 function blockToText(block: ContentBlock): string {
   if (typeof block === 'string') return block;
   if (typeof block?.text === 'string') return block.text;
