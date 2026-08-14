@@ -2002,6 +2002,17 @@ const electronAPI: ElectronAPI = {
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 
+// Expose link-preview helpers as `window.duya`. Both resolve the same
+// origin-cached `duya:link-preview` IPC, so repeated lookups for the same
+// site are served from the main-process cache instead of the network.
+const duya = {
+  getLinkFavicon: (url: string): Promise<string | null> =>
+    ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.favicon ?? null),
+  getPageTitle: (url: string): Promise<string | null> =>
+    ipcRenderer.invoke('duya:link-preview', url).then((p) => p?.title ?? null),
+};
+contextBridge.exposeInMainWorld('duya', duya);
+
 // Expose webUtils.getPathForFile so the renderer can resolve real filesystem
 // paths for dropped/pasted files (Electron ≥ 32 removed File.path). On older
 // versions this stays null and the renderer falls back to file.path.
