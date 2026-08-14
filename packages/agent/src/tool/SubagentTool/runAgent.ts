@@ -244,6 +244,7 @@ export async function* runAgent({
     workingDirectory,
     modelId: agentModel,
     modelName: agentModel,
+    language: toolUseContext.options.language,
     enabledTools: new Set(toolsToUse.map(tool => tool.name)),
     omitAgentsMd,
   })

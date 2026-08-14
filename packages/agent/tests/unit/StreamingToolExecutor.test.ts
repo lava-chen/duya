@@ -678,3 +678,63 @@ describe('permission approval channel (plan 419 P0)', () => {
     expect(results.some((r) => r.includes('Permission denied'))).toBe(true);
   });
 });
+
+describe('StreamingToolExecutor subagent render', () => {
+  it('renders a serial subagent JSON result through renderToolResultMessage', async () => {
+    const registry = new ToolRegistry();
+    const mockCanUseTool = vi.fn().mockResolvedValue(true);
+    const toolUseContext: ToolUseContext = {
+      toolUseId: 'ctx-1',
+      abortController: new AbortController(),
+      getAppState: () => ({}),
+      setAppState: () => {},
+      options: {
+        tools: [],
+        commands: [],
+        mainLoopModel: 'test-model',
+        mcpClients: [],
+      },
+    };
+
+    // Simulate SubagentTool: execute returns a JSON string, and the executor
+    // also implements renderToolResultMessage that turns it into readable text.
+    const executorInstance = {
+      execute: async () => ({
+        id: crypto.randomUUID(),
+        name: 'task',
+        result: JSON.stringify({
+          agentType: 'Explore',
+          resolvedAgentType: 'Explore',
+          description: 'scan e:',
+          content: 'E:\\ scan report',
+          sessionId: 'sub-1',
+        }),
+      }),
+      renderToolResultMessage: (r: { result: string }) => {
+        const parsed = JSON.parse(r.result);
+        return {
+          type: 'markdown' as const,
+          content: `[Report] ${parsed.content}\n<subagent_meta>id=${parsed.sessionId}</subagent_meta>`,
+        };
+      },
+    };
+    registry.register(
+      { name: 'task', description: 'Spawn a subagent', input_schema: {} },
+      executorInstance,
+    );
+
+    const executor = new StreamingToolExecutor(registry, mockCanUseTool, toolUseContext);
+    executor.addTool({ id: 'use-sub-1', name: 'task', input: { prompt: 'x' } });
+    const results: string[] = [];
+    for await (const update of executor.getRemainingResults()) {
+      const text = toolResultText(update);
+      if (text !== null) results.push(text);
+    }
+
+    expect(results.length).toBe(1);
+    // The model should see the rendered markdown, not the raw JSON string.
+    expect(results[0]).toContain('[Report] E:\\ scan report');
+    expect(results[0]).toContain('<subagent_meta>id=sub-1</subagent_meta>');
+    expect(results[0]).not.toContain('"agentType"');
+  });
+});

@@ -18,6 +18,7 @@ import type {
   AgentProgressEvent,
 } from '../types.js'
 import type { ToolRegistry } from './registry.js'
+import type { RenderedToolMessage } from './types.js'
 import { PermissionRequiredError } from './BaseTool.js'
 import { ToolRetryExecutor } from './retry/ToolRetryExecutor.js'
 import { DEFAULT_RETRY_STRATEGIES } from './retry/BuiltInStrategies.js'
@@ -1498,7 +1499,7 @@ export class StreamingToolExecutor {
       tool.stage = 'finalizing'
       this.updateProgress(tool, { stage: 'finalizing', currentOperation: 'Finalizing...', percentComplete: 95 })
 
-      const rawContent = typeof result.result === 'string'
+      let rawContent = typeof result.result === 'string'
         ? result.result
         : JSON.stringify(result.result)
 
@@ -1518,6 +1519,19 @@ export class StreamingToolExecutor {
           subAgentSessionId: parsedResult?.sessionId,
           resultLength: rawContent.length,
         }, 'SubAgent')
+
+        // Render the subagent tool result through renderToolResultMessage so
+        // the model sees a human-readable markdown block (with <subagent_meta>
+        // + resume footer) instead of the raw JSON string that execute()
+        // returns. This is the Grok-aligned path; without it the model must
+        // parse a JSON blob out of every serial subagent result.
+        const subagentExecutor = this.toolRegistry.getExecutor(
+          this.resolveToolKey(tool.block.name),
+        ) as { renderToolResultMessage?(r: ToolResult): RenderedToolMessage } | undefined
+        const rendered = subagentExecutor?.renderToolResultMessage?.(result)
+        if (rendered && typeof rendered.content === 'string') {
+          rawContent = rendered.content
+        }
       }
 
       // Check if result indicates a permission is required

@@ -27,6 +27,7 @@ Your answer is being rendered by an application for the user. Follow these guide
 * Do not use URIs like file://, vscode://, or https:// for file links.
 * Do not provide ranges of lines.
 * Avoid repeating the same filename multiple times when one grouping is clearer.
+* **To embed a local image, use a markdown image with an absolute path and forward slashes.** On Windows write the drive letter with a colon: \`![alt](C:/path/to/image.png)\` (e.g. \`![chart](C:/Users/me/plot.png)\`). On Unix write \`![alt](/abs/path/image.png)\`. Use forward slashes, never backslashes — \`E:\\4.png\` is not rendered correctly. Verify the file exists at the path you cite.
 
 ### Visualizations
 

@@ -67,7 +67,7 @@ import { detectModelCapability } from '../utils/model-capability-cache.js';
 import type { ProbeConfig } from '../utils/model-capability-cache.js';
 import { VisionTool } from '../tool/VisionTool/VisionTool.js';
 import type { ToolExecutor } from '../tool/registry.js';
-import { estimateMessageTokens } from '../compact/tokenBudget.js';
+import { estimateMessagesTokens } from '../compact/tokenBudget.js';
 import type { ApiFormat, ModelCompat } from '@duya/ai';
 
 // Polyfill globalThis.crypto for Node.js
@@ -204,6 +204,27 @@ let lastInterruptTime = 0;
 const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
+
+// Live context-usage tracker (module scope so the authoritative base survives
+// across turns of this worker's session). Keeping the base from the previous
+// round means the ring never dips to a message-only estimate at the start of a
+// new round — that estimate would omit the system prompt / AGENTS.md / tool
+// definitions and look like a reset. Reset on `init` for a fresh session.
+let liveBaseContext = 0;            // authoritative input + output from last `result`
+let liveBaseMessageCount = 0;       // agent message count when that `result` landed
+let hasLiveBase = false;            // whether liveBaseContext came from a real `result`
+let liveLastInput = 0;              // raw input_tokens of the last `result`
+let liveLastOutput = 0;             // raw output_tokens of the last `result`
+let liveLastCacheHit: number | undefined;      // cache hit (read) tokens of the last `result`
+let liveLastCacheCreation: number | undefined; // cache creation (write) tokens of the last `result`
+// Set true after a `result` lands, until the first `tool_result` of that
+// round finalizes the trailing boundary. It marks that the assistant message
+// produced by that `result` is now at the tail of the timeline but its tokens
+// are ALREADY counted in `liveBaseContext` (via output_tokens) — so the
+// trailing estimate must exclude it, or the ring double-counts the output and
+// sawtooths between results (dropping back to input+output when the next
+// `result` rebases).
+let liveBoundaryPending = false;
 // Track the main model name for multimodal detection
 let mainModelName = '';
 let probeConfig: ProbeConfig | null = null;
@@ -2021,23 +2042,63 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // without an incremental counter.
     const turnStartMessageCount = agent.getMessages().length;
 
-    // Live context-usage tracker. The last real `result` usage reflects the
-    // full prompt size at that point; afterwards each new tool_result adds a
-    // small trailing estimate. This mirrors pi's `usage + trailing` model and
-    // lets the renderer stream live context growth without a full message
-    // recount on every event.
-    let liveBaseInput = 0;          // last `result` input_tokens (covers cache)
-    let liveTrailingTokens = 0;     // tokens added since that `result`
-    let liveHasBase = false;        // whether a real usage has been seen
-    const emitTokenUsage = (data: {
-      inputTokens: number;
-      outputTokens: number;
-      cacheHitTokens?: number;
-      cacheCreationTokens?: number;
-      usedTokens: number;
-    }) => {
-      sendToMain({ type: 'chat:token_usage', sessionId: msg.sessionId, ...data });
+    // Live context-usage tracker.
+    //
+    // Core logic (mirrors pi's `usage + trailing` model, adapted to duya):
+    //   used = last authoritative LLM context + estimated tokens of messages
+    //          appended since that LLM call
+    // The authoritative base is the last `result` event's `input + output`
+    // (pi's `calculateContextTokens`), which reflects the real prompt size at
+    // that request (input_tokens already covers cache read + write, so no
+    // double counting). The trailing part is duya's native message estimator
+    // over the messages added after that request (tool results, assistant
+    // tool_use blocks). Before any `result`, fall back to duya's own
+    // CompactionManager estimate so the ring is live from the first event.
+    //
+    // Tracker state lives at module scope (see declarations above), so the
+    // authoritative base persists across turns of this session: at the start
+    // of a new round it still reflects the last real API usage plus a small
+    // trailing estimate — never a message-only estimate that would drop the
+    // system prompt / AGENTS.md / tool definitions and look like a reset.
+    const computeLiveUsed = (): number => {
+      if (!hasLiveBase) {
+        // No authoritative result yet — duya's native estimate of the real
+        // in-memory history (same source CompactionManager uses).
+        return agent.getContextStats().totalTokens;
+      }
+      // Authoritative base + estimated tokens of messages appended since the
+      // request that produced that base.
+      const msgs = agent.getMessages();
+      let boundary = liveBaseMessageCount;
+      if (liveBoundaryPending) {
+        // Exactly one assistant message is pushed right after the last
+        // `result`, and its tokens are already counted in `liveBaseContext`
+        // via output_tokens. Skip it so the trailing estimate only covers the
+        // tool results that follow — otherwise the output is counted twice
+        // and the ring sawtooths (drops back to input+output) when the next
+        // `result` rebases. The slice clamps when the assistant has not been
+        // pushed yet (boundary > length → empty).
+        boundary = liveBaseMessageCount + 1;
+      }
+      const trailing = estimateMessagesTokens(msgs.slice(boundary));
+      return liveBaseContext + trailing;
     };
+
+    const emitTokenUsage = (usedTokens?: number) => {
+      sendToMain({
+        type: 'chat:token_usage',
+        sessionId: msg.sessionId,
+        inputTokens: liveLastInput,
+        outputTokens: liveLastOutput,
+        cacheHitTokens: liveLastCacheHit,
+        cacheCreationTokens: liveLastCacheCreation,
+        usedTokens: usedTokens ?? computeLiveUsed(),
+      });
+    };
+
+    // Kick off the ring before the first LLM `result` lands, so the renderer
+    // has a live value immediately.
+    emitTokenUsage(computeLiveUsed());
 
     for await (const event of eventGen) {
       eventCount++;
@@ -2068,45 +2129,60 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       if (event.type === 'result' && event.data) {
         const candidateUsage = event.data as { input_tokens: number; output_tokens: number; total_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number };
+        const rawInput = candidateUsage.input_tokens ?? 0;
+        const outputTokens = candidateUsage.output_tokens ?? 0;
+        const cacheHitTokens = candidateUsage.cache_hit_tokens ?? candidateUsage.cache_read_input_tokens ?? 0;
+        // Cache-convention guard: Anthropic's input_tokens already includes
+        // cached tokens, but some OpenAI-compatible gateways report
+        // prompt_tokens EXCLUDING cache. When cache hits exceed the reported
+        // input, the input clearly omits cache — add the hits back (pi does
+        // the same: input + cacheRead + cacheWrite). Otherwise the ring would
+        // show only the uncached delta and swing as cache hits come and go.
+        const normalizedInput = cacheHitTokens > rawInput ? rawInput + cacheHitTokens : rawInput;
         // Ignore all-zero usage: persisting it would make the context ring show
-        // hasData=true but used=0, which renders as an empty ring.
+        // hasData=true but used=0, which renders as an empty ring. Cache hits
+        // count toward meaningful usage too (a fully cache-served request can
+        // report input=0 while hits are large).
         const meaningfulUsage =
-          (candidateUsage.input_tokens ?? 0) +
-          (candidateUsage.output_tokens ?? 0) +
+          rawInput +
+          outputTokens +
+          cacheHitTokens +
           (candidateUsage.total_tokens ?? 0) > 0;
         if (meaningfulUsage) {
           tokenUsage = candidateUsage;
-          log(`[Agent-Process] Received result event, tokenUsage set: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}`);
-          // Live context: the `result` input_tokens is the authoritative
-          // prompt size (covers cache read + write), so reset the trailing
-          // estimate and broadcast the current context.
-          liveHasBase = true;
-          liveBaseInput = candidateUsage.input_tokens ?? 0;
-          liveTrailingTokens = 0;
-          emitTokenUsage({
-            inputTokens: candidateUsage.input_tokens ?? 0,
-            outputTokens: candidateUsage.output_tokens ?? 0,
-            cacheHitTokens: candidateUsage.cache_hit_tokens ?? candidateUsage.cache_read_input_tokens,
-            cacheCreationTokens: candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens,
-            usedTokens: liveBaseInput + liveTrailingTokens,
-          });
+          log(`[Agent-Process] Received result event, tokenUsage set: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput}`);
+          // Live context: the `result` usage is the authoritative prompt
+          // size at that request, so rebase the trailing estimate and
+          // broadcast the current context.
+          liveBaseContext = normalizedInput + outputTokens;
+          liveBaseMessageCount = agent.getMessages().length;
+          hasLiveBase = true;
+          liveLastInput = normalizedInput;
+          liveLastOutput = outputTokens;
+          liveLastCacheHit = cacheHitTokens;
+          liveLastCacheCreation = candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens;
+          // The `result` fires BEFORE this round's assistant message is pushed
+          // to the timeline. Mark the boundary pending so the next trailing
+          // estimate skips that assistant (its tokens are already in
+          // liveBaseContext via output_tokens) instead of double-counting it.
+          liveBoundaryPending = true;
+          emitTokenUsage();
         } else {
           warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
         }
       } else if (event.type === 'tool_result' && event.data) {
-        // A tool result is appended to the context and will be sent to the
-        // model on the next request. Estimate its tokens and broadcast the
-        // growing context so the renderer stays live between `result` events.
-        const resultData = event.data as { result?: unknown };
-        const content = typeof resultData.result === 'string' ? resultData.result : '';
-        if (content.length > 0) {
-          liveTrailingTokens += estimateMessageTokens({ role: 'tool', content });
-          emitTokenUsage({
-            inputTokens: 0,
-            outputTokens: 0,
-            usedTokens: liveBaseInput + liveTrailingTokens,
-          });
+        // Tool results are appended to the in-memory history (with the
+        // assistant tool_use blocks) and will be sent to the model on the
+        // next request. Recompute the trailing estimate from duya's real
+        // message list and broadcast so the ring stays live between
+        // `result` events. The first tool result after a `result` finalizes
+        // the boundary just past the assistant message (which is already
+        // counted via output_tokens).
+        if (liveBoundaryPending) {
+          liveBaseMessageCount = Math.max(0, agent.getMessages().length - 1);
+          liveBoundaryPending = false;
         }
+        emitTokenUsage();
       }
 
       const agentMsg = convertSSEToAgentMessage(event);
@@ -2660,6 +2736,16 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           }
           sessionId = initMsg.sessionId;
           existingMessageCount = 0;
+          // Fresh session: clear any live context-usage base carried over
+          // from a previous session this worker process served.
+          liveBaseContext = 0;
+          liveBaseMessageCount = 0;
+          hasLiveBase = false;
+          liveLastInput = 0;
+          liveLastOutput = 0;
+          liveLastCacheHit = undefined;
+          liveLastCacheCreation = undefined;
+          liveBoundaryPending = false;
           if (agent) {
             log('[Agent-Process] Re-init: destroying existing agent and creating new one');
             try {
