@@ -1,0 +1,9 @@
+[
+  {
+    "id": "notion",
+    "provider": "notion",
+    "scopes": [],
+    "toolsets": [],
+    "required": true
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "name": "obsidian",
+  "version": "0.1.0",
+  "description": "Connect duya to a local Obsidian vault through the official desktop `obsidian` CLI: search and read notes, create or update pages, manage links, tasks, properties, templates, and local history.",
+  "author": {
+    "name": "Greg Asher",
+    "url": "https://github.com/greg-asher"
+  },
+  "homepage": "https://github.com/lava-chen/duya",
+  "license": "MIT",
+  "keywords": [
+    "obsidian",
+    "obsidian-cli",
+    "knowledge-management",
+    "notes",
+    "vault",
+    "markdown"
+  ],
+  "interface": {
+    "displayName": "Obsidian",
+    "shortDescription": "Search and edit your local Obsidian vault",
+    "longDescription": "Connect duya to your local Obsidian vault through the official desktop `obsidian` CLI. Search and read notes, create or update pages, manage backlinks, tasks, properties, templates, and restore from local note history. Requires the Obsidian desktop app with the official CLI enabled; the bundled skill works against your local vault directly.",
+    "category": "productivity",
+    "brandColor": "#7C3AED",
+    "icon": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

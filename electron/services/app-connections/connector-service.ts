@@ -18,6 +18,7 @@ import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } 
 import { createGoogleConnector } from './connectors/google.js';
 import { createSlackConnector } from './connectors/slack.js';
 import { createMicrosoft365Connector } from './connectors/microsoft365.js';
+import { createWeComConnector } from './connectors/wecom.js';
 import { RemoteMcpConnector } from './connectors/remote-mcp.js';
 import { getProviderConfig } from './providers/registry.js';
 import type {
@@ -56,6 +57,7 @@ export class ConnectorService {
       ['google', createGoogleConnector(fetchImpl)],
       ['slack', createSlackConnector(fetchImpl)],
       ['microsoft365', createMicrosoft365Connector(fetchImpl)],
+      ['wecom', createWeComConnector(this.service.vault)],
     ]);
   }
 
@@ -112,8 +114,13 @@ export class ConnectorService {
       return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
     }
 
-    // Acquire a valid token (may refresh). Token stays in this frame.
-    const tokenResult = await this.service.getValidToken(connectionId);
+    // Custom-credential providers (e.g. WeCom) read their credentials from
+    // the vault directly inside the connector; there is no OAuth token to
+    // acquire. Skip the token service for them.
+    const requiresOAuthClient = getProviderConfig(conn.provider).requiresOAuthClient !== false;
+    const tokenResult = requiresOAuthClient
+      ? await this.service.getValidToken(connectionId)
+      : { success: true as const, data: { accessToken: '', tokenType: '', expiresAt: null } };
     if (!tokenResult.success) {
       this.logger.warn(
         'App Connection: invoke failed (no token)',

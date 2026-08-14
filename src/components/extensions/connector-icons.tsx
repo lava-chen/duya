@@ -125,6 +125,38 @@ function LinearIcon({ size = 24 }: IconProps) {
   );
 }
 
+// WeCom (WeChat Work) — green rounded square "W" mark in WeCom green (#2BAD13)
+function WeComIcon({ size = 24 }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" role="img" aria-label="WeCom">
+      <path
+        d="M21.5 8.333C21.5 4.395 18.182 1.2 14.1 1.2c-4.083 0-7.4 3.195-7.4 7.133 0 3.938 3.317 7.133 7.4 7.133.473 0 .938-.043 1.39-.126l-1.006-.586a.5.5 0 0 1 .25-.931l2.55.69.025.007a6.5 6.5 0 0 1 2.748-.747c.3 0 .594.02.878.06l-4.2-2.45a.5.5 0 0 1 .25-.932l4.6 1.244c1.1-.6 1.87-1.6 2.03-2.733.173-1.22-.16-2.4-.938-3.33.046.16.073.328.073.5Z"
+        fill="#2BAD13"
+      />
+      <path
+        d="M8.5 22.8c3.317 0 6.007-2.508 6.007-5.6 0-3.093-2.69-5.6-6.007-5.6-3.316 0-6.006 2.507-6.006 5.6 0 .9.23 1.748.634 2.5l-1.1.297a.5.5 0 0 0-.25.932l2.15 1.254a.5.5 0 0 0 .25.932l2.4-.65a.5.5 0 0 0 .25-.932l-1.06-.618c.77.65 1.74 1.051 2.73 1.051Z"
+        fill="#2BAD13"
+      />
+    </svg>
+  );
+}
+
+// GitHub — monochrome mark, theme-aware via currentColor
+function GitHubIcon({ size = 24 }: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="var(--foreground)"
+      role="img"
+      aria-label="GitHub"
+    >
+      <path d="M8 1.3a6.665 6.665 0 0 1 5.413 10.56 6.677 6.677 0 0 1-3.288 2.432c-.333.067-.458-.142-.458-.316 0-.226.008-.942.008-1.834 0-.625-.208-1.025-.45-1.233 1.483-.167 3.042-.734 3.042-3.292a2.58 2.58 0 0 0-.684-1.792c.067-.166.3-.85-.066-1.766 0 0-.559-.184-1.834.683a6.186 6.186 0 0 0-1.666-.225c-.567 0-1.134.075-1.667.225-1.275-.858-1.833-.683-1.833-.683-.367.916-.134 1.6-.067 1.766a2.594 2.594 0 0 0-.683 1.792c0 2.55 1.55 3.125 3.033 3.292-.192.166-.367.458-.425.891-.383.175-1.342.459-1.942-.55-.125-.2-.5-.691-1.025-.683-.558.008-.225.317.009.442.283.158.608.75.683.941.133.376.567 1.092 2.242.784 0 .558.008 1.083.008 1.242 0 .174-.125.374-.458.316a6.662 6.662 0 0 1-4.559-6.325A6.665 6.665 0 0 1 8 1.3Z" />
+    </svg>
+  );
+}
+
 const REGISTRY: Record<ProviderId, (props: IconProps) => React.ReactElement> = {
   google: GoogleIcon,
   slack: SlackIcon,
@@ -135,6 +167,8 @@ const REGISTRY: Record<ProviderId, (props: IconProps) => React.ReactElement> = {
   vercel: VercelIcon,
   notion: NotionIcon,
   linear: LinearIcon,
+  github: GitHubIcon,
+  wecom: WeComIcon,
 };
 
 export interface ConnectorIconProps extends IconProps {

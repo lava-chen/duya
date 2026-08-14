@@ -244,6 +244,39 @@ export function registerAppConnectionHandlers(): void {
     },
   );
 
+  // --- appConnection:connectWeCom ---
+  ipcMain.handle(
+    'appConnection:connectWeCom',
+    async (
+      _event,
+      payload: { corpid: string; corpsecret: string },
+    ): Promise<AppConnectionSingleResponse> => {
+      if (!payload || typeof payload.corpid !== 'string' || typeof payload.corpsecret !== 'string') {
+        return { success: false, error: 'corpid and corpsecret are required' };
+      }
+      try {
+        const dto = await getReadyAppConnectionService().connectWeCom({
+          clientId: payload.corpid,
+          clientSecret: payload.corpsecret,
+        });
+        return { success: true, data: dto };
+      } catch (err) {
+        const errorCode = getErrorCode(err);
+        logger.warn(
+          'appConnection:connectWeCom failed',
+          err instanceof Error ? err : new Error(String(err)),
+          { code: errorCode },
+          COMPONENT,
+        );
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          errorCode,
+        };
+      }
+    },
+  );
+
   // --- appConnection:disconnect ---
   ipcMain.handle(
     'appConnection:disconnect',

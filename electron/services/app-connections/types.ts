@@ -16,7 +16,9 @@ export type ProviderId =
   | 'sentry'
   | 'vercel'
   | 'notion'
-  | 'linear';
+  | 'linear'
+  | 'github'
+  | 'wecom';
 
 /**
  * Connection lifecycle states.
@@ -104,8 +106,7 @@ export function toStatusDTO(conn: AppConnection): AppConnectionStatusDTO {
   };
 }
 
-/**
- * Encrypted token set persisted in the vault. The vault file itself
+/** Encrypted token set persisted in the vault. The vault file itself
  * is safeStorage-encrypted, but we treat the in-memory shape as a
  * secret too — it is never sent to the renderer or agent process.
  */
@@ -116,6 +117,19 @@ export interface TokenSet {
   expiresAt: number | null;
   tokenType: string;
   scopes: string[];
+}
+
+/**
+ * Manual credentials for a custom-credential provider such as WeCom.
+ * Unlike OAuth tokens, these are per-provider application credentials
+ * (e.g. enterprise `corpid` + `corpsecret`) stored in the vault's
+ * OAuth-client slot and injected into an external CLI at invocation time.
+ */
+export interface ManualProviderCredentials {
+  /** Enterprise id (corpid) for WeCom. */
+  clientId: string;
+  /** Enterprise secret (corpsecret) for WeCom. */
+  clientSecret: string;
 }
 
 /** Structured error code used by connector invocations. */
