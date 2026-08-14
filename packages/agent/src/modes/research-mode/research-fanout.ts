@@ -156,7 +156,8 @@ async function runOne(
   workingDirectory: string | undefined,
   context: ToolUseContext | undefined,
 ): Promise<FanoutResult> {
-  const prompt = RESEARCH_SUBAGENT_PROMPT(question);
+  const language = context?.options.language;
+  const prompt = RESEARCH_SUBAGENT_PROMPT(question, language);
   try {
     const res = await subagentTool.execute(
       {
@@ -214,11 +215,17 @@ function aggregate(results: FanoutResult[]): {
 }
 
 /** Build the Research sub-agent task prompt for a single sub-question. */
-function RESEARCH_SUBAGENT_PROMPT(question: string): string {
+function RESEARCH_SUBAGENT_PROMPT(question: string, language?: string): string {
+  const languageLine = language
+    ? `Reply in ${language} unless the user's request or the source material requires otherwise.`
+    : 'Reply in the language the surrounding research task is being conducted in.';
   return `You are investigating one sub-question of a larger deep-research task. Provide a focused, evidence-based summary.
 
 ## Research Question
 ${question}
+
+## Language
+${languageLine}
 
 ## Deliverable — return a structured markdown summary:
 ### Overview
