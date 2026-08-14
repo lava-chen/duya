@@ -21,6 +21,9 @@ export interface ToolAction {
   isError?: boolean;
   durationMs?: number | null;
   metadata?: Record<string, unknown>;
+  /** Research lifecycle stage the tool ran in (e.g. gathering / evaluating).
+   *  Set by the streaming path from the tool_use event in arrival order. */
+  stage?: string;
 }
 
 /**

@@ -30,7 +30,7 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
   }
 
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center space-y-8">
+    <div className="flex flex-col items-center justify-center h-full text-center space-y-6">
       {/* Language toggle */}
       <div className="flex items-center gap-1 p-1 rounded-lg bg-[var(--chip)] border border-[var(--border)]">
         <button
@@ -57,7 +57,7 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
 
       {/* Hero section */}
       <div className="space-y-4">
-        <div className="inline-flex items-center justify-center w-24 h-24 rounded-2xl overflow-hidden">
+        <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl overflow-hidden">
           <img
             src="./icon.png"
             alt="DUYA"
@@ -66,7 +66,7 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
         </div>
         <div className="flex items-center justify-center gap-3">
           <h1
-            className="text-3xl font-bold"
+            className="text-2xl font-bold"
             style={{
               color: "var(--text)",
               fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif",
@@ -85,12 +85,12 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
             BETA
           </span>
         </div>
-        <p className="text-base text-muted-foreground max-w-sm mx-auto leading-relaxed">
+        <p className="text-sm text-muted-foreground max-w-sm mx-auto leading-relaxed">
           {t("onboarding.welcomeDesc")}
         </p>
       </div>
 
-      <div className="space-y-3 w-full max-w-xs">
+      <div className="space-y-4 w-full max-w-xs">
         {/* Start from scratch button */}
         <Button
           variant="primary"
@@ -102,15 +102,13 @@ export function WelcomeStep({ onStart, locale, onSetLocale }: WelcomeStepProps) 
           <ArrowRightIcon size={18} />
         </Button>
 
-        {/* Import from external AI */}
-        <Button
-          variant="secondary"
-          size="lg"
+        {/* Import from external AI — secondary link */}
+        <button
           onClick={() => setShowImport(true)}
-          className="w-full rounded-xl"
+          className="text-xs text-muted-foreground hover:text-foreground underline-offset-4 hover:underline transition-colors"
         >
           {t("onboarding.importFromClaudeCode")}
-        </Button>
+        </button>
       </div>
     </div>
   );

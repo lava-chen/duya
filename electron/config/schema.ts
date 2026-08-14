@@ -56,6 +56,36 @@ export interface AgentConfig {
   default_permission_mode: string;
 }
 
+/** [agents.<id>] — user-defined agent profile driven entirely by config.toml.
+ *  id (map key) is the agent_profile_id used by sessions. Mirrors the
+ *  openclaw AgentConfig surface (workspace / model / tools), kept minimal:
+ *  model / workspace / system-prompt path / tools / plugins. */
+export interface CustomAgentToolsConfig {
+  /** Base tool profile: 'full' | 'coding' | 'minimal' | 'research' (maps to allow/deny presets). */
+  profile?: string;
+  /** Additional allowed tool patterns (wildcards supported, e.g. 'file:*'). */
+  allow?: string[];
+  /** Denied tool patterns; deny wins. */
+  deny?: string[];
+}
+
+export interface CustomAgentConfig {
+  /** Display name (falls back to the map key). */
+  name?: string;
+  /** One-line role description. */
+  description?: string;
+  /** Provider/model ref, e.g. 'anthropic/claude-sonnet-4-20250514'. Empty → fallback to config.model.default. */
+  model?: string;
+  /** This agent's own working directory. Empty → default workspace (~/.duya/workspace). */
+  workspace?: string;
+  /** Path to this agent's global instruction file (系统提示词配置路径). Empty → <workspace>/AGENTS.md. */
+  agents_md?: string;
+  /** Tool allow/deny/profile. */
+  tools?: CustomAgentToolsConfig;
+  /** Plugin / mcp references enabled for this agent (e.g. 'mcp:github'). */
+  plugins?: string[];
+}
+
 /**
  * Desktop voice input config (`[voice]`). STT engine is local whisper.cpp by
  * default; cloud (OpenAI-compatible `/v1/audio/transcriptions`) is optional.
@@ -254,6 +284,8 @@ export interface DuyaConfig {
   timezone: string;
   quick_commands: Record<string, unknown>;
   personalities: Record<string, unknown>;
+  /** [agents.<id>] — config-driven custom agent profiles (Plan 424). */
+  agents: Record<string, CustomAgentConfig>;
 }
 
 export const DEFAULT_CONFIG: DuyaConfig = {
@@ -370,6 +402,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   timezone: '',
   quick_commands: {},
   personalities: {},
+  agents: {},
 };
 
 /** Deep-merge `partial` over a fresh copy of DEFAULT_CONFIG. */

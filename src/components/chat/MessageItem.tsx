@@ -41,6 +41,7 @@ import {
   type BrowserReferenceDisplayData,
 } from '@/lib/browser-reference-display';
 import { parseToolInputSafe, buildToolAction } from './tools/normalize';
+import { extractResearchReport, ResearchReportCard, type ResearchReportData } from './ResearchReportCard';
 
 function isImageAttachment(attachment: FileAttachment): boolean {
   if (attachment.kind === 'image') return true;
@@ -717,6 +718,19 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     };
   }, [message, mergedMessages, toolResultMap, pastedContents]);
 
+  // Extract the deep-research report from the `research_report` tool action
+  // (if present). When found, it renders as a standalone card (ResearchReportCard)
+  // in place of the trailing final text, so the report survives as a document.
+  const researchReport = useMemo<ResearchReportData | null>(() => {
+    for (const a of actions) {
+      if (a.kind !== 'tool' || !a.tool) continue;
+      if (a.tool.name.toLowerCase() !== 'research_report') continue;
+      if (a.tool.result === undefined) continue; // still running
+      return extractResearchReport(a.tool.input, a.tool.result);
+    }
+    return null;
+  }, [actions]);
+
   // Full wall-clock duration for the entire assistant round.
   // The agent records the end-to-end time (stream start -> final text) on the
   // final assistant message; intermediate deltas don't carry it. Take the max
@@ -1103,8 +1117,14 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
               />
             )}
             <InterleavedContent actions={actions} sourceMessageId={message.id} />
-            {finalText && (
-              <AssistantContent text={finalText} sourceMessageId={message.id} />
+            {researchReport ? (
+              <div className="mt-2">
+                <ResearchReportCard data={researchReport} />
+              </div>
+            ) : (
+              finalText && (
+                <AssistantContent text={finalText} sourceMessageId={message.id} />
+              )
             )}
           </>
         ) : (
@@ -1116,8 +1136,14 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
                 forceExpanded={isSubAgentSession}
               />
             )}
-            {finalText && (
-              <AssistantContent text={finalText} sourceMessageId={message.id} />
+            {researchReport ? (
+              <div className="mt-2">
+                <ResearchReportCard data={researchReport} />
+              </div>
+            ) : (
+              finalText && (
+                <AssistantContent text={finalText} sourceMessageId={message.id} />
+              )
             )}
           </>
         )}

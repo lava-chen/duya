@@ -1094,35 +1094,22 @@ const en = {
   'slashCommands.review': 'Review',
   'slashCommands.terminal': 'Terminal',
 
-  // Onboarding - 4 Step Design
+  // Onboarding - 3 Step Design
   'onboarding.stepWelcome': 'Welcome',
-  'onboarding.stepFeatures': 'Features',
   'onboarding.stepConfig': 'Configuration',
   'onboarding.stepComplete': 'Complete',
   'onboarding.stepOf': 'Step {current} of {total}',
   'onboarding.skip': 'Skip',
   'onboarding.loading': 'Loading...',
   'onboarding.getStarted': 'Get Started',
-  'onboarding.next': 'Next',
   'onboarding.connect': 'Connect',
   'onboarding.connecting': 'Connecting...',
   'onboarding.errorNoApiKey': 'Please enter your API key',
   'onboarding.connectionFailed': 'Connection failed. Please check your API key.',
-  'onboarding.goToFeature': 'Go to feature {index}',
 
   // Welcome Step
   'onboarding.welcomeTitle': 'Welcome to DUYA',
   'onboarding.welcomeDesc': 'Your AI coding assistant. Let\'s get you set up to start coding smarter.',
-
-  // Feature Carousel
-  'onboarding.feature1.title': 'Smart Conversation',
-  'onboarding.feature1.desc': 'Chat naturally with AI about your code. Ask questions, get explanations, and write better code faster.',
-  'onboarding.feature2.title': 'Project Context',
-  'onboarding.feature2.desc': 'DUYA understands your codebase. It reads your files and provides context-aware suggestions.',
-  'onboarding.feature3.title': 'Tool Execution',
-  'onboarding.feature3.desc': 'Let AI run commands, edit files, and execute tasks. It can actually help you get work done.',
-  'onboarding.feature4.title': 'Permission Control',
-  'onboarding.feature4.desc': 'You\'re in control. Every sensitive operation requires your approval before execution.',
 
   // Config Step
   'onboarding.configTitle': 'Connect Your AI Provider',
@@ -1133,6 +1120,14 @@ const en = {
   'onboarding.apiKeyPlaceholder': 'Enter your API key...',
   'onboarding.privacyNotice': 'Your API key is stored locally on your device and is never sent to our servers. It is only used to authenticate with your chosen AI provider.',
   'onboarding.localProvider': 'Local / Self-hosted',
+
+  // Workspace Selection
+  'onboarding.workspaceTitle': 'Choose a Workspace (optional)',
+  'onboarding.workspaceDesc': 'Pick a project folder as DUYA\'s working directory so the agent can provide context-aware help.',
+  'onboarding.workspacePlaceholder': 'No workspace selected',
+  'onboarding.workspacePick': 'Choose Folder',
+  'onboarding.workspaceClear': 'Clear selection',
+  'onboarding.workspacePickerTitle': 'Choose Workspace Directory',
 
   // Complete Step
   'onboarding.completeTitle': 'You\'re All Set!',
@@ -1686,6 +1681,21 @@ const en = {
   'gateway.minutesAgo': '{minutes}m ago',
   'gateway.hoursAgo': '{hours}h ago',
   'gateway.daysAgo': '{days}d ago',
+
+  // Channel dashboard (upper/lower list layout)
+  'gateway.connecting': 'Connecting...',
+  'gateway.noConnectedChannels': 'No connected channels',
+  'gateway.viewSessions': 'View sessions',
+  'gateway.openSettings': 'Open settings',
+  'gateway.connect': 'Connect',
+  'gateway.allChannelsConnected': 'All channels are connected',
+  'gateway.connectChannel': 'Connect {name}',
+  'gateway.scanToConnect': 'Scan with your phone to connect',
+  'gateway.enterCredentials': 'Enter credentials',
+  'gateway.saveAndConnect': 'Save & Connect',
+  'gateway.tokenRequired': 'Bot Token is required',
+  'gateway.credentialsRequired': 'App ID and App Secret are required',
+  'gateway.channelSessions': '{name} sessions',
 
   // Import Flow
   'importFlow.skip': 'Skip',

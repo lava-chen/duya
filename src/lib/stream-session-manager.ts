@@ -406,6 +406,14 @@ interface SessionState {
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
   /** Plan 423 Phase 3: listeners for research tracker state broadcasts. */
   researchUpdatedListeners: Set<(event: ResearchUpdatedEvent) => void>;
+  /**
+   * Current research lifecycle state (e.g. clarifying / planning / gathering /
+   * evaluating / synthesizing). Updated whenever a `research_updated` event
+   * arrives; the value is stamped onto subsequent tool_use events so the
+   * renderer can group tool actions by research stage in arrival order.
+   * Empty when no research run is active.
+   */
+  researchStage: string;
   dbPersistedListeners: Set<(event: PersistEvent) => void>;
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
@@ -499,6 +507,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     toolResults: [],
     streamingToolOutput: '',
     statusText: undefined,
+    researchStage: '',
     startedAt: Date.now(),
     completedAt: null,
     error: null,
@@ -1079,11 +1088,29 @@ class StreamSessionManager {
         if (visionApi?.get) {
           const vc = await visionApi.get();
           if (vc?.enabled && vc.model) {
+            // The vision config carries its own apiKey, but users often leave a
+            // stale placeholder there after switching providers. When the key is
+            // missing/too short to be a real provider credential, fall back to the
+            // apiKey of the provider the vision model points at (the same cred that
+            // already authenticates the agent for that provider). This keeps vision
+            // in lockstep with the provider config instead of 401ing on the main
+            // model's key or a placeholder.
+            let visionApiKey = vc.apiKey;
+            if (!visionApiKey || visionApiKey.length < 20) {
+              const visionProvider = await getProviderConfigById(vc.provider, vc.model);
+              if (visionProvider?.apiKey) {
+                visionApiKey = visionProvider.apiKey;
+                console.log('[stream-session-manager] Vision apiKey fell back to provider key:', {
+                  provider: vc.provider,
+                  model: vc.model,
+                });
+              }
+            }
             (providerConfig as unknown as Record<string, unknown>).visionConfig = {
               provider: vc.provider,
               model: vc.model,
               baseURL: vc.baseUrl,
-              apiKey: vc.apiKey,
+              apiKey: visionApiKey,
               enabled: vc.enabled,
             };
             console.log('[stream-session-manager] Vision model config injected:', {
@@ -1270,7 +1297,10 @@ class StreamSessionManager {
           break;
 
         case 'done':
-          useContextUsageStore.getState().clearLive(sessionId);
+          // Keep the last live value on normal completion: the worker's final
+          // `result` already equals input+output, which matches what the
+          // post-persist message scan will report. Clearing here would flash
+          // the ring to 0 until `db_persisted` triggers a message reload.
           this.handleDoneEvent(sessionId, streamId);
           break;
 
@@ -1280,6 +1310,7 @@ class StreamSessionManager {
           // server normalizes it to `error` today but we keep this branch as
           // a defensive fallback so rate-limit/usage-limit errors still
           // surface in the UI if the server ever forwards the raw name.
+          useContextUsageStore.getState().clearLive(sessionId);
           this.handleErrorEvent(sessionId, streamId, event.data as StreamErrorEventData | undefined);
           break;
 
@@ -1560,6 +1591,7 @@ class StreamSessionManager {
       id: toolUse.id,
       name: toolUse.name,
       input: toolUse.input as Record<string, unknown>,
+      stage: s.researchStage || undefined,
     };
     const existingIndex = s.toolUses.findIndex((existing) => existing.id === toolUse.id);
     if (existingIndex !== -1) {
@@ -1771,6 +1803,9 @@ class StreamSessionManager {
     if (!data) return;
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    // Stamp the current research stage onto the session so subsequent
+    // tool_use events get grouped by stage in arrival order.
+    s.researchStage = data.state || '';
     s.researchUpdatedListeners.forEach((listener) => {
       try {
         listener(data as ResearchUpdatedEvent);

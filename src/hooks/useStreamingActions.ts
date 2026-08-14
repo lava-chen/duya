@@ -52,6 +52,8 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
             event.toolUse.name,
             event.toolUse.input,
             resultInfo,
+            undefined,
+            event.toolUse.stage,
           ),
         });
         break;

@@ -1793,12 +1793,12 @@ export function MessageInput({
                     key={mode}
                     type="button"
                     onClick={() => handleToggleMode(mode)}
-                    className="composer-mode-chip group"
+                    className="group flex min-w-0 max-w-24 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all text-xs font-medium text-[#7db4ff] border border-transparent hover:bg-[rgba(37,99,235,0.18)] hover:border-[#7db4ff]/40"
                     title={`${label} (click to disable)`}
                   >
                     <XIcon
                       size={14}
-                      className="hidden group-hover:block composer-mode-chip-x"
+                      className="hidden group-hover:block"
                     />
                     <span className="truncate">{label}</span>
                   </button>
@@ -1806,7 +1806,7 @@ export function MessageInput({
               })}
               {agentPlanMode && !activeModes.has('plan-task') && (
                 <span
-                  className="composer-mode-chip composer-mode-chip--readonly"
+                  className="flex min-w-0 max-w-32 shrink items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[#7db4ff] border border-[#7db4ff]/40 bg-[rgba(37,99,235,0.12)] cursor-default"
                   title="Agent entered plan mode — it will exit automatically when done planning"
                 >
                   <span className="truncate">Agent Plan Mode</span>

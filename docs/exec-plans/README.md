@@ -62,6 +62,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [420-goal-observability-persistence](./active/420-goal-observability-persistence.md) | Goal 可观测性+持久化：迁移日志 / goal_mode_enabled 标签恢复 / start 立即落盘 + 富事件 + 渲染端 modeState.get | P1 | ✅ 完成（2026-08-12） |
 | [421-goal-ui](./active/421-goal-ui.md) | Goal UI 重设计（对齐 OptionPanel）：GoalStatusChip + GoalStatusPanel + 删旧 GoalStatusCard | P1 | ✅ 完成（2026-08-12） |
 | [422-compaction-strategy-consolidation](./active/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model） | P0 | Implementation |
+| [424-config-driven-custom-agents](./active/424-config-driven-custom-agents.md) | 配置化自定义 Agent：config.toml `[agents.<id>]` 驱动 + 每 agent 独立 workspace/AGENTS.md + model/tools/plugins（对齐 openclaw；取代 420 DB 方向） | P1 | Planning |
 
 ### Conductor / Canvas
 

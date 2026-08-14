@@ -6,8 +6,12 @@ import {
   CheckIcon,
   ArrowUpRightIcon,
   ArrowLeftIcon,
+  FolderIcon,
+  XIcon,
 } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
+import { IconButton } from "@/components/ui/IconButton";
+import { useSettings } from "@/hooks/useSettings";
 import { QUICK_PRESETS } from "@/lib/provider-presets";
 import type { OnboardingState } from "../OnboardingFlow";
 import type { QuickPreset } from "@/lib/provider-presets";
@@ -77,6 +81,8 @@ function getBillingBadge(preset: QuickPreset, t: (key: import("@/i18n").Translat
 export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, onBack, onConfigured }: ConfigStepProps) {
   const { t, locale } = useTranslation();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const { settings, save } = useSettings();
+  const [workspaceDir, setWorkspaceDir] = useState<string>(settings.workspaceDir || "");
 
   const categories = useMemo(() => {
     const chatPresets = QUICK_PRESETS.filter((p) => p.category !== "media");
@@ -96,6 +102,28 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
   const handleDialogSave = async (data: ProviderFormData) => {
     if (!state.selectedPreset) return;
     await onConfigured(state.selectedPreset, data);
+  };
+
+  const handlePickWorkspace = async () => {
+    if (typeof window === "undefined" || !window.electronAPI?.dialog) return;
+    try {
+      const result = await window.electronAPI.dialog.openFolder({
+        title: t("onboarding.workspacePickerTitle"),
+        defaultPath: workspaceDir || undefined,
+      });
+      if (result && !result.canceled && result.filePaths.length > 0) {
+        const picked = result.filePaths[0];
+        setWorkspaceDir(picked);
+        await save({ workspaceDir: picked });
+      }
+    } catch {
+      // ignore picker errors; onboarding continues without a workspace
+    }
+  };
+
+  const handleClearWorkspace = async () => {
+    setWorkspaceDir("");
+    await save({ workspaceDir: undefined });
   };
 
   return (
@@ -120,7 +148,7 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto pr-1 space-y-4" style={{ maxHeight: 'calc(100vh - 320px)', minHeight: '300px' }}>
+      <div className="flex-1 overflow-y-auto pr-1 space-y-4 min-h-0">
         {/* Provider selection */}
         <div className="space-y-3">
           {(Object.keys(categories) as ProviderCategory[]).map((category) => {
@@ -169,6 +197,51 @@ export function ConfigStep({ state, onUpdateState, error, isLoading, onConnect, 
               </div>
             );
           })}
+        </div>
+
+        {/* Workspace / project selection (optional) */}
+        <div className="pt-1">
+          <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+            {t("onboarding.workspaceTitle")}
+          </h3>
+          <div
+            className={`flex items-center gap-3 p-3 rounded-xl border transition-all ${
+              workspaceDir
+                ? "border-[var(--accent)]/40 bg-[var(--accent)]/5"
+                : "border-[var(--border)] bg-[var(--chip)]/50"
+            }`}
+          >
+            <div className="w-9 h-9 rounded-lg bg-[var(--bg-surface)] border border-[var(--border)] flex items-center justify-center shrink-0 text-[var(--accent)]">
+              <FolderIcon size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium truncate">
+                {workspaceDir ? (
+                  <span className="text-[var(--text)]">{workspaceDir}</span>
+                ) : (
+                  <span className="text-muted-foreground">{t("onboarding.workspacePlaceholder")}</span>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground truncate">
+                {t("onboarding.workspaceDesc")}
+              </div>
+            </div>
+            {workspaceDir ? (
+              <IconButton
+                variant="ghost"
+                size="sm"
+                aria-label={t("onboarding.workspaceClear")}
+                onClick={handleClearWorkspace}
+              >
+                <XIcon size={14} />
+              </IconButton>
+            ) : (
+              <Button variant="secondary" size="sm" onClick={handlePickWorkspace}>
+                <FolderIcon size={14} />
+                {t("onboarding.workspacePick")}
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Provider Connect Dialog */}

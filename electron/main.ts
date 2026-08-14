@@ -11,6 +11,7 @@ import { registerAgentHandlers } from './agents/agent-communicator';
 import { registerProviderIpcHandlers } from './services/providers/provider-ipc-handlers';
 import { getProviderStore } from './services/providers/provider-store-electron';
 import { registerNetHandlers } from './ipc/net-handlers';
+import { registerDuyaLinkHandlers } from './ipc/duya-link-handlers';
 import { startGatewayProcess, stopGatewayProcess, registerGatewayIpcHandlers, forwardToGateway, isGatewaySession, waitForGatewayReady } from './gateway/index';
 import { resolveDatabasePath, updateDatabasePath } from './config/index';
 import { getConfigStore } from './config/store-instance';
@@ -84,6 +85,24 @@ setupTestMode();
 initGlobalErrorHandlers();
 
 const gotTheLock = acquireSingleInstanceLock();
+
+// Register the `duya-file://` custom scheme as privileged BEFORE the app is
+// ready. The renderer can only load it as a subresource (e.g. an `<img>` src
+// for markdown media or uploaded-image thumbnails) when it is registered as a
+// standard scheme; otherwise Chromium treats it as an opaque, non-routable
+// scheme and the image requests fail silently. `stream` is included so inline
+// `<video>` sources also work.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'duya-file',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+]);
 
 // macOS file-association / Dock drag-and-drop handling.
 // `open-file` fires when the user drops a file onto the Dock icon or
@@ -484,8 +503,14 @@ if (gotTheLock) {
         const url = new URL(request.url);
         let filePath = decodeURIComponent(url.pathname);
 
-        if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
-          filePath = filePath.slice(1);
+        // Windows absolute paths may arrive as `/e:/...` (drive + colon) or
+        // `/e/...` (git-bash/WSL style, drive letter without a colon). Normalize
+        // both to `e:/...` so `readFile` resolves from the drive root. Genuine
+        // Unix paths (`/home/...`) are left untouched.
+        if (process.platform === 'win32' && /^\/[a-zA-Z](?:\/|:)/.test(filePath)) {
+          const drive = filePath[1];
+          const afterDrive = filePath.slice(2); // starts with ':' or '/'
+          filePath = `${drive}:${afterDrive[0] === ':' ? afterDrive.slice(1) : afterDrive}`;
         }
         filePath = filePath.replace(/\//g, path.sep);
 
@@ -699,6 +724,7 @@ registerReferencesHandlers();
 registerLoggerHandlers();
 registerUpdaterHandlers();
 registerAgentServerHandlers();
+registerDuyaLinkHandlers();
 // ============================================================
 // Step 4.5a: Sync builtin plugins into ~/.duya/plugins/cache/builtin/
 //

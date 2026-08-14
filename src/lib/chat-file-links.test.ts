@@ -71,6 +71,13 @@ describe('chat-file-links / isLikelyLocalFileReference', () => {
     expect(isLikelyLocalFileReference('https://example.com/foo')).toBe(false);
     expect(isLikelyLocalFileReference('http://localhost:8000')).toBe(false);
   });
+
+  it('rejects external URLs even when the path has a file-like extension', () => {
+    expect(isLikelyLocalFileReference('https://example.com/page.html')).toBe(false);
+    expect(isLikelyLocalFileReference('https://example.com/doc.pdf')).toBe(false);
+    expect(isLikelyLocalFileReference('https://example.com/readme.md')).toBe(false);
+    expect(isLikelyLocalFileReference('https://example.com/config.json')).toBe(false);
+  });
 });
 
 describe('chat-file-links / isLocalhostUrl', () => {

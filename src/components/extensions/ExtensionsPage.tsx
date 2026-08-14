@@ -810,6 +810,13 @@ export function ExtensionsPage() {
               )
             }
             busy={busyPluginId === detailPlugin.id}
+            onSkillClick={(skill) => {
+              const full = skills.find((s) => s.name === skill.name);
+              if (full) {
+                setDetailPluginId(null);
+                setSelectedSkill(full);
+              }
+            }}
           />
         </div>
       </div>
@@ -1059,6 +1066,14 @@ export function ExtensionsPage() {
           }}
           onDisconnectConnection={handleDisconnect}
           busyProvider={busyProvider}
+          onSkillClick={(skill) => {
+            const full = skills.find((s) => s.name === skill.name);
+            if (full) {
+              setMarketplaceOpen(false);
+              setDetailPluginId(null);
+              setSelectedSkill(full);
+            }
+          }}
         />
         <OAuthClientSetupDialog
           provider={connectionSetupProvider}

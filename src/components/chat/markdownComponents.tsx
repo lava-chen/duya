@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CodeBlock } from './CodeBlock';
 import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -161,12 +161,12 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
         title={resolvedHref}
       >
+        <span className="markdown-file-link__name">{displayName}</span>
         {TypeIcon ? (
           <TypeIcon size={16} aria-hidden="true" />
         ) : (
           <FileIcon size={16} aria-hidden="true" />
         )}
-        <span className="markdown-file-link__name">{displayName}</span>
       </button>
     );
   }
@@ -174,7 +174,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   return (
     <a
       href={href}
-      className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors"
+      className="markdown-file-link markdown-link-external"
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => {
@@ -184,7 +184,62 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
       title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
     >
       {children}
+      {typeof href === 'string' && <LinkFavicon url={href} />}
     </a>
+  );
+}
+
+// Per-origin favicon cache so repeated links to the same site don't each
+// hit the (cached) IPC. `null` means "no icon resolved" and is cached too.
+const faviconCache = new Map<string, string | null>();
+
+interface DuyaGlobal {
+  getLinkFavicon?: (url: string) => Promise<string | null>;
+}
+
+function LinkFavicon({ url }: { url: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return;
+    }
+    const cached = faviconCache.get(origin);
+    if (cached !== undefined) {
+      setSrc(cached);
+      return;
+    }
+    let cancelled = false;
+    const duya = (window as Window & { duya?: DuyaGlobal }).duya;
+    duya
+      ?.getLinkFavicon?.(url)
+      .then((f) => {
+        if (cancelled) return;
+        faviconCache.set(origin, f);
+        setSrc(f);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        faviconCache.set(origin, null);
+        setSrc(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      loading="lazy"
+      onError={() => setSrc(null)}
+      className="markdown-link-external__favicon"
+    />
   );
 }
 

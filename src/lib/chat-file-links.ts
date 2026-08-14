@@ -120,6 +120,12 @@ export function isLikelyLocalFileReference(value: string): boolean {
   const clean = stripLineSuffix(value.trim());
   if (!clean) return false;
   if (/^file:\/\//i.test(clean)) return true;
+  // Any other URI scheme (http/https/ftp/github:, ...) is a web link, not
+  // a local file — even when its path ends in a file-like extension such
+  // as `.html` / `.pdf` / `.md`. Without this guard, `[doc](https://x.com/a.pdf)`
+  // would be misclassified as a local file and never reach the external-link
+  // (favicon) branch.
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i.test(clean)) return false;
   if (/^[a-zA-Z]:[\\/]/.test(clean)) return true;
   if (clean.startsWith('./') || clean.startsWith('../')) return true;
   if (clean.startsWith('/') || clean.startsWith('\\')) return true;
