@@ -13,6 +13,7 @@ import { registerUpdaterHandlers } from './updater-handlers';
 import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers } from './db-handlers';
 import { registerAgentHandlers } from '../agents/agent-communicator';
 import { registerNetHandlers } from './net-handlers';
+import { registerDuyaLinkHandlers } from './duya-link-handlers';
 import { registerAgentServerHandlers } from './agent-server-handlers';
 import { registerRecapHandlers } from './recap-handlers';
 import { registerPluginHandlers } from './plugin-handlers';
@@ -33,6 +34,7 @@ export {
   registerMailboxHandlers,
   registerAgentHandlers,
   registerNetHandlers,
+  registerDuyaLinkHandlers,
   registerAgentServerHandlers,
   registerRecapHandlers,
   registerPluginHandlers,
