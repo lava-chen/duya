@@ -56,3 +56,39 @@ describe('formatResult navigate projection', () => {
     expect(out).not.toContain('### Actions');
   });
 });
+
+const parallelResult: Record<string, unknown> = {
+  operation: 'parallel_fetch',
+  results: [
+    {
+      id: 'invest_0',
+      url: 'https://a.com',
+      title: 'A',
+      success: true,
+      compactSnapshot: '- a [ref=1] "标题A"',
+      interactiveElements: [{ ref: 1, tag: 'a', text: '标题A' }],
+    },
+    {
+      id: 'invest_1',
+      url: 'https://b.com',
+      title: 'B',
+      success: true,
+      compactSnapshot: '- span "简介B"',
+    },
+  ],
+  total: 2,
+  successful: 2,
+  mode: 'browser_pool',
+};
+
+describe('formatResult parallel_fetch projection', () => {
+  it('drops the full Snapshot section from each parallel item', () => {
+    const out = formatResult('parallel_fetch', parallelResult);
+    expect(out).toContain('### Parallel Fetch Results');
+    expect(out).toContain('### Summary');
+    expect(out).toContain('### Visible Text');
+    expect(out).not.toContain('### Snapshot');
+    expect(out).toMatch(/标题A/);
+    expect(out).toMatch(/简介B/);
+  });
+});

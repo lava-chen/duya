@@ -564,12 +564,6 @@ function formatPerItemSnapshot(
     }
   }
 
-  if (snapshot) {
-    parts.push('');
-    parts.push('### Snapshot');
-    parts.push(snapshot);
-  }
-
   return parts.join('\n');
 }
 
