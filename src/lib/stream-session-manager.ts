@@ -1084,27 +1084,18 @@ class StreamSessionManager {
     if (providerConfig) {
       try {
         const visionApi = (window.electronAPI as unknown as Record<string, unknown>)?.vision as
-          { get: () => Promise<{ provider: string; model: string; baseUrl: string; apiKey: string; enabled: boolean } | null> } | undefined;
+          { get: () => Promise<{ provider: string; model: string; baseUrl: string; enabled: boolean } | null> } | undefined;
         if (visionApi?.get) {
           const vc = await visionApi.get();
           if (vc?.enabled && vc.model) {
-            // The vision config carries its own apiKey, but users often leave a
-            // stale placeholder there after switching providers. When the key is
-            // missing/too short to be a real provider credential, fall back to the
-            // apiKey of the provider the vision model points at (the same cred that
-            // already authenticates the agent for that provider). This keeps vision
-            // in lockstep with the provider config instead of 401ing on the main
-            // model's key or a placeholder.
-            let visionApiKey = vc.apiKey;
-            if (!visionApiKey || visionApiKey.length < 20) {
-              const visionProvider = await getProviderConfigById(vc.provider, vc.model);
-              if (visionProvider?.apiKey) {
-                visionApiKey = visionProvider.apiKey;
-                console.log('[stream-session-manager] Vision apiKey fell back to provider key:', {
-                  provider: vc.provider,
-                  model: vc.model,
-                });
-              }
+            // The vision chain no longer carries its own apiKey
+            // (auxiliary.vision.apiKey is removed). The credential is always
+            // resolved from the configured provider, so vision stays in
+            // lockstep with the provider that already authenticates the agent.
+            const visionProvider = await getProviderConfigById(vc.provider, vc.model);
+            const visionApiKey = visionProvider?.apiKey || '';
+            if (!visionApiKey) {
+              console.warn('[stream-session-manager] No provider apiKey found for vision:', vc.provider);
             }
             (providerConfig as unknown as Record<string, unknown>).visionConfig = {
               provider: vc.provider,
@@ -1116,6 +1107,7 @@ class StreamSessionManager {
             console.log('[stream-session-manager] Vision model config injected:', {
               provider: vc.provider,
               model: vc.model,
+              hasApiKey: !!visionApiKey,
             });
           } else {
             console.log('[stream-session-manager] Vision model not enabled or no model configured');

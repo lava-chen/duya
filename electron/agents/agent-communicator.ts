@@ -28,7 +28,6 @@ const DEFAULT_VISION_SETTINGS: Record<string, string | boolean> = {
   provider: '',
   model: '',
   baseUrl: '',
-  apiKey: '',
   enabled: false,
 };
 
@@ -489,12 +488,15 @@ export function registerAgentHandlers(): void {
   // ==================== Vision handlers ====================
   ipcMain.handle('config:vision:get', () => {
     const store = getConfigStore();
-    return (store.getByPath('auxiliary.vision') as Record<string, unknown> | undefined) ?? DEFAULT_VISION_SETTINGS;
+    const vision = (store.getByPath('auxiliary.vision') as Record<string, unknown> | undefined) ?? DEFAULT_VISION_SETTINGS;
+    // Strip any legacy apiKey — vision derives its credential from the provider.
+    delete (vision as Record<string, unknown>).apiKey;
+    return vision;
   });
 
-  ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseUrl?: string; baseURL?: string; apiKey?: string; enabled?: boolean }) => {
+  ipcMain.handle('config:vision:set', (_event, data: { provider?: string; model?: string; baseUrl?: string; baseURL?: string; enabled?: boolean }) => {
     const store = getConfigStore();
-    const current = (store.getByPath('auxiliary.vision') as Record<string, string | boolean> | undefined) ?? DEFAULT_VISION_SETTINGS;
+    const current = (store.getByPath('auxiliary.vision') as Record<string, unknown> | undefined) ?? DEFAULT_VISION_SETTINGS;
     const merged = {
       ...current,
       ...data,
@@ -503,8 +505,10 @@ export function registerAgentHandlers(): void {
     };
     // Remove baseURL from merged since ConfigStore uses baseUrl
     delete (merged as Record<string, unknown>).baseURL;
+    // Vision creds come from the provider, not a per-feature key.
+    delete (merged as Record<string, unknown>).apiKey;
     store.set('auxiliary.vision', merged);
-    return (store.getByPath('auxiliary.vision') as Record<string, string | boolean> | undefined) ?? merged;
+    return (store.getByPath('auxiliary.vision') as Record<string, unknown> | undefined) ?? merged;
   });
 
   // ==================== Compact model handlers ====================

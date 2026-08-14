@@ -266,7 +266,6 @@ export function useSettings(): {
             provider?: string;
             model?: string;
             baseUrl?: string;
-            apiKey?: string;
             enabled?: boolean;
           } | null;
           if (visionConfig) {
@@ -274,7 +273,6 @@ export function useSettings(): {
               provider: visionConfig.provider || '',
               model: visionConfig.model || '',
               baseURL: visionConfig.baseUrl || '',
-              apiKey: visionConfig.apiKey || '',
               enabled: visionConfig.enabled ?? false,
             };
             parsed.visionLLMEnabled = visionConfig.enabled ?? false;
@@ -319,7 +317,6 @@ export function useSettings(): {
               provider: config.provider,
               model: config.model,
               baseUrl: config.baseURL,
-              apiKey: config.apiKey,
               enabled: config.enabled,
             });
           } else if (key === 'visionLLMEnabled') {

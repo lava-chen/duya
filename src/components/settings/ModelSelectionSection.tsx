@@ -33,11 +33,6 @@ function getVisionBaseUrlFallback(providerType: string): string {
   }
 }
 
-function isMaskedApiKey(value: string | undefined): boolean {
-  if (!value) return false;
-  return value.includes('***') || value.includes('****');
-}
-
 interface ModelSelectorRowProps {
   label: string;
   description: string;
@@ -137,7 +132,7 @@ export function ModelSelectionSection() {
         setProviders(providersList);
 
         // Load vision settings from ConfigManager
-        const visionSettings = await window.electronAPI.vision.get() as { provider?: string; model?: string; baseUrl?: string; apiKey?: string; enabled?: boolean };
+        const visionSettings = await window.electronAPI.vision.get() as { provider?: string; model?: string; baseUrl?: string; enabled?: boolean };
         console.log('[ModelSelection] Vision settings:', visionSettings);
 
         // Convert provider type name (e.g. "ollama") to provider ID
@@ -216,7 +211,6 @@ export function ModelSelectionSection() {
             provider?: string;
             model?: string;
             baseUrl?: string;
-            apiKey?: string;
             enabled?: boolean;
           } | null;
 
@@ -225,7 +219,6 @@ export function ModelSelectionSection() {
             provider.id,
             visionParsed.model,
           ) as {
-            apiKey?: string;
             baseUrl?: string;
             model?: string;
             provider?: string;
@@ -239,28 +232,11 @@ export function ModelSelectionSection() {
             || currentVision?.baseUrl
             || '';
 
-          const currentVisionApiKey = (currentVision?.apiKey || '').trim();
-          const providerConfigApiKey = (providerConfig?.apiKey || '').trim();
-          const providerListApiKey = (provider.apiKey || '').trim();
-
-          const normalizedCurrentVisionApiKey = isMaskedApiKey(currentVisionApiKey) ? '' : currentVisionApiKey;
-          const normalizedProviderListApiKey = isMaskedApiKey(providerListApiKey) ? '' : providerListApiKey;
-
-          // For local Ollama vision, apiKey is unnecessary and often stale.
-          const nextApiKey =
-            nextProvider === 'ollama'
-              ? ''
-              : (
-                normalizedCurrentVisionApiKey
-                || providerConfigApiKey
-                || normalizedProviderListApiKey
-              );
-
+          // Vision creds come from the configured provider, not a per-feature key.
           await window.electronAPI.vision.set({
             provider: nextProvider,
             model: visionParsed.model,
             baseUrl: nextBaseUrl,
-            apiKey: nextApiKey,
             enabled: currentVision?.enabled ?? true,
           });
           console.log('[ModelSelection] Vision model updated:', {

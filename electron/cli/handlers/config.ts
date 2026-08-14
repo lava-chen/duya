@@ -405,7 +405,6 @@ interface VisionSettings {
   provider?: string;
   model?: string;
   baseUrl?: string;
-  apiKey?: string;
   enabled?: boolean;
 }
 
@@ -422,7 +421,8 @@ export function handleGetVisionSettings(_req: IncomingMessage, res: ServerRespon
       model: settings.model,
       baseUrl: settings.baseUrl,
       enabled: settings.enabled,
-      hasKey: typeof settings.apiKey === 'string' && settings.apiKey.length > 0,
+      // Vision creds come from the configured provider, not a per-feature key.
+      hasKey: false,
     };
     sendJson(res, 200, { settings: dto });
   } catch (err) {
@@ -444,7 +444,7 @@ export async function handleSetVisionSettings(req: IncomingMessage, res: ServerR
   // not here — this handler is the new boundary). We still accept
   // `isActive` from the wire for forward compat with the old
   // `duya_config` callers during the migration window.
-  const allow = ['provider', 'model', 'baseUrl', 'apiKey', 'enabled', 'isActive'];
+  const allow = ['provider', 'model', 'baseUrl', 'enabled', 'isActive'];
   const patch: Record<string, unknown> = {};
   for (const k of allow) {
     if (body[k] !== undefined) patch[k] = body[k];
@@ -465,6 +465,8 @@ export async function handleSetVisionSettings(req: IncomingMessage, res: ServerR
   try {
     const current = getConfigStore().getByPath('auxiliary.vision') as VisionSettings;
     const merged = { ...current, ...patch };
+    // Vision creds come from the provider, not a per-feature key.
+    delete (merged as Record<string, unknown>).apiKey;
     getConfigStore().set('auxiliary.vision', merged);
     const ctx = readAuditContext(req);
     await audit(ctx, 'config.vision.set', 'vision', Object.keys(patch).join(','));
@@ -807,7 +809,7 @@ export async function handleConfigKvUnset(
       const defaults: Record<GenericConfigKey, unknown> = {
         agentSettings: {},
         uiPreferences: {},
-        visionSettings: { provider: '', model: '', baseUrl: '', apiKey: '', enabled: false },
+        visionSettings: { provider: '', model: '', baseUrl: '', enabled: false },
         outputStyles: {},
         apiProviders: {},
       };
