@@ -7,8 +7,8 @@ import {
   useContextBreakdown,
   type ContextUsage,
 } from '@/hooks/useContextUsage';
+import { formatTokensPi } from '@/lib/context-usage-utils';
 import { Button } from '@/components/ui/Button';
-import { ContextUsagePopover } from './ContextUsagePopover';
 import { ContextBreakdownModal } from './ContextBreakdownModal';
 
 interface ContextUsageRingProps {
@@ -20,17 +20,11 @@ interface ContextUsageRingProps {
   isCompacting?: boolean;
 }
 
-const HIDE_DELAY_MS = 200;
-
 /**
- * Small ring trigger next to the input that, on hover, shows a popover
- * with the context grid + summary numbers, and on click opens a modal
- * with a per-category breakdown.
- *
- * Hover is driven by React state (not pure CSS :hover) so the popover
- * stays open while the user moves the cursor into it — there's a 200ms
- * grace period after the cursor leaves the wrapper, and a transparent
- * "bridge" element between the trigger and the popover covers the gap.
+ * Small ring trigger next to the input. On hover the ring slides a pi-style
+ * stats line out to the left (cumulative ↑input / ↓output / R cache / $ cost,
+ * then the current context %), instead of a hover card. Clicking the ring
+ * opens the full per-category breakdown modal.
  */
 export function ContextUsageRing({
   messages,
@@ -43,10 +37,9 @@ export function ContextUsageRing({
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId);
   const [hovered, setHovered] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const shouldBuildBreakdown = hovered || detailsOpen;
   const breakdown = useContextBreakdown(
-    shouldBuildBreakdown ? messages : [],
-    shouldBuildBreakdown ? usage : { ...usage, hasData: false },
+    detailsOpen ? messages : [],
+    detailsOpen ? usage : { ...usage, hasData: false },
     typeof window !== 'undefined' && window.innerWidth < 480,
   );
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,7 +52,7 @@ export function ContextUsageRing({
   };
   const scheduleHide = () => {
     cancelHide();
-    hideTimer.current = setTimeout(() => setHovered(false), HIDE_DELAY_MS);
+    hideTimer.current = setTimeout(() => setHovered(false), 150);
   };
 
   useEffect(() => {
@@ -80,17 +73,93 @@ export function ContextUsageRing({
   }
 
   const effectiveWindow = contextWindow || usage.contextWindow;
+  const ctxClass =
+    usage.state === 'critical'
+      ? 'context-usage-ring-ctx context-usage-ring-ctx--critical'
+      : usage.state === 'warning'
+        ? 'context-usage-ring-ctx context-usage-ring-ctx--warn'
+        : 'context-usage-ring-ctx';
+
+  // pi-style footer line: ↑input ↓output RcacheRead [WcacheWrite] [CH hit%]
+  // [ $cost] {context}%/{window} (auto). Totals are session-cumulative.
+  const f = formatTokensPi;
+  const hasCache = usage.totalCacheRead > 0 || usage.totalCacheWrite > 0;
+  const ctxPercent = usage.hasData
+    ? (usage.ratio * 100).toFixed(1)
+    : '?';
 
   return (
     <>
       <div
-        className="context-usage-ring-wrapper"
+        className="context-usage-ring-wrap"
+        data-hovered={hovered}
         onMouseEnter={() => {
           cancelHide();
           setHovered(true);
         }}
         onMouseLeave={scheduleHide}
       >
+        <div
+          className="context-usage-ring-stats-shell"
+          aria-hidden={!hovered}
+        >
+          <div className="context-usage-ring-stats">
+            {usage.hasData && (
+              <>
+                <span className="context-usage-ring-stat">
+                  <span className="context-usage-ring-arrow">↑</span>
+                  {f(usage.totalInput)}
+                </span>
+                <span className="context-usage-ring-stat">
+                  <span className="context-usage-ring-arrow">↓</span>
+                  {f(usage.totalOutput)}
+                </span>
+                {usage.totalCacheRead > 0 && (
+                  <span className="context-usage-ring-stat">
+                    <span className="context-usage-ring-arrow">R</span>
+                    {f(usage.totalCacheRead)}
+                  </span>
+                )}
+                {usage.totalCacheWrite > 0 && (
+                  <span className="context-usage-ring-stat">
+                    <span className="context-usage-ring-arrow">W</span>
+                    {f(usage.totalCacheWrite)}
+                  </span>
+                )}
+                {hasCache && usage.cacheHitRate >= 0 && (
+                  <span className="context-usage-ring-stat">
+                    CH{(usage.cacheHitRate * 100).toFixed(1)}%
+                  </span>
+                )}
+                {usage.totalCost > 0 && (
+                  <span className="context-usage-ring-stat">
+                    ${usage.totalCost.toFixed(3)}
+                  </span>
+                )}
+                <span className={ctxClass}>
+                  {ctxPercent}%/{f(effectiveWindow)}
+                </span>
+                <span className="context-usage-ring-stat context-usage-ring-stat--dim">
+                  (auto)
+                </span>
+              </>
+            )}
+            {onCompress && usage.state !== 'normal' && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="context-usage-ring-compress"
+                onClick={onCompress}
+                disabled={isCompacting}
+                title="Compress context"
+              >
+                {isCompacting ? '…' : 'compress'}
+              </Button>
+            )}
+          </div>
+        </div>
+
         <Button
           type="button"
           variant="ghost"
@@ -131,30 +200,6 @@ export function ContextUsageRing({
             )}
           </svg>
         </Button>
-
-        {/* Transparent bridge covers the 8px gap so the cursor can travel
-            from the trigger into the popover without leaving the wrapper. */}
-        <div className="context-usage-ring-bridge" aria-hidden="true" />
-
-        <div
-          className={
-            'context-usage-ring-card ' +
-            (hovered ? 'context-usage-ring-card--open' : '')
-          }
-          // Mouse events on the card itself keep hover alive while the
-          // cursor is inside the popover.
-          onMouseEnter={cancelHide}
-          onMouseLeave={scheduleHide}
-        >
-          <ContextUsagePopover
-            usage={usage}
-            breakdown={breakdown}
-            contextWindow={effectiveWindow}
-            onOpenDetails={() => setDetailsOpen(true)}
-            onCompress={onCompress}
-            isCompacting={isCompacting}
-          />
-        </div>
       </div>
 
       <ContextBreakdownModal
@@ -168,9 +213,62 @@ export function ContextUsageRing({
       />
 
       <style>{`
-        .context-usage-ring-wrapper {
+        .context-usage-ring-wrap {
           position: relative;
           display: inline-flex;
+          align-items: center;
+          max-width: 100%;
+        }
+
+        /* Slide-out stats line: grid 0fr→1fr animates the width smoothly from
+           the ring leftwards (pi-style footer line). */
+        .context-usage-ring-stats-shell {
+          display: grid;
+          grid-template-columns: 0fr;
+          opacity: 0;
+          overflow: hidden;
+          max-width: 0;
+          transition:
+            grid-template-columns 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+            opacity 0.22s ease,
+            max-width 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+        .context-usage-ring-wrap[data-hovered='true'] .context-usage-ring-stats-shell,
+        .context-usage-ring-wrap:hover .context-usage-ring-stats-shell {
+          grid-template-columns: 1fr;
+          opacity: 1;
+          max-width: 480px;
+        }
+
+        .context-usage-ring-stats {
+          min-width: 0;
+          overflow: hidden;
+          white-space: nowrap;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding-right: 4px;
+          font-size: 11px;
+          line-height: 1;
+          font-variant-numeric: tabular-nums;
+          color: var(--muted);
+        }
+
+        .context-usage-ring-arrow {
+          font-weight: 600;
+        }
+
+        .context-usage-ring-ctx {
+          font-weight: 600;
+        }
+        .context-usage-ring-ctx--warn {
+          color: var(--warning);
+        }
+        .context-usage-ring-ctx--critical {
+          color: var(--error);
+        }
+        .context-usage-ring-stat--dim {
+          opacity: 0.65;
         }
 
         .context-usage-ring-trigger {
@@ -185,8 +283,8 @@ export function ContextUsageRing({
           transition: background-color 0.15s ease;
           position: relative;
           z-index: 2;
+          flex: none;
         }
-
         .context-usage-ring-trigger:hover {
           background-color: var(--bg-hover);
         }
@@ -203,35 +301,23 @@ export function ContextUsageRing({
           transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease;
         }
 
-        /* Invisible bridge between the trigger and the popover — covers
-           the 8px gap so the cursor never leaves the wrapper while
-           moving toward the popover. */
-        .context-usage-ring-bridge {
-          position: absolute;
-          right: 0;
-          bottom: 100%;
-          width: 100%;
-          height: 12px;
-          pointer-events: auto;
+        .context-usage-ring-compress {
+          background: transparent;
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          color: var(--warning);
+          cursor: pointer;
+          font-size: 10px;
+          padding: 2px 6px;
+          font-weight: 500;
+          flex: none;
         }
-
-        .context-usage-ring-card {
-          position: absolute;
-          bottom: calc(100% + 8px);
-          right: 0;
-          opacity: 0;
-          visibility: hidden;
-          transform: translateY(4px);
-          transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
-          pointer-events: none;
-          z-index: 1;
+        .context-usage-ring-compress:hover:not(:disabled) {
+          background: var(--bg-hover);
         }
-
-        .context-usage-ring-card--open {
-          opacity: 1;
-          visibility: visible;
-          transform: translateY(0);
-          pointer-events: auto;
+        .context-usage-ring-compress:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
       `}</style>
     </>
