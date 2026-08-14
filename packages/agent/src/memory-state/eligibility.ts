@@ -22,12 +22,13 @@ import type { Database } from 'better-sqlite3';
  */
 
 export const DEFAULT_ELIGIBILITY_LIMIT = 16;
-// Token budget control (Plan 417 follow-up): a session must be idle 12h
-// before extraction, halving how many sessions qualify per day.
-export const DEFAULT_IDLE_MS = 12 * 3600 * 1000; // 12h
+// Token budget control (Plan 417 follow-up): a session must be idle 4h
+// before extraction. Lowered from 12h so Phase 1 produces rollouts sooner;
+// sessions still need to go quiet before they qualify.
+export const DEFAULT_IDLE_MS = 4 * 3600 * 1000; // 4h
 export const DEFAULT_WINDOW_MS = 30 * 86400 * 1000; // 30d
-/** Minimum message count for a session to be eligible for extraction. Filters out thin sessions. */
-export const DEFAULT_MIN_MESSAGE_COUNT = 6;
+/** Minimum message count for a session to be eligible for extraction. Filters out very thin sessions. */
+export const DEFAULT_MIN_MESSAGE_COUNT = 3;
 
 export interface EligibleRollout {
   rolloutId: string;
@@ -39,6 +40,7 @@ const SELECT_ELIGIBLE_SQL = `
 SELECT r.rollout_id, r.last_message_at, r.source_fingerprint
 FROM rollout_catalog r
 WHERE r.agent_type = 'main'
+  AND r.mode IS NOT 'automation'
   AND r.source_status = 'active'
   AND r.message_count >= :minMessageCount
   AND r.last_message_at < :now - :idleMs
@@ -153,7 +155,7 @@ export function diagnoseEligibility(
          COUNT(*) AS total,
          SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' THEN 1 ELSE 0 END) AS active_main,
          SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND message_count >= ? THEN 1 ELSE 0 END) AS enough_messages,
-         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND message_count >= ?
+         SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND mode IS NOT 'automation' AND message_count >= ?
                    AND last_message_at < ? - ? AND last_message_at > ? - ? THEN 1 ELSE 0 END) AS idle_ready,
          SUM(CASE WHEN agent_type = 'main' AND source_status = 'active' AND EXISTS (
                SELECT 1 FROM stage1_outputs s

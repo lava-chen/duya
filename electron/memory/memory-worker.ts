@@ -210,7 +210,7 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   consolidatorOnForceSweep: true,
   catalogSyncIntervalMs: 60_000, // 1 min
   extractCooldownMs: 300_000, // 5 min — space batches to avoid LLM rate-limit spikes
-  minMessageCount: 6, // filter thin sessions
+  minMessageCount: 3, // filter very thin sessions only
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
   curationTimeoutMs: 4 * 60_000, // 4 min — single-shot curator chat() budget
 };
@@ -341,7 +341,6 @@ interface WorkerState {
   workerId: string;
   tickTimer: ReturnType<typeof setInterval> | null;
   outboxTimer: ReturnType<typeof setInterval> | null;
-  consolidatorTimer: ReturnType<typeof setInterval> | null;
   paused: boolean;
   tickInFlight: boolean;
   forceSweepInFlight: boolean;
@@ -377,7 +376,6 @@ function createWorker(
     workerId,
     tickTimer: null,
     outboxTimer: null,
-    consolidatorTimer: null,
     paused: cfg.paused,
     tickInFlight: false,
     forceSweepInFlight: false,
@@ -685,9 +683,9 @@ function createWorker(
     // legacy consolidator path is removed.
     let curated: CurationTickResult | null = null;
     // Do NOT await curation inside the tick — a hung curation must never
-    // freeze the phase1 extraction loop. The standalone sweepConsolidator
-    // interval owns the curation cycle (its own consolidatorInFlight guard)
-    // and re-drains the outbox on its own schedule.
+    // freeze the phase1 extraction loop. Phase 2 fires only when this tick
+    // produced new Stage 1 outputs (or on forceSweep), so it never runs
+    // against an empty / historical-only queue.
     if ((extracted > 0 || (options.force && cfg.consolidatorOnForceSweep)) && deps.curation) {
       curationTick({ force: options.force }).catch(() => { /* logged inside */ });
     }
@@ -770,26 +768,20 @@ function createWorker(
     }
   };
 
-  // Curation sweeper — independent interval so ad-hoc `.md` files dropped
-  // into `extensions/ad_hoc/` are digested even when no Stage 1 extractions
-  // are happening. The curation cycle's Hybrid trigger (N / T) fires here.
-  const sweepConsolidator = (): void => {
-    if (state.shutdownSignal || state.paused) return;
-    if (!deps.curation) return;
-    curationTick({ force: false }).catch(() => {
-      // Already logged inside curationTick.
-    });
-  };
+  // Curation sweeper. Phase 2 must follow Phase 1's new extractions (the
+  // "positive loop": Phase 1 emits new summaries → Phase 2 curates them →
+  // policy guides the next extraction). An independent 30-min timer that
+  // scans historical backlog would re-run curation with no new summaries,
+  // burning tokens for nothing. Phase 2 therefore fires only from the tick
+  // when `extracted > 0` (and from forceSweep). No timer drives it.
 
   state.tickTimer = setInterval(tick, tickIntervalMs);
   state.outboxTimer = setInterval(sweepOutbox, cfg.sweepOutboxEveryMs);
-  state.consolidatorTimer = setInterval(sweepConsolidator, cfg.consolidatorIntervalMs);
   // setInterval keeps the event loop alive; unref so the worker doesn't
   // block Electron shutdown on its own. Graceful shutdown is handled by
   // `performGracefulShutdown` calling `handle.shutdown()`.
   state.tickTimer.unref?.();
   state.outboxTimer.unref?.();
-  state.consolidatorTimer.unref?.();
 
   logger.warn(
     'MemoryWorker started',
@@ -829,10 +821,6 @@ function createWorker(
       if (state.outboxTimer) {
         clearInterval(state.outboxTimer);
         state.outboxTimer = null;
-      }
-      if (state.consolidatorTimer) {
-        clearInterval(state.consolidatorTimer);
-        state.consolidatorTimer = null;
       }
       // Let in-flight extracts settle (best-effort; extractor's heartbeat
       // interval will be cleared by its own finally block). We do NOT abort

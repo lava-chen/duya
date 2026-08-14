@@ -70,13 +70,15 @@ describe('selectEligible', () => {
     expect(ids).not.toContain('gw');
   });
 
-  it("2. cron sessions (mode='automation' legacy) are eligible like any other", () => {
+  it("2. automation sessions (mode='automation') are excluded; other modes stay eligible", () => {
     insertCatalogRow(db, { rollout_id: 'plain', last_message_at: BASE_LAST_MESSAGE_AT });
     insertCatalogRow(db, { rollout_id: 'cron', mode: 'automation', last_message_at: BASE_LAST_MESSAGE_AT });
+    insertCatalogRow(db, { rollout_id: 'code', mode: 'code', last_message_at: BASE_LAST_MESSAGE_AT });
 
     const ids = eligibleIds(db);
     expect(ids).toContain('plain');
-    expect(ids).toContain('cron');
+    expect(ids).toContain('code');
+    expect(ids).not.toContain('cron');
   });
 
   it("3. source_status='deleted' / 'missing' is excluded", () => {
@@ -277,20 +279,21 @@ describe('selectEligible', () => {
   });
 
   it('12. more eligible rollouts than the limit → returns limit rows, idle-DESC order', () => {
-    // 20 rollouts, idle from 7h (least idle) to 26h (most idle). With the
-    // 12h idle threshold only 14 (13h..26h idle) qualify.
+    // 20 rollouts, idle from 2h (least idle) to 21h (most idle). With the
+    // 4h idle threshold only 18 (4h..21h idle) qualify; the 2h/3h ones are
+    // too fresh. limit=16 truncates to the 16 longest-idle.
     for (let i = 0; i < 20; i++) {
       insertCatalogRow(db, {
         rollout_id: `bulk-${String(i).padStart(2, '0')}`,
-        last_message_at: T0 - (7 + i) * HOUR,
+        last_message_at: T0 - (2 + i) * HOUR,
       });
     }
 
     const result = selectEligible(db, { now: T0, limit: DEFAULT_ELIGIBILITY_LIMIT });
-    expect(result).toHaveLength(14);
-    // Longest-idle first: bulk-19 (26h idle) … bulk-06 (13h idle).
+    expect(result).toHaveLength(16);
+    // Longest-idle first: bulk-19 (21h idle) … bulk-04 (6h idle).
     expect(result[0].rolloutId).toBe('bulk-19');
-    expect(result[13].rolloutId).toBe('bulk-06');
+    expect(result[15].rolloutId).toBe('bulk-04');
     for (let i = 1; i < result.length; i++) {
       expect(result[i - 1].lastMessageAt).toBeLessThanOrEqual(result[i].lastMessageAt);
     }
@@ -336,16 +339,18 @@ describe('diagnoseEligibility', () => {
     insertCatalogRow(db, { rollout_id: 'thin', message_count: 2, last_message_at: BASE_LAST_MESSAGE_AT });
     // Non-main agent.
     insertCatalogRow(db, { rollout_id: 'gw', agent_type: 'gateway', last_message_at: BASE_LAST_MESSAGE_AT });
+    // Automation session (mode='automation') — excluded from idle_ready.
+    insertCatalogRow(db, { rollout_id: 'auto', mode: 'automation', last_message_at: BASE_LAST_MESSAGE_AT });
     // Already extracted (succeeded stage1_outputs).
     const extracted = insertCatalogRow(db, { rollout_id: 'done', last_message_at: BASE_LAST_MESSAGE_AT });
     insertStage1Output(db, { rollout_id: extracted, job_status: 'succeeded' });
 
     const diag = diagnoseEligibility(db, { now: T0 });
 
-    expect(diag.total).toBe(5);
-    expect(diag.activeMain).toBe(4); // ready, fresh, thin, done
-    expect(diag.enoughMessages).toBe(3); // ready, fresh, done
-    expect(diag.idleReady).toBe(2); // ready + done (both idle & enough, done already extracted)
+    expect(diag.total).toBe(6);
+    expect(diag.activeMain).toBe(5); // ready, fresh, thin, auto, done
+    expect(diag.enoughMessages).toBe(4); // ready, fresh, auto, done
+    expect(diag.idleReady).toBe(2); // ready + done (auto excluded, fresh not idle)
     expect(diag.alreadyExtracted).toBe(1); // done
   });
 

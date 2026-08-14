@@ -76,6 +76,7 @@ const DROPPABLE_TYPES: ReadonlySet<string> = new Set([
   'token_count',
   'turn_context',
   'reasoning',
+  'thinking',
   'encrypted_content',
   'progress',
 ]);
@@ -343,6 +344,35 @@ function truncate(text: string, maxChars: number): string {
   return text.length <= maxChars ? text : text.slice(0, maxChars);
 }
 
+/**
+ * Strip thinking / reasoning blocks from an assistant message's content.
+ * Assistant content is persisted as a JSON array of blocks
+ * ([{type:'thinking'},{type:'text'}]) by serializeMessageContent, so the raw
+ * string embeds the internal reasoning trace. That trace is not a memory
+ * takeaway and would waste the Stage 1 token budget, so we drop it and keep
+ * only the emitted text. Non-array / non-JSON content passes through unchanged.
+ */
+function stripThinkingBlocks(content: string): string {
+  if (!content) return content;
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('[')) return content;
+  let blocks: unknown;
+  try {
+    blocks = JSON.parse(trimmed);
+  } catch {
+    return content;
+  }
+  if (!Array.isArray(blocks)) return content;
+  const textBlocks = blocks
+    .filter(
+      (b): b is { type: string; text?: string } =>
+        typeof b === 'object' && b !== null && (b as { type?: string }).type === 'text',
+    )
+    .map((b) => b.text ?? '')
+    .join('\n');
+  return textBlocks.length > 0 ? textBlocks : content;
+}
+
 function seqSegment(event: MessageEvent): string {
   return event.seq_index != null ? ` seq=${event.seq_index}` : '';
 }
@@ -357,7 +387,7 @@ function renderLine(e: IndexedEvent, keepExitCodes: boolean): string {
     case 'assistant':
       return (
         `[assistant ${event.message_id}${seq}] ` +
-        truncate(collapseNewlines(event.content), ASSISTANT_CONTENT_LIMIT)
+        truncate(collapseNewlines(stripThinkingBlocks(event.content)), ASSISTANT_CONTENT_LIMIT)
       );
     case 'tool': {
       const callId = event.tool_call_id ?? 'unknown';
