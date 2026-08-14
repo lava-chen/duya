@@ -86,7 +86,25 @@ describe('research tools', () => {
     expect(researchModeTracker.query()).toBe('Existing');
   });
 
-  it('research_report(completed: true) only finalizes from synthesizing', async () => {
+  it('research_report carries report_markdown through to the result', async () => {
+    const [, report] = getResearchTools();
+    researchModeTracker.transition({ type: 'start', query: 'X' });
+    researchModeTracker.transition({ type: 'search' });
+    researchModeTracker.transition({ type: 'synthesize' });
+
+    const md = '# Report\n\nBody text.';
+    const done = await report.executor.execute(
+      { completed: true, title: 'My Report', report_markdown: md },
+      '/wd',
+      { options: { sessionId: 'sess-1' } } as never,
+    );
+    expect(done.error).toBe(false);
+    const parsed = JSON.parse(done.result) as { report_markdown?: string; title?: string };
+    expect(parsed.report_markdown).toBe(md);
+    expect(parsed.title).toBe('My Report');
+  });
+
+  it('research_report only finalizes from synthesizing', async () => {
     const [, report] = getResearchTools();
 
     // Not synthesizing → rejected with NOT_SYNTHESIZING.

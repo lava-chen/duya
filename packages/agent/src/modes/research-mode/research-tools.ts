@@ -144,12 +144,22 @@ const researchReportInputSchema = z.object({
     .string()
     .optional()
     .describe('Optional completion summary or status message.'),
+  title: z
+    .string()
+    .optional()
+    .describe('Short report title shown in the report card header.'),
+  report_markdown: z
+    .string()
+    .optional()
+    .describe(
+      'The full final report as markdown. Provide this when completed=true so the report can be rendered as a document and exported/copied.',
+    ),
 });
 
 const researchReportDefinition: Tool = {
   name: RESEARCH_REPORT_TOOL_NAME,
   description:
-    'Finalize the research run. Call with completed=true only when you have actually written the report while synthesizing — the lifecycle enforces this. Use a plain message for status updates.',
+    'Finalize the research run. Call with completed=true only when you have actually written the report while synthesizing — the lifecycle enforces this. Include the full report markdown in report_markdown and a short title in title so it renders as a document card. Use a plain message without report_markdown for status-only updates.',
   input_schema: {
     type: 'object',
     properties: {
@@ -160,6 +170,15 @@ const researchReportDefinition: Tool = {
       message: {
         type: 'string',
         description: 'Optional completion summary or status message.',
+      },
+      title: {
+        type: 'string',
+        description: 'Short report title shown in the report card header.',
+      },
+      report_markdown: {
+        type: 'string',
+        description:
+          'The full final report as markdown. Provide this when completed=true so the report can be rendered as a document and exported/copied.',
       },
     },
     required: ['completed'],
@@ -176,7 +195,7 @@ const researchReportExecutor: ToolExecutor = {
     if (!parse.success) {
       return errorInput(RESEARCH_REPORT_TOOL_NAME, parse.error.message);
     }
-    const { completed, message } = parse.data;
+    const { completed, message, title, report_markdown } = parse.data;
 
     const state = researchModeTracker.state();
     if (state === 'idle') {
@@ -221,6 +240,8 @@ const researchReportExecutor: ToolExecutor = {
           message: changed
             ? 'Research complete — report finalized.'
             : 'Research could not be finalized (unexpected state).',
+          title: title ?? undefined,
+          report_markdown: report_markdown ?? undefined,
         }),
         error: changed ? false : true,
       };
@@ -236,6 +257,8 @@ const researchReportExecutor: ToolExecutor = {
         phase: researchModeTracker.phase(),
         query: researchModeTracker.query(),
         message: message ?? undefined,
+        title: title ?? undefined,
+        report_markdown: report_markdown ?? undefined,
       }),
       error: false,
     };
