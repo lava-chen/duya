@@ -58,9 +58,20 @@ function formatUtcFilenameTimestamp(ms: number): string {
   );
 }
 
-/** First 8 hex chars of the rollout id (dashes stripped), lowercased. */
+/**
+ * First 8 hex chars of the rollout id, lowercased. A leading scheme
+ * prefix (e.g. `cron:` in `cron:<uuid>:<ts>:<uuid>` ids) is dropped and
+ * any remaining non-hex characters (notably the `:` itself) are
+ * stripped so the derived filename stays Windows-safe — colons are
+ * illegal in Windows filenames and would otherwise fail the outbox
+ * write with EINVAL.
+ */
 export function rolloutShortId(rolloutId: string): string {
-  return rolloutId.replace(/-/g, '').slice(0, 8).toLowerCase();
+  return rolloutId
+    .replace(/^[a-z]+:/i, '')
+    .replace(/[^a-f0-9]/gi, '')
+    .slice(0, 8)
+    .toLowerCase();
 }
 
 /**

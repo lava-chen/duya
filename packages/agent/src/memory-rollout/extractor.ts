@@ -780,7 +780,12 @@ export class Stage1Extractor {
         systemPrompt: systemPrompt,
         maxTokens: LLM_MAX_TOKENS,
         signal: abortController.signal,
-        effort: 'off', // deterministic JSON extraction — skip reasoning budget
+        // No effort override: reasoning-disabled models (e.g. MiniMax M3)
+        // with effort='off' return ONLY the raw_memory object and drop the
+        // outer envelope (job_status/content_outcome/rollout_summary/
+        // rollout_slug), which degrades every extraction to the tolerant
+        // fallback. Let the model use its default effort so the full JSON
+        // envelope is produced.
       });
       const chunks: string[] = [];
       for await (const event of generator) {
