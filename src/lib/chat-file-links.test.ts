@@ -239,18 +239,22 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.url).toBe('/Users/duya/projects/page.html');
   });
 
-  it('routes .docx to duya:open-office-panel', () => {
+  it('routes office files to the OS default app via shell.openPath', () => {
+    const shellOpen = vi.fn().mockResolvedValue('');
+    (window as unknown as { electronAPI: { shell: { openPath: typeof shellOpen } } }).electronAPI = {
+      shell: { openPath: shellOpen },
+    };
     openLocalArtifactTarget('E:\\reports\\plan.docx');
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0].event).toBe('duya:open-office-panel');
-    expect(dispatched[0].detail.filePath).toBe('E:\\reports\\plan.docx');
+    expect(shellOpen).toHaveBeenCalledWith('E:\\reports\\plan.docx');
   });
 
-  it('routes .docx to duya:open-office-panel on Unix', () => {
+  it('routes office files to the OS default app on Unix', () => {
+    const shellOpen = vi.fn().mockResolvedValue('');
+    (window as unknown as { electronAPI: { shell: { openPath: typeof shellOpen } } }).electronAPI = {
+      shell: { openPath: shellOpen },
+    };
     openLocalArtifactTarget('/Users/duya/reports/plan.docx');
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0].event).toBe('duya:open-office-panel');
-    expect(dispatched[0].detail.filePath).toBe('/Users/duya/reports/plan.docx');
+    expect(shellOpen).toHaveBeenCalledWith('/Users/duya/reports/plan.docx');
   });
 
   it('routes source code files to duya:open-file-preview-panel', () => {
