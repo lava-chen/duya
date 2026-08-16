@@ -18,7 +18,9 @@ import type {
 import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
-import { getAgentServerClient, type ChatOptions } from './agent-http-client';
+import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
+import { interruptChat } from './agent-sse-client';
+import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 
@@ -29,6 +31,21 @@ interface ProviderConfig {
   model: string;
   provider: string;
   authStyle: string;
+}
+
+/**
+ * Read the configured per-run max turn count (`agent.max_turns` in
+ * config.toml). Resolves to `undefined` when the config is unavailable or
+ * unset, in which case the worker falls back to its built-in default (100).
+ */
+async function readAgentMaxTurns(): Promise<number | undefined> {
+  try {
+    const raw = await getConfigValue('agent.max_turns');
+    const n = typeof raw === 'number' ? raw : raw != null ? Number(raw) : NaN;
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // Get active provider config from main process via IPC
@@ -304,6 +321,11 @@ interface StartStreamParams {
    * means no extended thinking.
    */
   effort?: string;
+  /**
+   * Maximum agentic turns for this run. When absent, the worker falls back
+   * to the `agent.max_turns` config (config.toml), then 100.
+   */
+  maxTurns?: number;
   /**
    * Conductor mode flag — when true, the agent runs in conductor mode
    * and binds to the conductorCanvasId. Forwarded to ChatOptions.
@@ -593,6 +615,25 @@ function normalizeStreamError(data: StreamErrorEventData | undefined): Streaming
 
 function isActivePhase(phase: StreamPhase): boolean {
   return ACTIVE_PHASES.includes(phase);
+}
+
+/**
+ * Human-readable explanation for a `done` SSE reason that indicates the run
+ * stopped before the task was actually finished. These reasons previously
+ * rendered as a silent "completed"; surfacing them lets the user understand
+ * why tool activity stopped mid-task.
+ */
+function formatDoneReason(reason: string): string {
+  switch (reason) {
+    case 'max_turns':
+      return '达到最大工具轮数上限，任务可能尚未完成。你可以继续发送消息，agent 会在当前会话中接着处理。';
+    case 'repeated_tool_calls':
+      return '检测到连续重复的工具调用，为避免死循环已停止。请换一种方式重新描述任务。';
+    case 'aborted':
+      return '本次运行被中止（中断或超时），任务可能尚未完成。你可以重新发送消息继续。';
+    default:
+      return `Agent 提前停止（原因：${reason}），任务可能尚未完成。`;
+  }
 }
 
 // ---- Research state helpers ----
@@ -1178,7 +1219,7 @@ class StreamSessionManager {
     void this.startStreamViaAgentServer(
       sessionId,
       streamId,
-      { content, displayContent, model, maxTokens, systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
+      { content, displayContent, model, maxTokens, maxTurns: params.maxTurns ?? (await readAgentMaxTurns()), systemPrompt, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig, providerConfig, workingDirectory, mode, defaultWorkspaceDirectory, securityScanEnabled, effort, conductorMode, conductorCanvasId, backgroundTaskResume },
       nextGeneration
     );
 
@@ -1193,6 +1234,7 @@ class StreamSessionManager {
       displayContent?: string;
       model?: string;
       maxTokens?: number;
+      maxTurns?: number;
       systemPrompt?: string;
       language?: string;
       permissionModeOverride?: 'default' | 'auto' | 'bypassPermissions';
@@ -1223,8 +1265,66 @@ class StreamSessionManager {
     // Get Agent Server client
     const client = getAgentServerClient();
 
-    // Register event handlers for Agent Server
-    const cleanup = client.onEvent(sessionId, (event) => {
+    // Register event handlers for Agent Server (shared with attachToExistingStream)
+    const cleanup = client.onEvent(sessionId, this.createStreamEventHandler(sessionId, streamId));
+
+    // Store cleanup function
+    this.messagePortCleanup.set(sessionId, cleanup);
+
+    // Start chat via Agent Server HTTP
+    // DEBUG: log files received
+    console.log('[stream-session-manager] startStream files:', params.files?.map(f => ({
+      name: f.name,
+      hasText: !!f.text,
+      textLength: f.text?.length ?? 0,
+      hasImageChunks: !!f.imageChunks,
+    })) ?? []);
+    try {
+      await client.startChat(sessionId, params.content, {
+        model: params.model,
+        maxTokens: params.maxTokens,
+        maxTurns: params.maxTurns,
+        systemPrompt: params.systemPrompt,
+        language: params.language,
+        permissionModeOverride: params.permissionModeOverride,
+        files: params.files,
+        agentProfileId: params.agentProfileId,
+        outputStyleConfig: params.outputStyleConfig,
+        displayContent: params.displayContent,
+        mode: params.mode,
+        titleGenerationModel: params.titleGenerationModel,
+        titleGenerationModelConfig: params.titleGenerationModelConfig,
+        providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
+        workingDirectory: params.workingDirectory,
+        defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
+        securityScanEnabled: params.securityScanEnabled,
+        effort: params.effort,
+        conductorMode: params.conductorMode,
+        conductorCanvasId: params.conductorCanvasId,
+        backgroundTaskResume: params.backgroundTaskResume,
+      } satisfies ChatOptions);
+    } catch (error) {
+      console.error('[stream-session-manager] Agent Server error:', error);
+      const s = this.sessions.get(sessionId);
+      if (s && this.isCurrentStream(sessionId, streamId)) {
+        s.phase = 'error';
+        s.error = error instanceof Error ? error.message : String(error);
+        s.completedAt = Date.now();
+        this.notifyListeners(sessionId);
+        this.notifyPhaseListeners(sessionId, s.phase);
+        this.notifyErrorListeners(sessionId, s.error);
+        this.notifyCompletedAtListeners(sessionId, s.completedAt);
+      }
+    }
+  }
+
+  /**
+   * Build the shared Agent-Server SSE event handler for a session. Used by both
+   * `startStreamViaAgentServer` (renderer-initiated turn) and
+   * `attachToExistingStream` (attaching to a run started elsewhere, e.g. cron).
+   */
+  private createStreamEventHandler(sessionId: string, streamId: string): (event: AgentEvent) => void {
+    return (event: AgentEvent) => {
       const s = this.sessions.get(sessionId);
       if (!s || !this.isCurrentStream(sessionId, streamId)) return;
 
@@ -1275,53 +1375,48 @@ class StreamSessionManager {
 
         case 'token_usage':
           // Live context-usage snapshot pushed by the worker during streaming.
-          // Updates the ring in real time without waiting for turn-end persist.
           if (event.data && typeof event.data === 'object') {
-            const d = event.data as { usedTokens?: number; inputTokens?: number; outputTokens?: number; cacheHitTokens?: number; cacheCreationTokens?: number };
+            const d = event.data as { usedTokens?: number; inputTokens?: number; outputTokens?: number; cacheHitTokens?: number; cacheCreationTokens?: number; totalInput?: number; totalInputRaw?: number; totalOutput?: number; totalCacheHit?: number; totalCacheCreation?: number };
             useContextUsageStore.getState().setLive(sessionId, {
               usedTokens: d.usedTokens ?? 0,
               inputTokens: d.inputTokens ?? 0,
               outputTokens: d.outputTokens ?? 0,
               cacheHitTokens: d.cacheHitTokens,
               cacheCreationTokens: d.cacheCreationTokens,
+              totalInput: d.totalInput,
+              totalInputRaw: d.totalInputRaw,
+              totalOutput: d.totalOutput,
+              totalCacheHit: d.totalCacheHit,
+              totalCacheCreation: d.totalCacheCreation,
             });
           }
           break;
 
         case 'done':
-          // Keep the last live value on normal completion: the worker's final
-          // `result` already equals input+output, which matches what the
-          // post-persist message scan will report. Clearing here would flash
-          // the ring to 0 until `db_persisted` triggers a message reload.
-          this.handleDoneEvent(sessionId, streamId);
+          this.handleDoneEvent(sessionId, streamId, event.data as { reason?: string } | undefined);
           break;
 
         case 'error':
         case 'chat:error':
-          // `chat:error` is the legacy/worker-emitted namespace; the agent
-          // server normalizes it to `error` today but we keep this branch as
-          // a defensive fallback so rate-limit/usage-limit errors still
-          // surface in the UI if the server ever forwards the raw name.
           useContextUsageStore.getState().clearLive(sessionId);
           this.handleErrorEvent(sessionId, streamId, event.data as StreamErrorEventData | undefined);
           break;
 
         case 'stream:end':
-          // SSE stream ended without done event (client disconnect, network error, etc.)
-          // Only transition to error if session is not already completed/done
+          // SSE stream ended without done (client disconnect, network error, etc.)
           if (this.isCurrentStream(sessionId, streamId)) {
-            const s = this.sessions.get(sessionId);
-            if (s && s.phase !== 'completed' && s.phase !== 'aborted' && s.phase !== 'error') {
+            const s2 = this.sessions.get(sessionId);
+            if (s2 && s2.phase !== 'completed' && s2.phase !== 'aborted' && s2.phase !== 'error') {
               console.warn('[stream-session-manager] SSE stream ended without done, transitioning to error');
-              s.phase = 'error';
-              s.error = 'Stream ended unexpectedly';
-              s.completedAt = Date.now();
+              s2.phase = 'error';
+              s2.error = 'Stream ended unexpectedly';
+              s2.completedAt = Date.now();
               this.notifyListeners(sessionId);
-              this.notifyPhaseListeners(sessionId, s.phase);
-              this.notifyErrorListeners(sessionId, s.error);
-              this.notifyCompletedAtListeners(sessionId, s.completedAt);
-            } else if (s) {
-              console.log('[stream-session-manager] SSE stream ended but session already in phase:', s.phase);
+              this.notifyPhaseListeners(sessionId, s2.phase);
+              this.notifyErrorListeners(sessionId, s2.error);
+              this.notifyCompletedAtListeners(sessionId, s2.completedAt);
+            } else if (s2) {
+              console.log('[stream-session-manager] SSE stream ended but session already in phase:', s2.phase);
             }
           }
           break;
@@ -1335,15 +1430,10 @@ class StreamSessionManager {
           break;
 
         case 'mode_changed':
-          // Plan 224 follow-up: agent runtime mode switched via
-          // EnterPlanMode / ExitPlanMode / SwitchMode tool. Notify
-          // listeners (ChatView) so they can sync input-box chip/glow.
           this.handleModeChangedEvent(sessionId, streamId, event.data as ModeChangedEvent | undefined);
           break;
 
         case 'goal_updated':
-          // Plan 411: goal tracker state changed (start / verdict / pause /
-          // budget). Notify listeners so the UI can render a goal status card.
           this.handleGoalUpdatedEvent(
             sessionId,
             streamId,
@@ -1352,8 +1442,6 @@ class StreamSessionManager {
           break;
 
         case 'research_updated':
-          // Plan 423 Phase 3: research tracker state changed (start / fan-out /
-          // finalize). Notify listeners so the UI can render a research status card.
           this.handleResearchUpdatedEvent(
             sessionId,
             streamId,
@@ -1363,7 +1451,6 @@ class StreamSessionManager {
 
         case 'db:request':
           // Forward DB requests to agent server via IPC - don't handle here
-          // The agent-server will route them to the database and forward responses
           this.handleAgentServerEvent(s, streamId, event);
           break;
 
@@ -1375,14 +1462,6 @@ class StreamSessionManager {
           break;
 
         case 'agent_progress':
-          // The wire format is a flat object emitted by the worker:
-          //   { type: 'chat:agent_progress', sessionId: <parent>, agentEventType,
-          //     agentId, agentType, agentName, agentDescription, agentSessionId,
-          //     data?, toolName?, toolInput?, toolResult?, duration? }
-          // The SSE client already stripped the chat:* prefix to produce
-          // AgentHTTPClient normalizes SSE into `{ type, data }`, where
-          // `data` contains the flat worker payload. Older callers passed the
-          // flat object directly, so handle both shapes.
           this.handleAgentProgressEvent(
             sessionId,
             streamId,
@@ -1397,53 +1476,56 @@ class StreamSessionManager {
           }
           break;
       }
-    });
+    };
+  }
 
-    // Store cleanup function
+  /**
+   * Attach to an already-running session's live stream (e.g. a cron run kicked
+   * off by the main-process scheduler). Opens a GET /chat SSE connection to the
+   * agent server for the session and routes events into the same state machine
+   * as a renderer-initiated turn, so existing phase/text/tool subscriptions
+   * receive live updates. Safe when the session has already finished — the
+   * attach fails gracefully and callers fall back to persisted messages.
+   */
+  async attachToExistingStream(sessionId: string): Promise<void> {
+    // Drop any previous attach handler for this session so re-attaching (e.g.
+    // reopening the cron modal mid-run) does not stack duplicate subscriptions.
+    this.cleanupMessagePort(sessionId);
+
+    const state = this.getOrCreateState(sessionId);
+    const streamId = crypto.randomUUID();
+    state.currentStreamId = streamId;
+    state.generation = 0;
+    state.streamId = streamId;
+    state.phase = 'streaming';
+    state.error = null;
+    state.errorCode = null;
+    state.completedAt = null;
+    state.streamingText = '';
+    state.streamingThinking = '';
+    state.toolUses = [];
+    state.toolResults = [];
+    state.streamingEvents = [];
+
+    const cleanup = getAgentServerClient().onEvent(sessionId, this.createStreamEventHandler(sessionId, streamId));
     this.messagePortCleanup.set(sessionId, cleanup);
 
-    // Start chat via Agent Server HTTP
-    // DEBUG: log files received
-    console.log('[stream-session-manager] startStream files:', params.files?.map(f => ({
-      name: f.name,
-      hasText: !!f.text,
-      textLength: f.text?.length ?? 0,
-      hasImageChunks: !!f.imageChunks,
-    })) ?? []);
+    this.notifyListeners(sessionId);
+    this.notifyPhaseListeners(sessionId, state.phase);
+    this.notifyTextListeners(sessionId, state.streamingText);
+
     try {
-      await client.startChat(sessionId, params.content, {
-        model: params.model,
-        maxTokens: params.maxTokens,
-        systemPrompt: params.systemPrompt,
-        language: params.language,
-        permissionModeOverride: params.permissionModeOverride,
-        files: params.files,
-        agentProfileId: params.agentProfileId,
-        outputStyleConfig: params.outputStyleConfig,
-        displayContent: params.displayContent,
-        mode: params.mode,
-        titleGenerationModel: params.titleGenerationModel,
-        titleGenerationModelConfig: params.titleGenerationModelConfig,
-        providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
-        workingDirectory: params.workingDirectory,
-        defaultWorkspaceDirectory: params.defaultWorkspaceDirectory,
-        securityScanEnabled: params.securityScanEnabled,
-        effort: params.effort,
-        conductorMode: params.conductorMode,
-        conductorCanvasId: params.conductorCanvasId,
-        backgroundTaskResume: params.backgroundTaskResume,
-      } satisfies ChatOptions);
+      await getAgentServerClient().attachToLiveStream(sessionId, 0);
+      // On success the stream's own `done`/`error` events drive the terminal
+      // phase. On failure (session already finished → 409, or not streaming),
+      // reset back to idle so the UI does not stay wedged in "streaming".
     } catch (error) {
-      console.error('[stream-session-manager] Agent Server error:', error);
+      console.warn('[stream-session-manager] attachToExistingStream failed:', error);
       const s = this.sessions.get(sessionId);
-      if (s && this.isCurrentStream(sessionId, streamId)) {
-        s.phase = 'error';
-        s.error = error instanceof Error ? error.message : String(error);
-        s.completedAt = Date.now();
+      if (s && s.phase === 'streaming') {
+        s.phase = 'idle';
         this.notifyListeners(sessionId);
         this.notifyPhaseListeners(sessionId, s.phase);
-        this.notifyErrorListeners(sessionId, s.error);
-        this.notifyCompletedAtListeners(sessionId, s.completedAt);
       }
     }
   }
@@ -1807,10 +1889,57 @@ class StreamSessionManager {
     });
   }
 
-  private handleDoneEvent(sessionId: string, streamId: string): void {
-    console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}`);
+  private handleDoneEvent(sessionId: string, streamId: string, data?: { reason?: string }): void {
+    console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}, reason=${data?.reason ?? 'completed'}`);
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    const reason = data?.reason;
+
+    // Early-stop reasons (max_turns / repeated_tool_calls) mean the run ended
+    // before the task was done. Surface them as an error banner instead of a
+    // silent "completed", so the user understands why tool activity stopped.
+    if (reason === 'max_turns' || reason === 'repeated_tool_calls') {
+      s.phase = 'error';
+      s.pendingPermissionRequest = null;
+      s.statusText = undefined;
+      s.error = formatDoneReason(reason);
+      s.errorCode = reason;
+      s.completedAt = Date.now();
+      this.notifyPhaseListeners(sessionId, s.phase);
+      this.notifyStatusTextListeners(sessionId, s.statusText);
+      this.notifyErrorListeners(sessionId, s.error);
+      this.notifyCompletedAtListeners(sessionId, s.completedAt);
+      this.flushPendingText(sessionId, streamId);
+      this.notifyListeners(sessionId);
+      this.clearIdleTimeout(sessionId);
+      this.autoStartQueuedStream(sessionId);
+      this.startPendingBackgroundResume(sessionId);
+      return;
+    }
+
+    // User-initiated abort / external interrupt: keep the aborted phase so
+    // the existing "stopped" UX applies; record the reason for diagnostics
+    // but do NOT raise the error banner (phase === 'aborted' suppresses it).
+    if (reason === 'aborted') {
+      s.phase = 'aborted';
+      s.pendingPermissionRequest = null;
+      s.statusText = undefined;
+      s.error = formatDoneReason(reason);
+      s.errorCode = reason;
+      s.completedAt = Date.now();
+      this.notifyPhaseListeners(sessionId, s.phase);
+      this.notifyStatusTextListeners(sessionId, s.statusText);
+      this.notifyErrorListeners(sessionId, s.error);
+      this.notifyCompletedAtListeners(sessionId, s.completedAt);
+      this.flushPendingText(sessionId, streamId);
+      this.notifyListeners(sessionId);
+      this.clearIdleTimeout(sessionId);
+      this.autoStartQueuedStream(sessionId);
+      this.startPendingBackgroundResume(sessionId);
+      return;
+    }
+
+    // Normal completion (completed / end_turn / stop_sequence / undefined).
     s.phase = 'completed';
     s.pendingPermissionRequest = null;
     s.statusText = undefined;
@@ -3238,6 +3367,7 @@ export const streamSessionManager = getStreamManager();
 export const ensureSession = (sessionId: string) => streamSessionManager.ensureSession(sessionId);
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
 export const resumeBackgroundTask = (sessionId: string) => streamSessionManager.resumeBackgroundTask(sessionId);
+export const attachToExistingStream = (sessionId: string) => streamSessionManager.attachToExistingStream(sessionId);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);
 export const canSend = (sessionId: string) => streamSessionManager.canSend(sessionId);
 export const enqueueMessage = (sessionId: string, params: StartStreamParams) => streamSessionManager.enqueueMessage(sessionId, params);

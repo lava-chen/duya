@@ -15,10 +15,9 @@ HOW TO USE:
 1. Formulate a search query based on the user's question
 2. Use descriptive terms - search message content, not just session titles
 3. Use OR between keywords for broader recall (e.g., "docker OR kubernetes")
-4. Use roleFilter to exclude tool outputs if needed (e.g., "user,assistant")
-5. Use scope="same_project" first for project work; expand to "other_projects" only when cross-project context is plausibly relevant
-6. Review summarized results to find relevant context
-7. Do NOT read full raw transcripts - use summaries for context
+4. Use scope="same_project" first for project work; expand to "other_projects" only when cross-project context is plausibly relevant
+5. Review summarized results to find relevant context
+6. Do NOT read full raw transcripts - use summaries for context
 
 OUTPUT:
 Returns summarized results from relevant sessions including:
@@ -29,7 +28,6 @@ Returns summarized results from relevant sessions including:
 OPTIONS:
 - query: Search keywords (omit for recent sessions)
 - limit: Max matching sessions to return; in recent all-project mode, applies per project group (default: 3, max: 5)
-- roleFilter: Comma-separated roles to include (e.g., "user,assistant")
 - scope: same_project, other_projects, or all (default)
 
 LIMITATIONS:

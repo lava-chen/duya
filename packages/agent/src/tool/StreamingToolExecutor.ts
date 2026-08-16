@@ -1485,12 +1485,6 @@ export class StreamingToolExecutor {
           ),
         )
 
-        if (isShellCommandToolName(tool.block.name)) {
-          this.hasErrored = true
-          this.erroredToolDescription = this.getToolDescription(tool)
-          this.siblingAbortController.abort('sibling_error')
-        }
-
         this.finalizeTool(tool, messages, undefined, result.error ? String(result.result) : undefined)
         return
       }
@@ -1679,12 +1673,6 @@ export class StreamingToolExecutor {
           `<tool_use_error>Error executing ${tool.block.name}: ${errorMessage}</tool_use_error>`,
         ),
       )
-
-      if (isShellCommandToolName(tool.block.name)) {
-        this.hasErrored = true
-        this.erroredToolDescription = this.getToolDescription(tool)
-        this.siblingAbortController.abort('sibling_error')
-      }
 
       this.finalizeTool(tool, messages, errorMessage)
     }

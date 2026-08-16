@@ -166,6 +166,11 @@ interface ChatStartMessage {
     };
     effort?: string;
     /**
+     * Maximum agentic turns for this run. Absent → fall back to the
+     * configured `agent.max_turns`, then the built-in default (100).
+     */
+    maxTurns?: number;
+    /**
      * Allowlist of tool names permitted for this chat turn. When set, only
      * tools whose name is in this list are exposed to the LLM. Used by
      * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.
@@ -225,6 +230,16 @@ let liveLastCacheCreation: number | undefined; // cache creation (write) tokens 
 // sawtooths between results (dropping back to input+output when the next
 // `result` rebases).
 let liveBoundaryPending = false;
+// Session-cumulative usage across every `result` this worker has seen for
+// this session (reset on `init`). The ring's ↑/↓/R/W/$ footer is cumulative
+// (pi-style), so the worker accumulates rather than broadcasting only the
+// last result's deltas — otherwise the stats line would freeze during
+// streaming and only update after the turn-end DB persist.
+let liveTotalInput = 0;        // normalized input (cache-convention aware)
+let liveTotalInputRaw = 0;     // raw input_tokens (for cost on the uncached portion)
+let liveTotalOutput = 0;
+let liveTotalCacheHit = 0;
+let liveTotalCacheCreation = 0;
 // Track the main model name for multimodal detection
 let mainModelName = '';
 let probeConfig: ProbeConfig | null = null;
@@ -1312,7 +1327,7 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'permission_request':
       return { type: 'chat:permission', request: event.data };
     case 'done':
-      return { type: 'chat:done' };
+      return { type: 'chat:done', reason: (event as { reason?: string }).reason };
     case 'error':
       return { type: 'chat:error', message: event.data as string, code: (event as { code?: string }).code };
     case 'turn_start':
@@ -2014,6 +2029,69 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       }
     }
 
+    // Seed the session-cumulative live totals (and the authoritative context
+    // base) from the history the agent now holds. The router sends `init` on
+    // EVERY turn, which zeroes the live counters — without re-seeding, the
+    // ring's ↑/↓/R/$ would reset to 0 at the start of each new turn instead
+    // of continuing from the real cumulative numbers. Re-seeding from
+    // messages also survives a full worker restart (messages are reloaded
+    // from the DB above), so the stats stay correct regardless of process
+    // lifetime. `result` events during this turn then accumulate on top.
+    {
+      let seedTotalInput = 0;
+      let seedTotalInputRaw = 0;
+      let seedTotalOutput = 0;
+      let seedTotalCacheHit = 0;
+      let seedTotalCacheCreation = 0;
+      let lastUsage: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_hit_tokens?: number;
+        cache_creation_tokens?: number;
+      } | undefined;
+      for (const m of agent.getMessages()) {
+        const u = (m as { tokenUsage?: Record<string, number | undefined> }).tokenUsage;
+        if (!u) continue;
+        const rawInput = u.input_tokens ?? 0;
+        const output = u.output_tokens ?? 0;
+        const cacheHit = u.cache_hit_tokens ?? 0;
+        const cacheCreation = u.cache_creation_tokens ?? 0;
+        const normalizedInput = cacheHit > rawInput ? rawInput + cacheHit : rawInput;
+        seedTotalInput += normalizedInput;
+        seedTotalInputRaw += rawInput;
+        seedTotalOutput += output;
+        seedTotalCacheHit += cacheHit;
+        seedTotalCacheCreation += cacheCreation;
+        lastUsage = {
+          input_tokens: rawInput,
+          output_tokens: output,
+          cache_hit_tokens: cacheHit,
+          cache_creation_tokens: cacheCreation,
+        };
+      }
+      liveTotalInput = seedTotalInput;
+      liveTotalInputRaw = seedTotalInputRaw;
+      liveTotalOutput = seedTotalOutput;
+      liveTotalCacheHit = seedTotalCacheHit;
+      liveTotalCacheCreation = seedTotalCacheCreation;
+      // Restore the authoritative context base from the last persisted result
+      // so the ring's used/% is correct from the very start of this turn
+      // (instead of a coarse estimate until the first `result` lands).
+      if (lastUsage) {
+        const rawInput = lastUsage.input_tokens ?? 0;
+        const cacheHit = lastUsage.cache_hit_tokens ?? 0;
+        const normalizedInput = cacheHit > rawInput ? rawInput + cacheHit : rawInput;
+        liveBaseContext = normalizedInput + (lastUsage.output_tokens ?? 0);
+        liveBaseMessageCount = agent.getMessages().length;
+        hasLiveBase = true;
+        liveLastInput = normalizedInput;
+        liveLastOutput = lastUsage.output_tokens ?? 0;
+        liveLastCacheHit = lastUsage.cache_hit_tokens;
+        liveLastCacheCreation = lastUsage.cache_creation_tokens;
+        liveBoundaryPending = false;
+      }
+    }
+
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
@@ -2023,6 +2101,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       attachments: files,
       displayContent: msg.options?.displayContent,
       effort: msg.options?.effort,
+      maxTurns: msg.options?.maxTurns,
       allowedTools: msg.options?.allowedTools,
       conductorMode: msg.options?.conductorMode ? true : undefined,
       conductorCanvasId: msg.options?.conductorCanvasId,
@@ -2035,6 +2114,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
     let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
+    // Terminal `done` reason from the agent loop (completed / max_turns /
+    // repeated_tool_calls / aborted). Captured from the deferred chat:done
+    // and attached to the final chat:done so the renderer can surface why
+    // the run stopped.
+    let turnEndReason: string | undefined;
     let eventCount = 0;
     // Stable-boundary persistence baseline: capture the message count at turn
     // start so the single end-of-turn append can persist exactly the messages
@@ -2093,6 +2177,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         cacheHitTokens: liveLastCacheHit,
         cacheCreationTokens: liveLastCacheCreation,
         usedTokens: usedTokens ?? computeLiveUsed(),
+        // Session-cumulative totals so the ring's ↑/↓/R/W/$ line moves live.
+        totalInput: liveTotalInput,
+        totalInputRaw: liveTotalInputRaw,
+        totalOutput: liveTotalOutput,
+        totalCacheHit: liveTotalCacheHit,
+        totalCacheCreation: liveTotalCacheCreation,
       });
     };
 
@@ -2161,6 +2251,12 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           liveLastOutput = outputTokens;
           liveLastCacheHit = cacheHitTokens;
           liveLastCacheCreation = candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens;
+          // Accumulate session-cumulative totals for the ring's stats line.
+          liveTotalInput += normalizedInput;
+          liveTotalInputRaw += rawInput;
+          liveTotalOutput += outputTokens;
+          liveTotalCacheHit += cacheHitTokens;
+          liveTotalCacheCreation += candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
           // The `result` fires BEFORE this round's assistant message is pushed
           // to the timeline. Mark the boundary pending so the next trailing
           // estimate skips that assistant (its tokens are already in
@@ -2189,7 +2285,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       if (agentMsg) {
         if (agentMsg.type === 'chat:done') {
           // Defer chat:done until after persistence completes
-          // to avoid race condition where SSE closes before messages are saved
+          // to avoid race condition where SSE closes before messages are saved.
+          // Capture the terminal reason (completed / max_turns /
+          // repeated_tool_calls / aborted) so the deferred chat:done below
+          // can surface it to the renderer.
+          if (typeof agentMsg.reason === 'string' && agentMsg.reason) {
+            turnEndReason = agentMsg.reason;
+          }
           continue;
         }
         if (DEBUG_IPC && (
@@ -2325,6 +2427,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           type: 'chat:done',
           sessionId: msg.sessionId,
           turnId: msg.id,
+          reason: turnEndReason,
           finalContent: extractFinalAssistantText(agentMessages),
           conversationText: summarizeConversation(agentMessages),
         });
@@ -2335,6 +2438,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           type: 'chat:done',
           sessionId: msg.sessionId,
           turnId: msg.id,
+          reason: turnEndReason,
           finalContent: extractFinalAssistantText(agentMessages),
           conversationText: summarizeConversation(agentMessages),
           error: err instanceof Error ? err.message : String(err),
@@ -2348,6 +2452,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         type: 'chat:done',
         sessionId: msg.sessionId,
         turnId: msg.id,
+        reason: turnEndReason,
         finalContent: '',
         conversationText: '',
       });
@@ -2746,6 +2851,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           liveLastCacheHit = undefined;
           liveLastCacheCreation = undefined;
           liveBoundaryPending = false;
+          liveTotalInput = 0;
+          liveTotalInputRaw = 0;
+          liveTotalOutput = 0;
+          liveTotalCacheHit = 0;
+          liveTotalCacheCreation = 0;
           if (agent) {
             log('[Agent-Process] Re-init: destroying existing agent and creating new one');
             try {

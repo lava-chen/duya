@@ -4,7 +4,27 @@
 
 import type { Tool } from '../../types.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
-import { SUBAGENT_TOOL_NAME } from './constants.js'
+import { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME } from './constants.js'
+import { MESSAGE_SESSION_TOOL_NAME } from '../MessageSessionTool/constants.js'
+import { GET_TASK_OUTPUT_TOOL_NAME } from '../BackgroundTaskTool/GetTaskOutputTool.js'
+import { WAIT_TASKS_TOOL_NAME } from '../BackgroundTaskTool/WaitTasksTool.js'
+import { KILL_TASK_TOOL_NAME } from '../BackgroundTaskTool/KillTaskTool.js'
+
+/**
+ * Agent-orchestration tools that spawn, delegate to, message, or manage other
+ * agents. These are intentionally withheld from sub-agents so a sub-agent can
+ * never spawn or delegate to another agent — otherwise a sub-agent could
+ * recursively spawn sub-agents or hand work to siblings/parents, breaking the
+ * single-level delegation model and bleeding parent orchestration state.
+ */
+export const SUBAGENT_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  SUBAGENT_TOOL_NAME,
+  LEGACY_SUBAGENT_TOOL_NAME,
+  MESSAGE_SESSION_TOOL_NAME,
+  GET_TASK_OUTPUT_TOOL_NAME,
+  WAIT_TASKS_TOOL_NAME,
+  KILL_TASK_TOOL_NAME,
+])
 
 export type ResolvedAgentTools = {
   hasWildcard: boolean

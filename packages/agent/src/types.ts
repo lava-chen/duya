@@ -231,6 +231,8 @@ export interface ChatOptions {
     enabled?: boolean;
     /** Consecutive identical calls before a steering message is injected. Default: 8. */
     nudgeAt?: number;
+    /** Consecutive identical calls before a stronger "change approach" nudge is injected. Default: 12. */
+    hardNudgeAt?: number;
     /** Consecutive identical calls before the loop hard-stops. Default: 16. */
     hardStopAt?: number;
   };
@@ -615,6 +617,13 @@ export interface ToolUseContextOptions {
    * falls back to the direct tool.name lookup (legacy behavior).
    */
   resolveMCPProviderToolName?: (providerName: string) => string;
+  /**
+   * Executors for the parent's already-connected MCP tools, keyed by the
+   * tool's model-visible `name`. Injected by the parent agent so sub-agents
+   * that opt in via `mcpTools` can reuse the live MCP runtime (clients are
+   * captured in the executor closures) instead of reconnecting servers.
+   */
+  mcpToolExecutors?: ReadonlyMap<string, import('./tool/registry.js').ToolExecutor>;
 }
 
 export interface AppState {

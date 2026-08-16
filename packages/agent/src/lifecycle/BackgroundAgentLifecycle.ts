@@ -20,10 +20,21 @@ export interface RegisterInput {
   abortController: AbortController
 }
 
+/** Default window (ms) a drained terminal record stays queryable via
+ * get_task_output after its completion notification was enqueued. */
+export const DEFAULT_DRAINED_RETENTION_MS = 5 * 60 * 1000
+
 export class BackgroundAgentLifecycle {
   private tasks = new Map<string, TaskRecord>()
   private drained = new Set<string>()
+  /** Timestamp (ms) at which each task was marked drained, so completed
+   * records can be pruned after `drainedRetentionMs` instead of being
+   * deleted immediately (which made get_task_output return not_found
+   * right after a completion notification pointed the model at it). */
+  private drainedAt = new Map<string, number>()
   private drainsByReason: ('completed' | 'killed' | 'failed')[] = ['completed', 'killed', 'failed']
+
+  constructor(private readonly drainedRetentionMs: number = DEFAULT_DRAINED_RETENTION_MS) {}
   /**
    * Tasks whose terminal notification has already been emitted to the
    * message queue. Prevents the completed + AbortError catch branches in
@@ -37,6 +48,10 @@ export class BackgroundAgentLifecycle {
     if (this.tasks.has(input.taskId)) {
       throw new Error(`BackgroundAgentLifecycle: duplicate taskId ${input.taskId}`)
     }
+    // Prune expired drained records here too: if the last task drained and no
+    // new task is ever drained again, lazy pruning in markDrained would leave
+    // a single terminal record resident for the process life.
+    this.pruneDrained(Date.now())
     const now = Date.now()
     const record: TaskRecord = {
       taskId: input.taskId,
@@ -114,13 +129,31 @@ export class BackgroundAgentLifecycle {
   }
 
   markDrained(taskIds: string[]): void {
+    const now = Date.now()
     for (const id of taskIds) {
       this.drained.add(id)
-      // Clean up the task record and notified flag so the Maps/Sets
-      // don't grow unboundedly across a long-lived session with many
-      // sub-agent spawns. Once drained, the task is fully consumed.
-      this.tasks.delete(id)
-      this.notified.delete(id)
+      // Record the drain time but KEEP the task record: the completion
+      // notification already told the model to call get_task_output, and
+      // deleting the record here made that call return `not_found` even for
+      // successfully completed tasks. Retention is bounded by
+      // pruneDrained(), so memory stays capped across a long session.
+      this.drainedAt.set(id, now)
+    }
+    this.pruneDrained(now)
+  }
+
+  /**
+   * Delete drained records whose retention window has elapsed. Runs lazily
+   * from markDrained/register so no timer thread is needed.
+   */
+  private pruneDrained(now: number): void {
+    for (const [id, at] of this.drainedAt) {
+      if (now - at > this.drainedRetentionMs) {
+        this.drainedAt.delete(id)
+        this.drained.delete(id)
+        this.tasks.delete(id)
+        this.notified.delete(id)
+      }
     }
   }
 

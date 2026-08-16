@@ -50,6 +50,7 @@ import { permissionRuleValueToString } from '../permissions/rules.js';
 import { logger } from '../utils/logger.js';
 import { createChildAbortController } from '../abort/index.js';
 import { getAgentProfileService } from '../agent-profile/AgentProfileService.js';
+import { readConfigAgents, toAgentProfile } from '../agent-profile/config-agents.js';
 import type { AgentProfile } from '../agent-profile/types.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../agent-profile/ToolFilter.js';
 import { mailboxDb, pluginDb } from '../ipc/db-client.js';
@@ -529,7 +530,7 @@ export class duyaAgent {
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}`);
 
     // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
-    const appliedProfile = this._resolveAgentProfile(options);
+    const appliedProfile = await this._resolveAgentProfile(options);
 
     // === Mode Dispatch ===
     // Resolve mode: explicit option > 'normal'. Orchestrator-paradigm
@@ -716,18 +717,26 @@ export class duyaAgent {
 
     let turnCount = 0;
     const maxTurns = options?.maxTurns ?? 100;
+    // Grants the model one extra wrap-up turn after hitting max_turns so it
+    // can summarize progress instead of the run ending abruptly mid-task.
+    let maxTurnsWrapupDone = false;
     let runtimePromptMessageId: string | null = null;
 
     // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
     // tool calls so the loop can steer or stop instead of spinning forever.
+    // Progression: soft nudge (deadLoopNudgeAt) → stronger "change approach"
+    // nudge (deadLoopHardNudgeAt) → hard stop (deadLoopHardStopAt).
     const deadLoop = options?.antiDeadLoop ?? {};
     const deadLoopEnabled = deadLoop.enabled ?? true;
     const deadLoopNudgeAt = deadLoop.nudgeAt ?? 8;
+    const deadLoopHardNudgeAt = deadLoop.hardNudgeAt ?? 12;
     const deadLoopHardStopAt = deadLoop.hardStopAt ?? 16;
     let lastToolCallSignature: string | null = null;
     let consecutiveToolCalls = 0;
     let deadLoopNudged = false;
     let deadLoopNudgeToolName: string | null = null;
+    let deadLoopHardNudged = false;
+    let deadLoopHardNudgeToolName: string | null = null;
 
     // Todo gate. When the agent would otherwise finish but pending tasks
     // remain, inject a steering message instead of stopping.
@@ -963,6 +972,7 @@ export class duyaAgent {
           // next turn without re-creating the executor.
           resolveMCPProviderToolName: (name: string) =>
             this.resolveMCPToolNameToInternalKey(name),
+          mcpToolExecutors: this.buildMCPToolExecutors(tools),
         },
         // Permission callback - passed from ChatOptions by API route
         requestPermission: options?.requestPermission,
@@ -1188,6 +1198,7 @@ export class duyaAgent {
               lastToolCallSignature = signature;
               consecutiveToolCalls = 1;
               deadLoopNudged = false;
+              deadLoopHardNudged = false;
             }
             if (
               deadLoopEnabled &&
@@ -1200,6 +1211,16 @@ export class duyaAgent {
               // rather than appearing before them (grok "results committed
               // after" semantics).
               deadLoopNudgeToolName = event.data.name;
+            }
+            if (
+              deadLoopEnabled &&
+              consecutiveToolCalls === deadLoopHardNudgeAt &&
+              !deadLoopHardNudged
+            ) {
+              deadLoopHardNudged = true;
+              // Stronger "change approach" nudge right before the hard stop,
+              // giving the model a second chance to break out of the loop.
+              deadLoopHardNudgeToolName = event.data.name;
             }
 
             // Build assistant content with tool_use block
@@ -1464,6 +1485,23 @@ export class duyaAgent {
               });
             }
 
+            // Stronger second-stage nudge just before the hard stop. Injected
+            // here (after tool results are committed) so the model sees it as
+            // feedback on those results — same timing as the soft nudge.
+            if (deadLoopHardNudgeToolName) {
+              const toolName = deadLoopHardNudgeToolName;
+              deadLoopHardNudgeToolName = null;
+              messages.push({
+                id: crypto.randomUUID(),
+                role: 'user',
+                content: renderSystemReminder(
+                  `Detected ${deadLoopHardNudgeAt} consecutive identical calls to tool "${toolName}" with no progress. Stop repeating this call now: either change your approach, or state explicitly that you cannot continue and summarize where things stand.`,
+                ),
+                timestamp: Date.now(),
+                seq_index: seqIndex,
+              });
+            }
+
             // widgetStyleHistory and canvasFreshness are stable references
             // injected into toolUseContext; canvas tools mutate them in
             // place, so nothing to copy back here. The next turn reads the
@@ -1523,11 +1561,33 @@ export class duyaAgent {
 
         logger.debug(`[Agent] Turn ${turnCount}: LLM stream ended, total events=${llmEventCount}`);
 
-        // Check max turns limit
-        if (turnCount >= maxTurns) {
-          // Refresh sessionInfo counters BEFORE yielding done event
-          this._commitMessages();
+        // Check max turns limit — only applies while the model keeps
+        // requesting more tool rounds; a natural completion falls through to
+        // the !needsFollowUp branch below. On the first hit, inject a wrap-up
+        // steering message so the model summarizes progress instead of the
+        // run ending abruptly without a conclusion.
+        if (turnCount >= maxTurns && needsFollowUp) {
+          if (!maxTurnsWrapupDone) {
+            maxTurnsWrapupDone = true;
+            logger.warn(
+              `[Agent] Turn ${turnCount}: reached max_turns (${maxTurns}); nudging model to wrap up`,
+            );
+            messages.push({
+              id: crypto.randomUUID(),
+              role: 'user',
+              content: renderSystemReminder(
+                '已达本轮最大工具调用次数上限。请立即收尾：不要再调用任何工具，' +
+                  '用 1-2 句话总结已经完成的进展和尚未完成的事项。',
+              ),
+              timestamp: Date.now(),
+              seq_index: seqIndex,
+            });
+            continue;
+          }
 
+          // Wrap-up turn already granted but the model still requests tools.
+          // Refresh sessionInfo counters BEFORE yielding done event.
+          this._commitMessages();
           yield { type: 'done', reason: 'max_turns' };
           return;
         }
@@ -2000,20 +2060,33 @@ export class duyaAgent {
    * selection (e.g. `promptSystem: 'research'`) is intentionally not
    * resolved here — callers handle profile -> mode mapping.
    */
-  private _resolveAgentProfile(options?: ChatOptions): AgentProfile | undefined {
+  private async _resolveAgentProfile(options?: ChatOptions): Promise<AgentProfile | undefined> {
     if (!options?.agentProfileId) {
       return undefined;
     }
     const profileService = getAgentProfileService();
-    const profile = profileService.get(options.agentProfileId);
-    if (profile) {
+    const preset = profileService.get(options.agentProfileId);
+    if (preset) {
       logger.info(
-        `[Agent] Applying agent profile: ${profile.name} (${profile.id}), promptSystem=${profile.promptSystem || 'general'}`
+        `[Agent] Applying agent profile: ${preset.name} (${preset.id}), promptSystem=${preset.promptSystem || 'general'}`
       );
-      return profile;
+      return preset;
     }
-    logger.warn(`[Agent] Agent profile not found: ${options.agentProfileId}`);
-    return undefined;
+    // Config-driven custom agents (Plan 424): read [agents.<id>] from config.toml.
+    try {
+      const agents = await readConfigAgents();
+      const entry = agents[options.agentProfileId];
+      if (!entry) {
+        logger.warn(`[Agent] Agent profile not found: ${options.agentProfileId}`);
+        return undefined;
+      }
+      const profile = await toAgentProfile(options.agentProfileId, entry);
+      logger.info(`[Agent] Applying config agent profile: ${profile.name} (${profile.id})`);
+      return profile;
+    } catch (err) {
+      logger.warn(`[Agent] Failed to resolve config agent profile ${options.agentProfileId}: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
   }
 
   /**
@@ -2553,7 +2626,7 @@ export class duyaAgent {
     }
 
     // Build a system prompt with no tools — side questions never call tools.
-    const profile = this._resolveAgentProfile({});
+    const profile = await this._resolveAgentProfile({});
     const systemPromptBase = await this._buildSystemPrompt([], {}, profile);
 
     // Project the current timeline to the model boundary (user/assistant/tool
@@ -2880,6 +2953,22 @@ export class duyaAgent {
   }
 
   /**
+   * Build a name → executor map for the current MCP tools, so sub-agents that
+   * opt in via `mcpTools` can reuse this agent's live MCP runtime (the client
+   * is captured in the executor closure) instead of reconnecting the servers.
+   * Only tools carrying `mcpInfo` are included; builtin tools are excluded.
+   */
+  private buildMCPToolExecutors(tools: Tool[]): Map<string, ToolExecutor> {
+    const map = new Map<string, ToolExecutor>();
+    for (const tool of tools) {
+      if (!tool.mcpInfo) continue;
+      const executor = this.activeMCPRegistry.getExecutor(tool.name);
+      if (executor) map.set(tool.name, executor);
+    }
+    return map;
+  }
+
+  /**
    * 获取当前工作目录
    */
   getWorkingDirectory(): string | undefined {
@@ -3007,14 +3096,15 @@ export class duyaAgent {
     strategy: string;
     tokensRemoved: number;
     tokensRetained: number;
+    removedCount: number;
   }> {
     if (this.messages.length === 0) {
-      return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0 };
+      return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0, removedCount: 0 };
     }
 
     const compactEntry = await this.compactionController.compactProactive(options);
     if (!compactEntry) {
-      return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0 };
+      return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0, removedCount: 0 };
     }
 
     // `this.messages` is a timeline-derived getter; the checkpoint entry
@@ -3026,6 +3116,7 @@ export class duyaAgent {
       strategy: compactEntry.strategy,
       tokensRemoved: compactEntry.tokensBefore - (compactEntry.tokensAfter ?? 0),
       tokensRetained: compactEntry.tokensAfter ?? 0,
+      removedCount: compactEntry.compactedMessageIds.length,
     };
   }
 }

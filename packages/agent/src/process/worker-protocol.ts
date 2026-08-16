@@ -80,6 +80,11 @@ export interface ChatStartCommand {
      */
     effort?: string;
     /**
+     * Maximum agentic turns for this run. Absent → worker falls back to the
+     * configured `agent.max_turns`, then its built-in default (100).
+     */
+    maxTurns?: number;
+    /**
      * Allowlist of tool names permitted for this chat turn. When set, only
      * tools whose name is in this list are exposed to the LLM. Used by
      * interagent `minimal` mode to restrict the target agent to Read/Grep/Glob.

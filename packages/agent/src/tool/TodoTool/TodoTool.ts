@@ -61,6 +61,7 @@ export class TodoTool implements Tool, ToolExecutor {
 
 - Send the full list up front with merge=false to replace any existing list.
 - To update, send only the items you are changing with merge=true (default). To flip a status without changing content, send just id + status.
+- Task ids are assigned by the system. After creating a list, reference the returned ids (not the ones you sent) when merging later.
 - Do not use this tool for subagent scheduling — use the \`task\` tool for that.`;
 
   readonly input_schema = {

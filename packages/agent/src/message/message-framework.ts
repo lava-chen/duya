@@ -375,22 +375,6 @@ export class MessageTimeline {
     this.appendEntry(entry);
   }
 
-  appendModelChange(entry: ModelChangeEntry): void {
-    this.appendEntry(entry);
-  }
-
-  appendModeChange(entry: ModeChangeEntry): void {
-    this.appendEntry(entry);
-  }
-
-  appendBranch(entry: BranchEntry): void {
-    this.appendEntry(entry);
-  }
-
-  appendCustomState(entry: CustomStateEntry): void {
-    this.appendEntry(entry);
-  }
-
   snapshot(): readonly MessageTimelineEntry[] {
     return [...this.timeline];
   }

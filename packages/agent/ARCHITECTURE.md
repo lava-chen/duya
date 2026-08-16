@@ -519,7 +519,6 @@ file-parser contracts:
 
 ```text
 @duya/agent
-@duya/agent/types
 @duya/agent/prompts[/types|/modes]
 @duya/agent/tool/registry
 @duya/agent/session

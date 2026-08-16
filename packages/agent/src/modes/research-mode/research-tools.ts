@@ -15,8 +15,10 @@
  * session load can restore the run even without a live SSE event.
  */
 
+import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
+import { expandPath } from '../../utils/path.js';
 import type { ToolExecutor } from '../../tool/registry.js';
 import { researchModeTracker } from './research-tracker.js';
 import type { ResearchState, ResearchEvent } from './research-tracker.js';
@@ -62,6 +64,8 @@ export const RESEARCH_ERROR_CODES = {
   ALREADY_ACTIVE: 'research_already_active',
   NOT_SYNTHESIZING: 'research_report_not_synthesizing',
   COMPLETE: 'research_report_complete',
+  REPORT_FILE_READ_FAILED: 'research_report_file_read_failed',
+  REPORT_NO_CONTENT: 'research_report_no_content',
   NOT_PAUSED: 'research_continue_not_paused',
   NO_ADVANCE: 'research_advance_no_advance',
 } as const;
@@ -148,18 +152,24 @@ const researchReportInputSchema = z.object({
     .string()
     .optional()
     .describe('Short report title shown in the report card header.'),
+  file_path: z
+    .string()
+    .optional()
+    .describe(
+      'Path to the final report markdown file you wrote to disk locally. Provide this instead of report_markdown when you have already written the report with the write tool — the content is read from the file so you do not need to duplicate it in this call. Can be absolute or relative to the working directory.',
+    ),
   report_markdown: z
     .string()
     .optional()
     .describe(
-      'The full final report as markdown. Provide this when completed=true so the report can be rendered as a document and exported/copied.',
+      'The full final report as markdown. Provide this only when you have NOT written the report to a file. Prefer file_path when the report exists on disk so you do not copy the whole text into the tool call.',
     ),
 });
 
 const researchReportDefinition: Tool = {
   name: RESEARCH_REPORT_TOOL_NAME,
   description:
-    'Finalize the research run. Call with completed=true only when you have actually written the report while synthesizing — the lifecycle enforces this. Include the full report markdown in report_markdown and a short title in title so it renders as a document card. Use a plain message without report_markdown for status-only updates.',
+    'Finalize the research run. Call with completed=true only when you have actually written the report while synthesizing — the lifecycle enforces this. Write the full report to a local markdown file with the write tool, then pass its path in file_path with a short title in title so it renders as a document card. If you have not written a file, pass the full markdown in report_markdown instead. Use a plain message without report_markdown/file_path for status-only updates.',
   input_schema: {
     type: 'object',
     properties: {
@@ -175,10 +185,15 @@ const researchReportDefinition: Tool = {
         type: 'string',
         description: 'Short report title shown in the report card header.',
       },
+      file_path: {
+        type: 'string',
+        description:
+          'Path to the final report markdown file you wrote to disk locally. Provide this instead of report_markdown when the report is already written — the content is read from the file.',
+      },
       report_markdown: {
         type: 'string',
         description:
-          'The full final report as markdown. Provide this when completed=true so the report can be rendered as a document and exported/copied.',
+          'The full final report as markdown. Provide this only when you have NOT written the report to a file.',
       },
     },
     required: ['completed'],
@@ -188,14 +203,14 @@ const researchReportDefinition: Tool = {
 const researchReportExecutor: ToolExecutor = {
   async execute(
     input: Record<string, unknown>,
-    _workingDirectory?: string,
+    workingDirectory?: string,
     context?: ToolUseContext,
   ): Promise<ToolResult> {
     const parse = researchReportInputSchema.safeParse(input);
     if (!parse.success) {
       return errorInput(RESEARCH_REPORT_TOOL_NAME, parse.error.message);
     }
-    const { completed, message, title, report_markdown } = parse.data;
+    const { completed, message, title, file_path, report_markdown } = parse.data;
 
     const state = researchModeTracker.state();
     if (state === 'idle') {
@@ -218,6 +233,39 @@ const researchReportExecutor: ToolExecutor = {
           error: true,
         };
       }
+
+      // Prefer the locally-written report file when a file_path is given so
+      // the model does not duplicate the full report text in the tool call.
+      let reportBody = report_markdown;
+      if (file_path) {
+        try {
+          reportBody = await readFile(expandPath(file_path, workingDirectory), 'utf-8');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            id: crypto.randomUUID(),
+            name: RESEARCH_REPORT_TOOL_NAME,
+            result: JSON.stringify({
+              error: `Failed to read report file '${file_path}': ${msg}. Write the report with the write tool first, then pass its path in file_path.`,
+              error_code: RESEARCH_ERROR_CODES.REPORT_FILE_READ_FAILED,
+            }),
+            error: true,
+          };
+        }
+      }
+      if (!reportBody || reportBody.trim().length === 0) {
+        return {
+          id: crypto.randomUUID(),
+          name: RESEARCH_REPORT_TOOL_NAME,
+          result: JSON.stringify({
+            error:
+              'research_report(completed: true) requires report content. Pass a readable file_path (the report you wrote locally) or the full report_markdown.',
+            error_code: RESEARCH_ERROR_CODES.REPORT_NO_CONTENT,
+          }),
+          error: true,
+        };
+      }
+
       const changed = researchModeTracker.transition({ type: 'report_done' });
       if (changed) {
         const sessionId = context?.options.sessionId;
@@ -241,7 +289,8 @@ const researchReportExecutor: ToolExecutor = {
             ? 'Research complete — report finalized.'
             : 'Research could not be finalized (unexpected state).',
           title: title ?? undefined,
-          report_markdown: report_markdown ?? undefined,
+          file_path: file_path ?? undefined,
+          report_markdown: reportBody,
         }),
         error: changed ? false : true,
       };
@@ -258,6 +307,7 @@ const researchReportExecutor: ToolExecutor = {
         query: researchModeTracker.query(),
         message: message ?? undefined,
         title: title ?? undefined,
+        file_path: file_path ?? undefined,
         report_markdown: report_markdown ?? undefined,
       }),
       error: false,

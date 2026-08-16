@@ -290,6 +290,31 @@ function extractTitle(html: string): string {
   return match ? match[1].trim() : '';
 }
 
+// Signals that a 2xx response is actually an error / bot-block page.
+const ERROR_PAGE_RE = /(404\s+not\s+found|page\s+not\s+found|403\s+forbidden|access\s+denied|forbidden|unauthorized|bad\s+request|internal\s+server\s+error|service\s+unavailable|captcha|hcaptcha|recaptcha|anti[- ]?bot|you\s+have\s+been\s+blocked|something\s+went\s+wrong|error\s+occurred)/i;
+
+function matchErrorPageSignal(title: string, content: string): string | null {
+  const searchable = `${title} ${content}`.trim();
+  if (!searchable) return null;
+  const match = searchable.match(ERROR_PAGE_RE);
+  return match ? match[0] : null;
+}
+
+// A 2xx status does not guarantee that the body carries useful content.
+// Treat empty / whitespace-only / near-empty bodies without a title as failures.
+function isContentMeaningful(content: string, title: string): boolean {
+  const text = (content || '').trim();
+  const pageTitle = (title || '').trim();
+
+  // Empty or whitespace-only body with no page title.
+  if (!text && !pageTitle) return false;
+
+  // A very short body with no title is unlikely to carry useful content.
+  if (text.length < 50 && !pageTitle) return false;
+
+  return true;
+}
+
 export class ParallelFetcher {
   async fetchBatch(tasks: FetchTask[]): Promise<FetchResult[]> {
     const results: FetchResult[] = [];
@@ -338,6 +363,29 @@ export class ParallelFetcher {
         interactiveOnly: false,
         maxLength: 100000,
       });
+
+      // A 2xx status does not guarantee useful content; validate before reporting success.
+      if (!isContentMeaningful(compressedContent, title)) {
+        return {
+          id: task.id,
+          url: task.url,
+          success: false,
+          error: 'Empty response: server returned success status but no readable content',
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      // Detect error / bot-block pages served with a 2xx status.
+      const errorSignal = matchErrorPageSignal(title, compressedContent);
+      if (errorSignal) {
+        return {
+          id: task.id,
+          url: task.url,
+          success: false,
+          error: `Error page detected: ${errorSignal}`,
+          durationMs: Date.now() - startTime,
+        };
+      }
 
       return {
         id: task.id,

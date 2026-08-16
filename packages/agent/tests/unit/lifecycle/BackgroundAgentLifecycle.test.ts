@@ -91,6 +91,34 @@ describe('BackgroundAgentLifecycle.getCompleted + markDrained', () => {
   })
 })
 
+describe('BackgroundAgentLifecycle drained retention', () => {
+  it('keeps drained terminal records queryable during the retention window', () => {
+    const lc = new BackgroundAgentLifecycle(60_000)
+    lc.register(makeInput({ taskId: 'a' }))
+    lc.getSnapshot('a')!.status = 'running'
+    lc.complete('a', { content: [{ type: 'text', text: 'done' }], totalDurationMs: 0, totalToolUseCount: 0 })
+    lc.markDrained(['a'])
+    // get_task_output must still resolve a completed task right after the
+    // completion notification was enqueued (previously returned not_found).
+    const rec = lc.getSnapshot('a')
+    expect(rec?.status).toBe('completed')
+    expect(rec?.result?.content[0].text).toBe('done')
+  })
+
+  it('prunes drained records after the retention window elapses', async () => {
+    const lc = new BackgroundAgentLifecycle(1) // 1ms retention
+    lc.register(makeInput({ taskId: 'a' }))
+    lc.getSnapshot('a')!.status = 'running'
+    lc.complete('a', { content: [{ type: 'text', text: 'done' }], totalDurationMs: 0, totalToolUseCount: 0 })
+    lc.markDrained(['a'])
+    // Let the retention window elapse, then a new spawn triggers pruneDrained.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    lc.register(makeInput({ taskId: 'b' }))
+    expect(lc.getSnapshot('a')).toBeUndefined()
+    expect(lc.getSnapshot('b')!.status).toBe('pending')
+  })
+})
+
 describe('BackgroundAgentLifecycle.subscribe', () => {
   it('subscriber fires on every terminal transition', () => {
     const lc = new BackgroundAgentLifecycle()
