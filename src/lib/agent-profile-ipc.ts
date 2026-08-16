@@ -58,6 +58,63 @@ export async function listAgentProfiles(): Promise<AgentProfile[]> {
   return raw.map(parseAgentProfile);
 }
 
+export interface CustomAgentConfig {
+  name?: string;
+  description?: string;
+  model?: string;
+  workspace?: string;
+  agents_md?: string;
+  tools?: { profile?: string; allow?: string[]; deny?: string[] };
+  plugins?: string[];
+}
+
+/** Config-driven custom agents ([agents.<id>] in config.toml). */
+export async function listCustomAgents(): Promise<Record<string, CustomAgentConfig>> {
+  return window.electronAPI.configAgents.list() as Promise<Record<string, CustomAgentConfig>>;
+}
+
+/** Input shape for create/update config agent (mirrors electron CustomAgentConfig). */
+export type AgentUpsertInput = {
+  name: string;
+  description?: string;
+  model?: string;
+  workspace?: string;
+  agents_md?: string;
+  tools?: { profile?: string; allow?: string[]; deny?: string[] };
+  plugins?: string[];
+};
+
+export async function createConfigAgent(id: string, input: AgentUpsertInput): Promise<void> {
+  await window.electronAPI.configAgents.create(id, input);
+}
+export async function updateConfigAgent(id: string, input: AgentUpsertInput): Promise<void> {
+  await window.electronAPI.configAgents.update(id, input);
+}
+export async function deleteConfigAgent(id: string): Promise<boolean> {
+  return window.electronAPI.configAgents.delete(id);
+}
+
+/** Merge config custom agents into an AgentProfile-shaped list (kind='main'). */
+export async function listMainAgentProfiles(): Promise<AgentProfile[]> {
+  const [dbProfiles, customAgents] = await Promise.all([listAgentProfiles(), listCustomAgents()]);
+  const main = dbProfiles.filter((p) => p.kind === 'main');
+  const custom: AgentProfile[] = Object.entries(customAgents).map(([id, c]) => ({
+    id,
+    name: c.name || id,
+    description: c.description,
+    allowedTools: c.tools?.allow,
+    disallowedTools: [...(c.tools?.deny ?? [])],
+    defaultModel: c.model,
+    kind: 'main',
+    userVisible: true,
+    isPreset: false,
+    isEnabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  }));
+  return [...main, ...custom];
+}
+
 export async function getAgentProfile(id: string): Promise<AgentProfile | null> {
   const raw = await window.electronAPI.agentProfile.get(id) as RawAgentProfile | null;
   return raw ? parseAgentProfile(raw) : null;

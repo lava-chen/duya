@@ -14,6 +14,26 @@ import { Command } from '@commander-js/extra-typings';
 import { CLI_DESCRIPTORS } from './descriptors.js';
 import { type CliSubcommand, type CliSubcommandContext } from './registry.js';
 
+/**
+ * Normalize a repeated / comma-separated CLI list value into string[].
+ * Commander keeps only the last value for a repeated `<value>` option,
+ * so we split on commas as well; never returns an empty array.
+ */
+function toList(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) {
+    const xs = v.filter((x): x is string => typeof x === 'string' && x.length > 0);
+    return xs.length > 0 ? xs : undefined;
+  }
+  if (typeof v === 'string' && v.length > 0) {
+    const xs = v
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return xs.length > 0 ? xs : undefined;
+  }
+  return undefined;
+}
+
 function buildOptions(cmd: Command, sub: CliSubcommand): void {
   const seen = new Set<string>();
   const declared = (opt: { flags: string; description: string }): void => {
@@ -121,6 +141,18 @@ export function buildControlPlane(program: Command): void {
             configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
             configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
             configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,
+            // Plan 102 — `duya agent` argv surface.
+            agentId: typeof opts.id === 'string' ? opts.id : undefined,
+            agentName: typeof opts.name === 'string' ? opts.name : undefined,
+            agentDescription: typeof opts.description === 'string' ? opts.description : undefined,
+            agentWorkspace: typeof opts.workspace === 'string' ? opts.workspace : undefined,
+            agentModel: typeof opts.model === 'string' ? opts.model : undefined,
+            agentInstructionsFile:
+              typeof opts.instructionsFile === 'string' ? opts.instructionsFile : undefined,
+            agentToolsProfile: typeof opts.toolsProfile === 'string' ? opts.toolsProfile : undefined,
+            agentAllow: toList(opts.allow),
+            agentDeny: toList(opts.deny),
+            agentPlugins: toList(opts.plugins),
             // Plan 200 P4 — plugin list / install / uninstall flags.
             enabled: opts.enabled === true,
             verbose: opts.verbose === true,

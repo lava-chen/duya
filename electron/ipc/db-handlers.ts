@@ -14,6 +14,7 @@ import { getAgentProcessPool } from '../agents/process-pool/agent-process-pool';
 import { getAutomationScheduler } from '../automation/Scheduler';
 import type { CreateAutomationCronInput, UpdateAutomationCronInput } from '../automation/types';
 import { getLogger, LogComponent } from '../logging/logger';
+import { setBrowserMaxTabs } from '../services/browser/daemon';
 import {
   createCanvas as createConductorCanvas,
   getMaxZIndex,
@@ -29,6 +30,7 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
+import { listConfigAgents, upsertConfigAgent, deleteConfigAgent } from '../config/agents';
 import {
   getWeixinAccounts,
   upsertWeixinAccount,
@@ -519,6 +521,7 @@ export function registerDbHandlers(): void {
     session_id: string;
     subject: string;
     description: string;
+    status?: string;
     active_form?: string;
     owner?: string;
   }) => {
@@ -675,6 +678,9 @@ export function registerDbHandlers(): void {
     if (isGatewayConfigKey(key)) {
       emitGatewayConfigChanged(`db:setting:set:${key}`);
     }
+    if (key === 'browserMaxTabs') {
+      setBrowserMaxTabs(Number(value));
+    }
   });
 
   ipcMain.handle('db:setting:getAll', () => {
@@ -739,6 +745,12 @@ export function registerDbHandlers(): void {
     // agent server is silently ignored by the helper.
     if (key === 'mcpServers') {
       void notifyMcpConfigChanged();
+    }
+    // Live-propagate the browser page cap to the daemon (built-in webview
+    // backend + Chrome extension) so the user's settings take effect
+    // immediately on running agents.
+    if (key === 'browserMaxTabs') {
+      setBrowserMaxTabs(typeof value === 'number' ? value : Number(value));
     }
   });
 
@@ -1131,6 +1143,22 @@ export function registerDbHandlers(): void {
       updated_at: now,
     });
     return database.prepare('SELECT * FROM agent_profiles WHERE id = ?').get(id);
+  });
+
+  // Plan 424: expose config-driven custom agent profiles to the renderer.
+  ipcMain.handle('config:agents:list', () => {
+    const store = getConfigStore();
+    return store.getByPath('agents') ?? {};
+  });
+  ipcMain.handle('config:agents:create', (_event, id: string, input: unknown) => {
+    return upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
+  });
+  ipcMain.handle('config:agents:update', (_event, id: string, input: unknown) => {
+    if (!(id in listConfigAgents())) throw new Error(`agent '${id}' not found`);
+    return upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
+  });
+  ipcMain.handle('config:agents:delete', (_event, id: string) => {
+    return deleteConfigAgent(id);
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {

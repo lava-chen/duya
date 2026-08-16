@@ -62,7 +62,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [420-goal-observability-persistence](./active/420-goal-observability-persistence.md) | Goal 可观测性+持久化：迁移日志 / goal_mode_enabled 标签恢复 / start 立即落盘 + 富事件 + 渲染端 modeState.get | P1 | ✅ 完成（2026-08-12） |
 | [421-goal-ui](./active/421-goal-ui.md) | Goal UI 重设计（对齐 OptionPanel）：GoalStatusChip + GoalStatusPanel + 删旧 GoalStatusCard | P1 | ✅ 完成（2026-08-12） |
 | [422-compaction-strategy-consolidation](./active/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model） | P0 | Implementation |
-| [424-config-driven-custom-agents](./active/424-config-driven-custom-agents.md) | 配置化自定义 Agent：config.toml `[agents.<id>]` 驱动 + 每 agent 独立 workspace/AGENTS.md + model/tools/plugins（对齐 openclaw；取代 420 DB 方向） | P1 | Planning |
+| [424-config-driven-custom-agents](./active/424-config-driven-custom-agents.md) | 配置化自定义 Agent：config.toml `[agents.<id>]` 驱动 + 每 agent 独立 workspace/AGENTS.md + model/tools/plugins（对齐 openclaw；取代 420 DB 方向） | P1 | 读侧接线完成（Task 3-7）；创建层落地于 [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) |
+| [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) | 自定义 Agent 创建：对话式（内置 skill）+ CLI（`duya agent create/list/delete`）+ 设置页表单三端统一写 `~/.duya/config.toml` `[agents.<id>]` | P1 | ✅ 实现完成（Phase A 读侧 + Phase B 创建层，24 单测通过） |
 
 ### Conductor / Canvas
 
@@ -149,6 +150,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
+| [426-low-spec-performance](./active/426-low-spec-performance.md) | 低配机器性能优化 — worker 并发自适应+空闲回收、lowPower 开关（轮询治理/渲染减负/服务降频延后） | P1 | Planning |
 | [214-agent-core-audit](./active/214-agent-core-audit.md) | Full read-only audit of agent runtime, IPC, renderer, DB, lifecycle, packaging | P0 | Phase 1 ✅ (audit only), Phase 2 ⏳ |
 | [94-research-mode-loop-improvement](./active/94-research-mode-loop-improvement.md) | Research Mode loop — dynamic ranking, StopDecision, SourceEvaluator, dedupe | P1 | Milestone 1 ✅, M2.1-3 📋 |
 | [95-external-agent-import](./active/95-external-agent-import.md) | Import project context/memory/skills from Claude Code / Codex | P1 | Phase 1 ✅ |

@@ -346,6 +346,31 @@ Main 收到 chat:start
   └─ chat:done → Agent 退出 → release 槽位 → 触发队列下一个
 ```
 
+### 自定义 Agent（config.toml `[agents.<id>]`）
+
+用户自定义 agent 完全由 `~/.duya/config.toml` 驱动（Plan 424 + custom-agent-creation），不落 DB。每个 agent 有独立 `workspace` + 全局指令文件（`agents_md`，默认 `<workspace>/AGENTS.md`），`model` 覆盖会话模型，`tools`/`plugins` 决定工具面。
+
+```toml
+[agents."frontend-expert"]
+name = "Frontend Expert"
+description = "前端专家，专注 React/TS"
+model = "anthropic/claude-sonnet-4-20250514"   # 覆盖会话模型（省略 → 回退默认）
+workspace = "~/duya-workspaces/frontend"        # 该 agent 自己的工作目录
+agents_md = "~/.duya/agents/frontend-expert/AGENTS.md"  # 全局指令路径（省略 → <workspace>/AGENTS.md）
+tools = { profile = "coding", allow = ["file:*", "search:*"], deny = ["browser"] }
+plugins = ["mcp:github"]                        # 本版本仅存储+暴露，per-agent MCP 门控为 follow-up
+```
+
+- **schema**：`CustomAgentConfig` + `DuyaConfig.agents`（`electron/config/schema.ts`），默认 `{}`。
+- **读链路**：
+  - 主进程/前端：renderer IPC `config:agents:list`（`electron/ipc/db-handlers.ts`）→ `electron/preload.ts` `configAgents.list` → `src/lib/agent-profile-ipc.ts` `listCustomAgents()`；picker/快捷位用 `listMainAgentProfiles()` 与 3 个预设合并展示；选自定义 agent 建会话时用其 `model`/`workspace` 覆盖（`NewChatView.tsx`）。
+  - 运行时：`packages/agent/src/agent-profile/config-agents.ts` `readConfigAgents()`/`toAgentProfile()` 直接读 config.toml（复刻 `readUserMcpToml` 先例），`DuyaAgent._resolveAgentProfile` 对非预设 id 构建 `AgentProfile`，`agent-shell.ts buildSystemPrompt` 把 `agents_md` 内容作为独立 `<system-reminder>` 块注入。
+- **写链路（三端统一）**：`electron/config/agents.ts` 共享写模块（`listConfigAgents`/`upsertConfigAgent`/`deleteConfigAgent`，校验 id 格式 + name 必填，经 ConfigStore 持久化 + hot-reload）。
+  - 表单：renderer IPC `config:agents:create/update/delete`（`db-handlers.ts` + `preload.ts`）→ `src/lib/agent-profile-ipc.ts` 写客户端 → `AgentsSection.tsx` CRUD 表单。
+  - CLI：`duya agent create/list/delete`（`packages/cli/src/commands/agent.ts`）→ HTTP `GET/POST /v1/config/agents`、`DELETE /v1/config/agents/:id`（`electron/cli/handlers/config.ts` + `cli-api-server.ts`）→ 写模块。CLI 侧先 `fs.mkdirSync` 建 workspace / 写 AGENTS.md，再调 HTTP 写 config。
+  - 对话式：内置 `packages/agent/skills/development/agent-create/SKILL.md` skill 用现有文件工具直接写 config.toml + workspace（`~/.duya` 已在 allowed-dirs），不经 IPC。
+- **约束**：id 需匹配 `/^[a-z0-9][a-z0-9-]*$/`；删除仅移除 config 段，不动 workspace/AGENTS.md。
+
 ### 安全设计
 
 #### Golden Trident 数据架构："物理分离、单一职责、原子防御"
@@ -964,10 +989,8 @@ duya/
 │
 ├── packages/agent/src/
 │   ├── index.ts                  # Pure barrel: re-exports public API + `duyaAgent` from `./agent/DuyaAgent.js`
-│   ├── agent/                    # duyaAgent class implementation home (plan 334 四层)
+│   ├── agent/                    # duyaAgent class implementation home (plan 334)
 │   │   ├── DuyaAgent.ts          # `duyaAgent` 薄状态壳 (~740 LoC) + public surface
-│   │   ├── types.ts              # 循环层类型契约: LoopState / AgentLoopConfig / AgentDeps / LoopEvent
-│   │   ├── agent-loop.ts         # 无状态核心循环 runAgentLoop (plan 334)
 │   │   ├── session/
 │   │   │   ├── agent-shell.ts    # streamChat 装配纯函数 + LoopEvent→SSEEvent 适配
 │   │   │   ├── history.ts        # HistoryStore (timeline 写入/重建/清空)

@@ -48,6 +48,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   openLinksInExternalBrowser: 'browser.open_links_in_external_browser',
   defaultPermissionMode: 'agent.default_permission_mode',
   defaultIde: 'ide.default',
+  customAgents: 'agents',
 };
 
 type PortRole = 'renderer' | 'agent' | 'main';

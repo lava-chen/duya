@@ -58,6 +58,11 @@ export interface AgentProfile {
    */
   identityPrompt?: string;
 
+  /** Optional full agent global instructions (loaded from config `agents_md`),
+   *  injected as an extra <system-reminder> block. Config-driven custom
+   *  agents only; not persisted to the DB. */
+  globalInstructions?: string;
+
   /** Whether this profile is selectable by users in the UI */
   userVisible: boolean;
   /** Whether this is a preset profile */

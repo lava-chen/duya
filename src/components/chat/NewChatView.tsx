@@ -17,16 +17,14 @@ import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { MessageInput } from './MessageInput';
 import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
+import { listCustomAgents } from '@/lib/agent-profile-ipc';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
-import { useDefaultPermission } from '@/stores/default-permission-store';
-import type { PermissionMode } from './PermissionModeSelector';
 import type { FileAttachment } from '@/types/message';
 
 interface NewChatViewProps {
   onSendMessage: (
     content: string,
-    permissionMode?: PermissionMode,
     model?: string,
     files?: FileAttachment[],
     agentProfileId?: string | null,
@@ -56,17 +54,6 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
-  const defaultPermission = useDefaultPermission();
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
-  const permissionTouchedRef = useRef(false);
-
-  // The global default (agent.default_permission_mode) may arrive asynchronously
-  // after mount; apply it unless the user already picked a mode in this composer.
-  useEffect(() => {
-    if (!permissionTouchedRef.current) {
-      setPermissionMode(defaultPermission);
-    }
-  }, [defaultPermission]);
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
 
@@ -149,11 +136,6 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
     if (nextProviderId) {
       setProviderId(nextProviderId);
     }
-  }, []);
-
-  const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
-    permissionTouchedRef.current = true;
-    setPermissionMode(mode);
   }, []);
 
   const handleDraftChange = useCallback(
@@ -306,12 +288,22 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
           }
         }
 
+        // Plan 424: when a config-driven custom agent ([agents.<id>]) is
+        // selected, its model and workspace override the session parameters.
+        const customAgents = await listCustomAgents();
+        const custom = agentProfileId ? customAgents[agentProfileId] : undefined;
+        let sessionModelName = actualModel;
+        if (custom) {
+          workingDirectory = custom.workspace || workingDirectory;
+          if (custom.model) sessionModelName = parseModelName(custom.model).modelName || custom.model;
+        }
+
         const thread = await createThread({
           workingDirectory,
           projectName,
           noProject: !workingDirectory,
           providerId: effectiveProviderId || undefined,
-          model: actualModel || undefined,
+          model: sessionModelName || undefined,
           agentProfileId,
         });
         if (!thread) return;
@@ -330,7 +322,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig);
           });
         });
       } catch (error) {
@@ -339,7 +331,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, permissionMode, agentProfileId],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId],
   );
 
   return (
@@ -361,8 +353,6 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
-              permissionMode={permissionMode}
-              onPermissionModeChange={handlePermissionModeChange}
               placeholder={t('chat.describeWhatToBuild')}
               popoverPlacement="bottom"
               draftMode

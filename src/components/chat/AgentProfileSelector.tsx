@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronDownIcon, RobotIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import {
-  listAgentProfiles,
+  listMainAgentProfiles,
   setSessionAgentProfile,
   type AgentProfile,
 } from '@/lib/agent-profile-ipc';
@@ -38,7 +38,7 @@ export function AgentProfileSelector({
 
   const loadProfiles = useCallback(async () => {
     try {
-      const data = await listAgentProfiles();
+      const data = await listMainAgentProfiles();
       setProfiles(data);
     } catch (error) {
       console.error('[AgentProfileSelector] Failed to load profiles:', error);

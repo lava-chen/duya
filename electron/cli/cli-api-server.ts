@@ -56,6 +56,9 @@ import {
   handleConfigKvGet,
   handleConfigKvUnset,
   handleConfigValidate,
+  handleListConfigAgents,
+  handleUpsertConfigAgent,
+  handleDeleteConfigAgent,
 } from './handlers/config.js';
 import {
   handleListChannels,
@@ -750,6 +753,24 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/config/validate
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'validate') {
     void handleConfigValidate(req, res);
+    return;
+  }
+
+  // GET /v1/config/agents
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'agents') {
+    handleListConfigAgents(req, res);
+    return;
+  }
+
+  // POST /v1/config/agents
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'agents') {
+    void handleUpsertConfigAgent(req, res);
+    return;
+  }
+
+  // DELETE /v1/config/agents/:id
+  if (req.method === 'DELETE' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'agents') {
+    void handleDeleteConfigAgent(req, res, decodeURIComponent(parts[3]));
     return;
   }
 

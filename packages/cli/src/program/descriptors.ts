@@ -74,6 +74,7 @@ import {
   runConfigKvUnset,
   runConfigValidate,
 } from '../commands/config.js';
+import { runAgentList, runAgentCreate, runAgentDelete } from '../commands/agent.js';
 
 import {
   type CliSubcommand,
@@ -891,6 +892,43 @@ const subConfigValidate: CliSubcommand = {
   run: (ctx) => runConfigValidate(ctx),
 };
 
+// ============================================================================
+// Plan 102 — `duya agent …` custom config-driven agents
+// (create / list / delete). Thin wrappers around /v1/config/agents.
+// ============================================================================
+
+const subAgentList: CliSubcommand = {
+  description: 'List configured custom agents (id / name / model / workspace / agents_md).',
+  run: (ctx) => runAgentList(ctx),
+};
+
+const subAgentCreate: CliSubcommand = {
+  description:
+    'Create a custom config-driven agent. Plan 102 write op; creates the workspace dir and seeds a placeholder instructions file when needed. --yes required in non-TTY.',
+  write: true,
+  options: [
+    { flags: '--id <id>', description: 'Agent id (defaults to a slug of --name)' },
+    { flags: '--name <name>', description: 'Agent display name' },
+    { flags: '--workspace <path>', description: 'Working directory for the agent' },
+    { flags: '--model <model>', description: 'Default model' },
+    { flags: '--instructions-file <path>', description: 'Path to a global instructions (AGENTS.md-like) file' },
+    { flags: '--tools-profile <profile>', description: 'Tools profile (e.g. minimal / standard / full)' },
+    { flags: '--allow <pattern>', description: 'Allow tool pattern (repeatable or comma-separated)' },
+    { flags: '--deny <pattern>', description: 'Deny tool pattern (repeatable or comma-separated)' },
+    { flags: '--plugins <ref>', description: 'Plugin reference (repeatable or comma-separated)' },
+    { flags: '--yes', description: 'Skip confirmation prompt' },
+  ],
+  run: (ctx) => runAgentCreate(ctx),
+};
+
+const subAgentDelete: CliSubcommand = {
+  description: 'Delete a custom config-driven agent. Plan 102 write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'id', required: true, description: 'Agent id' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: (ctx) => runAgentDelete(ctx),
+};
+
 const subSessionSearch: CliSubcommand = {
   description: 'Search top-level user-visible sessions by title (substring match)',
   options: [
@@ -1083,6 +1121,15 @@ export const CLI_DESCRIPTORS = defineDescriptors([
     name: 'uninstall-cli',
     description: 'Remove the `duya` wrapper script installed by `duya install-cli`',
     subcommands: { default: subUninstallCli },
+  },
+  {
+    name: 'agent',
+    description: 'Manage custom config-driven agents (create / list / delete)',
+    subcommands: {
+      create: subAgentCreate,
+      list: subAgentList,
+      delete: subAgentDelete,
+    },
   },
   {
     name: 'config',

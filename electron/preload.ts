@@ -558,6 +558,13 @@ export interface AgentProfileAPI {
   delete: (id: string) => Promise<boolean>
 }
 
+export interface ConfigAgentsAPI {
+  list: () => Promise<Record<string, unknown>>;
+  create: (id: string, input: Record<string, unknown>) => Promise<unknown>;
+  update: (id: string, input: Record<string, unknown>) => Promise<unknown>;
+  delete: (id: string) => Promise<boolean>;
+}
+
 export interface BrowserExtensionStatus {
   daemonRunning: boolean;
   extensionConnected: boolean;
@@ -979,6 +986,7 @@ export interface ElectronAPI {
   browserBackend: BrowserBackendAPI
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
+  configAgents: ConfigAgentsAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
   terminal: TerminalAPI
@@ -1777,6 +1785,12 @@ const electronAPI: ElectronAPI = {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:create', data),
     update: (id: string, data: Record<string, unknown>) => ipcRenderer.invoke('db:agentProfile:update', id, data),
     delete: (id: string) => ipcRenderer.invoke('db:agentProfile:delete', id),
+  },
+  configAgents: {
+    list: () => ipcRenderer.invoke('config:agents:list'),
+    create: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:create', id, input),
+    update: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:update', id, input),
+    delete: (id: string) => ipcRenderer.invoke('config:agents:delete', id),
   },
   recap: {
     request: (sessionId: string) => ipcRenderer.invoke('recap:request', sessionId),

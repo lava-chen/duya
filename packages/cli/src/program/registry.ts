@@ -50,6 +50,7 @@ export type CliCommandPath =
   | 'install-cli'
   | 'uninstall-cli'
   | 'config'
+  | 'agent'
   | 'voice';
 
 /**
@@ -106,6 +107,18 @@ export interface CliSubcommandOptions {
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];
+  // Plan 102 — `duya agent` argv surface (custom config-driven agents),
+  // forwarded from build-control-plane.ts.
+  agentId?: string;
+  agentName?: string;
+  agentDescription?: string;
+  agentWorkspace?: string;
+  agentModel?: string;
+  agentInstructionsFile?: string;
+  agentToolsProfile?: string;
+  agentAllow?: string | string[];
+  agentDeny?: string | string[];
+  agentPlugins?: string | string[];
   [key: string]: string | boolean | string[] | undefined;
 }
 
