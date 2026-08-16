@@ -210,6 +210,15 @@ export async function buildSystemPrompt(
     }
   }
 
+  // Plan 424: config-driven custom agent global instructions
+  // (loaded from `agents_md`). Injected as its own <system-reminder> block
+  // so the agent's own rules stay separated from project AGENTS.md.
+  if (appliedProfile?.globalInstructions) {
+    systemPromptContent = systemPromptContent
+      ? `${systemPromptContent}\n\n<system-reminder>\n<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>\n</system-reminder>`
+      : `<system-reminder>\n<agent_global_instructions>\n${appliedProfile.globalInstructions}\n</agent_global_instructions>\n</system-reminder>`;
+  }
+
   return systemPromptContent;
 }
 
@@ -316,7 +325,7 @@ export async function* streamLoopEvents<T, U>(
     }
   } finally {
     if (error) {
-      logger.error('[Agent] runAgentLoop failed', error instanceof Error ? error : new Error(String(error)));
+      logger.error('[Agent] streamLoopEvents failed', error instanceof Error ? error : new Error(String(error)));
     }
     onFinally?.();
     await runPromise.catch(() => undefined);

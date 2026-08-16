@@ -10,7 +10,7 @@ import {
 } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import {
-  listAgentProfiles,
+  listMainAgentProfiles,
   type AgentProfile,
 } from '@/lib/agent-profile-ipc';
 import { getAllSettingsIPC } from '@/lib/ipc-client';
@@ -78,7 +78,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
           }
         }
 
-        const profiles = await listAgentProfiles();
+        const profiles = await listMainAgentProfiles();
         const profileMap = new Map(profiles.map((p) => [p.id, p]));
 
         // Favorites first (max 3), then any remaining selectable main agents so

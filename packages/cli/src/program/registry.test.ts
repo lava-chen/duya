@@ -40,12 +40,14 @@ describe('CLI_DESCRIPTORS — frozen v1.0.0', () => {
     'update',
     'backup',
     'security',
+    'voice',
     'install-cli',
     'uninstall-cli',
+    'agent',
     'config',
   ];
 
-  it('has all 17 expected top-level command paths', () => {
+  it('has all 19 expected top-level command paths', () => {
     const actual = CLI_DESCRIPTORS.map((d) => d.name);
     expect(actual).toEqual(EXPECTED_PATHS);
   });
@@ -159,7 +161,7 @@ describe('error message helpers', () => {
     const list = listCommandNames(CLI_DESCRIPTORS);
     expect(list).toContain('status | plugin');
     expect(list).toContain('message | gateway');
-    expect(list).toContain('security | install-cli');
+    expect(list).toContain('security | voice');
   });
 
   it('listSubcommandNames joins a command\'s subcommands', () => {

@@ -34,6 +34,7 @@ import {
 } from '../../../src/lib/providers/legacy';
 import { getPairingStore } from '../../gateway/pairing';
 import { appendAuditEvent, type AuditEvent, type AuditEventKind } from '../../services/controlPlaneAudit';
+import { listConfigAgents, upsertConfigAgent, deleteConfigAgent } from '../../config/agents';
 
 // ---------------------------------------------------------------------------
 // Error envelope helpers
@@ -879,6 +880,64 @@ export async function handleConfigValidate(
     // Restore the original value so validate is effectively read-only.
     getConfigStore().set(CFG_PATH[body.key], before);
     sendJson(res, 200, { valid: true });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GET /v1/config/agents
+// ---------------------------------------------------------------------------
+
+export function handleListConfigAgents(_req: IncomingMessage, res: ServerResponse): void {
+  try {
+    sendJson(res, 200, { agents: listConfigAgents() });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /v1/config/agents
+// body: { id, name?, description?, model?, workspace?, agents_md?, tools?, plugins? }
+// ---------------------------------------------------------------------------
+
+export async function handleUpsertConfigAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    sendError(res, 400, 'invalid_request', err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const id = typeof body.id === 'string' ? body.id : '';
+  if (!id) {
+    sendError(res, 400, 'invalid_request', 'id is required');
+    return;
+  }
+  try {
+    const agent = upsertConfigAgent(id, body as unknown as Parameters<typeof upsertConfigAgent>[1]);
+    sendJson(res, 200, { ok: true, agent });
+  } catch (err) {
+    const c = classify(err);
+    sendError(res, c.status, c.code, c.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /v1/config/agents/:id
+// ---------------------------------------------------------------------------
+
+export function handleDeleteConfigAgent(_req: IncomingMessage, res: ServerResponse, id: string): void {
+  try {
+    const ok = deleteConfigAgent(id);
+    if (!ok) {
+      sendError(res, 404, 'agent_not_found', `Agent '${id}' not found`);
+      return;
+    }
+    sendJson(res, 200, { ok: true, removed: id });
   } catch (err) {
     const c = classify(err);
     sendError(res, c.status, c.code, c.message);

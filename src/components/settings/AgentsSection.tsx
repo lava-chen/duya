@@ -29,7 +29,13 @@ import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
 import {
   listAgentProfiles,
+  listCustomAgents,
+  createConfigAgent,
+  updateConfigAgent,
+  deleteConfigAgent,
   type AgentProfile,
+  type AgentUpsertInput,
+  type CustomAgentConfig,
 } from "@/lib/agent-profile-ipc";
 import {
   listOutputStylesIPC,
@@ -72,6 +78,34 @@ export function AgentsSection() {
   const [styleFormKeepCoding, setStyleFormKeepCoding] = useState(false);
   const [styleSaving, setStyleSaving] = useState(false);
   const [styleError, setStyleError] = useState<string | null>(null);
+
+  // Config Agents (config.toml [agents.<id>]) — CRUD form (Plan 424).
+  const [configAgents, setConfigAgents] = useState<Record<string, CustomAgentConfig>>({});
+  const [configAgentsLoading, setConfigAgentsLoading] = useState(true);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [isCreatingAgent, setIsCreatingAgent] = useState(false);
+  const [agentFormName, setAgentFormName] = useState("");
+  const [agentFormDescription, setAgentFormDescription] = useState("");
+  const [agentFormWorkspace, setAgentFormWorkspace] = useState("");
+  const [agentFormModel, setAgentFormModel] = useState("");
+  const [agentFormAgentsMd, setAgentFormAgentsMd] = useState("");
+  const [agentFormToolsProfile, setAgentFormToolsProfile] = useState("");
+  const [agentSaving, setAgentSaving] = useState(false);
+  const [agentError, setAgentError] = useState<string | null>(null);
+
+  const loadConfigAgents = useCallback(async () => {
+    try {
+      setConfigAgents(await listCustomAgents());
+    } catch (err) {
+      console.error("[AgentsSection] Failed to load config agents:", err);
+    } finally {
+      setConfigAgentsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadConfigAgents();
+  }, [loadConfigAgents]);
 
   const loadOutputStyles = useCallback(async () => {
     try {
@@ -217,6 +251,91 @@ export function AgentsSection() {
       await loadOutputStyles();
     } catch (err) {
       console.error("Failed to delete style:", err);
+    }
+  };
+
+  // Config Agents CRUD
+  const startCreateAgent = () => {
+    setAgentFormName("");
+    setAgentFormDescription("");
+    setAgentFormWorkspace("");
+    setAgentFormModel("");
+    setAgentFormAgentsMd("");
+    setAgentFormToolsProfile("");
+    setAgentError(null);
+    setIsCreatingAgent(true);
+    setEditingAgentId(null);
+  };
+
+  const startEditAgent = (id: string, agent: CustomAgentConfig) => {
+    setAgentFormName(agent.name || "");
+    setAgentFormDescription(agent.description || "");
+    setAgentFormWorkspace(agent.workspace || "");
+    setAgentFormModel(agent.model || "");
+    setAgentFormAgentsMd(agent.agents_md || "");
+    setAgentFormToolsProfile(agent.tools?.profile || "");
+    setAgentError(null);
+    setIsCreatingAgent(false);
+    setEditingAgentId(id);
+  };
+
+  const cancelAgentForm = () => {
+    setIsCreatingAgent(false);
+    setEditingAgentId(null);
+    setAgentError(null);
+  };
+
+  const saveAgent = async () => {
+    if (!agentFormName.trim()) {
+      setAgentError(t("settings.agents.configAgentsNameRequired") || "Name is required");
+      return;
+    }
+
+    setAgentSaving(true);
+    setAgentError(null);
+
+    try {
+      const id = editingAgentId
+        ? editingAgentId
+        : agentFormName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+      const input: AgentUpsertInput = {
+        name: agentFormName.trim(),
+        description: agentFormDescription.trim() || undefined,
+        workspace: agentFormWorkspace.trim() || undefined,
+        model: agentFormModel.trim() || undefined,
+        agents_md: agentFormAgentsMd || undefined,
+        tools: agentFormToolsProfile
+          ? { profile: agentFormToolsProfile }
+          : undefined,
+      };
+
+      if (editingAgentId) {
+        await updateConfigAgent(id, input);
+      } else {
+        await createConfigAgent(id, input);
+      }
+
+      await loadConfigAgents();
+      cancelAgentForm();
+    } catch (err) {
+      setAgentError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAgentSaving(false);
+    }
+  };
+
+  const deleteAgent = async (id: string, name: string) => {
+    const confirmed = window.confirm(
+      t("settings.agents.configAgentsConfirmDelete")?.replace("{name}", name) ||
+        `Delete custom agent "${name}"?`
+    );
+    if (!confirmed) return;
+    try {
+      await deleteConfigAgent(id);
+      await loadConfigAgents();
+    } catch (err) {
+      console.error("Failed to delete config agent:", err);
     }
   };
 
@@ -551,6 +670,189 @@ export function AgentsSection() {
                 >
                   <PlusIcon size={14} />
                   {t("outputStyles.create") || "Create output style"}
+                </Button>
+              </div>
+            </>
+          )}
+        </SettingsCard>
+      </SettingsSection>
+
+      {/* Config Agents Section (config.toml) */}
+      <SettingsSection
+        title={t("settings.agents.configAgentsTitle") || "Config Agents (config.toml)"}
+        description={t("settings.agents.configAgentsDesc") || "Configured in ~/.duya/config.toml under [agents.<id>]. Create, edit, and delete custom agents here."}
+      >
+        <SettingsCard>
+          {(isCreatingAgent || editingAgentId) ? (
+            <div className="py-4 space-y-3">
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsName") || "Name"} *
+                </label>
+                <Input
+                  type="text"
+                  value={agentFormName}
+                  onChange={(e) => setAgentFormName(e.target.value)}
+                  placeholder={t("settings.agents.configAgentsNamePlaceholder") || "e.g. Frontend Expert"}
+                  disabled={agentSaving}
+                />
+                {!editingAgentId && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {t("settings.agents.configAgentsIdNote") || "The id is derived from the name (e.g. frontend-expert)."}
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsDescription") || "Description"}
+                </label>
+                <Input
+                  type="text"
+                  value={agentFormDescription}
+                  onChange={(e) => setAgentFormDescription(e.target.value)}
+                  placeholder={t("settings.agents.configAgentsDescriptionPlaceholder") || "Optional description"}
+                  disabled={agentSaving}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsWorkspace") || "Workspace"}
+                </label>
+                <Input
+                  type="text"
+                  value={agentFormWorkspace}
+                  onChange={(e) => setAgentFormWorkspace(e.target.value)}
+                  placeholder={t("settings.agents.configAgentsWorkspacePlaceholder") || "Optional working directory"}
+                  disabled={agentSaving}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsModel") || "Model"}
+                </label>
+                <Input
+                  type="text"
+                  value={agentFormModel}
+                  onChange={(e) => setAgentFormModel(e.target.value)}
+                  placeholder={t("settings.agents.configAgentsModelPlaceholder") || "e.g. anthropic/claude-sonnet-4"}
+                  disabled={agentSaving}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsAgentsMd") || "Agents.md"}
+                </label>
+                <textarea
+                  value={agentFormAgentsMd}
+                  onChange={(e) => setAgentFormAgentsMd(e.target.value)}
+                  rows={4}
+                  className="w-full px-3 py-2 rounded-lg border border-border/50 bg-surface text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-accent resize-vertical"
+                  placeholder={t("settings.agents.configAgentsAgentsMdPlaceholder") || "Optional agent instructions"}
+                  disabled={agentSaving}
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-foreground block mb-1.5">
+                  {t("settings.agents.configAgentsToolsProfile") || "Tools profile"}
+                </label>
+                <select
+                  value={agentFormToolsProfile}
+                  onChange={(e) => setAgentFormToolsProfile(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-border/50 bg-surface text-sm text-foreground focus:outline-none focus:border-accent"
+                  disabled={agentSaving}
+                >
+                  <option value="">{t("settings.agents.configAgentsToolsProfileDefault") || "Default"}</option>
+                  <option value="full">Full</option>
+                  <option value="coding">Coding</option>
+                  <option value="minimal">Minimal</option>
+                  <option value="research">Research</option>
+                </select>
+              </div>
+              {agentError && (
+                <p className="text-sm text-red-400">{agentError}</p>
+              )}
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  variant="ghost"
+                  onClick={cancelAgentForm}
+                  disabled={agentSaving}
+                >
+                  {t("common.cancel")}
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={saveAgent}
+                  disabled={agentSaving}
+                >
+                  {agentSaving ? (
+                    <SpinnerGapIcon size={14} className="animate-spin" />
+                  ) : (
+                    <CheckIcon size={14} />
+                  )}
+                  {agentSaving ? t("common.loading") : t("common.save")}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {configAgentsLoading ? (
+                <div className="text-sm text-muted-foreground py-4 text-center">
+                  {t("common.loading")}
+                </div>
+              ) : Object.keys(configAgents).length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <RobotIcon size={32} className="mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">
+                    {t("settings.agents.configAgentsEmpty") || "No custom agents configured yet."}
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-border/30">
+                  {Object.entries(configAgents).map(([id, agent]) => (
+                    <div key={id} className="flex items-center justify-between py-3 gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-foreground truncate">
+                          {agent.name || id}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate mt-0.5">
+                          {id}
+                        </div>
+                        {agent.description && (
+                          <div className="text-xs text-muted-foreground truncate mt-0.5">
+                            {agent.description}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t("settings.agents.configAgentsEdit") || "Edit agent"}
+                          onClick={() => startEditAgent(id, agent)}
+                        >
+                          <NotePencilIcon size={14} className="text-muted-foreground" />
+                        </IconButton>
+                        <IconButton
+                          variant="danger"
+                          size="sm"
+                          aria-label={t("settings.agents.configAgentsDelete") || "Delete agent"}
+                          onClick={() => deleteAgent(id, agent.name || id)}
+                        >
+                          <TrashIcon size={14} className="text-muted-foreground" />
+                        </IconButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="border-t border-border/30 p-2">
+                <Button
+                  variant="ghost"
+                  onClick={startCreateAgent}
+                  className="w-full"
+                >
+                  <PlusIcon size={14} />
+                  {t("settings.agents.configAgentsCreate") || "New custom agent"}
                 </Button>
               </div>
             </>
