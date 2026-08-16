@@ -32,6 +32,29 @@ const networkCaptures = new Map<string, { pattern: string; requests: unknown[] }
 const userClosedSessions = new Map<string, number>();
 const USER_CLOSE_COOLDOWN_MS = 15_000;
 
+/**
+ * Upper bound on how many agent browser sessions (pages) may be open at once
+ * in the built-in webview backend. Enforced here in the daemon so the cap
+ * applies regardless of which agent/session requests the page. Mirrored in
+ * the Chrome extension via a `config` WS message pushed by the daemon.
+ * Configurable by the user through DUYA settings (`browserMaxTabs`).
+ */
+export const DEFAULT_MAX_WEBVIEW_SESSIONS = 10;
+let maxWebviewSessions = DEFAULT_MAX_WEBVIEW_SESSIONS;
+
+function normalizeMaxTabs(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_WEBVIEW_SESSIONS;
+  return Math.min(100, Math.max(1, Math.floor(value)));
+}
+
+export function setMaxWebviewSessions(value: number): void {
+  maxWebviewSessions = normalizeMaxTabs(value);
+}
+
+export function getMaxWebviewSessions(): number {
+  return maxWebviewSessions;
+}
+
 function isUserClosedSession(sessionId: string): boolean {
   const until = userClosedSessions.get(sessionId);
   if (!until) return false;
@@ -269,6 +292,22 @@ export async function handleWebviewCommand(
           id: body.id,
           ok: false,
           error: 'WEBVIEW_SESSION_CLOSED_BY_USER',
+        });
+        return true;
+      }
+      // Enforce the user-configurable page cap: refuse to spawn yet another
+      // agent browser session when the limit is reached. The agent receives a
+      // clear error instead of silently opening an unbounded number of pages.
+      if (webviewSessionMap.size >= maxWebviewSessions) {
+        logger.warn(
+          `Browser page limit reached (${maxWebviewSessions}) for session ${sessionId}; refusing to open a new agent browser tab`,
+          undefined,
+          LogComponent.BrowserDaemon,
+        );
+        jsonResponse(res, 429, {
+          id: body.id,
+          ok: false,
+          error: `BROWSER_MAX_TABS_REACHED: maximum browser pages reached (${maxWebviewSessions}). Close some pages or raise the browser page limit in DUYA settings.`,
         });
         return true;
       }

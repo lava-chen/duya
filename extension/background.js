@@ -41,6 +41,37 @@ const IDLE_TIMEOUT = 60000; // 60s idle timeout
 /** @type {Map<string, SessionState>} */
 const sessionTabs = new Map();
 
+// ─── Max agent pages (user-configurable) ──────────────────────────────
+// The DUYA desktop pushes the user's `browserMaxTabs` setting to this
+// extension via a `config` WS message whenever the connection is verified or
+// the setting changes. The value is persisted in chrome.storage so it
+// survives service-worker restarts between daemon pushes.
+const MAX_TABS_STORAGE_KEY = 'duyaMaxTabs';
+const DEFAULT_MAX_TABS = 10;
+let maxTabs = DEFAULT_MAX_TABS;
+
+function normalizeMaxTabs(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return DEFAULT_MAX_TABS;
+  return Math.min(100, Math.max(1, Math.floor(n)));
+}
+
+/** Total number of agent-owned tabs open across all sessions. */
+function totalOpenTabs() {
+  let count = 0;
+  for (const session of sessionTabs.values()) count += session.tabIds.size;
+  return count;
+}
+
+async function loadStoredMaxTabs() {
+  try {
+    const result = await chrome.storage.local.get(MAX_TABS_STORAGE_KEY);
+    maxTabs = normalizeMaxTabs(result[MAX_TABS_STORAGE_KEY]);
+  } catch {
+    maxTabs = DEFAULT_MAX_TABS;
+  }
+}
+
 /**
  * Get or create a tab for the given session.
  * Each session gets its own independent tab in the automation window.
@@ -71,6 +102,14 @@ async function getOrCreateSessionTab(sessionId) {
   const windowId = await getOrCreateAutomationWindow();
   if (!windowId) {
     throw new Error('Failed to create automation window');
+  }
+
+  // Enforce the user-configurable page cap before opening a new tab.
+  if (totalOpenTabs() >= maxTabs) {
+    throw new Error(
+      `BROWSER_MAX_TABS_REACHED: maximum browser pages reached (${maxTabs}). ` +
+      `Close some pages or raise the browser page limit in DUYA settings.`
+    );
   }
 
   // Create a new tab for this session
@@ -115,6 +154,12 @@ async function createAdditionalSessionTab(sessionId, url) {
   }
   const windowId = await getOrCreateAutomationWindow();
   if (!windowId) throw new Error('Failed to create automation window');
+  if (totalOpenTabs() >= maxTabs) {
+    throw new Error(
+      `BROWSER_MAX_TABS_REACHED: maximum browser pages reached (${maxTabs}). ` +
+      `Close some pages or raise the browser page limit in DUYA settings.`
+    );
+  }
   const tab = await chrome.tabs.create({ windowId, url: url || 'about:blank', active: false });
   if (!tab.id) throw new Error('Failed to create browser tab');
   existing.tabIds.add(tab.id);
@@ -378,6 +423,19 @@ function connect() {
 
         // Silently ignore stale hello_ack (e.g., from heartbeat re-hello)
         if (msg.type === 'hello_ack') return;
+
+        // Handle config pushes from the daemon (e.g. max agent pages).
+        // Persist locally so the cap survives service-worker restarts.
+        if (msg.type === 'config') {
+          if (typeof msg.maxTabs !== 'undefined') {
+            maxTabs = normalizeMaxTabs(msg.maxTabs);
+            try {
+              await chrome.storage.local.set({ [MAX_TABS_STORAGE_KEY]: maxTabs });
+            } catch {}
+            console.log(`[DUYA Bridge] Max agent pages updated to ${maxTabs}`);
+          }
+          return;
+        }
 
         await handleCommand(msg);
       } catch (error) {
@@ -1602,7 +1660,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // ─── Initialize ──────────────────────────────────────────────────────
 
-void connect();
+void loadStoredMaxTabs().then(() => {
+  void connect();
+});
 setupHeartbeat();
 
 chrome.runtime.onInstalled.addListener(() => {

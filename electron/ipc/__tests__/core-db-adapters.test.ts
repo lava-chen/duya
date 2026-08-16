@@ -355,6 +355,7 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
         session_id: 'sess-1',
         subject: 'Test task',
         description: 'A test',
+        status: 'in_progress',
         active_form: 'Testing',
         owner: 'agent-1',
       };
@@ -366,12 +367,22 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       expect(row.session_id).toBe('sess-1');
       expect(row.subject).toBe('Test task');
       expect(row.description).toBe('A test');
+      expect(row.status).toBe('in_progress');
       expect(row.active_form).toBe('Testing');
       expect(row.owner).toBe('agent-1');
-      expect(row.status).toBe('pending');
       expect(row.blocks).toBe('[]');
       expect(row.blocked_by).toBe('[]');
       expect(row.metadata).toBe('{}');
+    });
+
+    it('ipcTaskToCoreCreate defaults status to pending when omitted', () => {
+      const input = ipcTaskToCoreCreate({
+        id: 'task-x',
+        session_id: 'sess-1',
+        subject: 'S',
+        description: 'D',
+      });
+      expect(input.status).toBe('pending');
     });
 
     it('coreTaskToIpcRow serializes blocks/blocked_by/metadata as JSON strings', () => {

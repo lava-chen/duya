@@ -478,6 +478,7 @@ export function ipcTaskToCoreCreate(data: {
   session_id: string;
   subject: string;
   description: string;
+  status?: string;
   active_form?: string | null;
   owner?: string | null;
 }): TaskCreateInput {
@@ -486,6 +487,7 @@ export function ipcTaskToCoreCreate(data: {
     sessionId: data.session_id,
     subject: data.subject,
     description: data.description,
+    status: data.status ?? 'pending',
     activeForm: data.active_form ?? null,
     owner: data.owner ?? null,
   };
