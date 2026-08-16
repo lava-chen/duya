@@ -122,6 +122,7 @@ class IPCTaskStore implements TaskStore {
       session_id: this.sessionId,
       subject: task.subject,
       description: task.description,
+      status: task.status,
       active_form: task.activeForm,
       owner: task.owner,
     });

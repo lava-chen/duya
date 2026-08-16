@@ -76,7 +76,7 @@ function stateGuidance(state: ResearchState): string {
     case 'evaluating':
       return 'Evaluate gathered sources for authority, recency, and bias. If coverage gaps remain, you may advance back to gathering for more evidence. When satisfied, call research_advance to move to synthesizing, then write the report.';
     case 'synthesizing':
-      return 'Write the research report now as a structured markdown document, then call research_report(completed: true, title: <short title>, report_markdown: <full markdown>) to finalize. Put the complete report text in report_markdown and a short title in title so it renders as a document card and can be exported/copied.';
+      return 'Write the research report now as a structured markdown document to a local file with the write tool, then call research_report(completed: true, title: <short title>, file_path: <path to the written report file>) to finalize. Pass the file path in file_path so the report is read from disk — do not paste the whole report into the tool call. A short title in title makes it render as a document card that can be exported/copied.';
     case 'awaiting_input':
       return 'A user answer is required before you can continue. Once the user has answered, call research_continue to resume the investigation.';
     case 'blocked':

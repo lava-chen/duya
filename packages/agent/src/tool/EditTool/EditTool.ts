@@ -106,7 +106,7 @@ export function validateEditInput(input: unknown): { valid: true; data: EditTool
 
 export class EditTool extends BaseTool {
   readonly name = 'edit';
-  readonly description = 'Edit a single file using exact text replacement. Provide one or more edits[], each with an old_string (must match a unique, non-overlapping region of the original file) and a new_string. Use a single edit call with multiple edits[] entries instead of multiple edit calls when changing separate locations in one file. Each edits[i].old_string is matched against the original file, not against earlier edits. Prefer edit for precise single-file changes; for multi-file changes use apply_patch. Do not use cat, sed, or Python to write files — use edit or apply_patch.';
+  readonly description = 'Edit a single file via exact text replacement. Provide edits[], each with a unique old_string and a new_string. Match each old_string against the original file (not earlier edits) and keep it as small as possible while still unique — do not pad with large unchanged regions. Use one call with multiple edits[] for several locations in one file. For multi-file changes use apply_patch; never use cat, sed, or Python to write files.';
   readonly input_schema: Record<string, unknown> = {
     type: 'object',
     properties: {
@@ -122,7 +122,7 @@ export class EditTool extends BaseTool {
           properties: {
             old_string: {
               type: 'string',
-              description: 'The exact string to find and replace. Must be globally unique in the file.',
+              description: 'The exact string to find and replace. Must be globally unique in the file; keep it as small as possible while still unique — do not include large unchanged regions.',
             },
             new_string: {
               type: 'string',
@@ -344,6 +344,11 @@ function buildNotFoundDiagnostic(opts: {
 }): string {
   const { filePath, hasCRLF, hasBOM, lines, oldLines, editLabel = 'old_string' } = opts;
   const parts: string[] = [`Error: ${editLabel} not found in file: ${filePath}`];
+
+  // Lead with an imperative re-read command (grok-style) so the model treats
+  // its cached content as suspect and stops retrying the same stale old_string.
+  parts.push('Use the read tool to see the correct string.');
+  parts.push('The user (or a prior tool call) may have changed the file since you last read it.');
 
   const firstLine = oldLines[0];
   if (firstLine !== undefined && lines.length > 0) {

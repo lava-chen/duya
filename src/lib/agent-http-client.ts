@@ -10,6 +10,12 @@ import type { FileAttachment } from '@/types/message';
 export interface ChatOptions {
   model?: string;
   maxTokens?: number;
+  /**
+   * Maximum agentic turns for this run. Forwarded to the worker's
+   * `streamChat`; absent → worker falls back to `agent.max_turns` config,
+   * then its built-in default (100).
+   */
+  maxTurns?: number;
   systemPrompt?: string;
   language?: string;
   displayContent?: string;
@@ -59,6 +65,7 @@ export interface AgentEvent {
   result?: unknown;
   error?: string;
   content?: string;
+  reason?: string;
 }
 
 export type EventHandler = (event: AgentEvent) => void;
@@ -144,6 +151,7 @@ export class AgentServerClient {
             outputStyleConfig: options?.outputStyleConfig,
             displayContent: options?.displayContent,
             mode: options?.mode,
+            maxTurns: options?.maxTurns,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
             securityScanEnabled: options?.securityScanEnabled,
@@ -237,7 +245,6 @@ export class AgentServerClient {
               eventCount++;
               console.log('[agent-http-client] Received event #', eventCount, 'type:', currentEventType, 'data:', JSON.stringify(event).substring(0, 300));
               const mappedEvent: AgentEvent = {
-                // Use event type from SSE event line, fall back to event.type from JSON
                 type: currentEventType || event.type || 'unknown',
                 sessionId: event.sessionId || sessionId,
                 data: event.data,
@@ -247,6 +254,7 @@ export class AgentServerClient {
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,
+                reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
               };
               this.emit(sessionId, mappedEvent);
               // Reset event type after processing
@@ -289,6 +297,7 @@ export class AgentServerClient {
                   outputStyleConfig: options?.outputStyleConfig,
                   displayContent: options?.displayContent,
                   mode: options?.mode,
+                  maxTurns: options?.maxTurns,
                   titleGenerationModel: options?.titleGenerationModel,
                   titleGenerationModelConfig: options?.titleGenerationModelConfig,
                   securityScanEnabled: options?.securityScanEnabled,
@@ -345,6 +354,7 @@ export class AgentServerClient {
                       result: (event.data as Record<string, unknown>)?.result,
                       error: (event.data as Record<string, unknown>)?.error as string,
                       content: (event.data as Record<string, unknown>)?.content as string,
+                      reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
                     };
                     this.emit(sessionId, mappedEvent);
                     currentEventType = 'message';
@@ -393,6 +403,108 @@ export class AgentServerClient {
     if (controller) {
       controller.abort();
       this.abortControllers.delete(sessionId);
+    }
+  }
+
+  /**
+   * Attach to an in-progress session's live SSE stream via GET /chat (the same
+   * endpoint the renderer uses to reconnect). Unlike `startChat`, this does NOT
+   * start a new turn — it subscribes to the existing worker's output for a
+   * session that was initiated outside the renderer (e.g. a cron run in the
+   * main process). Emits a `stream:end` event on clean stream close. When the
+   * session is no longer STREAMING (finished / 409), callers should fall back
+   * to reading the persisted transcript.
+   */
+  async attachToLiveStream(sessionId: string, lastEventId = 0): Promise<void> {
+    const baseUrl = await this.getBaseUrl(true);
+    if (!baseUrl) {
+      throw new Error('Agent Server not available');
+    }
+
+    const abortController = new AbortController();
+    this.abortControllers.set(sessionId, abortController);
+
+    let streamEndedCleanly = false;
+    try {
+      const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}/chat`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'text/event-stream',
+          'Last-Event-ID': String(lastEventId),
+        },
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        throw new Error(`HTTP ${response.status}: ${errorText.slice(0, 200)}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Response body is not readable');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let currentEventType = 'message';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          streamEndedCleanly = true;
+          break;
+        }
+
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('event:')) {
+            currentEventType = line.slice(6).trim();
+            continue;
+          }
+          if (line.startsWith('data:')) {
+            const dataStr = line.slice(5).trim();
+            try {
+              const event = JSON.parse(dataStr);
+              const mappedEvent: AgentEvent = {
+                type: currentEventType || event.type || 'unknown',
+                sessionId: event.sessionId || sessionId,
+                data: event.data,
+                id: (event.data as Record<string, unknown>)?.id as string,
+                name: (event.data as Record<string, unknown>)?.name as string,
+                input: (event.data as Record<string, unknown>)?.input,
+                result: (event.data as Record<string, unknown>)?.result,
+                error: (event.data as Record<string, unknown>)?.error as string,
+                content: (event.data as Record<string, unknown>)?.content as string,
+              };
+              this.emit(sessionId, mappedEvent);
+              currentEventType = 'message';
+            } catch {
+              // skip invalid JSON
+            }
+          }
+        }
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[agent-http-client] Attach cancelled:', sessionId);
+      } else {
+        console.error('[agent-http-client] Attach stream error:', error);
+        this.emit(sessionId, {
+          type: 'chat:error',
+          sessionId,
+          data: { message: error instanceof Error ? error.message : String(error) },
+        });
+      }
+    } finally {
+      this.abortControllers.delete(sessionId);
+      if (streamEndedCleanly) {
+        this.emit(sessionId, { type: 'stream:end', sessionId, data: {} });
+      }
     }
   }
 

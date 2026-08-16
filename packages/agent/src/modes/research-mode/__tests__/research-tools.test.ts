@@ -104,6 +104,61 @@ describe('research tools', () => {
     expect(parsed.title).toBe('My Report');
   });
 
+  it('research_report reads report content from a local file_path', async () => {
+    const [, report] = getResearchTools();
+    researchModeTracker.transition({ type: 'start', query: 'X' });
+    researchModeTracker.transition({ type: 'search' });
+    researchModeTracker.transition({ type: 'synthesize' });
+
+    const { writeFile, mkdtemp } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'research-report-'));
+    const file = join(dir, 'report.md');
+    const md = '# Report\n\nWritten to disk.';
+    await writeFile(file, md, 'utf-8');
+
+    const done = await report.executor.execute(
+      { completed: true, title: 'File Report', file_path: file },
+      '/wd',
+      { options: { sessionId: 'sess-1' } } as never,
+    );
+    expect(done.error).toBe(false);
+    const parsed = JSON.parse(done.result) as { report_markdown?: string; title?: string };
+    expect(parsed.report_markdown).toBe(md);
+    expect(parsed.title).toBe('File Report');
+    expect(researchModeTracker.state()).toBe('complete');
+  });
+
+  it('research_report rejects a missing report file', async () => {
+    const [, report] = getResearchTools();
+    researchModeTracker.transition({ type: 'start', query: 'X' });
+    researchModeTracker.transition({ type: 'search' });
+    researchModeTracker.transition({ type: 'synthesize' });
+
+    const done = await report.executor.execute(
+      { completed: true, title: 'Nope', file_path: '/does/not/exist/report.md' },
+      '/wd',
+    );
+    expect(done.error).toBe(true);
+    const parsed = JSON.parse(done.result) as { error_code: string };
+    expect(parsed.error_code).toBe(RESEARCH_ERROR_CODES.REPORT_FILE_READ_FAILED);
+    expect(researchModeTracker.state()).toBe('synthesizing');
+  });
+
+  it('research_report rejects completed=true with no report content', async () => {
+    const [, report] = getResearchTools();
+    researchModeTracker.transition({ type: 'start', query: 'X' });
+    researchModeTracker.transition({ type: 'search' });
+    researchModeTracker.transition({ type: 'synthesize' });
+
+    const done = await report.executor.execute({ completed: true }, '/wd');
+    expect(done.error).toBe(true);
+    const parsed = JSON.parse(done.result) as { error_code: string };
+    expect(parsed.error_code).toBe(RESEARCH_ERROR_CODES.REPORT_NO_CONTENT);
+    expect(researchModeTracker.state()).toBe('synthesizing');
+  });
+
   it('research_report only finalizes from synthesizing', async () => {
     const [, report] = getResearchTools();
 
@@ -119,7 +174,7 @@ describe('research tools', () => {
     // Advance to synthesizing → accepted, transitions to complete + persists.
     researchModeTracker.transition({ type: 'synthesize' });
     const done = await report.executor.execute(
-      { completed: true, message: 'Report done' },
+      { completed: true, title: 'My Report', report_markdown: '# Ready' },
       '/wd',
       { options: { sessionId: 'sess-1' } } as never,
     );

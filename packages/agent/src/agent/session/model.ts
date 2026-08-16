@@ -2,7 +2,7 @@
  * model.ts - ModelRuntime
  *
  * Mutable handle for the current model id and thinking level (Plan 334 Phase 5).
- * This is the hot-swap surface for `prepareNextTurn`: the agent-loop reads the
+ * This is the hot-swap surface for `prepareNextTurn`: the stream loop reads the
  * current model / thinking level from here each turn and may swap them mid-run
  * without reconstructing the agent. The underlying fields mirror the mutable
  * `model` / `thinkingLevel` properties previously held directly on `DuyaAgent`.

@@ -43,7 +43,7 @@ You are now in **Deep Research Mode**. Your goal is to conduct a rigorous resear
 ## Starting & Finalizing
 
 - When the user asks you to research a topic, call \`research_start\` with the query to begin the research run.
-- When you have written the report, call \`research_report(completed: true)\` to finalize the run. It is only accepted while you are synthesizing.
+- When you have written the report to a local markdown file, call \`research_report(completed: true, title: <short title>, file_path: <path to the written report file>)\` to finalize. The report content is read from the file, so do not paste it back into the tool call. It is only accepted while you are synthesizing.
 
 ## Research Workflow
 

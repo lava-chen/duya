@@ -3,22 +3,15 @@ import { mkdirSync } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
-function getAppDataDir(): string {
+function getDuyaRoot(): string {
   const envPath = process.env.DUYA_APP_DATA_PATH
   if (envPath) return envPath
-  const platform = process.platform
-  if (platform === 'win32') {
-    return path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'DUYA')
-  }
-  if (platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', 'DUYA')
-  }
-  return path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local', 'share'), 'DUYA')
+  return path.join(os.homedir(), '.duya')
 }
 
 export class OutputFileWriter {
   static allocate(taskId: string): string {
-    const dir = path.join(getAppDataDir(), 'subagent-transcripts')
+    const dir = path.join(getDuyaRoot(), 'subagent-transcripts')
     mkdirSync(dir, { recursive: true })
     return path.join(dir, `${taskId}.jsonl`)
   }

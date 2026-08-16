@@ -52,10 +52,6 @@ export type {
   MessageEntry,
   MessageTimelineEntry,
   CompactionEntry,
-  ModelChangeEntry,
-  ModeChangeEntry,
-  BranchEntry,
-  CustomStateEntry,
   AgentContextProjection,
 } from './message-framework.js';
 

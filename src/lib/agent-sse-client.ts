@@ -393,7 +393,7 @@ export class AgentSSEClient {
         break;
       case 'done':
         this.streamEnded = true;
-        this.dispatch('done', {});
+        this.dispatch('done', eventObj.data ?? {});
         break;
       case 'error':
         this.streamEnded = true;
@@ -726,10 +726,11 @@ export async function compactContext(
           if (eventType && eventData) {
             if (eventType === 'compact:done') {
               const parsed = JSON.parse(eventData) as {
-                result?: { tokensRemoved?: number; tokensRetained?: number };
+                result?: { tokensRemoved?: number; tokensRetained?: number; removedCount?: number };
               };
               callbacks?.onDone?.({
                 success: true,
+                removedCount: parsed.result?.removedCount,
                 tokenReduction: parsed.result?.tokensRemoved,
               });
               return;

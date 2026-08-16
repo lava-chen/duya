@@ -15,6 +15,10 @@ describe('Agent 工具循环端到端测试', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Reset the module registry so each case's `vi.doMock('@duya/ai')` takes
+    // effect on a fresh `duyaAgent` import (avoids leaking the previous case's
+    // mocked LLM client into the next one).
+    vi.resetModules();
     const testId = `agent-loop-${Date.now()}`;
     tempDir = join(tmpdir(), testId);
     await mkdir(tempDir, { recursive: true });
@@ -82,6 +86,7 @@ describe('Agent 工具循环端到端测试', () => {
     const agent = new duyaAgent({
       apiKey: 'test-key',
       provider: 'anthropic',
+      model: 'test-model',
       workingDirectory: tempDir,
     });
 
@@ -179,6 +184,7 @@ describe('Agent 工具循环端到端测试', () => {
     const agent = new duyaAgent({
       apiKey: 'test-key',
       provider: 'anthropic',
+      model: 'test-model',
       workingDirectory: tempDir,
     });
 

@@ -33,12 +33,7 @@ const ALWAYS_ALLOWED_TOOLS = new Set([
   'Browser',
   'SessionSearch',
   'Config',
-  'DuyaInfo',
-  'DuyaConfig',
-  'DuyaRestart',
-  'DuyaHealth',
-  'DuyaSessions',
-  'DuyaLogs',
+  'duya_cli', // Unified CLI control-plane entry point (replaces DuyaInfo/Config/Restart/Health/Sessions/Logs)
   'Skill',
   'Vision',
 ])

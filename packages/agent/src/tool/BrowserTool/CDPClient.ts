@@ -108,6 +108,8 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
   private lastTitle = '';
   private _networkCaptureUnsupported = false;
   private _networkCaptureWarned = false;
+  /** Reentrancy guard: prevents tab recovery from re-triggering itself. */
+  private _recovering = false;
 
   constructor(sessionId: string) {
     super();
@@ -209,9 +211,10 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
   async send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
     if (!this.connected) throw new Error('Not connected');
 
-    if (!this.tabId) {
-      throw new Error('No active tab. Navigate to a URL first.');
-    }
+    // If the previously active tab was closed (by the user or a dropped CDP
+    // connection), restore the session before issuing the command. Transient
+    // daemon-side errors are handled inside sendCommand().
+    await this._ensureActiveTab();
 
     const result = await this.sendCommand({
       action: 'cdp',
@@ -228,9 +231,8 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
   }
 
   async evaluate(expression: string, _returnByValue = true): Promise<unknown> {
-    if (!this.tabId) {
-      throw new Error('No active tab. Navigate to a URL first.');
-    }
+    // Restore the session if the tab was closed since the last operation.
+    await this._ensureActiveTab();
 
     // Try extension evaluate action first (most reliable for extension mode)
     try {
@@ -909,7 +911,79 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
 
   // ─── Private Helpers ───────────────────────────────────────────────
 
+  /**
+   * Ensure a tab is attached before operating. If the active tab was closed
+   * (by the user or via a dropped CDP connection) and a last URL is known,
+   * attempt to restore the session once before giving up with the original
+   * error.
+   */
+  private async _ensureActiveTab(): Promise<void> {
+    if (this.tabId !== null) return;
+    if (this.lastUrl && (await this._retryWithTabRecovery())) return;
+    throw new Error('No active tab. Navigate to a URL first.');
+  }
+
+  /**
+   * Attempt to restore a lost browser tab session after the Chrome tab was
+   * closed (by the user) or the CDP connection dropped.
+   *
+   * - Drops the stale tabId so the extension re-creates a fresh session tab
+   * - Re-navigates to the last known URL
+   * - Returns true if a session was restored, false if recovery is impossible
+   */
+  private async _retryWithTabRecovery(): Promise<boolean> {
+    if (this._recovering) return false;
+    if (!this.lastUrl) return false;
+
+    this._recovering = true;
+    try {
+      logger.warn('[CDPClient] Browser tab session lost, restoring via last URL', undefined, 'BrowserTool');
+      // Drop the stale tabId so navigate() re-creates a fresh session tab.
+      this.tabId = null;
+      await this.navigate(this.lastUrl);
+      return this.tabId !== null;
+    } catch (err) {
+      logger.error(
+        '[CDPClient] Browser tab session recovery failed',
+        err instanceof Error ? err : new Error(String(err)),
+        undefined,
+        'BrowserTool'
+      );
+      return false;
+    } finally {
+      this._recovering = false;
+    }
+  }
+
+  /**
+   * Detect errors indicating the active Chrome tab was closed or its CDP
+   * connection dropped, so the session can be recovered by re-navigating.
+   */
+  private _isTabConnectionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err ?? '');
+    return (
+      message.includes('not attached') ||
+      message.includes('Detached') ||
+      message.includes('No active tab') ||
+      message.includes('Failed to attach tab') ||
+      message.includes('does not belong to session')
+    );
+  }
+
   private async sendCommand(command: Omit<Record<string, unknown>, 'id'>): Promise<unknown> {
+    return this._sendCommandWithRetry(command, 0);
+  }
+
+  /**
+   * Send a daemon command with a single tab-recovery retry. The extension's
+   * own handleCDP already re-attaches once; if the command still surfaces a
+   * detached/closed-tab error, restore the session and re-send the command
+   * against the freshly created tab.
+   */
+  private async _sendCommandWithRetry(
+    command: Omit<Record<string, unknown>, 'id'>,
+    attempt: number,
+  ): Promise<unknown> {
     const id = generateId();
     const body = { id, sessionId: this.sessionId, ...command };
 
@@ -925,7 +999,25 @@ export class ExtensionCDPClient extends EventEmitter implements ICDPClient {
       throw new Error(`Daemon error (${res.status}): ${error}`);
     }
 
-    return await res.json();
+    const result = (await res.json()) as { error?: unknown };
+
+    if (
+      attempt < 1 &&
+      !this._recovering &&
+      typeof command.tabId !== 'undefined' &&
+      typeof result?.error === 'string' &&
+      this._isTabConnectionError(result.error)
+    ) {
+      if (await this._retryWithTabRecovery()) {
+        // Re-point the command at the freshly created tab.
+        const freshTabId = this.tabId;
+        const retryCommand =
+          freshTabId !== null ? { ...command, tabId: freshTabId } : command;
+        return this._sendCommandWithRetry(retryCommand, attempt + 1);
+      }
+    }
+
+    return result;
   }
 
   private async requestDaemon(pathname: string, init?: RequestInit & { timeout?: number }): Promise<Response> {

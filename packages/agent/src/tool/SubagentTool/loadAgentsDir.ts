@@ -22,6 +22,13 @@ export type BaseAgentDefinition = {
   background?: boolean // Always run as background task when spawned
   initialPrompt?: string // Prepended to the first user turn (slash commands work)
   requiredMcpServers?: string[] // MCP server name patterns that must be configured for agent to be available
+  /**
+   * Inherit the parent's already-connected MCP tools into this sub-agent.
+   * Defaults to false — sub-agents otherwise run against the builtin registry
+   * only and never see MCP tools. Enable it for coding/executive agents that
+   * legitimately need the user's MCP surface (e.g. GitHub, databases).
+   */
+  mcpTools?: boolean
   /** Omit CLAUDE.md hierarchy from the agent's userContext. Read-only agents
    * (Explore, Plan) don't need commit/PR/lint guidelines — the main agent has
    * full CLAUDE.md and interprets their output. Saves ~5-15 Gtok/week across

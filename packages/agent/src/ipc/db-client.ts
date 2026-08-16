@@ -291,6 +291,7 @@ export const taskDb = {
     session_id: string;
     subject: string;
     description: string;
+    status?: string;
     active_form?: string;
     owner?: string;
   }) => sendDbRequest('task:create', data),

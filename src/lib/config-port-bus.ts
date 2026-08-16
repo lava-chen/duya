@@ -80,6 +80,33 @@ export function getConfig(key: string): void {
   getPort()?.getConfig(key);
 }
 
+/**
+ * Promise-based single-shot config read. Requests `key` over the config port
+ * and resolves with its value (or `undefined` on timeout / no port). Used by
+ * features that need a config value at call time (e.g. `agent.max_turns`).
+ */
+export function getConfigValue(key: string, timeoutMs = 2000): Promise<unknown> {
+  return new Promise((resolve) => {
+    if (!getPort()) {
+      resolve(undefined);
+      return;
+    }
+    let settled = false;
+    const settle = (value: unknown): void => {
+      if (settled) return;
+      settled = true;
+      unsub();
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const unsub = subscribeConfigResponses((data) => {
+      if (data.key === key) settle(data.value);
+    });
+    const timer = setTimeout(() => settle(undefined), timeoutMs);
+    getConfig(key);
+  });
+}
+
 export function setConfig(key: string, value: unknown): void {
   getPort()?.setConfig(key, value);
 }

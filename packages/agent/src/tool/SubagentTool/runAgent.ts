@@ -14,7 +14,7 @@ import type { AgentDefinition, BuiltInAgentDefinition, CustomAgentDefinition } f
 import { isBuiltInAgent } from './loadAgentsDir.js'
 import { duyaAgent } from '../../index.js'
 import { setMaxListeners } from 'node:events'
-import { resolveAgentTools } from './subagentToolUtils.js'
+import { resolveAgentTools, SUBAGENT_FORBIDDEN_TOOLS } from './subagentToolUtils.js'
 import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptsRegistry } from '../../prompts/registry.js'
@@ -64,7 +64,22 @@ export interface CacheSafeParams {
 
 export type RunAgentResult = AsyncGenerator<Message, void>
 
-const SUBAGENT_EVENT_STALL_TIMEOUT_MS = 45000
+/**
+ * If the sub-agent emits no SSE event within this window while it is idle
+ * (no tool in flight), the stream is assumed dead. This is a backstop: the
+ * AI layer already enforces a 120s per-chunk stream idle timeout that
+ * surfaces stalled provider streams through the retry path first, so this
+ * watchdog only catches a stream that is genuinely wedged.
+ */
+const SUBAGENT_IDLE_STALL_TIMEOUT_MS = 5 * 60 * 1000
+/**
+ * While a tool is executing no SSE events are emitted until it returns, so a
+ * legitimate long tool call (browser automation, tests, big builds) must not
+ * trip the idle stall watchdog. Each tool already enforces its own timeout;
+ * this is only a generous backstop against a tool executor that never
+ * resolves.
+ */
+const SUBAGENT_TOOL_STALL_TIMEOUT_MS = 30 * 60 * 1000
 
 /** Progress event emitted during sub-agent execution */
 export interface AgentProgressEvent {
@@ -231,10 +246,30 @@ export async function* runAgent({
     ? allTools.filter(t => toolNames.has(t.name))
     : allTools
 
-  // Prevent recursive agent calls - exclude the subagent task tool (and its
-  // legacy `Agent` wire name) from sub-agents to avoid infinite recursion
-  // where a sub-agent spawns another sub-agent.
-  toolsToUse = toolsToUse.filter(t => t.name !== 'task' && t.name !== 'Agent')
+  // Prevent recursive agent calls - strip every agent-orchestration tool
+  // (subagent spawn, inter-agent messaging, background-task management) from
+  // sub-agents so a sub-agent can never spawn or delegate to another agent.
+  toolsToUse = toolsToUse.filter(t => !SUBAGENT_FORBIDDEN_TOOLS.has(t.name))
+
+  // Inherit the parent's live MCP tools when the agent opts in via `mcpTools`.
+  // The parent captures the MCP client inside the executor closure, so the
+  // sub-agent reuses the already-connected runtime instead of reconnecting
+  // servers. Definition + executor are merged into the sub-agent's registry
+  // and tool surface; forbidden orchestration tools are still withheld.
+  if (agentDefinition.mcpTools) {
+    const mcpExecutors = toolUseContext.options.mcpToolExecutors
+    const mcpTools = availableTools.filter(
+      (t) => t.mcpInfo && !SUBAGENT_FORBIDDEN_TOOLS.has(t.name),
+    )
+    for (const mcpTool of mcpTools) {
+      const executor = mcpExecutors?.get(mcpTool.name)
+      if (!executor) continue
+      registry.registerWithKey(mcpTool.internalKey ?? mcpTool.name, mcpTool, executor)
+      if (!toolsToUse.some((t) => t.name === mcpTool.name)) {
+        toolsToUse.push(mcpTool)
+      }
+    }
+  }
 
   const omitAgentsMd =
     agentDefinition.omitClaudeMd === true &&
@@ -284,6 +319,10 @@ export async function* runAgent({
   let terminalProgressEmitted = false
   let lastEventType: SSEEvent['type'] | 'none' = 'none'
   let lastEventAt = Date.now()
+  // True between a tool_use and its tool_result: no SSE events are emitted
+  // while a tool is executing, so the stall watchdog must not treat a long
+  // tool call as a dead stream.
+  let toolInFlight = false
   let lastPersistTime = 0
   const PERSIST_INTERVAL_MS = 3000
   // Track how many messages have already been persisted so each periodic
@@ -361,14 +400,17 @@ export async function* runAgent({
       while (true) {
         const nextEventPromise = eventIterator.next()
         let stallTimer: ReturnType<typeof setTimeout> | null = null
+        const stallMs = toolInFlight
+          ? SUBAGENT_TOOL_STALL_TIMEOUT_MS
+          : SUBAGENT_IDLE_STALL_TIMEOUT_MS
         const stallTimeoutPromise = new Promise<IteratorResult<SSEEvent>>((_, reject) => {
           stallTimer = setTimeout(() => {
             reject(
               new Error(
-                `Sub-agent stalled: no events for ${Math.round(SUBAGENT_EVENT_STALL_TIMEOUT_MS / 1000)}s`
+                `Sub-agent stalled: no events for ${Math.round(stallMs / 1000)}s${toolInFlight ? ' (tool in flight)' : ''}`
               )
             )
-          }, SUBAGENT_EVENT_STALL_TIMEOUT_MS)
+          }, stallMs)
         })
 
         let nextEvent: IteratorResult<SSEEvent>
@@ -445,6 +487,7 @@ export async function* runAgent({
           onProgress?.({ type: 'text', data: textData, agentId })
         } else if (event.type === 'tool_use') {
           toolCalls++
+          toolInFlight = true
           const toolData = event.data as { name: string; input: Record<string, unknown> } | undefined
           onProgress?.({
             type: 'tool_use',
@@ -453,6 +496,7 @@ export async function* runAgent({
             agentId,
           })
         } else if (event.type === 'tool_result') {
+          toolInFlight = false
           const resultData = event.data as { id: string; name: string; result: string; error: boolean }
           onProgress?.({
             type: 'tool_result',

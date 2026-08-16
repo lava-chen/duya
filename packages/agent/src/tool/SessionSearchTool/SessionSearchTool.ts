@@ -50,6 +50,8 @@ interface SessionMatchInfo {
   source: string;
   sessionStarted: number;
   model?: string;
+  /** Content-match snippet from the main process (rollout scan). Empty for metadata-only hits. */
+  snippet?: string;
 }
 
 interface SessionSummary {
@@ -289,10 +291,6 @@ export class SessionSearchTool extends BaseTool {
         description: 'Maximum matching sessions to return (per project group in recent mode; default: 3, max: 5)',
         default: 3,
       },
-      roleFilter: {
-        type: 'string',
-        description: 'Optional: only search messages from specific roles (comma-separated). E.g. "user,assistant" to skip tool outputs.',
-      },
       scope: {
         type: 'string',
         enum: ['same_project', 'other_projects', 'all'],
@@ -354,7 +352,6 @@ export class SessionSearchTool extends BaseTool {
     limit = Math.max(1, Math.min(limit, MAX_RESULT_LIMIT));
 
     const query = (input.query as string | undefined)?.trim();
-    const roleFilter = (input.roleFilter as string | undefined)?.trim();
     const scope = this.parseScope(input.scope);
     const currentSessionId = context?.options?.sessionId || this.currentSessionId;
     const currentWorkingDirectory = workingDirectory || context?.options?.workingDirectory || '';
@@ -367,8 +364,6 @@ export class SessionSearchTool extends BaseTool {
           workingDirectory: currentWorkingDirectory,
           sameProjectLimit: scope === 'other_projects' ? 0 : limit,
           otherProjectLimit: scope === 'same_project' ? 0 : limit,
-          sameProjectLookbackMs: Number.POSITIVE_INFINITY,
-          otherProjectLookbackMs: Number.POSITIVE_INFINITY,
         });
         // Flatten the grouped directory into a single list of search
         // results for the formatter. The formatter no longer takes a
@@ -394,7 +389,7 @@ export class SessionSearchTool extends BaseTool {
       const results = await this.searchSessions(
         query,
         limit,
-        roleFilter,
+        undefined,
         scope,
         currentWorkingDirectory,
         currentSessionId,
@@ -467,6 +462,7 @@ export class SessionSearchTool extends BaseTool {
       workingDirectory?: string;
       sessionStarted: number;
       model?: string;
+      snippet?: string;
     }>,
     limit: number,
     parentMap: Map<string, string | null>,
@@ -496,6 +492,7 @@ export class SessionSearchTool extends BaseTool {
           source: 'cli',
           sessionStarted: row.sessionStarted,
           model: row.model,
+          snippet: row.snippet ?? '',
         });
       }
 
@@ -536,6 +533,7 @@ export class SessionSearchTool extends BaseTool {
       model: string;
       parent_id: string | null;
       parent_session_id: string | null;
+      snippet?: string;
     }>;
 
     if (!searchResults || searchResults.length === 0) {
@@ -564,6 +562,7 @@ export class SessionSearchTool extends BaseTool {
         workingDirectory: r.working_directory,
         sessionStarted: r.created_at,
         model: r.model,
+        snippet: r.snippet ?? '',
       })),
       limit,
       parentMap,
@@ -657,16 +656,26 @@ export class SessionSearchTool extends BaseTool {
 
     for (const matchInfo of results) {
       try {
-        const messages = getMessages(matchInfo.sessionId);
-        if (!messages || messages.length === 0) continue;
-
-        const conversationText = formatConversation(messages);
-        const truncatedText = truncateAroundMatches(conversationText, query);
+        // Prefer the content-match snippet returned by the main process
+        // (rollout scan). It pinpoints the exact matching text, so we avoid
+        // loading/re-truncating the whole conversation — and it stays correct
+        // even when the session was compacted. Fall back to the full
+        // conversation only when the search produced a metadata-only hit
+        // (empty snippet).
+        const snippet = matchInfo.snippet?.trim();
+        let conversationText: string;
+        if (snippet) {
+          conversationText = snippet;
+        } else {
+          const messages = getMessages(matchInfo.sessionId);
+          if (!messages || messages.length === 0) continue;
+          conversationText = truncateAroundMatches(formatConversation(messages), query);
+        }
 
         sessionData.push({
           sessionId: matchInfo.sessionId,
           matchInfo,
-          conversationText: truncatedText,
+          conversationText,
         });
       } catch (error) {
         console.warn(`Failed to load session ${matchInfo.sessionId}:`, error);
