@@ -20,8 +20,6 @@ import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, 
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
-import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
-import { uiPermissionModeToAgentModeOverride } from "@/lib/permission-mode";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -371,11 +369,11 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   }, [setActiveThread]);
 
   const handleSendMessage = useCallback(
-    // The session row remains the durable default, but this current turn also
-    // carries the UI mode as a trusted override to avoid DB write/read races.
+    // The permission mode is fixed to Auto (workspace-trust model). The
+    // session row remains the durable default; we still pass `auto` as a
+    // per-turn override so the worker never reverts to a stale stored mode.
     (
       content: string,
-      uiPermissionMode?: PermissionMode,
       model?: string,
       files?: FileAttachment[],
       agentProfileId?: string | null,
@@ -408,7 +406,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // Conductor canvas binding lives on the session row; read it here so
       // both enqueueMessage and startStream carry the durable canvasId.
       const conductorCanvasId = activeThread?.conductorCanvasId ?? undefined;
-      const permissionModeOverride = uiPermissionModeToAgentModeOverride(uiPermissionMode);
+      const permissionModeOverride = 'auto' as const;
 
       if (!canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {

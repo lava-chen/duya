@@ -301,10 +301,11 @@ ALLOW actions that:
 </user_environment_to_replace>
 
 <classification_guidelines>
-- Err on the side of blocking when uncertain
 - Consider the user's explicit intent from the conversation
 - Standard development operations are generally safe
-- The agent should be able to do its job effectively while staying safe
+- Allow actions that are clearly within the user's requested task
+- Block only actions that are clearly dangerous, destructive, or access sensitive data outside the workspace
+- If genuinely uncertain and the action is reversible or low-impact, allow it
 </classification_guidelines>
 
 ## Output Format
@@ -514,7 +515,8 @@ export interface YoloClassifierOptions {
  * 3. Build system prompt with rule substitutions
  * 4. Call classifier LLM with XML output format
  * 5. Parse response: <block>yes/no</block>
- * 6. Fail-closed on errors: return shouldBlock: true
+ * 6. On errors or unparseable output, return unavailable: true so the
+ *    caller can fall back to manual approval instead of hard-blocking.
  */
 export async function classifyAction(
   options: YoloClassifierOptions,
@@ -567,7 +569,7 @@ export async function classifyAction(
     userPrompts: userPromptsLength,
   };
 
-  const userMessageContent = `<transcript>\n${userPrompt}</transcript>\n\nErr on the side of blocking. <block> immediately.`;
+  const userMessageContent = `<transcript>\n${userPrompt}</transcript>\n\nDecide whether the pending action should be blocked. Respond with <block>yes</block> only if it is clearly dangerous.`;
 
   try {
     if (!llmClient.chat) {
@@ -595,9 +597,10 @@ export async function classifyAction(
 
     if (block === null) {
       return {
-        shouldBlock: true,
-        reason: 'Classifier response unparseable - blocking for safety',
+        shouldBlock: false,
+        reason: 'Classifier response unparseable - falling back to manual approval',
         model,
+        unavailable: true,
         usage: usageFromTokenUsage(result.usage),
         durationMs,
         promptLengths,
@@ -617,7 +620,7 @@ export async function classifyAction(
 
     if (signal.aborted) {
       return {
-        shouldBlock: true,
+        shouldBlock: false,
         reason: 'Classifier request aborted',
         model,
         unavailable: true,
@@ -628,8 +631,8 @@ export async function classifyAction(
 
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
-      shouldBlock: true,
-      reason: `Classifier unavailable: ${errorMessage} - blocking for safety`,
+      shouldBlock: false,
+      reason: `Classifier unavailable: ${errorMessage}`,
       model,
       unavailable: true,
       durationMs,

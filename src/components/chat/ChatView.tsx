@@ -11,9 +11,9 @@ import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
-import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged } from '@/lib/stream-session-manager';
+import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, attachToExistingStream, getSnapshot } from '@/lib/stream-session-manager';
+import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
-import type { PermissionMode } from './PermissionModeSelector';
 import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
@@ -51,10 +51,10 @@ interface ChatViewProps {
   sessionId: string;
   messages: Message[];
   /**
-   * 普通 send 不再携带 permissionMode. worker 从 session row.permission_profile 派生.
-   * 第一个参数 permissionMode 保留签名兼容 (App.handleSendMessage 还在声明), 但不使用.
+   * 权限模式固定为 Auto (workspace-trust). onSendMessage 不再携带
+   * permissionMode; worker 从 session row.permission_profile 派生.
    */
-  onSendMessage: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean, queuedMailboxId?: string) => void;
+  onSendMessage: (content: string, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean, queuedMailboxId?: string) => void;
   onInterrupt?: () => void;
   isStreaming?: boolean;
   /** The final persisted reply is loading; keep the existing stream view until it arrives. */
@@ -65,9 +65,9 @@ interface ChatViewProps {
 const NOOP_OPEN_PANEL = () => '';
 const NOOP_CLOSE_PANEL = () => {};
 
-// Hoisted (plan 236 Phase 5) so the sub-agent poll timer doesn't
-// allocate a fresh Set on every interval tick.
-const ACTIVE_PARENT_PHASES = new Set<string>([
+// Hoisted (plan 236 Phase 5) so the sub-agent / background-stream poll timers
+// don't allocate a fresh Set on every interval tick.
+const ACTIVE_STREAM_PHASES = new Set<string>([
   'starting',
   'streaming',
   'tool_use',
@@ -136,8 +136,6 @@ export function ChatView({
   // ContextUsageRing falls back to a hardcoded 200K for any minimax-*
   // model id, which silently hides 1M sessions.
   const [capabilityContextWindow, setCapabilityContextWindow] = useState<number | undefined>(undefined);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode | null>(null);
-  const [permissionUpdatePending, setPermissionUpdatePending] = useState(false);
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
 
@@ -489,7 +487,10 @@ export function ChatView({
   const lastUserContentRef = useRef<string>('');
   const lastFilesRef = useRef<FileAttachment[] | undefined>(undefined);
   const lastOutputStyleRef = useRef<{ name: string; prompt: string; keepCodingInstructions?: boolean } | null | undefined>(undefined);
-  const permissionProfile = permissionMode === 'bypass' ? 'full_access' : permissionMode === 'auto' ? 'auto' : 'default';
+  // Permission mode is fixed to Auto (workspace-trust model). The in-session
+  // permission prompt still surfaces for genuinely out-of-workspace actions,
+  // but the mode itself is no longer user-selectable.
+  const permissionProfile = 'auto';
 
   // Permission system
   const {
@@ -541,24 +542,9 @@ export function ChatView({
               updateThreadIPC(sessionId, { model: modelName }).catch(console.error);
             }
 
-            if (data.thread.permissionProfile) {
-              // Map DB values to UI PermissionMode:
-              // 'full_access'/'bypassPermissions'/'bypass' -> 'bypass'
-              // 'auto' -> 'auto'
-              // 'default' and others -> 'ask'
-              const dbProfile = data.thread.permissionProfile;
-              const mappedMode: PermissionMode = (dbProfile === 'full_access' || dbProfile === 'bypassPermissions' || dbProfile === 'bypass')
-                ? 'bypass'
-                : dbProfile === 'auto'
-                  ? 'auto'
-                  : 'ask';
-              setPermissionMode(mappedMode);
-            } else {
-              // 历史 row 缺 permission_profile, 极少见 (schema DEFAULT 'default' 一直在).
-              // 保守置 'ask', 让 selector 立即可用, 后续用户切 mode 会写入 row.
-              console.warn('[ChatView] thread missing permissionProfile, defaulting UI to ask', { sessionId });
-              setPermissionMode('ask');
-            }
+            // Note: permission profile is fixed to Auto (workspace-trust);
+            // data.thread.permissionProfile is kept in the DB for backward
+            // compatibility but is no longer surfaced in the UI.
 
             // Load agent profile binding. The profile is fixed at session
             // creation (no in-session agent switching), so only sync the id.
@@ -664,24 +650,6 @@ export function ChatView({
     }
   }, [sessionId, saveSettings, parseModelName, setThreadModel, sessionProviderId]);
 
-  // Handle permission mode change - persist to session.
-  // 改为 async + 设置 permissionUpdatePending, 防止用户切 mode 后立即发送, 出现 row 未落库就发消息的竞态.
-  // DB stores 'default' for ask, 'auto' for auto, 'full_access' for bypass.
-  const handlePermissionModeChange = useCallback(async (mode: PermissionMode) => {
-    setPermissionMode(mode);
-    if (sessionId) {
-      const dbProfile = mode === 'bypass' ? 'full_access' : mode === 'auto' ? 'auto' : 'default';
-      setPermissionUpdatePending(true);
-      try {
-        await updateThreadIPC(sessionId, { permissionProfile: dbProfile });
-      } catch (err) {
-        console.error('[ChatView] failed to persist permission mode', err);
-      } finally {
-        setPermissionUpdatePending(false);
-      }
-    }
-  }, [sessionId]);
-
   // Subscribe to permission events from SSE
   useEffect(() => {
     const unsubscribe = subscribeToPermissions(sessionId, handlePermissionRequest);
@@ -730,9 +698,9 @@ export function ChatView({
     };
 
     const startPolling = () => {
-      if (pollTimer || !ACTIVE_PARENT_PHASES.has(parentPhase)) return;
+      if (pollTimer || !ACTIVE_STREAM_PHASES.has(parentPhase)) return;
       pollTimer = setInterval(() => {
-        if (!ACTIVE_PARENT_PHASES.has(parentPhase)) {
+        if (!ACTIVE_STREAM_PHASES.has(parentPhase)) {
           stopPolling();
           return;
         }
@@ -742,7 +710,7 @@ export function ChatView({
 
     const unsubPhase = subscribeToPhase(parentSessionId, (phase) => {
       parentPhase = phase;
-      if (ACTIVE_PARENT_PHASES.has(parentPhase)) {
+      if (ACTIVE_STREAM_PHASES.has(parentPhase)) {
         startPolling();
       } else {
         stopPolling();
@@ -754,6 +722,78 @@ export function ChatView({
       unsubPhase();
     };
   }, [sessionId, parentSessionId]);
+
+  // Attach to streams started outside the renderer (e.g. a cron run kicked
+  // off by the main-process scheduler). Renderer-initiated turns render live
+  // through the stream manager already; without attaching, opening such a
+  // session mid-run shows a frozen transcript. The agent server replays the
+  // buffered events from Last-Event-ID 0, so a mid-run attach renders the
+  // whole run, not just the tail.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    let didAttach = false;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+    const stopPolling = () => {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const startPolling = () => {
+      // Only attached (externally-started) streams need the poll fallback;
+      // renderer-initiated turns already render live from their own stream.
+      if (pollTimer || !didAttach) return;
+      // Fallback for events the SSE attach misses: keep reloading persisted
+      // rows while the background run is active (loadThreadMessages skips
+      // streaming sessions unless forced).
+      pollTimer = setInterval(() => {
+        void loadThreadMessagesRef.current(sessionId, { force: true });
+      }, 2000);
+    };
+
+    void (async () => {
+      // A locally-active stream is already rendering — attaching would reset
+      // its state and stack a duplicate SSE subscription.
+      const local = getSnapshot(sessionId);
+      if (local && ACTIVE_STREAM_PHASES.has(local.phase)) return;
+
+      try {
+        const status = await getAgentServerClient().getSessionStatus(sessionId);
+        if (cancelled || !status || status.state !== 'STREAMING') return;
+        await attachToExistingStream(sessionId);
+        if (cancelled) return;
+        didAttach = true;
+        startPolling();
+      } catch {
+        // Agent Server unreachable or session finished — persisted
+        // messages still render normally.
+      }
+    })();
+
+    const unsubPhase = subscribeToPhase(sessionId, (phase) => {
+      if (ACTIVE_STREAM_PHASES.has(phase)) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      stopPolling();
+      unsubPhase();
+      // Drop only the SSE transport this effect opened. stopStream would
+      // mark the local phase 'aborted' for a run that is still executing in
+      // the background, and cancelling unconditionally would abort a
+      // renderer-initiated stream's fetch on every view switch.
+      if (didAttach) {
+        getAgentServerClient().cancelStream(sessionId);
+      }
+    };
+  }, [sessionId]);
 
   const handleSend = useCallback(
     async (content: string, files?: FileAttachment[], outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, displayContent?: string) => {
@@ -776,7 +816,6 @@ export function ChatView({
           const { modelName: actualModel } = parseModelName(sessionModel || '');
           onSendMessage(
             content,
-            permissionMode ?? undefined,
             actualModel,
             files,
             agentProfileId,
@@ -796,9 +835,9 @@ export function ChatView({
       baselineCapturedRef.current = false;
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
-      onSendMessage(content, permissionMode ?? undefined, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);
+      onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, permissionMode, sendMailbox, sessionId, sessionModel, effort, conductorEnabled]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled]
   );
 
   // Toggle conductor mode for the current session. On enable, resolve the
@@ -1028,9 +1067,9 @@ export function ChatView({
     if (lastContent) {
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       // Use saved files and parsed docs for retry
-      onSendMessage(lastContent, permissionMode ?? undefined, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current, undefined, effort);
+      onSendMessage(lastContent, actualModel, lastFilesRef.current, agentProfileId, lastOutputStyleRef.current, undefined, effort);
     }
-  }, [onSendMessage, permissionMode, sessionModel, parseModelName, agentProfileId, effort]);
+  }, [onSendMessage, sessionModel, parseModelName, agentProfileId, effort]);
 
   // Inline edit-and-resend: delete the target user message (and everything
   // after it), then send the edited text as a fresh message. Only the last
@@ -1044,8 +1083,8 @@ export function ChatView({
       return;
     }
     const { modelName: actualModel } = parseModelName(sessionModel || '');
-    onSendMessage(text, permissionMode ?? undefined, actualModel, undefined, agentProfileId, lastOutputStyleRef.current, undefined, effort, text, conductorEnabled);
-  }, [isStreaming, sessionId, deleteMessageAndAfter, parseModelName, sessionModel, permissionMode, onSendMessage, agentProfileId, effort, conductorEnabled]);
+    onSendMessage(text, actualModel, undefined, agentProfileId, lastOutputStyleRef.current, undefined, effort, text, conductorEnabled);
+  }, [isStreaming, sessionId, deleteMessageAndAfter, parseModelName, sessionModel, onSendMessage, agentProfileId, effort, conductorEnabled]);
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
@@ -1230,9 +1269,6 @@ export function ChatView({
                     onModelChange={handleModelChange}
                     effort={effort}
                     onEffortChange={setEffort}
-                    permissionMode={permissionMode}
-                    onPermissionModeChange={handlePermissionModeChange}
-                    permissionUpdatePending={permissionUpdatePending}
                     placeholder={t('chat.typeMessage')}
                     messages={messages}
                     conductorEnabled={conductorEnabled}
@@ -1341,9 +1377,6 @@ export function ChatView({
                 onModelChange={handleModelChange}
                 effort={effort}
                 onEffortChange={setEffort}
-                permissionMode={permissionMode}
-                onPermissionModeChange={handlePermissionModeChange}
-                permissionUpdatePending={permissionUpdatePending}
                 placeholder={t('chat.typeMessage')}
                 messages={messages}
                 conductorEnabled={conductorEnabled}

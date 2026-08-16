@@ -10,11 +10,12 @@ import { gatewayConfigEvents } from './config-events';
 import { createGatewaySessionRecord, updateGatewaySessionMeta } from './session-helpers';
 
 /**
- * Gateway (IM 通道: 飞书/微信/Telegram 等) 创建的 session 固定 permission_profile='default'.
+ * Gateway (IM 通道: 飞书/微信/Telegram 等) 创建的 session 使用 permission_profile='auto'
+ * (工作区信任模型): 工作区内操作放行, 越界操作走分类器, 灾难性操作恒被拦截.
  * 不读 desktop settings.permissionMode, 避免桌面端用户切 bypass 污染 IM 通道权限.
  * Gateway 自身的权限控制走 IM 平台白名单/配对机制.
  */
-const GATEWAY_PERMISSION_PROFILE = 'default';
+const GATEWAY_PERMISSION_PROFILE = 'auto';
 import { execSync } from 'child_process';
 import { testBridgeChannel } from '../services/network/bridge-tester';
 import { getPairingStore } from './pairing';

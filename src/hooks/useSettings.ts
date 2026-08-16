@@ -48,6 +48,8 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     browserHomeUrl: 'https://www.google.com',
     // Built-in browser default download directory
     browserDownloadPath: undefined,
+    // Max number of pages/tabs agents may open across browser backends
+    browserMaxTabs: 10,
     // Favorite agent profiles for quick access (max 3)
     favoriteAgentIds: ['general-purpose', 'code-expert', 'research'],
     // Agent prompt language preference
@@ -55,7 +57,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     // Security settings
     securityScanEnabled: true,
     cronPermissionMode: "auto",
-    gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
     // Default thinking effort for new chat sessions
@@ -148,6 +149,8 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       browserHomeUrl: raw.browserHomeUrl || defaults.browserHomeUrl,
       // Built-in browser default download directory
       browserDownloadPath: raw.browserDownloadPath || defaults.browserDownloadPath,
+      // Max number of pages/tabs agents may open across browser backends
+      browserMaxTabs: raw.browserMaxTabs ? Number(raw.browserMaxTabs) : defaults.browserMaxTabs,
       // Favorite agent profiles for quick access (max 3)
       favoriteAgentIds: raw.favoriteAgentIds ? JSON.parse(raw.favoriteAgentIds) : defaults.favoriteAgentIds,
       // Agent prompt language preference
@@ -166,7 +169,6 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       // Security settings
       securityScanEnabled: raw.securityScanEnabled !== "false",
       cronPermissionMode: (raw.cronPermissionMode as AppSettings["cronPermissionMode"]) ?? defaults.cronPermissionMode,
-      gatewayPermissionMode: (raw.gatewayPermissionMode as AppSettings["gatewayPermissionMode"]) ?? defaults.gatewayPermissionMode,
       // Default workspace directory for creating new projects
       workspaceDir: raw.workspaceDir || undefined,
       // Default thinking effort for new chat sessions
@@ -234,6 +236,8 @@ export function useSettings(): {
     browserHomeUrl: 'https://www.google.com',
     // Built-in browser default download directory
     browserDownloadPath: undefined,
+    // Max number of pages/tabs agents may open across browser backends
+    browserMaxTabs: 10,
     // Favorite agent profiles for quick access (max 3)
     favoriteAgentIds: ['general-purpose', 'code-expert', 'research'],
     // Agent prompt language preference
@@ -241,7 +245,6 @@ export function useSettings(): {
     // Security settings
     securityScanEnabled: true,
     cronPermissionMode: "auto",
-    gatewayPermissionMode: "auto",
     // Default workspace directory for creating new projects
     workspaceDir: undefined,
     // Default thinking effort for new chat sessions
@@ -330,8 +333,6 @@ export function useSettings(): {
         } else if (key === 'permissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
         } else if (key === 'cronPermissionMode' && typeof value === 'string') {
-          await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
-        } else if (key === 'gatewayPermissionMode' && typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, uiPermissionModeToSettings(value as Parameters<typeof uiPermissionModeToSettings>[0]));
         } else if (typeof value === 'string') {
           await window.electronAPI.settingsDb.set(key, value);

@@ -1022,6 +1022,69 @@ export function isToolWithinWorkspace(
   return true
 }
 
+/**
+ * Detect whether a shell command escapes the workspace, i.e. changes
+ * directory to a path outside the allowed workspace dirs, redirects output
+ * into a system directory, or reads/exfiltrates secrets. Used to decide
+ * whether a workspace-confined action can be default-allowed in auto mode.
+ *
+ * Mirrors grok/dsh's "workspace-write by default, deny explicit escapes"
+ * philosophy: a command that stays inside the workspace is trusted; only
+ * escapes are escalated to the classifier.
+ */
+export function isWorkspaceEscapingCommand(
+  command: string,
+  context: ToolPermissionContext,
+): boolean {
+  if (!command.trim()) return true;
+
+  const allowedDirs: string[] = [];
+  for (const [dirPath] of context.additionalWorkingDirectories) {
+    allowedDirs.push(path.resolve(dirPath));
+  }
+  if (context.defaultWorkspaceDirectory) {
+    allowedDirs.push(path.resolve(context.defaultWorkspaceDirectory));
+  }
+  const isWithin = (target: string): boolean => {
+    const resolved = path.resolve(target);
+    return allowedDirs.some((allowed) => {
+      const rel = path.relative(allowed, resolved);
+      return !rel.startsWith('..') && !path.isAbsolute(rel);
+    });
+  };
+
+  // Changing directory to a path outside the allowed workspace dirs.
+  const cdMatch = command.match(/cd\s+["']?([^"';\s]+)/);
+  if (cdMatch && !isWithin(cdMatch[1])) return true;
+
+  // Any explicit absolute path argument that escapes the workspace signals
+  // intent to touch something outside it (e.g. `Remove-Item C:\Windows\...`).
+  const absPathArgs: string[] = [];
+  for (const m of command.matchAll(/[a-zA-Z]:[\\/][^\s"';&|]+/g)) {
+    absPathArgs.push(m[0]);
+  }
+  for (const m of command.matchAll(/(?<=[\s"'`])\/(etc|sys|proc|dev|usr|bin|sbin|lib|var)\/[^\s"';&|]+/g)) {
+    absPathArgs.push(m[0]);
+  }
+  for (const arg of absPathArgs) {
+    if (!isWithin(arg)) return true;
+  }
+
+  // Redirecting output into a system directory.
+  const redirections = extractOutputRedirections(command).redirections;
+  for (const redir of redirections) {
+    if (/^\/(etc|sys|proc|dev|usr|bin|sbin|lib|var)\//.test(redir.target)) return true;
+    if (/^[a-zA-Z]:\\[Ww]indows\\/.test(redir.target)) return true;
+  }
+
+  // Reading or exfiltrating secrets never belongs to a task, even in-workspace.
+  if (command.match(/\.(env|pem|key|netrc|pgpass)(\s|$)/i)) return true;
+  if (command.match(/curl\s+[^\n]*\$[{]?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i)) return true;
+  if (command.match(/wget\s+[^\n]*\$[{]?\w*(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|API)/i)) return true;
+
+  return false;
+}
+
 // ============================================================================
 // Risk-tier gating for connector tools (Plan 312 Phase 4)
 // ============================================================================

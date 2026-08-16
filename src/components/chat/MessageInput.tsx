@@ -26,7 +26,7 @@ import {
   filterItems,
 } from '@/lib/message-input-logic';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
-import { PermissionModeSelector, type PermissionMode } from './PermissionModeSelector';
+
 import { getEffortOptionsForModel } from '@duya/ai';
 import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
 import { AttachmentBar } from './AttachmentBar';
@@ -96,13 +96,6 @@ interface MessageInputProps {
   onModelChange?: (model: string, providerId?: string) => void;
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
-  permissionMode?: PermissionMode | null;
-  onPermissionModeChange?: (mode: PermissionMode) => void;
-  /**
-   * selector 切 mode 后, IPC updateThreadIPC 落库期间为 true.
-   * 发送按钮在此期间 disabled, 防止 row 未落库就发消息, 引发 worker 读到旧值.
-   */
-  permissionUpdatePending?: boolean;
   placeholder?: string;
   // Slash-command popover placement. Default `top` keeps the popup above the
   // input (chat history). Pass `bottom` on the welcome / start page where
@@ -291,9 +284,6 @@ export function MessageInput({
   onModelChange,
   effort,
   onEffortChange,
-  permissionMode = 'ask',
-  onPermissionModeChange,
-  permissionUpdatePending = false,
   placeholder,
   popoverPlacement = 'top',
   onExecuteCommand,
@@ -1378,10 +1368,6 @@ export function MessageInput({
       // text would be missing and the agent would see "Not Parsed" warnings.
       if (isParsing && hasUnparsedDocs) return;
 
-      // Block sending while permission profile is being persisted to DB.
-      // 否则 worker 会读到旧的 row 值, 出现"用户切到 ask 但工具仍按 bypass 执行"的竞态.
-      if (permissionUpdatePending) return;
-
       const clearDraft = () => {
         draftLoadedRef.current = false;
         if (sessionId) {
@@ -1466,7 +1452,7 @@ export function MessageInput({
         textareaRef.current.style.height = 'auto';
       }
     },
-    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, permissionUpdatePending, requestRecap],
+    [inputValue, hiddenPrompt, disabled, isStreaming, isParsing, cliBadge, attachments, hasUnparsedDocs, buildContentWithChips, clearAttachments, onSend, onExecuteCommand, onClearMessages, selectedStyleId, responseStyles, sessionId, activeModes, requestRecap],
   );
 
   const handleKeyDown = useCallback(
@@ -1765,13 +1751,6 @@ export function MessageInput({
                   }
                   input.value = '';
                 }}
-              />
-
-              {/* Permission Mode Selector */}
-              <PermissionModeSelector
-                value={permissionMode ?? 'ask'}
-                onChange={onPermissionModeChange || (() => {})}
-                disabled={isStreaming}
               />
 
               {/* Mode Badges — one chip per active mode (plan-task / research / conductor).

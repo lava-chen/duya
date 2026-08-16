@@ -35,6 +35,7 @@ import {
   isReadOnlyCommand,
   isCatastrophicToolCall,
   isToolWithinWorkspace,
+  isWorkspaceEscapingCommand,
 } from './policy.js'
 import type { AIClient } from '@duya/ai'
 import type { Message } from '../types.js'
@@ -421,40 +422,30 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 8. Auto mode: locally allow clearly low-risk actions before invoking the
-    // LLM classifier. This keeps normal exploration such as `ls`, `pwd`,
-    // `git status`, `Get-ChildItem`, browser navigation, and browser snapshots
-    // from being rejected by an unavailable or overly conservative classifier.
+    // 8. Auto mode: default-allow workspace-confined actions (grok-style
+    // workspace trust). Normal exploration, builds, npm install, and file
+    // edits inside the workspace run without the LLM classifier; only
+    // actions that escape the workspace (cd outside, system-dir writes) or
+    // are otherwise unverifiable fall through to the classifier below.
     const isAutoMode = appState.toolPermissionContext.mode === 'auto';
-    if (isAutoMode && isLocallySafeAutoModeAction(toolName, input)) {
+    if (isAutoMode && isAutoModeWorkspaceSafe(toolName, input, appState.toolPermissionContext)) {
       return {
         behavior: 'allow',
         decisionReason: {
           type: 'safetyCheck',
-          reason: `${toolName} action is locally classified as low-risk in auto mode.`,
+          reason: `${toolName} operates within the workspace in auto mode.`,
           classifierApprovable: false,
         },
       };
     }
 
-    // 9. Auto mode: use AI classifier instead of prompting user
+    // 9. Auto mode: use AI classifier instead of prompting user. Only
+    // actions that escaped the workspace reach here.
     if (isAutoMode && context.llmClient && context.classifierModel) {
       const denialState =
         appState.denialTracking ??
         context.localDenialTracking ??
         createDenialTrackingState();
-
-      // Check circuit breaker: fall back to prompting on too many denials
-      if (shouldFallbackToPrompting(denialState)) {
-        return {
-          behavior: 'ask',
-          message: createPermissionRequestMessage(toolName),
-          decisionReason: {
-            type: 'other',
-            reason: 'Auto mode classifier disabled due to too many denials - manual approval required',
-          },
-        };
-      }
 
       // Run the classifier
       const result = await classifyAction({
@@ -467,7 +458,22 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
         signal: context.abortController.signal,
       });
 
-      if (result.unavailable || result.shouldBlock) {
+      // Classifier unavailable (error, abort, unparseable) — fall back to a
+      // manual approval prompt instead of denying. A classifier that cannot
+      // decide must not silently reject the agent's work.
+      if (result.unavailable) {
+        return {
+          behavior: 'ask',
+          message: createPermissionRequestMessage(toolName),
+          decisionReason: {
+            type: 'other',
+            reason: 'Auto mode classifier unavailable - manual approval required',
+          },
+        };
+      }
+
+      // Genuine classifier block — deny, with circuit breaker / denial history.
+      if (result.shouldBlock) {
         const newDenialState = recordDenial(denialState);
         persistDenialState(context, newDenialState);
 
@@ -572,6 +578,61 @@ function isLocallySafeAutoModeAction(
   }
 
   return false;
+}
+
+/**
+ * Decide whether a tool action is safe to default-allow in auto mode.
+ *
+ * Modeled on grok/deepseek-harness workspace trust: anything confined to the
+ * workspace — reads, writes, builds, package installs, file edits — is allowed
+ * without the LLM classifier. Only actions that escape the workspace (shell
+ * `cd` outside, redirection to system dirs, secret access) or are otherwise
+ * unverifiable fall through to the classifier.
+ */
+function isAutoModeWorkspaceSafe(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ToolPermissionContext,
+): boolean {
+  // Allowlisted read-only/metadata tools and low-risk browser ops.
+  if (isLocallySafeAutoModeAction(toolName, input)) {
+    return true;
+  }
+
+  if (isShellTool(toolName)) {
+    const command = typeof input.command === 'string' ? input.command : '';
+    return !isWorkspaceEscapingCommand(command, context);
+  }
+
+  // File/content tools: contained within the workspace, or path-less
+  // (cwd-relative, therefore within the workspace).
+  if (isFileTool(toolName)) {
+    if (isToolWithinWorkspace(toolName, input, context)) return true;
+    // No explicit path (e.g. apply_patch) resolves against the session cwd,
+    // which is the workspace — trust it.
+    return !hasExplicitPath(input);
+  }
+
+  return false;
+}
+
+function hasExplicitPath(input: Record<string, unknown>): boolean {
+  return (
+    typeof input.path === 'string' ||
+    typeof input.file_path === 'string' ||
+    typeof input.directory === 'string' ||
+    Array.isArray(input.paths)
+  );
+}
+
+function isShellTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase();
+  return lower === 'bash' || lower === 'powershell' || lower === 'shell';
+}
+
+function isFileTool(toolName: string): boolean {
+  const lower = toolName.toLowerCase();
+  return lower === 'write' || lower === 'edit' || lower === 'read' || lower === 'apply_patch';
 }
 
 function isLowRiskBrowserOperation(
