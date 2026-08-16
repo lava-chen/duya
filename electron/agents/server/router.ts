@@ -86,7 +86,7 @@ export function sendNotImplemented(res: http.ServerResponse): void {
 
 export function parsePath(url: string): { pathname: string; parts: string[] } {
   const pathname = url.split('?')[0] || '/';
-  const parts = pathname.split('/').filter(Boolean);
+  const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent);
   return { pathname, parts };
 }
 

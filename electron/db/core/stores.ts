@@ -55,6 +55,7 @@ export interface TaskCreateInput {
   sessionId: string;
   subject: string;
   description: string;
+  status?: string;
   activeForm?: string | null;
   owner?: string | null;
 }
@@ -124,7 +125,7 @@ export class TaskStore {
           status, blocks, blocked_by, metadata, created_at, updated_at
         ) VALUES (
           @id, @session_id, @subject, @description, @active_form, @owner,
-          'pending', '[]', '[]', '{}', @created_at, @updated_at
+          @status, '[]', '[]', '{}', @created_at, @updated_at
         )`,
       )
       .run({
@@ -132,6 +133,7 @@ export class TaskStore {
         session_id: input.sessionId,
         subject: input.subject,
         description: input.description,
+        status: input.status ?? 'pending',
         active_form: input.activeForm ?? null,
         owner: input.owner ?? null,
         created_at: now,

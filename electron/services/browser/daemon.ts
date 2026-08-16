@@ -30,6 +30,8 @@ import {
   handleWebviewTabControl,
   registerWebviewSession,
   unregisterWebviewSession,
+  setMaxWebviewSessions,
+  DEFAULT_MAX_WEBVIEW_SESSIONS,
 } from './webview-bridge';
 
 const DEFAULT_DAEMON_PORT = 19825;
@@ -89,6 +91,39 @@ let isRunning = false;
 
 // Blocked domains from extension
 let blockedDomains: string[] = [];
+
+// User-configurable max agent browser pages. Mirrors the cap enforced on the
+// built-in webview backend (webview-bridge) and is pushed to the extension so
+// it can refuse to open additional tabs once the limit is reached.
+let browserMaxTabs = DEFAULT_MAX_WEBVIEW_SESSIONS;
+
+/**
+ * Update the max agent browser page cap and propagate it to both backends:
+ * the built-in webview bridge (in-process) and the connected Chrome extension
+ * (via a `config` WS message). Safe to call before the extension connects —
+ * the config is re-pushed on every verified connection.
+ */
+export function setBrowserMaxTabs(value: number): void {
+  const normalized = Number.isFinite(value)
+    ? Math.min(100, Math.max(1, Math.floor(value)))
+    : DEFAULT_MAX_WEBVIEW_SESSIONS;
+  browserMaxTabs = normalized;
+  setMaxWebviewSessions(normalized);
+  pushExtensionConfig();
+}
+
+export function getBrowserMaxTabs(): number {
+  return browserMaxTabs;
+}
+
+function pushExtensionConfig(): void {
+  if (!extensionWs || extensionWs.readyState !== WebSocket.OPEN) return;
+  try {
+    extensionWs.send(JSON.stringify({ type: 'config', maxTabs: browserMaxTabs }));
+  } catch {
+    // Best-effort push; the config is re-sent on the next verified connection.
+  }
+}
 
 // Expected extension name - must match manifest.json
 const EXPECTED_EXTENSION_NAME = 'DUYA Browser Bridge';
@@ -504,6 +539,9 @@ function setupWebSocket(server: ReturnType<typeof createServer>): void {
           }
 
           try { ws.send(JSON.stringify({ type: 'hello_ack', ok: true })); } catch {}
+          // Push runtime config (e.g. max agent pages) once the extension is
+          // verified, so it can enforce the same cap as the built-in backend.
+          pushExtensionConfig();
           return;
         }
 
@@ -903,4 +941,6 @@ export {
   closeWebviewSessionByUser,
   registerWebviewSession,
   unregisterWebviewSession,
+  setMaxWebviewSessions,
+  DEFAULT_MAX_WEBVIEW_SESSIONS,
 } from './webview-bridge';

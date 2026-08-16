@@ -25,7 +25,7 @@ import { initSessionManager, getSessionManager } from './agents/session-manager'
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
-import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds } from './services/browser/daemon';
+import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
 import { getAutomationScheduler, initAutomationScheduler } from './automation/Scheduler';
 import { initLogger, getLogger, LogComponent } from './logging/index';
@@ -489,6 +489,11 @@ if (gotTheLock) {
           .filter((id) => id.length > 0),
       ));
       setAllowedExtensionIds(normalizedExtensionIds);
+      // Seed the daemon with the user-configured max agent browser pages so
+      // both the built-in webview backend and the extension cap applies from
+      // the first command. Falls back to the default when unset.
+      const storedMaxTabs = getJsonSetting<unknown>('browserMaxTabs', DEFAULT_MAX_WEBVIEW_SESSIONS);
+      setBrowserMaxTabs(typeof storedMaxTabs === 'number' ? storedMaxTabs : DEFAULT_MAX_WEBVIEW_SESSIONS);
       await startBrowserDaemon();
       attachBrowserDownloadHandler();
     } catch (error) {

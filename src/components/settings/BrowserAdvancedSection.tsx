@@ -45,6 +45,8 @@ export function BrowserAdvancedSection() {
   const [cleared, setCleared] = useState(false);
   const [homeUrlDraft, setHomeUrlDraft] = useState(settings.browserHomeUrl ?? '');
   const [homeUrlError, setHomeUrlError] = useState<string | null>(null);
+  const [maxTabsDraft, setMaxTabsDraft] = useState(String(settings.browserMaxTabs ?? 10));
+  const [maxTabsError, setMaxTabsError] = useState<string | null>(null);
 
   const handleSaveHomeUrl = useCallback(async () => {
     const trimmed = homeUrlDraft.trim();
@@ -55,6 +57,18 @@ export function BrowserAdvancedSection() {
     await save({ browserHomeUrl: trimmed });
     setHomeUrlError(null);
   }, [homeUrlDraft, save, t]);
+
+  const handleSaveMaxTabs = useCallback(async () => {
+    const parsed = Number(maxTabsDraft);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100) {
+      setMaxTabsError(t('browserAdvanced.maxTabsInvalid'));
+      return;
+    }
+    const value = Math.floor(parsed);
+    setMaxTabsDraft(String(value));
+    setMaxTabsError(null);
+    await save({ browserMaxTabs: value });
+  }, [maxTabsDraft, save, t]);
 
   const handleSelectDownloadFolder = useCallback(async () => {
     const result = await window.electronAPI?.dialog?.selectDownloadFolder({
@@ -177,6 +191,40 @@ export function BrowserAdvancedSection() {
               <p className="mt-2 text-xs text-destructive">{homeUrlError}</p>
             )}
             <p className="mt-2 text-xs text-muted-foreground">{t('browserAdvanced.homeUrlDesc')}</p>
+          </div>
+        </SettingsCard>
+
+        {/* Max agent pages */}
+        <SettingsCard>
+          <SettingsRow
+            label={
+              <span className="flex items-center gap-2.5">
+                <GlobeIcon size={18} className="text-muted-foreground" />
+                <span className="text-sm font-medium text-foreground">{t('browserAdvanced.maxTabs')}</span>
+              </span>
+            }
+          />
+          <div className="pb-3.5">
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={maxTabsDraft}
+                onChange={(e) => {
+                  setMaxTabsDraft(e.target.value);
+                  setMaxTabsError(null);
+                }}
+                onBlur={handleSaveMaxTabs}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveMaxTabs(); }}
+                disabled={saving}
+                className="flex-1 px-3 py-2 rounded-lg border text-sm bg-surface text-foreground focus:outline-none focus:ring-2 focus:ring-accent/50 focus:border-accent border-border/50 disabled:opacity-50"
+              />
+            </div>
+            {maxTabsError && (
+              <p className="mt-2 text-xs text-destructive">{maxTabsError}</p>
+            )}
+            <p className="mt-2 text-xs text-muted-foreground">{t('browserAdvanced.maxTabsDesc')}</p>
           </div>
         </SettingsCard>
 

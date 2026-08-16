@@ -183,7 +183,8 @@ function migrateSettingsJson(store: ConfigStore, settingsPath: string): boolean 
     if (typeof uip.showLineNumbers === 'boolean') store.set('display.show_line_numbers', uip.showLineNumbers);
   }
 
-  // visionSettings -> auxiliary.vision (apiKey split via .apiKey)
+  // visionSettings -> auxiliary.vision (apiKey dropped — vision creds come
+  // from the configured provider, not a per-feature key)
   const vision = settings.visionSettings;
   if (vision && typeof vision === 'object') {
     const v = vision as Record<string, unknown>;
@@ -193,7 +194,6 @@ function migrateSettingsJson(store: ConfigStore, settingsPath: string): boolean 
     if (typeof v.baseUrl === 'string') target.baseUrl = v.baseUrl;
     if (typeof v.enabled === 'boolean') target.enabled = v.enabled;
     if (Object.keys(target).length > 0) store.set('auxiliary.vision', target);
-    if (typeof v.apiKey === 'string' && v.apiKey) store.set('auxiliary.vision.apiKey', v.apiKey);
   }
 
   return true;
