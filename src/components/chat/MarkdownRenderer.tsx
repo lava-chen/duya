@@ -47,6 +47,31 @@ export function preprocessBareImageLinks(text: string): string {
   });
 }
 
+/**
+ * Normalize Windows backslash paths inside markdown image/link destinations.
+ *
+ * react-markdown (via micromark) treats `\` as an escape character, so a
+ * Windows absolute path like `![image](C:\Users\foo\shot.png)` gets corrupted:
+ * `\p` / `\t` are either silently dropped or interpreted as tab characters,
+ * producing a broken src like `C:Users oo shot.png`.
+ *
+ * We rewrite the backslashes to forward slashes BEFORE the markdown parser
+ * sees the text. Only absolute Windows paths (drive letter + colon + backslash)
+ * are converted; other destinations (http URLs, relative paths) are untouched.
+ */
+export function preprocessMarkdownImagePaths(text: string): string {
+  return text.replace(
+    /(!?\[[^\]]*\]\()([^)]+)(\))/g,
+    (match, prefix, url, suffix) => {
+      // Only convert if the URL looks like a Windows path (starts with drive letter + colon)
+      if (/^[a-zA-Z]:\\/.test(url)) {
+        return prefix + url.replace(/\\/g, '/') + suffix;
+      }
+      return match;
+    }
+  );
+}
+
 interface FrontmatterResult {
   meta: Record<string, string> | null;
   content: string;
@@ -233,7 +258,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   //    hover popover in the message action bar (see MessageItem.tsx).
   const { cleanedText } = extractMemoryCitation(children);
 
-  const processed = preprocessBareImageLinks(preprocessMarkdownBold(cleanedText));
+  const processed = preprocessBareImageLinks(
+    preprocessMarkdownImagePaths(preprocessMarkdownBold(cleanedText))
+  );
   const { meta, content } = parseFrontmatter(processed);
 
   return (
@@ -241,7 +268,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       {showFrontmatterCard && meta && <FrontmatterCard meta={meta} />}
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, { strict: false }]]}
         components={markdownComponents}
       >
         {content}

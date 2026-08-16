@@ -2,14 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '@/types/message';
-import {
-  useContextUsage,
-  useContextBreakdown,
-  type ContextUsage,
-} from '@/hooks/useContextUsage';
+import { useContextUsage, type ContextUsage } from '@/hooks/useContextUsage';
 import { formatTokensPi } from '@/lib/context-usage-utils';
 import { Button } from '@/components/ui/Button';
-import { ContextBreakdownModal } from './ContextBreakdownModal';
 
 interface ContextUsageRingProps {
   messages: Message[];
@@ -23,8 +18,8 @@ interface ContextUsageRingProps {
 /**
  * Small ring trigger next to the input. On hover the ring slides a pi-style
  * stats line out to the left (cumulative ↑input / ↓output / R cache / $ cost,
- * then the current context %), instead of a hover card. Clicking the ring
- * opens the full per-category breakdown modal.
+ * then the current context %), updating live from the worker during
+ * streaming. No click popup — the hover line is the only detail view.
  */
 export function ContextUsageRing({
   messages,
@@ -36,12 +31,6 @@ export function ContextUsageRing({
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId);
   const [hovered, setHovered] = useState(false);
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const breakdown = useContextBreakdown(
-    detailsOpen ? messages : [],
-    detailsOpen ? usage : { ...usage, hasData: false },
-    typeof window !== 'undefined' && window.innerWidth < 480,
-  );
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelHide = () => {
@@ -73,6 +62,11 @@ export function ContextUsageRing({
   }
 
   const effectiveWindow = contextWindow || usage.contextWindow;
+  // `(auto)` mirrors pi's footer: it means the context window was NOT pinned
+  // by the user (no 200K/1M override from provider capabilities), so the
+  // window is auto-resolved from the model. When a window is pinned, the tag
+  // is hidden because the fraction is then exact, not "auto".
+  const isAutoWindow = !contextWindow;
   const ctxClass =
     usage.state === 'critical'
       ? 'context-usage-ring-ctx context-usage-ring-ctx--critical'
@@ -139,9 +133,11 @@ export function ContextUsageRing({
                 <span className={ctxClass}>
                   {ctxPercent}%/{f(effectiveWindow)}
                 </span>
-                <span className="context-usage-ring-stat context-usage-ring-stat--dim">
-                  (auto)
-                </span>
+                {isAutoWindow && (
+                  <span className="context-usage-ring-stat context-usage-ring-stat--dim">
+                    (auto)
+                  </span>
+                )}
               </>
             )}
             {onCompress && usage.state !== 'normal' && (
@@ -160,14 +156,10 @@ export function ContextUsageRing({
           </div>
         </div>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
+        <span
           className="context-usage-ring-trigger"
+          role="img"
           aria-label="Context usage"
-          aria-expanded={hovered}
-          onClick={() => setDetailsOpen(true)}
         >
           <svg
             width={size}
@@ -199,18 +191,8 @@ export function ContextUsageRing({
               />
             )}
           </svg>
-        </Button>
+        </span>
       </div>
-
-      <ContextBreakdownModal
-        open={detailsOpen}
-        onClose={() => setDetailsOpen(false)}
-        usage={usage}
-        breakdown={breakdown}
-        contextWindow={effectiveWindow}
-        onCompress={onCompress}
-        isCompacting={isCompacting}
-      />
 
       <style>{`
         .context-usage-ring-wrap {
@@ -278,7 +260,7 @@ export function ContextUsageRing({
           padding: 4px;
           background: transparent;
           border: none;
-          cursor: pointer;
+          cursor: default;
           border-radius: 4px;
           transition: background-color 0.15s ease;
           position: relative;

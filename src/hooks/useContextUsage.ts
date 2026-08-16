@@ -1,19 +1,16 @@
 /**
  * useContextUsage.ts
  *
- * Aggregate context-usage hook used by both the ring trigger (popover) and
- * the breakdown modal. Returns the same shape the legacy inline
- * useContextUsage produced, so existing call sites keep working.
+ * Aggregate context-usage hook used by the ring trigger. Returns the same
+ * shape the legacy inline useContextUsage produced, so existing call sites
+ * keep working.
  */
 import { useMemo } from 'react';
 import type { Message } from '@/types/message';
 import {
-  extractSources,
-  normalizeAndBuildGrid,
   estimateTokens,
   normalizeInputTokens,
   estimateCost,
-  type ContextBreakdown,
 } from '@/lib/context-usage-utils';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 
@@ -150,7 +147,10 @@ export function useContextUsage(
     };
 
     // When the worker has broadcast live usage, prefer it over the persisted
-    // message scan so the ring reflects the in-flight context.
+    // message scan so the ring reflects the in-flight context. The ring's
+    // ↑/↓/R/W/$ stats line is session-cumulative, so the live totals (pushed
+    // by the worker) win over the persisted scan here — otherwise the stats
+    // would freeze mid-turn and only jump after the DB persist.
     if (live && live.usedTokens > 0) {
       const used = live.usedTokens;
       const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
@@ -162,11 +162,34 @@ export function useContextUsage(
       const cacheRead = live.cacheHitTokens || 0;
       const cacheCreation = live.cacheCreationTokens || 0;
       const outputTokens = live.outputTokens || 0;
-      const cacheHitRate = inputTokens > 0 ? cacheRead / inputTokens : 0;
       const effectiveRatio = Math.max(ratio, estimatedNextRatio);
       let state: ContextState = 'normal';
       if (effectiveRatio >= 0.95) state = 'critical';
       else if (effectiveRatio >= 0.8) state = 'warning';
+      // Cumulative totals: prefer live worker totals, fall back to the
+      // persisted scan for sessions where the worker did not send them yet.
+      const liveTotalInput = live.totalInput ?? totalInput;
+      const liveTotalOutput = live.totalOutput ?? totalOutput;
+      const liveTotalCacheRead = live.totalCacheHit ?? totalCacheRead;
+      const liveTotalCacheWrite = live.totalCacheCreation ?? totalCacheWrite;
+      // Cumulative cache hit rate from the session totals, not the last
+      // result's delta — the ring's CH% next to the cumulative ↑/↓/R/W/$ line
+      // should reflect the whole session, not just the most recent request
+      // (which is often ~100% cached for the system prompt + history portion).
+      const cacheHitRate =
+        liveTotalInput > 0 ? liveTotalCacheRead / liveTotalInput : 0;
+      const liveTotalCost =
+        live.totalInputRaw !== undefined &&
+        live.totalOutput !== undefined &&
+        live.totalCacheHit !== undefined &&
+        live.totalCacheCreation !== undefined
+          ? estimateCost(
+              live.totalInputRaw,
+              live.totalOutput,
+              live.totalCacheHit,
+              live.totalCacheCreation,
+            )
+          : totalCost;
       return {
         modelName: modelName || 'unknown',
         contextWindow: resolvedContextWindow,
@@ -178,11 +201,11 @@ export function useContextUsage(
         cacheCreationTokens: cacheCreation,
         outputTokens,
         inputTokens,
-        totalInput,
-        totalOutput,
-        totalCacheRead,
-        totalCacheWrite,
-        totalCost,
+        totalInput: liveTotalInput,
+        totalOutput: liveTotalOutput,
+        totalCacheRead: liveTotalCacheRead,
+        totalCacheWrite: liveTotalCacheWrite,
+        totalCost: liveTotalCost,
         cacheHitRate,
         hasData: true,
         state,
@@ -328,32 +351,4 @@ export function useContextUsage(
 
     return noData;
   }, [messages, modelName, contextWindow, live]);
-}
-
-/** Per-message source breakdown for the popover grid + detail modal.
- *  Falls back to an empty breakdown when there's no tokenUsage yet. */
-export function useContextBreakdown(
-  messages: Message[],
-  usage: ContextUsage,
-  narrow = false,
-): ContextBreakdown {
-  return useMemo(() => {
-    if (!usage.hasData) {
-      return normalizeAndBuildGrid(
-        [],
-        0,
-        usage.contextWindow,
-        'normal',
-        narrow,
-      );
-    }
-    const raw = extractSources(messages);
-    return normalizeAndBuildGrid(
-      raw,
-      usage.used,
-      usage.contextWindow,
-      usage.state,
-      narrow,
-    );
-  }, [messages, usage, narrow]);
 }

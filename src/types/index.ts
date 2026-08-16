@@ -6,6 +6,11 @@ export * from './slash-command';
 export * from './automation';
 export * from './bash-task';
 
+// Legacy UI permission toggle (Ask / Auto / Bypass). The desktop permission
+// mode is now fixed to Auto (workspace-trust); the type is retained for the
+// settings persistence helpers that still map UI values to stored modes.
+export type PermissionMode = 'ask' | 'auto' | 'bypass';
+
 // Extended thread type with project support
 export interface Thread {
   id: string;
@@ -105,6 +110,8 @@ export interface AppSettings {
   browserHomeUrl?: string;
   // Built-in browser default download directory
   browserDownloadPath?: string;
+  // Max number of pages/tabs agents may open across browser backends
+  browserMaxTabs?: number;
   // Favorite agent profiles for quick access (max 3)
   favoriteAgentIds: string[];
   // Agent prompt language preference (e.g. 'Chinese', 'English')
@@ -112,14 +119,6 @@ export interface AppSettings {
   // Security settings
   securityScanEnabled: boolean;
   cronPermissionMode?: "default" | "bypass" | "auto";
-  /**
-   * Permission mode applied to sessions created by the IM gateway
-   * (Feishu / WeChat / Telegram / QQ). Independent from `permissionMode`
-   * (desktop chat) so users can keep desktop strict while relaxing (or
-   * tightening) IM-channel access without coupling them. Falls back to
-   * `permissionMode` when unset.
-   */
-  gatewayPermissionMode?: "default" | "bypass" | "auto";
   // Default workspace directory for creating new projects
   workspaceDir?: string;
   /**

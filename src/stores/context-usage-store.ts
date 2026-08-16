@@ -17,6 +17,13 @@ export interface LiveContextUsage {
   outputTokens: number;
   cacheHitTokens?: number;
   cacheCreationTokens?: number;
+  /** Session-cumulative totals (pi-style ↑/↓/R/W/$ footer). */
+  totalInput?: number;
+  /** Raw (uncached) cumulative input — for the cost estimate. */
+  totalInputRaw?: number;
+  totalOutput?: number;
+  totalCacheHit?: number;
+  totalCacheCreation?: number;
   updatedAt: number;
 }
 

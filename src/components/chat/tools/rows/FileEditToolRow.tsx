@@ -179,12 +179,12 @@ export function FileEditToolRow({ tool }: FileEditToolRowProps) {
 
   // Open the file. Delegates to openLocalArtifactTarget which routes:
   //   - .html / .htm → DUYA's side-panel browser (duya:open-browser-panel)
-  //   - .doc / .docx / .ppt / .pptx / .xls / .xlsx → DUYA's side-panel
-  //     Office viewer (duya:open-office-panel)
   //   - previewable assets (md, txt, json, png, ts, tsx, py, go, rs, …)
   //     → DUYA's side-panel file preview workspace
   //     (duya:open-file-preview-panel)
-  //   - everything else → system default editor via shell.openPath
+  //   - office docs (.doc/.xlsx/.pptx …), directories, binaries, and
+  //     anything else → system default app via shell.openPath (a folder
+  //     opens in the file manager)
   // The helper also resolves relative paths against the current
   // thread's working directory, so a bare "tank-battle.html" becomes
   // E:\projects\duya\tank-battle.html instead of https://tank-battle.html/.

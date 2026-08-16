@@ -182,13 +182,12 @@ export function openLocalFileTarget(filePath: string, cwd?: string | null): void
     }));
     return;
   }
-  if (isOfficeFile(resolved)) {
-    window.dispatchEvent(new CustomEvent('duya:open-office-panel', {
-      detail: { filePath: resolved, workingDirectory: cwd || null },
-    }));
-    return;
-  }
 
+  // Everything else — office docs (xlsx/pptx/docx), directories, binaries,
+  // unknown extensions — opens with the OS default app. `shell.openPath`
+  // launches a file with its registered app and opens a folder in the file
+  // manager, so AI-provided path links "just work" instead of silently
+  // doing nothing.
   if (window.electronAPI?.shell?.openPath) {
     void window.electronAPI.shell.openPath(resolved);
     return;
@@ -227,12 +226,6 @@ export function openLocalArtifactTarget(
   if (isHtmlFile(resolved)) {
     window.dispatchEvent(new CustomEvent('duya:open-browser-panel', {
       detail: { url: resolved },
-    }));
-    return;
-  }
-  if (isOfficeFile(resolved)) {
-    window.dispatchEvent(new CustomEvent('duya:open-office-panel', {
-      detail: { filePath: resolved, workingDirectory: defaultPreviewRootForFile(resolved, cwd) },
     }));
     return;
   }

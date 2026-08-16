@@ -250,61 +250,36 @@ describe('FileEditToolRow', () => {
     }
   });
 
-  it('dispatches duya:open-office-panel for .docx files (no shell.openPath)', () => {
+  it('opens .docx files with the system default app via shell.openPath', () => {
     const tool: ToolAction = {
       id: 't9',
       name: 'write',
       input: { file_path: 'E:\\projects\\duya\\report.docx', content: '' },
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let capturedDetail: Record<string, unknown> | null = null;
-    const listener = (event: Event) => {
-      capturedDetail = (event as CustomEvent<Record<string, unknown>>).detail ?? null;
-    };
-    window.addEventListener('duya:open-office-panel', listener);
+    render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
+    const fileBtn = screen.getByText('report.docx') as HTMLElement;
+    act(() => {
+      fireEvent.click(fileBtn);
+    });
 
-    try {
-      render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
-      const fileBtn = screen.getByText('report.docx') as HTMLElement;
-      act(() => {
-        fireEvent.click(fileBtn);
-      });
-
-      expect(capturedDetail).not.toBeNull();
-      const detail = capturedDetail as unknown as Record<string, unknown>;
-      expect(detail.filePath as string).toBe('E:\\projects\\duya\\report.docx');
-      expect(openPath).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener('duya:open-office-panel', listener);
-    }
+    expect(openPath).toHaveBeenCalledWith('E:\\projects\\duya\\report.docx');
   });
 
-  it('dispatches duya:open-office-panel for .pptx files (no shell.openPath)', () => {
+  it('opens .pptx files with the system default app via shell.openPath', () => {
     const tool: ToolAction = {
       id: 't10',
       name: 'write',
       input: { file_path: 'E:\\projects\\duya\\slides.pptx', content: '' },
     };
 
-    let dispatched = false;
-    const listener = () => {
-      dispatched = true;
-    };
-    window.addEventListener('duya:open-office-panel', listener);
+    render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
+    const fileBtn = screen.getByText('slides.pptx') as HTMLElement;
+    act(() => {
+      fireEvent.click(fileBtn);
+    });
 
-    try {
-      render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
-      const fileBtn = screen.getByText('slides.pptx') as HTMLElement;
-      act(() => {
-        fireEvent.click(fileBtn);
-      });
-
-      expect(dispatched).toBe(true);
-      expect(openPath).not.toHaveBeenCalled();
-    } finally {
-      window.removeEventListener('duya:open-office-panel', listener);
-    }
+    expect(openPath).toHaveBeenCalledWith('E:\\projects\\duya\\slides.pptx');
   });
 
   it('dispatches duya:open-file-preview-panel for .md files (no shell.openPath)', () => {
