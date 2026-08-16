@@ -15,12 +15,15 @@ import { coreSessionToIpcRow } from '../ipc/core-db-adapters';
 import type { SessionPatch } from '../db/core';
 
 /**
- * Gateway (IM channels: Feishu/WeChat/Telegram/etc.) sessions always use
- * permission_mode='default'. Desktop settings.permissionMode is intentionally
- * ignored so a desktop user switching to bypass cannot widen IM-channel
- * permissions. Gateway auth is enforced via platform whitelist / pairing.
+ * Gateway (IM channels: Feishu/WeChat/Telegram/etc.) sessions use
+ * permission_mode='auto' — the workspace-trust model (WorkBuddy-style:
+ * allow within the workspace, gate workspace escapes via the classifier,
+ * hardline-catastrophic ops always denied). Desktop settings.permissionMode
+ * is intentionally ignored so a desktop user switching to bypass cannot
+ * widen IM-channel permissions. Gateway auth is enforced via platform
+ * whitelist / pairing.
  */
-const GATEWAY_PERMISSION_PROFILE = 'default';
+const GATEWAY_PERMISSION_PROFILE = 'auto';
 
 /**
  * Extension keys stored in `sessions.extensions` that map to top-level
@@ -43,7 +46,7 @@ const SESSION_EXTENSION_KEYS = new Set([
  * SET working_directory = excluded.working_directory, permission_profile =
  * excluded.permission_profile, updated_at = excluded.updated_at` upsert:
  *  - If the session does not exist, create it with mode='chat',
- *    status='active', provider_id='env', permission_mode='default'.
+ *    status='active', provider_id='env', permission_mode='auto'.
  *  - If it exists, only sync working_directory + permission_profile
  *    (preserving the existing title and metadata).
  *

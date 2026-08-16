@@ -466,7 +466,6 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   // to 'default' (ask) or 'bypass' (full access) via Settings → Security.
   insertSetting.run('permissionMode', 'auto', Date.now());
   insertSetting.run('cronPermissionMode', 'auto', Date.now());
-  insertSetting.run('gatewayPermissionMode', 'auto', Date.now());
 
   const insertCanvas = db.prepare(`
     INSERT OR IGNORE INTO conductor_canvases (id, name, description, layout_config, sort_order, created_at, updated_at)

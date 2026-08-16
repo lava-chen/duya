@@ -8,30 +8,17 @@ import { MessageInput } from "@/components/chat/MessageInput";
 import { AgentModeSelector, getProfileIdForMode } from "@/components/chat/AgentModeSelector";
 import { SessionSelector } from "./SessionSelector";
 import { InputDialog } from "@/components/ui/InputDialog";
-import { useDefaultPermission } from "@/stores/default-permission-store";
-import type { PermissionMode } from "@/components/chat/PermissionModeSelector";
 import type { FileAttachment } from "@/types/message";
 
 interface WelcomeViewProps {
   onSelectThread: (threadId: string) => void;
-  onSendMessage?: (content: string, permissionMode?: PermissionMode, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
+  onSendMessage?: (content: string, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
 }
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
   const { projects, createThread, addProjectFolder, isHydrated } = useConversationStore();
   const { t } = useTranslation();
-  const defaultPermission = useDefaultPermission();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(defaultPermission);
-  const permissionTouchedRef = useRef(false);
-
-  // The global default (agent.default_permission_mode) may arrive asynchronously
-  // after mount; apply it unless the user already picked a mode in this view.
-  useEffect(() => {
-    if (!permissionTouchedRef.current) {
-      setPermissionMode(defaultPermission);
-    }
-  }, [defaultPermission]);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
@@ -189,12 +176,12 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           // Double rAF ensures the ChatView mount effects (subscribeSession, etc.) have fired
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, permissionMode, actualModel, files, agentProfileId, outputStyleConfig);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig);
           });
         });
       }
     },
-    [selectedProject, createThread, onSelectThread, permissionMode, parseModelName, resolveDefaultModelSync, agentProfileId]
+    [selectedProject, createThread, onSelectThread, parseModelName, resolveDefaultModelSync, agentProfileId]
   );
 
   const handleNewNoProjectSession = useCallback(async () => {
@@ -257,11 +244,6 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     }
   }, []);
 
-  const handlePermissionModeChange = useCallback((mode: PermissionMode) => {
-    permissionTouchedRef.current = true;
-    setPermissionMode(mode);
-  }, []);
-
   return (
     <div className="welcome-view">
       <div className="welcome-content">
@@ -281,8 +263,6 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
-              permissionMode={permissionMode}
-              onPermissionModeChange={handlePermissionModeChange}
               placeholder={t('chat.describeWhatToBuild')}
             />
             {/* Agent chosen once at session creation; fixed afterwards. */}
