@@ -40,11 +40,22 @@ export interface GrepInput {
   [key: string]: unknown;
 }
 
+export interface GrepContextLine {
+  line: number;
+  content: string;
+}
+
 export interface GrepMatch {
   file: string;
   line: number;
   column: number;
   content: string;
+  /**
+   * Surrounding lines (context window) shown before/after the match. Each
+   * entry carries the 1-based line number and its content. Absent when the
+   * `context` argument is 0.
+   */
+  context?: GrepContextLine[];
 }
 
 export interface GrepToolOptions {
@@ -58,6 +69,51 @@ export interface GrepSearchResult {
   total: number;
   /** True when more matches exist than were returned (total > matches.length). */
   truncated: boolean;
+}
+
+// ============================================================
+// Ripgrep line classification
+// ============================================================
+
+export type ParsedRipgrepLine =
+  | { kind: 'match'; file: string; line: number; column: number; content: string }
+  | { kind: 'context'; file: string; line: number; content: string };
+
+// Match lines have the form `path:line:column:content`. A greedy `.*` anchors
+// the trailing `:digits:digits:` so Windows drive-letter colons in the path
+// survive (e.g. `C:\...`). Context lines have no column, so ripgrep emits them
+// dash-delimited as `path-line-content`. Match is tried first since a greedy
+// prefix can otherwise mis-handle the dash/digit syntax.
+const rgMatchPattern = /^(.*):(\d+):(\d+):(.*)$/;
+const rgContextPattern = /^(.*)-(\d+)-(.*)$/;
+
+/**
+ * Classify a single ripgrep output line into a match line, a context line, or
+ * null when it is neither (blank lines, `-`/`--` separators are handled by the
+ * caller). Exported so tests can feed synthetic ripgrep output directly.
+ */
+export function parseRipgrepLine(line: string): ParsedRipgrepLine | null {
+  if (!line.trim()) return null;
+
+  const m = line.match(rgMatchPattern);
+  if (m) {
+    const lineNum = parseInt(m[2], 10);
+    const column = parseInt(m[3], 10);
+    if (!isNaN(lineNum) && !isNaN(column)) {
+      return { kind: 'match', file: m[1], line: lineNum, column, content: m[4] };
+    }
+    return null;
+  }
+
+  const c = line.match(rgContextPattern);
+  if (c) {
+    const lineNum = parseInt(c[2], 10);
+    if (!isNaN(lineNum)) {
+      return { kind: 'context', file: c[1], line: lineNum, content: c[3] };
+    }
+  }
+
+  return null;
 }
 
 // ============================================================
@@ -186,6 +242,11 @@ export class GrepTool extends BaseTool {
   private readonly allowedRoots?: readonly string[];
   private defaultMaxResults = 100;
 
+  // Cached ripgrep availability probe. Reuses the result across calls within a
+  // session so we don't shell out on every search; on failure the cache is
+  // cleared so a later call may retry.
+  private static ripgrepProbe: Promise<boolean> | null = null;
+
   constructor(options: GrepToolOptions = {}) {
     super();
     // Process cwd is unreliable in the packaged Electron main process — it
@@ -212,12 +273,17 @@ export class GrepTool extends BaseTool {
    * Check if ripgrep is available
    */
   private async isRipgrepAvailable(): Promise<boolean> {
-    try {
-      await execAsync('rg --version');
-      return true;
-    } catch {
-      return false;
+    if (GrepTool.ripgrepProbe === null) {
+      GrepTool.ripgrepProbe = execAsync('rg --version')
+        .then(() => true)
+        .catch(() => {
+          // Probe failed — clear the cache so the next call retries instead of
+          // caching the failure forever.
+          GrepTool.ripgrepProbe = null;
+          return false;
+        });
     }
+    return GrepTool.ripgrepProbe;
   }
 
   /**
@@ -284,22 +350,82 @@ export class GrepTool extends BaseTool {
         }
       };
 
-      // ripgrep emits `path:line:column:content`. On Windows the path contains
-      // a drive-letter colon (e.g. `C:\...`), so a naive `split(':')` on the
-      // first colon breaks. A greedy `.*` in the prefix captures the whole path
-      // (including the drive colon) while the trailing `:digits:digits:` anchors
-      // the line/column numbers.
-      const linePattern = /^(.*):(\d+):(\d+):(.*)$/;
-      const handleLine = (line: string): void => {
-        if (!line.trim()) return;
-        const m = line.match(linePattern);
-        if (!m) return;
-        total++;
-        if (maxResults && matches.length >= maxResults) return;
-        const lineNum = parseInt(m[2], 10);
-        const column = parseInt(m[3], 10);
-        if (isNaN(lineNum) || isNaN(column)) return;
-        matches.push({ file: m[1], line: lineNum, column, content: this.truncateLine(m[4].trim()) });
+      // Stream assembly for context windows. ripgrep (with `--context`) emits a
+      // contiguous group of: before-context lines, a match line, after-context
+      // lines, then a `-` / `--` separator before the next unrelated group. We
+      // buffer before-context lines and attach them to the next match, then
+      // attach the following `context` lines to that same match. The separator
+      // resets the group so context never bleeds across files.
+      let pendingBefore: GrepContextLine[] = [];
+      let lastMatch: GrepMatch | null = null;
+      let remainingAfter = 0;
+
+      const handleLine = (rawLine: string): void => {
+        const trimmed = rawLine.trim();
+        if (!trimmed) return;
+        if (trimmed === '-' || trimmed === '--') {
+          // Context-group / file separator — close the current group.
+          pendingBefore = [];
+          lastMatch = null;
+          remainingAfter = 0;
+          return;
+        }
+        const parsed = parseRipgrepLine(rawLine);
+        if (parsed === null) return;
+
+        if (parsed.kind === 'match') {
+          total++;
+          if (maxResults && matches.length >= maxResults) {
+            // Result budget exhausted — drop the match and its context.
+            pendingBefore = [];
+            lastMatch = null;
+            remainingAfter = 0;
+            return;
+          }
+          const match: GrepMatch = {
+            file: parsed.file,
+            line: parsed.line,
+            column: parsed.column,
+            content: this.truncateLine(parsed.content.trim()),
+          };
+          // Attach buffered before-context lines to this match.
+          if (context > 0) {
+            match.context = pendingBefore.map((c) => ({
+              line: c.line,
+              content: c.content.trim(),
+            }));
+          }
+          matches.push(match);
+          lastMatch = match;
+          pendingBefore = [];
+          remainingAfter = context;
+          return;
+        }
+
+        // A context line. It is either after-context for the current match or
+        // before-context for the next one (decided by whether we still owe the
+        // previous match context lines).
+        if (remainingAfter > 0 && lastMatch && context > 0) {
+          lastMatch.context = lastMatch.context ?? [];
+          // remainingAfter already caps the count, so no length guard is
+          // needed here (before-context may already fill the window).
+          lastMatch.context.push({
+            line: parsed.line,
+            content: this.truncateLine(parsed.content.trim()),
+          });
+          remainingAfter--;
+          return;
+        }
+        // Otherwise it precedes a match we haven't seen yet. Bound the buffer to
+        // the context window so one path with many consecutive context lines
+        // cannot grow memory unboundedly.
+        if (context > 0 && pendingBefore.length >= context) {
+          pendingBefore.shift();
+        }
+        pendingBefore.push({
+          line: parsed.line,
+          content: this.truncateLine(parsed.content.trim()),
+        });
       };
 
       child.stdout?.on('data', (chunk: Buffer) => {
@@ -376,7 +502,8 @@ export class GrepTool extends BaseTool {
     searchPath: string,
     caseSensitive: boolean,
     maxResults?: number,
-    literal = false
+    literal = false,
+    context = 0
   ): Promise<GrepSearchResult> {
     const matches: GrepMatch[] = [];
     let total = 0;
@@ -388,6 +515,12 @@ export class GrepTool extends BaseTool {
         try {
           const content = await readFile(filePath, 'utf-8');
           const lines = content.split('\n');
+          // `split('\n')` leaves a trailing empty element when the file ends
+          // with a newline. Drop it so line numbers and context windows match
+          // how ripgrep (and a text editor) count lines.
+          if (lines.length > 0 && lines[lines.length - 1] === '') {
+            lines.pop();
+          }
 
           for (let i = 0; i < lines.length; i++) {
             if (maxResults && matches.length >= maxResults) break;
@@ -402,12 +535,26 @@ export class GrepTool extends BaseTool {
             while ((match = localRegex.exec(line)) !== null) {
               total++;
               if (maxResults && matches.length >= maxResults) break;
-              matches.push({
+              const entry: GrepMatch = {
                 file: filePath,
                 line: i + 1,
                 column: match.index + 1,
                 content: this.truncateLine(line),
-              });
+              };
+              // Gather up/down context lines directly from the buffered file
+              // lines, clamped to the file boundaries. The matched line range
+              // is skipped — context shows only the surrounding lines.
+              if (context > 0 && lines.length > 0) {
+                const ctx: GrepContextLine[] = [];
+                const start = Math.max(0, i - context);
+                const end = Math.min(lines.length - 1, i + context);
+                for (let j = start; j <= end; j++) {
+                  if (j === i) continue;
+                  ctx.push({ line: j + 1, content: this.truncateLine(lines[j]) });
+                }
+                entry.context = ctx;
+              }
+              matches.push(entry);
             }
           }
         } catch {
@@ -535,7 +682,7 @@ export class GrepTool extends BaseTool {
       const hasRipgrep = await this.isRipgrepAvailable();
       const searchResult = hasRipgrep
         ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults, literal, context)
-        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal);
+        : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal, context);
 
       const { matches: results, total, truncated } = searchResult;
 
@@ -559,6 +706,7 @@ export class GrepTool extends BaseTool {
         line: m.line,
         column: m.column,
         content: m.content,
+        ...(m.context && m.context.length > 0 ? { context: m.context } : {}),
       }));
 
       return {

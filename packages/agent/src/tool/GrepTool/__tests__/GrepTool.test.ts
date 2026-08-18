@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { GrepTool } from '../GrepTool.js';
+import { GrepTool, parseRipgrepLine } from '../GrepTool.js';
 
 let root: string;
 let outside: string;
@@ -138,5 +138,139 @@ describe('GrepTool relative paths', () => {
     const file = parsed.matches[0].file as string;
     expect(file).toBe('a.md');
     expect(file).not.toMatch(/^[A-Za-z]:/);
+  });
+});
+
+describe('parseRipgrepLine (context-aware classifier)', () => {
+  it('classifies a match line with a Windows drive-letter path', () => {
+    const parsed = parseRipgrepLine('C:\\repo\\src\\a.ts:12:5:const needle = 1;');
+    expect(parsed).toEqual({
+      kind: 'match',
+      file: 'C:\\repo\\src\\a.ts',
+      line: 12,
+      column: 5,
+      content: 'const needle = 1;',
+    });
+  });
+
+  it('classifies a context line (dash-delimited, no column)', () => {
+    const parsed = parseRipgrepLine('C:\\repo\\src\\a.ts-10-context before');
+    expect(parsed).toEqual({
+      kind: 'context',
+      file: 'C:\\repo\\src\\a.ts',
+      line: 10,
+      content: 'context before',
+    });
+  });
+
+  it('classifies a context line whose content contains colons', () => {
+    // Must not be mistaken for a match line: there is no `:digits:digits:`
+    // anchor, so the dash-delimited form wins.
+    const parsed = parseRipgrepLine('a.ts-3-line has 42: value');
+    expect(parsed).toEqual({ kind: 'context', file: 'a.ts', line: 3, content: 'line has 42: value' });
+  });
+
+  it('returns null for blank lines and group separators', () => {
+    expect(parseRipgrepLine('')).toBeNull();
+    expect(parseRipgrepLine('   ')).toBeNull();
+    expect(parseRipgrepLine('-')).toBeNull();
+    expect(parseRipgrepLine('--')).toBeNull();
+  });
+
+  it('returns null for an unparseable line', () => {
+    expect(parseRipgrepLine('not a ripgrep line with any structure')).toBeNull();
+  });
+});
+
+describe('GrepTool context lines', () => {
+  // Eagerly switch the engine the tool uses so context-window semantics are
+  // tested deterministically for both engines. Searches run via the real
+  // engine on the temp fixture.
+  const engineProbe = GrepTool as unknown as {
+    ripgrepProbe: Promise<boolean> | null;
+  };
+  let originalProbe: Promise<boolean> | null;
+  const forceEngine = (useRipgrep: boolean): void => {
+    engineProbe.ripgrepProbe = Promise.resolve(useRipgrep);
+  };
+
+  beforeEach(() => {
+    originalProbe = engineProbe.ripgrepProbe;
+  });
+
+  afterEach(() => {
+    engineProbe.ripgrepProbe = originalProbe;
+  });
+
+  // Node fallback walks a directory (it cannot scan a bare file path), so the
+  // node tests search an isolated subdirectory containing only ctx.md.
+  const nodeDir = (content: string): string => {
+    const dir = join(root, 'memory', 'ctxdir');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'ctx.md'), content);
+    return dir;
+  };
+
+  it('attaches surrounding lines to the match when context > 0 (rg engine)', async () => {
+    const file = join(root, 'memory', 'ctx.md');
+    writeFileSync(file, 'line one\nline two needle\nline three\nline four\n');
+    forceEngine(true); // rg must be installed to reach this path.
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: file, context: 1 });
+    if (result.error) throw new Error(`rg engine failed: ${result.result}`);
+    const parsed = JSON.parse(result.result);
+    expect(parsed.matches[0].context).toEqual([
+      { line: 1, content: 'line one' },
+      { line: 3, content: 'line three' },
+    ]);
+  });
+
+  it('attaches surrounding lines to the match when context > 0 (node fallback)', async () => {
+    const dir = nodeDir('line one\nline two needle\nline three\nline four\n');
+    forceEngine(false);
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: dir, context: 1 });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.matches[0].context).toEqual([
+      { line: 1, content: 'line one' },
+      { line: 3, content: 'line three' },
+    ]);
+  });
+
+  it('clamps before-context at the first line', async () => {
+    const dir = nodeDir('needle first\nline two\nline three\n');
+    forceEngine(false);
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: dir, context: 2 });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    const m = parsed.matches[0];
+    expect(m.line).toBe(1);
+    expect(m.context.map((c: { line: number }) => c.line)).toEqual([2, 3]);
+  });
+
+  it('clamps after-context at the last line', async () => {
+    const dir = nodeDir('line one\nline two\nneedle last\n');
+    forceEngine(false);
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: dir, context: 2 });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    const m = parsed.matches[0];
+    expect(m.line).toBe(3);
+    expect(m.context.map((c: { line: number }) => c.line)).toEqual([1, 2]);
+  });
+
+  it('omits the context field when context is 0', async () => {
+    const dir = nodeDir('line one\nline two needle\nline three\n');
+    forceEngine(false);
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: dir });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    for (const m of parsed.matches) {
+      expect(m).not.toHaveProperty('context');
+    }
   });
 });

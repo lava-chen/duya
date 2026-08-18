@@ -40,6 +40,10 @@ import { checkPathWritePermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
+import { FileSnapshotStore } from '../file-snapshot-store.js';
+
+/** Module-level content-addressed snapshot store (shared with Edit/Write). */
+const fileSnapshotStore = new FileSnapshotStore();
 
 // ============================================================
 // Input Validation
@@ -142,14 +146,16 @@ export function parseCodexPatch(patchText: string): ParsedOperation[] {
     }
     if (HUNK_RE.test(line)) {
       flushHunk();
-      if (current.kind !== 'update') {
-        throw new Error(`Unexpected @@ hunk under *** ${current.kind} File: ${current.path}`);
+      // Tolerate an @@ hunk marker even under an Add/Delete header. Models
+      // sometimes emit a unified-diff hunk right after `*** Add File`; treat
+      // that as a compatible unified-diff form rather than rejecting it. For
+      // an add op the `+` lines below still capture the intended file content.
+      if (current.kind === 'update') {
+        inHunk = true;
       }
-      inHunk = true;
       continue;
     }
     if (current.kind === 'add') {
-      if (inHunk) throw new Error('Unexpected hunk content inside *** Add File');
       if (line.startsWith('+')) {
         addLines.push(line.slice(1));
       }
@@ -201,6 +207,37 @@ function stripTrailingWhitespace(lines: string[]): string[] {
   return lines.map((l) => l.replace(/[ \t]+$/, ''));
 }
 
+/**
+ * When `needle` is not found exactly, approximate where it was intended by
+ * returning the start of the file window that shares the most lines with
+ * `needle` (line equality, trailing-whitespace tolerant). Used to make the
+ * "actual lines near the failure" diagnostic point at a meaningful location
+ * (e.g. the section the author meant to edit) instead of the file head when a
+ * hunk's target does not exist in the file.
+ *
+ * Returns a 0-based start index, or -1 when there is no window to score
+ * (empty needle, or needle longer than the file).
+ */
+function findClosestApproxStart(lineView: string[], rawNeedle: string[]): number {
+  const needle = rawNeedle.map((l) => l.replace(/[ \t]+$/, ''));
+  const lines = lineView.map((l) => l.replace(/[ \t]+$/, ''));
+  if (needle.length === 0 || needle.length > lines.length) return -1;
+
+  let bestStart = 0;
+  let bestScore = -1;
+  for (let i = 0; i <= lines.length - needle.length; i++) {
+    let score = 0;
+    for (let j = 0; j < needle.length; j++) {
+      if (lines[i + j] === needle[j]) score++;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = i;
+    }
+  }
+  return bestStart;
+}
+
 export interface HunkApplyResult {
   success: true;
   lines: string[];
@@ -210,6 +247,10 @@ export interface HunkApplyFailure {
   success: false;
   expectedLines: string[];
   actualContextStart: number;
+  /** True when the search block matched more than one location. */
+  ambiguous?: boolean;
+  /** 0-based candidate start indices (into the file lines) when ambiguous. */
+  candidateStarts?: number[];
 }
 
 export type HunkApplyResultUnion = HunkApplyResult | HunkApplyFailure;
@@ -221,7 +262,8 @@ export type HunkApplyResultUnion = HunkApplyResult | HunkApplyFailure;
  * Strategy: build the "search block" (context + removed lines) and the
  * "replacement block" (context + added lines). Find the search block; if
  * exactly one occurrence, swap it for the replacement. If zero, retry with
- * trailing whitespace stripped (tolerance). If ambiguous, return null.
+ * trailing whitespace stripped (tolerance). If ambiguous (multiple matches),
+ * return a failure marked `ambiguous` with the candidate locations.
  */
 export function applyHunkToLines(fileLines: string[], hunk: Hunk): HunkApplyResultUnion {
   const search: string[] = [];
@@ -248,9 +290,26 @@ export function applyHunkToLines(fileLines: string[], hunk: Hunk): HunkApplyResu
         lines: swapBlock(fileLines, starts[0], search.length, replacement),
       };
     }
-    return { success: false, expectedLines: search, actualContextStart: 0 };
+    // Zero match: locate the closest window so the diagnostic points at where
+    // the edit was likely intended instead of the file head.
+    const approx = findClosestApproxStart(fileLines, search);
+    return {
+      success: false,
+      expectedLines: search,
+      actualContextStart: approx < 0 ? 0 : approx,
+      ambiguous: starts.length > 1,
+      candidateStarts: starts,
+    };
   }
-  if (starts.length > 1) return { success: false, expectedLines: search, actualContextStart: starts[0] };
+  if (starts.length > 1) {
+    return {
+      success: false,
+      expectedLines: search,
+      actualContextStart: starts[0],
+      ambiguous: true,
+      candidateStarts: starts,
+    };
+  }
   return {
     success: true,
     lines: swapBlock(fileLines, starts[0], search.length, replacement),
@@ -300,16 +359,14 @@ export class ApplyPatchTool extends BaseTool {
     return false;
   }
 
-  checkPermissions(_input: unknown, context: ToolContext): PermissionCheckResult {
-    const appState = context.getAppState();
-    const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
-    // Per-file gating happens in execute() since we only learn the paths after
-    // parsing the patch. Allow here; execute() enforces the real checks.
-    void permissionContext;
+  checkPermissions(_input: unknown, _context: ToolContext): PermissionCheckResult {
+    // Patch target paths are only known after parsing the patch text, so
+    // per-path write permission cannot be checked here. execute() enforces
+    // checkPathWritePermission on every resolved op path.
     return { allowed: true };
   }
 
-  async execute(input: Record<string, unknown>, workingDirectory?: string, _context?: ToolUseContext): Promise<ToolResult> {
+  async execute(input: Record<string, unknown>, workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
     const id = crypto.randomUUID();
     const validation = validateApplyPatchInput(input);
     if (!validation.valid) {
@@ -330,6 +387,10 @@ export class ApplyPatchTool extends BaseTool {
 
     const applied: string[] = [];
     const failures: string[] = [];
+    /** Collected pre-image snapshot references (path -> content address), plan 429 #3. */
+    const fileSnapshots: Array<{ path: string; preImageSha: string }> = [];
+    const appState = context?.getAppState();
+    const permissionContext = appState?.toolPermissionContext as ToolPermissionContext | undefined;
 
     for (const op of ops) {
       let resolved = op.path;
@@ -342,14 +403,40 @@ export class ApplyPatchTool extends BaseTool {
         continue;
       }
 
+      const writeCheck = checkPathWritePermission(resolved, workingDirectory, permissionContext);
+      if (!writeCheck.allowed) {
+        failures.push(
+          `Permission denied for '${op.path}': ${writeCheck.reason ?? 'write permission not granted'}`,
+        );
+        continue;
+      }
+
       // Serialize the read-modify-write for the same file so same-file
       // operations run in order, while different files mutate in parallel.
       await withFileMutationQueue(resolved, async () => {
         try {
           if (op.kind === 'add') {
+            // Plan 429 #3: an add may overwrite an existing file — snapshot any
+            // pre-existing content before the write (best-effort).
+            try {
+              const existing = await readFile(resolved, 'utf-8');
+              const preImageSha = await fileSnapshotStore.put(existing);
+              fileSnapshots.push({ path: resolved, preImageSha });
+            } catch {
+              // ENOENT / unreadable — new file, nothing to snapshot.
+            }
             await writeFileAtomic(resolved, (op.content ?? '') + '\n');
             applied.push(`added ${op.path}`);
           } else if (op.kind === 'delete') {
+            // Plan 429 #3: snapshot the file before deleting it so a rewind
+            // can restore it (best-effort).
+            try {
+              const existing = await readFile(resolved, 'utf-8');
+              const preImageSha = await fileSnapshotStore.put(existing);
+              fileSnapshots.push({ path: resolved, preImageSha });
+            } catch {
+              // ENOENT / unreadable — nothing to snapshot.
+            }
             await rm(resolved, { force: true });
             applied.push(`deleted ${op.path}`);
           } else {
@@ -364,6 +451,13 @@ export class ApplyPatchTool extends BaseTool {
                 failures.push(`${op.path}: ${err instanceof Error ? err.message : String(err)}`);
               }
               return;
+            }
+            // Plan 429 #3: snapshot the pre-update content (best-effort).
+            try {
+              const preImageSha = await fileSnapshotStore.put(content);
+              fileSnapshots.push({ path: resolved, preImageSha });
+            } catch {
+              // ignore — snapshot is best-effort
             }
             const hasBOM = content.charCodeAt(0) === 0xfeff;
             const core = hasBOM ? content.slice(1) : content;
@@ -384,11 +478,29 @@ export class ApplyPatchTool extends BaseTool {
               resultLines = res.lines;
             }
             if (!ok && failDetail) {
-              // Verification re-read (Codex style): report the actual lines
-              // near the failed hunk so the model can self-correct without
-              // re-reading the whole file.
-              const actualCtx = failDetail.actualContextStart + failDetail.expectedLines.length;
               const expected = failDetail.expectedLines.join('\n');
+              const pathMsg = ` in ${op.path}`;
+              if (failDetail.ambiguous) {
+                // Ambiguous match: multiple locations match, so claiming the
+                // lines were "not found" would be self-contradictory (the
+                // file already contains them). Instead tell the model the
+                // match is not unique and how to narrow it.
+                const positions = (failDetail.candidateStarts ?? [])
+                  .map((s) => s + 1)
+                  .join(', ');
+                failures.push(
+                  `apply_patch verification failed: the hunk is ambiguous${pathMsg} \u2014 it matches ` +
+                    `${failDetail.candidateStarts?.length ?? 0} locations. Add more surrounding context ` +
+                    `lines to the hunk so the match is unique.\n` +
+                    `Expected hunk:\n${expected}\n\n` +
+                    `Candidate match locations (1-based line numbers): ${positions || '(none)'}.`,
+                );
+                return;
+              }
+              // No match found: report the actual file content near the
+              // failing hunk so the model can self-correct without re-reading
+              // the whole file.
+              const actualCtx = failDetail.actualContextStart + failDetail.expectedLines.length;
               const actual = fileLines
                 .slice(Math.max(0, failDetail.actualContextStart - 2), Math.min(fileLines.length, actualCtx))
                 .map((l, idx) => {
@@ -397,7 +509,7 @@ export class ApplyPatchTool extends BaseTool {
                 })
                 .join('\n');
               failures.push(
-                `apply_patch verification failed: Failed to find expected lines in ${op.path}.\n` +
+                `apply_patch verification failed: Failed to find expected lines${pathMsg}.\n` +
                   `Expected hunk:\n${expected}\n\n` +
                   `Actual lines near the failure:\n${actual || '(file empty)'}`,
               );
@@ -424,11 +536,14 @@ export class ApplyPatchTool extends BaseTool {
       summary.push(`Failed ${failures.length} operation(s):\n${failures.map((f) => `  - ${f}`).join('\n')}`);
     }
 
+    const metadata: ToolResult['metadata'] = {};
+    if (fileSnapshots.length > 0) metadata.fileSnapshots = fileSnapshots;
     return {
       id,
       name: this.name,
       result: summary.join('\n\n') || 'No operations to apply.',
       error: failures.length > 0 && applied.length === 0,
+      metadata,
     };
   }
 

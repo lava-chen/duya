@@ -4,7 +4,7 @@
  * Adds input validation and security checks
  */
 
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile, writeFile, rename, stat } from 'node:fs/promises';
 import { resolve, isAbsolute } from 'node:path';
 import { diffLines } from 'diff';
 import type { ToolResult } from '../../types.js';
@@ -21,6 +21,11 @@ import { checkPathWritePermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
+import { FileSnapshotStore } from '../file-snapshot-store.js';
+import { getFileReadState, recordFileRead } from '../file-read-state.js';
+
+/** Module-level content-addressed snapshot store (shared with Write/ApplyPatch). */
+const fileSnapshotStore = new FileSnapshotStore();
 
 // ============================================================
 // Types
@@ -376,11 +381,37 @@ function buildNotFoundDiagnostic(opts: {
       const fileLineAt = lines[bestIdx + contiguous - 1];
       const oldLineAt = oldLines[contiguous - 1];
       const d = firstDiffIndex(fileLineAt, oldLineAt);
-      parts.push(
-        `First divergence at file char ${d}: file has ${charInfo(fileLineAt, d)}, old_string expects ${charInfo(oldLineAt, d)}.`,
-      );
-      parts.push(`  file context: ...${escapeEol(fileLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
-      parts.push(`  old_string : ...${escapeEol(oldLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
+      // firstDiffIndex returns the min length when one line is a prefix of the
+      // other, so charInfo would show <EOF> on both sides and the model could
+      // not tell which one is truncated. Disambiguate: file-truncated vs
+      // over-long (incomplete) old_string.
+      const fileEnded = d >= fileLineAt.length;
+      const oldEnded = d >= oldLineAt.length;
+      if (fileEnded !== oldEnded) {
+        if (fileEnded) {
+          parts.push(
+            `File content is a PREFIX of ${editLabel} at this line (${fileLineAt.length} chars vs expected ${oldLineAt.length}): file ends here, ${editLabel} continues with ${charInfo(oldLineAt, d)}.`,
+          );
+          parts.push(
+            'The file content is shorter than expected — likely truncated by compaction or an incomplete read. ' +
+              'Re-read the file (optionally with line_range) to confirm exact bytes, then retry the edit.',
+          );
+        } else {
+          parts.push(
+            `${editLabel} is a PREFIX of the file content at this line (${oldLineAt.length} chars vs file ${fileLineAt.length}): ${editLabel} ends here, file continues with ${charInfo(fileLineAt, d)}.`,
+          );
+          parts.push(
+            `${editLabel} may be incomplete or truncated (e.g. cut off by compaction). ` +
+              'Include the full line or re-read the file to confirm exact bytes, then retry the edit.',
+          );
+        }
+      } else {
+        parts.push(
+          `First divergence at file char ${d}: file has ${charInfo(fileLineAt, d)}, old_string expects ${charInfo(oldLineAt, d)}.`,
+        );
+        parts.push(`  file context: ...${escapeEol(fileLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
+        parts.push(`  old_string : ...${escapeEol(oldLineAt.slice(Math.max(0, d - 20), d + 40))}...`);
+      }
     }
   }
 
@@ -538,12 +569,56 @@ export async function executeEdit(
   // Serialize the whole read-modify-write per resolved file so concurrent
   // edits to the same path stay ordered (see file-mutation-queue.ts).
   return withFileMutationQueue(resolvedPath, async () => {
+    // Plan 428: anchor edits to a verified read. Refuse to edit a file that
+    // was never read in this session, or that changed on disk since the last
+    // read — otherwise the model may build old_string from compacted
+    // (placeholder) or externally modified content.
+    let currentStat: Awaited<ReturnType<typeof stat>>;
+    try {
+      currentStat = await stat(resolvedPath);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
+    }
+
+    const readState = getFileReadState(resolvedPath);
+    if (!readState) {
+      return {
+        id: toolUseId,
+        name: 'edit',
+        result:
+          `Error: File has not been read yet: ${file_path}\n` +
+          'Read the file first with the read tool, then retry the edit with an old_string taken from the actual file content.',
+        error: true,
+      };
+    }
+    if (readState.mtimeMs !== currentStat.mtimeMs) {
+      return {
+        id: toolUseId,
+        name: 'edit',
+        result:
+          `Error: File was modified after the last read: ${file_path}\n` +
+          'The file changed on disk since it was last read (bash, apply_patch, or an external process may have touched it). ' +
+          'Re-read the file with the read tool, then retry the edit with a fresh old_string.',
+        error: true,
+      };
+    }
+
     let content: string;
     try {
       content = await readFile(resolvedPath, 'utf-8');
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
+    }
+
+    // Plan 429 #3: snapshot the pre-edit content (best-effort) so a session
+    // rewind can restore this file. `content` is the untouched on-disk text.
+    let preImageSha: string | undefined;
+    try {
+      preImageSha = await fileSnapshotStore.put(content);
+    } catch {
+      preImageSha = undefined;
     }
 
     // Track file facts for diagnostics and to preserve style on write.
@@ -623,6 +698,17 @@ export async function executeEdit(
       await writeFile(tmpPath, result, 'utf-8');
       await rename(tmpPath, resolvedPath);
 
+      // Re-anchor the read state to this tool's own write so consecutive
+      // edits in the same session are not rejected as stale (plan 428).
+      // Best-effort: a racing stat failure just means the next edit asks
+      // for a re-read.
+      try {
+        const postStat = await stat(resolvedPath);
+        recordFileRead(resolvedPath, { mtimeMs: postStat.mtimeMs, size: postStat.size });
+      } catch {
+        // ignore
+      }
+
       // Report the applied diff and the first changed line so the model can see
       // exactly what changed without re-reading the whole file.
       const { diff, firstChangedLine } = generateDiffString(normalizedContent, resultLines.join('\n'));
@@ -630,10 +716,13 @@ export async function executeEdit(
       const changedLine = firstChangedLine !== undefined ? `\nFirst changed line: ${firstChangedLine}` : '';
       const notes = resolved.filter((r) => r.note).map((r) => r.note);
       const noteSuffix = notes.length > 0 ? `\nNotes:\n${notes.map((n) => `- ${n}`).join('\n')}` : '';
+      const metadata: ToolResult['metadata'] = { filePath: resolvedPath };
+      if (preImageSha) metadata.preImageSha = preImageSha;
       return {
         id: toolUseId,
         name: 'edit',
         result: `Successfully edited ${file_path}: ${totalEdits} ${blockWord} changed.${changedLine}\n\n${diff}${noteSuffix}`,
+        metadata,
       };
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);

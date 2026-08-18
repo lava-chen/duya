@@ -354,6 +354,160 @@ describe('projectPersistenceMessages', () => {
   });
 });
 
+// ─── Tool error signal (Plan 428 Task A) ────────────────────────────────
+
+describe('tool error signal survives both projection directions', () => {
+  it('derives is_error from top-level status when wrapping string content', () => {
+    // StreamingToolExecutor.createErrorMessage emits string content plus a
+    // top-level status 'error'.
+    const errorResult: AgentMessage = {
+      role: 'tool',
+      id: 't-err',
+      timestamp: createdAt,
+      visibility: 'visible',
+      name: 'edit',
+      tool_call_id: 'call-err',
+      content: '<tool_error>File not found</tool_error>',
+      status: 'error',
+    };
+
+    const persisted = projectPersistenceMessages([errorResult]);
+
+    expect(persisted[0]).toMatchObject({
+      role: 'tool',
+      status: 'error',
+      tool_call_id: 'call-err',
+    });
+    expect(persisted[0].content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'call-err',
+        content: '<tool_error>File not found</tool_error>',
+        is_error: true,
+      },
+    ]);
+  });
+
+  it('derives is_error from metadata.status (factory-created tool results)', () => {
+    // AgentMessageFactory.createToolResultMessage stores runtime fields under
+    // metadata keys instead of top-level columns.
+    const errorResult: AgentMessage = {
+      role: 'tool',
+      id: 't-err-meta',
+      timestamp: createdAt,
+      visibility: 'visible',
+      name: 'edit',
+      tool_call_id: 'call-err',
+      content: '<tool_error>boom</tool_error>',
+      metadata: { status: 'error' },
+    };
+
+    const persisted = projectPersistenceMessages([errorResult]);
+
+    expect(persisted[0].content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'call-err',
+        content: '<tool_error>boom</tool_error>',
+        is_error: true,
+      },
+    ]);
+  });
+
+  it('keeps is_error false for successful string-content tool results', () => {
+    const okResult: AgentMessage = {
+      role: 'tool',
+      id: 't-ok',
+      timestamp: createdAt,
+      visibility: 'visible',
+      name: 'read',
+      tool_call_id: 'call-ok',
+      content: 'file contents here',
+    };
+
+    const persisted = projectPersistenceMessages([okResult]);
+
+    expect(persisted[0].content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'call-ok',
+        content: 'file contents here',
+        is_error: false,
+      },
+    ]);
+  });
+
+  it('recovers status error on re-ingest and keeps it through re-projection', () => {
+    // Legacy DB row as persisted by the projector above: top-level status
+    // plus a wrapped tool_result block.
+    const legacyRow: Message = {
+      id: 'row-err',
+      role: 'tool',
+      name: 'edit',
+      tool_call_id: 'call-err',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'call-err',
+          content: '<tool_error>File not found</tool_error>',
+          is_error: true,
+        },
+      ],
+      status: 'error',
+      timestamp: createdAt,
+    };
+
+    const native = ingestMessage(legacyRow);
+    expect(native).toMatchObject({
+      role: 'tool',
+      status: 'error',
+      tool_call_id: 'call-err',
+    });
+
+    const rePersisted = projectPersistenceMessages([native]);
+    expect(rePersisted[0]).toMatchObject({ status: 'error' });
+    expect(rePersisted[0].content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'call-err',
+        content: '<tool_error>File not found</tool_error>',
+        is_error: true,
+      },
+    ]);
+  });
+
+  it('preserves is_error on tool_result blocks carried in array content without status', () => {
+    // Legacy rows that never had a status column still carry the flag on the
+    // content block itself; array content is cloned verbatim.
+    const legacyRow: Message = {
+      id: 'row-block-only',
+      role: 'tool',
+      name: 'edit',
+      tool_call_id: 'call-err',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'call-err',
+          content: '<tool_error>legacy failure</tool_error>',
+          is_error: true,
+        },
+      ],
+      timestamp: createdAt,
+    };
+
+    const rePersisted = projectPersistenceMessages([ingestMessage(legacyRow)]);
+
+    expect(rePersisted[0].content).toEqual([
+      {
+        type: 'tool_result',
+        tool_use_id: 'call-err',
+        content: '<tool_error>legacy failure</tool_error>',
+        is_error: true,
+      },
+    ]);
+  });
+});
+
 // ─── Transcript boundary ────────────────────────────────────────────────
 
 describe('projectTranscriptMessages', () => {

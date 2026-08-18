@@ -328,6 +328,11 @@ function nativeToolResultToLegacy(message: Message): Message {
         (block) => block.type === 'tool_result',
       )
     : undefined;
+  // Plan 428: derive the wrapped block's error flag from the runtime status
+  // column (top-level, or metadata for factory-created messages) so a failed
+  // execution (status 'error') persists is_error on the tool_result block
+  // instead of a hardcoded false.
+  const isError = runtimeField(message, 'status', 'status') === 'error';
   return augmentLegacyColumns(message, {
     id: message.id,
     role: 'tool',
@@ -340,7 +345,7 @@ function nativeToolResultToLegacy(message: Message): Message {
             type: 'tool_result' as const,
             tool_use_id: message.tool_call_id ?? '',
             content: message.content,
-            is_error: false,
+            is_error: isError,
           },
         ]),
     timestamp: message.timestamp,

@@ -4,7 +4,7 @@
  * Adds input validation, enhanced security checks, and atomic writes
  */
 
-import { writeFile, mkdir, access, constants } from 'node:fs/promises';
+import { writeFile, mkdir, access, constants, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { ToolResult } from '../../types.js';
@@ -21,6 +21,8 @@ import { checkPathWritePermission } from '../../permissions/policy.js';
 import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
+import { withFileSnapshot } from '../file-snapshot.js';
+import { recordFileRead } from '../file-read-state.js';
 
 // ============================================================
 // Input Validation
@@ -186,19 +188,35 @@ export class WriteTool extends BaseTool {
           }
         }
 
-        await writeFile(absolutePath, content, encoding as BufferEncoding);
+        const { value: result } = await withFileSnapshot(absolutePath, async (preImageSha) => {
+          await writeFile(absolutePath, content, encoding as BufferEncoding);
 
-        const lineCount = content.split('\n').length;
-        return {
-          id,
-          name: this.name,
-          result: `Successfully wrote ${content.length} characters (${lineCount} lines) to '${absolutePath}'`,
-          metadata: {
+          // Record the observed mtime/size so a following edit in the same
+          // session is anchored to this write without a re-read (plan 428,
+          // file-read-state.ts). Best-effort: a failed stat just means the
+          // next edit will ask for a read first.
+          try {
+            const writeStat = await stat(absolutePath);
+            recordFileRead(absolutePath, { mtimeMs: writeStat.mtimeMs, size: writeStat.size });
+          } catch {
+            // ignore
+          }
+
+          const lineCount = content.split('\n').length;
+          const metadata: ToolResult['metadata'] = {
             filePath: absolutePath,
             charCount: content.length,
             lineCount,
-          },
-        };
+          };
+          if (preImageSha) metadata.preImageSha = preImageSha;
+          return {
+            id,
+            name: this.name,
+            result: `Successfully wrote ${content.length} characters (${lineCount} lines) to '${absolutePath}'`,
+            metadata,
+          };
+        });
+        return result;
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Unknown error';

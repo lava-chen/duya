@@ -53,6 +53,8 @@ import {
   suggestPathUnderCwd,
 } from './path-suggest.js';
 import { serializeParseResult } from './result-builder.js';
+import { recordFileRead } from '../file-read-state.js';
+import { isModelLikelyMultimodal } from '../../utils/multimodal-detection.js';
 
 // Re-export ReadInput + validateReadInput for tests / external callers
 export { validateReadInput } from './schema.js';
@@ -60,6 +62,12 @@ export type { ReadInput } from './schema.js';
 
 const MAX_LINES = 10000;
 const DEFAULT_MAX_TOKENS = 25_000;
+// Full-file (no line_range) text reads are capped at 2000 lines OR 50KB
+// (whichever is hit first) so a single read cannot emit unbounded output.
+// This matches the ReadTool.description promise. line_range remains the
+// escape hatch for reading the rest (helpers plan 428).
+const FULL_READ_MAX_LINES = 2000;
+const FULL_READ_MAX_BYTES = 50 * 1024; // 50KB, measured as UTF-8 bytes
 const PAGE_RANGE_RE = /^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$/;
 const TEXT_EXTENSIONS = new Set([
   '.txt', '.md', '.markdown', '.rst',
@@ -78,7 +86,36 @@ const BINARY_SNIFF_BYTES = 16;
 // Image files are not read directly by this tool. They are routed to the
 // dedicated `vision_analyze` tool so pixels are never fed to a model that
 // can't see them, and analysis stays on the vision tool (not duplicated here).
+// Exception: when the active main model is multimodal (see
+// isMainModelMultimodal below), ReadTool reads the image back as an inline
+// image payload instead, so a vision-capable model sees it directly without
+// a forced two-hop vision_analyze call.
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tif', '.tiff']);
+// Maps a supported image extension to its MIME media type for the inline
+// base64 image payload. Mirrors the values used by the document parsers.
+const IMAGE_EXTENSION_MEDIA_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
+};
+
+/**
+ * Decide whether the active main model can see image content inline.
+ *
+ * Uses the same heuristic the image-preprocessing path relies on
+ * (isModelLikelyMultimodal). When the model is unknown/absent we stay
+ * conservative (return false) so the existing "route to vision_analyze"
+ * behavior is preserved rather than risking sending pixels to a model
+ * that cannot consume them.
+ */
+export function isMainModelMultimodal(model: string | undefined): boolean {
+  return isModelLikelyMultimodal(model ?? '');
+}
 
 function isDocMode(input: ReadInput, ext: string | null): boolean {
   // .ipynb must always go through the document parser — its first
@@ -355,7 +392,18 @@ export class ReadTool extends BaseTool {
       // by this read tool. Reject them with a clear pointer so the model
       // routes image analysis through the vision tool instead of attaching
       // raw pixels that a non-vision main model cannot consume.
+      //
+      // Exception (plan 428 / multimodal direct-read): when the active main
+      // model is multimodal, ReadTool reads the image and returns it as an
+      // inline base64 payload (ToolResult.images) so the model sees it
+      // directly instead of being forced into a two-hop vision_analyze call.
+      // The StreamingToolExecutor already attaches result.images as image
+      // content blocks, and non-vision models are downgraded downstream.
       if (ext && IMAGE_EXTENSIONS.has(ext.toLowerCase())) {
+        const model = context?.options.mainLoopModel;
+        if (isMainModelMultimodal(model)) {
+          return await this.readImageInline(input, id, workingDirectory, ext.toLowerCase());
+        }
         return {
           id, name: 'read', error: true,
           result: `Error: Cannot read '${input.file_path}' — this is an image file. Use the \`vision_analyze\` tool to analyze image content.`,
@@ -406,7 +454,52 @@ export class ReadTool extends BaseTool {
         finalText = filterChunksByCellRange(text, input.cell_range, result.chunks);
       }
 
+      // Record the observed mtime/size so edit can anchor old_string to
+      // this exact version of the file (plan 428, file-read-state.ts).
+      recordFileRead(resolved, { mtimeMs: statResult.mtimeMs, size: statResult.size });
+
       return { id, name: 'read', result: finalText, metadata, images };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };
+    }
+  }
+
+  /**
+   * Multimodal direct-read path: read an image file and return it as an
+   * inline base64 payload on ToolResult.images so a vision-capable main
+   * model sees the image directly in the tool_result (the executor attaches
+   * these as ImageContent blocks). Mirrors how the document parser's pure
+   * image path surfaces images in result-builder.
+   *
+   * Only called from readAsDocument for a known multimodal main model;
+   * non-multimodal / unknown models keep the vision_analyze rejection
+   * and never reach here.
+   */
+  private async readImageInline(
+    input: ReadInput,
+    id: string,
+    workingDirectory?: string,
+    ext = '.png',
+  ): Promise<ToolResult> {
+    try {
+      const resolved = expandPath(input.file_path, workingDirectory);
+      const data = await readFile(resolved);
+      if (data.length === 0) {
+        return {
+          id, name: 'read', error: true,
+          result: `Error: Cannot read '${input.file_path}' — the image file is empty.`,
+        };
+      }
+      const mediaType = IMAGE_EXTENSION_MEDIA_TYPES[ext] ?? 'image/png';
+      const result = `File: ${normalizePath(resolved)}\nMIME: ${mediaType}\n\n[Read metadata: image attached as inline image content. Vision-capable main models can see it directly.]`;
+      return {
+        id,
+        name: 'read',
+        result,
+        metadata: { filePath: normalizePath(resolved), mediaType },
+        images: [{ data: data.toString('base64'), mediaType }],
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       return { id, name: 'read', error: true, result: `Error reading file: ${msg}` };
@@ -615,16 +708,54 @@ export async function readFileContent(
         output += `\n\n[Read metadata: read ${endLine - startIdx} of ${lines.length} lines. Omitted: ${notes.join('; ')}. Use line_range to read the remaining lines.]`;
       }
     } else {
-      output = content;
+      // Full-file read. Cap the output to FULL_READ_MAX_LINES lines or
+      // FULL_READ_MAX_BYTES UTF-8 bytes (whichever is hit first), matching
+      // the tool description instead of returning the whole file unbounded.
+      // We line-cap first (cheap), then byte-cap that payload. byteLength is
+      // used because the description promises 50KB, and line-based truncation
+      // alone cannot bound a file with very long lines.
+      const totalLines = lines.length;
+      const overLineLimit = totalLines > FULL_READ_MAX_LINES;
+      const lineCapped = overLineLimit ? lines.slice(0, FULL_READ_MAX_LINES).join('\n') : content;
+      const overByteLimit = Buffer.byteLength(lineCapped, 'utf-8') > FULL_READ_MAX_BYTES;
+      const body = overByteLimit
+        ? Buffer.from(lineCapped, 'utf-8').subarray(0, FULL_READ_MAX_BYTES).toString('utf-8')
+        : lineCapped;
+
+      output = body;
       startLine = 1;
-      endLine = lines.length;
+      endLine = body.split('\n').length;
+
+      if (overLineLimit || overByteLimit) {
+        // Mirror the line_range note style so the model knows a partial
+        // view is not the whole file and how to continue (plan 428).
+        const notes: string[] = [];
+        if (overLineLimit) notes.push(`truncated to first ${FULL_READ_MAX_LINES} of ${totalLines} lines`);
+        if (overByteLimit) notes.push(`truncated at ~${Math.ceil(FULL_READ_MAX_BYTES / 1024)}KB`);
+        output += `\n\n[Read metadata: returned ${endLine} of ${totalLines} lines. ${notes.join('; ')}. Use line_range to read the remaining lines.]`;
+      }
+    }
+
+    // Record the observed mtime/size (full and line_range reads alike) so
+    // edit can verify its old_string is anchored to this version of the
+    // file (plan 428, file-read-state.ts). Best-effort: if the file vanishes
+    // between read and stat there is nothing left to anchor.
+    try {
+      const readStat = await stat(resolvedPath);
+      recordFileRead(resolvedPath, { mtimeMs: readStat.mtimeMs, size: readStat.size });
+    } catch {
+      // ignore — the read itself already succeeded
     }
 
     return {
       id,
       name: 'read',
       result: `File: ${normalizePath(resolvedPath)}\nLines: ${startLine}-${endLine}\n\n${output}`,
-      metadata: { filePath: normalizePath(resolvedPath), lineCount: endLine - startLine + 1 },
+      metadata: {
+        filePath: normalizePath(resolvedPath),
+        lineCount: endLine - startLine + 1,
+        totalLines: lines.length,
+      },
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
