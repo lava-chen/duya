@@ -84,6 +84,16 @@ export interface PlatformAdapter {
    * Called when a stream completes or errors.
    */
   removeMessageReaction?(chatId: string, messageId: string): Promise<void>;
+
+  /**
+   * Register a handler fired when the platform connection transitions back
+   * to connected after a disconnect (network outage, WebSocket drop, polling
+   * backoff). The GatewayManager uses this to flush delivery-ledger
+   * redeliveries that failed while the channel was down — without it, a
+   * final agent reply generated during an outage is only retried on the
+   * next gateway process restart.
+   */
+  onReconnected?(handler: () => void): void;
 }
 
 /**

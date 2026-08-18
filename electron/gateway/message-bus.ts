@@ -527,6 +527,36 @@ export function handleGatewayMessage(
       // Accumulate text from chat:text events
       let accumulatedText = '';
       let sseBuffer = '';
+      // Tracks whether the agent stream reached a terminal event. When the SSE
+      // connection dies without one (agent-server crash/restart), the gateway
+      // subprocess's StreamHandler would otherwise wait forever for chat:done
+      // and never finalize — the user gets no reply and no error. Emit a
+      // chat:error on abnormal teardown so the channel at least learns the
+      // turn failed instead of hanging silently.
+      let terminalReceived = false;
+      const markTerminal = () => { terminalReceived = true; };
+
+      // Fallback for abnormal stream teardown: if the SSE connection ends
+      // without a done/error frame (agent-server crash, restart, or the HTTP
+      // request failing outright), the gateway subprocess would hang waiting
+      // for chat:done. Notify it with a chat:error so the channel user learns
+      // the turn failed. Guarded so the error is emitted once.
+      let fallbackSent = false;
+      const sendFallbackError = (reason: string) => {
+        if (fallbackSent || terminalReceived) return;
+        fallbackSent = true;
+        getLogger().error('[gateway:inbound] SSE stream ended without terminal event', new Error(reason), { sessionId }, LogComponent.Gateway);
+        sendToGatewayProcess({
+          type: 'gateway:outbound',
+          sessionId,
+          platform,
+          platformChatId,
+          event: {
+            type: 'chat:error',
+            message: `Agent stream disconnected before completion (${reason})`,
+          },
+        });
+      };
 
       const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
       try {
@@ -598,6 +628,7 @@ export function handleGatewayMessage(
                     event: { type: 'chat:thinking', content },
                   });
                 } else if (event.type === 'done') {
+                  markTerminal();
                   getLogger().debug('[gateway:inbound] done event received', {
                     sessionId,
                     accumulatedLength: accumulatedText.length,
@@ -615,6 +646,7 @@ export function handleGatewayMessage(
                     },
                   });
                 } else if (event.type === 'error') {
+                  markTerminal();
                   const message = event.data?.message || 'Agent error';
                   getLogger().error('[gateway:inbound] Agent error', new Error(message), { sessionId }, LogComponent.Gateway);
                   sendToGatewayProcess({
@@ -671,14 +703,24 @@ export function handleGatewayMessage(
             }
           });
 
+          // Fallback for abnormal stream teardown (see sendFallbackError above).
           res.on('end', () => {
             getLogger().debug('[gateway:inbound] SSE stream ended', { sessionId }, LogComponent.Gateway);
+            if (!terminalReceived) {
+              sendFallbackError('connection ended without terminal event');
+            }
+          });
+          res.on('close', () => {
+            if (!terminalReceived) {
+              sendFallbackError('connection closed before completion');
+            }
           });
         }
       );
 
       req.on('error', (err: Error) => {
         getLogger().error('Failed to forward gateway:inbound to Agent Server', err, { sessionId }, LogComponent.Gateway);
+        sendFallbackError(err.message);
       });
 
       req.write(body);

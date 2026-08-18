@@ -78,6 +78,9 @@ export abstract class BaseAdapter implements PlatformAdapter {
   // ---------------------------------------------------------------------------
   protected messageHandler: ((msg: NormalizedMessage) => void) | null = null;
   protected commandHandler: ((msg: NormalizedMessage) => Promise<boolean>) | null = null;
+  private reconnectedHandler: (() => void) | null = null;
+  /** True after the first successful connect; guards reconnect-transition detection. */
+  private hasConnectedOnce = false;
 
   // ---------------------------------------------------------------------------
   // Constructor
@@ -125,6 +128,10 @@ export abstract class BaseAdapter implements PlatformAdapter {
 
   setCommandHandler(handler: (msg: NormalizedMessage) => Promise<boolean>): void {
     this.commandHandler = handler;
+  }
+
+  onReconnected(handler: () => void): void {
+    this.reconnectedHandler = handler;
   }
 
   /**
@@ -318,9 +325,18 @@ export abstract class BaseAdapter implements PlatformAdapter {
   // Protected: Health update helpers
   // ---------------------------------------------------------------------------
   protected updateHealthConnected(): void {
+    const wasConnected = this.health.connected;
     this.health.connected = true;
     this.health.lastConnectedAt = Date.now();
     this.health.consecutiveErrors = 0;
+    // Fire the reconnect transition only when the adapter is running, has been
+    // connected at least once, and is recovering from an actual disconnect —
+    // the initial connect (hasConnectedOnce=false) and repeated connect calls
+    // while already healthy must not re-trigger redelivery.
+    if (this.running && !wasConnected && this.hasConnectedOnce) {
+      this.reconnectedHandler?.();
+    }
+    this.hasConnectedOnce = true;
   }
 
   protected updateHealthError(err: unknown): void {

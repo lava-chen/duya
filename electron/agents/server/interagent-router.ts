@@ -7,6 +7,7 @@ import { workerLogger } from './logger';
 import type { WorkerEvent } from '../../../packages/agent/src/process/worker-protocol';
 import type { ApiProvider } from '../../config/provider-types';
 import { buildInitProviderConfig, detectReferencesEnabled } from './router';
+import { calculateMaxConcurrentWorkers } from './worker-limits';
 
 /**
  * Shared map of pending DB requests, keyed by request id. The agent server
@@ -72,7 +73,9 @@ export interface InteragentRouterDeps {
   workerDbRequests: WorkerDbRequests;
 }
 
-const MAX_CONCURRENT_WORKERS = 16;
+// Plan 426 Phase 1.1: adaptive cap shared with the HTTP router (CPU/2
+// bounded by total-memory tier, lowPower-aware).
+
 // Tool names MUST match the lowercase names registered in the agent
 // registry (packages/agent/src/tool/*Tool.ts), since DuyaAgent._resolveTools
 // filters with a strict Set.has(t.name) comparison (DuyaAgent.ts:1702).
@@ -150,7 +153,7 @@ export class InteragentRouter {
     }
 
     // 4. Worker cap
-    if (this.deps.workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {
+    if (this.deps.workerManager.workerCount >= calculateMaxConcurrentWorkers()) {
       return { ok: false, reason: 'server_busy' };
     }
 

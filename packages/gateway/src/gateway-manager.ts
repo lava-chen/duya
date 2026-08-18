@@ -51,6 +51,13 @@ export class GatewayManager {
   private lastActivityByChat = new Map<string, number>();
   /** Queued inbound text per busy session (merged into a single prompt). */
   private busyQueue = new Map<string, string[]>();
+  /**
+   * Periodic sweep of ledger obligations for connected adapters. Backstop for
+   * the reconnect hook: a failed send lands in the ledger AFTER the channel
+   * reconnects, so the reconnect event itself cannot see it. The sweep retries
+   * it on the next tick instead of waiting for a process restart.
+   */
+  private redeliveryTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.ipc = new IpcClient();
@@ -183,6 +190,21 @@ export class GatewayManager {
             ),
           ]);
 
+          // Flush delivery-ledger redeliveries whenever this channel recovers
+          // from a disconnect. A final reply that failed to send while the
+          // channel was down must not wait for a process restart to be retried.
+          adapter.onReconnected?.(() => {
+            console.log(`[GatewayManager] Adapter reconnected: ${platform}, flushing pending redeliveries`);
+            this.streamHandler.redeliverRecoverable(
+              (p) => this.adapters.get(p as PlatformType),
+              [platformType],
+            ).then((n) => {
+              if (n > 0) console.log(`[GatewayManager] Reconnected redelivery: delivered ${n} message(s) for ${platform}`);
+            }).catch((err) => {
+              console.error(`[GatewayManager] Reconnected redelivery failed for ${platform}:`, err);
+            });
+          });
+
           console.log(`[GatewayManager] Adapter started: ${platform}`);
           return { platform: platformType, adapter };
         } catch (err) {
@@ -220,6 +242,25 @@ export class GatewayManager {
     );
     if (redelivered > 0) {
       console.log(`[GatewayManager] Redelivered ${redelivered} recoverable message(s) from delivery ledger`);
+    }
+
+    // Periodic backstop sweep (60s). Only connected adapters are swept so a
+    // still-offline channel's obligations are not burned against a dead link.
+    if (!this.redeliveryTimer) {
+      this.redeliveryTimer = setInterval(() => {
+        const connectedPlatforms = Array.from(this.adapters.entries())
+          .filter(([, a]) => a.getHealth?.().connected ?? a.isRunning())
+          .map(([p]) => p);
+        if (connectedPlatforms.length === 0) return;
+        this.streamHandler.redeliverRecoverable(
+          (platform) => this.adapters.get(platform as PlatformType),
+          connectedPlatforms,
+        ).then((n) => {
+          if (n > 0) console.log(`[GatewayManager] Periodic sweep delivered ${n} pending message(s)`);
+        }).catch((err) => {
+          console.error('[GatewayManager] Periodic redelivery sweep failed:', err);
+        });
+      }, 60_000);
     }
 
     // Broadcast gateway-online to the home channel (Hermes parity).
@@ -288,6 +329,11 @@ export class GatewayManager {
     );
 
     await Promise.allSettled(stopTasks);
+
+    if (this.redeliveryTimer) {
+      clearInterval(this.redeliveryTimer);
+      this.redeliveryTimer = null;
+    }
 
     this.adapters.clear();
     this.streamHandler.cleanupAll();

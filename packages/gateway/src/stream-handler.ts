@@ -954,11 +954,23 @@ export class StreamHandler {
    * Re-deliver obligations recovered from the ledger after a crash restart.
    * Call this once adapter startup completes. Returns the number of successful
    * redeliveries; failures are re-marked for a later retry boundary.
+   *
+   * When `platforms` is given, only obligations for those platforms are swept.
+   * This is how the gateway manager redelivers on adapter reconnect without
+   * touching rows belonging to still-offline channels (which would burn retry
+   * attempts against a dead link).
    */
-  async redeliverRecoverable(adapterLookup: (platform: string) => PlatformAdapter | undefined): Promise<number> {
+  async redeliverRecoverable(
+    adapterLookup: (platform: string) => PlatformAdapter | undefined,
+    platforms?: Iterable<string>,
+  ): Promise<number> {
     if (!this.ledger) return 0;
     let delivered = 0;
+    const platformSet = platforms ? new Set(platforms) : null;
     for (const obligation of this.ledger.sweepRecoverable()) {
+      if (platformSet && !platformSet.has(obligation.platform)) {
+        continue;
+      }
       const adapter = adapterLookup(obligation.platform);
       if (!adapter) continue;
       const reply = obligation.reply as NormalizedReply;

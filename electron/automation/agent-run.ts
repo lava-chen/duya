@@ -15,6 +15,7 @@
  */
 
 import * as http from 'node:http';
+import { BrowserWindow } from 'electron';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -81,6 +82,33 @@ export function createCronSessionRow(params: {
       context_summary_updated_at: 0,
     },
   });
+  // A cron run is created by the main process, outside any renderer action,
+  // so the normal `sync:threads-changed` path (renderer → main → other
+  // windows) never fires for it. Broadcast to every window so the session
+  // list and sidebar cron group pick up the new run without a manual refresh.
+  broadcastThreadsChanged(params.sessionId);
+}
+
+/**
+ * Best-effort broadcast of `sync:threads-changed` to every renderer window.
+ * The renderer handler force-syncs the session list on receipt, so a
+ * scheduled run shows up in the UI while it is still executing. Swallows
+ * failures (headless boot / CLI bootstrap have no windows at all).
+ */
+function broadcastThreadsChanged(sessionId: string): void {
+  try {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send('sync:threads-changed');
+      }
+    }
+  } catch (error) {
+    getLogger().warn(
+      'Failed to broadcast threads-changed after cron session creation',
+      { sessionId, error: error instanceof Error ? error.message : String(error) },
+      LogComponent.Automation,
+    );
+  }
 }
 
 /**
