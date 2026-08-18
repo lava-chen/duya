@@ -71,4 +71,27 @@ export function registerVoiceHandlers(): void {
   ipcMain.handle('voice:env-doctor', () => {
     return getService().envReport();
   });
+
+  ipcMain.handle('voice:runtime-status', () => {
+    return getService().runtimeStatus();
+  });
+
+  // One-click install: downloads the prebuilt whisper.cpp CLI. Progress is
+  // streamed on the `voice:download-progress` event.
+  ipcMain.handle('voice:runtime-download', async () => {
+    logger.info('voice:runtime-download', undefined, LogComponent.Voice);
+    return getService().installRuntime();
+  });
+
+  ipcMain.handle('voice:model-download', async (_event, model?: string) => {
+    if (typeof model !== 'string' && model !== undefined) {
+      return { ok: false, message: 'invalid model name' };
+    }
+    logger.info('voice:model-download', { model }, LogComponent.Voice);
+    return getService().downloadModel(model);
+  });
+
+  ipcMain.handle('voice:cloud-test', async () => {
+    return getService().cloudTest();
+  });
 }

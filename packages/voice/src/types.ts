@@ -11,6 +11,8 @@ export type PcmChunk = Int16Array;
 /** Public voice config surfaced to the renderer (sanitized, no secrets). */
 export interface VoiceConfigDTO {
   enabled: boolean;
+  /** Preferred input device id; empty = system default. */
+  inputDevice: string;
   engine: 'local' | 'cloud';
   endSilenceMs: number;
   noSpeechTimeoutMs: number;
@@ -19,6 +21,10 @@ export interface VoiceConfigDTO {
   model: string;
   modelReady: boolean;
   modelSizeMb: number;
+  /** Cloud track: configured provider id ('' = auto/default). */
+  cloudProvider: string;
+  /** Cloud track: transcription model name (e.g. whisper-1). */
+  cloudModel: string;
 }
 
 export interface ModelStatusDTO {

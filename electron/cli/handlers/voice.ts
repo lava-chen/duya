@@ -18,8 +18,10 @@ import * as http from 'http';
 import {
   collectEnvReport,
   ModelManager,
+  RuntimeManager,
   resolveVoiceConfig,
   modelRoot,
+  runtimeBinDir,
 } from '@duya/voice';
 import { getConfigStore } from '../../config/store-instance';
 import { resolveConfigRoot } from '../../config/compass';
@@ -74,12 +76,14 @@ export function handleVoiceEnvDoctor(req: http.IncomingMessage, res: http.Server
     const { model, root } = resolveVoiceContext();
     const mgr = new ModelManager({ rootDir: root });
     const modelStatus = mgr.status(model);
-    const env = collectEnvReport();
+    const env = collectEnvReport({ managedBinDir: runtimeBinDir(resolveConfigRoot()) });
     sendJson(res, 200, {
       ok: true,
       platform: env.platform,
       binaryFound: env.binaryFound,
       binaryPath: env.binaryPath,
+      binarySource: env.binarySource,
+      runtimeInstallable: env.runtimeInstallable,
       model,
       modelReady: modelStatus.ready,
       modelSizeMb: modelStatus.sizeMb,
@@ -94,15 +98,37 @@ export function handleVoiceEnvDoctor(req: http.IncomingMessage, res: http.Server
   }
 }
 
-/** POST /v1/voice/setup — ensure the configured model is downloaded + verified. */
+/**
+ * POST /v1/voice/setup — first-use provisioning. Installs the prebuilt
+ * whisper.cpp runtime when missing (`install_runtime`, default true where
+ * supported) and ensures the configured model is downloaded + verified.
+ */
 export async function handleVoiceSetup(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   try {
+    const body = await readBody(req).catch(() => ({}) as Record<string, unknown>);
+    const installRuntime = body.install_runtime !== false;
+    const userDataRoot = resolveConfigRoot();
+
+    let runtimeResult: { installed: boolean; path?: string; message?: string } = {
+      installed: false,
+    };
+    if (installRuntime) {
+      const runtime = new RuntimeManager({ binDir: runtimeBinDir(userDataRoot) });
+      const status = await runtime.install();
+      runtimeResult = {
+        installed: status.ready,
+        path: status.path,
+        message: status.message,
+      };
+    }
+
     const { model, root } = resolveVoiceContext();
     const mgr = new ModelManager({ rootDir: root });
     const status = await mgr.ensure(model);
-    const env = collectEnvReport();
+    const env = collectEnvReport({ managedBinDir: runtimeBinDir(userDataRoot) });
     sendJson(res, 200, {
       ok: true,
+      runtime: runtimeResult,
       model: status.model,
       ready: true,
       sizeMb: status.sizeMb,

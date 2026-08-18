@@ -1,9 +1,10 @@
 // src/lib/voice/useVoiceInput.ts — hook that drives the push-to-talk flow:
 //   started → mic capture → stream chunks to Main STT → interim/final text
-//   injected via onText callbacks. Handles permission, model-not-ready, and
-//   no-speech cancellation gracefully.
+//   injected via onText callbacks. Handles permission, device selection,
+//   model-not-ready, and no-speech cancellation gracefully.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { VoiceStatus, VoiceErrorCode } from './types';
+import { describeStartError } from './errors';
 
 export interface UseVoiceInputOptions {
   /** Called with interim text (and later the final result). */
@@ -11,10 +12,10 @@ export interface UseVoiceInputOptions {
   /** Called when the utterance is cancelled (no speech / user cancel). */
   onCancelled?: (reason: string) => void;
   /**
-   * Called when the STT environment is not ready (model_not_ready) and the
-   * user taps the mic. Lets the UI auto-inject a setup-guide message so the
-   * agent configures whisper via the `voice-setup` skill. Fired per attempt;
-   * the caller is responsible for de-duplication.
+   * Called when the STT environment is not ready (disabled / model_not_ready)
+   * and the user taps the mic. Lets the UI auto-inject a setup-guide message
+   * so the agent configures whisper via the `voice-setup` skill. Fired per
+   * attempt; the caller is responsible for de-duplication.
    */
   onNeedsSetup?: () => void;
 }
@@ -44,6 +45,8 @@ export function useVoiceInput({ onText, onCancelled, onNeedsSetup }: UseVoiceInp
   const captureRef = useRef<import('./voice-capture').VoiceCapture | null>(null);
   const statusRef = useRef<VoiceStatus>('idle');
   statusRef.current = status;
+  const startInFlightRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
   const apiSupported = typeof window !== 'undefined' && !!window.electronAPI?.voice;
 
@@ -60,19 +63,17 @@ export function useVoiceInput({ onText, onCancelled, onNeedsSetup }: UseVoiceInp
       setErrorMessage(d.message);
       setStatusSafe('error');
     });
-    const unsubCancelled = api.onCancelled((d) => {
-      onCancelledRef.current?.(d.reason);
+    const unsubCancelled = api.onCancelled(() => {
+      onCancelledRef.current?.('user_cancelled');
       setStatusSafe('idle');
     });
     const unsubAutoStop = api.onAutoStop((d) => {
+      captureRef.current?.stop();
+      captureRef.current = null;
       if (d.reason === 'finalize') {
         // Main already finalized the utterance; final text arrives via onFinal.
-        captureRef.current?.stop();
-        captureRef.current = null;
         if (statusRef.current === 'recording') setStatusSafe('idle');
       } else {
-        captureRef.current?.stop();
-        captureRef.current = null;
         onCancelledRef.current?.('no_speech');
         setStatusSafe('idle');
       }
@@ -87,76 +88,123 @@ export function useVoiceInput({ onText, onCancelled, onNeedsSetup }: UseVoiceInp
   }, [apiSupported, setStatusSafe]);
 
   const start = useCallback(async () => {
-    if (!apiSupported || statusRef.current === 'recording') return;
-
-    // Ensure the model/binary is ready before grabbing the mic.
-    const cfg = await window.electronAPI.voice.getConfig();
-    if (!cfg.modelReady) {
-      setErrorCode('model_not_ready');
-      setErrorMessage(`STT model not ready: ${cfg.model}`);
-      setStatusSafe('error');
-      // Notify the UI that the environment needs setup so it can auto-inject
-      // a guide message (Phase 3 of Plan 411).
-      onNeedsSetupRef.current?.();
-      return;
-    }
-
-    const { AudioWorkletVoiceCapture } = await import('./voice-capture');
-    const capture = new AudioWorkletVoiceCapture();
-    captureRef.current = capture;
-
-    setErrorCode(null);
-    setErrorMessage(null);
-    setStatusSafe('permission-pending');
-
-    const ok = await capture.start();
-    if (!ok) {
-      setErrorCode('permission_denied');
-      setErrorMessage('Microphone permission denied or unavailable');
-      setStatusSafe('error');
-      return;
-    }
-
-    capture.setCallbacks({
-      onChunk: (chunk) => {
-        void window.electronAPI.voice.transcribeChunk(chunk);
-      },
-      onError: (message) => {
+    if (!apiSupported || statusRef.current === 'recording' || startInFlightRef.current) return;
+    startInFlightRef.current = true;
+    stopRequestedRef.current = false;
+    try {
+      // Ensure voice is enabled and the model/binary is ready before
+      // grabbing the mic.
+      const cfg = await window.electronAPI.voice.getConfig();
+      if (!cfg.enabled || !cfg.modelReady) {
+        setErrorCode(!cfg.enabled ? 'model_not_ready' : 'model_not_ready');
+        setErrorMessage(
+          !cfg.enabled
+            ? '语音输入未启用：请在 设置 → 语音输入 中开启，或让 DUYA 自动配置'
+            : `语音模型未就绪：${cfg.model}（可在设置中一键安装）`,
+        );
         setStatusSafe('error');
+        // Notify the UI that the environment needs setup so it can
+        // auto-inject a guide message (Phase 3 of Plan 411).
+        onNeedsSetupRef.current?.();
+        return;
+      }
+
+      const { AudioWorkletVoiceCapture } = await import('./voice-capture');
+      const capture = new AudioWorkletVoiceCapture();
+      captureRef.current = capture;
+
+      setErrorCode(null);
+      setErrorMessage(null);
+      setStatusSafe('permission-pending');
+
+      // One bounded PCM block per chunkMs; keeps the IPC invoke rate at
+      // ~5/s instead of one per render quantum.
+      const blockSamples = Math.max(160, Math.round((16000 * cfg.chunkMs) / 1000));
+      const started = await capture.start({
+        deviceId: cfg.inputDevice || undefined,
+        blockSamples,
+      });
+      if (!started.ok) {
+        setErrorCode('permission_denied');
+        setErrorMessage(started.message ?? '无法访问麦克风');
+        setStatusSafe('error');
+        capture.stop();
+        captureRef.current = null;
+        return;
+      }
+
+      // The button was released while permission/start was pending.
+      if (stopRequestedRef.current) {
+        capture.stop();
+        captureRef.current = null;
+        setStatusSafe('idle');
+        return;
+      }
+
+      capture.setCallbacks({
+        onChunk: (chunk) => {
+          void window.electronAPI.voice.transcribeChunk(chunk);
+        },
+        onError: (message) => {
+          setStatusSafe('error');
+          setErrorMessage(message);
+        },
+      });
+
+      const res = await window.electronAPI.voice.start();
+      if (!res.ok) {
+        const { code, message } = describeStartError(res.error, res.message);
+        setErrorCode(code);
         setErrorMessage(message);
-      },
-    });
+        setStatusSafe('error');
+        capture.stop();
+        captureRef.current = null;
+        if (res.error === 'model_not_ready') onNeedsSetupRef.current?.();
+        return;
+      }
 
-    const started = await window.electronAPI.voice.start();
-    if (!started.ok) {
-      setErrorCode((started.error as VoiceErrorCode) ?? 'internal');
-      setErrorMessage(started.message ?? started.error ?? 'failed to start STT');
-      setStatusSafe('error');
-      capture.stop();
-      captureRef.current = null;
-      return;
+      // Released while the STT worker was starting.
+      if (stopRequestedRef.current) {
+        await window.electronAPI.voice.stop();
+        capture.stop();
+        captureRef.current = null;
+        setStatusSafe('idle');
+        return;
+      }
+
+      setStatusSafe('recording');
+    } finally {
+      startInFlightRef.current = false;
     }
-
-    setStatusSafe('recording');
   }, [apiSupported, setStatusSafe]);
 
   const stop = useCallback(async () => {
-    if (statusRef.current !== 'recording') return;
-    setStatusSafe('transcribing');
-    await window.electronAPI.voice.stop();
-    captureRef.current?.stop();
-    captureRef.current = null;
-    setStatusSafe('idle');
-  }, [setStatusSafe]);
+    if (statusRef.current === 'recording') {
+      setStatusSafe('transcribing');
+      await window.electronAPI.voice.stop();
+      captureRef.current?.stop();
+      captureRef.current = null;
+      setStatusSafe('idle');
+      return;
+    }
+    // Still starting (permission / worker spawn): remember the release and
+    // let the in-flight start() unwind as soon as it is ready.
+    if (startInFlightRef.current) {
+      stopRequestedRef.current = true;
+    }
+  }, [apiSupported, setStatusSafe]);
 
   const cancel = useCallback(async () => {
-    if (statusRef.current !== 'recording' && statusRef.current !== 'transcribing') return;
+    if (statusRef.current !== 'recording' && statusRef.current !== 'transcribing') {
+      if (startInFlightRef.current) stopRequestedRef.current = true;
+      return;
+    }
+    // Main emits `voice:cancelled` which resets the status via the event.
     await window.electronAPI.voice.cancel();
     captureRef.current?.stop();
     captureRef.current = null;
-    onCancelledRef.current?.('user_cancelled');
     setStatusSafe('idle');
-  }, [setStatusSafe]);
+  }, [apiSupported, setStatusSafe]);
 
   return { status, supported: apiSupported, errorCode, errorMessage, start, stop, cancel };
 }

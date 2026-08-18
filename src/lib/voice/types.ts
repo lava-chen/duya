@@ -19,6 +19,7 @@ export type VoiceAutoStopReason = 'finalize' | 'no_speech';
 
 export interface VoiceConfigDTO {
   enabled: boolean;
+  inputDevice: string;
   engine: 'local' | 'cloud';
   endSilenceMs: number;
   noSpeechTimeoutMs: number;
@@ -27,4 +28,6 @@ export interface VoiceConfigDTO {
   model: string;
   modelReady: boolean;
   modelSizeMb: number;
+  cloudProvider: string;
+  cloudModel: string;
 }
