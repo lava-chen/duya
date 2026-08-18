@@ -14,8 +14,37 @@ import { readFile, stat } from 'node:fs/promises';
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { expandPath } from '../../utils/path.js';
+import { logger } from '../../utils/logger.js';
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Return a short, actionable next-step for the model based on the vision
+ * provider error, so it does not blindly retry the identical call.
+ */
+function buildErrorGuidance(errMsg: string): string {
+  const m = errMsg.toLowerCase();
+
+  if (
+    /401|403/.test(m) ||
+    m.includes('unauthoriz') ||
+    m.includes('auth') ||
+    m.includes('invalid api key') ||
+    m.includes('authentication')
+  ) {
+    return '视觉 provider 的 API key/凭据无效或已过期，请在 设置 > 视觉模型 检查凭据配置后再试';
+  }
+
+  if (/fetch failed|connection|econnrefused|enotfound|timeout|socket hang up/.test(m)) {
+    return '无法连接视觉 provider（网络或端点配置问题），检查端点地址与网络后重试';
+  }
+
+  if (/429|rate|quota/.test(m)) {
+    return '视觉 provider 限流或配额不足，稍后重试或改用多模态主模型';
+  }
+
+  return '请检查视觉 provider 配置（模型、端点、API key）与网络，确认无误后再试；不要盲目重试同一调用';
+}
 
 const MAGIC_BYTES: Record<string, Buffer> = {
   'image/png': Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -246,12 +275,11 @@ export class VisionTool implements Tool, ToolExecutor {
         ? `Answer the following question about this image: "${question}"\n\nProvide a clear and thorough answer based on what you see in the image.`
         : undefined;
 
-      console.log('[VisionTool] Calling analyzeImage with:', {
+      logger.debug('[VisionTool] Calling analyzeImage', {
         source: loaded.resolvedPath || loaded.label,
         base64Length: loaded.base64Data.length,
         mimeType: loaded.mimeType,
         hasPrompt: !!prompt,
-        promptPreview: prompt?.substring(0, 100),
       });
 
       let analysis: string;
@@ -259,19 +287,17 @@ export class VisionTool implements Tool, ToolExecutor {
         analysis = await analyzeImage(loaded.base64Data, loaded.mimeType, prompt);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.log('[VisionTool] analyzeImage threw error:', errMsg);
+        const guidance = buildErrorGuidance(errMsg);
+        logger.warn('[VisionTool] analyzeImage threw', { message: errMsg });
         return {
           id,
           name: this.name,
-          result: `Error: ${errMsg}\n\nImage: ${loaded.resolvedPath || loaded.label} (${(loaded.fileSizeBytes / 1024).toFixed(1)} KB, ${loaded.mimeType})`,
+          result: `Error: ${errMsg}\n\nImage: ${loaded.resolvedPath || loaded.label} (${(loaded.fileSizeBytes / 1024).toFixed(1)} KB, ${loaded.mimeType})\n\n建议: ${guidance}`,
           error: true,
         };
       }
 
-      console.log('[VisionTool] analyzeImage returned:', {
-        analysisLength: analysis.length,
-        analysisPreview: analysis.substring(0, 200),
-      });
+      logger.debug('[VisionTool] analyzeImage returned', { analysisLength: analysis.length });
 
       const resultParts: string[] = [];
       resultParts.push(`Image analyzed: ${loaded.resolvedPath || loaded.label}`);

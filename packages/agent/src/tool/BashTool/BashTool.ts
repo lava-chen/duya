@@ -143,7 +143,12 @@ export interface ShellCommandToolConfig {
 const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
   name: 'bash',
   description:
-    'Execute a bash command. Returns the stdout and stderr output. For long-running commands, set run_in_background=true and you will be notified on completion; use get_task_output with the returned task ID to fetch results, and kill_task to terminate a background task if needed.',
+    'Execute a bash command and return its stdout + stderr output. ' +
+    'Quote arguments correctly: single quotes (\'...\') prevent all expansion (no variables or backticks), ' +
+    'double quotes ("...") allow variable and backtick expansion; prefer a single one-line command chained with && or ; over multi-line scripts. ' +
+    'For commands that emit very long output, pipe through head/grep/sed/tail or redirect to a file instead of dumping everything to the transcript. ' +
+    'Do not use bash as a thinking scratchpad or pad with empty echo commands — blank output only wastes turns; reason in your own scratchpad instead. ' +
+    'For long-running commands, set run_in_background=true and you will be notified on completion; use get_task_output with the returned task ID to fetch results, and kill_task to terminate a background task if needed.',
   providerKind: 'bash',
   commandLabel: 'bash command',
   securityCheck: analyzeCommandSafety,

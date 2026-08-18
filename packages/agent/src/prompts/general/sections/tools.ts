@@ -35,7 +35,7 @@ ${items.map(item => ` - ${item}`).join('\n')}`
 
   const providedToolSubitems = [
     `To read files use ${TOOL_NAMES.READ}`,
-    `To edit files use ${TOOL_NAMES.EDIT}`,
+    `To edit files use ${TOOL_NAMES.EDIT}. Prefer ${TOOL_NAMES.EDIT} when you have a single file and an exact, unique old_string to replace. Use apply_patch for multi-file changes or when matching must tolerate context drift (the current file may differ from what you read earlier). Do not default to one over the other — pick the tool that fits the change.`,
     `To create files use ${TOOL_NAMES.WRITE}`,
     ...(hasEmbeddedSearchTools
       ? []

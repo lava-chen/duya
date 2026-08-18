@@ -13,10 +13,12 @@ import { join } from 'node:path';
 import {
   ReadTool,
   _resetSharedParser,
+  isMainModelMultimodal,
   type ReadInput,
 } from '../ReadTool.js';
 import { _resetFileParserConfig } from '../../../file-parser/config.js';
 import { Jimp } from 'jimp';
+import type { ToolUseContext, ToolUseContextOptions } from '../../../types.js';
 
 let tmpDir: string;
 let tool: ReadTool;
@@ -178,9 +180,10 @@ describe('ReadTool document mode (NodeFileParser)', () => {
     // the full file. max_tokens only applies to document mode
     // (PDF/DOCX/etc.) via serializeParseResult. This test pins that
     // behavior so a future change doesn't silently start truncating
-    // text reads (which would break line_range-less reads of large code).
+    // text reads based on max_tokens (full reads are capped only by the
+    // fixed 2000-line / 50KB ceiling, independent of max_tokens).
     const f = join(tmpDir, 'long.txt');
-    const content = 'x'.repeat(200_000);
+    const content = 'small body line\nsecond line\n';
     writeFileSync(f, content);
     const result = await tool.execute({
       file_path: f,
@@ -190,9 +193,58 @@ describe('ReadTool document mode (NodeFileParser)', () => {
     // Text mode returns the full content; max_tokens is ignored.
     expect(result.result).toContain('File:');
     expect(result.result).toContain('Lines:');
-    // The full 200_000-char body is present (no truncation marker).
-    expect(result.result.length).toBeGreaterThan(200_000);
+    expect(result.result).toContain('small body line');
+    expect(result.result).toContain('second line');
+    // No truncation note because a small file is under every ceiling.
     expect(result.result).not.toMatch(/truncated/i);
+  });
+
+  it('truncates a full read at 2000 lines with metadata explaining the remainder', async () => {
+    // More lines than FULL_READ_MAX_LINES but far under the 50KB byte
+    // ceiling → only the line cap applies.
+    const f = join(tmpDir, 'many-lines.txt');
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`);
+    writeFileSync(f, lines.join('\n'));
+    const result = await tool.execute({ file_path: f });
+    expect(result.error).toBeFalsy();
+    expect(result.result).toContain('Lines: 1-2000');
+    expect(result.result).toContain('line 2000');
+    expect(result.result).not.toContain('line 2001');
+    expect(result.result).toMatch(/\[Read metadata: returned 2000 of 3000 lines/);
+    expect(result.result).toMatch(/truncated to first 2000 of 3000 lines/);
+    expect(result.result).toMatch(/read the remaining lines/);
+    expect(result.metadata).toMatchObject({ lineCount: 2000, totalLines: 3000 });
+  });
+
+  it('truncates a full read at 50KB for a file with very long lines', async () => {
+    // One line containing 200KB of text → line cap is irrelevant, the
+    // UTF-8 byte cap (50KB) must cut the output.
+    const f = join(tmpDir, 'mono-line.txt');
+    const content = 'x'.repeat(200_000);
+    writeFileSync(f, content);
+    const result = await tool.execute({ file_path: f });
+    expect(result.error).toBeFalsy();
+    expect(result.result).toContain('Lines: 1-1');
+    expect(result.result).toContain('File:');
+    expect(result.result).toMatch(/\[Read metadata: returned 1 of 1 lines/);
+    expect(result.result).toMatch(/truncated at ~50KB/);
+    expect(result.result).toMatch(/read the remaining lines/);
+    // Truncated body must be far smaller than the 200KB source.
+    expect(result.result.length).toBeLessThan(70_000);
+    expect(result.metadata).toMatchObject({ lineCount: 1, totalLines: 1 });
+  });
+
+  it('returns the full content for a small file (under both ceilings)', async () => {
+    const f = join(tmpDir, 'small.txt');
+    const content = Array.from({ length: 5 }, (_, i) => `small ${i + 1}`).join('\n');
+    writeFileSync(f, content);
+    const result = await tool.execute({ file_path: f });
+    expect(result.error).toBeFalsy();
+    expect(result.result).toContain('small 1');
+    expect(result.result).toContain('small 5');
+    expect(result.result).not.toMatch(/truncated/i);
+    expect(result.result).not.toMatch(/Read metadata/);
+    expect(result.metadata).toMatchObject({ lineCount: 5, totalLines: 5 });
   });
 
   it('routes through text path when line_range is provided', async () => {
@@ -371,5 +423,94 @@ describe('ReadTool allowedRoots sandbox', () => {
     const tool = new ReadTool({ allowedRoots: [join(root, 'memory')] });
     const result = await tool.execute({ file_path: join(root, 'memory', 'inside.md') });
     expect(result.error).toBeFalsy();
+  });
+});
+
+function makeContext(model?: string): ToolUseContext {
+  const options = { mainLoopModel: model ?? '' } as ToolUseContextOptions;
+  return { options } as unknown as ToolUseContext;
+}
+
+describe('ReadTool multimodal direct-read (plan 428)', () => {
+  beforeEach(() => {
+    // Clear any kill-switch env leak from the 'DUYA_FILE_PARSER_DISABLED'
+    // describe block above so document-mode reads actually run here.
+    delete process.env.DUYA_FILE_PARSER_DISABLED;
+    _resetFileParserConfig();
+    _resetSharedParser();
+  });
+
+  it('returns image inline for a multimodal main model instead of rejecting', async () => {
+    const f = join(tmpDir, 'photo.png');
+    await makePng(f);
+    const result = await tool.execute({ file_path: f }, undefined, makeContext('claude-sonnet-4'));
+    expect(result.error).toBeFalsy();
+    // Non-error read result produced for the multimodal model.
+    expect(result.result).toContain('File:');
+    expect(result.result).toContain('image/png');
+    // Inline image payload present, base64 of the read file.
+    expect(result.images).toBeDefined();
+    expect(result.images?.length).toBe(1);
+    expect(result.images?.[0]?.mediaType).toBe('image/png');
+    expect(result.images?.[0]?.data).toBeTruthy();
+    expect((result.images?.[0]?.data as string).length).toBeGreaterThan(0);
+  });
+
+  it('maps jpeg extension to image/jpeg media type', async () => {
+    const f = join(tmpDir, 'photo.jpeg');
+    await makePng(f);
+    const result = await tool.execute({ file_path: f }, undefined, makeContext('gemini-2.0-flash'));
+    expect(result.error).toBeFalsy();
+    expect(result.images?.[0]?.mediaType).toBe('image/jpeg');
+  });
+
+  it('still rejects images and points at vision_analyze for a non-multimodal model', async () => {
+    const f = join(tmpDir, 'img.png');
+    await makePng(f);
+    const result = await tool.execute({ file_path: f }, undefined, makeContext('deepseek-v3'));
+    expect(result.error).toBe(true);
+    expect(result.result).toContain('image file');
+    expect(result.result).toContain('`vision_analyze`');
+    expect(result.images).toBeUndefined();
+  });
+
+  it('keeps rejecting images when no model is known (conservative default)', async () => {
+    const f = join(tmpDir, 'img.png');
+    await makePng(f);
+    // No context at all — same as the pre-existing behavior.
+    const noContext = await tool.execute({ file_path: f });
+    expect(noContext.error).toBe(true);
+    expect(noContext.result).toContain('`vision_analyze`');
+    // Empty-string model also stays conservative.
+    const emptyModel = await tool.execute({ file_path: f }, undefined, makeContext(''));
+    expect(emptyModel.error).toBe(true);
+    expect(emptyModel.result).toContain('`vision_analyze`');
+  });
+
+  it('reports an error when the image file is missing', async () => {
+    const result = await tool.execute(
+      { file_path: join(tmpDir, 'missing.png') },
+      undefined,
+      makeContext('gpt-4o'),
+    );
+    expect(result.error).toBe(true);
+  });
+});
+
+describe('ReadTool.isMainModelMultimodal', () => {
+  it('matches known multimodal model names', () => {
+    expect(isMainModelMultimodal('claude-sonnet-4-20250514')).toBe(true);
+    expect(isMainModelMultimodal('gpt-4o')).toBe(true);
+    expect(isMainModelMultimodal('gemini-1.5-pro')).toBe(true);
+  });
+
+  it('does not match known non-multimodal model names', () => {
+    expect(isMainModelMultimodal('deepseek-chat')).toBe(false);
+    expect(isMainModelMultimodal('gpt-3.5-turbo')).toBe(false);
+  });
+
+  it('returns false for undefined/empty model (conservative)', () => {
+    expect(isMainModelMultimodal(undefined)).toBe(false);
+    expect(isMainModelMultimodal('')).toBe(false);
   });
 });
