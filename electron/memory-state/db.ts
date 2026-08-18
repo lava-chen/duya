@@ -54,8 +54,15 @@ function loadCtor(): BetterSqlite3Ctor {
   return ctor;
 }
 
-export interface BootstrapOptions {
-  /** Database directory resolved from boot.json (required — no fallback). */
+/**
+ * Public accessor for the better-sqlite3 constructor (plan 428 RAG index
+ * reuses the packaged-path resolution instead of duplicating it).
+ */
+export function loadBetterSqlite3Ctor(): BetterSqlite3Ctor {
+  return loadCtor();
+}
+
+export interface BootstrapOptions {  /** Database directory resolved from boot.json (required — no fallback). */
   bootJsonDatabaseDir: string;
   /**
    * Optional constructor injection for tests. Production callers should
