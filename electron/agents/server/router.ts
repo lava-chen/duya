@@ -10,6 +10,7 @@ import { WorkerManager } from './worker-manager';
 import { CheckpointBatcher } from './checkpoint-batcher';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
+import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -252,7 +253,7 @@ async function handlePostChat(
       const availableMem = getAvailableMemory();
       const usedRatio = (totalMem - availableMem) / totalMem;
 
-      const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
+      const MEMORY_THRESHOLD = getWorkerMemoryThreshold();
       if (usedRatio > MEMORY_THRESHOLD) {
         logger.warn('System memory usage high, rejecting chat', { usedRatio, totalMem, availableMem, sessionId });
         revertStreamingLock();
@@ -265,7 +266,8 @@ async function handlePostChat(
         return;
       }
 
-      const MAX_CONCURRENT_WORKERS = 16;
+      // Plan 426 Phase 1.1: adaptive cap (CPU/2 bounded by total-memory tier)
+      const MAX_CONCURRENT_WORKERS = calculateMaxConcurrentWorkers();
       if (workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {
         logger.warn('Max concurrent workers reached, rejecting chat', { current: workerManager.workerCount, max: MAX_CONCURRENT_WORKERS, sessionId });
         revertStreamingLock();
@@ -1009,8 +1011,6 @@ interface ChatInitParams {
   systemPrompt?: string;
 }
 
-const MAX_CONCURRENT_WORKERS = 16;
-
 /**
  * Build the legacy `InitMessage.providerConfig` shape that the agent
  * worker expects, from the persisted session row + the resolved
@@ -1091,12 +1091,13 @@ async function lazySpawnWorkerForCompact(
   const availableMem = getAvailableMemory();
   const usedRatio = (totalMem - availableMem) / totalMem;
 
-  const MEMORY_THRESHOLD = parseFloat(process.env.DUYA_MEMORY_THRESHOLD || '0.98');
+  const MEMORY_THRESHOLD = getWorkerMemoryThreshold();
   if (usedRatio > MEMORY_THRESHOLD) {
     logger.warn('System memory usage high, rejecting compact lazy-spawn', { usedRatio, totalMem, availableMem, sessionId });
     sendJson(res, 503, { error: 'System memory usage is high', retryAfterSec: 30 });
     return { ok: false };
   }
+  const MAX_CONCURRENT_WORKERS = calculateMaxConcurrentWorkers();
   if (workerManager.workerCount >= MAX_CONCURRENT_WORKERS) {
     logger.warn('Max concurrent workers reached, rejecting compact lazy-spawn', {
       current: workerManager.workerCount,

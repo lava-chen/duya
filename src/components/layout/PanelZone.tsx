@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
 import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_CHAT_WIDTH, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
@@ -167,28 +167,30 @@ export function PanelZone() {
       >
         {tabs.length > 0 && <PanelHeader />}
         <div className="sidebar-panel-content">
-          {browserTabs.map((browserTab) => {
-            const BrowserComponent = getPageDescriptor(browserTab.pageId).component;
-            const isActive = browserTab.id === activeTabId;
-            return (
-              <div
-                key={browserTab.id}
-                className={`sidebar-panel-browser-tab${isActive ? " active" : ""}`}
-                aria-hidden={!isActive}
-              >
-                <BrowserComponent tab={browserTab} embedded />
-              </div>
-            );
-          })}
-          {activeTab && activeTab.pageId !== "browser" ? (
-            (() => {
-              const desc = getPageDescriptor(activeTab.pageId);
-              const Component = desc.component;
-              return <Component tab={activeTab} embedded />;
-            })()
-          ) : !activeTab ? (
-            <EmptyPanelLauncher onSelect={openPage} />
-          ) : null}
+          <Suspense fallback={<div className="sidebar-panel-lazy-fallback" />}>
+            {browserTabs.map((browserTab) => {
+              const BrowserComponent = getPageDescriptor(browserTab.pageId).component;
+              const isActive = browserTab.id === activeTabId;
+              return (
+                <div
+                  key={browserTab.id}
+                  className={`sidebar-panel-browser-tab${isActive ? " active" : ""}`}
+                  aria-hidden={!isActive}
+                >
+                  <BrowserComponent tab={browserTab} embedded />
+                </div>
+              );
+            })}
+            {activeTab && activeTab.pageId !== "browser" ? (
+              (() => {
+                const desc = getPageDescriptor(activeTab.pageId);
+                const Component = desc.component;
+                return <Component tab={activeTab} embedded />;
+              })()
+            ) : !activeTab ? (
+              <EmptyPanelLauncher onSelect={openPage} />
+            ) : null}
+          </Suspense>
         </div>
       </div>
     </div>

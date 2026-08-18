@@ -12,6 +12,8 @@
 
 import { app } from 'electron';
 
+import { isLowPowerEnabled } from './low-power';
+
 // =============================================================================
 // TYPES & INTERFACES
 // =============================================================================
@@ -463,6 +465,10 @@ export class PerformanceMonitor {
 
   private startAutoExport(): void {
     this.exportTimer = setInterval(() => {
+      // Low-power mode (plan 426 Phase 6.2): skip memory sampling, leak
+      // detection, and the metrics export; only the base counters keep
+      // running. Checked per tick so toggling the config applies live.
+      if (isLowPowerEnabled()) return;
       this.recordMemorySnapshot();
       const leakAlert = this.detectMemoryLeak();
       if (leakAlert) {

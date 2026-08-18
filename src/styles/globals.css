@@ -6054,7 +6054,7 @@ a {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
 }
 
 .file-tree-search-row {
@@ -9297,17 +9297,11 @@ html[data-message-font-size="large"] .prose h3 {
   overflow: hidden;
 }
 
-.panel-zone-collapsed {
-  width: 42px;
-  align-items: stretch;
-  border-left: 1px solid var(--border);
-  background: var(--sidebar-bg);
-}
-
 .panel-header {
+  position: relative;
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 40px;
   flex-shrink: 0;
   padding: 0 6px;
   gap: 4px;
@@ -9427,55 +9421,19 @@ html[data-message-font-size="large"] .prose h3 {
 .panel-header-tab.drop-before::before { left: -3px; }
 .panel-header-tab.drop-after::after  { right: -3px; }
 
-.panel-header-add,
-.panel-header-collapse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
-.panel-header-add:hover,
-.panel-header-collapse:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
-  color: var(--text);
-}
-
-/* Picker-view header: "选择页面" label + ‹ back button. */
-.panel-header-picker {
-  justify-content: space-between;
-}
-
-.panel-header-picker-title {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-muted);
-  padding: 0 6px;
-  letter-spacing: 0.04em;
-}
-
 .panel-header-icon-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
   background: transparent;
-  border: none;
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: var(--text-muted);
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
 .panel-header-icon-btn:hover {
@@ -9489,101 +9447,6 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
-}
-
-/* Inline page picker. Two variants: `empty` (full-height, no header
-   bar) and `picker` (rendered below the picker-view header). */
-.page-picker {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  padding: 4px 0;
-  overflow-y: auto;
-}
-
-.page-picker-empty {
-  padding: 6px 0;
-}
-
-.page-picker-hint {
-  padding: 10px 14px 4px;
-  font-size: 11px;
-  color: var(--text-faint, var(--text-muted));
-}
-
-.page-picker-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 8px 12px;
-  background: transparent;
-  border: none;
-  text-align: left;
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--text);
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.page-picker-row:hover:not(.disabled) {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
-}
-
-.page-picker-row.disabled {
-  color: var(--text-muted);
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.page-picker-row-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.page-picker-row-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.page-picker-row-shortcut {
-  flex-shrink: 0;
-  font-family: var(--font-mono, "JetBrains Mono", "SF Mono", Menlo, monospace);
-  font-size: 10px;
-  color: var(--text-faint, var(--text-muted));
-  padding: 1px 6px;
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--border);
-  border-radius: 3px;
-}
-
-.page-picker-row-hint {
-  flex-shrink: 0;
-  font-size: 10px;
-  color: var(--text-muted);
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
-  padding: 1px 6px;
-  border-radius: 3px;
-}
-
-.panel-empty-state {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
-  font-size: 12px;
-  padding: 16px;
 }
 
 .panel-empty-launcher {
@@ -9682,148 +9545,6 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--muted);
   font-size: 11px;
   line-height: 18px;
-}
-
-/* Right sidebar visual refresh - align with the Codex-style open launcher. */
-.panel-zone-collapsed {
-  width: 30px;
-  align-items: stretch;
-  border-left: 1px solid var(--border);
-  background: var(--sidebar-bg);
-}
-
-.sidebar-panel-launcher {
-  background: var(--sidebar-bg);
-}
-
-.panel-header {
-  min-height: 44px;
-  padding: 0 14px;
-  gap: 10px;
-  background: var(--main-bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.panel-header-launcher,
-.panel-header-content {
-  justify-content: space-between;
-}
-
-.panel-header-launcher {
-  border-bottom: none;
-}
-
-.panel-header-launcher-copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.panel-header-launcher-title,
-.panel-header-current-title {
-  display: block;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-.panel-header-current {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--text);
-}
-
-.panel-header-icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  color: var(--text-muted);
-}
-
-.panel-header-icon-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.panel-header-actions {
-  gap: 4px;
-}
-
-.page-picker {
-  flex: 1;
-  min-height: 0;
-  justify-content: center;
-  padding: 20px 0;
-  background: var(--sidebar-bg);
-  overflow-y: auto;
-}
-
-.page-picker-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 42px;
-  padding: 0 18px;
-  background: transparent;
-  font-size: 13px;
-}
-
-.page-picker-row:hover:not(.disabled) {
-  background: var(--surface-hover);
-}
-
-.page-picker-row-main,
-.page-picker-row-meta {
-  display: inline-flex;
-  align-items: center;
-}
-
-.page-picker-row-main {
-  gap: 10px;
-  min-width: 0;
-}
-
-.page-picker-row-meta {
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.page-picker-row-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.page-picker-row-name {
-  font-size: 13px;
-}
-
-.page-picker-row-shortcut {
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.34);
-  font-family: inherit;
-  font-size: 12px;
-}
-
-.page-picker-row-hint {
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
-}
-
-/* Collapsed right sidebar should read as a single button, not a full rail. */
-.panel-zone-collapsed {
-  width: 18px;
-  align-items: flex-start;
-  justify-content: flex-start;
-  border-left: none;
-  background: transparent;
-  overflow: visible;
 }
 
 /* =============================================================================
@@ -10327,7 +10048,7 @@ html[data-message-font-size="large"] .prose h3 {
   height: 100%;
   min-width: 0;
   overflow: hidden;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
   border-left: 1px solid var(--border);
   transition: background-color 120ms ease, border-color 120ms ease;
 }
@@ -10335,7 +10056,7 @@ html[data-message-font-size="large"] .prose h3 {
 .panel-zone-open {
   width: var(--panel-zone-width);
   flex-basis: var(--panel-zone-width);
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
   border-left-width: 1px;
   border-left-color: var(--border);
 }
@@ -10836,7 +10557,7 @@ html[data-message-font-size="large"] .prose h3 {
   width: var(--panel-content-width);
   height: 100%;
   border-left: none;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -10845,14 +10566,13 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-zone-open .panel-header {
-  padding-right: 94px;
-}
-
-.panel-zone-open .panel-header {
   position: relative;
   z-index: 3;
   justify-content: flex-start;
   overflow: visible;
+  /* Reserve the right edge for the absolute-positioned sidebar/expand
+     toggles so tabs never scroll beneath them. */
+  padding-right: 94px;
 }
 
 .panel-zone-open .panel-header::after {
@@ -10867,130 +10587,6 @@ html[data-message-font-size="large"] .prose h3 {
   background: linear-gradient(90deg, transparent, var(--main-bg) 24%, var(--main-bg));
 }
 
-/* Expanded read-only file workspace */
-.file-workspace-chat-body {
-  background: var(--main-bg);
-}
-
-.file-workspace {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--main-bg);
-}
-
-.file-workspace-tabs {
-  position: relative;
-  min-height: 44px;
-  flex: 0 0 44px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--sidebar-bg) 72%, var(--main-bg));
-}
-
-.file-workspace-tabs .panel-header {
-  height: 43px;
-  padding-right: 108px;
-  border-bottom: 0;
-  background: transparent;
-}
-
-.file-workspace-controls {
-  position: absolute;
-  z-index: 8;
-  top: 6px;
-  right: 8px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.file-workspace-controls button,
-.file-preview-actions > button:not(.file-preview-open-ide):not(.file-preview-open-caret) {
-  display: inline-flex;
-  width: 30px;
-  height: 30px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
-}
-
-.file-workspace-controls button:hover,
-.file-workspace-controls button.active,
-.file-preview-actions > button:not(.file-preview-open-ide):not(.file-preview-open-caret):hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.file-workspace-controls button:active,
-.file-preview-actions button:active {
-  transform: scale(0.94);
-}
-
-.file-workspace-breadcrumb {
-  display: flex;
-  min-height: 43px;
-  flex: 0 0 43px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 18px;
-  border-bottom: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.file-workspace-breadcrumb i {
-  color: color-mix(in srgb, var(--text-muted) 52%, transparent);
-  font-style: normal;
-}
-
-.file-workspace-breadcrumb strong {
-  overflow: hidden;
-  color: var(--text);
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.file-workspace-body {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-}
-
-.file-workspace-preview {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  background: var(--main-bg);
-}
-
-.file-workspace-tree {
-  width: clamp(220px, 20vw, 300px);
-  min-width: 220px;
-  flex: 0 0 clamp(220px, 20vw, 300px);
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--sidebar-bg);
-}
-
-.file-workspace-tree .file-tree-panel-embedded {
-  height: 100%;
-}
-
-.file-workspace-empty,
 .file-preview-empty {
   display: flex;
   min-width: 0;
@@ -11004,26 +10600,14 @@ html[data-message-font-size="large"] .prose h3 {
   text-align: center;
 }
 
-.file-workspace-empty strong,
 .file-preview-empty strong {
   color: var(--text);
   font-size: 15px;
   font-weight: 650;
 }
 
-.file-workspace-empty span,
 .file-preview-empty span {
   font-size: 12px;
-}
-
-.file-workspace-composer {
-  position: relative;
-  z-index: 12;
-  flex: 0 0 auto;
-  padding: 12px 18px 10px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--main-bg) 94%, transparent);
-  box-shadow: 0 -14px 30px color-mix(in srgb, var(--main-bg) 76%, transparent);
 }
 
 .file-preview-panel {
@@ -11051,14 +10635,9 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 20px 0 14px;
-  border-bottom: 1px solid #e5e5e5;
-  background: #f3f3f3;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
   box-sizing: border-box;
-}
-
-[data-theme="dark"] .file-preview-toolbar {
-  border-bottom-color: #333333;
-  background: #252526;
 }
 
 .file-preview-title,
@@ -11072,70 +10651,58 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 1 1 auto;
   gap: 8px;
   overflow: hidden;
-  color: #1f1f1f;
+  color: var(--text);
 }
 
-[data-theme="dark"] .file-preview-title {
-  color: #e0e0e0;
+.file-preview-filetype {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted);
 }
 
-.file-preview-name-stack {
-  display: flex;
+.file-preview-filename {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.file-preview-path {
+  display: inline-flex;
   min-width: 0;
   flex: 1 1 auto;
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 1px;
-}
-
-.file-preview-breadcrumb {
-  display: flex;
-  min-width: 0;
   align-items: center;
   gap: 2px;
   overflow: hidden;
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.35;
+  color: var(--muted);
 }
 
-.file-preview-breadcrumb-root,
-.file-preview-breadcrumb-part,
-.file-preview-breadcrumb-current {
+.file-preview-path-root,
+.file-preview-path-segment {
   overflow: hidden;
-  flex: 0 1 auto;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.file-preview-breadcrumb-root,
-.file-preview-breadcrumb-part {
-  color: #616161;
+.file-preview-path-root,
+.file-preview-path-segment {
+  flex: 0 1 auto;
 }
 
-[data-theme="dark"] .file-preview-breadcrumb-root,
-[data-theme="dark"] .file-preview-breadcrumb-part {
-  color: #a0a0a0;
-}
-
-.file-preview-breadcrumb-current {
-  color: #1f1f1f;
+.file-preview-path-root {
   font-weight: 600;
 }
 
-[data-theme="dark"] .file-preview-breadcrumb-current {
-  color: #e0e0e0;
-}
-
-.file-preview-breadcrumb-separator {
+.file-preview-path-separator {
   flex: 0 0 auto;
-  padding: 0 3px;
-  color: #9e9e9e;
+  color: color-mix(in srgb, var(--muted) 62%, transparent);
   font-size: 11px;
-}
-
-[data-theme="dark"] .file-preview-breadcrumb-separator {
-  color: #6e6e6e;
 }
 
 .file-preview-actions {
@@ -11158,13 +10725,9 @@ html[data-message-font-size="large"] .prose h3 {
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: #616161;
+  color: var(--muted);
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-
-[data-theme="dark"] .file-preview-actions > button {
-  color: #a0a0a0;
 }
 
 .file-preview-actions > button:hover {
@@ -11172,9 +10735,9 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--text);
 }
 
-[data-theme="dark"] .file-preview-actions > button:hover {
+.file-preview-actions > button.active {
   background: var(--surface-hover);
-  color: var(--text);
+  color: var(--accent);
 }
 
 /* "Open" dropdown in the preview toolbar. The trigger button now uses
@@ -11192,6 +10755,51 @@ html[data-message-font-size="large"] .prose h3 {
   transform: rotate(180deg);
 }
 
+/* "Open" trigger group: two buttons fused into one segmented control
+ * (IDE icon + caret). Sits on an accent chip so the primary action
+ * reads at a glance, like VSCode's "open editors" toolbar. */
+.file-preview-open-group {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.file-preview-open-group:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.file-preview-open-group button {
+  display: inline-flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.file-preview-open-group .file-preview-open-ide {
+  width: 32px;
+}
+
+.file-preview-open-group .file-preview-open-caret {
+  width: 18px;
+  border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  color: var(--muted);
+}
+
+.file-preview-open-group button:hover {
+  background: var(--surface-hover);
+}
+
 .file-preview-canvas {
   position: relative;
   min-width: 0;
@@ -11199,11 +10807,7 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 1 1 auto;
   overflow: auto;
   overscroll-behavior: contain;
-  background: #ffffff;
-}
-
-[data-theme="dark"] .file-preview-canvas {
-  background: #1e1e1e;
+  background: var(--main-bg);
 }
 
 .file-preview-state {
@@ -11263,23 +10867,91 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-preview-text.code {
-  padding: 0 0 40px;
+  min-height: 100%;
+}
+
+/* Gutter + code split: the gutter is sticky-left so line numbers stay
+ * put while long lines scroll horizontally (VSCode-style). Both columns
+ * share the same row metrics as CODE_LINE_HEIGHT in FilePreviewPanel. */
+.file-preview-code-scroll {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+}
+
+.file-preview-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  min-width: 52px;
+  padding: 10px 0 40px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--surface-solid) 48%, var(--main-bg));
+  user-select: none;
+}
+
+.file-preview-line-no {
+  display: block;
+  padding: 0 12px 0 10px;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-size: 12px;
+  font-feature-settings: "tnum";
+  line-height: 20.8px;
+  text-align: right;
+  cursor: default;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.file-preview-line-no:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  cursor: pointer;
+}
+
+.file-preview-line-no.current {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 650;
+}
+
+.file-preview-code-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.file-preview-focus-bar {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  pointer-events: none;
 }
 
 /* react-syntax-highlighter already tokenises and wraps lines. We only
  * need to make the host <pre> fill the scrollable area and keep long
- * lines on a single horizontal scroll track. */
+ * lines on a single horizontal scroll track. The !important rules beat
+ * the inline styles react-syntax-highlighter merges from the theme /
+ * customStyle — without them the gutter and focus bar (which rely on
+ * padding-top 10px and a 20.8px row height) desync from the code rows. */
 .file-preview-text.code pre {
+  position: relative;
+  z-index: 1;
   margin: 0;
-  min-width: 100%;
+  min-width: max-content;
   min-height: 100%;
-  padding: 0 24px;
+  padding: 10px 24px 40px !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
   background: transparent !important;
 }
 
-/* Override react-syntax-highlighter's default line-table cell padding
- * so line numbers sit flush in the gutter and code has a stable left
- * margin. */
+/* Keep the highlighted code text above the focus strip. */
 .file-preview-text.code pre > code {
   display: block;
   padding: 0 !important;
@@ -11302,6 +10974,43 @@ html[data-message-font-size="large"] .prose h3 {
 .file-preview-text.code pre > code .linenumber,
 .file-preview-text.code pre > code .linenumber + span {
   user-select: none;
+}
+
+/* VSCode-style bottom status bar: Ln/Col on the left, language and file
+ * stats on the right. */
+.file-preview-statusbar {
+  display: flex;
+  min-height: 22px;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--main-bg));
+  color: var(--muted);
+  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-size: 10.5px;
+  font-feature-settings: "tnum";
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+.file-preview-statusbar-left,
+.file-preview-statusbar-right {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.file-preview-statusbar-right {
+  gap: 12px;
+  color: var(--muted);
+}
+
+.file-preview-statusbar-left {
+  color: var(--text);
+  font-weight: 550;
 }
 
 .file-preview-markdown {
@@ -11350,30 +11059,8 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 @media (max-width: 980px) {
-  .file-workspace-tree {
-    width: 280px;
-    min-width: 240px;
-    flex-basis: 280px;
-  }
-
   .file-preview-markdown {
     width: calc(100% - 32px);
-  }
-}
-
-@media (max-width: 760px) {
-  .file-workspace-tree {
-    position: absolute;
-    z-index: 18;
-    top: 87px;
-    right: 0;
-    bottom: 0;
-    width: min(84vw, 320px);
-    box-shadow: -18px 0 36px rgba(0, 0, 0, 0.24);
-  }
-
-  .file-workspace-composer {
-    padding-inline: 10px;
   }
 }
 
@@ -11390,12 +11077,17 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   flex: 0 0 auto;
   z-index: 4;
+  overflow: visible;
 }
 
 .panel-header-add-page.active,
 .panel-header-add-page:hover {
-  background: var(--surface-hover);
+  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
   color: var(--text);
+}
+
+.panel-header-add-page.active {
+  border-color: var(--border);
 }
 
 .panel-add-menu {
@@ -11867,7 +11559,7 @@ html[data-message-font-size="large"] .prose h3 {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
   color: var(--foreground);
 }
 
@@ -11877,7 +11569,7 @@ html[data-message-font-size="large"] .prose h3 {
   gap: 3px;
   padding: 5px 7px;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--sidebar-bg) 92%, var(--surface) 8%);
+  background: var(--surface-solid);
 }
 
 .browser-agent-toolbar {
@@ -13027,7 +12719,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .code-review-panel {
   --review-muted: color-mix(in srgb, var(--text-muted) 84%, transparent);
-  --review-surface: color-mix(in srgb, var(--sidebar-bg) 76%, var(--main-bg));
+  --review-surface: var(--main-bg);
   --review-border: color-mix(in srgb, var(--border) 82%, transparent);
   --review-add: #31c578;
   --review-remove: #ef6262;
@@ -13223,7 +12915,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .code-review-file-tree {
   border-left: 1px solid var(--review-border);
-  background: color-mix(in srgb, var(--sidebar-bg) 64%, var(--main-bg));
+  background: var(--main-bg);
 }
 
 .code-review-file-list {
@@ -13295,7 +12987,7 @@ html[data-message-font-size="large"] .prose h3 {
   gap: 12px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--review-border);
-  background: color-mix(in srgb, var(--sidebar-bg) 58%, var(--main-bg));
+  background: var(--main-bg);
 }
 
 .code-review-file-identity {
@@ -13551,7 +13243,7 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 clamp(220px, 20vw, 300px);
   overflow: hidden;
   border-left: 1px solid var(--border);
-  background: var(--sidebar-bg);
+  background: var(--main-bg);
 }
 
 .panel-file-tree-header {
@@ -13561,13 +13253,8 @@ html[data-message-font-size="large"] .prose h3 {
   height: 40px;
   flex: 0 0 40px;
   padding: 0 8px;
-  border-bottom: 1px solid #e5e5e5;
-  background: #f3f3f3;
-}
-
-[data-theme="dark"] .panel-file-tree-header {
-  border-bottom-color: #333333;
-  background: #252526;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
 }
 
 .panel-file-tree-header button {
@@ -13603,7 +13290,6 @@ html[data-message-font-size="large"] .prose h3 {
   height: 100%;
 }
 
-.file-preview-actions button.active,
 .office-toolbar-actions button.active {
   background: var(--surface-hover);
   color: var(--text);
@@ -14269,3 +13955,47 @@ html[data-message-font-size="large"] .prose h3 {
 
 /* ── Composer mode chips (goal / plan-task / research / conductor) ────
    Blue button look: light-blue text, transparent border, blue hover fill. */
+
+/* Placeholder shown while a lazy panel chunk (conductor / code review /
+   office) loads. Local-disk chunks resolve in milliseconds, so a plain
+   surface-colored block is enough (plan 426 Phase 5.2). */
+.sidebar-panel-lazy-fallback {
+  height: 100%;
+  min-height: 160px;
+  background: var(--main-bg);
+}
+
+/* ── Low-power mode (plan 426 Phase 5.3) ─────────────────────────────
+   `data-lowpower` is set on <html> by low-power-store. Backdrop-filter
+   blurs are a major frame cost on integrated GPUs, so the heaviest
+   frosted-glass surfaces switch to solid translucent backgrounds and
+   every remaining blur is disabled globally. */
+[data-lowpower] .memory-popover,
+[data-lowpower] .conductor-panel,
+[data-lowpower] .conductor-zoom-pill,
+[data-lowpower] .conductor-popover {
+  background: var(--panel-bg-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-lowpower] .app-header,
+[data-lowpower] .hero-card,
+[data-lowpower] .surface-card {
+  background: var(--main-bg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-lowpower] .attachment-preview-overlay {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Generic fallback: kill any remaining backdrop filter (4~12px pills,
+   scrims, closers) without per-selector rules. */
+[data-lowpower] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

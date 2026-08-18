@@ -15,6 +15,7 @@ import { useStreamingRetry } from '@/hooks/useStreamingRetry';
 import { useStreamingActions } from '@/hooks/useStreamingActions';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
+import { usePolling } from '@/hooks/usePolling';
 import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
@@ -88,14 +89,17 @@ function ThinkingPhaseLabel() {
  
 function ElapsedTimer({ startedAt }: { startedAt: number | null }) {
   const [elapsed, setElapsed] = useState(0);
- 
-  useEffect(() => {
-    if (!startedAt) return;
-    const update = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-    update();
-    const id = setInterval(update, 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
+
+  // Tick only while a stream is live (startedAt set); the polling hook
+  // skips ticks once the stream ends (plan 426 Phase 4.2).
+  usePolling(
+    () => {
+      if (!startedAt) return;
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    },
+    1000,
+    { activeWhen: () => startedAt != null },
+  );
  
   const mins = Math.floor(elapsed / 60);
   const secs = elapsed % 60;

@@ -1,6 +1,7 @@
 // useBrowserExtension.ts - Hook for checking browser extension status via IPC
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 
 export type ExtensionStatus = 'checking' | 'connected' | 'disconnected' | 'error';
 
@@ -207,21 +208,10 @@ export function useBrowserExtension(
     }
   }, []);
 
-  useEffect(() => {
-    // Initial check
-    checkExtension();
-
-    // Set up polling if autoCheck is enabled
-    if (autoCheck) {
-      intervalRef.current = setInterval(checkExtension, interval);
-    }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-      }
-    };
-  }, [checkExtension, autoCheck, interval]);
+  // Immediate check on mount, then periodic polling while autoCheck is on.
+  usePolling(checkExtension, interval, {
+    activeWhen: () => autoCheck,
+  });
 
   return {
     status,

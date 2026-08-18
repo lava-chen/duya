@@ -12,7 +12,8 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePolling } from '@/hooks/usePolling';
 import { getGitStatus } from '@/lib/git-ipc';
 import type { GitStatusFileChange, GitStatusTotals } from '@/lib/git-ipc';
 
@@ -35,49 +36,56 @@ export function useGitStatus(
   enabled = true
 ): UseGitStatusResult {
   const [status, setStatus] = useState<UseGitStatusResult>(EMPTY);
+  // Guards that drop responses resolving after cwd/enabled changed,
+  // replacing the per-effect `cancelled` flag now that the fetch
+  // callback outlives a single effect run.
+  const cwdRef = useRef(cwd);
+  cwdRef.current = cwd;
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
+  const fetchStatus = useCallback(async (): Promise<void> => {
+    const requestCwd = cwdRef.current;
+    if (!enabledRef.current || !requestCwd) return;
+    try {
+      const result = await getGitStatus(requestCwd);
+      if (!enabledRef.current || cwdRef.current !== requestCwd) return;
+
+      if (!result.isGitRepo || !result.fileChanges) {
+        setStatus(EMPTY);
+        return;
+      }
+
+      const totals: GitStatusTotals = result.totals ?? {
+        additions: result.fileChanges.reduce((sum, c) => sum + c.additions, 0),
+        removals: result.fileChanges.reduce((sum, c) => sum + c.removals, 0),
+        fileCount: result.fileChanges.length,
+      };
+
+      setStatus({
+        isGitRepo: true,
+        fileChanges: result.fileChanges,
+        totals,
+      });
+    } catch {
+      if (enabledRef.current && cwdRef.current === requestCwd) setStatus(EMPTY);
+    }
+  }, []);
+
+  // Immediate fetch on mount and whenever cwd/enabled changes; the
+  // periodic cadence is owned by usePolling below.
   useEffect(() => {
     if (!enabled || !cwd) {
       setStatus(EMPTY);
       return;
     }
-
-    let cancelled = false;
-
-    const fetchStatus = async (): Promise<void> => {
-      try {
-        const result = await getGitStatus(cwd);
-        if (cancelled) return;
-
-        if (!result.isGitRepo || !result.fileChanges) {
-          setStatus(EMPTY);
-          return;
-        }
-
-        const totals: GitStatusTotals = result.totals ?? {
-          additions: result.fileChanges.reduce((sum, c) => sum + c.additions, 0),
-          removals: result.fileChanges.reduce((sum, c) => sum + c.removals, 0),
-          fileCount: result.fileChanges.length,
-        };
-
-        setStatus({
-          isGitRepo: true,
-          fileChanges: result.fileChanges,
-          totals,
-        });
-      } catch {
-        if (!cancelled) setStatus(EMPTY);
-      }
-    };
-
     void fetchStatus();
-    const id = setInterval(fetchStatus, POLL_INTERVAL_MS);
+  }, [cwd, enabled, fetchStatus]);
 
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [cwd, enabled]);
+  usePolling(fetchStatus, POLL_INTERVAL_MS, {
+    activeWhen: () => enabled && Boolean(cwd),
+    noImmediate: true,
+  });
 
   return status;
 }
