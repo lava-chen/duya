@@ -14,6 +14,7 @@ import type {
   AgentMessage,
   AgentMessageVisibility,
   RuntimeContextMessage,
+  RuntimeContextSource,
 } from './message-framework.js';
 import { buildAttachmentContext } from '../utils/attachment-context.js';
 
@@ -269,6 +270,31 @@ export function adaptTodoGateContext(
   const factory = createFactory(options);
   return factory.createRuntimeContextMessage({
     source: 'todo_gate',
+    content,
+    visibility: options.visibility ?? 'hidden',
+    seqIndex: options.seqIndex,
+    metadata: options.metadata,
+  });
+}
+
+// ─── 6b. Loop-hook steering nudges -> per-effect source ─────────────────
+
+/**
+ * Generic adapter for loop-hook steering effects (plan 426): dead-loop
+ * nudges, premature-stop / tool-intent directives, and the max-turns
+ * wrap-up. The hook effect carries its own source so each nudge family stays
+ * filterable without parsing content. Defaults to visibility='hidden' like
+ * the todo-gate directive — model-only harness steering, never re-rendered
+ * as a user turn and never persisted (see persistableMessages).
+ */
+export function adaptLoopNudgeContext(
+  content: string,
+  source: RuntimeContextSource,
+  options: RuntimeContextAdapterOptions = {},
+): RuntimeContextMessage {
+  const factory = createFactory(options);
+  return factory.createRuntimeContextMessage({
+    source,
     content,
     visibility: options.visibility ?? 'hidden',
     seqIndex: options.seqIndex,

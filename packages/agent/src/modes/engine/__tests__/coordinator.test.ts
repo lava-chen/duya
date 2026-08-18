@@ -400,4 +400,62 @@ describe('ModeCoordinator', () => {
       expect(tracker.state()).toBe('inactive');
     });
   });
+
+  // Plan 426 Phase 3 — the coordinator re-based onto the loop-hook bus.
+  describe('createLoopHookRegistrations (plan 426 Phase 3)', () => {
+    function makeCtx(messages: unknown[]) {
+      return {
+        event: 'PreTurn' as const,
+        turnCount: 1,
+        seqIndex: 9,
+        messages: messages as never,
+      };
+    }
+
+    it('returns PreTurn and PreFinalize bridge registrations with early priority', () => {
+      const registrations = makeCoordinator(new PlanModeTracker()).createLoopHookRegistrations();
+      expect(registrations.map((r) => r.id)).toEqual([
+        'mode-coordinator.turn-reminders',
+        'mode-coordinator.round-end',
+      ]);
+      expect(registrations[0].events).toEqual(['PreTurn']);
+      expect(registrations[0].priority).toBe(5);
+      expect(registrations[1].events).toEqual(['PreFinalize']);
+      expect(registrations[1].priority).toBe(5);
+    });
+
+    it('PreTurn hook injects plan reminders through the runtime-context channel', async () => {
+      const tracker = new PlanModeTracker();
+      activate(tracker);
+      const coordinator = makeCoordinator(tracker);
+      const [preTurn] = coordinator.createLoopHookRegistrations();
+
+      const messages: unknown[] = [];
+      await preTurn.handler(makeCtx(messages));
+
+      // Sparse reminder path: active tracker gets its per-turn reminder.
+      expect(messages).toHaveLength(1);
+      const msg = messages[0] as Record<string, unknown>;
+      expect(msg.role).toBe('user');
+      expect(msg.content).toContain('<system-reminder>');
+      expect(msg.seq_index).toBe(9);
+      // Plan 426 Phase 3 fix: the reminder is stamped as runtime context so
+      // lastRealUserQuery never mistakes it for a real user turn.
+      expect((msg.metadata as Record<string, unknown>).runtimeContext).toBe(true);
+      expect((msg.metadata as Record<string, unknown>).source).toBe('mode');
+    });
+
+    it('PreFinalize hook runs round-end transitions (plan deferred exit)', async () => {
+      const tracker = new PlanModeTracker();
+      activate(tracker);
+      tracker.transition('user_exit', { inFlight: true }); // active → exit_pending
+      expect(tracker.state()).toBe('exit_pending');
+      const coordinator = makeCoordinator(tracker);
+      const [, preFinalize] = coordinator.createLoopHookRegistrations();
+
+      await preFinalize.handler(makeCtx([]));
+
+      expect(tracker.state()).toBe('inactive');
+    });
+  });
 });

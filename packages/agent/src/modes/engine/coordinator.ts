@@ -14,7 +14,6 @@
  * the same reminder-tracker duck-type.
  */
 
-import { randomUUID } from 'crypto';
 import type { ModeTrackerEngine } from './engine.js';
 import type { ModeTracker } from './tracker.js';
 import {
@@ -30,8 +29,16 @@ import { renderResearchContinuation } from '../research-mode/research-reminders.
 import type { ResearchTracker } from '../research-mode/research-tracker.js';
 import { getResearchConfig } from '../research-mode/research-config.js';
 import { persistSnapshot, restoreTracker } from './persistence.js';
-import { adaptGoalSummaryContext, adaptResearchContinuationContext } from '../../message/runtime-context-adapters.js';
+import {
+  adaptGoalSummaryContext,
+  adaptResearchContinuationContext,
+  adaptLoopNudgeContext,
+} from '../../message/runtime-context-adapters.js';
 import { projectRuntimeContextToProviderMessage } from '../../message/message-projectors.js';
+import type {
+  LoopHookRegistration,
+  LoopHookDispatchContext,
+} from '../../hooks/loop.js';
 import { expandPath } from '../../utils/path.js';
 import {
   resolvePlanFilePath,
@@ -131,18 +138,18 @@ export class ModeCoordinator {
   }
 
   /**
-   * Append a transient `<system-reminder>` message to the working message
-   * array. Same shape as mailbox guidance: `role: 'user'`, `seq_index` set,
-   * filtered out of persistence by the `persistableMessages` path.
+   * Append a plan-mode reminder via the runtime-context framework (plan 426
+   * Phase 3). The rendered content is already a `<system-reminder>` block, so
+   * it is projected as-is; the adapter only stamps `metadata.runtimeContext`
+   * and `source: 'mode'` so `lastRealUserQuery` never mistakes it for a real
+   * user turn. Visible (rendered like goal/research continuations) because
+   * plan-mode state feedback is part of the user-visible transcript.
    */
   private pushReminder(messages: unknown[], seqIndex: number, content: string): void {
-    messages.push({
-      id: randomUUID(),
-      role: 'user',
-      content,
-      timestamp: Date.now(),
-      seq_index: seqIndex,
-    });
+    const provider = projectRuntimeContextToProviderMessage(
+      adaptLoopNudgeContext(content, 'mode', { visibility: 'visible' }),
+    );
+    messages.push({ ...provider, seq_index: seqIndex });
   }
 
   /**
@@ -477,5 +484,50 @@ export class ModeCoordinator {
   /** The engine backing this coordinator (exposed for tests / wiring). */
   getEngine(): ModeTrackerEngine {
     return this.engine;
+  }
+
+  /**
+   * Plan 426 Phase 3 — re-base the coordinator onto the loop-hook bus as the
+   * mode system's consumer surface. Two thin bridge registrations:
+   *
+   *  - `PreTurn` (priority 5, runs before everything): flushes buffered
+   *    mid-turn activations (`refreshTurn`) then injects per-turn mode
+   *    reminders (`injectTurnReminders`). Injections still flow through the
+   *    runtime-context channel inside the coordinator; the hook only owns
+   *    the WHEN. Dispatched after the mailbox checkpoint so mode rules stay
+   *    more recent than mailbox guidance (pre-bus ordering preserved).
+   *  - `PreFinalize` (priority 5, before builtin vetoes): runs
+   *    `onRoundEnd()` transitions + snapshot persistence. Runs even when a
+   *    builtin veto later continues the loop, matching the pre-bus behavior
+   *    where onRoundEnd fired on every natural stop.
+   *
+   * Trackers, tool gating (`gateWriteTool`) and token-budget reporting stay
+   * on their own call sites — a hook is an event→effect callback and cannot
+   * express per-tool permission checks or mid-stream token events.
+   */
+  createLoopHookRegistrations(): LoopHookRegistration[] {
+    return [
+      {
+        id: 'mode-coordinator.turn-reminders',
+        events: ['PreTurn'],
+        priority: 5,
+        handler: (ctx: LoopHookDispatchContext) => {
+          // The bus exposes a readonly view; the coordinator's methods take a
+          // mutable array (they push). The dispatching agent always passes the
+          // live working array, so this cast is safe at runtime.
+          const messages = ctx.messages as unknown[];
+          this.refreshTurn(messages, ctx.seqIndex);
+          this.injectTurnReminders(messages, ctx.seqIndex);
+        },
+      },
+      {
+        id: 'mode-coordinator.round-end',
+        events: ['PreFinalize'],
+        priority: 5,
+        handler: async () => {
+          await this.onRoundEnd();
+        },
+      },
+    ];
   }
 }

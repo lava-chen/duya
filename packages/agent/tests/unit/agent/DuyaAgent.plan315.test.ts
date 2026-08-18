@@ -453,18 +453,20 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       // Stub mailboxDb.claimBatch to return one correction row.
       const { mailboxDb } = await import('../../../src/ipc/db-client.js');
       const claimBatchMock = vi.spyOn(mailboxDb, 'claimBatch');
-      claimBatchMock.mockResolvedValue({
-        rows: [
-          {
-            id: 'mail-1',
-            session_id: 'sess-mailbox',
-            content: 'Use concise language',
-            kind: 'followup',
-            status: 'observed',
-          } as never,
-        ],
-        claimTokens: ['claim-1'],
-      });
+      claimBatchMock
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'mail-1',
+              session_id: 'sess-mailbox',
+              content: 'Use concise language',
+              kind: 'followup',
+              status: 'observed',
+            } as never,
+          ],
+          claimTokens: ['claim-1'],
+        })
+        .mockResolvedValue({ rows: [], claimTokens: [] });
       vi.spyOn(mailboxDb, 'apply').mockResolvedValue({} as never);
 
       streamState.current = {
@@ -513,18 +515,20 @@ describe('Plan 315 — duyaAgent MessageTimeline migration', () => {
       // Stub mailboxDb.claimBatch to return one background_notification row
       // whose content is the <task-notification> XML envelope.
       const { mailboxDb } = await import('../../../src/ipc/db-client.js');
-      vi.spyOn(mailboxDb, 'claimBatch').mockResolvedValue({
-        rows: [
-          {
-            id: 'mail-bg-1',
-            session_id: 'sess-background',
-            content: '<task-notification><task-id>child-1</task-id><status>completed</status></task-notification>',
-            kind: 'background_notification',
-            status: 'observed',
-          } as never,
-        ],
-        claimTokens: ['claim-bg-1'],
-      });
+      vi.spyOn(mailboxDb, 'claimBatch')
+        .mockResolvedValueOnce({
+          rows: [
+            {
+              id: 'mail-bg-1',
+              session_id: 'sess-background',
+              content: '<task-notification><task-id>child-1</task-id><status>completed</status></task-notification>',
+              kind: 'background_notification',
+              status: 'observed',
+            } as never,
+          ],
+          claimTokens: ['claim-bg-1'],
+        })
+        .mockResolvedValue({ rows: [], claimTokens: [] });
       vi.spyOn(mailboxDb, 'apply').mockResolvedValue({} as never);
 
       streamState.current = {

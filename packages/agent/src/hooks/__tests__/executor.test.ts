@@ -1,0 +1,470 @@
+/**
+ * Hook executor + config-loop bridge tests (plan 426 Phase 4).
+ *
+ * Command hooks run real `node -e` scripts (JSON additionalContext, plain
+ * text, non-zero exit, timeout kill); http hooks run against a local
+ * node:http server (2xx JSON, 500 fail-open); prompt/agent stubs fail open.
+ * config-loop tests use deps.hooks injection (no fs) and drive the
+ * registrations through a real LoopHookBus.
+ */
+
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import * as http from 'node:http';
+import * as os from 'node:os';
+import { AddressInfo } from 'node:net';
+import { executeHook, executeHookCommand, executeHttpHook, executeProcessHook } from '../executor.js';
+import { createConfiguredLoopHooks } from '../config-loop.js';
+import { LoopHookBus } from '../loop.js';
+import { expandHookTemplate } from '../types.js';
+import type { BaseHookInput, HooksSettings } from '../types.js';
+
+const CWD = os.tmpdir();
+
+function baseInput(): BaseHookInput {
+  return { session_id: 's1', cwd: CWD, hook_event_name: 'PreTurn', turnCount: 1 };
+}
+
+/** `node -e` script echoing a JSON object with the given additionalContext. */
+function cmdJsonContext(ctx: string): string {
+  return `node -e "process.stdout.write(JSON.stringify({additionalContext:'${ctx}'}))"`;
+}
+
+/** `node -e` script echoing plain text on stdout. */
+function cmdPlain(text: string): string {
+  return `node -e "process.stdout.write('${text}')"`;
+}
+
+// ============================================================================
+// command executor
+// ============================================================================
+
+describe('executeHookCommand', () => {
+  it('uses additionalContext from JSON stdout on exit 0', async () => {
+    const result = await executeHookCommand(
+      { type: 'command', command: cmdJsonContext('ctx-from-json') },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('ctx-from-json');
+  });
+
+  it('uses plain stdout verbatim when it is not additionalContext JSON', async () => {
+    const result = await executeHookCommand(
+      { type: 'command', command: cmdPlain('plain hook text') },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('plain hook text');
+  });
+
+  it('returns ok without context when stdout is empty', async () => {
+    const result = await executeHookCommand(
+      { type: 'command', command: 'node -e ""' },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBeUndefined();
+  });
+
+  it('fails open on non-zero exit and reports the exit code', async () => {
+    const result = await executeHookCommand(
+      { type: 'command', command: 'node -e "process.exit(3)"' },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('exited with code 3');
+    expect(result.exitCode).toBe(3);
+  });
+
+  it('pipes the hook input as JSON on stdin', async () => {
+    const command =
+      'node -e "var d=\'\';process.stdin.on(\'data\',function(c){d+=c});' +
+      'process.stdin.on(\'end\',function(){' +
+      'process.stdout.write(JSON.stringify({additionalContext:\'got:\'+JSON.parse(d).hook_event_name}))})"';
+    const result = await executeHookCommand({ type: 'command', command }, baseInput(), {
+      cwd: CWD,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('got:PreTurn');
+  });
+
+  it('kills the process and fails open on timeout', async () => {
+    const start = Date.now();
+    const result = await executeHookCommand(
+      { type: 'command', command: 'node -e "setTimeout(function(){},8000)"', timeout: 1 },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('timed out');
+    expect(result.exitCode).toBeUndefined();
+    // 1s timeout (plus scheduling slack) — not the 8s the script would run.
+    expect(Date.now() - start).toBeLessThan(6000);
+  });
+});
+
+// ============================================================================
+// http executor
+// ============================================================================
+
+describe('executeHttpHook', () => {
+  let server: http.Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c: Buffer) => (body += c));
+      req.on('end', () => {
+        if (req.url === '/ok') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ additionalContext: `http-ctx:${JSON.parse(body).session_id}` }));
+        } else {
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('boom');
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('POSTs the input and reads additionalContext from a 2xx JSON body', async () => {
+    const result = await executeHttpHook({ type: 'http', url: `${baseUrl}/ok` }, baseInput());
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('http-ctx:s1');
+  });
+
+  it('fails open on a 500 response', async () => {
+    const result = await executeHttpHook({ type: 'http', url: `${baseUrl}/err` }, baseInput());
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('500');
+  });
+
+  it('fails open on a network error', async () => {
+    const result = await executeHttpHook(
+      { type: 'http', url: 'http://127.0.0.1:1/nope', timeout: 2 },
+      baseInput(),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeTruthy();
+  });
+});
+
+// ============================================================================
+// process executor (ZCode hooks.json alignment)
+// ============================================================================
+
+describe('executeProcessHook', () => {
+  it('uses additionalContext from JSON stdout on exit 0', async () => {
+    const result = await executeProcessHook(
+      {
+        type: 'process',
+        command: 'node',
+        args: ['-e', "process.stdout.write(JSON.stringify({additionalContext:'proc-ctx'}))"],
+      },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('proc-ctx');
+  });
+
+  it('passes args through verbatim and pipes the hook input on stdin', async () => {
+    const script =
+      `var d='';process.stdin.on('data',function(c){d+=c});` +
+      `process.stdin.on('end',function(){` +
+      `process.stdout.write(JSON.stringify({additionalContext:'got:'+JSON.parse(d).hook_event_name+':'+process.argv[1]}))})`;
+    const result = await executeProcessHook(
+      { type: 'process', command: 'node', args: ['-e', script, 'MARKER'] },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('got:PreTurn:MARKER');
+  });
+
+  it('fails open on non-zero exit and reports the exit code', async () => {
+    const result = await executeProcessHook(
+      { type: 'process', command: 'node', args: ['-e', 'process.exit(4)'] },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('exited with code 4');
+    expect(result.exitCode).toBe(4);
+  });
+
+  it('kills the process and fails open on timeoutMs', async () => {
+    const start = Date.now();
+    const result = await executeProcessHook(
+      {
+        type: 'process',
+        command: 'node',
+        args: ['-e', 'setTimeout(function(){},8000)'],
+        timeoutMs: 1000,
+      },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('timed out');
+    expect(result.exitCode).toBeUndefined();
+    // 1s timeout (plus scheduling slack) — not the 8s the script would run.
+    expect(Date.now() - start).toBeLessThan(6000);
+  });
+
+  it('spawns without a shell (metacharacters arrive as literal args)', async () => {
+    const script =
+      `var d='';process.stdin.on('data',function(c){d+=c});` +
+      `process.stdin.on('end',function(){` +
+      `process.stdout.write(JSON.stringify({additionalContext:process.argv[1]}))})`;
+    const result = await executeProcessHook(
+      { type: 'process', command: 'node', args: ['-e', script, '$LITERAL|a;b'] },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('$LITERAL|a;b');
+  });
+
+  it('expands ${KEY} placeholders in command and args', async () => {
+    const script = `process.stdout.write(JSON.stringify({additionalContext:process.argv[1]}))`;
+    const result = await executeProcessHook(
+      { type: 'process', command: 'node', args: ['-e', script, '${sessionId}|${cwd}'] },
+      baseInput(),
+      { cwd: CWD, vars: { sessionId: 'sess-1', cwd: CWD } },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe(`sess-1|${CWD}`);
+  });
+
+  it('leaves unknown and unsafe ${KEY} placeholders untouched', async () => {
+    const script = `process.stdout.write(JSON.stringify({additionalContext:process.argv[1]}))`;
+    const result = await executeProcessHook(
+      { type: 'process', command: 'node', args: ['-e', script, '${UNKNOWN}:${sessionId}'] },
+      baseInput(),
+      { cwd: CWD, vars: { sessionId: 'bad value; rm -rf' } },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('${UNKNOWN}:${sessionId}');
+  });
+});
+
+// ============================================================================
+// ${VAR} template expansion (pure function)
+// ============================================================================
+
+describe('expandHookTemplate', () => {
+  it('replaces known safe keys', () => {
+    expect(expandHookTemplate('a${k}b', { k: 'X' })).toBe('aXb');
+  });
+
+  it('leaves unknown keys verbatim', () => {
+    expect(expandHookTemplate('${unknown}', {})).toBe('${unknown}');
+  });
+
+  it('rejects values containing unsafe characters', () => {
+    expect(expandHookTemplate('${k}', { k: 'a b;rm -rf' })).toBe('${k}');
+    expect(expandHookTemplate('${k}', { k: '$HOME' })).toBe('${k}');
+    expect(expandHookTemplate('${k}', { k: '`id`' })).toBe('${k}');
+  });
+
+  it('allows path-like safe values', () => {
+    expect(expandHookTemplate('${root}/x', { root: 'C:/Users/a/.duya' })).toBe('C:/Users/a/.duya/x');
+  });
+
+  it('expands repeated keys', () => {
+    expect(expandHookTemplate('${a}-${a}', { a: '1' })).toBe('1-1');
+  });
+});
+
+// ============================================================================
+// dispatcher
+// ============================================================================
+
+describe('executeHook dispatcher', () => {
+  it('routes process type to the process executor', async () => {
+    const result = await executeHook(
+      { type: 'process', command: 'node', args: ['-e', "process.stdout.write('dispatched')"] },
+      baseInput(),
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.additionalContext).toBe('dispatched');
+  });
+
+  it('prompt type fails open with the not-implemented error', async () => {
+    const result = await executeHook({ type: 'prompt', prompt: 'x' }, baseInput(), { cwd: CWD });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('not implemented');
+  });
+
+  it('agent type fails open with the not-implemented error', async () => {
+    const result = await executeHook({ type: 'agent', prompt: 'x' }, baseInput(), { cwd: CWD });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('not implemented');
+  });
+});
+
+// ============================================================================
+// config-loop bridge
+// ============================================================================
+
+describe('createConfiguredLoopHooks', () => {
+  const TEST_NS = 'hooks-executor-test';
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function busOf(regs: ReturnType<typeof createConfiguredLoopHooks>): LoopHookBus {
+    const bus = new LoopHookBus();
+    for (const r of regs) bus.register(r);
+    return bus;
+  }
+
+  it('emits one registration per bridged event with configured matchers', () => {
+    const settings: HooksSettings = {
+      PreTurn: [{ hooks: [{ type: 'command', command: 'echo a' }] }],
+      PostTurn: [{ hooks: [{ type: 'command', command: 'echo b' }] }],
+    };
+    const regs = createConfiguredLoopHooks({ hooks: settings, cwd: CWD });
+    expect(regs.map((r) => r.id).sort()).toEqual(['config.PostTurn', 'config.PreTurn']);
+    for (const r of regs) {
+      expect(r.priority).toBe(400);
+      expect(r.events).toHaveLength(1);
+    }
+  });
+
+  it('returns [] when nothing is configured', () => {
+    expect(createConfiguredLoopHooks({ hooks: {}, cwd: CWD })).toEqual([]);
+  });
+
+  it('returns [] for events not bridged onto the loop bus', () => {
+    // SessionStart is dispatched by ConfigHooksRunner (events.ts), not the
+    // loop bus; PreFinalize is unbridged (no external veto path). Neither
+    // should produce a loop registration.
+    const settings: HooksSettings = {
+      SessionStart: [{ hooks: [{ type: 'command', command: 'echo x' }] }],
+      PreFinalize: [{ hooks: [{ type: 'command', command: 'echo y' }] }],
+    };
+    expect(createConfiguredLoopHooks({ hooks: settings, cwd: CWD })).toEqual([]);
+  });
+
+  it('reads undefined (no fs config) when deps.hooks is omitted', () => {
+    // Namespace isolation so the real ~/.duya/config.toml cannot leak in.
+    vi.stubEnv('DUYA_TEST', '1');
+    vi.stubEnv('DUYA_TEST_NAMESPACE', TEST_NS);
+    expect(createConfiguredLoopHooks({ cwd: CWD })).toEqual([]);
+  });
+
+  it('PreTurn registration collects command additionalContext into a custom inject', async () => {
+    const settings: HooksSettings = {
+      PreTurn: [{ hooks: [{ type: 'command', command: cmdJsonContext('pre-turn-ctx') }] }],
+    };
+    const bus = busOf(createConfiguredLoopHooks({ hooks: settings, cwd: CWD }));
+    const effects = await bus.dispatch('PreTurn', {
+      sessionId: 's1',
+      turnCount: 2,
+      seqIndex: 0,
+      messages: [],
+    });
+    expect(effects).toEqual([{ type: 'inject', injection: 'pre-turn-ctx', source: 'custom' }]);
+  });
+
+  it('PostToolUse matcher filters by tool name; no matcher matches everything', async () => {
+    const settings: HooksSettings = {
+      PostToolUse: [
+        { matcher: '^Read$', hooks: [{ type: 'command', command: cmdJsonContext('read-ctx') }] },
+        { hooks: [{ type: 'command', command: cmdJsonContext('any-ctx') }] },
+      ],
+    };
+    const bus = busOf(createConfiguredLoopHooks({ hooks: settings, cwd: CWD }));
+
+    const withRead = await bus.dispatch('PostToolUse', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+      toolCalls: [
+        { name: 'Read', input: {} },
+        { name: 'Bash', input: {} },
+      ],
+    });
+    expect(withRead).toHaveLength(1);
+    expect(withRead[0]).toMatchObject({ type: 'inject', source: 'custom' });
+    expect((withRead[0] as { injection: string }).injection).toBe('read-ctx\n\nany-ctx');
+
+    const withoutRead = await bus.dispatch('PostToolUse', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+      toolCalls: [{ name: 'Bash', input: {} }],
+    });
+    expect(withoutRead).toHaveLength(1);
+    expect((withoutRead[0] as { injection: string }).injection).toBe('any-ctx');
+  });
+
+  it('failed hooks are skipped (fail-open), successful ones still inject', async () => {
+    const settings: HooksSettings = {
+      PostTurn: [
+        { hooks: [{ type: 'http', url: 'http://127.0.0.1:1/nope', timeout: 2 }] },
+        { hooks: [{ type: 'command', command: cmdJsonContext('good-ctx') }] },
+      ],
+    };
+    const bus = busOf(createConfiguredLoopHooks({ hooks: settings, cwd: CWD }));
+    const effects = await bus.dispatch('PostTurn', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+    });
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ type: 'inject', injection: 'good-ctx', source: 'custom' });
+  });
+
+  it('injects a non-zero-exit command diagnostic back to the model (verifier)', async () => {
+    const settings: HooksSettings = {
+      PostTurn: [
+        { hooks: [{ type: 'command', command: 'node -e "process.stderr.write(\'lint error@L1\');process.exit(2)"' }] },
+      ],
+    };
+    const bus = busOf(createConfiguredLoopHooks({ hooks: settings, cwd: CWD }));
+    const effects = await bus.dispatch('PostTurn', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+    });
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ type: 'inject', source: 'custom' });
+    const injection = (effects[0] as { injection: string }).injection;
+    expect(injection).toContain('[verify:command]');
+    expect(injection).toContain('exited with code 2');
+    expect(injection).toContain('lint error@L1');
+  });
+
+  it('returns no effect when matched hooks produce no context', async () => {
+    const settings: HooksSettings = {
+      PreTurn: [{ hooks: [{ type: 'command', command: 'node -e ""' }] }],
+    };
+    const bus = busOf(createConfiguredLoopHooks({ hooks: settings, cwd: CWD }));
+    const effects = await bus.dispatch('PreTurn', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+    });
+    expect(effects).toHaveLength(0);
+  });
+});
