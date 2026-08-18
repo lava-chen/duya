@@ -38,6 +38,17 @@ export interface CacheEligibility {
 export type CacheRetention = 'short' | 'long' | 'none'
 
 /**
+ * Anthropic caps explicit `cache_control` breakpoints at 4 per request
+ * (`maxBreakpoints`). The `system` param breakpoint is applied separately via
+ * `applyCacheControlToSystem` — `toAnthropicMessages` lifts the system message
+ * out of the messages array, so `applyCacheControl`'s own system branch never
+ * fires for that caller. Without reserving a slot here, system(1) + last-4
+ * messages = 5 breakpoints, which the API rejects with "at most 4 cache
+ * breakpoints". This is the "3" in the system_and_3 strategy: system + 3.
+ */
+const MESSAGE_BREAKPOINT_BUDGET = 3
+
+/**
  * Check if a provider/model combination supports prompt caching.
  *
  * @param provider - Provider identifier (e.g., 'anthropic', 'openrouter')
@@ -266,6 +277,11 @@ function applyCacheMarkerToMessage(
  * 1. System prompt (stable across all turns)
  * 2-4. Last 3 non-system messages (rolling window)
  *
+ * The messages-side budget is capped at `MESSAGE_BREAKPOINT_BUDGET` (3):
+ * the `system` param breakpoint is applied separately via
+ * `applyCacheControlToSystem` since `toAnthropicMessages` lifts system out of
+ * the messages array. system(1) + messages(3) = 4 ≤ Anthropic's limit.
+ *
  * @param messages - Array of messages to apply caching to
  * @param eligibility - Cache eligibility from checkCacheEligibility
  * @param cacheRetention - Cache retention policy
@@ -297,8 +313,13 @@ export function applyCacheControl(
     breakpointsUsed++
   }
 
-  // 2. Apply to last N non-system messages
-  const remaining = eligibility.maxBreakpoints - breakpointsUsed
+  // 2. Apply to last N non-system messages. Cap at the system_and_3 budget so
+  //    the separately-marked `system` param (applyCacheControlToSystem) does
+  //    not push the total past maxBreakpoints.
+  const remaining = Math.min(
+    eligibility.maxBreakpoints - breakpointsUsed,
+    MESSAGE_BREAKPOINT_BUDGET,
+  )
   const nonSystemIndices: number[] = []
 
   for (let i = 0; i < result.length; i++) {

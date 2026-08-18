@@ -612,6 +612,25 @@ export class OllamaClient implements AIClient {
   ): Promise<{ content: string; usage?: TokenUsage }> {
     throw new Error('chat() is not supported for Ollama client. Use streamChat() instead.');
   }
+
+  /** Batch text embedding via Ollama's native /api/embed endpoint. */
+  async embed(texts: string[]): Promise<number[][]> {
+    const response = await fetch(`${this.baseURL}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: this.model, input: texts }),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Ollama embed failed: HTTP ${response.status} ${(await response.text()).slice(0, 512)}`,
+      );
+    }
+    const body = (await response.json()) as { embeddings?: number[][] };
+    if (!Array.isArray(body.embeddings) || body.embeddings.length !== texts.length) {
+      throw new Error('Ollama embed returned an unexpected payload shape');
+    }
+    return body.embeddings;
+  }
 }
 
 /**

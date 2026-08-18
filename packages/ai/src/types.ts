@@ -16,6 +16,8 @@
  * break any consumer.
  */
 
+import type { CacheRetention } from './utils/prompt-caching.js';
+
 // ─── ApiFormat (re-exported from src/lib/providers/types.ts conceptually) ───
 export type ApiFormat =
   | 'openai-chat'
@@ -455,6 +457,10 @@ export interface AIClientOptions {
   headers?: Record<string, string>;
   providerId: string;
   modelCapabilities?: ModelCompat;
+  /** Prompt-cache retention. 'long' enables 1h TTL on endpoints that support
+   *  it (api.anthropic.com / api.vertex.ai) and is downgraded to ephemeral
+   *  elsewhere. Defaults to 'short' (5-minute TTL). */
+  cacheRetention?: CacheRetention;
 }
 
 export interface AIClient {
@@ -494,4 +500,10 @@ export interface AIClient {
       signal?: AbortSignal;
     },
   ): Promise<{ content: string; usage?: TokenUsage }>;
+
+  /** Batch text embedding (plan 428 memory RAG). Returns one vector per
+   *  input text. Optional — providers without an embeddings endpoint
+   *  (e.g. Anthropic) leave it undefined and callers degrade to keyword
+   *  search. */
+  embed?(texts: string[]): Promise<number[][]>;
 }
