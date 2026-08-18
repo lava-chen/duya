@@ -2,7 +2,6 @@
   "name": "@duya/voice",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "DUYA voice input — mic to streaming STT to text, aligned with grok's dictation model",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

@@ -66,6 +66,11 @@ extraResources:
   - from: packages/gateway/bundle/
     to: gateway-bundle/
     filter: ["**/*"]
+  # @duya/voice worker (tsc output, CommonJS). resolveSttWorkerPath() expects
+  # resources/voice/worker.js in packaged builds.
+  - from: packages/voice/dist/
+    to: voice/
+    filter: ["**/*"]
   - from: packages/agent/skills/
     to: agent/skills/
     filter: ["**/*"]
