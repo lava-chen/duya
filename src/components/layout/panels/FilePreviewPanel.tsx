@@ -11,7 +11,7 @@ import {
   WarningCircleIcon,
 } from "@/components/icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { SyntaxHighlighter } from "@/lib/prism-languages";
 import { vs, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { Button } from "@/components/ui/Button";
@@ -158,72 +158,166 @@ function languageFromExtension(extension?: string): string {
   return map[ext] ?? "text";
 }
 
+/** Human-readable labels for the status bar. */
+const LANGUAGE_LABELS: Record<string, string> = {
+  typescript: "TypeScript",
+  tsx: "TSX",
+  javascript: "JavaScript",
+  jsx: "JSX",
+  python: "Python",
+  ruby: "Ruby",
+  go: "Go",
+  rust: "Rust",
+  java: "Java",
+  kotlin: "Kotlin",
+  swift: "Swift",
+  csharp: "C#",
+  cpp: "C++",
+  c: "C",
+  css: "CSS",
+  scss: "SCSS",
+  less: "Less",
+  html: "HTML",
+  json: "JSON",
+  yaml: "YAML",
+  xml: "XML",
+  markdown: "Markdown",
+  sql: "SQL",
+  bash: "Shell",
+  docker: "Dockerfile",
+  toml: "TOML",
+  ini: "INI",
+  graphql: "GraphQL",
+  protobuf: "Protocol Buffers",
+  php: "PHP",
+  lua: "Lua",
+  r: "R",
+  text: "Plain Text",
+};
+
 const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
 
-/** Memoized text/code preview body. Isolates the expensive
- *  SyntaxHighlighter / MarkdownRenderer from selection, menu, and
+/** Code line height in px. MUST stay in sync with the CSS
+ *  (`.file-preview-text.code` font-size 13px × line-height 1.6). */
+const CODE_LINE_HEIGHT = 20.8;
+
+/** Top padding of the code area in px. MUST stay in sync with the CSS
+ *  (`.file-preview-text.code pre` padding-top) so the focus bar and the
+ *  gutter line up with the first code row. */
+const CODE_TOP_PADDING = 10;
+
+function lineCountOf(content: string): number {
+  return Math.max(1, content.split("\n").length);
+}
+
+/** Memoized markdown preview body. Isolated from selection, menu, and
  *  focus-line state changes in the parent so they don't trigger a
- *  full re-parse of the code on every mouseup or dropdown toggle. */
-const PreviewTextContent = memo(function PreviewTextContent({
+ *  re-render of the markdown parser. */
+const PreviewMarkdownContent = memo(function PreviewMarkdownContent({
   content,
-  extension,
-  language,
-  isDark,
   truncatedHint,
-  lineProps,
 }: {
   content: string;
-  extension?: string;
-  language: string;
-  isDark: boolean;
   truncatedHint: string;
-  lineProps: (lineNumber: number) => object;
 }) {
-  const isMarkdown = MARKDOWN_EXTENSIONS.has(extension ?? "");
   return (
-    <div className={`file-preview-text${isMarkdown ? " markdown" : " code"}`}>
+    <div className="file-preview-text markdown">
       {truncatedHint && <div className="file-preview-truncated">{truncatedHint}</div>}
-      {isMarkdown ? (
-        <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
-          {content}
-        </MarkdownRenderer>
-      ) : (
-        <SyntaxHighlighter
-          language={language}
-          style={isDark ? vscDarkPlus : vs}
-          wrapLines
-          showLineNumbers
-          startingLineNumber={1}
-          lineProps={lineProps}
-          customStyle={{
-            margin: 0,
-            padding: 0,
-            background: "transparent",
-            fontSize: "13px",
-            lineHeight: "1.65",
-            minHeight: "100%",
-          }}
-          codeTagProps={{
-            style: {
-              fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
-            },
-          }}
-          lineNumberStyle={{
-            minWidth: "36px",
-            paddingRight: "12px",
-            paddingLeft: "8px",
-            textAlign: "right",
-            color: isDark ? "#6e7681" : "#6e7681",
-            background: "transparent",
-            userSelect: "none",
-          }}
-        >
-          {content}
-        </SyntaxHighlighter>
-      )}
+      <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
+        {content}
+      </MarkdownRenderer>
     </div>
   );
 });
+
+/** Memoized syntax-highlighted code body. This is the expensive part;
+ *  its props stay referentially stable while the user clicks lines, so
+ *  the tokenizer never re-runs on interaction. */
+const PreviewCodeContent = memo(function PreviewCodeContent({
+  content,
+  language,
+  isDark,
+  lineProps,
+}: {
+  content: string;
+  language: string;
+  isDark: boolean;
+  lineProps: (lineNumber: number) => object;
+}) {
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={isDark ? vscDarkPlus : vs}
+      wrapLines
+      showLineNumbers={false}
+      lineProps={lineProps}
+      customStyle={{
+        margin: 0,
+        // No padding here: the host CSS owns `.file-preview-text.code pre`
+        // padding (10px top), which the gutter and focus bar align with.
+        // An inline padding would override that CSS and desync the rows.
+        background: "transparent",
+        fontSize: "13px",
+        lineHeight: "1.6",
+        minHeight: "100%",
+      }}
+      codeTagProps={{
+        style: {
+          fontFamily: "var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
+        },
+      }}
+    >
+      {content}
+    </SyntaxHighlighter>
+  );
+});
+
+/** Fixed line-number gutter rendered next to the code. Stays put while
+ *  the code scrolls horizontally (position: sticky in CSS). Line
+ *  heights must match `CODE_LINE_HEIGHT`. */
+const PreviewCodeGutter = memo(function PreviewCodeGutter({
+  content,
+  currentLine,
+  onLineClick,
+}: {
+  content: string;
+  currentLine: number | null;
+  onLineClick: (lineNumber: number) => void;
+}) {
+  const lineCount = useMemo(() => lineCountOf(content), [content]);
+  const rows = useMemo(() => Array.from({ length: lineCount }, (_, i) => i + 1), [lineCount]);
+  return (
+    <div className="file-preview-gutter" aria-hidden="true">
+      {rows.map((lineNumber) => (
+        <div
+          key={lineNumber}
+          className={`file-preview-line-no${lineNumber === currentLine ? " current" : ""}`}
+          data-preview-line={lineNumber}
+          onClick={() => onLineClick(lineNumber)}
+          title={`Ln ${lineNumber}`}
+        >
+          {lineNumber}
+        </div>
+      ))}
+    </div>
+  );
+});
+
+/** Overlay strip highlighting the focused line range. Rendered above
+ *  the gutter but behind the code text; positioned from
+ *  `CODE_LINE_HEIGHT` so it stays perfectly aligned with the rows. */
+function PreviewHighlightBar({ focusLines }: { focusLines: FocusLines | null }) {
+  if (!focusLines) return null;
+  const top = (focusLines.start - 1) * CODE_LINE_HEIGHT + CODE_TOP_PADDING;
+  const height = ((focusLines.end ?? focusLines.start) - focusLines.start + 1) * CODE_LINE_HEIGHT;
+  return (
+    <div
+      className="file-preview-focus-bar"
+      style={{ top, height }}
+      aria-hidden="true"
+    />
+  );
+}
 
 export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const propFilePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
@@ -265,6 +359,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const { t } = useTranslation();
   const panel = useOptionalPanel();
   const workspaceTreeOpen = panel?.workspaceTreeOpen ?? false;
+
+  // Line the user last clicked (shown in the status bar and highlighted
+  // in the gutter). Distinct from focusLines which comes from external
+  // requests (ReadToolRow / gutter clicks).
+  const [currentLine, setCurrentLine] = useState<number | null>(null);
 
   // Read the initial focus range from tab.params (set by ReadToolRow via
   // openLocalArtifactTarget → duya:open-file-preview-panel). Subsequent
@@ -468,6 +567,25 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     });
   }, [preview?.content]);
 
+  // Track the line under the cursor so the status bar and gutter can
+  // show "Ln n". The gutter and code rows both carry data-preview-line,
+  // so this handles clicks on either.
+  const handleCanvasClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    const lineEl = target.closest("[data-preview-line]");
+    if (lineEl instanceof HTMLElement) {
+      const lineNumber = Number(lineEl.dataset.previewLine);
+      if (Number.isFinite(lineNumber) && lineNumber > 0) setCurrentLine(lineNumber);
+    }
+  }, []);
+
+  // Clicking a line number focuses that line: it scrolls to center,
+  // highlights it, and becomes the "current" line.
+  const handleLineClick = useCallback((lineNumber: number) => {
+    setCurrentLine(lineNumber);
+    setFocusLines({ start: lineNumber });
+  }, []);
+
   const askDuya = useCallback(() => {
     if (!selection || !filePath) return;
     // Plan 220: askDuya from a file preview attaches the FILE
@@ -496,13 +614,14 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     return `data:${preview.mediaType};base64,${preview.data}`;
   }, [preview?.data, preview?.mediaType]);
 
-  // Screenshot capture was removed from the preview header (see plan); the
-  // data URL above is still needed for image/PDF rendering.
   const language = useMemo(
     () => languageFromExtension(preview?.extension),
     [preview?.extension],
   );
 
+  // Referentially stable so the memoized highlighter never re-tokenizes
+  // when the user clicks around. Focus highlighting is done with the
+  // absolutely-positioned PreviewHighlightBar instead.
   const lineProps = useCallback(
     (lineNumber: number) => {
       return {
@@ -537,6 +656,10 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const FileTypeIcon = useMemo(() => getFileTypeIcon(preview?.extension), [preview?.extension]);
   // Breadcrumb segments for the *directory* path (all but the file name).
   const pathBreadcrumb = useMemo(() => breadcrumb?.slice(0, -1), [breadcrumb]);
+
+  const isMarkdown = useMemo(() => MARKDOWN_EXTENSIONS.has(preview?.extension ?? ""), [preview?.extension]);
+  const lineCount = useMemo(() => lineCountOf(preview?.content ?? ""), [preview?.content]);
+  const languageLabel = LANGUAGE_LABELS[language] ?? language;
 
   const handleOpenWithDefault = useCallback(() => {
     setOpenMenuOpen(false);
@@ -595,6 +718,15 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     }
   }, [filePath]);
 
+  const handleCopyContent = useCallback(async () => {
+    if (!preview?.content) return;
+    try {
+      await navigator.clipboard.writeText(preview.content);
+    } catch {
+      // Ignore clipboard errors in restricted contexts.
+    }
+  }, [preview?.content]);
+
   const handleOpenItem = useCallback((item: OptionPanelItem) => {
     setOpenMenuOpen(false);
     if (item.id.startsWith('ide:')) {
@@ -620,6 +752,8 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     );
   }
 
+  const truncatedHint = preview?.truncated ? t('filePreview.truncatedHint') : "";
+
   return (
     <PanelFileTreeSplit workingDirectory={workingDirectory}>
     <div className="file-preview-panel">
@@ -634,7 +768,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               {rootName && <span className="file-preview-path-root">{rootName}</span>}
               {pathBreadcrumb?.map((segment) => (
                 <span key={segment.fullPath} className="file-preview-path-segment">
-                  <span className="file-preview-path-separator">›</span>
+                  <span className="file-preview-path-separator">/</span>
                   {segment.name}
                 </span>
               ))}
@@ -642,6 +776,19 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           )}
         </div>
         <div className="file-preview-actions">
+          {preview?.success && preview.kind === "text" && (
+            <IconButton
+              type="button"
+              variant="default"
+              shape="square"
+              size="md"
+              onClick={handleCopyContent}
+              title={t('filePreview.copyContent')}
+              aria-label={t('filePreview.copyContent')}
+            >
+              <CopyIcon size={16} stroke={1.5} />
+            </IconButton>
+          )}
           <div ref={openContainerRef} className="file-preview-open-dropdown">
             <div className="file-preview-open-group">
               <button
@@ -700,7 +847,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         </div>
       </div>
 
-      <div className={`file-preview-canvas${preview?.kind === "pdf" ? " file-preview-canvas-pdf" : ""}`} ref={canvasRef} onMouseUp={captureSelection}>
+      <div className={`file-preview-canvas${preview?.kind === "pdf" ? " file-preview-canvas-pdf" : ""}`} ref={canvasRef} onMouseUp={captureSelection} onClick={handleCanvasClick}>
         {loading && (
           <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
         )}
@@ -720,15 +867,29 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         {!loading && preview?.success && !preview.tooLarge && preview.kind === "pdf" && dataUrl && (
           <iframe className="file-preview-pdf" src={`${dataUrl}#toolbar=0`} title={preview.name || tab.title} />
         )}
-        {!loading && preview?.success && preview.kind === "text" && (
-          <PreviewTextContent
-            content={preview.content || ""}
-            extension={preview.extension}
-            language={language}
-            isDark={isDark}
-            truncatedHint={preview.truncated ? t('filePreview.truncatedHint') : ""}
-            lineProps={lineProps}
-          />
+        {!loading && preview?.success && preview.kind === "text" && !isMarkdown && (
+          <div className="file-preview-text code">
+            {truncatedHint && <div className="file-preview-truncated">{truncatedHint}</div>}
+            <div className="file-preview-code-scroll">
+              <PreviewCodeGutter
+                content={preview.content || ""}
+                currentLine={currentLine}
+                onLineClick={handleLineClick}
+              />
+              <div className="file-preview-code-body">
+                <PreviewHighlightBar focusLines={focusLines} />
+                <PreviewCodeContent
+                  content={preview.content || ""}
+                  language={language}
+                  isDark={isDark}
+                  lineProps={lineProps}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        {!loading && preview?.success && preview.kind === "text" && isMarkdown && (
+          <PreviewMarkdownContent content={preview.content || ""} truncatedHint={truncatedHint} />
         )}
         {selection && (
           <Button
@@ -744,6 +905,20 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </Button>
         )}
       </div>
+
+      {!loading && preview?.success && preview.kind === "text" && (
+        <div className="file-preview-statusbar">
+          <span className="file-preview-statusbar-left">
+            {t('filePreview.statusLine', { line: currentLine ?? 1 })}
+          </span>
+          <span className="file-preview-statusbar-right">
+            <span>{languageLabel}</span>
+            <span>{t('filePreview.statusLines', { count: lineCount })}</span>
+            <span>UTF-8</span>
+            <span>LF</span>
+          </span>
+        </div>
+      )}
     </div>
     </PanelFileTreeSplit>
   );

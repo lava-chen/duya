@@ -13,7 +13,8 @@ import {
 describe('MODE_KIND (plan 413e)', () => {
   it('marks plan-task as session-level so it survives message sends', () => {
     expect(MODE_KIND['plan-task']).toBe('session');
-    expect(MODE_KIND['research']).toBe('message');
+    // Plan 423: research is a session-level deep-research state machine.
+    expect(MODE_KIND['research']).toBe('session');
     expect(MODE_KIND['conductor']).toBe('session');
   });
 

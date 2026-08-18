@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { SyntaxHighlighter } from '@/lib/prism-languages';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CopyIcon, CheckIcon, CheckCircleIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';

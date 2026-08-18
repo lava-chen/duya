@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { XIcon, SpinnerGapIcon, ChatCircleIcon, CircleNotchIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
+import { usePolling } from "@/hooks/usePolling";
 import { listGatewaySessionsIPC, type GatewaySession } from "@/lib/ipc-client";
 import { getSnapshot, subscribeToPhase } from "@/lib/stream-session-manager";
 import type { StreamPhase } from "@/types/message";
@@ -71,15 +72,17 @@ export function ChannelSessionsDialog({ channel, onClose }: ChannelSessionsDialo
     }
   }, []);
 
+  // The dialog is conditionally mounted (only while open), so plain polling
+  // without an activeWhen gate is enough. Immediate first tick on mount.
+  usePolling(fetchSessions, 3000);
+
+  // Release phase subscriptions on unmount (dialog close).
   useEffect(() => {
-    fetchSessions();
-    const interval = setInterval(fetchSessions, 3000);
     return () => {
-      clearInterval(interval);
       unsubscribeRefs.current.forEach((unsubscribe) => unsubscribe());
       unsubscribeRefs.current.clear();
     };
-  }, [fetchSessions]);
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

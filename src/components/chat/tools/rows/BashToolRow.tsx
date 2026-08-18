@@ -7,7 +7,7 @@
 
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CheckCircleIcon,
@@ -16,6 +16,7 @@ import {
   XCircleIcon,
 } from '@/components/icons';
 import { IconButton } from '@/components/ui/IconButton';
+import { usePolling } from '@/hooks/usePolling';
 import { ActionRowChrome } from '../chrome/ActionRowChrome';
 import { getStatus } from '../registry';
 import type { ToolAction, ToolStatus } from '../types';
@@ -47,17 +48,17 @@ export function BashToolRow({ tool, streamingToolOutput }: BashToolRowProps) {
   // Live tick — while the tool is still running, recompute elapsed ms
   // every second so the header's "已持续 2s" label updates in real time.
   // When the result lands the backend-supplied `tool.durationMs` takes
-  // over and the interval is torn down.
+  // over and polling is gated off (plan 426 Phase 4.2).
   const [liveDurationMs, setLiveDurationMs] = useState<number>(
     () => Date.now() - startedAtRef.current,
   );
-  useEffect(() => {
-    if (!isRunning) return undefined;
-    const tick = () => setLiveDurationMs(Date.now() - startedAtRef.current);
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [isRunning]);
+  usePolling(
+    () => {
+      setLiveDurationMs(Date.now() - startedAtRef.current);
+    },
+    1000,
+    { activeWhen: () => isRunning },
+  );
 
   const handleCopy = async () => {
     try {

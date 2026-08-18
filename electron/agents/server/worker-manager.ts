@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
+import { getWorkerMaxMemoryMB, getWorkerIdleTtlMs, isLowPowerEnv, selectIdleSessionIds } from './worker-limits';
 
 export function createWorkerEnvironment(
   sessionId: string,
@@ -32,6 +33,13 @@ export class WorkerManager {
   private onWorkerMessage: ((sessionId: string, msg: Record<string, unknown>) => void) | null = null;
   // H6: Track intentionally killed workers so their exit is not misjudged as a crash
   private intentionalKills = new WeakSet<ChildProcess>();
+  // Plan 426 Phase 2: idle recycling. lastActivityAt refreshes on every
+  // inbound worker message and every outbound command; the reaper kills
+  // settled workers whose last activity is older than the TTL.
+  private lastActivity = new Map<string, number>();
+  private keepAliveSessions = new Set<string>();
+  private idleReaperTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly lowPower = isLowPowerEnv();
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -54,7 +62,7 @@ export class WorkerManager {
       throw new Error(`Worker entry not found: ${workerPath}`);
     }
 
-    const maxMemoryMB = parseInt(process.env.DUYA_WORKER_MAX_MEMORY_MB || '2048', 10);
+    const maxMemoryMB = getWorkerMaxMemoryMB();
 
     const env = createWorkerEnvironment(
       sessionId,
@@ -81,6 +89,7 @@ export class WorkerManager {
     });
 
     this.workers.set(sessionId, child);
+    this.lastActivity.set(sessionId, Date.now());
 
     // C5: Transition state after worker is registered. The caller may have already
     // transitioned (e.g. handlePostChat uses transitionState as a concurrency lock),
@@ -107,6 +116,8 @@ export class WorkerManager {
         return;
       }
       this.workers.delete(sessionId);
+      this.lastActivity.delete(sessionId);
+      this.keepAliveSessions.delete(sessionId);
 
       const exitedCleanly = code === 0;
       const exitedBySignal = code === null && signal !== null;
@@ -160,6 +171,7 @@ export class WorkerManager {
     });
 
     child.on('message', (msg: Record<string, unknown>) => {
+      this.lastActivity.set(sessionId, Date.now());
       // db:request, conductor:executor:rpc, appConnection:invoke, and
       // appConnection:listDescriptors are handled by the per-request handlers
       // in router.ts (they forward to main process). All other messages go
@@ -238,6 +250,8 @@ export class WorkerManager {
         this.workers.delete(sessionId);
         workerLogger.info('Worker terminated', { sessionId });
       }
+      this.lastActivity.delete(sessionId);
+      this.keepAliveSessions.delete(sessionId);
     });
 
     if (process.platform === 'win32') {
@@ -255,6 +269,7 @@ export class WorkerManager {
     }
 
     workerLogger.debug('Sending command to worker', { sessionId, commandType: cmd.type });
+    this.lastActivity.set(sessionId, Date.now());
     try {
       child.stdin.write(JSON.stringify(cmd) + '\n');
     } catch (err) {
@@ -278,6 +293,66 @@ export class WorkerManager {
     }
     workerLogger.info('Broadcast command to workers', { commandType: cmd.type, workerCount: count });
     return count;
+  }
+
+  /**
+   * Plan 426 Phase 2.3: per-session exemption from idle reaping. Use for
+   * sessions whose worker must survive idle periods (cron/shared sessions,
+   * long-lived subagent parents). The mark is cleared automatically when
+   * the worker exits.
+   */
+  setKeepAlive(sessionId: string, enabled: boolean): void {
+    if (enabled) this.keepAliveSessions.add(sessionId);
+    else this.keepAliveSessions.delete(sessionId);
+  }
+
+  isKeepAlive(sessionId: string): boolean {
+    return this.keepAliveSessions.has(sessionId);
+  }
+
+  /** Test/inspection hook: last activity timestamp for a session's worker. */
+  getLastActivity(sessionId: string): number | undefined {
+    return this.lastActivity.get(sessionId);
+  }
+
+  /**
+   * Plan 426 Phase 2.2: start the periodic idle reaper. Default check
+   * interval 30s; workers idle past the TTL (10min default, 4min in
+   * lowPower) are killed — later requests go through the existing
+   * lazy-spawn path.
+   */
+  startIdleReaper(checkIntervalMs = 30_000): void {
+    if (this.idleReaperTimer) return;
+    this.idleReaperTimer = setInterval(() => this.reapIdleWorkers(), checkIntervalMs);
+  }
+
+  stopIdleReaper(): void {
+    if (this.idleReaperTimer) {
+      clearInterval(this.idleReaperTimer);
+      this.idleReaperTimer = null;
+    }
+  }
+
+  private reapIdleWorkers(): void {
+    if (this.workers.size === 0) return;
+    const ttlMs = getWorkerIdleTtlMs(this.lowPower);
+    const now = Date.now();
+    const candidates = Array.from(this.workers.keys()).map((sessionId) => ({
+      sessionId,
+      lastActivityAt: this.lastActivity.get(sessionId),
+      keepAlive: this.keepAliveSessions.has(sessionId),
+      state: this.sessionManager.getSession(sessionId)?.state,
+    }));
+    for (const sessionId of selectIdleSessionIds(candidates, now, ttlMs)) {
+      const child = this.workers.get(sessionId);
+      if (!child) continue;
+      // A kill is already in flight (killWorkerImpl marked it) — wait for
+      // the exit event instead of stacking duplicate kill attempts.
+      if (this.intentionalKills.has(child)) continue;
+      const idleMs = now - (this.lastActivity.get(sessionId) ?? now);
+      workerLogger.info('Reaping idle worker', { sessionId, pid: child.pid, idleMs, ttlMs, lowPower: this.lowPower });
+      this.killWorker(sessionId);
+    }
   }
 
   getWorker(sessionId: string): ChildProcess | undefined {

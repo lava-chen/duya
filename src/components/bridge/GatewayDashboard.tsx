@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { GearSixIcon } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
+import { usePolling } from "@/hooks/usePolling";
 import { ConnectedChannelList } from "./ConnectedChannelList";
 import { ConnectableChannelList } from "./ConnectableChannelList";
 import { ChannelConnectDialog } from "./ChannelConnectDialog";
@@ -56,11 +57,9 @@ export function GatewayDashboard() {
     void Promise.all([fetchStatus(), fetchSettings(), fetchSessionCount()]);
   }, [fetchStatus, fetchSettings, fetchSessionCount]);
 
-  useEffect(() => {
-    fetchAll();
-    const interval = setInterval(fetchAll, 5000);
-    return () => clearInterval(interval);
-  }, [fetchAll]);
+  // Immediate first tick on mount + 5s refresh (pauses when hidden,
+  // slows down under low-power mode).
+  usePolling(fetchAll, 5000);
 
   // ---- bridge control ----
   const toggleBridge = useCallback(async () => {

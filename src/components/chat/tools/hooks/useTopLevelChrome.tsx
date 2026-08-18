@@ -6,6 +6,7 @@
 
 import React, { useState } from 'react';
 import { useTranslation } from '@/hooks/useTranslation';
+import { usePolling } from '@/hooks/usePolling';
 import type { TranslationKey } from '@/i18n';
 
 export function formatDuration(ms: number): string {
@@ -25,12 +26,12 @@ export const LiveDurationText = React.memo(function LiveDurationText({
 }) {
   const [durationMs, setDurationMs] = useState(() => Math.max(0, Date.now() - startedAt));
 
-  React.useEffect(() => {
-    const tick = () => setDurationMs(Math.max(0, Date.now() - startedAt));
-    tick();
-    const id = window.setInterval(tick, 1000);
-    return () => window.clearInterval(id);
-  }, [startedAt]);
+  // Mounted only while a live run is in progress, so mount/unmount is the
+  // start/stop condition; no extra activeWhen gate needed (plan 426
+  // Phase 4.2).
+  usePolling(() => {
+    setDurationMs(Math.max(0, Date.now() - startedAt));
+  }, 1000);
 
   return <>{formatDuration(durationMs)}</>;
 });

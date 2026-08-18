@@ -1,7 +1,7 @@
 // src/components/layout/panels/registry.ts
 "use client";
 
-import type { ComponentType } from "react";
+import { lazy, type ComponentType } from "react";
 import {
   FolderIcon,
   FileTextIcon,
@@ -13,12 +13,23 @@ import {
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
 import { FileTreePanel } from "./FileTreePanel";
-import { SidebarConductorView } from "./SidebarConductorView";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
-import { OfficePanel } from "./OfficePanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
-import { CodeReviewPanel } from "./CodeReviewPanel";
+
+// Heavy, low-frequency panels are lazy-loaded so their dependencies
+// (conductor canvas engine, diff viewer, office suite) stay out of the
+// entry chunk (plan 426 Phase 5.2). Rendered inside <Suspense> in
+// PanelZone; chunks load from local disk in Electron.
+const SidebarConductorView = lazy(() =>
+  import("./SidebarConductorView").then((m) => ({ default: m.SidebarConductorView }))
+);
+const CodeReviewPanel = lazy(() =>
+  import("./CodeReviewPanel").then((m) => ({ default: m.CodeReviewPanel }))
+);
+const OfficePanel = lazy(() =>
+  import("./OfficePanel").then((m) => ({ default: m.OfficePanel }))
+);
 
 export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office";
 

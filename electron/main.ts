@@ -21,6 +21,7 @@ import { defaultCronFilePath } from './automation/cron-file';
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { subscribeMcpConfigHotReload } from './services/mcp-config';
 import { initPerformanceMonitor } from './services/performance-monitor';
+import { initLowPower, isLowPowerEnabled } from './services/low-power';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
@@ -33,6 +34,12 @@ import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdater
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
 import { initDocumentParser, getDocumentParser } from './services/document-parser/index';
 import { resolveMemoryModel } from './services/providers/memory-model-resolution';
+import {
+  refreshMemoryRagIndex,
+  resolveScanRoots,
+  defaultRagIndexPath,
+} from './memory/rag_index';
+import { createEmbeddingClient } from './memory/rag_embedding_client';
 import { toLegacyApiProvider } from '../src/lib/providers/legacy';
 
 // IPC handlers (extracted from main.ts)
@@ -134,6 +141,21 @@ app.on('second-instance', () => {
   }
 });
 
+/**
+ * Run a non-critical startup task once the main window finished loading
+ * (plan 426 Phase 6.3) so it never competes with first paint. Falls back
+ * to the next macrotask when the renderer already settled —
+ * `did-finish-load` may fire while `await createWindow()` resolves.
+ */
+function runAfterWindowReady(fn: () => void): void {
+  const win = getMainWindow();
+  if (win && !win.isDestroyed() && win.webContents.isLoading()) {
+    win.webContents.once('did-finish-load', fn);
+  } else {
+    setTimeout(fn, 0);
+  }
+}
+
 if (gotTheLock) {
   app.whenReady().then(async () => {
     app.name = 'DUYA';
@@ -225,6 +247,11 @@ if (gotTheLock) {
       // NOTE: agentControl channel removed - Phase 7.1 of plan 53
       // Agent communication now uses HTTP+SSE via Agent Server
     ]);
+
+    // Plan 426 Phase 3: resolve performance.lowPower BEFORE any child
+    // processes spawn — the agent server inherits DUYA_LOW_POWER from
+    // process.env, and main services read isLowPowerEnabled() live.
+    initLowPower();
 
     initPerformanceMonitor();
     initSessionManager();
@@ -322,7 +349,7 @@ if (gotTheLock) {
     if (memoryEnabled) {
       try {
         const { bootstrap } = await import('./memory-state');
-        const { startMemoryWorker } = await import('./memory/memory-worker');
+        const { startMemoryWorker, applyLowPowerOverrides } = await import('./memory/memory-worker');
         const { createAIClientWithRetry } = await import('@duya/ai');
         const { getDatabasePath } = await import('./config/boot-config');
         const { toLLMProvider } = await import('./config/provider-types');
@@ -401,10 +428,69 @@ if (gotTheLock) {
           // flow, 2026-08-09); a git backup is taken before each run.
           const os = await import('os');
           const memoryRoot = path.join(os.homedir(), '.duya', 'memory');
+
+          // RAG index refresh (plan 428): rebuild the retrievable memory
+          // index after each successful curation run. Enabled via
+          // `[memory.rag].enabled`; the embedding client resolves through
+          // the provider framework (falling back to keyword-only when the
+          // provider has no embeddings endpoint).
+          let ragRefresh: ((memoryRoot: string) => Promise<void>) | undefined;
+          try {
+            const ragCfg = getConfigStore().getByPath('memory.rag') as
+              | { enabled?: boolean; index_path?: string; scan_paths?: string[]; embedding_enabled?: boolean; embedding_provider?: string; embedding_model?: string }
+              | undefined;
+            if (ragCfg?.enabled) {
+              const homeDir = os.homedir();
+              const scanPaths = ragCfg.scan_paths ?? [];
+              const dbPath =
+                ragCfg.index_path && ragCfg.index_path.trim() !== ''
+                  ? ragCfg.index_path
+                  : defaultRagIndexPath(homeDir);
+              const embeddingEnabled = ragCfg.embedding_enabled !== false;
+              // Singleton facade — same instance used above for the memory
+              // LLM client.
+              const providerStore = getProviderStore();
+              const embeddingClient = createEmbeddingClient(providerStore, {
+                providerId: ragCfg.embedding_provider || undefined,
+                modelId: ragCfg.embedding_model || undefined,
+              });
+              const memProvider = providerStore.getMemoryLlmProvider();
+              const embeddingLabel = [
+                ragCfg.embedding_provider || memProvider?.id || '',
+                ragCfg.embedding_model || providerStore.getMemoryModel() || '',
+              ]
+                .filter(Boolean)
+                .join('/');
+              ragRefresh = async (root: string): Promise<void> => {
+                const result = await refreshMemoryRagIndex(
+                  resolveScanRoots(root, scanPaths, homeDir),
+                  {
+                    dbPath,
+                    embeddingEnabled,
+                    embeddingClient,
+                    embeddingLabel,
+                  },
+                );
+                logger.info(
+                  'RAG index refreshed',
+                  { documents: result.documents, embedded: result.embedded, scanRoots: result.scanRoots.length },
+                  LogComponent.DB,
+                );
+              };
+            }
+          } catch (ragErr) {
+            logger.warn(
+              'RAG index refresh setup failed; disabled',
+              { error: ragErr instanceof Error ? ragErr.message : String(ragErr) },
+              LogComponent.DB,
+            );
+          }
+
           const curation = curationProviderConfig
             ? {
                 configRoot: path.join(memoryRoot, 'memory-config'),
                 providerConfig: curationProviderConfig,
+                ragRefresh,
               }
             : undefined;
 
@@ -439,7 +525,12 @@ if (gotTheLock) {
               llmClient,
               curation,
             },
-            { instancesPerMinute: 60, concurrency: 2 },
+            // Plan 426 Phase 6.1: low-power mode raises the tick floor to
+            // 5s and throttles catalogSync to 5min.
+            applyLowPowerOverrides(
+              { instancesPerMinute: 60, concurrency: 2 },
+              isLowPowerEnabled(),
+            ),
           );
           logger.info('Memory worker started (shadow mode)', { curation: curation ? 'wired' : 'disabled' }, LogComponent.DB);
         } else {
@@ -475,29 +566,6 @@ if (gotTheLock) {
       }
     } catch (error) {
       logger.error('Failed to auto-start Gateway', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
-    }
-
-    // ============================================================
-    // Step 5: Start Browser Daemon
-    // ============================================================
-    try {
-      const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
-      const normalizedExtensionIds = Array.from(new Set(
-        (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
-          .filter((id) => typeof id === 'string')
-          .map((id) => id.trim())
-          .filter((id) => id.length > 0),
-      ));
-      setAllowedExtensionIds(normalizedExtensionIds);
-      // Seed the daemon with the user-configured max agent browser pages so
-      // both the built-in webview backend and the extension cap applies from
-      // the first command. Falls back to the default when unset.
-      const storedMaxTabs = getJsonSetting<unknown>('browserMaxTabs', DEFAULT_MAX_WEBVIEW_SESSIONS);
-      setBrowserMaxTabs(typeof storedMaxTabs === 'number' ? storedMaxTabs : DEFAULT_MAX_WEBVIEW_SESSIONS);
-      await startBrowserDaemon();
-      attachBrowserDownloadHandler();
-    } catch (error) {
-      logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
     }
 
     // ============================================================
@@ -705,6 +773,51 @@ if (gotTheLock) {
       }
     }
 
+    // ============================================================
+    // Step 7: Deferred non-critical services (plan 426 Phase 6.3)
+    // ============================================================
+    // Browser Daemon and the CLI API server don't block first paint —
+    // start them after the main window finished loading. Error handling
+    // mirrors the pre-move inline blocks (unchanged).
+    runAfterWindowReady(() => {
+      void (async () => {
+        try {
+          const allowedExtensionIds = getJsonSetting<string[]>('browserExtensionAllowedIds', []);
+          const normalizedExtensionIds = Array.from(new Set(
+            (Array.isArray(allowedExtensionIds) ? allowedExtensionIds : [])
+              .filter((id) => typeof id === 'string')
+              .map((id) => id.trim())
+              .filter((id) => id.length > 0),
+          ));
+          setAllowedExtensionIds(normalizedExtensionIds);
+          // Seed the daemon with the user-configured max agent browser pages so
+          // both the built-in webview backend and the extension cap applies from
+          // the first command. Falls back to the default when unset.
+          const storedMaxTabs = getJsonSetting<unknown>('browserMaxTabs', DEFAULT_MAX_WEBVIEW_SESSIONS);
+          setBrowserMaxTabs(typeof storedMaxTabs === 'number' ? storedMaxTabs : DEFAULT_MAX_WEBVIEW_SESSIONS);
+          await startBrowserDaemon();
+          attachBrowserDownloadHandler();
+        } catch (error) {
+          logger.error('Failed to start Browser Daemon', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+        }
+      })();
+
+      void (async () => {
+        try {
+          const { startCliApiServer } = await import('./cli/cli-api-server');
+          const handle = await startCliApiServer();
+          logger.info('CLI API server listening', { port: handle.port, pid: process.pid }, 'Main');
+        } catch (error) {
+          logger.error(
+            'Failed to start CLI API server',
+            error instanceof Error ? error : new Error(String(error)),
+            undefined,
+            'Main',
+          );
+        }
+      })();
+    });
+
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
         createWindow().then(() => {
@@ -758,30 +871,6 @@ registerMemoryListHandlers();
 registerMemorySystemLogHandlers();
 registerMemoryWakeupHandlers();
 registerVoiceHandlers();
-
-// =============================================================================
-// Step 4.6: Start CLI API server (Phase 0 — read-only control plane)
-//
-// Only runs inside the single-instance main process (gotTheLock === true).
-// Placement is intentionally BEFORE marketplace preload / auto-sync so the
-// CLI control plane is never blocked by network catalog fetches. The server
-// depends only on the local PluginManager (lazy singleton + synchronous
-// registry read), so no other init step is required for it to serve requests.
-// =============================================================================
-void (async () => {
-  try {
-    const { startCliApiServer } = await import('./cli/cli-api-server');
-    const handle = await startCliApiServer();
-    logger.info('CLI API server listening', { port: handle.port, pid: process.pid }, 'Main');
-  } catch (error) {
-    logger.error(
-      'Failed to start CLI API server',
-      error instanceof Error ? error : new Error(String(error)),
-      undefined,
-      'Main',
-    );
-  }
-})();
 
 // =============================================================================
 // Graceful Shutdown
