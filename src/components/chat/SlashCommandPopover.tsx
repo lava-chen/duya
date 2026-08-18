@@ -803,29 +803,34 @@ export function SlashCommandPopover({
   if (allDisplayedItems.length === 0 && !subView) return null;
 
   // -----------------------------------------------------------------------
-  // Partition items into groups
+  // Partition items into category groups
   // -----------------------------------------------------------------------
-  // When filtering (typing after /), static settings/mode items are always
-  // shown; only skill/action items are filtered.
+  // `filteredItems` already carries only ONE category's items (set by the
+  // caller from useSlashCommands contextItems / fetchCommandItems). Here we
+  // split each category into its visual sections:
+  //   - @ context (mode 'context')  → Add files + Mode + MCP
+  //   - / commands (mode 'skill')   → Settings + Skills
   const attachmentsGroup = filteredItems.filter(
     (item) => item.group === 'attachments',
   );
   const modeGroup = filteredItems.filter(
-    (item) => item.group === 'mode' || item.kind === 'mode',
+    (item) => item.kind === 'mode',
+  );
+  const mcpGroup = filteredItems.filter(
+    (item) => item.submenu === 'mcp',
   );
   const settingsGroup = filteredItems.filter(
-    (item) =>
-      item.group !== 'attachments'
-      && (item.group === 'settings' || item.kind === 'settings_action' || item.kind === 'settings_submenu'),
+    (item) => item.group === 'settings' && item.submenu !== 'mcp',
   );
   const skillGroup = filteredItems.filter(
-    (item) => item.group === 'skills' && item.kind !== 'settings_action',
+    (item) => item.group === 'skills',
   );
 
-  // Visual order matches allDisplayedItems order: attachments → mode → settings → skills.
-  const attachmentsEnd = attachmentsGroup.length;
-  const modeEnd = attachmentsEnd + modeGroup.length;
-  const settingsEnd = modeEnd + settingsGroup.length;
+  const isContext = popoverMode === 'context';
+  // Cumulative start index for the Mode/MCP sections (after the attachments row).
+  const modeStart = attachmentsGroup.length;
+  const mcpStart = modeStart + modeGroup.length;
+  const settingsEnd = settingsGroup.length;
 
   return (
     <div
@@ -854,11 +859,19 @@ export function SlashCommandPopover({
           renderSubView()
         ) : (
           <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-            {attachmentsGroup.map((item, idx) =>
-              renderRow(item, idx, idx === selectedIndex))}
-            {renderSection('Mode', modeGroup, attachmentsEnd)}
-            {renderSection('Settings', settingsGroup, modeEnd)}
-            {renderSection('Skills', skillGroup, settingsEnd)}
+            {isContext ? (
+              <>
+                {attachmentsGroup.map((item, idx) =>
+                  renderRow(item, idx, idx === selectedIndex))}
+                {renderSection('Mode', modeGroup, modeStart)}
+                {renderSection('MCP', mcpGroup, mcpStart)}
+              </>
+            ) : (
+              <>
+                {renderSection('Settings', settingsGroup, 0)}
+                {renderSection('Skills', skillGroup, settingsEnd)}
+              </>
+            )}
           </div>
         )}
       </div>
