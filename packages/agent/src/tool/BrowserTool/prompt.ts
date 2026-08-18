@@ -60,8 +60,13 @@ function buildStrategySection(networkEnv?: NetworkEnvironment): string {
 - You already know the exact URL (official docs domain, GitHub repo, npm page,
   specific article you've visited before)? → Use \`browser_navigate\` to go
   there directly. Do NOT search for it first.
-- You need to discover where the information lives? → Search. One query,
-  read 2-3 results at most, then stop.
+- You need to discover where the information lives? → Use the \`search\`
+  operation FIRST: \`{"operation": "search", "query": "..."}\`. It deterministically
+  picks the engine for the current network, parses the SERP, and returns a clean
+  structured result list in ONE call. Do NOT manually navigate to a search
+  engine, find the input by ref, and type+submit — that wastes 4-6 rounds.
+  Only fall back to manual search-box interaction when \`search\` itself fails
+  and its nextSteps guidance says so.
 
 **Step 2 — Task budget**
 
@@ -168,6 +173,16 @@ ${strategySection}
 ${interactionGuide}
 
 ### Operations
+
+- **search** - Web search that returns a clean structured result list (preferred way to discover sources)
+  \`\`\`json
+  {"operation": "search", "query": "node better-sqlite3 migration guide", "maxResults": 8, "engine": "auto"}
+  \`\`\`
+  - One call = engine selection + SERP navigation + parsing. Returns \`{results: [{rank, title, url, snippet}]}\`.
+  - \`engine\`: \`auto\` (recommended — deterministic choice from the probed network environment), or explicitly \`google\` / \`bing\` / \`baidu\` / \`duckduckgo\` / \`brave\` / \`yahoo\`.
+  - \`maxResults\`: 1-20, default 8.
+  - Failed engines degrade automatically (google → bing → baidu → duckduckgo → brave → yahoo). If everything fails the result carries \`nextSteps\` — follow them instead of improvising.
+  - To read a result, \`navigate\` to its URL or batch them with \`parallel_fetch\`.
 
 - **navigate** - Load a URL
   \`\`\`json

@@ -18,11 +18,14 @@ import { FallbackBrowser } from './FallbackBrowser.js';
 import { ParallelFetcher } from './ParallelFetcher.js';
 import { BrowserPool } from './BrowserPool.js';
 import { getPrompt } from './prompt.js';
+import { detectNetworkEnvironment } from './networkEnv.js';
 import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
 import { isUrlBlocked, getEffectiveBlockedDomains, type DomainBlockerConfig } from './DomainBlocker.js';
 import { ActionRegistry, SchemaGenerator, getAllActions, type ActionContext } from './actions/index.js';
 import { formatResult } from './ResultFormatter.js';
+import { isRecoverableSessionInvalidation, retryOnceAfterSessionInvalidation } from './selfHealing.js';
 import type { BrowserMode, NetworkEnvironment } from './types.js';
+import { logger } from '../../utils/logger.js';
 
 export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   readonly name = BROWSER_TOOL_NAME;
@@ -118,6 +121,15 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     this.currentSessionId = resolvedSessionId;
     const config = this.config ?? DEFAULT_BROWSER_CONFIG;
 
+    // Kick off the network-environment probe once (fire-and-forget, cached
+    // process-wide). The result feeds the `search` engine chain and the
+    // prompt's engine guidance; never block the browser connection on it.
+    if (this.networkEnvironment === undefined) {
+      detectNetworkEnvironment()
+        .then(env => this.setNetworkEnvironment(env))
+        .catch(() => {});
+    }
+
     // Probe extension health (with timeout). Skipped entirely in built-in mode.
     // human-like mode probes too: when the extension is online it wraps the
     // user's real Chrome with human-like input instead of the sidebar webview.
@@ -195,6 +207,8 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
       mode: this.mode,
       browserBackendMode: this.config?.mode ?? 'auto',
       extensionAvailable: this.extensionAvailable,
+      networkEnvironment: this.networkEnvironment,
+      setNetworkEnvironment: (env) => this.setNetworkEnvironment(env),
       platformHookManager: this.platformHookManager,
       checkDomainBlocked: (url: string) =>
         isUrlBlocked(url, getEffectiveBlockedDomains(this.domainBlockerConfig)),
@@ -217,15 +231,34 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     try {
       const sessionId = context?.options?.sessionId;
       await this.ensureConnection(sessionId);
-      const ctx = this.buildContext(sessionId);
       console.log('[BrowserTool.execute] built context, about to execute:', operation);
-      const result = await this.actionRegistry.execute(operation, input, ctx);
+
+      // Rebuild a fresh ActionContext on every attempt so a self-heal rebuild
+      // (which swaps `this.cdp`) is reflected in the retry.
+      const runOnce = () => {
+        const ctx = this.buildContext(sessionId);
+        return this.actionRegistry.execute(operation, input, ctx);
+      };
+
+      const result = await retryOnceAfterSessionInvalidation(runOnce, {
+        isRecoverable: isRecoverableSessionInvalidation,
+        rebuild: async () => {
+          logger.warn(
+            `[BrowserTool] Session handle invalidated for operation "${operation}"; rebuilding browser session and retrying once.`,
+            undefined,
+            'BrowserTool'
+          );
+          this.resetConnection();
+          await this.ensureConnection(sessionId);
+        },
+        alwaysSurfaceFailureMessage: true,
+      });
       const resultPayload = { operation, mode: this.mode, ...result };
 
-      // For parallel_fetch, preserve a structured result list so the UI can
-      // render a search-result card without having to parse markdown.
+      // For parallel_fetch and search, preserve a structured result list so
+      // the UI can render a search-result card without parsing markdown.
       const metadata: ToolResult['metadata'] | undefined =
-        operation === 'parallel_fetch' && Array.isArray(result.results)
+        (operation === 'parallel_fetch' || operation === 'search') && Array.isArray(result.results)
           ? {
               browserResults: result.results.map((item: Record<string, unknown>) => ({
                 url: String(item.url ?? ''),
