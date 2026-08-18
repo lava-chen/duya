@@ -32,7 +32,18 @@ export type PlatformContentType =
   | 'wechat-article'
   | 'google-search'
   | 'arxiv'
-  | 'article';
+  | 'wikipedia'
+  | 'hacker-news'
+  | 'pubmed'
+  | 'article'
+  | 'weibo'
+  | 'instagram'
+  | 'tiktok'
+  | 'rednote'
+  | 'xianyu'
+  | 'jd'
+  | 'taobao'
+  | 'ali1688';
 
 /**
  * Result from a platform extractor

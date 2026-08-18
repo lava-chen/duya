@@ -6,6 +6,7 @@
 import { BaseExtractor } from '../BaseExtractor.js';
 import type { ICDPClient } from '../../CDPClient.js';
 import type { PlatformContent, RedditPost, RedditComment, ExtractionOptions } from '../types.js';
+import { publicFetchJson } from '../_shared/public-api.js';
 
 // Reddit API endpoint for comments
 const REDDIT_COMMENTS_API = 'https://www.reddit.com';
@@ -47,6 +48,45 @@ interface RedditResult {
   detail?: string;
 }
 
+interface ListingItemData {
+  title?: string;
+  author?: string;
+  subreddit?: string;
+  subreddit_name_prefixed?: string;
+  score?: number;
+  num_comments?: number;
+  permalink?: string;
+  selftext?: string;
+}
+
+interface RedditListingResponse {
+  kind: string;
+  data?: {
+    children?: Array<{
+      kind: string;
+      data?: ListingItemData;
+    }>;
+  };
+}
+
+interface ListingItem {
+  title: string;
+  permalink: string;
+  author: string;
+  subreddit: string;
+  subredditPrefixed: string;
+  score: number;
+  numComments: number;
+  selftext: string;
+}
+
+interface RedditSearchParams {
+  query: string;
+  sort: string;
+  time: string;
+  subreddit: string | null;
+}
+
 export class RedditExtractor extends BaseExtractor {
   name = 'reddit';
 
@@ -64,7 +104,19 @@ export class RedditExtractor extends BaseExtractor {
       return this.error('reddit-post', 'Invalid URL');
     }
 
-    // Extract post ID from URL
+    // Search results page: /search/?q=... or /r/<sub>/search/?q=...
+    const search = this.extractSearchParams(parsed);
+    if (search) {
+      return this.extractSearch(cdp, search, options);
+    }
+
+    // Subreddit listing: /r/<name>[/hot|new|top]
+    const listing = this.matchListing(parsed.pathname);
+    if (listing) {
+      return this.extractListing(cdp, listing.subreddit, listing.sort, options);
+    }
+
+    // Single post / comments (existing behavior)
     const postId = this.extractPostId(parsed.pathname);
     if (!postId) {
       return this.error('reddit-post', 'Could not extract Reddit post ID from URL');
@@ -228,6 +280,171 @@ export class RedditExtractor extends BaseExtractor {
         detail: `Evaluation error: ${e instanceof Error ? e.message : String(e)}`,
       };
     }
+  }
+
+  /**
+   * Detect whether the path is a subreddit listing: /r/<name> or /r/<name>[/hot|new|top]
+   */
+  private matchListing(pathname: string): { subreddit: string; sort: string } | null {
+    const m = pathname.match(/^\/r\/([^/]+)(?:\/(hot|new|top|rising|controversial))?\/?$/);
+    if (!m) return null;
+    return { subreddit: m[1], sort: m[2] || 'hot' };
+  }
+
+  /**
+   * Detect whether the URL is a Reddit search results page with a q= query.
+   */
+  private extractSearchParams(parsed: URL): RedditSearchParams | null {
+    const q = parsed.searchParams.get('q');
+    if (!q) return null;
+    const pathname = parsed.pathname;
+    let subreddit: string | null = null;
+    if (!/^\/search\/?$/.test(pathname)) {
+      const m = pathname.match(/^\/r\/([^/]+)\/search\/?$/);
+      if (!m) return null;
+      subreddit = m[1];
+    }
+    return {
+      query: q,
+      sort: parsed.searchParams.get('sort') || 'relevance',
+      time: parsed.searchParams.get('t') || 'all',
+      subreddit,
+    };
+  }
+
+  private async extractListing(
+    cdp: ICDPClient,
+    subreddit: string,
+    sort: string,
+    options?: ExtractionOptions
+  ): Promise<PlatformContent> {
+    const jsonUrl = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/${sort}.json?limit=25&raw_json=1`;
+    return this.fetchListing(cdp, jsonUrl, options);
+  }
+
+  private async extractSearch(
+    cdp: ICDPClient,
+    search: RedditSearchParams,
+    options?: ExtractionOptions
+  ): Promise<PlatformContent> {
+    const subPath = search.subreddit ? `/r/${encodeURIComponent(search.subreddit)}` : '';
+    const q = encodeURIComponent(search.query);
+    const jsonUrl =
+      `https://www.reddit.com${subPath}/search.json` +
+      `?q=${q}&sort=${search.sort}&t=${search.time}` +
+      `&restrict_sr=${search.subreddit ? 'on' : 'off'}&limit=25&raw_json=1`;
+    return this.fetchListing(cdp, jsonUrl, options);
+  }
+
+  /**
+   * Fetch a listing/search page. Prefers the public `.json` endpoint via Node-side
+   * fetch; falls back to DOM extraction from the live page, else returns an error.
+   */
+  private async fetchListing(
+    cdp: ICDPClient,
+    jsonUrl: string,
+    options?: ExtractionOptions
+  ): Promise<PlatformContent> {
+    const json = await publicFetchJson<RedditListingResponse>(jsonUrl);
+
+    if (json.ok && json.data) {
+      const rawChildren = json.data.data?.children ?? [];
+      const items: ListingItem[] = [];
+      for (const c of rawChildren) {
+        if (c.kind !== 't3' || !c.data?.title) continue;
+        items.push({
+          title: c.data.title,
+          permalink: c.data.permalink || '',
+          author: c.data.author || '[deleted]',
+          subreddit: c.data.subreddit || '',
+          subredditPrefixed: c.data.subreddit_name_prefixed || '',
+          score: c.data.score ?? 0,
+          numComments: c.data.num_comments ?? 0,
+          selftext: c.data.selftext || '',
+        });
+      }
+
+      if (items.length > 0) {
+        return this.success('reddit-post', this.formatListing(items, options));
+      }
+    }
+
+    // Fallback: extract from the live DOM.
+    const domItems = await this.extractListingFromDom(cdp);
+    if (domItems.length > 0) {
+      return this.success('reddit-post', this.formatListing(domItems, options));
+    }
+
+    const reason = !json.ok
+      ? `JSON fetch failed (HTTP ${json.status}${json.error ? `: ${json.error}` : ''})`
+      : 'JSON fetch returned no posts';
+    return this.error('reddit-post', `Could not extract Reddit listing. ${reason}.`);
+  }
+
+  /**
+   * Fallback DOM extraction of a Reddit listing page (shreddit-post / article nodes).
+   */
+  private async extractListingFromDom(cdp: ICDPClient): Promise<ListingItem[]> {
+    const script = `(() => {
+      const items = [];
+      const posts = document.querySelectorAll(
+        'shreddit-post, article[data-post-id], article[data-testid="post-container"]'
+      );
+      for (const p of posts) {
+        const titleEl = p.querySelector('a[data-testid="post-title"], a[href*="/comments/"]');
+        const title = (titleEl?.textContent || p.getAttribute('post-title') || '').trim();
+        const permalink = titleEl?.getAttribute('href') || p.getAttribute('content-href') || '';
+        if (!title && !permalink) continue;
+        const scoreEl = p.querySelector('shreddit-post-score, [data-testid="post-score"]');
+        const score =
+          parseInt((scoreEl?.getAttribute('score') || scoreEl?.textContent || '0').replace(/[^\\d-]/g, ''), 10) || 0;
+        items.push({
+          title,
+          permalink,
+          author: p.getAttribute('author') || '',
+          subreddit: p.getAttribute('subreddit') || '',
+          subredditPrefixed: p.getAttribute('subreddit-prefixed-name') || '',
+          score,
+          numComments: 0,
+          selftext: ''
+        });
+      }
+      return items;
+    })()`;
+
+    try {
+      const result = await cdp.evaluate(script);
+      if (Array.isArray(result)) {
+        return result as ListingItem[];
+      }
+    } catch {
+      // Ignore DOM extraction failures.
+    }
+    return [];
+  }
+
+  private formatListing(items: ListingItem[], options?: ExtractionOptions): string {
+    const maxLength = options?.maxLength ?? 15000;
+    const lines: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const sub = it.subredditPrefixed
+        ? it.subredditPrefixed.replace(/^\/+/, '')
+        : it.subreddit
+          ? `r/${it.subreddit}`
+          : '';
+      lines.push(`${i + 1}. **${this.escapeMarkdown(it.title)}**`);
+      lines.push(`   ${sub} • u/${it.author} • ${this.formatScore(it.score)} pts • ${it.numComments} comments`);
+      if (it.permalink) {
+        lines.push(`   <https://www.reddit.com${it.permalink}>`);
+      }
+      lines.push('');
+    }
+    let text = lines.join('\n').trim();
+    if (text.length > maxLength) {
+      text = this.truncate(text, maxLength) + '\n\n*[Content truncated]*';
+    }
+    return text;
   }
 
   private formatAsMarkdown(post: RedditPost, comments: RedditComment[], options?: ExtractionOptions): string {
