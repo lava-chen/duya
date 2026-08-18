@@ -11,6 +11,12 @@ import Google from "@lobehub/icons/es/Google";
 import Volcengine from "@lobehub/icons/es/Volcengine";
 import Bailian from "@lobehub/icons/es/Bailian";
 import Ollama from "@lobehub/icons/es/Ollama";
+import DeepSeek from "@lobehub/icons/es/DeepSeek";
+import Stepfun from "@lobehub/icons/es/Stepfun";
+import XAI from "@lobehub/icons/es/XAI";
+import Arcee from "@lobehub/icons/es/Arcee";
+import OpenAI from "@lobehub/icons/es/OpenAI";
+import Qwen from "@lobehub/icons/es/Qwen";
 import { GlobeIcon, ServerIcon } from "@/components/icons";
 
 interface PresetIconProps {
@@ -44,6 +50,18 @@ export function PresetIcon({ iconKey, size = 18 }: PresetIconProps) {
       return <Bailian {...iconProps} />;
     case "ollama":
       return <Ollama {...iconProps} />;
+    case "deepseek":
+      return <DeepSeek {...iconProps} />;
+    case "stepfun":
+      return <Stepfun {...iconProps} />;
+    case "xai":
+      return <XAI {...iconProps} />;
+    case "arcee":
+      return <Arcee {...iconProps} />;
+    case "openai":
+      return <OpenAI {...iconProps} />;
+    case "qwen":
+      return <Qwen {...iconProps} />;
     case "server":
       return <ServerIcon size={size} className="text-muted-foreground" />;
     default:

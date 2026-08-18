@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useConversationStore } from '@/stores/conversation-store';
 import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useSettings } from '@/hooks/useSettings';
 import { MessageInput } from './MessageInput';
 import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
 import { listCustomAgents } from '@/lib/agent-profile-ipc';
@@ -37,6 +38,7 @@ interface NewChatViewProps {
 
 export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const { t } = useTranslation();
+  const { settings, save: saveSettings } = useSettings();
   const {
     projects,
     isHydrated,
@@ -56,6 +58,20 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+  // Remember the last-used thinking effort so it carries over to new sessions.
+  const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
+
+  // Sync effort from settings when they load for the first time.
+  useEffect(() => {
+    setEffortState(settings.defaultThinkingEffort ?? undefined);
+  }, [settings.defaultThinkingEffort]);
+
+  const setEffort = useCallback((newEffort: string | undefined) => {
+    setEffortState(newEffort);
+    if (newEffort !== settings.defaultThinkingEffort) {
+      saveSettings({ defaultThinkingEffort: newEffort ?? null }).catch(console.error);
+    }
+  }, [saveSettings, settings.defaultThinkingEffort]);
 
   // Refs to always read the latest values inside stable callbacks.
   const sessionModelRef = useRef(sessionModel);
@@ -322,7 +338,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, agentProfileId, outputStyleConfig);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, undefined, effort);
           });
         });
       } catch (error) {
@@ -331,7 +347,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId, effort],
   );
 
   return (
@@ -353,6 +369,8 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
+              effort={effort}
+              onEffortChange={setEffort}
               placeholder={t('chat.describeWhatToBuild')}
               popoverPlacement="bottom"
               draftMode
