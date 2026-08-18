@@ -8,7 +8,7 @@ import {
   renderRolloutSummaryFile,
   type Stage1OutputRow,
 } from '../projectionContent';
-import { reconcileProjections } from '../reconcile';
+import { reconcileProjections, purgeDegradedOutputs } from '../reconcile';
 import {
   createMemoryStateFixture,
   insertStage1Output,
@@ -307,5 +307,44 @@ describe('reconcileProjections (D12)', () => {
     expect(
       deriveRolloutSummaryFilename({ rollout_id: ID_A, rollout_slug: 'ab', generated_at: T0 })
     ).toContain('-rollout.md');
+  });
+});
+
+describe('purgeDegradedOutputs', () => {
+  let env: MemoryStateFixture;
+  beforeEach(() => { env = createMemoryStateFixture(); });
+  afterEach(() => { env.cleanup(); });
+
+  it('deletes tolerant-fallback shells and reports their rollout_ids', () => {
+    // Healthy extraction (descriptive slug) — must NOT be touched.
+    const healthyId = insertStage1Output(env.db, { rollout_slug: 'china-news-brief' });
+    // Tolerant-fallback shells (hard-coded 'memory-items') — must be purged.
+    const degradedId1 = insertStage1Output(env.db, {
+      job_status: 'succeeded',
+      content_outcome: 'uncertain',
+      rollout_slug: 'memory-items',
+    });
+    const degradedId2 = insertStage1Output(env.db, {
+      job_status: 'succeeded',
+      content_outcome: 'uncertain',
+      rollout_slug: 'memory-items',
+    });
+
+    const result = purgeDegradedOutputs(env.db);
+
+    expect(result.purgedRows).toBe(2);
+    expect(result.rolloutIds.sort()).toEqual([degradedId1, degradedId2].sort());
+    expect(getStage1Row(env.db, healthyId)).toBeDefined();
+    expect(getStage1Row(env.db, degradedId1)).toBeUndefined();
+    expect(getStage1Row(env.db, degradedId2)).toBeUndefined();
+  });
+
+  it('is a no-op when no degraded rows exist', () => {
+    insertStage1Output(env.db, { rollout_slug: 'normal-slug' });
+
+    const result = purgeDegradedOutputs(env.db);
+
+    expect(result.purgedRows).toBe(0);
+    expect(result.rolloutIds).toEqual([]);
   });
 });

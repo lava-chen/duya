@@ -35,21 +35,19 @@ describe('refreshProjections', () => {
     expect(touched).toEqual([]);
   });
 
-  it('2. writes MEMORY.md + summary.md + 2 index.md when area+person exist', async () => {
+  it('2. writes MEMORY.md + 2 index.md when area+person exist', async () => {
     writeArea(root, 'foo', '# Foo\n\nfoo body');
     writePerson(root, 'alice', '# Alice\n\nalice bio');
 
     const touched = await refreshProjections(root);
-    expect(touched).toHaveLength(4); // MEMORY.md, summary.md, areas/index.md, people/index.md
+    expect(touched).toHaveLength(3); // MEMORY.md, areas/index.md, people/index.md
 
     const memory = readUtf8(path.join(root, 'MEMORY.md'));
     expect(memory).toContain('**area:foo**');
     expect(memory).toContain('**person:alice**');
 
-    const summary = readUtf8(path.join(root, 'summary.md'));
-    expect(summary).toContain('Memory Summary');
-    expect(summary).toMatch(/\[area\]/);
-    expect(summary).toMatch(/\[person\]/);
+    // summary.md is now Phase-3 owned; it is NOT written by refreshProjections.
+    expect(fs.existsSync(path.join(root, 'summary.md'))).toBe(false);
 
     const areaIndex = readUtf8(path.join(root, 'global/areas/index.md'));
     expect(areaIndex).toContain('# Areas Index');
@@ -63,7 +61,7 @@ describe('refreshProjections', () => {
   it('3. only area → only areas/index.md is written (people/ missing)', async () => {
     writeArea(root, 'only-area', '# Only\n\nonly body');
     const touched = await refreshProjections(root);
-    expect(touched).toHaveLength(3); // MEMORY.md, summary.md, areas/index.md
+    expect(touched).toHaveLength(2); // MEMORY.md, areas/index.md — summary.md is Phase-3 owned
     expect(fs.existsSync(path.join(root, 'global/people/index.md'))).toBe(false);
   });
 

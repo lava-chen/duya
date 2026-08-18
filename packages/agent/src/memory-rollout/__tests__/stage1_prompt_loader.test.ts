@@ -60,6 +60,46 @@ describe('STAGE1_HARD_CONTRACT', () => {
     expect(STAGE1_HARD_CONTRACT).toContain('NEVER');
     expect(STAGE1_HARD_CONTRACT).toContain('API keys');
   });
+
+  // Regression guard for the 2026-08-13 incident: when a non-empty policy
+  // exists the assembled prompt replaces the full STAGE1_SYSTEM_PROMPT, so
+  // the hard contract alone must carry the complete JSON envelope schema.
+  // Without it the LLM emits a bare {"items":[...]} and every extraction
+  // degrades to the 'memory-items' tolerant fallback.
+  it('carries the full JSON envelope schema regardless of policy content', () => {
+    // Policy shaped like the real adaptive-loop output: dimension guidance
+    // only, NO output-format/schema section (that is the failure mode).
+    const policyWithoutSchema = [
+      '## Extraction focus',
+      '### 1. Project & environment topology',
+      '- Capture project paths verbatim.',
+      '### 8. Preferences & corrections',
+      '- ALWAYS extract explicit "always/never/prefer" statements.',
+    ].join('\n');
+    const assembled = assembleStage1Prompt(policyWithoutSchema);
+
+    const envelopeFields = [
+      'job_status',
+      'content_outcome',
+      'rollout_summary',
+      'rollout_slug',
+      'raw_memory',
+    ];
+    for (const field of envelopeFields) {
+      expect(assembled).toContain(`"${field}"`);
+    }
+    // Item-level field schema must also survive policy assembly.
+    for (const itemField of ['canonical_key', 'confidence', 'why_future_agent_needs_this']) {
+      expect(assembled).toContain(`"${itemField}"`);
+    }
+    // The envelope must be declared mandatory — a bare items object invalid.
+    expect(assembled).toContain('bare {"items":[...]}');
+    // rollout_summary Markdown structure guidance must be present.
+    expect(assembled).toContain('Rollout context:');
+    expect(assembled).toContain('## State Delta');
+    // Slug rules must be present so filenames are descriptive again.
+    expect(assembled).toContain('[a-z0-9-]{3,80}');
+  });
 });
 
 describe('loadPolicy', () => {

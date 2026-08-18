@@ -41,7 +41,10 @@ import {
   DEFAULT_WINDOW_MS,
 } from '../../packages/agent/src/memory-state/eligibility.js';
 import { drainOutbox } from '../../packages/agent/src/memory-state/outbox.js';
-import { reconcileProjections } from '../../packages/agent/src/memory-state/reconcile.js';
+import {
+  reconcileProjections,
+  purgeDegradedOutputs,
+} from '../../packages/agent/src/memory-state/reconcile.js';
 import { queryEligibleInputs } from '../../packages/agent/src/memory-state/curation_ledger.js';
 import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log.js';
 import { syncAllFromMainDb } from '../memory-state/catalogSync';
@@ -104,6 +107,11 @@ export interface CurationWorkerDeps {
   configRoot: string;
   /** LLM provider config forwarded to the curator agent process. */
   providerConfig: ProviderConfig;
+  /**
+   * Post-curation RAG index refresh (plan 428). Invoked with the memory
+   * root after every successful `runCurationCycle`; best-effort.
+   */
+  ragRefresh?: (memoryRoot: string) => Promise<void>;
 }
 
 export interface MemoryWorkerConfig {
@@ -214,6 +222,41 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
   projectCooldownMs: 10 * 60_000, // 10 min — suppress sibling extraction floods
   curationTimeoutMs: 4 * 60_000, // 4 min — single-shot curator chat() budget
 };
+
+// ---------------------------------------------------------------------------
+// Low-power overrides (plan 426 Phase 6.1)
+// ---------------------------------------------------------------------------
+
+/** Low-power tick floor: 5s between extraction ticks (vs 1s default). */
+export const LOW_POWER_MIN_TICK_MS = 5_000;
+/** Low-power catalogSync throttle (vs 60s default). */
+export const LOW_POWER_CATALOG_SYNC_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Apply low-power overrides to caller-provided worker config (plan 426
+ * Phase 6.1). `instancesPerMinute` is capped so the effective tick
+ * interval floors at LOW_POWER_MIN_TICK_MS, and `catalogSyncIntervalMs`
+ * is throttled to at least LOW_POWER_CATALOG_SYNC_INTERVAL_MS. Pure —
+ * callers pass the resolved lowPower flag (see services/low-power.ts).
+ */
+export function applyLowPowerOverrides(
+  cfg: Partial<MemoryWorkerConfig>,
+  lowPower: boolean,
+): Partial<MemoryWorkerConfig> {
+  if (!lowPower) return cfg;
+  const base = { ...DEFAULT_WORKER_CONFIG, ...cfg };
+  return {
+    ...cfg,
+    instancesPerMinute: Math.min(
+      base.instancesPerMinute,
+      Math.floor(60_000 / LOW_POWER_MIN_TICK_MS),
+    ),
+    catalogSyncIntervalMs: Math.max(
+      base.catalogSyncIntervalMs,
+      LOW_POWER_CATALOG_SYNC_INTERVAL_MS,
+    ),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Phase 2 curation switch + Hybrid scheduler (Plan 406, design §9.1)
@@ -428,6 +471,7 @@ function createWorker(
           sessionId: `curation-${state.workerId}`,
           llmClient: deps.llmClient,
           curationTimeoutMs: cfg.curationTimeoutMs,
+          ragRefresh: curation.ragRefresh,
         }),
         // Outer cycle deadline must exceed the LLM call budget (cfg.curationTimeoutMs)
         // plus the file-apply + projection-drain overhead. The single-shot
@@ -483,11 +527,24 @@ function createWorker(
     ) {
       state.reconciledThisInstance = true;
       try {
+        // Self-healing: drop tolerant-fallback shells (rollout_slug=
+        // 'memory-items', no narrative) so those rollouts become eligible
+        // again and their empty files are cleaned up as orphans below.
+        let purged = 0;
+        try {
+          purged = purgeDegradedOutputs(memoryDb).purgedRows;
+        } catch (err) {
+          logger.warn(
+            'MemoryWorkerPurgeDegraded failed',
+            { error: err instanceof Error ? err.message : String(err) },
+            LogComponent.DB,
+          );
+        }
         const r = reconcileProjections(memoryDb, { rootDir, dryRun: false, now });
         reconciled = { written: r.written.length, removed: r.removed.length, mismatched: r.mismatched.length };
         logger.warn(
           'MemoryWorkerReconcile',
-          { written: reconciled.written, removed: reconciled.removed, mismatched: reconciled.mismatched, durationMs: r.durationMs },
+          { purgedDegraded: purged, written: reconciled.written, removed: reconciled.removed, mismatched: reconciled.mismatched, durationMs: r.durationMs },
           LogComponent.DB,
         );
       } catch (err) {

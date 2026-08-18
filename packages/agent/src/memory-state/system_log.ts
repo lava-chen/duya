@@ -26,7 +26,7 @@ import * as path from 'path';
  * so packages/agent can use it without importing the Electron DB singleton.
  */
 
-export type MemoryLogPhase = 'phase1' | 'phase2' | 'system';
+export type MemoryLogPhase = 'phase1' | 'phase2' | 'phase3' | 'system';
 export type MemoryLogLevel = 'info' | 'warn' | 'error';
 
 export interface MemoryLogEntry {
@@ -53,9 +53,26 @@ export interface WriteSystemLogInput {
   ts?: number;
 }
 
+/**
+ * Env var overriding the default system-log root (`~/.duya`). Set by the
+ * vitest setup to a temp dir so tests exercising real pipeline code (e.g.
+ * `runCurationCycle`) can never append fake events to the production log —
+ * the 2026-08-13/14 production JSONL was polluted by 125 fake `run-1`-style
+ * entries this way.
+ */
+const LOG_ROOT_ENV = 'DUYA_MEMORY_LOG_ROOT';
+
+function defaultLogRoot(): string {
+  const envRoot = process.env[LOG_ROOT_ENV];
+  if (envRoot && envRoot.trim().length > 0) {
+    return envRoot.trim();
+  }
+  return path.join(os.homedir(), '.duya');
+}
+
 /** Resolve the daily JSONL path for a given timestamp (ms). */
 export function systemLogPathFor(ts: number, rootDir?: string): string {
-  const root = rootDir ?? path.join(os.homedir(), '.duya');
+  const root = rootDir ?? defaultLogRoot();
   const d = new Date(ts);
   const pad = (n: number) => String(n).padStart(2, '0');
   return path.join(
@@ -120,7 +137,7 @@ export interface ListSystemLogResult {
  */
 export function listSystemLog(opts?: ListSystemLogOpts, rootDir?: string): ListSystemLogResult {
   const limit = opts?.limit ?? 200;
-  const root = rootDir ?? path.join(os.homedir(), '.duya');
+  const root = rootDir ?? defaultLogRoot();
   const base = path.join(root, 'memory-system-log');
   if (!fs.existsSync(base)) {
     return { entries: [], total: 0 };

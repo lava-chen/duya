@@ -50,6 +50,14 @@ export interface CurationInputForPrompt {
   contentHash: string;
   outputUpdatedAt: number;
   rolloutSlug?: string;
+  /**
+   * Rollout summary Markdown from `stage1_outputs` (DB is the source of
+   * truth). The `rollout_summaries/` files are D11-named projections
+   * (`<ts>-<shortid>-<slug>.md`); resolving them by `inputKey` (a UUID)
+   * always misses, which made every curation input read as
+   * "summary file missing" and starved Phase 2 of all content.
+   */
+  summaryMarkdown?: string;
 }
 
 export interface SingleShotCurationOpts {
@@ -372,8 +380,10 @@ two or three more cycles.
 
 /**
  * Assemble the user prompt: list of input rollouts + existing area
- * content. Each input's `inputKey` is a rollout_id and we resolve it
- * to the on-disk `rollout_summaries/<id8>-<slug>.md` file.
+ * content. Rollout bodies come from `input.summaryMarkdown` (read
+ * from `stage1_outputs` by the caller) — the DB is the source of
+ * truth; the `rollout_summaries/` files are D11-named projections and
+ * must not be resolved by `inputKey` here.
  *
  * The existing area map is keyed by `rollout_slug` so the curator only
  * sees areas that the current batch actually targets.
@@ -382,18 +392,12 @@ async function assembleUserPrompt(
   memoryRoot: string,
   inputs: ReadonlyArray<CurationInputForPrompt>,
 ): Promise<string> {
-  const rolloutSummariesDir = path.join(memoryRoot, 'rollout_summaries');
-
   const rolloutBlock = await Promise.all(
     inputs.map(async (input) => {
-      const filePath = path.join(rolloutSummariesDir, `${input.inputKey}.md`);
-      let body = '';
-      try {
-        body = await fs.readFile(filePath, 'utf8');
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        body = `<!-- summary file missing: ${filePath} -->`;
-      }
+      const body =
+        input.summaryMarkdown && input.summaryMarkdown.trim().length > 0
+          ? input.summaryMarkdown
+          : `<!-- empty stage1 summary for ${input.inputKey} (job_status=succeeded but no body) -->`;
       // Cap each summary to 12 KiB so a runaway rollout can't blow the prompt
       // (real summaries are 2-8 KiB; the cap is only a safety net).
       const capped = body.length > 12_000 ? body.slice(0, 12_000) + '\n...[truncated]...' : body;
@@ -489,7 +493,7 @@ async function assembleUserPrompt(
  * HTTP connection on abort (rather than leaving the request hanging
  * after the timeout fires).
  */
-async function chatWithTimeout(
+export async function chatWithTimeout(
   llmClient: AIClient,
   messages: Parameters<AIClient['chat']>[0],
   chatOptions: Parameters<AIClient['chat']>[1],
@@ -595,8 +599,21 @@ export async function runSingleShotCuration(
       // dimension, write the new policy (atomic + version bump). The
       // extractor reloads it on mtime change, so the very next extraction
       // uses the richer focus.
+      //
+      // Guard: when EVERY input in this batch has an empty body, the
+      // curator saw no real content and its policy "diagnosis" is a
+      // hallucination (historically: it blamed Stage 1 for files it
+      // could not read and churned the policy every run). Skip the
+      // write in that case.
       const suggestion = response.stage1_policy;
-      if (suggestion?.op === 'update' && opts.policyPath && suggestion.content) {
+      const hasAnyBody = opts.inputs.some(
+        (i) => (i.summaryMarkdown ?? '').trim().length > 0,
+      );
+      if (suggestion?.op === 'update' && !hasAnyBody) {
+        console.warn(
+          '[memory] stage1_policy update skipped: all inputs in this batch have empty summaries',
+        );
+      } else if (suggestion?.op === 'update' && opts.policyPath && suggestion.content) {
         try {
           const res = await writePolicy(opts.policyPath, suggestion.content);
           policyUpdated = res.changed;

@@ -42,6 +42,28 @@ describe('memory-system-log', () => {
     expect(parsed.level).toBe('info');
   });
 
+  // Test-isolation guard: the default root (no explicit rootDir) must honor
+  // DUYA_MEMORY_LOG_ROOT so pipeline tests never append to the production
+  // ~/.duya/memory-system-log (2026-08-13/14 pollution incident).
+  it('honors DUYA_MEMORY_LOG_ROOT for the default root', () => {
+    const prev = process.env.DUYA_MEMORY_LOG_ROOT;
+    const ts = Date.UTC(2026, 7, 13, 12, 0, 0);
+    try {
+      process.env.DUYA_MEMORY_LOG_ROOT = tmpRoot;
+
+      const defaultPath = systemLogPathFor(ts);
+      expect(defaultPath.startsWith(tmpRoot)).toBe(true);
+
+      writeSystemLog({ phase: 'phase1', eventType: 'env-guard', message: 'routed', ts });
+      expect(fs.existsSync(path.join(tmpRoot, 'memory-system-log', '2026', '08', '13.jsonl'))).toBe(
+        true
+      );
+    } finally {
+      if (prev === undefined) delete process.env.DUYA_MEMORY_LOG_ROOT;
+      else process.env.DUYA_MEMORY_LOG_ROOT = prev;
+    }
+  });
+
   it('appends to the same daily file for multiple events', () => {
     const ts = Date.UTC(2026, 7, 13, 10, 0, 0);
     writeSystemLog({ phase: 'phase1', eventType: 'event1', message: 'first', ts }, tmpRoot);

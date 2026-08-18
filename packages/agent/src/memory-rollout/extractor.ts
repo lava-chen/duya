@@ -764,11 +764,11 @@ export class Stage1Extractor {
     const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
 
     const policy = await this.resolvePolicy();
-    // When no policy file is configured the hard contract alone omits the item
-    // schema (claim/confidence/status) and the JSON envelope the validator
-    // requires, so every extraction fails schema-violation. Fall back to the
-    // complete schema-bearing prompt so durable items are produced; a non-empty
-    // policy still overrides via the hard-contract + policy assembly.
+    // The hard contract carries the full envelope + item schema (see
+    // STAGE1_HARD_CONTRACT), so a non-empty policy yields a self-sufficient
+    // prompt. With no policy file at all we still prefer the complete
+    // STAGE1_SYSTEM_PROMPT: it adds long-form guidance (lifecycle fields,
+    // cross-session key reuse, examples) beyond the contract's minimum.
     const systemPrompt =
       policy.content.trim().length > 0
         ? assembleStage1Prompt(policy.content)
