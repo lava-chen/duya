@@ -40,6 +40,17 @@ export class WorkerManager {
   private keepAliveSessions = new Set<string>();
   private idleReaperTimer: ReturnType<typeof setInterval> | null = null;
   private readonly lowPower = isLowPowerEnv();
+  // In-flight background sub-agent count per worker process (reported by the
+  // agent process via `background_tasks:update`). While the session total is
+  // > 0 the session's worker is exempt from idle reaping and its replacement
+  // is deferred, because the sub-agents execute inside that worker process.
+  private backgroundInFlightByWorker = new Map<ChildProcess, number>();
+  // Old workers kept alive solely to drain in-flight background sub-agents
+  // after a new chat replaced them. Killed when the count hits 0 or the
+  // deadline passes.
+  private drainingWorkers = new Map<string, { child: ChildProcess; deadline: number }>();
+  /** Hard cap for a draining worker that never settles (60 min). */
+  private static readonly DRAIN_MAX_MS = 60 * 60 * 1000;
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
@@ -103,9 +114,15 @@ export class WorkerManager {
       });
     }
 
-    // Now kill the old worker if it existed
+    // Now handle the old worker: background sub-agents run inside it, so a
+    // replacement must not kill them mid-run. Defer the kill until the agent
+    // reports zero in-flight tasks (or the drain deadline expires).
     if (oldChild) {
-      this.killWorkerImpl(sessionId, oldChild);
+      if ((this.backgroundInFlightByWorker.get(oldChild) ?? 0) > 0) {
+        this.deferWorkerKill(sessionId, oldChild);
+      } else {
+        this.killWorkerImpl(sessionId, oldChild);
+      }
     }
 
     child.on('exit', (code, signal) => {
@@ -117,7 +134,12 @@ export class WorkerManager {
       }
       this.workers.delete(sessionId);
       this.lastActivity.delete(sessionId);
-      this.keepAliveSessions.delete(sessionId);
+      this.backgroundInFlightByWorker.delete(child);
+      // A draining (deferred) worker may still run background sub-agents for
+      // this session — keep the reaper exemption until those drain too.
+      if (this.sessionInFlight(sessionId) === 0) {
+        this.keepAliveSessions.delete(sessionId);
+      }
 
       const exitedCleanly = code === 0;
       const exitedBySignal = code === null && signal !== null;
@@ -172,6 +194,26 @@ export class WorkerManager {
 
     child.on('message', (msg: Record<string, unknown>) => {
       this.lastActivity.set(sessionId, Date.now());
+      // Control-plane: the agent process reports background sub-agent counts
+      // so the reaper keeps this worker alive while sub-agents run and drops
+      // the exemption (and kills any deferred old worker) once they drain.
+      if (msg.type === 'background_tasks:update') {
+        const inFlight = typeof msg.inFlight === 'number' && Number.isFinite(msg.inFlight)
+          ? Math.max(0, Math.floor(msg.inFlight))
+          : 0;
+        this.backgroundInFlightByWorker.set(child, inFlight);
+        // Session total spans the current worker and any draining (deferred)
+        // worker; a stale zero from one worker must not drop the exemption
+        // while the other still runs sub-agents.
+        const sessionTotal = this.sessionInFlight(sessionId);
+        if (sessionTotal > 0) {
+          this.keepAliveSessions.add(sessionId);
+        } else {
+          this.keepAliveSessions.delete(sessionId);
+          this.killDrainingWorker(sessionId);
+        }
+        return;
+      }
       // db:request, conductor:executor:rpc, appConnection:invoke, and
       // appConnection:listDescriptors are handled by the per-request handlers
       // in router.ts (they forward to main process). All other messages go
@@ -193,7 +235,64 @@ export class WorkerManager {
   killWorker(sessionId: string): void {
     const child = this.workers.get(sessionId);
     if (!child) return;
+    // A worker with in-flight background sub-agents must not be killed
+    // outright (interagent cleanup, session teardown) — defer the kill so
+    // the sub-agents can finish and deliver their notifications. The idle
+    // reaper never reaches this branch for in-flight workers (keepAlive).
+    if ((this.backgroundInFlightByWorker.get(child) ?? 0) > 0) {
+      this.deferWorkerKill(sessionId, child);
+      return;
+    }
     this.killWorkerImpl(sessionId, child);
+  }
+
+  /**
+   * Keep an old worker alive (outside the workers map) so its in-flight
+   * background sub-agents can finish after a replacement worker took over
+   * the session. The worker is killed when the agent reports zero in-flight
+   * tasks (see the `background_tasks:update` handler) or when the drain
+   * deadline passes, whichever comes first.
+   */
+  private deferWorkerKill(sessionId: string, child: ChildProcess): void {
+    this.intentionalKills.add(child);
+    this.drainingWorkers.set(sessionId, { child, deadline: Date.now() + WorkerManager.DRAIN_MAX_MS });
+    workerLogger.info('Worker replacement deferred (background sub-agents in flight)', {
+      sessionId,
+      pid: child.pid,
+    });
+    // Hard deadline: never leak a stuck draining worker forever.
+    const timer = setTimeout(() => {
+      if (this.drainingWorkers.get(sessionId)?.child !== child) return;
+      this.drainingWorkers.delete(sessionId);
+      workerLogger.warn('Draining worker deadline exceeded, force killing', { sessionId, pid: child.pid });
+      child.kill('SIGKILL');
+    }, WorkerManager.DRAIN_MAX_MS);
+    if (typeof timer.unref === 'function') timer.unref();
+    child.once('exit', () => {
+      if (this.drainingWorkers.get(sessionId)?.child === child) {
+        this.drainingWorkers.delete(sessionId);
+      }
+      this.backgroundInFlightByWorker.delete(child);
+    });
+  }
+
+  /** Total in-flight background sub-agents across all workers of a session. */
+  private sessionInFlight(sessionId: string): number {
+    let total = 0;
+    const current = this.workers.get(sessionId);
+    if (current) total += this.backgroundInFlightByWorker.get(current) ?? 0;
+    const draining = this.drainingWorkers.get(sessionId);
+    if (draining) total += this.backgroundInFlightByWorker.get(draining.child) ?? 0;
+    return total;
+  }
+
+  /** Kill the deferred old worker for a session once its tasks drained. */
+  private killDrainingWorker(sessionId: string): void {
+    const entry = this.drainingWorkers.get(sessionId);
+    if (!entry) return;
+    this.drainingWorkers.delete(sessionId);
+    workerLogger.info('Killing drained replacement worker', { sessionId, pid: entry.child.pid });
+    this.killWorkerImpl(sessionId, entry.child);
   }
 
   interruptWorker(sessionId: string, graceMs = 2000): boolean {
@@ -251,7 +350,13 @@ export class WorkerManager {
         workerLogger.info('Worker terminated', { sessionId });
       }
       this.lastActivity.delete(sessionId);
-      this.keepAliveSessions.delete(sessionId);
+      this.backgroundInFlightByWorker.delete(child);
+      // Only drop the reaper exemption when no worker of this session still
+      // runs background sub-agents (a draining worker's exit must not clear
+      // the exemption of a current worker with in-flight tasks).
+      if (this.sessionInFlight(sessionId) === 0) {
+        this.keepAliveSessions.delete(sessionId);
+      }
     });
 
     if (process.platform === 'win32') {
@@ -418,5 +523,12 @@ export class WorkerManager {
     for (const [sessionId] of this.workers) {
       this.killWorker(sessionId);
     }
+    // Draining workers hold in-flight background sub-agents; on shutdown they
+    // must be killed too (their sub-agents die with them, as before).
+    for (const [sessionId, entry] of this.drainingWorkers) {
+      workerLogger.info('Killing draining worker on shutdown', { sessionId, pid: entry.child.pid });
+      this.killWorkerImpl(sessionId, entry.child);
+    }
+    this.drainingWorkers.clear();
   }
 }

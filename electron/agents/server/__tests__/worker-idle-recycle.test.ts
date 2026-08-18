@@ -161,4 +161,77 @@ describe('WorkerManager idle recycling (plan 426 Phase 2)', () => {
       delete process.env.DUYA_LOW_POWER;
     }
   });
+
+  it('keeps a worker alive while background sub-agents are in flight', () => {
+    sessionManager.createSession('s6');
+    workerManager.spawnWorker('s6');
+    sessionManager.transitionState('s6', SessionState.COMPLETED);
+    workerManager.startIdleReaper(1000);
+
+    // A background sub-agent is still running inside the worker: the agent
+    // process reports inFlight=1 and the reaper must not touch the worker,
+    // even far past the idle TTL.
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 1 });
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    expect(children[0].kill).not.toHaveBeenCalled();
+
+    // The sub-agent drained: the exemption drops and the worker becomes
+    // reapable again after the TTL.
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 0 });
+    vi.advanceTimersByTime(11 * 60 * 1000);
+    expect(children[0].kill).toHaveBeenCalled();
+  });
+
+  it('defers killing a replaced worker that still runs sub-agents', () => {
+    sessionManager.createSession('s7');
+    workerManager.spawnWorker('s7');
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 2 });
+
+    // A new chat starts → worker replacement. The old worker must NOT be
+    // killed while sub-agents are in flight.
+    workerManager.spawnWorker('s7');
+    expect(children).toHaveLength(2);
+    expect(children[0].kill).not.toHaveBeenCalled();
+
+    // The sub-agents drain → the deferred old worker is killed.
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 0 });
+    expect(children[0].kill).toHaveBeenCalled();
+    emitExit(children[0]);
+
+    // The new worker stays untouched.
+    expect(children[1].kill).not.toHaveBeenCalled();
+  });
+
+  it('keeps the reaper exemption while any worker of the session has sub-agents', () => {
+    sessionManager.createSession('s8');
+    workerManager.spawnWorker('s8');
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 1 });
+    // Replacement deferred: two workers for one session.
+    workerManager.spawnWorker('s8');
+    sessionManager.transitionState('s8', SessionState.COMPLETED);
+    workerManager.startIdleReaper(1000);
+
+    // The new worker reports zero tasks of its own, but the session total
+    // (old draining worker still at 1) must keep the exemption.
+    children[1].emit('message', { type: 'background_tasks:update', inFlight: 0 });
+    vi.advanceTimersByTime(30 * 60 * 1000);
+    expect(children[1].kill).not.toHaveBeenCalled();
+
+    // Old worker drains → exemption drops, new worker becomes reapable.
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 0 });
+    vi.advanceTimersByTime(11 * 60 * 1000);
+    expect(children[1].kill).toHaveBeenCalled();
+  });
+
+  it('killWorker defers when the worker runs sub-agents', () => {
+    sessionManager.createSession('s9');
+    workerManager.spawnWorker('s9');
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 1 });
+
+    workerManager.killWorker('s9');
+    expect(children[0].kill).not.toHaveBeenCalled();
+
+    children[0].emit('message', { type: 'background_tasks:update', inFlight: 0 });
+    expect(children[0].kill).toHaveBeenCalled();
+  });
 });

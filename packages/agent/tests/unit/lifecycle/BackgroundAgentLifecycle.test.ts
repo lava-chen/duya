@@ -38,6 +38,30 @@ describe('BackgroundAgentLifecycle', () => {
     expect(r.subscribers.size).toBe(0)
   })
 
+  it('reports in-flight count changes to onInFlightChange', () => {
+    const seen: number[] = []
+    lc.onInFlightChange = (count) => { seen.push(count) }
+
+    // register: 0 -> 1
+    lc.register(makeInput({ taskId: 't-1' }))
+    expect(seen).toEqual([1])
+
+    // A second register: 1 -> 2
+    lc.register(makeInput({ taskId: 't-2' }))
+    expect(seen).toEqual([1, 2])
+
+    // pending -> running is not a count change: no emission.
+    const snap = lc.getSnapshot('t-1')!
+    snap.status = 'running'
+    lc.complete('t-1', { content: [{ type: 'text', text: 'ok' }], totalDurationMs: 10, totalToolUseCount: 0 })
+    expect(seen).toEqual([1, 2, 1])
+
+    // No-op duplicate transition is rejected, so no extra emissions.
+    expect(() => lc.complete('t-1', { content: [], totalDurationMs: 0, totalToolUseCount: 0 }))
+      .toThrow(/illegal transition/)
+    expect(seen).toEqual([1, 2, 1])
+  })
+
   it('register rejects duplicate taskId', () => {
     lc.register(makeInput())
     expect(() => lc.register(makeInput())).toThrow(/duplicate/)

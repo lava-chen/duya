@@ -57,6 +57,7 @@ import { duyaAgent } from '../agent/DuyaAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
+import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
 import { applyMCPConfiguration, type MCPApplyResult } from '../mcp/apply.js';
@@ -289,6 +290,28 @@ function scheduleBashTaskPush(): void {
 }
 
 getBashTaskRegistry().onAnyChange(scheduleBashTaskPush);
+
+// ----------------------------------------------------------------------------
+// Background sub-agent in-flight reporting — keep the parent worker alive.
+// ----------------------------------------------------------------------------
+// Background sub-agents execute inside this worker process. The Agent Server
+// reaps idle workers (idle TTL) and replaces the worker when a new chat starts,
+// so it must know when background sub-agents are still running here. IPC-only
+// (process.send) — the stdout SSE path must not see a control-plane message.
+backgroundAgentLifecycle.onInFlightChange = (inFlight: number) => {
+  const activeSessionId = sessionId;
+  if (!activeSessionId) return;
+  try {
+    process.send?.({
+      type: 'background_tasks:update',
+      sessionId: activeSessionId,
+      inFlight,
+    });
+  } catch (err) {
+    // Best effort — the server keeps its own TTL fallback if IPC is dead.
+    warn('background_tasks:update send failed', err);
+  }
+};
 
 function startChatHeartbeat(): void {
   if (chatHeartbeatTimer) {
