@@ -227,6 +227,20 @@ export function registerAgentHandlers(): void {
     };
   });
 
+  // Live mid-run permission-mode switch. Fire-and-forget: forward the new
+  // agent mode to the running worker's agent subprocess, which re-reads it on
+  // every permission decision (built-in and MCP alike).
+  ipcMain.handle('agent:set-permission-mode', (_event, payload: { sessionId: string; mode: string }) => {
+    const { sessionId, mode } = payload ?? {};
+    if (!sessionId) return false;
+    const pool = getAgentProcessPool();
+    const sent = pool.isRunning(sessionId)
+      ? pool.send(sessionId, { type: 'permission:set', mode })
+      : false;
+    getLogger().info('Live permission mode update', { sessionId, mode, forwarded: sent }, LogComponent.AgentCommunicator);
+    return sent;
+  });
+
   // Resolve the soft-default provider, falling back to the first
   // configured provider when no default is set. Without this, a user
   // who has providers configured but no `model.provider` default gets

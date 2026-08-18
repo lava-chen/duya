@@ -143,6 +143,12 @@ export interface PermissionResolveCommand {
   updatedInput?: Record<string, unknown>;
 }
 
+/** Live mid-run permission-mode switch (Ask/Auto/Bypass → agent mode). */
+export interface PermissionSetCommand {
+  type: 'permission:set';
+  mode: string;
+}
+
 export interface DbResponseCommand {
   type: 'db:response';
   requestId: string;
@@ -175,6 +181,7 @@ export type WorkerCommand =
   | SideQuestionCommand
   | ConfigUpdateCommand
   | PermissionResolveCommand
+  | PermissionSetCommand
   | DbResponseCommand
   | InteragentInvokeCommand
   | InteragentEventMessage
