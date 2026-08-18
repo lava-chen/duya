@@ -1,5 +1,13 @@
 // usage.ts - Usage statistics and analytics types
+//
+// The usage dashboard is backed by a main-process aggregation over the
+// core-db rollout files (`db:usage:summary` IPC). The renderer never
+// aggregates in-memory store messages — the conversation store only holds
+// transcripts of sessions opened during the current app run, which made
+// renderer-side totals wildly inconsistent.
 
+/** Per-token-bucket totals. `input`/`cacheRead`/`cacheWrite` are exclusive
+ *  buckets (input is net of cache; see usage-aggregator for the convention). */
 export interface TokenUsageBreakdown {
   input: number;
   output: number;
@@ -14,6 +22,9 @@ export interface CostBreakdown {
   cacheReadCost: number;
   cacheWriteCost: number;
   totalCost: number;
+  /** True when at least one session's model has no pricing record in
+   *  provider_model_capabilities — cost figures are partial, not exact. */
+  costEstimated: boolean;
 }
 
 export interface MessageCounts {
@@ -44,30 +55,16 @@ export interface DailyUsageEntry {
   cacheReadCost: number;
   cacheWriteCost: number;
   messageCount: number;
+  /** Distinct sessions with activity on this day. */
   sessionCount: number;
-}
-
-export interface HourlyUsageEntry {
-  hour: number;
-  tokens: number;
-  cost: number;
-  sessionCount: number;
-}
-
-export interface HeatmapCell {
-  day: number;
-  hour: number;
-  value: number;
-  intensity: number;
+  /** Per-model token totals for this day (model id -> tokens). */
+  models: Record<string, number>;
 }
 
 export interface UsageSessionSummary {
   id: string;
   title: string;
-  agentId?: string;
-  channel?: string;
-  modelProvider?: string;
-  model?: string;
+  model: string;
   createdAt: number;
   updatedAt: number;
   totalTokens: number;
@@ -80,8 +77,6 @@ export interface UsageSessionSummary {
   toolCallCount: number;
   errorCount: number;
   durationMs: number;
-  firstActivity: number;
-  lastActivity: number;
   dailyBreakdown: { date: string; tokens: number; cost: number }[];
 }
 
@@ -91,27 +86,47 @@ export interface UsageAggregates {
   durationSumMs: number;
   sessionCount: number;
   activeDays: number;
+  /** Consecutive active days ending today (0 = no activity today). */
+  currentStreak: number;
+}
+
+/** Stable model palette used for donut / stacked bars. Assign indices by
+ *  sorted token volume so the largest model keeps the same color across
+ *  refreshes. */
+export const MODEL_PALETTE = [
+  '#3b82f6', // blue-500
+  '#22c55e', // green-500
+  '#a855f7', // purple-500
+  '#f59e0b', // amber-500
+  '#ef4444', // red-500
+  '#06b6d4', // cyan-500
+  '#f97316', // orange-500
+  '#ec4899', // pink-500
+  '#84cc16', // lime-500
+  '#6366f1', // indigo-500
+];
+
+/** Per-model token totals, sorted by tokens descending. */
+export interface ModelUsageEntry {
+  model: string;
+  tokens: number;
+  cost: number;
+  percentage: number;
+  /** Stable color index assigned by the aggregator. */
+  colorIndex: number;
 }
 
 export interface UsageTotals extends TokenUsageBreakdown, CostBreakdown {}
 
-export interface UsageSummaryMetrics {
+/** Wire shape returned by `db:usage:summary`. Aggregated in the main
+ *  process; the renderer only renders it. */
+export interface UsageSummary {
   totals: UsageTotals;
   aggregates: UsageAggregates;
   dailyData: DailyUsageEntry[];
-  hourlyData: HourlyUsageEntry[];
-  heatmapData: HeatmapCell[];
+  modelUsage: ModelUsageEntry[];
   sessions: UsageSessionSummary[];
-}
-
-export interface UsageFilters {
-  dateFrom?: string;
-  dateTo?: string;
-  agentId?: string;
-  model?: string;
-  provider?: string;
-  channel?: string;
-  searchQuery?: string;
+  generatedAt: number;
 }
 
 export interface UsageStatCardData {
@@ -120,8 +135,8 @@ export interface UsageStatCardData {
   subtext?: string;
   status?: 'good' | 'warn' | 'bad' | 'neutral';
   icon?: string;
-  format?: 'number' | 'currency' | 'percent' | 'duration';
+  format?: 'number' | 'currency' | 'percent' | 'duration' | 'text';
 }
 
 export type ChartMode = 'tokens' | 'cost';
-export type ChartStackMode = 'total' | 'breakdown';
+export type ChartStackMode = 'total' | 'breakdown' | 'model';

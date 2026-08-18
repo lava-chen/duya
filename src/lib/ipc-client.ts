@@ -10,6 +10,7 @@
 import type { FileAttachment } from '@/types/message'
 import type { ContentBlock } from '@/types/message'
 import type { MemoryEntry } from '@/types'
+import type { UsageSummary } from '@/types/usage'
 
 // Types matching the store's expected format (camelCase)
 export interface Thread {
@@ -335,6 +336,13 @@ function backendProjectToProject(db: DbProjectGroup): ProjectGroup {
 export async function listThreadsIPC(): Promise<Thread[]> {
   const dbThreads = await window.electronAPI!.thread!.list() as DbThread[]
   return dbThreads.map(dbThreadToThread).filter((t): t is Thread => t !== null)
+}
+
+// Usage statistics — aggregated in the main process over core-db rollout
+// files. Never aggregate renderer-side: the conversation store only holds
+// transcripts of sessions opened during the current app run.
+export async function getUsageSummaryIPC(): Promise<UsageSummary> {
+  return window.electronAPI!.usage!.summary()
 }
 
 export async function getThreadIPC(id: string): Promise<{ thread: Thread; messages: Message[] } | null> {

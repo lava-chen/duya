@@ -1,55 +1,73 @@
 import React from 'react';
-import type { UsageSummaryMetrics } from '@/types/usage';
-import type { UsageStatCardData } from '@/types/usage';
+import type { UsageSummary, UsageStatCardData } from '@/types/usage';
 import { UsageStatCard } from './UsageStatCard';
 import { useTranslation } from '@/hooks/useTranslation';
 import { formatNumber, formatCurrency, formatPercent } from '@/hooks/useUsageData';
 
 interface UsageSummaryGridProps {
-  metrics: UsageSummaryMetrics;
+  summary: UsageSummary;
 }
 
-export const UsageSummaryGrid: React.FC<UsageSummaryGridProps> = ({ metrics }) => {
+export const UsageSummaryGrid: React.FC<UsageSummaryGridProps> = ({ summary }) => {
   const { t } = useTranslation();
-  const { totals, aggregates } = metrics;
+  const { totals, aggregates, modelUsage } = summary;
 
-  const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
-  const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
-
-  const errorRate = aggregates.messages.total
-    ? aggregates.messages.errors / aggregates.messages.total
-    : 0;
-
-  const avgTokens = aggregates.messages.total
-    ? Math.round(totals.totalTokens / aggregates.messages.total)
-    : 0;
-
-  const throughputTokensPerMin =
-    totals.totalTokens && aggregates.durationSumMs > 0
-      ? totals.totalTokens / (aggregates.durationSumMs / 60000)
-      : 0;
+  const topModel = (modelUsage ?? [])[0];
+  const inputOutputText = `${formatNumber(totals.input)} ${t('usage.input')} · ${formatNumber(totals.output)} ${t('usage.output')}`;
+  const costSuffix = totals.costEstimated ? ` · ${t('usage.costEstimated')}` : '';
 
   const cards: UsageStatCardData[] = [
     {
-      label: t('usage.totalTokens'),
+      label: t('usage.tokenUsage'),
       value: totals.totalTokens,
       format: 'number',
-      subtext: `${formatNumber(totals.input)} ${t('usage.input')} · ${formatNumber(totals.output)} ${t('usage.output')}`,
+      subtext: inputOutputText,
       status: 'neutral',
     },
     {
       label: t('usage.totalCost'),
       value: totals.totalCost,
       format: 'currency',
-      subtext: `${formatCurrency(totals.inputCost)} ${t('usage.input')} · ${formatCurrency(totals.outputCost)} ${t('usage.output')}`,
+      subtext: `${formatCurrency(totals.inputCost)} ${t('usage.input')} · ${formatCurrency(totals.outputCost)} ${t('usage.output')}${costSuffix}`,
       status: 'neutral',
     },
     {
-      label: t('usage.messages'),
+      label: t('usage.sessionCount'),
+      value: aggregates.sessionCount,
+      format: 'number',
+      subtext: `${aggregates.activeDays} ${t('usage.activeDays')}`,
+      status: 'neutral',
+    },
+    {
+      label: t('usage.messageCount'),
       value: aggregates.messages.total,
       format: 'number',
       subtext: `${aggregates.messages.user} ${t('usage.user')} · ${aggregates.messages.assistant} ${t('usage.assistant')}`,
       status: 'neutral',
+    },
+    {
+      label: t('usage.activeDaysLabel'),
+      value: aggregates.activeDays,
+      format: 'number',
+      subtext: `${aggregates.currentStreak} ${t('usage.currentStreak')}`,
+      status: aggregates.currentStreak > 0 ? 'good' : 'neutral',
+    },
+    {
+      label: t('usage.throughput'),
+      value:
+        totals.totalTokens && aggregates.durationSumMs > 0
+          ? totals.totalTokens / (aggregates.durationSumMs / 60000)
+          : 0,
+      format: 'number',
+      subtext: t('usage.tokensPerMinute'),
+      status: 'neutral',
+    },
+    {
+      label: t('usage.topModel'),
+      value: topModel?.model ?? t('usage.unknownModel'),
+      format: 'text',
+      subtext: topModel ? t('usage.topModelShare', { percent: formatPercent(topModel.percentage) }) : undefined,
+      status: topModel ? 'good' : 'neutral',
     },
     {
       label: t('usage.toolCalls'),
@@ -58,45 +76,10 @@ export const UsageSummaryGrid: React.FC<UsageSummaryGridProps> = ({ metrics }) =
       subtext: `${aggregates.tools.uniqueTools} ${t('usage.uniqueTools')}`,
       status: aggregates.tools.totalCalls > 0 ? 'good' : 'neutral',
     },
-    {
-      label: t('usage.avgTokens'),
-      value: avgTokens,
-      format: 'number',
-      subtext: t('usage.perMessage'),
-      status: 'neutral',
-    },
-    {
-      label: t('usage.cacheHitRate'),
-      value: cacheHitRate,
-      format: 'percent',
-      subtext: `${formatNumber(totals.cacheRead)} ${t('usage.cached')} · ${formatNumber(cacheBase)} ${t('usage.total')}`,
-      status: cacheHitRate > 0.6 ? 'good' : cacheHitRate > 0.3 ? 'warn' : 'neutral',
-    },
-    {
-      label: t('usage.errorRate'),
-      value: errorRate,
-      format: 'percent',
-      subtext: `${aggregates.messages.errors} ${t('usage.errors')} · ${aggregates.messages.total} ${t('usage.total')}`,
-      status: errorRate > 0.05 ? 'bad' : errorRate > 0.01 ? 'warn' : 'good',
-    },
-    {
-      label: t('usage.throughput'),
-      value: throughputTokensPerMin,
-      format: 'number',
-      subtext: t('usage.tokensPerMinute'),
-      status: 'neutral',
-    },
-    {
-      label: t('usage.sessions'),
-      value: aggregates.sessionCount,
-      format: 'number',
-      subtext: `${aggregates.activeDays} ${t('usage.activeDays')}`,
-      status: 'neutral',
-    },
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-3">
       {cards.map((card) => (
         <UsageStatCard key={card.label} data={card} />
       ))}

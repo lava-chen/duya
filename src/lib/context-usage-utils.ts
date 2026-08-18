@@ -127,21 +127,28 @@ export function estimateTokens(text: string): number {
 /**
  * Cache-convention guard for `input_tokens`.
  *
- * Anthropic's `input_tokens` already includes cached (cache-read) tokens, so
- * `used = input + output` is the true prompt size. Some OpenAI-compatible
- * gateways report `prompt_tokens` EXCLUDING cached tokens. When cache hits
- * exceed the reported input, the input clearly omits cache — add the hits back
- * (pi does the same: input + cacheRead + cacheWrite). Otherwise the ring would
- * show only the uncached delta and swing between hundreds and thousands as
- * cache hits come and go.
+ * Anthropic's `input_tokens` excludes BOTH cached (cache-read) and
+ * cache-creation tokens, so the true prompt size is
+ * `input + cacheRead + cacheWrite`. Some OpenAI-compatible gateways report
+ * `prompt_tokens` already including the cached portion. When either cache
+ * counter exceeds the reported input, the input clearly omits cache — add all
+ * cache back (pi does the same: input + cacheRead + cacheWrite). Otherwise the
+ * ring would show only the uncached delta and swing between hundreds and
+ * thousands as cache hits come and go. The `cacheWrite > input` clause covers
+ * the first request of a session, where cacheRead is still 0 but the full
+ * prefix (system + tools) is written to cache.
  */
 export function normalizeInputTokens(
   inputTokens: number,
   cacheHitTokens: number,
+  cacheWriteTokens: number = 0,
 ): number {
   const input = inputTokens || 0;
   const cacheHit = cacheHitTokens || 0;
-  return cacheHit > input ? input + cacheHit : input;
+  const cacheWrite = cacheWriteTokens || 0;
+  return cacheHit > input || cacheWrite > input
+    ? input + cacheHit + cacheWrite
+    : input;
 }
 
 /**

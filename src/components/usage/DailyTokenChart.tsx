@@ -1,12 +1,13 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import type { DailyUsageEntry } from '@/types/usage';
-import type { ChartMode, ChartStackMode } from '@/types/usage';
+import type { DailyUsageEntry, ModelUsageEntry } from '@/types/usage';
+import { MODEL_PALETTE, type ChartMode, type ChartStackMode } from '@/types/usage';
 import { useTranslation } from '@/hooks/useTranslation';
 import { formatNumber, formatCurrency } from '@/hooks/useUsageData';
 import { Button } from '@/components/ui/Button';
 
 interface DailyTokenChartProps {
-  data: DailyUsageEntry[];
+  dailyData: DailyUsageEntry[];
+  modelUsage?: ModelUsageEntry[];
 }
 
 const SEGMENT_COLORS = {
@@ -16,7 +17,7 @@ const SEGMENT_COLORS = {
   cacheWrite: 'var(--warning)',
 };
 
-export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
+export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, modelUsage }) => {
   const { t } = useTranslation();
   const [mode, setMode] = useState<ChartMode>('tokens');
   const [stackMode, setStackMode] = useState<ChartStackMode>('total');
@@ -27,6 +28,9 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
     entry: DailyUsageEntry;
   } | null>(null);
 
+  const days = dailyData ?? [];
+  const models = modelUsage ?? [];
+
   const SEGMENT_LABELS = {
     input: t('usage.inputTokens'),
     output: t('usage.outputTokens'),
@@ -34,10 +38,19 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
     cacheWrite: t('usage.cacheWrite'),
   };
 
-  const chartData = useMemo(() => {
-    if (data.length === 0) return [];
+  // Model id -> stable color, ordered by token volume (matches donut).
+  const modelColorMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of models) {
+      map.set(entry.model, MODEL_PALETTE[entry.colorIndex % MODEL_PALETTE.length]);
+    }
+    return map;
+  }, [models]);
 
-    return data.map((entry) => ({
+  const chartData = useMemo(() => {
+    if (days.length === 0) return [];
+
+    return days.map((entry) => ({
       ...entry,
       totalValue: mode === 'tokens' ? entry.tokens : entry.cost,
       segments: {
@@ -47,7 +60,7 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
         cacheWrite: mode === 'tokens' ? entry.cacheWrite : entry.cacheWriteCost,
       },
     }));
-  }, [data, mode]);
+  }, [days, mode]);
 
   // Use sqrt scaling to make small values more visible
   const { maxTotalValue, maxSegmentValue, getScaledHeight } = useMemo(() => {
@@ -84,7 +97,7 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
   const handleBarHover = useCallback(
     (index: number, event: React.MouseEvent) => {
       setHoveredIndex(index);
-      const entry = data[index];
+      const entry = days[index];
       if (entry) {
         setTooltip({
           x: event.clientX,
@@ -93,7 +106,7 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
         });
       }
     },
-    [data]
+    [days]
   );
 
   const handleBarLeave = useCallback(() => {
@@ -101,13 +114,11 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
     setTooltip(null);
   }, []);
 
-  const formatValue = mode === 'tokens' ? formatNumber : formatCurrency;
-
   return (
     <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-sm font-semibold text-[var(--text)]">{t('usage.dailyUsage')}</h3>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <div className="flex rounded-lg border border-[var(--border)] overflow-hidden">
             <Button
               variant="ghost"
@@ -159,6 +170,18 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
             >
               {t('usage.breakdown')}
             </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setStackMode('model')}
+              className={`rounded-none px-3 py-1 ${
+                stackMode === 'model'
+                  ? 'bg-[var(--accent)] text-white hover:bg-[var(--accent)] hover:text-white'
+                  : ''
+              }`}
+            >
+              {t('usage.byModel')}
+            </Button>
           </div>
         </div>
       </div>
@@ -174,19 +197,17 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
               const barHeight = getScaledHeight(entry.totalValue);
               const isHovered = hoveredIndex === index;
 
-              // Calculate bar width: flex-1 when few items, fixed width when many
-              const barWidth = chartData.length <= 30 ? 'flex-1' : '12px';
+              const benchProps = {
+                className: `flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`,
+                style: { width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' },
+                onMouseEnter: (e: React.MouseEvent) => handleBarHover(index, e),
+                onMouseMove: (e: React.MouseEvent) => handleBarHover(index, e),
+                onMouseLeave: handleBarLeave,
+              };
 
               if (stackMode === 'total') {
                 return (
-                  <div
-                    key={entry.date}
-                    className={`flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`}
-                    style={{ width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' }}
-                    onMouseEnter={(e) => handleBarHover(index, e)}
-                    onMouseMove={(e) => handleBarHover(index, e)}
-                    onMouseLeave={handleBarLeave}
-                  >
+                  <div key={entry.date} {...benchProps}>
                     <div
                       className="w-full rounded-t transition-all duration-200"
                       style={{
@@ -200,17 +221,37 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
                 );
               }
 
+              if (stackMode === 'model') {
+                const modelSegs = Object.entries(entry.models)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 8);
+                return (
+                  <div key={entry.date} {...benchProps}>
+                    <div className="w-full flex flex-col-reverse rounded-t overflow-hidden" style={{ height: `${barHeight}%` }}>
+                      {modelSegs.map(([model, value]) => (
+                        <div
+                          key={model}
+                          className="w-full transition-all duration-200"
+                          style={{
+                            height: `${entry.totalValue > 0 ? (value / entry.totalValue) * 100 : 0}%`,
+                            backgroundColor: modelColorMap.get(model) ?? 'var(--muted)',
+                            opacity: isHovered ? 1 : 0.85,
+                            minHeight: value > 0 ? '1px' : '0',
+                          }}
+                        />
+                      ))}
+                      {modelSegs.length === 0 && entry.totalValue > 0 && (
+                        <div className="w-full" style={{ height: '100%', backgroundColor: 'var(--muted)', opacity: 0.4 }} />
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
               // Stacked breakdown - scale segments relative to max segment value
               const segmentKeys = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
               return (
-                <div
-                  key={entry.date}
-                  className={`flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`}
-                  style={{ width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' }}
-                  onMouseEnter={(e) => handleBarHover(index, e)}
-                  onMouseMove={(e) => handleBarHover(index, e)}
-                  onMouseLeave={handleBarLeave}
-                >
+                <div key={entry.date} {...benchProps}>
                   <div className="w-full flex flex-col-reverse rounded-t overflow-hidden" style={{ height: `${getScaledHeight(entry.totalValue)}%` }}>
                     {segmentKeys.map((key) => {
                       const segmentValue = entry.segments[key];
@@ -256,6 +297,22 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
               ))}
             </div>
           )}
+
+          {stackMode === 'model' && (
+            <div className="flex flex-wrap gap-3 mt-3 pt-3 border-t border-[var(--border)]">
+              {models.slice(0, 10).map((entry) => (
+                <div key={entry.model} className="flex items-center gap-1.5">
+                  <div
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: MODEL_PALETTE[entry.colorIndex % MODEL_PALETTE.length] }}
+                  />
+                  <span className="text-[10px] text-[var(--muted)] truncate max-w-40" title={entry.model}>
+                    {entry.model}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
@@ -269,7 +326,23 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ data }) => {
         >
           <div className="font-semibold text-[var(--text)] mb-1">{tooltip.entry.date}</div>
           <div className="text-[var(--muted)]">
-            {mode === 'tokens' ? (
+            {stackMode === 'model' ? (
+              <>
+                <div>{t('usage.totalBtn')}: {formatNumber(tooltip.entry.tokens)}</div>
+                {Object.entries(tooltip.entry.models)
+                  .sort(([, a], [, b]) => b - a)
+                  .slice(0, 8)
+                  .map(([model, value]) => (
+                    <div key={model} className="flex items-center gap-1.5">
+                      <span
+                        className="inline-block w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: modelColorMap.get(model) ?? 'var(--muted)' }}
+                      />
+                      <span className="truncate">{model}: {formatNumber(value)}</span>
+                    </div>
+                  ))}
+              </>
+            ) : mode === 'tokens' ? (
               <>
                 <div>{t('usage.totalBtn')}: {formatNumber(tooltip.entry.tokens)}</div>
                 <div>{t('usage.inputTokens')}: {formatNumber(tooltip.entry.input)}</div>
