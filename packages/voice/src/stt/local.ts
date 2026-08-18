@@ -19,15 +19,22 @@ export interface LocalWhisperEngineOptions {
   /** Path to the ggml model file. */
   modelPath?: string;
   language?: string;
-  /** Minimum PCM samples before running an interim transcribe (8 kHz-ish). */
+  /** Minimum PCM samples before running the first interim transcribe. */
   interimMinSamples?: number;
+  /** New PCM samples required between interim transcribes (default 1.5 s). */
+  interimIntervalSamples?: number;
 }
 
 const WAV_HEADER_BYTES = 44;
 
 export class LocalWhisperEngine implements SttEngine {
   readonly kind = 'local' as const;
-  private buffer: number[] = [];
+  private chunks: Int16Array[] = [];
+  private totalSamples = 0;
+  private lastInterimSamples = 0;
+  private inFlight = false;
+  /** Serializes whisper-cli runs (interims never overlap the finalize pass). */
+  private chain: Promise<unknown> = Promise.resolve();
   private readonly opts: LocalWhisperEngineOptions;
   private _ready = false;
 
@@ -41,51 +48,76 @@ export class LocalWhisperEngine implements SttEngine {
   }
 
   async push(chunk: PcmChunk): Promise<SttResult | null> {
-    this.buffer.push(...chunk);
+    this.chunks.push(chunk);
+    this.totalSamples += chunk.length;
     const interimMin = this.opts.interimMinSamples ?? 16000; // 1s
-    if (this.buffer.length < interimMin) return null;
+    if (this.totalSamples < interimMin) return null;
+    // Throttle: only re-transcribe after enough NEW audio arrived, and never
+    // stack on a running whisper-cli process.
+    const interval = this.opts.interimIntervalSamples ?? 24000; // 1.5s
+    if (this.lastInterimSamples > 0 && this.totalSamples - this.lastInterimSamples < interval) {
+      return null;
+    }
+    if (this.inFlight) return null;
     return this.transcribe(false);
   }
 
   async finalize(): Promise<SttResult> {
-    if (this.buffer.length === 0) return { done: true, text: '' };
+    if (this.totalSamples === 0) return { done: true, text: '' };
     const result = await this.transcribe(true);
     this.reset();
     return result;
   }
 
   reset(): void {
-    this.buffer = [];
+    this.chunks = [];
+    this.totalSamples = 0;
+    this.lastInterimSamples = 0;
   }
 
-  private async transcribe(final: boolean): Promise<SttResult> {
+  private transcribe(final: boolean): Promise<SttResult> {
+    const run = this.chain.then(() => this.doTranscribe(final));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async doTranscribe(final: boolean): Promise<SttResult> {
     if (!this._ready) {
       throw new Error('Local whisper engine is not ready (binary/model missing)');
     }
-    const wavPath = this.writeWav(this.buffer);
+    this.inFlight = true;
     try {
-      const text = await this.runWhisper(wavPath);
-      if (final) return { done: true, text: text.trim() };
-      return { done: false, text: text.trim(), isFinal: false };
-    } finally {
+      const wavPath = this.writeWav();
       try {
-        unlinkSync(wavPath);
-      } catch {
-        /* temp cleanup best-effort */
+        const text = await this.runWhisper(wavPath);
+        this.lastInterimSamples = this.totalSamples;
+        if (final) return { done: true, text: text.trim() };
+        return { done: false, text: text.trim(), isFinal: false };
+      } finally {
+        try {
+          unlinkSync(wavPath);
+        } catch {
+          /* temp cleanup best-effort */
+        }
       }
+    } finally {
+      this.inFlight = false;
     }
   }
 
-  private writeWav(samples: number[]): string {
+  private writeWav(): string {
     const path = join(tmpdir(), `duya-voice-${Date.now()}-${Math.random().toString(36).slice(2)}.wav`);
-    writeFileSync(path, encodeWav(samples));
+    writeFileSync(path, encodeWav(this.chunks));
     return path;
   }
 
   private runWhisper(wavPath: string): Promise<string> {
     const bin = this.opts.binaryPath!;
-    const args = ['-m', this.opts.modelPath!, '-f', wavPath, '-otxt', '-np', '-nt'];
-    if (this.opts.language) args.push('-l', this.opts.language);
+    // No -otxt: the transcript goes to stdout and temp .txt files are not
+    // orphaned next to the wav.
+    const args = ['-m', this.opts.modelPath!, '-f', wavPath, '-np', '-nt'];
+    const lang = this.opts.language?.trim();
+    if (lang) args.push('-l', lang);
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
@@ -104,9 +136,10 @@ export class LocalWhisperEngine implements SttEngine {
   }
 }
 
-/** Encode mono 16-bit 16 kHz PCM samples as a WAV file buffer. */
-export function encodeWav(samples: number[]): Buffer {
-  const n = samples.length;
+/** Encode mono 16-bit 16 kHz PCM sample chunks as a WAV file buffer. */
+export function encodeWav(chunks: Int16Array[]): Buffer {
+  let n = 0;
+  for (const c of chunks) n += c.length;
   const buf = Buffer.alloc(WAV_HEADER_BYTES + n * 2);
   const sampleRate = 16000;
   buf.write('RIFF', 0);
@@ -122,9 +155,13 @@ export function encodeWav(samples: number[]): Buffer {
   buf.writeUInt16LE(16, 34); // bits per sample
   buf.write('data', 36);
   buf.writeUInt32LE(n * 2, 40);
-  for (let i = 0; i < n; i++) {
-    const s = Math.max(-32768, Math.min(32767, samples[i]));
-    buf.writeInt16LE(s, WAV_HEADER_BYTES + i * 2);
+  let off = WAV_HEADER_BYTES;
+  for (const c of chunks) {
+    for (let i = 0; i < c.length; i++) {
+      const s = Math.max(-32768, Math.min(32767, c[i]));
+      buf.writeInt16LE(s, off);
+      off += 2;
+    }
   }
   return buf;
 }

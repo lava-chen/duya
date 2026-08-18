@@ -3,7 +3,11 @@
  *
  * Spawns the @duya/voice worker entry on a **Node** runtime (via `fork`),
  * isolating whisper.cpp's native ABI from Electron (same pattern as the
- * agent-bundle / better-sqlite3 split). Communicates over stdio JSON lines.
+ * agent-bundle / better-sqlite3 split). Communicates over the fork IPC
+ * channel with v8 advanced serialization (`serialization: 'advanced'`), so
+ * PCM chunks (Int16Array) are transferred natively — JSON serialization
+ * silently turns an ArrayBuffer into `{}`, which is what previously severed
+ * this pipeline. stderr stays piped for diagnostics.
  */
 import { fork, ChildProcess } from 'child_process';
 import { join } from 'path';
@@ -22,13 +26,12 @@ export interface SttWorkerInitPayload {
 
 type WorkerRequest =
   | { type: 'init'; payload?: SttWorkerInitPayload }
-  | { type: 'push'; payload?: { chunk: ArrayBuffer } }
+  | { type: 'push'; payload?: { chunk?: Int16Array } }
   | { type: 'finalize' }
   | { type: 'reset' }
   | { type: 'dispose' };
 
 type WorkerResponse =
-  | { ok: true; kind: 'ready' }
   | { ok: true; kind: 'init_result'; ready: boolean }
   | { ok: true; kind: 'interim' | 'final'; text: string }
   | { ok: true; kind: 'resumed' }
@@ -39,6 +42,8 @@ export interface SttWorkerCallbacks {
   onInterim: (text: string) => void;
   onFinal: (text: string) => void;
   onError: (message: string, code?: string) => void;
+  /** Fired when the subprocess dies unexpectedly (not via dispose). */
+  onExit?: () => void;
 }
 
 /** Resolve the worker entry path (packaged vs dev). */
@@ -54,8 +59,8 @@ export function resolveSttWorkerPath(): string {
 
 export class SttWorker {
   private child: ChildProcess | null = null;
-  private pending = '';
   private ready = false;
+  private disposed = false;
   private readonly callbacks: SttWorkerCallbacks;
   private readonly logger = getLogger();
 
@@ -64,7 +69,7 @@ export class SttWorker {
   }
 
   get isRunning(): boolean {
-    return this.child !== null && this.child.exitCode === null;
+    return this.child !== null && this.child.exitCode === null && !this.disposed;
   }
 
   /** Spawn the subprocess and wait for it to come alive. */
@@ -77,22 +82,34 @@ export class SttWorker {
 
     const child = fork(workerPath, [], {
       stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      // 'advanced' = v8 structured clone: Int16Array survives IPC natively.
+      serialization: 'advanced',
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
       execPath: process.execPath,
     });
     this.child = child;
-    this.pending = '';
+    this.disposed = false;
 
     child.stdout?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => this.onData(chunk));
+    child.stdout?.on('data', (chunk: string) => {
+      const line = chunk.trim();
+      if (line) this.logger.debug('STT worker stdout', { line }, LogComponent.Voice);
+    });
     child.stderr?.on('data', (data: Buffer) => {
       const line = data.toString().trim();
       if (line) this.logger.warn('STT worker stderr', { line }, LogComponent.Voice);
     });
+    child.on('message', (resp: WorkerResponse) => this.handleResponse(resp));
     child.on('exit', (code, signal) => {
       this.logger.info('STT worker exited', { code, signal }, LogComponent.Voice);
       this.child = null;
       this.ready = false;
+      const pendingInit = this.pendingInit;
+      this.pendingInit = null;
+      if (pendingInit) {
+        pendingInit.reject(new Error('STT worker exited before init completed'));
+      }
+      if (!this.disposed) this.callbacks.onExit?.();
     });
 
     this.logger.info('STT worker spawned', { pid: child.pid, workerPath }, LogComponent.Voice);
@@ -111,7 +128,8 @@ export class SttWorker {
   }
 
   push(chunk: Int16Array): void {
-    this.send({ type: 'push', payload: { chunk: chunk.buffer } });
+    if (chunk.length === 0) return;
+    this.send({ type: 'push', payload: { chunk } });
   }
 
   finalize(): void {
@@ -123,6 +141,7 @@ export class SttWorker {
   }
 
   dispose(): void {
+    this.disposed = true;
     try {
       this.send({ type: 'dispose' });
     } catch {
@@ -133,23 +152,6 @@ export class SttWorker {
       setTimeout(() => {
         if (child.exitCode === null) child.kill();
       }, 500).unref();
-    }
-  }
-
-  private onData(chunk: string): void {
-    this.pending += chunk;
-    let idx: number;
-    while ((idx = this.pending.indexOf('\n')) >= 0) {
-      const line = this.pending.slice(0, idx);
-      this.pending = this.pending.slice(idx + 1);
-      if (!line.trim()) continue;
-      let resp: WorkerResponse;
-      try {
-        resp = JSON.parse(line) as WorkerResponse;
-      } catch {
-        continue;
-      }
-      this.handleResponse(resp);
     }
   }
 
@@ -186,9 +188,9 @@ export class SttWorker {
   }
 
   private send(req: WorkerRequest): void {
-    if (!this.child || this.child.stdin?.writable === false) {
+    if (!this.child || !this.child.connected) {
       throw new Error('STT worker is not running');
     }
-    this.child.stdin.write(`${JSON.stringify(req)}\n`);
+    this.child.send(req);
   }
 }

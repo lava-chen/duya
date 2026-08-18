@@ -4,6 +4,7 @@ import type {
   ProjectDatabaseRequest,
 } from '../packages/conductor/src/database/types'
 import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
+import type { UsageSummary } from '../src/types/usage'
 // Plan 312 — App Connection status DTO is the only shape returned to the
 // renderer. Token fields never appear here.
 import type { AppConnectionStatusDTO } from './services/app-connections/types'
@@ -42,6 +43,7 @@ export interface AgentAPI {
   streamChat: (prompt: string, options?: Record<string, unknown>) => Promise<unknown>
   interrupt: () => Promise<unknown>
   reinitProvider: () => Promise<unknown>
+  setAgentPermissionMode: (sessionId: string, mode: string) => Promise<unknown>
 }
 
 export interface SyncAPI {
@@ -109,6 +111,10 @@ export interface MessageAPI {
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
   truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
   truncateFromInclusive: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
+}
+
+export interface UsageAPI {
+  summary: () => Promise<UsageSummary>
 }
 
 export interface SettingsAPI {
@@ -964,6 +970,7 @@ export interface ElectronAPI {
   session: SessionAPI
   modeState: ModeStateAPI
   message: MessageAPI
+  usage: UsageAPI
   settingsDb: SettingsAPI
   migration: MigrationAPI
   provider: ProviderAPI
@@ -1071,6 +1078,7 @@ export interface VoiceAPI {
   cancel: () => Promise<{ ok: boolean }>
   getConfig: () => Promise<{
     enabled: boolean
+    inputDevice: string
     engine: 'local' | 'cloud'
     endSilenceMs: number
     noSpeechTimeoutMs: number
@@ -1079,6 +1087,8 @@ export interface VoiceAPI {
     model: string
     modelReady: boolean
     modelSizeMb: number
+    cloudProvider: string
+    cloudModel: string
   }>
   getModelStatus: () => Promise<{ model: string; ready: boolean; sizeMb: number; path?: string }>
   getModelList: () => Promise<Array<{ model: string; ready: boolean; sizeMb: number; path?: string }>>
@@ -1086,9 +1096,28 @@ export interface VoiceAPI {
     platform: string
     binaryFound: boolean
     binaryPath?: string
+    binarySource?: 'config' | 'managed' | 'path' | 'candidate'
+    runtimeInstallable: boolean
+    runtimeBaseUrl: string
     installSteps: string[]
     summary: string
   }>
+  runtimeStatus: () => Promise<{
+    ready: boolean
+    path?: string
+    installable: boolean
+    message?: string
+  }>
+  runtimeDownload: () => Promise<{ ok: boolean; message?: string; path?: string }>
+  modelDownload: (model?: string) => Promise<{ ok: boolean; message?: string }>
+  cloudTest: () => Promise<{ ok: boolean; latencyMs: number; message?: string }>
+  onDownloadProgress: (callback: (d: {
+    target: 'runtime' | 'model'
+    phase: 'downloading' | 'extracting' | 'locating' | 'done'
+    model?: string
+    receivedBytes?: number
+    totalBytes?: number
+  }) => void) => () => void
   onInterim: (callback: (d: { sessionId?: string; text: string }) => void) => () => void
   onFinal: (callback: (d: { sessionId?: string; text: string }) => void) => () => void
   onError: (callback: (d: { sessionId?: string; code: string; message: string }) => void) => () => void
@@ -1410,6 +1439,9 @@ const electronAPI: ElectronAPI = {
     streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),
     interrupt: () => ipcRenderer.invoke('agent:interrupt'),
     reinitProvider: () => ipcRenderer.invoke('agent:reinit-provider'),
+    /** Live mid-run permission-mode switch for a running session. */
+    setAgentPermissionMode: (sessionId: string, mode: string) =>
+      ipcRenderer.invoke('agent:set-permission-mode', { sessionId, mode }),
   },
   projects: {
     getRecentFolders: () => ipcRenderer.invoke('projects:get-recent-folders'),
@@ -1557,6 +1589,9 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:message:truncateAfter', sessionId, messageId),
     truncateFromInclusive: (sessionId: string, messageId: string) =>
       ipcRenderer.invoke('db:message:truncateFromInclusive', sessionId, messageId),
+  },
+  usage: {
+    summary: () => ipcRenderer.invoke('db:usage:summary'),
   },
   settingsDb: {
     get: (key: string) => ipcRenderer.invoke('db:setting:get', key),
@@ -1978,6 +2013,24 @@ const electronAPI: ElectronAPI = {
     getModelStatus: () => ipcRenderer.invoke('voice:model-status'),
     getModelList: () => ipcRenderer.invoke('voice:model-list'),
     envDoctor: () => ipcRenderer.invoke('voice:env-doctor'),
+    runtimeStatus: () => ipcRenderer.invoke('voice:runtime-status'),
+    runtimeDownload: () => ipcRenderer.invoke('voice:runtime-download'),
+    modelDownload: (model) => ipcRenderer.invoke('voice:model-download', model),
+    cloudTest: () => ipcRenderer.invoke('voice:cloud-test'),
+    onDownloadProgress: (callback) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        d: {
+          target: 'runtime' | 'model'
+          phase: 'downloading' | 'extracting' | 'locating' | 'done'
+          model?: string
+          receivedBytes?: number
+          totalBytes?: number
+        },
+      ) => callback(d)
+      ipcRenderer.on('voice:download-progress', handler)
+      return () => ipcRenderer.removeListener('voice:download-progress', handler)
+    },
     onInterim: (callback) => {
       const handler = (_e: Electron.IpcRendererEvent, d: { sessionId?: string; text: string }) => callback(d)
       ipcRenderer.on('voice:interim', handler)

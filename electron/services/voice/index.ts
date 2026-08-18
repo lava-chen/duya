@@ -14,10 +14,15 @@ import {
   collectEnvReport,
   modelPath,
   modelRoot,
+  runtimeBinDir,
   ModelManager,
+  RuntimeManager,
+  testCloudTranscription,
   Vad,
   type VoiceConfigDTO,
   type ModelStatusDTO,
+  type ModelDownloadProgress,
+  type RuntimeProgress,
   type VoiceErrorCode,
 } from '@duya/voice';
 import { SttWorker, type SttWorkerInitPayload } from './stt-worker';
@@ -31,7 +36,8 @@ export type VoiceEmitChannel =
   | 'voice:final'
   | 'voice:error'
   | 'voice:cancelled'
-  | 'voice:auto-stop';
+  | 'voice:auto-stop'
+  | 'voice:download-progress';
 
 export interface VoiceServiceOptions {
   /** Push an event to the renderer (wired to webContents.send by the handler). */
@@ -41,17 +47,12 @@ export interface VoiceServiceOptions {
 export class VoiceService {
   private readonly opts: VoiceServiceOptions;
   private worker: SttWorker | null = null;
-  private readonly vad: Vad;
+  private vad: Vad | null = null;
   private readonly logger = getLogger();
   private readonly userDataRoot = resolveConfigRoot();
 
   constructor(opts: VoiceServiceOptions) {
     this.opts = opts;
-    const cfg = this.resolvedConfig();
-    this.vad = new Vad({
-      endSilenceBlocks: Math.max(1, Math.round(cfg.endSilenceMs / cfg.chunkMs)),
-      noSpeechBlocks: Math.max(1, Math.round(cfg.noSpeechTimeoutMs / cfg.chunkMs)),
-    });
   }
 
   private resolvedConfig() {
@@ -69,8 +70,13 @@ export class VoiceService {
       return this.startCloud(cfg, opts?.sessionId);
     }
 
-    // Local whisper.cpp path.
-    const binary = detectWhisperBinary();
+    // Local whisper.cpp path: explicit config path → managed runtime dir →
+    // PATH → common candidates.
+    const binary = detectWhisperBinary(
+      process.platform,
+      cfg.binaryPath,
+      runtimeBinDir(this.userDataRoot),
+    );
     if (!binary.found || !binary.path) {
       return { ok: false, error: 'model_not_ready', message: 'whisper binary missing' };
     }
@@ -88,19 +94,24 @@ export class VoiceService {
   }
 
   /**
-   * Cloud track: resolve the provider (explicit `voice.stt.cloud.provider`,
-   * else the default provider), then base_url / api key / model from the
-   * single-source provider config. Falls back to the default provider when
-   * the configured one is missing.
+   * Cloud provider resolution with the full fallback chain: explicit
+   * `voice.stt.cloud.provider` → default provider → first configured
+   * provider (mirrors agent-communicator's getDefaultOrFirstLlmProvider) so
+   * voice works out of the box whenever any provider exists.
    */
+  private resolveCloudProvider(cfg: ResolvedVoiceConfig) {
+    const providerStore = getProviderStore();
+    const explicit = cfg.cloud.provider
+      ? providerStore.getLlmProvider(cfg.cloud.provider)
+      : undefined;
+    return explicit ?? providerStore.getDefaultLlmProvider() ?? providerStore.listLlmProviders()[0];
+  }
+
   private startCloud(
     cfg: ResolvedVoiceConfig,
     sessionId?: string,
   ): Promise<{ ok: boolean; error?: string; message?: string }> {
-    const providerStore = getProviderStore();
-    const provider =
-      (cfg.cloud.provider ? providerStore.getLlmProvider(cfg.cloud.provider) : undefined) ??
-      providerStore.getDefaultLlmProvider();
+    const provider = this.resolveCloudProvider(cfg);
     const baseUrl = (cfg.cloud.baseUrl || provider?.endpoints.baseUrl || '').replace(/\/+$/, '');
     const apiKey = provider?.auth?.apiKey || '';
     if (!baseUrl || !apiKey) {
@@ -119,16 +130,33 @@ export class VoiceService {
     payload: SttWorkerInitPayload,
     sessionId?: string,
   ): Promise<{ ok: boolean; error?: string; message?: string }> {
+    // One worker per utterance: dispose any leftover worker from a previous
+    // session so processes never accumulate.
+    this.worker?.dispose();
+    this.worker = null;
+
+    const cfg = this.resolvedConfig();
     try {
       const worker = new SttWorker({
         onInterim: (text) => this.opts.emit('voice:interim', { sessionId, text }),
-        onFinal: (text) => this.opts.emit('voice:final', { sessionId, text }),
-        onError: (message, code) =>
+        onFinal: (text) => {
+          this.opts.emit('voice:final', { sessionId, text });
+          // The utterance is complete — tear the worker down so nothing leaks.
+          if (this.worker === worker) this.worker = null;
+          worker.dispose();
+        },
+        onError: (message, code) => {
           this.opts.emit('voice:error', {
             sessionId,
             code: normalizeErrorCode(code ?? 'internal'),
             message,
-          }),
+          });
+          if (this.worker === worker) this.worker = null;
+          worker.dispose();
+        },
+        onExit: () => {
+          if (this.worker === worker) this.worker = null;
+        },
       });
       await worker.spawn();
       const ready = await worker.init({ ...payload, kind });
@@ -137,7 +165,10 @@ export class VoiceService {
         return { ok: false, error: 'model_not_ready', message: 'worker init reported not ready' };
       }
       this.worker = worker;
-      this.vad.reset();
+      this.vad = new Vad({
+        endSilenceMs: cfg.endSilenceMs,
+        noSpeechTimeoutMs: cfg.noSpeechTimeoutMs,
+      });
       this.logger.info('Voice STT ready', { engine: kind }, LogComponent.Voice);
       return { ok: true };
     } catch (err) {
@@ -148,9 +179,10 @@ export class VoiceService {
 
   transcribeChunk(chunk: Int16Array): { ok: boolean } {
     const worker = this.worker;
-    if (!worker) return { ok: false };
+    const vad = this.vad;
+    if (!worker || !vad) return { ok: false };
     try {
-      const vadState = this.vad.push(chunk);
+      const vadState = vad.push(chunk);
       if (vadState.kind === 'finalize') {
         this.autoFinalize(worker, chunk);
         return { ok: true };
@@ -168,13 +200,17 @@ export class VoiceService {
 
   /**
    * Tail silence reached: finalize the current utterance and notify the
-   * renderer that transcription auto-stopped. Synchronous on purpose so the
-   * chunk pipeline stays { ok: boolean }.
+   * renderer that transcription auto-stopped. The final text follows on the
+   * `voice:final` event (which also disposes the worker). Synchronous on
+   * purpose so the chunk pipeline stays { ok: boolean }.
    */
   private autoFinalize(worker: SttWorker, chunk: Int16Array): void {
+    this.vad?.reset();
     worker.finalize();
-    this.opts.emit('voice:auto-stop', { reason: 'finalize' });
+    // Tail silence seeds the next utterance buffer; harmless because the
+    // renderer stops capturing after the auto-stop event.
     worker.push(chunk);
+    this.opts.emit('voice:auto-stop', { reason: 'finalize' });
   }
 
   /**
@@ -182,14 +218,15 @@ export class VoiceService {
    * renderer. Synchronous on purpose (worker.reset() is sync).
    */
   private autoCancelNoSpeech(worker: SttWorker): void {
+    this.vad?.reset();
     worker.reset();
-    this.vad.reset();
     this.opts.emit('voice:auto-stop', { reason: 'no_speech' });
   }
 
   async stop(): Promise<{ ok: boolean }> {
     const worker = this.worker;
     if (!worker) return { ok: false };
+    // Final text arrives on `voice:final`, which disposes the worker.
     worker.finalize();
     return { ok: true };
   }
@@ -197,24 +234,36 @@ export class VoiceService {
   async cancel(): Promise<{ ok: boolean }> {
     const worker = this.worker;
     if (!worker) return { ok: false };
+    this.vad?.reset();
     worker.reset();
-    this.vad.reset();
+    if (this.worker === worker) this.worker = null;
+    worker.dispose();
+    this.opts.emit('voice:cancelled', { reason: 'user_cancelled' });
     return { ok: true };
   }
 
   getConfig(): VoiceConfigDTO {
     const cfg = this.resolvedConfig();
     const modelStatus = this.modelStatus();
+    const binary = detectWhisperBinary(
+      process.platform,
+      cfg.binaryPath,
+      runtimeBinDir(this.userDataRoot),
+    );
     return {
       enabled: cfg.enabled,
+      inputDevice: cfg.inputDevice,
       engine: cfg.engine,
       endSilenceMs: cfg.endSilenceMs,
       noSpeechTimeoutMs: cfg.noSpeechTimeoutMs,
       chunkMs: cfg.chunkMs,
       language: cfg.language,
       model: cfg.model,
-      modelReady: cfg.engine === 'cloud' ? this.cloudReady() : modelStatus.ready,
+      modelReady:
+        cfg.engine === 'cloud' ? this.cloudReady() : modelStatus.ready && binary.found,
       modelSizeMb: modelStatus.sizeMb,
+      cloudProvider: cfg.cloud.provider,
+      cloudModel: cfg.cloud.size,
     };
   }
 
@@ -224,12 +273,80 @@ export class VoiceService {
 
   /** List all known local models with their readiness/size (for the picker). */
   getModelList(): ModelStatusDTO[] {
-    return new ModelManager({ rootDir: modelRoot(this.userDataRoot) }).listModels();
+    return new ModelManager({
+      rootDir: modelRoot(this.userDataRoot),
+      baseUrl: this.resolvedConfig().modelUrlBase,
+    }).listModels();
   }
 
   /** First-use guidance report (whisper binary / model / install steps). */
   envReport() {
-    return collectEnvReport();
+    const cfg = this.resolvedConfig();
+    return collectEnvReport({
+      explicitPath: cfg.binaryPath,
+      managedBinDir: runtimeBinDir(this.userDataRoot),
+      runtimeBaseUrl: cfg.runtimeUrlBase,
+    });
+  }
+
+  /** Managed prebuilt-runtime status (for the one-click install card). */
+  runtimeStatus() {
+    const cfg = this.resolvedConfig();
+    return new RuntimeManager({
+      binDir: runtimeBinDir(this.userDataRoot),
+      baseUrl: cfg.runtimeUrlBase,
+    }).status();
+  }
+
+  /** One-click install: download + extract the prebuilt whisper.cpp CLI. */
+  async installRuntime(): Promise<{ ok: boolean; message?: string; path?: string }> {
+    const cfg = this.resolvedConfig();
+    const manager = new RuntimeManager({
+      binDir: runtimeBinDir(this.userDataRoot),
+      baseUrl: cfg.runtimeUrlBase,
+    });
+    const progress = (p: RuntimeProgress) =>
+      this.opts.emit('voice:download-progress', { target: 'runtime', ...p });
+    try {
+      const status = await manager.install(progress);
+      return status.ready
+        ? { ok: true, path: status.path }
+        : { ok: false, message: status.message ?? 'runtime install failed' };
+    } catch (err) {
+      this.logger.error('Voice runtime install failed', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Voice);
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Download a ggml model into the managed models dir. */
+  async downloadModel(model?: string): Promise<{ ok: boolean; message?: string }> {
+    const cfg = this.resolvedConfig();
+    const target = model?.trim() || cfg.model;
+    const manager = new ModelManager({
+      rootDir: modelRoot(this.userDataRoot),
+      baseUrl: cfg.modelUrlBase,
+    });
+    const progress = (p: ModelDownloadProgress) =>
+      this.opts.emit('voice:download-progress', { target: 'model', model: p.model, ...p });
+    try {
+      await manager.ensure(target, undefined, progress);
+      return { ok: true };
+    } catch (err) {
+      this.logger.error('Voice model download failed', err instanceof Error ? err : new Error(String(err)), undefined, LogComponent.Voice);
+      return { ok: false, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /** Probe the configured cloud provider with a 0.2 s silent transcription. */
+  async cloudTest(): Promise<{ ok: boolean; latencyMs: number; message?: string }> {
+    const cfg = this.resolvedConfig();
+    const provider = this.resolveCloudProvider(cfg);
+    const baseUrl = (cfg.cloud.baseUrl || provider?.endpoints.baseUrl || '').replace(/\/+$/, '');
+    const apiKey = provider?.auth?.apiKey || '';
+    if (!baseUrl || !apiKey) {
+      return { ok: false, latencyMs: 0, message: '未配置可用的 provider（base_url / API Key 缺失）' };
+    }
+    return testCloudTranscription({ baseUrl, apiKey, model: cfg.cloud.size });
   }
 
   private modelStatus(): ModelStatusDTO {
@@ -240,10 +357,7 @@ export class VoiceService {
   /** True when the cloud track has a usable provider (base_url + api key). */
   private cloudReady(): boolean {
     const cfg = this.resolvedConfig();
-    const providerStore = getProviderStore();
-    const provider =
-      (cfg.cloud.provider ? providerStore.getLlmProvider(cfg.cloud.provider) : undefined) ??
-      providerStore.getDefaultLlmProvider();
+    const provider = this.resolveCloudProvider(cfg);
     return !!(cfg.cloud.baseUrl || provider?.endpoints.baseUrl) && !!provider?.auth?.apiKey;
   }
 

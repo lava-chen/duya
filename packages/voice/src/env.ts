@@ -1,13 +1,18 @@
 /**
  * Local whisper.cpp environment detection and provisioning guidance.
  *
- * This is the package's core responsibility per the user: manage the
- * machine's whisper environment and give first-use configuration guidance.
- * It detects the binary, reports platform-specific install commands, and
- * verifies the model file.
+ * Resolution order: explicit `binary_path` config → managed runtime dir
+ * (`~/.duya/voice/bin`, installed by RuntimeManager) → PATH → common
+ * install locations. Reports platform-specific install guidance and whether
+ * one-click install is available.
  */
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  runtimeAssetForPlatform,
+  WHISPER_BINARY_NAMES,
+  DEFAULT_RUNTIME_BASE,
+} from './runtime-manager';
 import type { ModelStatusDTO } from './types';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
@@ -23,6 +28,12 @@ export interface EnvReport {
   platform: Platform;
   binaryFound: boolean;
   binaryPath?: string;
+  /** Source of the detected binary (config / managed / path / candidates). */
+  binarySource?: 'config' | 'managed' | 'path' | 'candidate';
+  /** One-click runtime install is supported on this platform. */
+  runtimeInstallable: boolean;
+  /** Download base used by RuntimeManager (mirror-aware). */
+  runtimeBaseUrl: string;
   version?: string;
   /** Install commands (per platform) shown when the binary is missing. */
   installSteps: string[];
@@ -30,30 +41,34 @@ export interface EnvReport {
   summary: string;
 }
 
-/** Whisper CLI binary name per platform. */
+/** Whisper CLI binary names per platform, preference-ordered. */
 function binaryNames(platform: NodeJS.Platform): string[] {
-  switch (platform) {
-    case 'win32':
-      return ['whisper-cli.exe', 'whisper.exe'];
-    case 'darwin':
-      return ['whisper-cli', 'whisper'];
-    default:
-      return ['whisper-cli', 'whisper'];
+  const base = ['whisper-cli', 'whisper'];
+  if (platform === 'win32') {
+    return ['whisper-cli.exe', 'whisper.exe', 'main.exe'];
   }
+  return base;
 }
 
 /** Common install locations for the whisper.cpp binary. */
 function candidatePaths(platform: NodeJS.Platform): string[] {
   const home = process.env.HOME || process.env.USERPROFILE || '';
+  const local = process.env.LOCALAPPDATA || '';
+  const programData = process.env.PROGRAMDATA || '';
   const paths: string[] = [];
   switch (platform) {
     case 'win32': {
-      // VCPKG / custom installs.
-      paths.push(join(home, 'whisper.cpp', 'build', 'bin', 'whisper-cli.exe'));
+      // whisper.cpp built from source (classic + modern layouts).
+      for (const bin of ['whisper-cli.exe', 'main.exe']) {
+        paths.push(join(home, 'whisper.cpp', 'build', 'bin', bin));
+        paths.push(join(home, 'whisper.cpp', 'bin', bin));
+      }
+      paths.push(join(local, 'Programs', 'whisper.cpp', 'whisper-cli.exe'));
+      paths.push(join(home, 'scoop', 'shims', 'whisper-cli.exe'));
+      paths.push(join(programData, 'chocolatey', 'bin', 'whisper-cli.exe'));
       break;
     }
     case 'darwin': {
-      // Homebrew installs whisper-cli into /usr/local or /opt/homebrew.
       paths.push('/opt/homebrew/bin/whisper-cli');
       paths.push('/usr/local/bin/whisper-cli');
       break;
@@ -61,6 +76,7 @@ function candidatePaths(platform: NodeJS.Platform): string[] {
     default: {
       paths.push('/usr/local/bin/whisper-cli');
       paths.push('/usr/bin/whisper-cli');
+      paths.push(join(home, '.local', 'bin', 'whisper-cli'));
       break;
     }
   }
@@ -72,10 +88,9 @@ function installSteps(platform: NodeJS.Platform): string[] {
   switch (platform) {
     case 'win32':
       return [
-        'Windows: download the whisper.cpp release ZIP from',
-        '  https://github.com/ggerganov/whisper.cpp/releases',
-        'Extract and place whisper-cli.exe into your PATH, or set the',
-        'path explicitly in config.toml under [voice.stt.local].',
+        'Windows: 在 设置 → 语音输入 点击「一键安装」自动下载 whisper.cpp，或',
+        '从 https://github.com/ggml-org/whisper.cpp/releases 下载 whisper-bin-x64.zip',
+        '解压后在设置中配置二进制路径（[voice.stt.local] binary_path）。',
       ];
     case 'darwin':
       return [
@@ -85,31 +100,57 @@ function installSteps(platform: NodeJS.Platform): string[] {
       ];
     default:
       return [
-        'Linux: build from source:',
-        '  cmake -B build && cmake --build build -j',
+        'Linux: 在 设置 → 语音输入 点击「一键安装」，或',
+        'build from source: cmake -B build && cmake --build build -j',
         'The binary is produced at build/bin/whisper-cli.',
       ];
   }
 }
 
-/** Detect whether a whisper.cpp binary is present on the current machine. */
+export interface DetectWhisperOptions {
+  /** Explicit `voice.stt.local.binary_path` config value. */
+  explicitPath?: string;
+  /** Managed runtime dir (`~/.duya/voice/bin`), checked before PATH. */
+  managedBinDir?: string;
+}
+
+/**
+ * Detect whether a whisper.cpp CLI binary is present on this machine.
+ * Order: explicit config → managed dir → PATH → common candidates.
+ */
 export function detectWhisperBinary(
   platform: NodeJS.Platform = process.platform,
   explicitPath?: string,
-): { found: boolean; path?: string } {
-  if (explicitPath) {
-    return { found: existsSync(explicitPath), path: explicitPath };
+  managedBinDir?: string,
+): { found: boolean; path?: string; source?: 'config' | 'managed' | 'path' | 'candidate' } {
+  if (explicitPath && explicitPath.trim()) {
+    const p = explicitPath.trim();
+    return { found: existsSync(p), path: p, source: 'config' };
+  }
+  if (managedBinDir) {
+    for (const name of WHISPER_BINARY_NAMES) {
+      const p = join(managedBinDir, name);
+      if (isFile(p)) return { found: true, path: p, source: 'managed' };
+    }
   }
   // Search PATH first (executables discoverable via `which`-like lookup).
   const names = binaryNames(platform);
   for (const name of names) {
     const fromPath = findOnPath(name);
-    if (fromPath) return { found: true, path: fromPath };
+    if (fromPath) return { found: true, path: fromPath, source: 'path' };
   }
   for (const p of candidatePaths(platform)) {
-    if (existsSync(p)) return { found: true, path: p };
+    if (isFile(p)) return { found: true, path: p, source: 'candidate' };
   }
   return { found: false };
+}
+
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Minimal PATH lookup (respects PATHEXT on Windows). */
@@ -128,19 +169,35 @@ function findOnPath(bin: string): string | undefined {
   return undefined;
 }
 
+export interface CollectEnvOptions extends DetectWhisperOptions {
+  /** Mirror / custom release-download base used by RuntimeManager. */
+  runtimeBaseUrl?: string;
+}
+
 /** Build a full environment report for the `voice env doctor` command. */
-export function collectEnvReport(explicitPath?: string): EnvReport {
+export function collectEnvReport(opts?: CollectEnvOptions): EnvReport {
   const platform = process.platform as Platform;
-  const { found, path } = detectWhisperBinary(process.platform, explicitPath);
+  const baseUrl = opts?.runtimeBaseUrl?.trim() || DEFAULT_RUNTIME_BASE;
+  const { found, path, source } = detectWhisperBinary(
+    process.platform,
+    opts?.explicitPath,
+    opts?.managedBinDir,
+  );
   const install = installSteps(process.platform);
+  const runtimeInstallable = runtimeAssetForPlatform(process.platform, process.arch, baseUrl) !== null;
   return {
     platform,
     binaryFound: found,
     binaryPath: path,
+    binarySource: source,
+    runtimeInstallable,
+    runtimeBaseUrl: baseUrl,
     installSteps: install,
     summary: found
       ? `whisper.cpp binary found at ${path}`
-      : 'whisper.cpp binary is missing. Follow the install steps below.',
+      : runtimeInstallable
+        ? 'whisper.cpp binary is missing. 可在设置中一键安装。'
+        : 'whisper.cpp binary is missing. Follow the install steps below.',
   };
 }
 
