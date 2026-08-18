@@ -1,8 +1,18 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { BackgroundAgentLifecycle } from '../../../src/lifecycle/BackgroundAgentLifecycle.js'
 import type { TaskRecord } from '../../../src/lifecycle/TaskState.js'
 import type { AgentProgressEvent } from '../../../src/tool/AgentTool/runAgent.js'
 import type { Message } from '../../../src/types.js'
+
+// The lifecycle delivers terminal <task-notification> envelopes through the
+// mailbox IPC. Under vitest's fork pool `process.send` exists, so an
+// unmocked mailboxDb.send would push a real db:request frame into the pool's
+// IPC channel and crash the runner ("Unexpected call to process.send()").
+vi.mock('../../../src/ipc/db-client.js', () => ({
+  mailboxDb: {
+    send: vi.fn(async () => ({})),
+  },
+}))
 
 function makeInput(overrides: Partial<Parameters<BackgroundAgentLifecycle['register']>[0]> = {}) {
   return {

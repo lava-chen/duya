@@ -17,6 +17,10 @@ export type RuntimeContextSource =
   | 'auto_continue'
   | 'goal_summary'
   | 'research_continuation'
+  | 'dead_loop_nudge'
+  | 'premature_stop'
+  | 'tool_intent'
+  | 'max_turns_wrapup'
   | 'custom';
 
 /**
@@ -244,6 +248,10 @@ export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
   auto_continue: false,
   goal_summary: false, // dual-tag turn+directive; counts as mid-turn (grok GoalSummary)
   research_continuation: false,
+  dead_loop_nudge: false,
+  premature_stop: false,
+  tool_intent: false,
+  max_turns_wrapup: false,
   custom: false,
 };
 
