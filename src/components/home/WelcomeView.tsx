@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useConversationStore } from "@/stores/conversation-store";
 import { getActiveProviderIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
+import { useSettings } from "@/hooks/useSettings";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { AgentModeSelector, getProfileIdForMode } from "@/components/chat/AgentModeSelector";
 import { SessionSelector } from "./SessionSelector";
@@ -18,11 +19,26 @@ interface WelcomeViewProps {
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
   const { projects, createThread, addProjectFolder, isHydrated } = useConversationStore();
   const { t } = useTranslation();
+  const { settings, save: saveSettings } = useSettings();
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
+  // Remember the last-used thinking effort so it carries over to new sessions.
+  const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
+
+  // Sync effort from settings when they load for the first time.
+  useEffect(() => {
+    setEffortState(settings.defaultThinkingEffort ?? undefined);
+  }, [settings.defaultThinkingEffort]);
+
+  const setEffort = useCallback((newEffort: string | undefined) => {
+    setEffortState(newEffort);
+    if (newEffort !== settings.defaultThinkingEffort) {
+      saveSettings({ defaultThinkingEffort: newEffort ?? null }).catch(console.error);
+    }
+  }, [saveSettings, settings.defaultThinkingEffort]);
 
   // Refs to always read the latest values inside useCallback closures.
   // Without these, handleSend captures the initial '' and never sees
@@ -176,12 +192,12 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           // Double rAF ensures the ChatView mount effects (subscribeSession, etc.) have fired
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, agentProfileId, outputStyleConfig);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, undefined, effort);
           });
         });
       }
     },
-    [selectedProject, createThread, onSelectThread, parseModelName, resolveDefaultModelSync, agentProfileId]
+    [selectedProject, createThread, onSelectThread, parseModelName, resolveDefaultModelSync, agentProfileId, effort]
   );
 
   const handleNewNoProjectSession = useCallback(async () => {
@@ -263,6 +279,8 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
               isStreaming={false}
               modelName={sessionModel}
               onModelChange={handleModelChange}
+              effort={effort}
+              onEffortChange={setEffort}
               placeholder={t('chat.describeWhatToBuild')}
             />
             {/* Agent chosen once at session creation; fixed afterwards. */}

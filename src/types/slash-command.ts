@@ -34,6 +34,15 @@ export interface PopoverItem {
   installedSource?: 'agents' | 'claude';
   source?: 'global' | 'project' | 'plugin' | 'installed' | 'sdk';
   group?: PopoverItemGroup;
+  /**
+   * Category used by the input plus-menu to group items into the two
+   * second-level lists:
+   *   - 'context' → mode + MCP (triggered by `@` or the `@添加上下文` row)
+   *   - 'command' → settings + skills (triggered by `/` or the `/使用指令和技能` row)
+   * `attachments` (add files) lives outside either category and is exposed as a
+   * top-level row of the plus-menu instead.
+   */
+  category?: 'context' | 'command';
   /** Absolute path to the skill directory (SKILL.md parent). Only set for agent_skill items. */
   skillRoot?: string;
   /** For settings_submenu items: which sub-view to open. */
@@ -42,7 +51,7 @@ export interface PopoverItem {
   modeValue?: string;
 }
 
-export type PopoverMode = 'skill' | 'file' | 'cli' | null;
+export type PopoverMode = 'skill' | 'context' | 'cli' | null;
 
 export interface CommandBadge {
   command: string;

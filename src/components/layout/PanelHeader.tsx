@@ -1,7 +1,7 @@
 // src/components/layout/PanelHeader.tsx
 "use client";
 
-import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type RefObject } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { PlusIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
@@ -129,7 +129,7 @@ export function PanelHeader() {
               open={addMenuOpen}
               onClick={() => setAddMenuOpen((value) => !value)}
             />
-            {addMenuOpen && <AddPageMenu ref={addMenuRef} anchorRef={addButtonRef} onSelect={openPage} />}
+            {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
           </div>
         </div>
       </div>
@@ -187,17 +187,17 @@ export function PanelHeader() {
             </button>
           );
         })}
+      </div>
+      <div className="panel-header-actions">
         <div className="panel-header-add-wrap">
           <AddPageButton
             ref={addButtonRef}
             open={addMenuOpen}
             onClick={() => setAddMenuOpen((value) => !value)}
           />
+          {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
         </div>
       </div>
-      {addMenuOpen && (
-        <AddPageMenu ref={addMenuRef} anchorRef={addButtonRef} onSelect={openPage} />
-      )}
     </div>
   );
 }
@@ -235,17 +235,8 @@ const AddPageButton = forwardRef<
 
 const AddPageMenu = forwardRef<
   HTMLDivElement,
-  { onSelect: (pageId: PageId) => void; anchorRef: RefObject<HTMLButtonElement | null> }
->(function AddPageMenu({ onSelect, anchorRef }, ref) {
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-
-  useEffect(() => {
-    const el = anchorRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setPos({ top: rect.bottom + 6, right: window.innerWidth - rect.right });
-  }, [anchorRef]);
-
+  { onSelect: (pageId: PageId) => void }
+>(function AddPageMenu({ onSelect }, ref) {
   // `office` is a passive surface — opened by the agent / external
   // events, not chosen from the menu. Hide it here so the picker only
   // surfaces pages the user can launch themselves.
@@ -258,7 +249,6 @@ const AddPageMenu = forwardRef<
       ref={ref}
       className="panel-add-menu"
       role="menu"
-      style={pos ? { position: "fixed", top: pos.top, right: pos.right, left: "auto" } : undefined}
     >
       {entries.map((entry) => (
         <AddPageMenuRow

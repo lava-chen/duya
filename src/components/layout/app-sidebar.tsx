@@ -125,6 +125,7 @@ const settingsNavGroups: {
     labelKey: 'settings.group.system',
     items: [
       { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
+      { id: 'performance', labelKey: 'settings.performance', icon: LightningIcon },
       { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
     ],
   },

@@ -72,6 +72,35 @@ export function preprocessMarkdownImagePaths(text: string): string {
   );
 }
 
+/**
+ * Repair malformed ATX heading syntax that LLM outputs occasionally produce,
+ * so a `###` renders as a heading instead of literal `#` text:
+ *
+ * 1. Missing space after the marker at line start: `###标题` -> `### 标题`
+ * 2. Heading glued to the previous line: `正文### 标题` -> `正文\n### 标题`
+ *
+ * Only `##`-`######` are repaired — a single `#` is left untouched to avoid
+ * mangling `#include` / `#!` / `#hashtag`. Fenced code blocks are skipped so
+ * their contents are never rewritten.
+ */
+export function preprocessMarkdownHeadings(text: string): string {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  return parts
+    .map((part, i) => (i % 2 === 1 ? part : repairHeadingSyntax(part)))
+    .join('');
+}
+
+function repairHeadingSyntax(segment: string): string {
+  let out = segment;
+  // 1) Missing space after a heading marker at line start.
+  out = out.replace(/^(#{2,6})(?!\s)(?!#)/gm, '$1 ');
+  // 2) Heading glued to the previous line: ensure a newline precedes it.
+  //    Never match a subset of an existing marker (preceded by #) or a
+  //    marker already at line start.
+  out = out.replace(/(?<![#\n])(?<!^)(#{2,6}\s)/gm, '\n$1');
+  return out;
+}
+
 interface FrontmatterResult {
   meta: Record<string, string> | null;
   content: string;
@@ -259,7 +288,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const { cleanedText } = extractMemoryCitation(children);
 
   const processed = preprocessBareImageLinks(
-    preprocessMarkdownImagePaths(preprocessMarkdownBold(cleanedText))
+    preprocessMarkdownImagePaths(
+      preprocessMarkdownBold(preprocessMarkdownHeadings(cleanedText))
+    )
   );
   const { meta, content } = parseFrontmatter(processed);
 
