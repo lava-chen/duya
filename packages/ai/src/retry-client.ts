@@ -49,5 +49,10 @@ export function createAIClientWithRetry(options: RetryableAIClientOptions): AICl
       if (!inner.chat) throw new Error('Underlying client does not support chat()');
       return inner.chat(messages, opts);
     },
+    async embed(texts) {
+      const inner = await innerPromise;
+      if (!inner.embed) throw new Error('Underlying client does not support embed()');
+      return inner.embed(texts);
+    },
   };
 }

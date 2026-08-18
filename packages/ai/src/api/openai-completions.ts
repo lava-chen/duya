@@ -24,6 +24,7 @@ import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
+import { sortToolsByName } from '../utils/tool-order.js';
 
 // =============================================================================
 // Tool call ID synthesis
@@ -65,6 +66,42 @@ interface OpenAIToolCallDelta {
  */
 interface OpenRouterProviderMeta {
   provider?: { name?: string };
+}
+
+/**
+ * OpenAI Chat Completions reports cache hits in
+ * `usage.prompt_tokens_details.cached_tokens` (OpenAI / GLM / DeepSeek /
+ * Kimi all follow this standard). The SDK's `Usage` type omits the field,
+ * so we narrow via this structural cast.
+ */
+interface OpenAIPromptDetails {
+  prompt_tokens_details?: { cached_tokens?: number };
+}
+
+/**
+ * Map an OpenAI Chat Completions usage block to duya's `TokenUsage` shape.
+ *
+ * OpenAI's `prompt_tokens` already includes the cached portion, so it maps
+ * 1:1 to `input_tokens` without inflating the total — `cached_tokens` is
+ * only split out so the pipeline can report cache hit rate and price cache
+ * reads at the discounted rate. Without this mapping, every OpenAI-protocol
+ * provider shows a 0% cache hit rate.
+ */
+export function mapOpenAIUsage(
+  promptTokens: number | undefined,
+  completionTokens: number | undefined,
+  cachedTokens: number | undefined,
+): { input_tokens: number; output_tokens: number; cache_hit_tokens: number } {
+  return {
+    input_tokens: promptTokens || 0,
+    output_tokens: completionTokens || 0,
+    cache_hit_tokens: cachedTokens || 0,
+  };
+}
+
+/** Read `prompt_tokens_details.cached_tokens` off a raw usage block. */
+function cachedTokensFrom(usage: unknown): number | undefined {
+  return (usage as OpenAIPromptDetails | undefined)?.prompt_tokens_details?.cached_tokens;
 }
 
 /** Internal accumulator type for streaming JSON arguments. */
@@ -569,7 +606,7 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
         stream_options: { include_usage: true },
         ...(chatOptions?.tools?.length
           ? {
-              tools: chatOptions.tools.map(t => ({
+              tools: sortToolsByName(chatOptions.tools).map(t => ({
                 type: 'function' as const,
                 function: {
                   name: t.name,
@@ -763,11 +800,22 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       return {
         content: response.choices[0]?.message?.content ?? '',
         usage: response.usage ? {
-          input_tokens: response.usage.prompt_tokens,
-          output_tokens: response.usage.completion_tokens,
+          ...mapOpenAIUsage(
+            response.usage.prompt_tokens,
+            response.usage.completion_tokens,
+            cachedTokensFrom(response.usage),
+          ),
           ...(providerName ? { upstreamProvider: providerName } : {}),
         } : undefined,
       };
+    },
+
+    async embed(texts) {
+      const response = await client.embeddings.create({
+        model: options.model,
+        input: texts,
+      });
+      return response.data.map((item) => item.embedding);
     },
   };
 }

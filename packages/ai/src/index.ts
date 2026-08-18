@@ -252,5 +252,10 @@ function createLazyClient(loader: () => Promise<AIClient>): AIClient {
       if (!client.chat) throw new Error('Underlying client does not support chat()');
       return client.chat(messages, options);
     },
+    async embed(texts) {
+      const client = await getClient();
+      if (!client.embed) throw new Error('Underlying client does not support embed()');
+      return client.embed(texts);
+    },
   };
 }

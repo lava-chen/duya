@@ -38,6 +38,7 @@ import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tool
 import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem } from '../utils/prompt-caching.js';
+import { sortToolsByName } from '../utils/tool-order.js';
 import { isToolSchemaMismatchError } from '../utils/errors.js';
 import { parseJsonWithRepair } from '../utils/json-repair.js';
 import { parsePartialJsonSafe } from '../utils/partial-json.js';
@@ -1405,10 +1406,19 @@ export function toAnthropicMessages(
           } as unknown as ContentBlockParam);
         }
       }
+      // Plan 428: propagate the structured tool-error signal so the model can
+      // distinguish failed executions from successful ones. Primary signal is
+      // the message-level status; legacy persisted history without status
+      // falls back to the `<tool_error>` wrapper emitted by
+      // StreamingToolExecutor.createErrorMessage (same probe as
+      // textifyToolResults in transform-messages.ts).
+      const isError = msg.status === 'error'
+        || (typeof msg.content === 'string' && msg.content.includes('<tool_error>'));
       const contentBlocks: ContentBlockParam[] = [{
         type: 'tool_result',
         tool_use_id: toolUseId,
         content: references.length > 0 ? references : toolContent,
+        ...(isError ? { is_error: true } : {}),
       } as ContentBlockParam];
       if (references.length > 0) {
         if (typeof toolContent === 'string') {
@@ -1760,7 +1770,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
       const tools =
         transport === 'none'
           ? []
-          : compatibleTools.map((tool) => ({
+          : sortToolsByName(compatibleTools).map((tool) => ({
               name: tool.name,
               description: tool.description,
               input_schema: tool.input_schema as Anthropic.Tool.InputSchema,
@@ -2047,7 +2057,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         system: applyCacheControlToSystem(
           chatOptions?.systemPrompt || '',
           cacheEligibility,
-          'short',
+          options.cacheRetention ?? 'short',
           options.baseURL,
         ) as Anthropic.MessageCreateParams['system'],
         messages: toAnthropicMessages(chatMessages, model),

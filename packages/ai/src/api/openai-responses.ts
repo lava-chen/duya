@@ -28,6 +28,7 @@ import { transformMessages } from './transform-messages.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { getTemperature } from '../utils/simple-options.js';
+import { sortToolsByName } from '../utils/tool-order.js';
 
 // =============================================================================
 // Types
@@ -68,6 +69,50 @@ function resolveResponsesReasoning(
 
   const mapped = EFFORT_MAP[effort];
   return mapped ? { effort: mapped } : undefined;
+}
+
+// =============================================================================
+// Usage mapping
+// =============================================================================
+
+/**
+ * The Responses API reports cache hits in `usage.input_tokens_details.cached_tokens`
+ * (same convention as Chat Completions' `prompt_tokens_details.cached_tokens`).
+ * The SDK's `ResponseUsage` type omits the field, so we narrow structurally.
+ */
+interface ResponseInputTokenDetails {
+  input_tokens_details?: { cached_tokens?: number };
+}
+
+/**
+ * Map a Responses API usage block to duya's `TokenUsage` shape.
+ *
+ * `input_tokens` already includes the cached portion, so it maps 1:1 —
+ * `cached_tokens` is only split out so the pipeline can report cache hit
+ * rate and price cache reads at the discounted rate.
+ */
+export function mapResponsesUsage(
+  inputTokens: number | undefined,
+  outputTokens: number | undefined,
+  totalTokens: number | undefined,
+  cachedTokens: number | undefined,
+): {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens?: number;
+  cache_hit_tokens: number;
+} {
+  return {
+    input_tokens: inputTokens || 0,
+    output_tokens: outputTokens || 0,
+    total_tokens: totalTokens,
+    cache_hit_tokens: cachedTokens || 0,
+  };
+}
+
+/** Read `input_tokens_details.cached_tokens` off a raw Responses usage block. */
+function cachedTokensFromResponse(usage: unknown): number | undefined {
+  return (usage as ResponseInputTokenDetails | undefined)?.input_tokens_details?.cached_tokens;
 }
 
 // =============================================================================
@@ -368,7 +413,7 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(chatOptions?.tools?.length
           ? {
-              tools: chatOptions.tools.map(t => ({
+              tools: sortToolsByName(chatOptions.tools).map(t => ({
                 type: 'function' as const,
                 name: t.name,
                 description: t.description,
@@ -710,11 +755,12 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
       return {
         content: response.output_text || '',
         usage: response.usage
-          ? {
-              input_tokens: response.usage.input_tokens || 0,
-              output_tokens: response.usage.output_tokens || 0,
-              total_tokens: response.usage.total_tokens,
-            }
+          ? mapResponsesUsage(
+              response.usage.input_tokens,
+              response.usage.output_tokens,
+              response.usage.total_tokens,
+              cachedTokensFromResponse(response.usage),
+            )
           : undefined,
       };
     },

@@ -571,6 +571,86 @@ describe('toAnthropicMessages strict tool ID binding', () => {
   });
 });
 
+// ─── toAnthropicMessages tool error signal (is_error) ───────────────────────
+
+/**
+ * Plan 428: a failed tool execution must reach the provider as a
+ * `tool_result` block with `is_error: true`. The signal comes from the
+ * message-level `status: 'error'` (StreamingToolExecutor.createErrorMessage),
+ * with a `<tool_error>` content-wrapper fallback for legacy persisted
+ * history that predates the status column.
+ */
+describe('toAnthropicMessages tool error signal (is_error)', () => {
+  const model = anthropicModels[0];
+
+  function findToolResult(messages: MessageParam[], toolUseId: string): ContentBlockParam {
+    for (const m of messages) {
+      if (!Array.isArray(m.content)) continue;
+      for (const b of m.content) {
+        if (
+          typeof b === 'object' &&
+          b !== null &&
+          (b as { type?: string }).type === 'tool_result' &&
+          (b as { tool_use_id?: string }).tool_use_id === toolUseId
+        ) {
+          return b;
+        }
+      }
+    }
+    throw new Error(`tool_result for ${toolUseId} not found`);
+  }
+
+  function roundWithToolResult(
+    toolMessage: { content: Message['content']; status?: string },
+  ): MessageParam[] {
+    return toAnthropicMessages(
+      [
+        { id: 'u1', role: 'user', content: 'run the tool' },
+        {
+          id: 'a1',
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_01', name: 'bash', input: { command: 'ls' } }],
+        },
+        { id: 't1', role: 'tool', tool_call_id: 'toolu_01', ...toolMessage },
+      ],
+      model,
+    );
+  }
+
+  it('sets is_error true when the tool message carries status error', () => {
+    const out = roundWithToolResult({
+      content: '<tool_error>command failed</tool_error>',
+      status: 'error',
+    });
+
+    const block = findToolResult(out, 'toolu_01');
+    expect((block as { is_error?: boolean }).is_error).toBe(true);
+  });
+
+  it('sets is_error true for legacy <tool_error> content without status', () => {
+    const out = roundWithToolResult({
+      content: '<tool_error>legacy persisted failure</tool_error>',
+    });
+
+    const block = findToolResult(out, 'toolu_01');
+    expect((block as { is_error?: boolean }).is_error).toBe(true);
+  });
+
+  it('does not set is_error for successful tool results', () => {
+    const out = roundWithToolResult({ content: 'file1 file2' });
+
+    const block = findToolResult(out, 'toolu_01');
+    expect('is_error' in block).toBe(false);
+  });
+
+  it('does not set is_error for a success status', () => {
+    const out = roundWithToolResult({ content: 'ok', status: 'completed' });
+
+    const block = findToolResult(out, 'toolu_01');
+    expect('is_error' in block).toBe(false);
+  });
+});
+
 // ─── parseAnthropicEvent MiniMax thinking handling ──────────────────────────
 
 describe('parseAnthropicEvent MiniMax thinking handling', () => {
