@@ -236,9 +236,10 @@ export function useContextUsage(
         const cacheCreation = usage.cache_creation_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
         // Cache-convention guard: some OpenAI-compatible gateways report
-        // input_tokens excluding cached tokens. Normalize so used reflects
-        // the full prompt volume regardless of the provider's convention.
-        const inputTokens = normalizeInputTokens(rawInput, cacheRead);
+        // input_tokens excluding cached tokens (both cache read and cache
+        // creation). Normalize so used reflects the full prompt volume
+        // regardless of the provider's convention.
+        const inputTokens = normalizeInputTokens(rawInput, cacheRead, cacheCreation);
 
         if (latestUsed === undefined) {
           latestUsed = usage.total_tokens || inputTokens + outputTokens;

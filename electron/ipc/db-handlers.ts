@@ -54,6 +54,8 @@ import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
 import { resolvePermissionProfile } from '../db/permission-resolver';
+import { CapabilityDao } from '../services/providers/capability-dao';
+import { aggregateUsage, type UsageSessionInput } from './usage-aggregator';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
@@ -272,7 +274,7 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:session:list', () => {
     const { sessions } = getCoreStores();
     // Cron sessions are fully ordinary (mode='chat'); no exclusion here.
-    const list = sessions.list();
+    const list = sessions.list({});
     return list.map(coreSessionToIpcRow);
   });
 
@@ -432,6 +434,40 @@ export function registerDbHandlers(): void {
     const deletedCount = events.length - keptEvents.length;
     messageLog.rewriteSession(sessionId, keptEvents);
     return { deletedCount };
+  });
+
+  // ==================== Usage Summary (settings dashboard) ====================
+  // Aggregates token usage / cost / activity across ALL sessions by scanning
+  // core-db rollout files — the renderer's in-memory conversation store only
+  // holds transcripts of sessions opened during the current app run, so
+  // renderer-side aggregation was wildly incomplete (plan: usage-stats fix).
+  ipcMain.handle('db:usage:summary', () => {
+    const { sessions: sessionStore, messageLog } = getCoreStores();
+    const capabilityDao = new CapabilityDao(getDb());
+
+    const inputs: UsageSessionInput[] = sessionStore.list({}).map((session) => ({
+      id: session.id,
+      title: session.title,
+      model: session.model,
+      providerId: session.providerId,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      rows: session.rolloutPath
+        ? storedEventsToIpcMessages(messageLog.listBySession(session.id))
+        : [],
+    }));
+
+    return aggregateUsage(inputs, (providerId, model) => {
+      if (!model) return undefined;
+      const pricing = capabilityDao.getOne(providerId, model)?.pricing;
+      if (!pricing) return undefined;
+      return {
+        inputPerMillion: pricing.inputPerMillion,
+        outputPerMillion: pricing.outputPerMillion,
+        cacheReadPerMillion: pricing.cacheReadPerMillion,
+        cacheWritePerMillion: pricing.cacheWritePerMillion,
+      };
+    });
   });
 
   // ==================== Lock Handlers (core store thin forward) ====================

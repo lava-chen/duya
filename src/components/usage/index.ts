@@ -4,4 +4,5 @@ export { UsageStatCard } from './UsageStatCard';
 export { DailyTokenChart } from './DailyTokenChart';
 export { CostBreakdownBar } from './CostBreakdownBar';
 export { UsageHeatmap } from './UsageHeatmap';
+export { ModelUsageDonut } from './ModelUsageDonut';
 export { SessionList } from './SessionList';

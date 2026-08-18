@@ -4,6 +4,7 @@ import { formatNumber, formatCurrency, formatPercent, formatDuration } from '@/h
 
 interface UsageStatCardProps {
   data: UsageStatCardData;
+  icon?: React.ReactNode;
 }
 
 function getStatusColor(status?: string): string {
@@ -47,13 +48,16 @@ function formatValue(value: string | number, format?: string): string {
   }
 }
 
-export const UsageStatCard: React.FC<UsageStatCardProps> = ({ data }) => {
+export const UsageStatCard: React.FC<UsageStatCardProps> = ({ data, icon }) => {
   return (
     <div
       className={`rounded-xl border p-4 transition-all duration-200 hover:shadow-md ${getStatusBg(data.status)}`}
     >
-      <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] font-semibold">
-        {data.label}
+      <div className="flex items-start justify-between">
+        <div className="text-[11px] uppercase tracking-wider text-[var(--muted)] font-semibold">
+          {data.label}
+        </div>
+        {icon && <div className="text-[var(--muted)] ml-2 -mr-1 -mt-1">{icon}</div>}
       </div>
       <div
         className={`text-2xl font-bold mt-2 font-[family-name:--font-copernicus] ${getStatusColor(data.status)}`}

@@ -1,39 +1,34 @@
 import React, { useState } from 'react';
-import { useConversationStore } from '@/stores/conversation-store';
 import { useUsageData } from '@/hooks/useUsageData';
 import { useTranslation } from '@/hooks/useTranslation';
-import type { UsageFilters } from '@/types/usage';
 import { UsageSummaryGrid } from './UsageSummaryGrid';
 import { DailyTokenChart } from './DailyTokenChart';
-import { CostBreakdownBar } from './CostBreakdownBar';
 import { UsageHeatmap } from './UsageHeatmap';
+import { ModelUsageDonut } from './ModelUsageDonut';
 import { SessionList } from './SessionList';
 import { ProviderQuotaView } from './ProviderQuotaView';
-import { ChartBarIcon, ArrowUpRightIcon, DownloadSimpleIcon } from '@/components/icons';
+import { ChartBarIcon, ArrowUpRightIcon, DownloadSimpleIcon, ArrowClockwiseIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 
 export const UsageDashboard: React.FC = () => {
   const { t } = useTranslation();
-  const threads = useConversationStore((s) => s.threads);
-  const messages = useConversationStore((s) => s.messages);
-  const [filters, setFilters] = useState<UsageFilters>({});
+  const { data, loading, refreshing, error, refresh } = useUsageData();
   const [isExporting, setIsExporting] = useState(false);
   const [view, setView] = useState<'stats' | 'quota'>('stats');
 
-  const metrics = useUsageData({ messages, threads, filters });
-
   const handleExport = () => {
+    if (!data) return;
     setIsExporting(true);
     try {
       const exportData = {
-        generatedAt: new Date().toISOString(),
-        filters,
-        totals: metrics.totals,
-        aggregates: metrics.aggregates,
-        dailyData: metrics.dailyData,
-        sessions: metrics.sessions.map((s) => ({
+        generatedAt: data.generatedAt,
+        totals: data.totals,
+        aggregates: data.aggregates,
+        dailyData: data.dailyData,
+        sessions: data.sessions.map((s) => ({
           id: s.id,
           title: s.title,
+          model: s.model,
           totalTokens: s.totalTokens,
           totalCost: s.totalCost,
           messageCount: s.messageCount,
@@ -57,11 +52,11 @@ export const UsageDashboard: React.FC = () => {
     }
   };
 
-  const hasData = metrics.aggregates.messages.total > 0;
-
   if (view === 'quota') {
     return <ProviderQuotaView onBack={() => setView('stats')} />;
   }
+
+  const hasData = !!data && data.aggregates.messages.total > 0;
 
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6">
@@ -77,6 +72,15 @@ export const UsageDashboard: React.FC = () => {
           <Button
             variant="secondary"
             size="sm"
+            onClick={() => void refresh()}
+            disabled={loading || refreshing}
+          >
+            <ArrowClockwiseIcon size={14} className={refreshing ? 'animate-spin' : undefined} />
+            {refreshing ? t('usage.refreshing') : t('usage.refresh')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             onClick={handleExport}
             disabled={isExporting || !hasData}
           >
@@ -86,7 +90,17 @@ export const UsageDashboard: React.FC = () => {
         </div>
       </div>
 
-      {!hasData ? (
+      {error && (
+        <div className="rounded-xl border border-[var(--error)]/40 bg-[var(--error)]/5 p-4 text-sm text-[var(--error)]">
+          {t('usage.loadFailed')}: {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-12 text-center text-sm text-[var(--muted)]">
+          {t('common.loading')}
+        </div>
+      ) : !hasData ? (
         <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-12 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--surface)] flex items-center justify-center mx-auto mb-4">
             <ChartBarIcon size={32} className="text-[var(--muted)]" />
@@ -96,10 +110,10 @@ export const UsageDashboard: React.FC = () => {
             {t('usage.noDataDesc')}
           </p>
         </div>
-      ) : (
+      ) : data ? (
         <>
           {/* Summary Stats */}
-          <UsageSummaryGrid metrics={metrics} />
+          <UsageSummaryGrid summary={data} />
 
           {/* Provider Quota Entry */}
           <button
@@ -122,20 +136,20 @@ export const UsageDashboard: React.FC = () => {
           {/* Charts Row */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
-              <DailyTokenChart data={metrics.dailyData} />
+              <DailyTokenChart dailyData={data.dailyData} modelUsage={data.modelUsage} />
             </div>
             <div>
-              <CostBreakdownBar totals={metrics.totals} />
+              <ModelUsageDonut modelUsage={data.modelUsage} totalTokens={data.totals.totalTokens} />
             </div>
           </div>
 
           {/* Heatmap */}
-          <UsageHeatmap data={metrics.heatmapData} />
+          <UsageHeatmap data={data.dailyData.map((d) => ({ date: d.date, value: d.tokens }))} />
 
           {/* Sessions */}
-          <SessionList sessions={metrics.sessions} />
+          <SessionList sessions={data.sessions} />
         </>
-      )}
+      ) : null}
     </div>
   );
 };
