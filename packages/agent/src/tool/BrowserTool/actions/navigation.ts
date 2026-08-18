@@ -1,5 +1,7 @@
 import { z } from 'zod/v4';
 import type { ActionHandler, ActionContext } from './types.js';
+import { getCapabilityGuide } from '../platform-extractors/capability-guides.js';
+import type { PlatformContentType } from '../platform-extractors/types.js';
 
 const navigateSchema = z.object({
   url: z.string().describe('URL to navigate to'),
@@ -57,6 +59,20 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
         } else {
           console.log(`[NavigateAction] Extractor failed or returned empty:`, platformContent?.error);
         }
+
+        // Extractors (article / API-backed) generally don't collect interactive
+        // refs. Keep interaction possible by capturing the refs separately.
+        if (compactSnapshot && interactiveElements.length === 0 && ctx.snapshotEngine) {
+          try {
+            const refs = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true });
+            interactiveElements = refs.interactiveElements.map(el => ({
+              ref: el.ref,
+              tag: el.tag,
+              text: el.text,
+            }));
+          } catch { /* best effort */ }
+        }
+
       } else {
         console.log(`[NavigateAction] No extractor found for ${url}`);
       }
@@ -83,7 +99,12 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
         status: 'loaded',
         mode: ctx.mode,
         ...(compactSnapshot !== null && compactSnapshot.length > 10
-          ? { compactSnapshot, interactiveElements, platformType }
+          ? {
+              compactSnapshot,
+              interactiveElements,
+              platformType,
+              guide: platformType ? getCapabilityGuide(platformType as PlatformContentType) : undefined,
+            }
           : { snapshotNote: 'Use snapshot operation for full DOM view' }),
       };
     }

@@ -3,7 +3,7 @@ import type { ToolResult } from '../../../types.js';
 import type { ICDPClient } from '../CDPClient.js';
 import type { SnapshotEngine } from '../SnapshotEngine.js';
 import type { FallbackBrowser } from '../FallbackBrowser.js';
-import type { BrowserBackendMode, BrowserMode } from '../types.js';
+import type { BrowserBackendMode, BrowserMode, NetworkEnvironment } from '../types.js';
 import type { PlatformContent, ExtractionOptions } from '../platform-extractors/types.js';
 
 export interface ActionContext {
@@ -13,6 +13,10 @@ export interface ActionContext {
   mode: BrowserMode;
   browserBackendMode: BrowserBackendMode;
   extensionAvailable: boolean;
+  /** Probed network environment ('domestic' | 'overseas' | 'unknown'); undefined when not probed yet. */
+  networkEnvironment?: NetworkEnvironment;
+  /** Sync a freshly probed network environment back onto the tool instance. */
+  setNetworkEnvironment?: (env: NetworkEnvironment) => void;
   platformHookManager: {
     shouldApplyHooks(url: string): boolean;
     applyPostNavigateHooks(cdp: ICDPClient, url: string): Promise<void>;

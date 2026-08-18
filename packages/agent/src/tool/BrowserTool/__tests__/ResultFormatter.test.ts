@@ -23,8 +23,7 @@ describe('formatResult navigate projection', () => {
   it('drops the full Snapshot section from navigate output', () => {
     const out = formatResult('navigate', navResult);
     expect(out).toContain('### Page');
-    expect(out).toContain('### Summary');
-    expect(out).toContain('### Visible Text');
+    expect(out).toContain('### Content');
     expect(out).toContain('### Actions (2)');
     expect(out).not.toContain('### Snapshot');
     expect(out).toContain('snapshot');
@@ -85,8 +84,8 @@ describe('formatResult parallel_fetch projection', () => {
   it('drops the full Snapshot section from each parallel item', () => {
     const out = formatResult('parallel_fetch', parallelResult);
     expect(out).toContain('### Parallel Fetch Results');
-    expect(out).toContain('### Summary');
-    expect(out).toContain('### Visible Text');
+    expect(out).toContain('### Content');
+    expect(out).not.toContain('### Summary');
     expect(out).not.toContain('### Snapshot');
     expect(out).toMatch(/标题A/);
     expect(out).toMatch(/简介B/);

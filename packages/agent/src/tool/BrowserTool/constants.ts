@@ -7,6 +7,7 @@ export const BROWSER_TOOL_NAME = 'browser';
 export const BROWSER_TOOL_DESCRIPTION = `Navigate and interact with web pages using a real browser.
 
 This tool provides powerful web browsing capabilities:
+- **search** - Web search returning a clean structured result list (one call replaces manual search-engine navigation)
 - Navigate to URLs and wait for page load (auto-returns compact snapshot)
 - Get DOM snapshots (structured text representation of the page)
 - Click elements, type text, scroll pages, hover, select dropdowns
@@ -18,6 +19,7 @@ This tool provides powerful web browsing capabilities:
 - **browser_parallel** - Investigate multiple URLs simultaneously (multi-window parallel research)
 
 Use this when you need to:
+- Discover web sources: start with the \`search\` operation
 - Access JavaScript-heavy websites (SPAs, React/Vue apps)
 - Interact with web pages (click, type, submit forms)
 - Extract data from dynamic content

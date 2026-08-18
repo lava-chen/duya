@@ -9,6 +9,7 @@ import { networkStartAction, networkReadAction } from './network.js';
 import { cookiesAction } from './cookies.js';
 import { parallelFetchAction } from './parallel.js';
 import { closeWindowAction } from './close.js';
+import { searchAction } from './search.js';
 import {
   clickAtAction,
   mouseMoveAction,
@@ -75,6 +76,7 @@ const ALL_ACTIONS: ActionHandler[] = [
   waitAction,
   selectAction,
   parallelFetchAction,
+  searchAction,
   tabsListAction,
   tabsNewAction,
   tabsCloseAction,
@@ -98,4 +100,4 @@ const ALL_ACTIONS: ActionHandler[] = [
 
 export function getAllActions(): ActionHandler[] {
   return ALL_ACTIONS;
-}
+};

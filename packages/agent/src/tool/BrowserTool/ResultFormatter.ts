@@ -58,6 +58,8 @@ export function formatResult(operation: string, result: Record<string, unknown>)
       return formatCookiesResult(result);
     case 'parallel_fetch':
       return formatParallelFetchResult(result);
+    case 'search':
+      return formatSearchResult(result);
     case 'close_window':
       return formatCloseWindowResult(result);
     case 'click_at':
@@ -102,19 +104,14 @@ function formatPage(result: Record<string, unknown>): string {
   if (title) lines.push(`- Title: ${title}`);
   if (platformType) lines.push(`- Platform: ${platformType}`);
 
-  const snapshot = extractSnapshot(result, 'compactSnapshot');
-  const summary = snapshot ? buildSnapshotSummary(snapshot, title, platformType) : null;
-  if (summary) {
+  // Body: platform extractor markdown when available, otherwise the raw
+  // snapshot text. A single "Content" block replaces the old Summary /
+  // Visible Text / Extracted Content split.
+  const content = extractSnapshot(result, 'compactSnapshot');
+  if (content) {
     lines.push('');
-    lines.push('### Summary');
-    lines.push(summary);
-  }
-
-  const visibleText = snapshot ? extractVisibleText(snapshot) : [];
-  if (visibleText.length > 0) {
-    lines.push('');
-    lines.push('### Visible Text');
-    for (const t of visibleText) lines.push(`- ${t}`);
+    lines.push('### Content');
+    lines.push(content);
   }
 
   const interactiveElements = extractInteractiveElements(result);
@@ -123,8 +120,14 @@ function formatPage(result: Record<string, unknown>): string {
     lines.push(interactiveElements);
   }
 
+  const guide = renderCapabilityGuide(result.guide);
+  if (guide) {
+    lines.push('');
+    lines.push(guide);
+  }
+
   lines.push('');
-  lines.push('> 完整 DOM 请使用 snapshot 操作。');
+  lines.push('> Use snapshot for the full DOM, or the refs above to interact.');
   return lines.join('\n');
 }
 
@@ -147,6 +150,12 @@ function formatSnapshotResult(result: Record<string, unknown>): string {
   if (result.truncated) {
     lines.push('');
     lines.push('> Snapshot was truncated due to size limits.');
+  }
+
+  const guide = renderCapabilityGuide(result.guide);
+  if (guide) {
+    lines.push('');
+    lines.push(guide);
   }
 
   return lines.join('\n') || '(empty page)';
@@ -517,7 +526,7 @@ function formatParallelFetchResult(result: Record<string, unknown>): string {
         lines.push(metadataParts.join(' | '));
       }
 
-      const snapshotStr = formatPerItemSnapshot(item, title, platformType);
+      const snapshotStr = formatPerItemSnapshot(item);
       if (snapshotStr) {
         lines.push('');
         lines.push(snapshotStr);
@@ -534,41 +543,83 @@ function formatParallelFetchResult(result: Record<string, unknown>): string {
   return lines.join('\n');
 }
 
-function formatPerItemSnapshot(
-  item: Record<string, unknown>,
-  title: string,
-  platformType: string | undefined,
-): string {
+function formatPerItemSnapshot(item: Record<string, unknown>): string {
   const rawSnapshot: string | null =
     (typeof item.compactSnapshot === 'string' ? item.compactSnapshot :
      typeof item.snapshot === 'string' ? item.snapshot :
      typeof item.content === 'string' ? item.content :
      null);
-
-  const snapshot = extractSnapshot({ compactSnapshot: rawSnapshot }, 'compactSnapshot');
-  const summary = snapshot ? buildSnapshotSummary(snapshot, title, platformType) : null;
-  const visibleText = snapshot ? extractVisibleText(snapshot) : [];
-
   const parts: string[] = [];
-
-  if (summary) {
-    parts.push('### Summary');
-    parts.push(summary);
+  if (rawSnapshot) {
+    const content = extractSnapshot({ compactSnapshot: rawSnapshot }, 'compactSnapshot');
+    if (content) parts.push('### Content', content);
   }
-
-  if (visibleText.length > 0) {
-    parts.push('');
-    parts.push('### Visible Text');
-    for (const t of visibleText) {
-      parts.push(`- ${t}`);
-    }
-  }
-
+  const guide = renderCapabilityGuide(item.guide);
+  if (guide) parts.push(guide);
   return parts.join('\n');
+}
+
+/** Render a compact site capability guide, if present. */
+function renderCapabilityGuide(guide: unknown): string | null {
+  if (typeof guide !== 'string' || guide.trim().length === 0) return null;
+  return `### Site Guide\n${guide.replace(/\n+$/, '')}`;
 }
 
 function formatCloseWindowResult(_result: Record<string, unknown>): string {
   return 'Browser window closed';
+}
+
+function formatSearchResult(result: Record<string, unknown>): string {
+  const lines: string[] = [];
+
+  if (result.success !== true) {
+    lines.push('### Search Failed');
+    lines.push(`- Query: ${String(result.query || '')}`);
+    lines.push(`- Error: ${String(result.error || 'unknown error')}`);
+    const attempts = result.attempts;
+    if (Array.isArray(attempts) && attempts.length > 0) {
+      lines.push('');
+      lines.push('Attempts:');
+      for (const a of attempts.slice(0, 6)) {
+        if (typeof a === 'object' && a !== null) {
+          lines.push(`- ${String((a as Record<string, unknown>).engine)}/${String((a as Record<string, unknown>).path)}: ${String((a as Record<string, unknown>).error || 'failed')}`);
+        }
+      }
+    }
+    const nextSteps = result.nextSteps;
+    if (Array.isArray(nextSteps) && nextSteps.length > 0) {
+      lines.push('');
+      lines.push('Next steps:');
+      for (const step of nextSteps) lines.push(`- ${String(step)}`);
+    }
+    return lines.join('\n');
+  }
+
+  lines.push('### Search Results');
+  const engineUsed = String(result.engineUsed || 'unknown');
+  const networkEnvironment = result.networkEnvironment ? String(result.networkEnvironment) : '';
+  lines.push(`- Query: ${String(result.query || '')}`);
+  lines.push(`- Engine: ${engineUsed}${networkEnvironment ? ` (network: ${networkEnvironment})` : ''}`);
+
+  const results = result.results;
+  if (Array.isArray(results) && results.length > 0) {
+    lines.push('');
+    for (const r of results) {
+      if (typeof r !== 'object' || r === null) continue;
+      const item = r as Record<string, unknown>;
+      const typeTag = item.type && String(item.type) !== 'result' ? ` [${String(item.type)}]` : '';
+      lines.push(`${String(item.rank)}. **${String(item.title || '')}**${typeTag}`);
+      const url = String(item.url || '');
+      if (url) lines.push(`   ${url}`);
+      const snippet = String(item.snippet || '');
+      if (snippet) lines.push(`   ${snippet}`);
+    }
+    lines.push('');
+    lines.push('> Read a specific result with navigate or parallel_fetch; only open the visual browser when the page needs interaction.');
+  } else {
+    lines.push('- No results.');
+  }
+  return lines.join('\n');
 }
 
 function formatGenericResult(operation: string, result: Record<string, unknown>): string {
@@ -640,56 +691,4 @@ function extractInteractiveElements(result: Record<string, unknown>): string | n
   }
 
   return lines.join('\n');
-}
-
-function buildSnapshotSummary(snapshot: string, title: string, platformType?: string): string | null {
-  const lines = snapshot.split('\n').map(l => l.trim()).filter(Boolean);
-  if (lines.length === 0) return null;
-
-  const refCount = lines.filter(l => l.includes('[ref=')).length;
-  const hasForm = lines.some(l => l.includes('form'));
-  const hasListLike = lines.some(l => l.includes('list') || l.includes('grid'));
-  const hasSearch = lines.some(l => /search|搜索/i.test(l));
-
-  const parts: string[] = [];
-  if (title) parts.push(`页面标题为 "${title}"。`);
-  if (platformType) parts.push(`页面类型：${platformType}。`);
-  if (hasSearch) parts.push('页面包含搜索相关区域。');
-  if (hasForm) parts.push('页面包含可填写表单。');
-  if (hasListLike) parts.push('页面主体可能为列表或网格内容。');
-  if (refCount > 0) parts.push(`当前可交互元素约 ${refCount} 个。`);
-
-  if (parts.length === 0) return `页面已加载，捕获到 ${lines.length} 行结构化快照。`;
-  return parts.join(' ');
-}
-
-const VISIBLE_TEXT_ITEM_LIMIT = 30;
-const VISIBLE_TEXT_CHAR_LIMIT = 1500;
-
-function extractVisibleText(snapshot: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  let budget = VISIBLE_TEXT_CHAR_LIMIT;
-
-  const matches = snapshot.match(/"([^"\n]{1,200})"/g) || [];
-  for (const m of matches) {
-    const text = m.slice(1, -1).replace(/\s+/g, ' ').trim();
-    if (!text) continue;
-    if (!isUsefulVisibleText(text)) continue;
-    const key = text.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    if (out.length >= VISIBLE_TEXT_ITEM_LIMIT || budget <= 0) break;
-    budget -= text.length + 3; // "+ 3" accounts for the "- " list prefix
-    out.push(text);
-  }
-  return out;
-}
-
-function isUsefulVisibleText(text: string): boolean {
-  if (!text || text.length < 2) return false;
-  if (!/[\p{L}\p{N}]/u.test(text)) return false;
-  if (/^(html|body|div|span|svg|path|g|li|ul|ol|section|article)$/i.test(text)) return false;
-  if (/^https?:\/\/\S+$/i.test(text)) return false;
-  return true;
 }

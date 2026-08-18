@@ -16,6 +16,8 @@ import type { ICDPClient } from './CDPClient.js';
 import { createCDPClientForMode } from './CDPClient.js';
 import { SnapshotEngine } from './SnapshotEngine.js';
 import { PlatformHookManager } from './platform-hooks/PlatformHookManager.js';
+import { getCapabilityGuide } from './platform-extractors/capability-guides.js';
+import type { PlatformContentType } from './platform-extractors/types.js';
 import type { BrowserBackendMode } from './types.js';
 
 export interface InvestigationTask {
@@ -42,6 +44,8 @@ export interface InvestigationResult {
     text: string;
   }>;
   evaluateResult?: unknown;
+  platformType?: string;
+  guide?: string;
   success: boolean;
   error?: string;
   durationMs: number;
@@ -191,6 +195,19 @@ export class BrowserPool {
             text: el.text,
           }));
           platformType = platformContent.type;
+
+          // Extractors generally don't collect refs; capture them separately so
+          // parallel results stay interactive.
+          if (interactiveElements.length === 0 && session.snapshotEngine) {
+            try {
+              const refs = await session.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true });
+              interactiveElements = refs.interactiveElements.map(el => ({
+                ref: el.ref,
+                tag: el.tag,
+                text: el.text,
+              }));
+            } catch { /* best effort */ }
+          }
         }
       }
 
@@ -230,7 +247,10 @@ export class BrowserPool {
         evaluateResult,
         success: true,
         durationMs: Date.now() - startTime,
-        ...(platformType && { platformType }),
+        ...(platformType && {
+          platformType,
+          guide: getCapabilityGuide(platformType as PlatformContentType),
+        }),
       };
     } catch (error) {
       return {
