@@ -25,7 +25,7 @@ import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js'
 
 import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../session/db.js';
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
-import type { Message, MessageContent, MCPServerConfig, Tool } from '../types.js';
+import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
 import {
   messageDb,
@@ -47,6 +47,7 @@ import {
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle, shouldRegenerateTitle } from '../session/title-generator.js';
+import { getSteeringConfig } from '../hooks/config.js';
 import { classifyError, APIErrorType } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
@@ -657,6 +658,30 @@ function messageRowToMessage(
     }
   }
 
+  let tokenUsage: TokenUsage | undefined;
+  if (row.token_usage) {
+    try {
+      const parsed = JSON.parse(row.token_usage) as Partial<TokenUsage> | null;
+      // Restore only if it carries the required numeric counters — malformed
+      // rows must not break the live-usage seed scan.
+      if (
+        parsed &&
+        typeof parsed.input_tokens === 'number' &&
+        typeof parsed.output_tokens === 'number'
+      ) {
+        tokenUsage = {
+          input_tokens: parsed.input_tokens,
+          output_tokens: parsed.output_tokens,
+          total_tokens: parsed.total_tokens,
+          cache_hit_tokens: parsed.cache_hit_tokens,
+          cache_creation_tokens: parsed.cache_creation_tokens,
+        };
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
   return {
     id: row.id,
     role: row.role,
@@ -678,6 +703,7 @@ function messageRowToMessage(
     duration_ms: row.duration_ms ?? undefined,
     sub_agent_id: row.sub_agent_id || undefined,
     attachments: parsedAttachments,
+    tokenUsage,
   };
 }
 
@@ -1411,6 +1437,9 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     case 'query_deduplicated':
     case 'finding_deduplicated':
     case 'action_executed':
+    // LLM usage frame: consumed upstream for token accounting before this
+    // converter runs; nothing to forward to the SSE client.
+    case 'result':
       return null;
     default:
         warn('[Agent-Process] Unknown SSE event type:', event.type);
@@ -2050,7 +2079,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         cache_creation_tokens?: number;
       } | undefined;
       for (const m of agent.getMessages()) {
-        const u = (m as { tokenUsage?: Record<string, number | undefined> }).tokenUsage;
+        // `tokenUsage` (camel) is set when messages were reloaded from the DB;
+        // `token_usage` (snake) is attached in-process at turn end. Read both
+        // so same-process follow-up turns seed from the previous turn too.
+        const raw = m as {
+          tokenUsage?: Record<string, number | undefined>;
+          token_usage?: Record<string, number | undefined>;
+        };
+        const u = raw.tokenUsage ?? raw.token_usage;
         if (!u) continue;
         const rawInput = u.input_tokens ?? 0;
         const output = u.output_tokens ?? 0;
@@ -2080,7 +2116,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       if (lastUsage) {
         const rawInput = lastUsage.input_tokens ?? 0;
         const cacheHit = lastUsage.cache_hit_tokens ?? 0;
-        const normalizedInput = cacheHit > rawInput ? rawInput + cacheHit : rawInput;
+        const cacheCreation = lastUsage.cache_creation_tokens ?? 0;
+        const normalizedInput =
+          cacheHit > rawInput || cacheCreation > rawInput
+            ? rawInput + cacheHit + cacheCreation
+            : rawInput;
         liveBaseContext = normalizedInput + (lastUsage.output_tokens ?? 0);
         liveBaseMessageCount = agent.getMessages().length;
         hasLiveBase = true;
@@ -2091,6 +2131,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         liveBoundaryPending = false;
       }
     }
+
+    // Plan 426 Phase 4: steering config from [steering] in ~/.duya/config.toml.
+    // Fresh read per streamChat — hot reload semantics (hooks/config.ts).
+    const steering = getSteeringConfig();
 
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
@@ -2110,10 +2154,21 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       conductorIpc: { sendToMain, ipcRequest: toolIpcRequest },
       backgroundTaskResume: msg.options?.backgroundTaskResume,
       llmRequestTimeoutMs: msg.options?.llmRequestTimeoutMs,
+      todoGate: { enabled: steering.todoGateEnabled },
+      antiDeadLoop: { ...steering.antiDeadLoop },
+      toolIntentNudgeMax: steering.toolIntentNudgeMax,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
-    let tokenUsage: { input_tokens: number; output_tokens: number; total_tokens?: number } | null = null;
+    // Turn-cumulative token usage (sum over every `result` event of this
+    // turn; persisted on the turn's last assistant message at stream end).
+    let tokenUsage: {
+      input_tokens: number;
+      output_tokens: number;
+      total_tokens?: number;
+      cache_hit_tokens?: number;
+      cache_creation_tokens?: number;
+    } | null = null;
     // Terminal `done` reason from the agent loop (completed / max_turns /
     // repeated_tool_calls / aborted). Captured from the deferred chat:done
     // and attached to the final chat:done so the renderer can surface why
@@ -2222,13 +2277,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         const rawInput = candidateUsage.input_tokens ?? 0;
         const outputTokens = candidateUsage.output_tokens ?? 0;
         const cacheHitTokens = candidateUsage.cache_hit_tokens ?? candidateUsage.cache_read_input_tokens ?? 0;
+        const cacheCreationTokens =
+          candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
         // Cache-convention guard: Anthropic's input_tokens already includes
         // cached tokens, but some OpenAI-compatible gateways report
         // prompt_tokens EXCLUDING cache. When cache hits exceed the reported
         // input, the input clearly omits cache — add the hits back (pi does
-        // the same: input + cacheRead + cacheWrite). Otherwise the ring would
-        // show only the uncached delta and swing as cache hits come and go.
-        const normalizedInput = cacheHitTokens > rawInput ? rawInput + cacheHitTokens : rawInput;
+        // the same: input + cacheRead + cacheWrite). The cacheWrite clause
+        // covers the first request of a session where cacheRead is still 0
+        // but the full prefix (system + tools) is written to cache.
+        const normalizedInput =
+          cacheHitTokens > rawInput || cacheCreationTokens > rawInput
+            ? rawInput + cacheHitTokens + cacheCreationTokens
+            : rawInput;
         // Ignore all-zero usage: persisting it would make the context ring show
         // hasData=true but used=0, which renders as an empty ring. Cache hits
         // count toward meaningful usage too (a fully cache-served request can
@@ -2239,8 +2300,31 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           cacheHitTokens +
           (candidateUsage.total_tokens ?? 0) > 0;
         if (meaningfulUsage) {
-          tokenUsage = candidateUsage;
-          log(`[Agent-Process] Received result event, tokenUsage set: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput}`);
+          // Accumulate across ALL result events in this turn — one fires per
+          // LLM API call, so a tool-heavy turn emits many. Keeping only the
+          // last event (the old behavior) lost every earlier round's tokens,
+          // and input grows each round, so the loss was large. Raw fields are
+          // summed; per-provider conventions (input includes cache,
+          // total_tokens = input + output) survive summation.
+          const cacheCreationTokens =
+            candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
+          const callTotal = candidateUsage.total_tokens ?? rawInput + outputTokens;
+          if (!tokenUsage) {
+            tokenUsage = {
+              input_tokens: rawInput,
+              output_tokens: outputTokens,
+              total_tokens: callTotal,
+              cache_hit_tokens: cacheHitTokens,
+              cache_creation_tokens: cacheCreationTokens,
+            };
+          } else {
+            tokenUsage.input_tokens += rawInput;
+            tokenUsage.output_tokens += outputTokens;
+            tokenUsage.total_tokens = (tokenUsage.total_tokens ?? 0) + callTotal;
+            tokenUsage.cache_hit_tokens = (tokenUsage.cache_hit_tokens ?? 0) + cacheHitTokens;
+            tokenUsage.cache_creation_tokens = (tokenUsage.cache_creation_tokens ?? 0) + cacheCreationTokens;
+          }
+          log(`[Agent-Process] Received result event, turn tokenUsage accumulated: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}, cacheHit=${tokenUsage.cache_hit_tokens ?? 0} (call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput})`);
           // Live context: the `result` usage is the authoritative prompt
           // size at that request, so rebase the trailing estimate and
           // broadcast the current context.
@@ -2250,13 +2334,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           liveLastInput = normalizedInput;
           liveLastOutput = outputTokens;
           liveLastCacheHit = cacheHitTokens;
-          liveLastCacheCreation = candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens;
+          liveLastCacheCreation = cacheCreationTokens;
           // Accumulate session-cumulative totals for the ring's stats line.
           liveTotalInput += normalizedInput;
           liveTotalInputRaw += rawInput;
           liveTotalOutput += outputTokens;
           liveTotalCacheHit += cacheHitTokens;
-          liveTotalCacheCreation += candidateUsage.cache_creation_tokens ?? candidateUsage.cache_creation_input_tokens ?? 0;
+          liveTotalCacheCreation += cacheCreationTokens;
           // The `result` fires BEFORE this round's assistant message is pushed
           // to the timeline. Mark the boundary pending so the next trailing
           // estimate skips that assistant (its tokens are already in
@@ -3113,6 +3197,16 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               void drainQueuedChatStart();
             });
           });
+          break;
+        }
+
+        case 'permission:set': {
+          const pMode = (msg as { mode?: string }).mode;
+          log('[Agent-Process] Received permission:set', { sessionId, mode: pMode });
+          if (agent && pMode) {
+            agent.setPermissionMode(pMode);
+            log('[Agent-Process] Permission mode updated live', { sessionId, mode: pMode });
+          }
           break;
         }
 

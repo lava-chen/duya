@@ -1131,6 +1131,26 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     };
   }
 
+  // Third-party (marketplace-installed) server: driver for the remaining
+  // permission-gate flow tests. Unlike `settings` (now trusted by explicit
+  // user config), a `plugin` source must always prompt in non-bypass modes,
+  // so it exercises the prompt/approve/deny/headless paths.
+  async function applyPluginServer(agent: ReturnType<typeof makeFakeAgent>): Promise<{
+    internalKey: string;
+  }> {
+    setNextCollection([
+      { source: 'plugin', rawConfig: { name: 'cg', command: 'node', args: [] } },
+    ]);
+    setNextResolution(
+      [makeInventoryEntry('plugin:cg', 'cg', 'plugin', undefined, 'p0')],
+      [makeResolved('plugin:cg', 'cg', 'plugin', 'plugin:p0:cg', 'p0')],
+    );
+    await applyMCPConfiguration({ agent, reason: 'initialization' });
+    // Resolve the entry dynamic instead of hard-coding a generated key.
+    const internalKey = agent._providerNameToInternalKey().values().next().value as string;
+    return { internalKey };
+  }
+
   function gateContext(
     toolUseId: string,
     requestPermission?: (r: unknown) => Promise<'allow' | 'deny'>,
@@ -1138,6 +1158,27 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     return {
       toolUseId,
       getAppState: () => ({}),
+      ...(requestPermission ? { requestPermission } : {}),
+    } as unknown as import('../../src/types.js').ToolUseContext;
+  }
+
+  /**
+   * A context backed by a MUTABLE appState + real setAppState, mirroring the
+   * plan-419-fixed DuyaAgent host. Approval recorded via `setAppState`
+   * persists across re-entries (this is the singleton `_approvedToolUses`
+   * approval channel now; there is no module-level fallback).
+   */
+  function approvedContext(
+    toolUseId: string,
+    requestPermission?: (r: unknown) => Promise<'allow' | 'deny'>,
+  ) {
+    let appState: Record<string, unknown> = {};
+    return {
+      toolUseId,
+      getAppState: () => appState,
+      setAppState: (f: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+        appState = f(appState);
+      },
       ...(requestPermission ? { requestPermission } : {}),
     } as unknown as import('../../src/types.js').ToolUseContext;
   }
@@ -1171,9 +1212,27 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     expect(requestPermission).not.toHaveBeenCalled();
   });
 
-  it('default mode prompts via requestPermission; allow executes the call', async () => {
+  it('settings-sourced tools run without prompting (explicit user config = trust)', async () => {
     const agent = makeFakeAgent();
     const { internalKey } = await applySettingsServer(agent);
+    const entry = agent._toolEntries().get(internalKey)!;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const r = await entry.executor.execute(
+      { q: 1 },
+      undefined,
+      gateContext('tu-settings-1', requestPermission),
+    );
+    // A user-configured server in config.toml is an explicit trust signal
+    // (plan 419 P2), so its tools execute without a permission prompt even
+    // in default mode.
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
+    expect(requestPermission).not.toHaveBeenCalled();
+  });
+
+  it('default mode prompts via requestPermission; allow executes the call', async () => {
+    const agent = makeFakeAgent();
+    const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
     const requestPermission = vi.fn(async () => 'allow' as const);
     const r = await entry.executor.execute(
@@ -1193,7 +1252,7 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
 
   it('user deny produces a gate error and the call does not run', async () => {
     const agent = makeFakeAgent();
-    const { internalKey } = await applySettingsServer(agent);
+    const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
     const requestPermission = vi.fn(async () => 'deny' as const);
     const r = await entry.executor.execute(
@@ -1206,31 +1265,34 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
     expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 
-  it('no approval channel degrades to the hard gate error (headless)', async () => {
+  it('no approval channel implicitly allows in background/headless contexts', async () => {
     const agent = makeFakeAgent();
-    const { internalKey } = await applySettingsServer(agent);
+    const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
     const r = await entry.executor.execute(
       { q: 1 },
       undefined,
       gateContext('tu-headless-1'),
     );
-    expect(r.error).toBe(true);
-    expect(r.result).toMatch(/requires explicit user approval/);
-    expect(r.result).toMatch(/bypassPermissions/);
+    // No interactive user can answer a prompt in a headless / background /
+    // sub-agent context, so the gate lets the call through instead of
+    // dead-locking on a dialog nobody can respond to.
+    expect(r.error).toBeFalsy();
+    expect(r.result).toBe('stub result');
   });
 
   it('an already-approved toolUseId skips the prompt on re-entry', async () => {
     const agent = makeFakeAgent();
-    const { internalKey } = await applySettingsServer(agent);
+    const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
     const requestPermission = vi.fn(async () => 'allow' as const);
-    const ctx = gateContext('tu-approve-1', requestPermission);
+    const ctx = approvedContext('tu-approve-1', requestPermission);
     const r1 = await entry.executor.execute({ q: 1 }, undefined, ctx);
     expect(r1.error).toBeFalsy();
     expect(requestPermission).toHaveBeenCalledTimes(1);
     // Executor re-entry with the same toolUseId (e.g. StreamingToolExecutor
-    // retry after approval) must not prompt again.
+    // retry after approval) must not prompt again: the approval persisted
+    // in `_approvedToolUses` via setAppState.
     const r2 = await entry.executor.execute({ q: 2 }, undefined, ctx);
     expect(r2.error).toBeFalsy();
     expect(r2.result).toBe('stub result');
@@ -1239,34 +1301,21 @@ describe('Case 12: MCP tools exposed by default + permission gate flow', () => {
 
   it('writes the approval into appState _approvedToolUses (shared channel)', async () => {
     const agent = makeFakeAgent();
-    const { internalKey } = await applySettingsServer(agent);
+    const { internalKey } = await applyPluginServer(agent);
     const entry = agent._toolEntries().get(internalKey)!;
-    // Mutable appState + real setAppState, mirroring the P0-fixed
-    // DuyaAgent toolUseContext (plan 419).
-    let appState: Record<string, unknown> = {};
-    const ctx = {
-      toolUseId: 'tu-appstate-1',
-      getAppState: () => appState,
-      setAppState: (f: (prev: Record<string, unknown>) => Record<string, unknown>) => {
-        appState = f(appState);
-      },
-      requestPermission: vi.fn(async () => 'allow' as const),
-    } as unknown as import('../../src/types.js').ToolUseContext;
+    const requestPermission = vi.fn(async () => 'allow' as const);
+    const ctx = approvedContext('tu-appstate-1', requestPermission);
     const r = await entry.executor.execute({ q: 1 }, undefined, ctx);
     expect(r.error).toBeFalsy();
-    const approved = (appState._approvedToolUses as Record<string, boolean> | undefined) ?? {};
+    const appState = ctx.getAppState() as { _approvedToolUses?: Record<string, boolean> };
+    const approved = appState._approvedToolUses ?? {};
     expect(approved['tu-appstate-1']).toBe(true);
-    // A second entry through a context with a NO-OP setAppState (hosts
-    // not yet migrated) still falls back to the module-level set: no
-    // second prompt.
-    const requestPermission2 = vi.fn(async () => 'allow' as const);
-    const r2 = await entry.executor.execute(
-      { q: 2 },
-      undefined,
-      gateContext('tu-appstate-1', requestPermission2),
-    );
+    // A second entry on the SAME context (persistent appState on a real
+    // host) skips the prompt: the approval was recorded in `_approvedToolUses`
+    // (the single channel) — no module-level fallback.
+    const r2 = await entry.executor.execute({ q: 2 }, undefined, ctx);
     expect(r2.error).toBeFalsy();
-    expect(requestPermission2).not.toHaveBeenCalled();
+    expect(requestPermission).toHaveBeenCalledTimes(1);
   });
 
   it('bundled MCP tools stay trusted (no gate, no prompt)', async () => {

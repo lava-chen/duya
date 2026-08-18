@@ -42,6 +42,7 @@ import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
+import { resolveCacheRetention } from '../config/cache-config.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/policy.js';
@@ -57,7 +58,12 @@ import { mailboxDb, pluginDb } from '../ipc/db-client.js';
 import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxRow } from '../session/db.js';
-import { getDatabaseTaskStore } from '../session/task-store.js';
+import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '../hooks/loop.js';
+import { createBuiltinLoopHooks } from '../hooks/builtin.js';
+import { createConfiguredLoopHooks } from '../hooks/config-loop.js';
+import { ConfigHooksRunner } from '../hooks/events.js';
+import { readHooksConfig } from '../hooks/config.js';
+import type { BaseHookInput } from '../hooks/types.js';
 import path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -68,15 +74,11 @@ import { isMemoryEnabled } from '../memory-rollout/wakeup.js';
 import { modeModifierRegistry, modeTrackerEngine } from '../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ResolvedMode, ToolRegistration } from '../modes/index.js';
 import { ModeCoordinator } from '../modes/engine/index.js';
-import { applyModes, collectActiveModes } from '../modes/apply-modes.js';
-import { matchedStopPattern, prematureStopNudge } from '../modes/goal/goal-stop-detector.js';
-import { goalModeTracker } from '../modes/goal/goal-tracker.js';
+import { applyModes, collectActiveModes, runExitHooks } from '../modes/apply-modes.js';
 import { planModeTracker } from '../modes/plan/plan-tracker.js';
 
 import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
-import { matchedToolIntent, toolIntentNudge } from './tool-intent-detector.js';
-import { renderSystemReminder } from './reminders.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
 import {
@@ -106,7 +108,6 @@ import {
   adaptAttachmentContext,
   adaptBackgroundNotification,
   adaptMailboxRows,
-  adaptTodoGateContext,
   projectRuntimeContextToProviderMessage,
   RUNTIME_CONTEXT_METADATA_KEYS,
 } from '../message/runtime-context-adapters.js';
@@ -116,7 +117,6 @@ import {
   extractTextFromContent,
   collectRecentImageAttachments,
   persistableMessages,
-  lastRealUserQuery,
   computeCachePlanFingerprint,
   chooseMailboxApplyMode,
   buildAgentIdentityBlock,
@@ -324,6 +324,9 @@ export class duyaAgent {
       apiFormat: options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat'),
       providerId: options.runtimeConfig?.providerId ?? provider,
       modelCapabilities: options.runtimeConfig?.modelCompat,
+      // Prompt-cache retention per provider (anthropic/vertex → 1h TTL on
+      // their native endpoints; everything else falls back to 'short').
+      cacheRetention: resolveCacheRetention(provider),
     };
 
     if (enableRetry) {
@@ -529,6 +532,48 @@ export class duyaAgent {
     this.abortController = new AbortController();
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}`);
 
+    // Plan 426 follow-up: configured [hooks] events dispatched outside the
+    // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / …).
+    // One runner per streamChat call; config is read fresh so edits
+    // hot-reload on the next run. Fail-open: a throwing/failing hook never
+    // breaks the run (each dispatch is individually wrapped below).
+    const promptText = typeof prompt === 'string' ? prompt : '';
+    const configHooks = new ConfigHooksRunner({
+      cwd: this.workingDirectory ?? process.cwd(),
+      vars: {
+        sessionId: this.sessionId ?? '',
+        cwd: this.workingDirectory ?? '',
+        prompt: promptText,
+      },
+    });
+
+    // UserPromptSubmit — the user's raw prompt entered the run.
+    try {
+      const submitCtx = await configHooks.run(
+        'UserPromptSubmit',
+        { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
+      );
+      if (submitCtx.contexts.length > 0) {
+        logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s)`);
+      }
+    } catch (err) {
+      logger.warn(`[Hooks] UserPromptSubmit dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // SessionStart — fired once per run (covers orchestrator modes too,
+    // since this sits ahead of the mode dispatch below).
+    try {
+      const startCtx = await configHooks.run(
+        'SessionStart',
+        { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
+      );
+      if (startCtx.contexts.length > 0) {
+        logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
+      }
+    } catch (err) {
+      logger.warn(`[Hooks] SessionStart dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
     const appliedProfile = await this._resolveAgentProfile(options);
 
@@ -725,7 +770,9 @@ export class duyaAgent {
     // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
     // tool calls so the loop can steer or stop instead of spinning forever.
     // Progression: soft nudge (deadLoopNudgeAt) → stronger "change approach"
-    // nudge (deadLoopHardNudgeAt) → hard stop (deadLoopHardStopAt).
+    // nudge (deadLoopHardNudgeAt) → hard stop (deadLoopHardStopAt). The
+    // counting and the hard stop are engine invariants (plan 426); the
+    // soft/hard nudge *texts* live in the builtin dead-loop loop hook.
     const deadLoop = options?.antiDeadLoop ?? {};
     const deadLoopEnabled = deadLoop.enabled ?? true;
     const deadLoopNudgeAt = deadLoop.nudgeAt ?? 8;
@@ -733,22 +780,49 @@ export class duyaAgent {
     const deadLoopHardStopAt = deadLoop.hardStopAt ?? 16;
     let lastToolCallSignature: string | null = null;
     let consecutiveToolCalls = 0;
-    let deadLoopNudged = false;
-    let deadLoopNudgeToolName: string | null = null;
-    let deadLoopHardNudged = false;
-    let deadLoopHardNudgeToolName: string | null = null;
+    let consecutiveToolName: string | null = null;
 
-    // Todo gate. When the agent would otherwise finish but pending tasks
-    // remain, inject a steering message instead of stopping.
-    const todoGateEnabled = options?.todoGate?.enabled ?? true;
-    let todoGatePrompted = false;
+    // Loop-hook bus (plan 426): per-run event spine carrying the steering
+    // policies that used to be inline blocks below (todo gate, premature
+    // stop, tool intent, dead-loop nudges). Engine invariants — mailbox
+    // checkpoints, max-turns stop, dead-loop hard stop — stay in this loop
+    // and are never delegated.
+    const loopHooks = new LoopHookBus();
+    for (const registration of createBuiltinLoopHooks({
+      sessionId: this.sessionId,
+      todoGateEnabled: options?.todoGate?.enabled ?? true,
+      antiDeadLoop: {
+        enabled: deadLoopEnabled,
+        nudgeAt: deadLoopNudgeAt,
+        hardNudgeAt: deadLoopHardNudgeAt,
+      },
+      toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
+    })) {
+      loopHooks.register(registration);
+    }
+    // Plan 426 Phase 3: the mode coordinator rides the bus — per-turn
+    // reminders via PreTurn (priority 5), round-end transitions + snapshot
+    // persistence via PreFinalize (priority 5, ahead of builtin vetoes).
+    // Its dedicated call sites below are gone; the WHEN is now owned here.
+    for (const registration of this.modeCoordinator?.createLoopHookRegistrations() ?? []) {
+      loopHooks.register(registration);
+    }
+    // Plan 426 Phase 4: user-configured [hooks] from config.toml (plan 87
+    // command/http executor vocabulary) bridged onto the loop events.
+    // Config is read fresh per streamChat, so edits hot-reload on the next
+    // run. Fail-open: configured hook failures never break the loop.
+    for (const registration of createConfiguredLoopHooks()) {
+      loopHooks.register(registration);
+    }
+    // Shared snapshot builder for loop-hook dispatches.
+    const buildHookCtx = (): Omit<LoopHookDispatchContext, 'event'> => ({
+      sessionId: this.sessionId,
+      turnCount,
+      seqIndex,
+      messages,
+      prompt: typeof prompt === 'string' ? prompt : undefined,
+    });
 
-    // Plan 418 L2: tool-intent / action-consistency guard. When the model
-    // ends its turn with a tool-intent statement but no tool_use was emitted,
-    // nudge it to follow through. Capped so a model that keeps announcing
-    // without acting cannot spin forever.
-    const toolIntentNudgeMax = options?.toolIntentNudgeMax ?? 2;
-    let toolIntentNudgeCount = 0;
     // The LLM's native stop reason for the current turn (end_turn / max_tokens
     // / tool_use / stop_sequence), captured from the stream's done event.
     let turnStopReason: string | undefined = undefined;
@@ -796,6 +870,12 @@ export class duyaAgent {
 
       turnCount++;
       const turnStartTime = Date.now();
+      // Tool calls the assistant emits this turn; handed to the PostToolUse
+      // dispatch so configured hooks can match on tool names (plan 426 Phase 4).
+      const turnToolCalls: Array<{ name: string; input: unknown }> = [];
+      // tool_use id → tool name, so a failing tool result can be attributed
+      // to its hook matcher (PostToolUseFailure).
+      const turnToolCallIds = new Map<string, string>();
 
       // Surface tools discovered via tool_search in previous turns.
       // Discoverable tools are excluded from the base list by
@@ -847,9 +927,9 @@ export class duyaAgent {
         systemPromptContent = prefix + '\n\n' + this.baseSystemPromptWithoutModes;
       }
 
-      // Plan 413d: safe point to flush a buffered mid-turn mode activation
-      // reminder before this turn's per-turn reminders are injected below.
-      this.modeCoordinator?.refreshTurn(messages, seqIndex);
+      // Plan 426 Phase 3: the mid-turn buffered-activation flush and the
+      // per-turn mode reminders moved into the mode-coordinator PreTurn hook
+      // (dispatched after the mailbox checkpoint below).
 
       // A discoverable tool receives the exact same full schema object that
       // an always-exposed tool receives. If its executor also provides a
@@ -1083,9 +1163,15 @@ export class duyaAgent {
       // _claimMailboxAtCheckpoint; fall through to the LLM call with it in
       // the message history.
 
-      // Plan 413d: inject per-turn mode reminders AFTER mailbox guidance so
-      // the model sees mode rules before any external instructions.
-      this.modeCoordinator?.injectTurnReminders(messages, seqIndex);
+      // Plan 426 Phase 3: PreTurn dispatch, deliberately located AFTER the
+      // mailbox checkpoint so mode turn reminders (mode-coordinator hook,
+      // priority 5) stay more recent than mailbox guidance — the same
+      // ordering the pre-bus inline calls produced. The hook flushes
+      // buffered mid-turn activations first, then injects per-turn mode
+      // reminders; other PreTurn consumers see the same position.
+      for (const effect of await loopHooks.dispatch('PreTurn', buildHookCtx())) {
+        applyLoopHookEffect(messages, effect, seqIndex);
+      }
 
       // Optional per-request wall-clock timeout (curator + callers that opt
       // in via llmRequestTimeoutMs). Aborts a single LLM call that overruns
@@ -1184,44 +1270,49 @@ export class duyaAgent {
             yield event;
 
           } else if (event.type === 'tool_use') {
+            // Plan 426 follow-up: PreToolUse — notification before the tool
+            // is dispatched to its executor. Runs to completion (blocking),
+            // fail-open; matchers filter on the tool name.
+            try {
+              const preCtx = await configHooks.run(
+                'PreToolUse',
+                {
+                  session_id: this.sessionId ?? '',
+                  cwd: this.workingDirectory ?? '',
+                  hook_event_name: 'PreToolUse',
+                  tool_name: event.data.name,
+                  tool_input: event.data.input ?? {},
+                  tool_use_id: event.data.id,
+                },
+                { toolName: event.data.name },
+              );
+              if (preCtx.contexts.length > 0) {
+                logger.debug(
+                  `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
+                );
+              }
+            } catch (err) {
+              logger.warn(`[Hooks] PreToolUse dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+            }
+
             // Add tool to executor for background execution
             executor.addTool(event.data);
             needsFollowUp = true;
 
             // Anti-dead-loop: track consecutive identical tool calls (name +
             // serialized input). U+0001 is a safe field separator that cannot
-            // appear in a tool name or JSON input.
+            // appear in a tool name or JSON input. Streak counting is an
+            // engine invariant; nudge decisions consume it via PostToolUse.
             const signature = `${event.data.name}\u0001${JSON.stringify(event.data.input ?? {})}`;
             if (signature === lastToolCallSignature) {
               consecutiveToolCalls++;
             } else {
               lastToolCallSignature = signature;
               consecutiveToolCalls = 1;
-              deadLoopNudged = false;
-              deadLoopHardNudged = false;
             }
-            if (
-              deadLoopEnabled &&
-              consecutiveToolCalls === deadLoopNudgeAt &&
-              !deadLoopNudged
-            ) {
-              deadLoopNudged = true;
-              // Defer the steering message until the tool results for this
-              // turn are committed (below), so it follows the tool results
-              // rather than appearing before them (grok "results committed
-              // after" semantics).
-              deadLoopNudgeToolName = event.data.name;
-            }
-            if (
-              deadLoopEnabled &&
-              consecutiveToolCalls === deadLoopHardNudgeAt &&
-              !deadLoopHardNudged
-            ) {
-              deadLoopHardNudged = true;
-              // Stronger "change approach" nudge right before the hard stop,
-              // giving the model a second chance to break out of the loop.
-              deadLoopHardNudgeToolName = event.data.name;
-            }
+            consecutiveToolName = event.data.name;
+            turnToolCalls.push({ name: event.data.name, input: event.data.input });
+            turnToolCallIds.set(event.data.id, event.data.name);
 
             // Build assistant content with tool_use block
             assistantContent.push({
@@ -1251,9 +1342,16 @@ export class duyaAgent {
             if (lastBlock && lastBlock.type === 'text') {
               lastBlock.text += event.data;
             } else {
+              // When the previous block was a tool_use / thinking, the new
+              // text block needs a leading newline so block-level markdown
+              // (### heading, - list, 1. numbered, etc.) is not swallowed
+              // into the previous paragraph. Without this, LLM outputs
+              // like `...text\n### heading` that span a tool boundary get
+              // concatenated into a single inline paragraph.
+              const prefix = assistantContent.length > 0 ? '\n' : '';
               assistantContent.push({
                 type: 'text',
-                text: event.data,
+                text: prefix + event.data,
               });
             }
 
@@ -1404,6 +1502,30 @@ export class duyaAgent {
                     },
                   };
 
+                  // Plan 426 follow-up: PostToolUseFailure — fired when a
+                  // tool result is an error (fail-open; matchers filter on
+                  // the failed tool's name).
+                  if (toolResultError) {
+                    try {
+                      const failedToolName = turnToolCallIds.get(toolResultId) ?? '';
+                      await configHooks.run(
+                        'PostToolUseFailure',
+                        {
+                          session_id: this.sessionId ?? '',
+                          cwd: this.workingDirectory ?? '',
+                          hook_event_name: 'PostToolUseFailure',
+                          tool_name: failedToolName,
+                          tool_input: {},
+                          tool_use_id: toolResultId,
+                          error: toolResultContent.slice(0, 2048),
+                        },
+                        { toolName: failedToolName || undefined },
+                      );
+                    } catch (err) {
+                      logger.warn(`[Hooks] PostToolUseFailure dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+                    }
+                  }
+
                   // Plan 224 follow-up: if this tool_result belongs to a
                   // mode-switch tool (EnterPlanMode / ExitPlanMode /
                   // SwitchMode), parse the new runtime mode out of the
@@ -1465,41 +1587,27 @@ export class duyaAgent {
                   `[Agent] Turn ${turnCount}: Plan 241 Phase 3 harvested ${addedCount} tool name(s) from tool_search results; will surface in next turn`,
                 );
               }
-            }
 
-            // Deferred anti-dead-loop nudge: injected now that the assistant
-            // message and tool results are committed, so it reads as feedback
-            // on those results. Transient (mailbox pattern) — visible to the
-            // model next turn, filtered from durable history.
-            if (deadLoopNudgeToolName) {
-              const toolName = deadLoopNudgeToolName;
-              deadLoopNudgeToolName = null;
-              messages.push({
-                id: crypto.randomUUID(),
-                role: 'user',
-                content: renderSystemReminder(
-                  `Detected ${deadLoopNudgeAt} consecutive identical calls to tool "${toolName}". If this is not making progress, change your approach or state explicitly that this step is complete.`,
-                ),
-                timestamp: Date.now(),
-                seq_index: seqIndex,
-              });
-            }
-
-            // Stronger second-stage nudge just before the hard stop. Injected
-            // here (after tool results are committed) so the model sees it as
-            // feedback on those results — same timing as the soft nudge.
-            if (deadLoopHardNudgeToolName) {
-              const toolName = deadLoopHardNudgeToolName;
-              deadLoopHardNudgeToolName = null;
-              messages.push({
-                id: crypto.randomUUID(),
-                role: 'user',
-                content: renderSystemReminder(
-                  `Detected ${deadLoopHardNudgeAt} consecutive identical calls to tool "${toolName}" with no progress. Stop repeating this call now: either change your approach, or state explicitly that you cannot continue and summarize where things stand.`,
-                ),
-                timestamp: Date.now(),
-                seq_index: seqIndex,
-              });
+              // Plan 426: PostToolUse dispatch, fired now that the turn's
+              // tool results are committed so hook injections read as
+              // feedback on those results (grok "results committed after"
+              // semantics). Carries the identical-call streak for the
+              // dead-loop nudge hook.
+              const streak =
+                deadLoopEnabled && consecutiveToolCalls > 0 && consecutiveToolName
+                  ? {
+                      count: consecutiveToolCalls,
+                      toolName: consecutiveToolName,
+                      nudgeAt: deadLoopNudgeAt,
+                      hardNudgeAt: deadLoopHardNudgeAt,
+                    }
+                  : undefined;
+              for (const effect of await loopHooks.dispatch('PostToolUse', {
+                ...buildHookCtx(),
+                consecutiveIdenticalToolCalls: streak,
+              })) {
+                applyLoopHookEffect(messages, effect, seqIndex);
+              }
             }
 
             // widgetStyleHistory and canvasFreshness are stable references
@@ -1572,16 +1680,19 @@ export class duyaAgent {
             logger.warn(
               `[Agent] Turn ${turnCount}: reached max_turns (${maxTurns}); nudging model to wrap up`,
             );
-            messages.push({
-              id: crypto.randomUUID(),
-              role: 'user',
-              content: renderSystemReminder(
-                '已达本轮最大工具调用次数上限。请立即收尾：不要再调用任何工具，' +
+            // Budget invariant stays in the engine (plan 426); only the
+            // injection channel is unified on the runtime-context framework.
+            applyLoopHookEffect(
+              messages,
+              {
+                type: 'inject',
+                injection:
+                  '已达本轮最大工具调用次数上限。请立即收尾：不要再调用任何工具，' +
                   '用 1-2 句话总结已经完成的进展和尚未完成的事项。',
-              ),
-              timestamp: Date.now(),
-              seq_index: seqIndex,
-            });
+                source: 'max_turns_wrapup',
+              },
+              seqIndex,
+            );
             continue;
           }
 
@@ -1613,112 +1724,47 @@ export class duyaAgent {
             continue;
           }
 
-          // Plan 413d: round-end mode transitions + snapshot persistence
-          // (e.g. plan's deferred exit landing now that the in-flight turn
-          // has ended). Runs before _commitMessages so persistence is not
-          // coupled to message commit.
-          await this.modeCoordinator?.onRoundEnd();
+          // Plan 426 Phase 3: round-end mode transitions + snapshot
+          // persistence (plan deferred exit, goal worker rounds, research
+          // auto-converge) now run inside the mode-coordinator PreFinalize
+          // hook (priority 5) — dispatched ahead of the builtin vetoes
+          // below, and re-fired on every natural stop exactly like the
+          // pre-bus inline call did.
 
-          // Goal premature-stop detection (grok goal_stop_detector.rs): when
-          // the model ends its turn with a surrender/hand-off signal while the
-          // goal is still active, inject a bail-specific nudge and continue
-          // instead of finalizing — a "giving up" ending must not silently
-          // stop the goal while open work remains.
-          if (goalActive()) {
-            const lastAssistantText = lastAssistantTextOf(messages);
-            if (lastAssistantText) {
-              const pattern = matchedStopPattern(lastAssistantText);
-              if (pattern) {
-                logger.info(`[Agent] Goal premature-stop detected (pattern=${pattern}); nudging to continue`);
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'user',
-                  content: renderSystemReminder(prematureStopNudge(pattern)),
-                  timestamp: Date.now(),
-                  seq_index: seqIndex,
-                });
-                continue;
-              }
-            }
+          // Plan 426: PreFinalize dispatch — the veto-capable steering point.
+          // The model ended its turn naturally; the bus consults the builtin
+          // policies (goal premature-stop → tool-intent → todo gate, in that
+          // fixed priority order) before the run is allowed to finalize. A
+          // block_finalize veto injects a transient <system-reminder>
+          // directive and continues the loop. Hook failures already degraded
+          // to "allow" inside the bus (fail-open).
+          const finalizeEffects = await loopHooks.dispatch('PreFinalize', {
+            ...buildHookCtx(),
+            stopReason: turnStopReason,
+          });
+          const finalizeVeto = finalizeEffects.find(
+            (effect) => effect.type === 'block_finalize',
+          );
+          if (finalizeVeto) {
+            applyLoopHookEffect(messages, finalizeVeto, seqIndex);
+            continue;
           }
 
-          // Plan 418 L2: tool-intent / action-consistency nudge. The model
-          // announced a tool action but ended its turn without emitting any
-          // tool_use (lossy third-party endpoints / weak tool generation).
-          // Stop only when the model explicitly concludes; otherwise steer it
-          // to follow through. Capped so a model that keeps announcing
-          // without acting cannot spin forever. Goal/todo guards above take
-          // precedence when they already decide to continue.
-          if (
-            toolIntentNudgeCount < toolIntentNudgeMax &&
-            (turnStopReason === undefined ||
-              turnStopReason === 'end_turn' ||
-              turnStopReason === 'completed' ||
-              turnStopReason === 'stop_sequence')
-          ) {
-            const lastAssistantText = lastAssistantTextOf(messages);
-            if (lastAssistantText) {
-              const intent = matchedToolIntent(lastAssistantText);
-              if (intent) {
-                toolIntentNudgeCount++;
-                logger.info(
-                  `[Agent] Turn ${turnCount}: Tool intent without tool_use (intent=${intent}); nudging to continue (${toolIntentNudgeCount}/${toolIntentNudgeMax})`,
-                );
-                messages.push({
-                  id: crypto.randomUUID(),
-                  role: 'user',
-                  content: renderSystemReminder(toolIntentNudge(intent)),
-                  timestamp: Date.now(),
-                  seq_index: seqIndex,
-                });
-                continue;
-              }
-            }
+          // Plan 426: PostTurn dispatch — run-boundary observation point
+          // before the final answer is committed.
+          for (const effect of await loopHooks.dispatch('PostTurn', buildHookCtx())) {
+            applyLoopHookEffect(messages, effect, seqIndex);
           }
 
-          // Todo gate: before finalizing, if pending/in-progress tasks remain,
-          // inject a steering message asking the model to continue instead of
-          // stopping. Reuses the task-store data source (same as TaskTool).
-          // Only triggered once per run to avoid repeated nudging.
-          if (todoGateEnabled && !todoGatePrompted && this.sessionId) {
+          // Plan 426 Phase 3: mode lifecycle — run onExit hooks for
+          // kind:'message' modes at the run boundary (fail-open; a failing
+          // exit hook never blocks the final answer).
+          if (this.resolvedModes && this.modeCtx) {
             try {
-              const store = getDatabaseTaskStore(this.sessionId);
-              const tasks = await store.listTasks();
-              const pending = tasks.filter(
-                (t) => t.status === 'pending' || t.status === 'in_progress',
-              );
-              if (pending.length > 0) {
-                todoGatePrompted = true;
-                // The user's last real request that started this run. Anchor the
-                // final answer to it so the model does not reply to the injected
-                // directive below as if it were a fresh user turn. Skips transient
-                // synthetic turns (aligned with grok's synthetic_reason handling).
-                const lastUserText = lastRealUserQuery(messages);
-                const originalRequest =
-                  (lastUserText ?? (typeof prompt === 'string' ? prompt : '')).trim();
-                // Transient steering message (same pattern as mailbox guidance).
-                // Wrapped in <system-reminder> so the model treats it as an
-                // internal directive to keep working, not a user question to answer.
-                // Flows through the shared RuntimeContextMessage framework so the
-                // mark is carried on a runtime_context message and projected to the
-                // provider as a user turn (mirrors grok's synthetic_reason).
-                const todoGateCtx = adaptTodoGateContext(
-                  renderSystemReminder(
-                    `<goal-state>\nObjective: ${originalRequest}\nStatus: Active\n</goal-state>\n\n` +
-                      `Internal system directive — NOT a new user question. Do not reply to this message.\n` +
-                      `There ${pending.length === 1 ? 'is 1 unfinished task' : `are ${pending.length} unfinished tasks`} that should be completed:\n` +
-                      pending.map((t) => `- ${t.subject}`).join('\n') +
-                      `\nContinue working to complete ${pending.length === 1 ? 'it' : 'them'}. ` +
-                      `When everything is done, give your final answer to the user's ORIGINAL request above.`,
-                  ),
-                  { seqIndex },
-                );
-                messages.push(projectRuntimeContextToProviderMessage(todoGateCtx));
-                continue;
-              }
+              await runExitHooks(this.resolvedModes, this.modeCtx);
             } catch (err) {
               logger.warn(
-                `[TodoGate] listTasks failed: ${err instanceof Error ? err.message : String(err)}`,
+                `[Agent] runExitHooks failed: ${err instanceof Error ? err.message : String(err)}`,
               );
             }
           }
@@ -1726,6 +1772,19 @@ export class duyaAgent {
           // Refresh sessionInfo counters BEFORE yielding done event
           // so API route can retrieve the final state
           this._commitMessages();
+
+          // Plan 426 follow-up: SessionEnd — fired on the natural run
+          // completion boundary (fail-open; never blocks the final answer).
+          try {
+            await configHooks.run('SessionEnd', {
+              session_id: this.sessionId ?? '',
+              cwd: this.workingDirectory ?? '',
+              hook_event_name: 'SessionEnd',
+              reason: 'user_exit',
+            });
+          } catch (err) {
+            logger.warn(`[Hooks] SessionEnd dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+          }
 
           yield { type: 'done', reason: 'completed' };
           return;
@@ -1854,6 +1913,31 @@ export class duyaAgent {
     // User interrupted - executor already created in current turn
     // Refresh sessionInfo counters BEFORE yielding done event
     this._commitMessages();
+
+    // Plan 426 follow-up: Stop + SessionEnd — the run is being torn down
+    // (user interrupt). Fail-open: a broken hook never blocks the done
+    // event.
+    try {
+      await configHooks.run('Stop', {
+        session_id: this.sessionId ?? '',
+        cwd: this.workingDirectory ?? '',
+        hook_event_name: 'Stop',
+        reason: 'user_request',
+      });
+    } catch (err) {
+      logger.warn(`[Hooks] Stop dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      await configHooks.run('SessionEnd', {
+        session_id: this.sessionId ?? '',
+        cwd: this.workingDirectory ?? '',
+        hook_event_name: 'SessionEnd',
+        reason: 'user_exit',
+      });
+    } catch (err) {
+      logger.warn(`[Hooks] SessionEnd dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     yield { type: 'done', reason: 'aborted' };
   }
 
@@ -2349,7 +2433,11 @@ export class duyaAgent {
     const permissionContext: ToolPermissionCheckContext = {
       getAppState: () => ({
         toolPermissionContext: {
-          mode: this.permissionMode,
+          // Single canonical mode read path: `this.permissionMode` is the sole
+          // permission-mode field; `getPermissionMode()` is its accessor. MCP
+          // (apply.ts) reads the same live value, so built-in and MCP tools
+          // always agree on the effective mode.
+          mode: this.getPermissionMode(),
           additionalWorkingDirectories: this.additionalWorkingDirectories,
           alwaysAllowRules: this.alwaysAllowRules,
           alwaysDenyRules: this.alwaysDenyRules,
@@ -3121,12 +3209,6 @@ export class duyaAgent {
   }
 }
 
-/** Whether a goal is currently active (self-driving) on the tracker. */
-function goalActive(): boolean {
-  const s = goalModeTracker.state();
-  return s === 'active' || s === 'verifying';
-}
-
 /**
  * Build a dedicated compaction client from `compact_model` config. Returns
  * undefined when disabled or unconfigured so callers fall back to the main
@@ -3151,21 +3233,4 @@ function buildCompactClient(
   } catch {
     return undefined;
   }
-}
-
-/** Text of the last assistant message in the working message array. */
-function lastAssistantTextOf(
-  messages: Array<{ role?: string; content?: string | readonly unknown[] | null }>,
-): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m?.role !== 'assistant') continue;
-    if (m.content === undefined || m.content === null) continue;
-    const text =
-      typeof m.content === 'string'
-        ? m.content
-        : extractTextFromContent(m.content as readonly MessageContent[]);
-    if (text && text.trim().length > 0) return text;
-  }
-  return undefined;
 }

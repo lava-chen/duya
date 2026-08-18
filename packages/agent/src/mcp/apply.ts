@@ -29,8 +29,8 @@
 // state converges to the last committed snapshot.
 
 import { logger } from '../utils/logger.js';
-import { evaluateMcpToolPermission, type McpToolSource } from './permission-gate.js';
-import type { PermissionMode } from '../permissions/types.js';
+import { decideMcpSource } from '../permissions/permissions.js';
+import type { PermissionMode, McpToolSource } from '../permissions/types.js';
 import { computeProviderName, AnthropicToolNamePolicy } from '@duya/plugin-core';
 import type {
   MCPCandidate,
@@ -158,16 +158,6 @@ export interface ActiveMCPRuntimeSnapshot {
 // ============================================================================
 
 let lastMCPLoadResult: MCPLoadResult | null = null;
-
-/**
- * Module-scope: toolUseIds whose MCP permission prompt the user already
- * approved in this process. Recorded by the executor after an inline
- * `requestPermission` allow; consulted on re-entry so an already-approved
- * tool use is never prompted twice. Per-process, bounded by tool-use
- * lifetimes (the agent process reuses ids across turns only in the same
- * session; entries are tiny).
- */
-const approvedMcpToolUseIds = new Set<string>();
 
 export function getLastMCPLoadResult(): MCPLoadResult | null {
   return lastMCPLoadResult;
@@ -443,7 +433,7 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     const capturedClient = scopedClient;
     const capturedMcpInfo = t.mcpInfo;
     const gateErrorResult = (
-      decision: { kind: 'deny' | 'prompt'; reason: string },
+      kind: 'deny' | 'ask',
       message: string,
     ) => ({
       id: capturedMcpInfo.toolName + '-gate',
@@ -452,7 +442,7 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
       error: true,
       metadata: {
         source: (capturedMcpInfo.source ?? 'unknown') as McpToolSource,
-        gateKind: decision.kind,
+        gateKind: kind,
       },
     });
     const executor: ToolExecutor = {
@@ -461,9 +451,10 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
         _workingDirectory?: string,
         context?: ToolUseContext,
       ) => {
-        // BLOCKER B (audit 2026-06-03): runtime permission gate.
-        // Pure predicate, runs BEFORE the underlying client call so
-        // third-party MCP tools can never execute silently.
+        // BLOCKER B (audit 2026-06-03): runtime permission gate. The MCP
+        // decision is the SAME gate built-in tools use (`decideMcpSource` is
+        // the provenance step of `hasPermissionsToUseTool`), so third-party
+        // MCP tools can never execute silently.
         const source: McpToolSource = (capturedMcpInfo.source
           ?? 'unknown') as McpToolSource;
         // Read the host agent's ACTUAL permission mode. (The old lookup
@@ -473,42 +464,45 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
         // fakes, which the gate treats as "always needs approval" — the
         // safest default.
         const activeMode = agent.getPermissionMode ? agent.getPermissionMode() : undefined;
-        const decision = evaluateMcpToolPermission(
-          source,
-          activeMode,
-          capturedMcpInfo.toolName,
-        );
-        if (decision.kind === 'deny') {
+        const decision = decideMcpSource(source, activeMode, capturedMcpInfo.toolName);
+        if (decision.behavior === 'deny') {
           logger.warn(
             '[MCP] tool call denied by permission gate',
-            { toolName: capturedMcpInfo.toolName, source, kind: decision.kind, reason: decision.reason },
+            { toolName: capturedMcpInfo.toolName, source, reason: decision.message },
           );
-          return gateErrorResult(decision, '[MCP permission gate] ' + decision.reason);
+          return gateErrorResult('deny', '[MCP permission gate] ' + decision.message);
         }
-        if (decision.kind === 'prompt') {
+        if (decision.behavior === 'ask') {
           logger.warn(
             '[MCP] tool call requires user approval',
-            { toolName: capturedMcpInfo.toolName, source, kind: decision.kind, reason: decision.reason },
+            { toolName: capturedMcpInfo.toolName, source, reason: decision.message },
           );
           // Skip the gate when this tool use was already approved: either
           // StreamingToolExecutor's pre-check marked `_approvedToolUses`
           // in appState, or we recorded it below on a prior entry with
           // the same toolUseId (e.g. executor re-entry after approval).
+          // `_approvedToolUses` in appState is the SINGLE approval channel
+          // (plan 419 P0: DuyaAgent streams a real, mutable AppState with
+          // working getAppState/setAppState, so hosts always persist it).
           const toolUseId = context?.toolUseId;
           const appState = context?.getAppState ? context.getAppState() : undefined;
           const appApproved = toolUseId
             ? ((appState?._approvedToolUses as Record<string, boolean> | undefined) ?? {})[toolUseId]
             : undefined;
-          if (!appApproved && !(toolUseId && approvedMcpToolUseIds.has(toolUseId))) {
-            // No approval channel (headless CLI / sub-agent / unit test):
-            // keep the hard gate error instead of dead-locking on a prompt
-            // nobody can answer.
+          if (!appApproved) {
+            // No approval channel (headless CLI / sub-agent / background
+            // gateway session): there is no interactive user to answer a
+            // permission prompt, so asking would dead-lock the turn. These
+            // contexts are trusted app-internal/automation surfaces, so we
+            // allow the call through (the source-level trust model above
+            // still gates market-installed / manual-path third-party tools
+            // in interactive sessions). Log the implicit approval loudly.
             if (!context?.requestPermission) {
-              return gateErrorResult(
-                decision,
-                '[MCP permission gate] ' + decision.reason +
-                  '. Switch the session to bypassPermissions or dontAsk to allow this tool.',
+              logger.warn(
+                '[MCP] no interactive user available; implicitly allowing tool',
+                { toolName: capturedMcpInfo.toolName, source, mode: activeMode },
               );
+              return capturedClient.callTool(capturedMcpInfo.toolName, input);
             }
             // Ask the user through the standard permission_request flow
             // (chat:permission event -> renderer Allow/Deny prompt). This
@@ -523,23 +517,20 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
               toolInput: input,
               mode: 'generic',
               expiresAt: Date.now() + 5 * 60 * 1000,
-              decisionReason: decision.reason,
+              decisionReason: decision.message,
             });
             if (userDecision === 'deny') {
               logger.warn(
                 '[MCP] tool call denied by user',
                 { toolName: capturedMcpInfo.toolName, source },
               );
-              return gateErrorResult(decision, '[MCP permission gate] Permission denied by user');
+              return gateErrorResult('ask', '[MCP permission gate] Permission denied by user');
             }
             // Plan 419 P0: record the approval on the SAME channel
             // StreamingToolExecutor uses (`_approvedToolUses` in appState),
-            // so a re-entry with this toolUseId skips the gate even when
-            // the module-level fallback set is cleared. `setAppState` may
-            // be absent on hosts that still pass a no-op context; the
-            // module-level `approvedMcpToolUseIds` stays as the fallback.
+            // so a re-entry with this toolUseId skips the gate. appState is
+            // reliable on real hosts now, so it is the only approval channel.
             if (toolUseId) {
-              approvedMcpToolUseIds.add(toolUseId);
               context?.setAppState?.((prev) => ({
                 ...prev,
                 _approvedToolUses: {

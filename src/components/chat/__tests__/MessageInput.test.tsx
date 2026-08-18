@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 // Heavy modules that MessageInput transitively imports. We mock them out
@@ -58,18 +58,9 @@ vi.mock('@/components/icons', () => ({
   // chain (working-tree WIP); mock them so the smoke tests mount.
   ChalkboardIcon: () => null,
   TargetArrowIcon: () => null,
-}));
-
-vi.mock('@/components/chat/ModelSelector', () => ({
-  ModelSelector: ({ onSelect }: { onSelect: (model: string) => void }) => (
-    <button type="button" onClick={() => onSelect('[DeepSeek] deepseek-v4-flash')}>
-      choose DeepSeek
-    </button>
-  ),
-}));
-
-vi.mock('@/components/chat/PermissionModeSelector', () => ({
-  PermissionModeSelector: () => null,
+  // Session mode chips (plan 413e) render ChatCircleIcon while a
+  // session-level mode chip is visible.
+  ChatCircleIcon: () => null,
 }));
 
 vi.mock('@/components/chat/SlashCommandPopover', () => ({
@@ -137,11 +128,11 @@ describe('MessageInput mode helpers (plan 413e)', () => {
     expect(pickMessageMode(new Set(['plan-task', 'conductor']))).toBe('plan-task');
   });
 
-  it('clearMessageModes keeps session modes (plan-task, conductor) and drops research', () => {
+  it('clearMessageModes keeps session modes (plan-task, research, conductor — plan 423 made research session-level)', () => {
     const next = clearMessageModes(new Set(['plan-task', 'research', 'conductor']));
     expect(next.has('plan-task')).toBe(true);
     expect(next.has('conductor')).toBe(true);
-    expect(next.has('research')).toBe(false);
+    expect(next.has('research')).toBe(true);
   });
 });
 
@@ -203,26 +194,7 @@ describe('MessageInput (Plan 220 smoke test)', () => {
     expect(screen.getByTestId('attachment-bar')).toBeInTheDocument();
   });
 
-  it('reports the selected model together with its provider', async () => {
-    mocks.listProvidersIPC.mockResolvedValue([
-      {
-        id: 'deepseek',
-        name: 'DeepSeek',
-        providerType: 'anthropic',
-        hasApiKey: true,
-        options: JSON.stringify({ enabled_models: ['deepseek-v4-flash'] }),
-      },
-    ]);
-    const onModelChange = vi.fn();
-
-    render(<MessageInput onSend={() => {}} onModelChange={onModelChange} />);
-
-    await waitFor(() => expect(mocks.listProvidersIPC).toHaveBeenCalled());
-    fireEvent.click(screen.getByRole('button', { name: 'choose DeepSeek' }));
-
-    expect(onModelChange).toHaveBeenCalledWith(
-      '[DeepSeek] deepseek-v4-flash',
-      'deepseek',
-    );
-  });
+  // NOTE: the former "reports the selected model together with its provider"
+  // case was removed — the standalone ModelSelector was replaced by the
+  // unified slash-command popover (onSelectModel via useSlashCommands).
 });

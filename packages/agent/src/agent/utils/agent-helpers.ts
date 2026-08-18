@@ -48,7 +48,7 @@ export function extractTextFromContent(content: string | readonly MessageContent
  * identified purely by `metadata.runtimeContext`, never by parsing text.
  * Returns undefined when no real user message with text exists.
  */
-export function lastRealUserQuery(messages: Message[]): string | undefined {
+export function lastRealUserQuery(messages: readonly Message[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'user') continue;
@@ -104,6 +104,27 @@ export type RuntimeMailboxDecision =
   | { action: 'soft_stop'; summary: string }
   | { action: 'hard_replace'; replacement: string };
 
+/**
+ * Text of the last assistant message with non-empty content. Shared by the
+ * loop-hook builtin nudges (premature-stop, tool-intent) that pattern-match
+ * the model's closing statement before finalize.
+ */
+export function lastAssistantTextOf(
+  messages: ReadonlyArray<{ role?: string; content?: string | readonly unknown[] | null }>,
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m?.role !== 'assistant') continue;
+    if (m.content === undefined || m.content === null) continue;
+    const text =
+      typeof m.content === 'string'
+        ? m.content
+        : extractTextFromContent(m.content as readonly MessageContent[]);
+    if (text && text.trim().length > 0) return text;
+  }
+  return undefined;
+}
+
 export interface RuntimeMailboxClaim {
   rows: MailboxRow[];
   claimTokens: string[];
@@ -123,7 +144,11 @@ export function persistableMessages(messages: Message[]): Message[] {
         source === 'background_notification' ||
         source === 'custom' ||
         source === 'todo_gate' ||
-        source === 'auto_continue'
+        source === 'auto_continue' ||
+        source === 'dead_loop_nudge' ||
+        source === 'premature_stop' ||
+        source === 'tool_intent' ||
+        source === 'max_turns_wrapup'
       ) {
         return false;
       }

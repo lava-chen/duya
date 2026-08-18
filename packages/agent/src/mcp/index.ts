@@ -203,8 +203,8 @@ class MCPClient {
       this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown }) => {
         // Security layer 3 (prompt injection scan): warn on suspicious tool
         // descriptions. Does not block — false positives would break legit
-        // servers. The permission gate (permission-gate.ts) handles blocking
-        // based on source. Here we only observe + log.
+        // server descriptions. Warning only — the actual source-based
+        // blocking gate lives in the permission system (`decideMcpSource`).
         scanMcpDescription(this.config.name, tool.name, tool.description || '');
         return {
           name: tool.name,

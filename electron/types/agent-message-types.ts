@@ -50,7 +50,9 @@ export type RendererToAgentMessage =
   | { type: 'chat:start'; sessionId: string; prompt: string; options?: ChatStartOptions }
   | { type: 'chat:interrupt' }
   | { type: 'chat:continue' }
-  | { type: 'permission:resolve'; id: string; decision: PermissionDecision };
+  | { type: 'permission:resolve'; id: string; decision: PermissionDecision }
+  /** Live mid-run permission-mode switch (Ask/Auto/Bypass → agent mode). */
+  | { type: 'permission:set'; mode: string };
 
 // =============================================================================
 // SHARED TYPES

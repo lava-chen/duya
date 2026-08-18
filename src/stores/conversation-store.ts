@@ -79,7 +79,7 @@ export type SettingsTab =
   | 'general' | 'appearance' | 'providers'
   | 'provider-picker' | 'provider-edit'
   | 'extensions' | 'channels' | 'browser' | 'security'
-  | 'usage' | 'agents' | 'support' | 'memory' | 'voice';
+  | 'usage' | 'agents' | 'support' | 'memory' | 'voice' | 'performance';
 
 /**
  * Plan 205: the target of the `provider-edit` page. Either
@@ -1126,18 +1126,15 @@ export const useConversationStore = create<ConversationState>()(
   )
 );
 
-// Handle sync event from other tabs/windows
+// Handle sync event from other tabs/windows (and main-process broadcasts such
+// as a scheduled cron run creating a session). Always forceSync: the event
+// means "the sessions table changed", and loadFromDatabase only hydrates the
+// active session's transcript when it has never been loaded, so an in-flight
+// stream and its optimistic messages are untouched — only the sidebar list
+// (including the cron group) refreshes.
 function handleSyncEvent(source: string) {
   console.log(`[Sync] Received sync event from ${source}`);
-  const store = useConversationStore.getState();
-  // Only sync if we're not currently in an active chat
-  // to avoid disrupting the user's current work
-  if (store.activeThreadId === null) {
-    store.forceSync();
-  } else {
-    // Mark as stale so next loadFromDatabase will refresh
-    useConversationStore.setState({ lastSyncAt: 0 });
-  }
+  useConversationStore.getState().forceSync();
 }
 
 // Subscribe to sync events from other tabs/windows

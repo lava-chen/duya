@@ -8,9 +8,11 @@ import type {
   PermissionDecision,
   PermissionDecisionReason,
   PermissionDenyDecision,
+  PermissionMode,
   PermissionResult,
   PermissionRule,
   ToolPermissionContext,
+  McpToolSource,
 } from './types.js'
 import {
   permissionRuleValueFromString,
@@ -36,6 +38,8 @@ import {
   isCatastrophicToolCall,
   isToolWithinWorkspace,
   isWorkspaceEscapingCommand,
+  isFileTool,
+  isShellTool,
 } from './policy.js'
 import type { AIClient } from '@duya/ai'
 import type { Message } from '../types.js'
@@ -77,6 +81,7 @@ const GLOBAL_ALWAYS_ALLOWED_TOOLS = new Set([
   'task',
   'Agent',
   'Task',
+  'send_artifact',
 ])
 
 export function permissionRuleSourceDisplayString(
@@ -241,6 +246,13 @@ export interface ToolPermissionCheckContext {
   setAppState?: (fn: (prev: unknown) => { denialTracking?: DenialTrackingState }) => void
   localDenialTracking?: DenialTrackingState
   abortController: AbortController
+  /**
+   * Provenance of an MCP tool (bundled/settings/plugin/local/unknown). When
+   * present, the gate trusts only bundled + settings servers automatically and
+   * prompts for third-party sources — see the short-circuit in
+   * `hasPermissionsToUseTool`. Absent for built-in tools.
+   */
+  source?: McpToolSource
   /** LLM client for auto mode classifier */
   llmClient?: AIClient
   /** Model name for auto mode classifier */
@@ -256,6 +268,55 @@ export type HasPermissionsFn = (
 ) => Promise<PermissionDecision>
 
 /**
+ * Shared MCP source predicate — the single decision for MCP tools by their
+ * provenance (`bundled`/`settings`/`plugin`/`local`/`unknown`) and the active
+ * mode. Both the unified gate (`hasPermissionsToUseTool`, step 0) and the MCP
+ * executor in `mcp/apply.ts` call this, so the MCP permission decision lives
+ * in exactly one place. Never silently auto-approves third-party sources.
+ */
+export function decideMcpSource(
+  source: McpToolSource,
+  mode: PermissionMode | undefined,
+  toolName: string,
+): PermissionDecision {
+  if (source === 'bundled') {
+    return {
+      behavior: 'allow',
+      decisionReason: {
+        type: 'safetyCheck',
+        reason: 'bundled MCP tools are trusted first-party',
+        classifierApprovable: false,
+      },
+    }
+  }
+  if (mode === 'bypassPermissions' || mode === 'dontAsk') {
+    return {
+      behavior: 'allow',
+      decisionReason: { type: 'mode', mode },
+    }
+  }
+  if (source === 'settings') {
+    return {
+      behavior: 'allow',
+      decisionReason: {
+        type: 'safetyCheck',
+        reason: `user-configured MCP server tool "${toolName}" is trusted by explicit user configuration`,
+        classifierApprovable: false,
+      },
+    }
+  }
+  // plugin / local / unknown — never silently auto-approved.
+  return {
+    behavior: 'ask',
+    message: `MCP tool "${toolName}" requires explicit user approval`,
+    decisionReason: {
+      type: 'other',
+      reason: `MCP tool "${toolName}" with third-party provenance requires explicit user approval`,
+    },
+  }
+}
+
+/**
  * Creates the main permission check function
  */
 export function createHasPermissionsToUseTool(): HasPermissionsFn {
@@ -269,6 +330,20 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
     }
 
     let appState = context.getAppState()
+
+    // 0. MCP source gate — the same gate used by built-in tools, extended with
+    // the MCP provenance dimension. When `context.source` is present this
+    // short-circuits before the built-in ordering so third-party MCP tools
+    // (market-installed `plugin` / manual-path `local` / `unknown`) stay behind
+    // a prompt even when the rest of the pipeline would auto-allow. `bundled`
+    // (trusted first-party) and `settings` (explicit user config = trust) are
+    // allowed automatically; `bypassPermissions` / `dontAsk` override the
+    // source prompt, mirroring the role the old `evaluateMcpToolPermission`
+    // played before it was folded into this single gate.
+    const source = context.source
+    if (source) {
+      return decideMcpSource(source, appState.toolPermissionContext.mode, toolName)
+    }
 
     // 1. Canvas and project-database tools operate entirely within the
     // application's own project workspace. They do not touch external systems, so they
@@ -380,9 +455,14 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
       }
     }
 
-    // 5. Check mode-based permissions
+    // 5. Check mode-based permissions. `bypassPermissions` and `dontAsk`
+    // both mean "don't prompt the user". `dontAsk` is the headless /
+    // background read-only mode used by the CLI and automation surfaces,
+    // where automated commands and app-internal tools must not block on a
+    // permission dialog nobody can answer.
     const shouldBypassPermissions =
       appState.toolPermissionContext.mode === 'bypassPermissions' ||
+      appState.toolPermissionContext.mode === 'dontAsk' ||
       (appState.toolPermissionContext.mode === 'plan' &&
         appState.toolPermissionContext.isBypassPermissionsModeAvailable)
 
@@ -623,16 +703,6 @@ function hasExplicitPath(input: Record<string, unknown>): boolean {
     typeof input.directory === 'string' ||
     Array.isArray(input.paths)
   );
-}
-
-function isShellTool(toolName: string): boolean {
-  const lower = toolName.toLowerCase();
-  return lower === 'bash' || lower === 'powershell' || lower === 'shell';
-}
-
-function isFileTool(toolName: string): boolean {
-  const lower = toolName.toLowerCase();
-  return lower === 'write' || lower === 'edit' || lower === 'read' || lower === 'apply_patch';
 }
 
 function isLowRiskBrowserOperation(

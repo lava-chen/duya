@@ -10,6 +10,9 @@ import { ArrowUpIcon,
   XCircleIcon,
   PaperclipIcon,
   PlusIcon,
+  HandIcon,
+  ShieldCheckIcon,
+  ShieldWarningIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
 import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
@@ -47,6 +50,7 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { RichTextInput } from './RichTextInput';
 import { VoiceButton } from './VoiceButton';
+import { applyDictation } from '@/lib/voice/dictation';
 import { InlineTaskRow } from './InlineTaskRow';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import type { Task } from '@duya/agent';
@@ -96,6 +100,10 @@ interface MessageInputProps {
   onModelChange?: (model: string, providerId?: string) => void;
   effort?: string;
   onEffortChange?: (effort: string | undefined) => void;
+  /** Current permission mode (Ask / Auto / Bypass). Managed by the parent so
+   *  a live change is forwarded to the running agent mid-run. */
+  permissionMode?: PermissionModeUi;
+  onPermissionModeChange?: (mode: PermissionModeUi) => void;
   placeholder?: string;
   // Slash-command popover placement. Default `top` keeps the popup above the
   // input (chat history). Pass `bottom` on the welcome / start page where
@@ -272,6 +280,52 @@ function EffortSelector({ value, onChange, modelId }: EffortSelectorProps) {
   );
 }
 
+/** User-facing permission mode in the composer (mirrors Conductor's selector). */
+type PermissionModeUi = 'ask' | 'auto' | 'bypass';
+
+interface PermissionModeSelectorProps {
+  value: PermissionModeUi;
+  onChange: (mode: PermissionModeUi) => void;
+}
+
+const PERMISSION_MODES: Array<{
+  id: PermissionModeUi;
+  icon: typeof HandIcon;
+  labelKey: 'messageInput.permissionAsk' | 'messageInput.permissionAuto' | 'messageInput.permissionBypass';
+}> = [
+  { id: 'ask', icon: HandIcon, labelKey: 'messageInput.permissionAsk' },
+  { id: 'auto', icon: ShieldCheckIcon, labelKey: 'messageInput.permissionAuto' },
+  { id: 'bypass', icon: ShieldWarningIcon, labelKey: 'messageInput.permissionBypass' },
+];
+
+/**
+ * Compact permission-mode toggle (Ask → Auto → Bypass → Ask). Shows the
+ * current mode's icon + localized label; clicking cycles to the next mode.
+ */
+function PermissionModeSelector({ value, onChange }: PermissionModeSelectorProps) {
+  const { t } = useTranslation();
+  const current = PERMISSION_MODES.find((m) => m.id === value) ?? PERMISSION_MODES[1];
+  const Icon = current.icon;
+  const isBypass = value === 'bypass';
+  const handleClick = () => {
+    const idx = PERMISSION_MODES.findIndex((m) => m.id === current.id);
+    onChange(PERMISSION_MODES[(idx + 1) % PERMISSION_MODES.length].id);
+  };
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className={`permission-mode-toggle flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] hover:bg-accent/50 hover:text-foreground transition-colors ${
+        isBypass ? 'text-[var(--warning)]' : 'text-muted-foreground'
+      }`}
+      title={PERMISSION_MODES.map((m) => t(m.labelKey)).join(' / ')}
+    >
+      <Icon size={14} />
+      <span>{t(current.labelKey)}</span>
+    </button>
+  );
+}
+
 export function MessageInput({
   onSend,
   onRecapRequest,
@@ -284,6 +338,8 @@ export function MessageInput({
   onModelChange,
   effort,
   onEffortChange,
+  permissionMode,
+  onPermissionModeChange,
   placeholder,
   popoverPlacement = 'top',
   onExecuteCommand,
@@ -500,12 +556,14 @@ export function MessageInput({
     setTriggerPos(null);
   }, []);
 
-  const filteredItems = popoverMode === 'skill' ? filterItems(popoverItems, popoverFilter) : popoverItems;
+  const filteredItems = (popoverMode === 'skill' || popoverMode === 'context')
+    ? filterItems(popoverItems, popoverFilter)
+    : popoverItems;
 
   const {
     insertItem,
     handleInputChange: handleSlashInputChange,
-    openCommandPopover,
+    contextItems,
   } = useSlashCommands({
     textareaRef,
     inputValue,
@@ -521,6 +579,16 @@ export function MessageInput({
     closePopover,
     sessionId,
   });
+
+  // Open the `@` context popup (添加附件 + mode + MCP) — the plus button opens
+  // this directly. Populates items from the static `contextItems` builder.
+  const openContextPopover = useCallback(() => {
+    setPopoverMode('context');
+    setPopoverFilter('');
+    setTriggerPos(null);
+    setSelectedIndex(0);
+    setPopoverItems(contextItems);
+  }, [contextItems]);
 
   // Plan 220 Phase 4: unified attachment state. Single source of truth for
   // files, paste, terminal refs, browser refs, and file-tree refs. Replaces
@@ -1538,13 +1606,31 @@ export function MessageInput({
       // localStorage unavailable — still inject once per session below.
     }
     const guide =
-      '语音输入尚未就绪（本地 whisper 环境或云端 STT 未配置）。请使用 voice-setup 技能，' +
-      '通过 duya_cli 依次执行 voice doctor 诊断环境、voice setup 下载模型、' +
-      'voice enable / voice set 写入配置，最后复检确保语音立即可用。';
+      '语音输入尚未就绪。用户可在 设置 → 语音输入 一键安装 whisper 运行时与模型；' +
+      '或使用 voice-setup 技能，通过 duya_cli 依次执行 voice doctor 诊断环境、' +
+      'voice setup 下载模型、voice enable / voice set 写入配置，最后复检确保语音立即可用。';
     const sendMode = pickMessageMode(activeModes);
     const conductorMode = activeModes.has('conductor') || undefined;
     onSend(guide, undefined, undefined, sendMode, guide, conductorMode);
   }, [onSend, activeModes]);
+
+  // Dictation appends to the input instead of replacing it: snapshot the
+  // text when a session starts, show interim as base + interim, and commit
+  // each final result onto the base. Logic lives in the pure helper
+  // `applyDictation` so the append semantics are unit-testable.
+  const voiceBaseTextRef = useRef('');
+  const inputValueRef = useRef(inputValue);
+  inputValueRef.current = inputValue;
+
+  const handleVoiceSessionStart = useCallback(() => {
+    voiceBaseTextRef.current = inputValueRef.current;
+  }, []);
+
+  const handleVoiceTranscription = useCallback((text: string, kind: 'interim' | 'final') => {
+    const { display, base } = applyDictation(voiceBaseTextRef.current, text, kind);
+    voiceBaseTextRef.current = base;
+    setInputValue(display);
+  }, []);
 
   // Remove CLI badge handler
   const handleRemoveCliBadge = useCallback(() => {
@@ -1586,10 +1672,7 @@ export function MessageInput({
           placement={popoverPlacement}
           // Settings state + callbacks
           thinkingEffort={selectedEffort ?? null}
-          onSelectThinkingEffort={(effort) => {
-            setSelectedEffort(effort ?? undefined);
-            onEffortChange?.(effort ?? undefined);
-          }}
+          onSelectThinkingEffort={handleEffortChange}
           // Strip the `[provider] ` prefix so @duya/ai sees the raw model id
           // (e.g. 'MiniMax-M3') it can look up in allProviderModels.
           modelId={selectedModel.replace(/^\[[^\]]+\]\s*/, '')}
@@ -1713,9 +1796,9 @@ export function MessageInput({
 
           {/* Bottom Toolbar */}
           <div className="mt-1 px-2 flex min-w-0 items-center gap-2">
-            {/* Left: Plus Button (opens unified command popover) & Permission */}
             <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
-              {/* Plus Button — opens the slash command popover (modes + settings + skills) */}
+              {/* Plus Button — opens the `@` context popup (添加附件 / mode / MCP). The
+                  `/` commands are only reachable by typing `/` in the input. */}
               <IconButton
                 variant="ghost"
                 shape="square"
@@ -1723,14 +1806,14 @@ export function MessageInput({
                 aria-label={t('common.settings') || 'Settings'}
                 data-plus-trigger
                 onClick={() => {
-                  if (popoverMode === 'skill') {
+                  if (popoverMode === 'context') {
                     closePopover();
                   } else {
-                    openCommandPopover();
+                    openContextPopover();
                   }
                 }}
                 className={`border ${
-                  popoverMode === 'skill'
+                  popoverMode === 'context'
                     ? 'text-foreground bg-chip border-border'
                     : 'text-muted-foreground border-transparent hover:text-foreground hover:bg-accent/50'
                 }`}
@@ -1738,6 +1821,13 @@ export function MessageInput({
               >
                 <PlusIcon size={16} />
               </IconButton>
+              {/* Permission mode toggle — right of the attachment button. */}
+              {permissionMode && onPermissionModeChange && (
+                <PermissionModeSelector
+                  value={permissionMode}
+                  onChange={onPermissionModeChange}
+                />
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1793,25 +1883,14 @@ export function MessageInput({
               )}
             </div>
 
-            {/* Right: Send/Stop Button */}
+            {/* Right: Send/Stop Button — single toggle. While streaming with an
+                empty input, show Stop; otherwise show Send (a Send during
+                streaming queues the message instead of interrupting). */}
             <div className="flex shrink-0 items-center gap-1">
               {hasQueuedMessages && !isStreaming && (
                 <span className="text-xs text-muted-foreground bg-accent/20 px-1.5 py-0.5 rounded-full select-none">
                   +{1}
                 </span>
-              )}
-              {isStreaming && onStop && (
-                <IconButton
-                  variant="danger"
-                  shape="round"
-                  size="md"
-                  aria-label="Stop"
-                  onClick={handleStop}
-                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30 ml-1"
-                  title="Stop"
-                >
-                  <StopIcon size={16} />
-                </IconButton>
               )}
               {/* Model / Provider / Effort selector — next to the voice button */}
               {hasProvider && providerGroups.length > 0 && (
@@ -1828,21 +1907,36 @@ export function MessageInput({
               )}
               <VoiceButton
                 disabled={disabled || isStreaming}
-                onTranscription={(text, _kind) => setInputValue(text)}
+                onTranscription={handleVoiceTranscription}
                 onNeedsSetup={handleVoiceNeedsSetup}
+                onSessionStart={handleVoiceSessionStart}
               />
-              <IconButton
-                type="submit"
-                variant="primary"
-                shape="round"
-                size="md"
-                aria-label="Send"
-                title="Send"
-                disabled={disabled || (!inputValue.trim() && attachments.length === 0)}
-                className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
-              >
-                <ArrowUpIcon size={16} />
-              </IconButton>
+              {isStreaming && onStop && !inputValue.trim() && attachments.length === 0 ? (
+                <IconButton
+                  variant="danger"
+                  shape="round"
+                  size="md"
+                  aria-label="Stop"
+                  onClick={handleStop}
+                  className="bg-red-500/20 text-red-400 hover:bg-red-500/30 ml-1"
+                  title="Stop"
+                >
+                  <StopIcon size={16} />
+                </IconButton>
+              ) : (
+                <IconButton
+                  type="submit"
+                  variant="primary"
+                  shape="round"
+                  size="md"
+                  aria-label="Send"
+                  title="Send"
+                  disabled={disabled || (!inputValue.trim() && attachments.length === 0)}
+                  className="bg-[var(--send-btn)] hover:bg-[var(--send-btn-hover)] ml-1"
+                >
+                  <ArrowUpIcon size={16} />
+                </IconButton>
+              )}
             </div>
           </div>
         </div>

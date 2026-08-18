@@ -7,6 +7,13 @@
 // Permission Modes
 // ============================================================================
 
+/**
+ * Provenance bucket of an MCP tool. Used by the unified permission gate to
+ * trust first-party / user-configured servers without prompting, while keeping
+ * market-installed or manual-path third-party tools behind a prompt.
+ */
+export type McpToolSource = 'bundled' | 'plugin' | 'local' | 'settings' | 'unknown'
+
 export const EXTERNAL_PERMISSION_MODES = [
   'acceptEdits',
   'bypassPermissions',

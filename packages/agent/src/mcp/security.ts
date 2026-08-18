@@ -10,8 +10,9 @@
 //   4. Sampling rate limit  — cap reverse LLM calls (sampling/createMessage)
 //
 // Design principle: this module is an OBSERVATION + SANITIZATION layer. It
-// never blocks a legitimate MCP server. Blocking policy lives in
-// permission-gate.ts (source-based) and the tool permission system
+// never blocks a legitimate MCP server. Blocking policy lives in the
+// permission gate (`permissions.ts` / `decideMcpSource`, source-based) and the
+// tool permission system
 // (PermissionMode). Here we only filter what crosses the trust boundary.
 
 import { logger } from '../utils/logger.js';

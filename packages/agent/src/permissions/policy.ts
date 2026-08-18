@@ -933,12 +933,12 @@ export function isCatastrophicToolCall(
   return false;
 }
 
-function isFileTool(toolName: string): boolean {
+export function isFileTool(toolName: string): boolean {
   const lower = toolName.toLowerCase();
   return lower === 'write' || lower === 'edit' || lower === 'read' || lower === 'apply_patch';
 }
 
-function isShellTool(toolName: string): boolean {
+export function isShellTool(toolName: string): boolean {
   const lower = toolName.toLowerCase();
   return lower === 'bash' || lower === 'powershell' || lower === 'shell';
 }

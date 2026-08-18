@@ -2524,7 +2524,20 @@ class StreamSessionManager {
       return;
     }
 
-    state.streamingText += state.pendingTextEmit;
+    // Preserve block-level markdown boundaries: when the accumulated text
+    // does not end with a newline but the pending chunk starts with a
+    // block-level pattern (#, -, *, >, 1.), insert a newline so headings,
+    // list items, and blockquotes are not swallowed into the previous
+    // paragraph. This prevents `###` from rendering as literal text.
+    const chunk = state.pendingTextEmit;
+    const prev = state.streamingText;
+    const needsNewline = prev.length > 0
+      && !prev.endsWith('\n')
+      && /^[#\*>\-\d]/.test(chunk);
+    if (needsNewline) {
+      state.streamingText += '\n';
+    }
+    state.streamingText += chunk;
     state.finalMessageContent = state.streamingText;
     const newText = state.streamingText;
     state.pendingTextEmit = '';
