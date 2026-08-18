@@ -13,6 +13,10 @@ const sessionManager = new SessionManager();
 const workerManager = new WorkerManager(sessionManager);
 const checkpointBatcher = new CheckpointBatcher(sessionManager);
 
+// Plan 426 Phase 2: reap workers idle past the TTL (10min default, 4min in
+// lowPower). Subsequent requests go through the existing lazy-spawn path.
+workerManager.startIdleReaper();
+
 checkpointBatcher.setFlushHandler((batch) => {
   for (const cp of batch) {
     logger.info('Batched checkpoint flushed', { sessionId: cp.sessionId, batchSize: batch.length });
@@ -240,6 +244,7 @@ function gracefulShutdown(): void {
   logger.info('Starting graceful shutdown', { sessionCount: sessionManager.getSessionCount(), workerCount: workerManager.workerCount });
 
   checkpointBatcher.stop();
+  workerManager.stopIdleReaper();
   workerManager.killAll();
 
   server.close(() => {

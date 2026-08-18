@@ -99,9 +99,7 @@ export class QQAdapter extends BaseAdapter {
     this.wsManager = new QQWebSocketManager(
       {
         onOpen: () => {
-          this.health.connected = true;
-          this.health.lastConnectedAt = Date.now();
-          this.health.consecutiveErrors = 0;
+          this.updateHealthConnected();
         },
         onMessage: (payload) => this.handleWebSocketPayload(payload),
         onClose: (code, reason) => {

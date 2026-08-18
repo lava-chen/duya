@@ -16,7 +16,6 @@ import {
   runAutomationCronIPC,
   updateAutomationCronIPC,
 } from '@/lib/automation-ipc';
-import { CronChatModal } from './CronChatModal';
 import { CronHistoryPanel } from './CronHistoryPanel';
 import { ModelSelector, type ModelOption } from '@/components/chat/ModelSelector';
 import { listProvidersIPC, getOllamaModelsIPC, type Provider } from '@/lib/ipc-client';
@@ -29,9 +28,9 @@ import {
   XIcon,
   ChatCirclePlusIcon,
   MonitorIcon,
-  PencilIcon,
   ClockCounterClockwiseIcon,
   TrashIcon,
+  FolderIcon,
 } from '@/components/icons';
 import { AutomationEmptyState } from './AutomationEmptyState';
 import { QuickCronChatModal } from './QuickCronChatModal';
@@ -202,11 +201,6 @@ export function AutomationView() {
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
   const storeThreads = useConversationStore((s) => s.threads);
 
-  // Cron chat modal state
-  const [chatModalOpen, setChatModalOpen] = useState(false);
-  const [selectedRun, setSelectedRun] = useState<{ sessionId: string; runStatus?: string } | null>(null);
-  const [selectedCronForRun, setSelectedCronForRun] = useState<AutomationCron | null>(null);
-
   // Models state
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -302,18 +296,12 @@ export function AutomationView() {
     }
   }, [hasElectronApi]);
 
-  const handleOpenChat = (cron: AutomationCron, sessionId: string) => {
+  const handleOpenChat = (_cron: AutomationCron, sessionId: string) => {
+    // Cron runs are ordinary sessions (id prefix `cron:`) grouped in the
+    // sidebar's cron section — open them in the normal chat view.
     if (sessionId) {
-      setSelectedCronForRun(cron);
-      setSelectedRun({ sessionId });
-      setChatModalOpen(true);
+      void setActiveThread(sessionId);
     }
-  };
-
-  const handleCloseChat = () => {
-    setChatModalOpen(false);
-    setSelectedRun(null);
-    setSelectedCronForRun(null);
   };
 
   async function reloadCrons(): Promise<void> {
@@ -441,12 +429,13 @@ export function AutomationView() {
       setError(null);
       const handle = await runAutomationCronIPC(cron.id);
       // runCronNow returns the run handle (with session_id) immediately and
-      // executes in the background, so jump straight to the run view to watch
-      // it live. Provider errors surface synchronously as a thrown error.
+      // executes in the background, so jump straight into the new session to
+      // watch it live in the normal chat view. setActiveThread loads the
+      // thread, switches to the chat view, and refreshes the sidebar so the
+      // session appears in the cron group. Provider errors surface
+      // synchronously as a thrown error.
       if (handle && handle.sessionId) {
-        setSelectedCronForRun(cron);
-        setSelectedRun({ sessionId: handle.sessionId, runStatus: 'running' });
-        setChatModalOpen(true);
+        await setActiveThread(handle.sessionId);
       }
       await reloadCrons();
       await reloadAllSessions();
@@ -708,17 +697,6 @@ export function AutomationView() {
         templates={templates}
       />
 
-      {/* Cron Chat Modal */}
-      {chatModalOpen && selectedRun && selectedCronForRun && (
-        <CronChatModal
-          sessionId={selectedRun.sessionId}
-          sessionTitle={`[Cron] ${selectedCronForRun.name}`}
-          cronName={selectedCronForRun.name}
-          runStatus={selectedRun.runStatus ?? 'running'}
-          onClose={handleCloseChat}
-        />
-      )}
-
       {/* Create / Edit Cron Modal */}
       <CronEditModal
         cron={editingCron}
@@ -752,8 +730,17 @@ function CronListItem({
 
   return (
     <div
-      className="grid items-center gap-4 px-4 py-3 text-sm border-b border-border/20 transition-colors last:border-b-0 hover:bg-[var(--surface-hover)]"
+      className="grid items-center gap-4 px-4 py-3 text-sm border-b border-border/20 transition-colors last:border-b-0 hover:bg-[var(--surface-hover)] cursor-pointer"
       style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
+      onClick={onEdit}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onEdit();
+        }
+      }}
     >
       {/* Task name */}
       <div className="flex items-center gap-2 min-w-0">
@@ -764,7 +751,7 @@ function CronListItem({
       <div className="truncate text-muted-foreground">{getFriendlySchedule(cron)}</div>
 
       {/* Status */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
         <Switch
           checked={cron.enabled}
           onCheckedChange={onToggleStatus}
@@ -789,7 +776,10 @@ function CronListItem({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center justify-end gap-1">
+      <div
+        className="flex items-center justify-end gap-1"
+        onClick={(event) => event.stopPropagation()}
+      >
         <IconButton
           type="button"
           aria-label={t('automation.runNow')}
@@ -800,17 +790,6 @@ function CronListItem({
           onClick={onRun}
         >
           <PlayIcon size={16} />
-        </IconButton>
-        <IconButton
-          type="button"
-          aria-label={t('automation.edit')}
-          title={t('automation.edit')}
-          variant="ghost"
-          shape="square"
-          size="sm"
-          onClick={onEdit}
-        >
-          <PencilIcon size={16} />
         </IconButton>
         <IconButton
           type="button"
@@ -938,6 +917,17 @@ function CronEditModal({
     ? editor.workingDirectory.split(/[/\\]/).pop() || editor.workingDirectory
     : '默认工作目录';
 
+  const handlePickWorkingDir = async () => {
+    if (!window.electronAPI?.dialog?.openFolder) return;
+    const result = await window.electronAPI.dialog.openFolder({
+      title: t('automation.workingDirectory'),
+      defaultPath: editor.workingDirectory || undefined,
+    });
+    if (!result.canceled && result.filePaths[0]) {
+      setEditor((prev) => ({ ...prev, workingDirectory: result.filePaths[0] }));
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -969,7 +959,6 @@ function CronEditModal({
 
         <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
           <div className="space-y-5">
-            {/* Task name */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">{t('automation.name')}</label>
               <Input
@@ -981,7 +970,6 @@ function CronEditModal({
               />
             </div>
 
-            {/* Trigger time */}
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">{t('automation.triggerTime')}</label>
               <div className="flex items-center gap-3">
@@ -1051,19 +1039,16 @@ function CronEditModal({
               <p className="text-xs text-muted-foreground">{describeScheduleDraft(editor.scheduleDraft)}</p>
             </div>
 
-            {/* Prompt */}
             <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground">{t('automation.whatToDo')}</label>
               <textarea
-                className="w-full min-h-[180px] rounded-lg border border-border/50 bg-chip px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50 resize-y"
+                className="h-[120px] w-full resize-none rounded-lg border border-border/50 bg-chip px-3 py-2.5 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
                 placeholder={t('automation.promptPlaceholder')}
                 value={editor.prompt}
                 onChange={(event) => setEditor((prev) => ({ ...prev, prompt: event.target.value }))}
               />
             </div>
 
-            {/* Model & working dir */}
-            <div className="space-y-3 rounded-lg border border-border/50 bg-[var(--surface)] p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">{t('automation.model')}</label>
                 <ModelSelector
@@ -1080,55 +1065,14 @@ function CronEditModal({
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">{t('automation.workingDirectory')}</label>
-                <Input
-                  type="text"
-                  size="md"
-                  placeholder="~/.duya/workspace"
-                  value={editor.workingDirectory}
-                  onChange={(event) => setEditor((prev) => ({ ...prev, workingDirectory: event.target.value }))}
-                />
-              </div>
-            </div>
-
-            {/* Advanced */}
-            <div className="space-y-3 rounded-lg border border-border/50 bg-[var(--surface)] p-4">
-              <p className="text-sm font-medium text-foreground">{t('automation.advancedSettings')}</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">{t('automation.concurrencyPolicy')}</label>
-                  <select
-                    className="h-9 w-full rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
-                    value={editor.concurrencyPolicy}
-                    onChange={(event) =>
-                      setEditor((prev) => ({ ...prev, concurrencyPolicy: event.target.value as ConcurrencyPolicy }))
-                    }
-                  >
-                    <option value="skip">{t('automation.concurrencySkip')}</option>
-                    <option value="parallel">{t('automation.concurrencyParallel')}</option>
-                    <option value="queue">{t('automation.concurrencyQueue')}</option>
-                    <option value="replace">{t('automation.concurrencyReplace')}</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">{t('automation.maxRetries')}</label>
-                  <Input
-                    type="number"
-                    size="md"
-                    min="0"
-                    max="10"
-                    value={editor.maxRetries}
-                    onChange={(event) => setEditor((prev) => ({ ...prev, maxRetries: event.target.value }))}
-                    className="w-full"
-                  />
-                </div>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-sm text-foreground">{t('automation.enableTask')}</span>
-                <Switch
-                  checked={editor.enabled}
-                  onCheckedChange={(checked) => setEditor((prev) => ({ ...prev, enabled: checked }))}
-                  ariaLabel={t('automation.enabled')}
-                />
+                <button
+                  type="button"
+                  onClick={() => void handlePickWorkingDir()}
+                  className="flex h-10 w-full items-center gap-2 rounded-lg border border-border/50 bg-chip px-3 text-sm text-foreground outline-none transition-colors hover:bg-[var(--surface-hover)] focus:border-accent/60 focus:ring-2 focus:ring-accent/50"
+                >
+                  <FolderIcon size={16} className="shrink-0 text-muted-foreground" />
+                  <span className="truncate">{editor.workingDirectory || '默认工作目录'}</span>
+                </button>
               </div>
             </div>
 
@@ -1146,7 +1090,7 @@ function CronEditModal({
         <div className="flex items-center justify-end gap-2 border-t border-border/50 px-5 py-4">
           <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
             <MonitorIcon size={14} />
-            <span className="truncate max-w-[200px]">{workingDirDisplay}</span>
+            <span className="truncate max-w-[220px]">{workingDirDisplay}</span>
           </div>
           <Button type="button" variant="ghost" size="md" onClick={onClose}>
             {t('automation.cancel')}

@@ -104,6 +104,8 @@ export class FeishuChannel extends EventEmitter {
   private _lastError?: string;
   private _consecutiveErrors = 0;
   private _totalMessages = 0;
+  /** True after the first successful connect; guards reconnect-transition detection. */
+  private _hasConnectedOnce = false;
 
   constructor(options: FeishuAdapterOptions) {
     super();
@@ -284,11 +286,10 @@ export class FeishuChannel extends EventEmitter {
       },
       onStatusChange: (status) => {
         console.log(`[Feishu] WebSocket status changed: ${status}`);
-        const isConnected = status === 'connected';
-        this._connected = isConnected;
-        if (isConnected) {
-          this._lastConnectedAt = Date.now();
-          this._consecutiveErrors = 0;
+        if (status === 'connected') {
+          this._markConnected();
+        } else {
+          this._connected = false;
         }
         const mapped = status === 'connecting' || status === 'reconnecting'
           ? 'disconnected' as const : status === 'connected' ? 'connected' as const : 'disconnected' as const;
@@ -297,6 +298,22 @@ export class FeishuChannel extends EventEmitter {
     });
     await this._wsClient.connect();
     console.log(`[Feishu] WebSocket connected successfully`);
+  }
+
+  /**
+   * Record a successful connect and emit `reconnected` when the channel is
+   * recovering from an actual disconnect (first connect and already-healthy
+   * calls are ignored), so the gateway manager can flush pending redeliveries.
+   */
+  private _markConnected(): void {
+    const wasConnected = this._connected;
+    this._connected = true;
+    this._lastConnectedAt = Date.now();
+    this._consecutiveErrors = 0;
+    if (this._running && !wasConnected && this._hasConnectedOnce) {
+      this.emit('reconnected');
+    }
+    this._hasConnectedOnce = true;
   }
 
   private async _startWebhookMode(): Promise<void> {
@@ -314,8 +331,7 @@ export class FeishuChannel extends EventEmitter {
     });
     await this._webhookServer.start();
     // Webhook mode is considered connected when server starts successfully
-    this._connected = true;
-    this._lastConnectedAt = Date.now();
+    this._markConnected();
     this._options.onStatusChange?.('connected');
   }
 
@@ -1081,6 +1097,12 @@ class FeishuAdapterWrapper implements PlatformAdapter {
 
   setCommandHandler(handler: (msg: NormalizedMessage) => Promise<boolean>): void {
     this._commandHandler = handler;
+  }
+
+  onReconnected(handler: () => void): void {
+    // The channel is created in start(), which the GatewayManager completes
+    // before it wires reconnect hooks, so the listener binds to a live channel.
+    this._channel?.on('reconnected', handler);
   }
 
   sendReply(chatId: string, reply: NormalizedReply): Promise<SendResult> {

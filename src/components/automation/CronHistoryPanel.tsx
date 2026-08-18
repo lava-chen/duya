@@ -9,8 +9,8 @@ import { useTranslation } from '@/hooks/useTranslation';
 
 /**
  * A cron's run history is its ordinary sessions (id prefix `cron:<jobId>:`).
- * Each card links to the session transcript (CronChatModal), which shows the
- * full agent run — output, tool calls, errors — from the session rollout.
+ * Each card opens the session in the normal chat view, which shows the full
+ * agent run — output, tool calls, errors — from the session rollout.
  */
 interface SessionEntry {
   session: CronSessionSummary;
@@ -62,8 +62,9 @@ function SessionCard({ entry, onOpenChat }: { entry: SessionEntry; onOpenChat: C
 
 export function CronHistoryPanel({ sessions, onOpenChat, onRefresh }: CronHistoryPanelProps) {
   const { t } = useTranslation();
-  // Live transcript polling lives in CronChatModal (getThreadIPC). The history
-  // list itself is static; keep onRefresh for the caller's reload contract.
+  // Live rendering lives in ChatView (attach + persisted transcript). The
+  // history list itself is static; keep onRefresh for the caller's reload
+  // contract.
   void onRefresh;
 
   if (sessions.length === 0) {
