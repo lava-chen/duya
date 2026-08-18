@@ -18,7 +18,10 @@ import * as path from 'path'
 import { parseLayout, renderLayoutForPrompt, DEFAULT_LAYOUT, type MemoryLayout } from '../../../memory-state/memory_layout.js'
 
 /** Safety cap in case summary.md ever exceeds its design budget. */
-const MAX_INLINE_SUMMARY_CHARS = 8_000
+// summary.md is now Phase-3 owned: a semantic digest (profile / rules /
+// memory map / blind spots, budgeted ~4-6 KB) prepended to the
+// deterministic index (~6 KB). 12 KiB keeps both intact under the cap.
+const MAX_INLINE_SUMMARY_CHARS = 12_000
 
 export function getMemorySection(ctx: PromptContext): string {
   const duyaRoot = path.join(os.homedir(), '.duya')

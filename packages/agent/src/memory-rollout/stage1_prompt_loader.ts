@@ -24,6 +24,15 @@ import * as crypto from 'crypto';
  * Hard contract: non-negotiable rules enforced by parseAndValidate regardless
  * of what the policy file says. Extracted from the original STAGE1_SYSTEM_PROMPT
  * (prompt.ts) — the policy-contradicting sections are rejected at validation time.
+ *
+ * The contract MUST be self-sufficient for output formatting: it carries the
+ * full JSON envelope schema (job_status / content_outcome / rollout_summary /
+ * rollout_slug / raw_memory) and the item field schema. A policy file only
+ * tunes WHAT to look for — it never describes the output shape, so any
+ * non-empty policy assembled behind this contract still produces an LLM that
+ * knows the exact envelope `parseAndValidate` requires. (Regression guard for
+ * the 2026-08-13 incident where policy-path extractions lost the envelope
+ * schema and every rollout degraded to the 'memory-items' tolerant fallback.)
  */
 export const STAGE1_HARD_CONTRACT: string = `You are the DUYA Memory Stage 1 extractor. Your response MUST be parseable by JSON.parse — no prose outside JSON, no markdown fences.
 
@@ -82,9 +91,56 @@ Violating these makes the entire output invalid.
 
 At most 5 items, ranked by future decision value; drop the rest. If two items share a canonical_key, merge them and union their evidence.
 
-# 8. Output format
+# 8. Output format — envelope schema (mandatory, policy cannot change it)
 
-Return ONLY valid JSON matching the schema described in the policy section. No markdown fences, no prose before or after.
+Return ONLY valid JSON. No markdown fences, no prose before or after. The response is ALWAYS the following envelope object — a bare {"items":[...]} without the outer fields is INVALID:
+
+{
+  "job_status": "succeeded | succeeded_no_output",
+  "content_outcome": "success | partial | fail | uncertain | null",
+  "rollout_summary": "Markdown string | null",
+  "rollout_slug": "kebab-case-slug",
+  "raw_memory": {
+    "items": [
+      {
+        "claim": "...",
+        "claim_type": "preference | fact | decision | invariant | procedure | goal | commitment | reference | person | relationship | area | capability",
+        "scope": "personal | project | repository | app | relationship | shared | global",
+        "scope_id": "string | null",
+        "evidence": [ { "source_type": "...", "source_id": "...", "verification": "..." } ],
+        "canonical_key": "...",
+        "confidence": "low | medium | high",
+        "status": "active | draft | superseded | retired",
+        "valid_from": "ISO-8601 date | null",
+        "valid_until": "ISO-8601 date | null",
+        "relation_to_existing": "string | null",
+        "supersedes": [ "canonical_key" ],
+        "why_future_agent_needs_this": "...",
+        "retrieval_cues": [ "..." ]
+      }
+    ]
+  }
+}
+
+Envelope rules:
+- job_status='succeeded' when the session contains ANY meaningful work (tasks attempted, decisions made, failures, files/configs touched, open loops) — even when no durable memory was found. 'succeeded_no_output' ONLY for sessions with no meaningful content at all (pure greeting, small talk, too thin to summarize); in that case content_outcome and rollout_summary MUST be null.
+- content_outcome is REQUIRED when job_status='succeeded', null otherwise. Values: success (completed and verified), partial, fail, uncertain. Multi-task aggregation follows the WEAKEST link.
+- rollout_summary is a REQUIRED non-empty Markdown string when job_status='succeeded'. Structure (omit empty sections):
+  # <Title: the user's objective, not the assistant's activity>
+  Rollout context: <one line on what the session was about>
+  ## Tasks
+  ### Task N: <goal>
+  - **Status**: success | partial | fail | uncertain
+  - **Verification**: proposed | executed | tool_succeeded | state_changed | verified | goal_met
+  - **Actions taken**: ... / **Tool calls**: quote exact commands and paths / **Observable results**: ...
+  ## State Delta
+  - **Files created/modified/deleted**: ... / **Config changes**: ... / **Schema changes**: ...
+  ## Decisions
+  - <decision> (confirmed_by_user: true | false)
+  ## Constraints / ## Failures / ## Open Loops / ## Commitments / ## Suggested Next Actions / ## Activation Conditions
+  Ground every line in the transcript; never invent tool calls, file paths, or outcomes.
+- rollout_slug: kebab-case matching [a-z0-9-]{3,80}, derived from the session's main topic. If the topic yields an empty slug, use "untitled".
+- raw_memory.items MAY be empty when job_status='succeeded' — a productive session with no cross-session knowledge is a first-class outcome.
 
 # 9. Safety
 

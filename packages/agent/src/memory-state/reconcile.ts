@@ -14,6 +14,16 @@
  * the outbox stays the only mechanism that mutates the projection.
  * Files whose names do not match the projection filename grammar are
  * user-owned and are never touched.
+ *
+ * `purgeDegradedOutputs` is a self-healing companion (2026-08-16): when a
+ * Stage 1 extraction landed on the tolerant-envelope fallback
+ * (job_status='succeeded' with the hard-coded rollout_slug='memory-items'),
+ * the rollout has NO narrative and the on-disk shell is zero-information.
+ * Dropping those stage1_outputs rows makes the rollouts eligible again
+ * (Case 1: never successfully extracted) and turns their empty-shell files
+ * into orphans that the regular reconcile removes. This is safe to run on
+ * every startup: the slug is produced exclusively by the fallback, never by
+ * a healthy extraction.
  */
 
 import * as fs from 'fs';
@@ -165,4 +175,43 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
 
   const finishedAt = opts.now ?? Date.now();
   return { written, removed, mismatched, durationMs: finishedAt - startedAt };
+}
+
+export interface PurgeDegradedResult {
+  /** Number of stage1_outputs rows deleted (fallback shells). */
+  purgedRows: number;
+  /** rollout_ids whose degraded output was dropped and are eligible again. */
+  rolloutIds: string[];
+}
+
+/**
+ * Delete Stage 1 outputs that landed on the tolerant-envelope fallback:
+ * job_status='succeeded' with rollout_slug='memory-items'. These carry no
+ * narrative and only exist because the model returned a bare `{"items":[...]}`
+ * (prompt-path regression, 2026-08-13). Dropping the rows re-queues the
+ * rollouts for a clean extraction; the empty on-disk shells become orphans
+ * that `reconcileProjections` deletes on the next startup sweep.
+ *
+ * Returns the number of rows purged. No-op when there is nothing to purge.
+ */
+export function purgeDegradedOutputs(db: Database): PurgeDegradedResult {
+  const degraded = db
+    .prepare(
+      `SELECT rollout_id FROM stage1_outputs
+        WHERE job_status = 'succeeded' AND rollout_slug = 'memory-items'`,
+    )
+    .all() as Array<{ rollout_id: string }>;
+  if (degraded.length === 0) {
+    return { purgedRows: 0, rolloutIds: [] };
+  }
+  const result = db
+    .prepare(
+      `DELETE FROM stage1_outputs
+        WHERE job_status = 'succeeded' AND rollout_slug = 'memory-items'`,
+    )
+    .run();
+  return {
+    purgedRows: result.changes,
+    rolloutIds: degraded.map((r) => r.rollout_id),
+  };
 }

@@ -83,7 +83,18 @@ async function sendDbRequest(action: string, payload: unknown): Promise<unknown>
 function handleDbResponse(response: DbResponse): void {
   const pending = pendingRequests.get(response.id);
   if (!pending) {
-    console.warn('[DB-Client] Received response for unknown request:', response.id);
+    // Not an error: this module is loaded (and its message listener registered)
+    // in every process that imports anything from it — including the
+    // agent-server, which pulls in messageDb via the memory-rollout extractor.
+    // Every process observes every db:response flowing through it, but only the
+    // one that issued the request holds a matching pending entry; the rest see
+    // responses destined for a sibling process (e.g. a worker being routed via
+    // the agent-server). Log at DEBUG level (via env gate) so a genuinely lost
+    // response in the issuing process is still diagnosable without warning on
+    // every cross-process response.
+    if (process.env.DUYA_DEBUG_DB_CLIENT === '1') {
+      console.warn('[DB-Client] Received response for unknown request:', response.id);
+    }
     return;
   }
 

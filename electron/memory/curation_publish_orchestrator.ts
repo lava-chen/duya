@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3';
 import type { AIClient } from '@duya/ai';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 
 import {
@@ -9,6 +10,7 @@ import {
   failRun,
   abandonExpiredRuns,
   computeInputSetHash,
+  countPriorDeferrals,
   type CurationInput,
   type InputDisposition,
 } from '../../packages/agent/src/memory-state/curation_ledger';
@@ -16,6 +18,11 @@ import { runSingleShotCuration } from './curation_single_shot';
 import { backupMemoryBeforeRun } from './memory_git_backup';
 import { cleanStagingTmps } from './curation_file_writer';
 import { refreshProjections } from './curation_projection_refresh';
+import {
+  computeCanonicalHash,
+  synthesizeSummary,
+  SYNTH_HASH_FILENAME,
+} from './summary_synthesizer';
 import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log';
 
 /**
@@ -46,7 +53,13 @@ const DEFAULT_CURATION_TIMEOUT_MS = 4 * 60_000;
  * Uncertain means the curator could not decide safely; deferring (instead of
  * re-claiming every 30-min cycle) keeps it from pinning the Phase 2 loop.
  */
-const DEFER_UNCERTAIN_MS = 6 * 60 * 60_000;
+const DEFER_UNCERTAIN_MS = 60 * 60_000;
+/**
+ * Defer cap: after this many prior deferrals of the same
+ * (input_key, content_hash), an 'uncertain' verdict is finalized as
+ * 'no_signal' so the input can never pin the loop forever.
+ */
+const MAX_PRIOR_DEFERRALS = 2;
 
 export interface ProviderConfig {
   apiKey: string;
@@ -70,6 +83,12 @@ export interface RunCurationCycleOpts {
    * Used both for the run lease TTL and the chat() deadline.
    */
   curationTimeoutMs?: number;
+  /**
+   * Post-run RAG index refresh (plan 428). Invoked with the memory root
+   * after every successful cycle once all files are settled on disk.
+   * Best-effort: failures are logged via the system log, never thrown.
+   */
+  ragRefresh?: (memoryRoot: string) => Promise<void>;
   now?: number;
 }
 
@@ -190,6 +209,7 @@ export async function runCurationCycle(
       contentHash: e.contentHash,
       outputUpdatedAt: e.outputUpdatedAt,
       rolloutSlug: e.rolloutSlug,
+      summaryMarkdown: e.summaryMarkdown,
     })),
     llmClient: opts.llmClient,
     timeoutMs: curationTimeoutMs,
@@ -210,7 +230,19 @@ export async function runCurationCycle(
     const explicit = dispositionByKey.get(i.inputKey);
     if (explicit === 'uncertain') {
       // Defer instead of re-claiming every cycle so 'uncertain' inputs do
-      // not pin the Phase 2 loop. Retried after DEFER_UNCERTAIN_MS.
+      // not pin the Phase 2 loop. Retried after DEFER_UNCERTAIN_MS — but
+      // capped: after MAX_PRIOR_DEFERRALS deferrals of the same content,
+      // finalize as 'no_signal' so it can never loop forever.
+      const priorDeferrals = countPriorDeferrals(db, i.inputKey, i.contentHash);
+      if (priorDeferrals >= MAX_PRIOR_DEFERRALS) {
+        return {
+          inputKind: i.inputKind,
+          inputKey: i.inputKey,
+          contentHash: i.contentHash,
+          disposition: 'no_signal',
+          note: `uncertain ${priorDeferrals + 1}x; defer cap reached, finalized as no_signal`,
+        };
+      }
       return {
         inputKind: i.inputKind,
         inputKey: i.inputKey,
@@ -296,6 +328,83 @@ export async function runCurationCycle(
         sessionId: opts.sessionId,
       });
     }
+
+    // Phase 3 — semantic summary synthesis. Hash-gated: only re-runs when
+    // the canonical store actually changed, so a busy curation loop never
+    // re-summarizes unchanged memory. Best-effort: `synthesizeSummary`
+    // always returns a deterministic fallback on failure, so summary.md
+    // is never stale.
+    try {
+      const canonicalHash = await computeCanonicalHash(opts.memoryRoot);
+      const sidecarPath = path.join(opts.memoryRoot, SYNTH_HASH_FILENAME);
+      let prevHash: string | null = null;
+      try {
+        prevHash = (await fs.readFile(sidecarPath, 'utf8')).trim();
+      } catch {
+        prevHash = null; // no sidecar yet — first synthesis
+      }
+      if (prevHash === canonicalHash) {
+        // No substantive change since the last synthesis — skip the LLM call.
+      } else {
+        const synth = await synthesizeSummary({
+          memoryRoot: opts.memoryRoot,
+          llmClient: opts.llmClient,
+          timeoutMs: curationTimeoutMs,
+        });
+        await fs.writeFile(path.join(opts.memoryRoot, 'summary.md'), synth.content, 'utf8');
+        await fs.writeFile(sidecarPath, canonicalHash, 'utf8');
+        if (synth.success) {
+          writeSystemLog({
+            phase: 'phase3',
+            eventType: 'summary_synthesized',
+            message: 'Semantic summary synthesized (Phase 3)',
+            detail: { bytes: synth.content.length },
+            runId,
+            sessionId: opts.sessionId,
+          });
+        } else {
+          writeSystemLog({
+            phase: 'phase3',
+            eventType: 'summary_synthesis_fallback',
+            level: 'warn',
+            message: `Semantic summary synthesis fell back to deterministic index (${synth.error ?? 'unknown'})`,
+            detail: { error: synth.error ?? null },
+            runId,
+            sessionId: opts.sessionId,
+          });
+        }
+      }
+    } catch (err) {
+      writeSystemLog({
+        phase: 'phase3',
+        eventType: 'summary_synthesis_failed',
+        level: 'warn',
+        message: 'Semantic summary synthesis failed',
+        detail: { error: err instanceof Error ? err.message : String(err) },
+        runId,
+        sessionId: opts.sessionId,
+      });
+    }
+
+    // Phase 4 — RAG index refresh (plan 428). Runs after every successful
+    // cycle, once canonical files, projections, and summary.md are all on
+    // disk. Best-effort: a refresh failure never downgrades the run.
+    if (opts.ragRefresh) {
+      try {
+        await opts.ragRefresh(opts.memoryRoot);
+      } catch (err) {
+        writeSystemLog({
+          phase: 'phase3',
+          eventType: 'rag_index_refresh_failed',
+          level: 'warn',
+          message: 'RAG index refresh failed after curation run',
+          detail: { error: err instanceof Error ? err.message : String(err) },
+          runId,
+          sessionId: opts.sessionId,
+        });
+      }
+    }
+
     return {
       skipped: false,
       success: true,

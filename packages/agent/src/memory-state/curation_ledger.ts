@@ -44,6 +44,14 @@ export interface EligibleInput extends CurationInput {
   /** `stage1_outputs.generated_at` — needed to derive the on-disk projection filename. */
   generatedAt: number;
   bytes: number;
+  /**
+   * Sanitized rollout summary Markdown straight from `stage1_outputs`.
+   * The DB is the source of truth for curation prompts — the
+   * `rollout_summaries/*.md` files are only projections (D11 filename
+   * `<ts>-<shortid>-<slug>.md`), so resolving them by `rollout_id` is
+   * wrong. Phase 2 reads the body here instead.
+   */
+  summaryMarkdown: string;
 }
 
 export interface InputDisposition {
@@ -326,6 +334,7 @@ interface EligibleRow {
   generated_at: number;
   output_updated_at: number;
   rollout_slug: string;
+  rollout_summary: string | null;
   bytes: number;
 }
 
@@ -352,6 +361,7 @@ export function queryEligibleInputs(db: Database, opts: QueryEligibleOpts): Elig
          s.generated_at,
          s.output_updated_at,
          s.rollout_slug,
+         s.rollout_summary,
          COALESCE(length(CAST(s.rollout_summary AS BLOB)), 0) AS bytes
        FROM stage1_outputs s
        WHERE s.job_status = 'succeeded'
@@ -389,8 +399,32 @@ export function queryEligibleInputs(db: Database, opts: QueryEligibleOpts): Elig
       rolloutSlug: row.rollout_slug,
       generatedAt: row.generated_at,
       bytes: row.bytes,
+      summaryMarkdown: row.rollout_summary ?? '',
     });
     totalBytes += row.bytes;
   }
   return result;
+}
+
+/**
+ * How many times this exact (input_key, content_hash) has already been
+ * deferred by a previous curation run. Callers use this to cap the
+ * defer-retry loop: after N deferrals an 'uncertain' input is finalized
+ * as 'no_signal' instead of being deferred forever.
+ */
+export function countPriorDeferrals(
+  db: Database,
+  inputKey: string,
+  contentHash: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM curation_run_inputs
+       WHERE input_kind = 'rollout'
+         AND input_key = ?
+         AND content_hash = ?
+         AND disposition = 'deferred'`,
+    )
+    .get(inputKey, contentHash) as { n: number };
+  return row.n;
 }

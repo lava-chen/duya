@@ -21,14 +21,22 @@
  *      We deliberately do NOT touch `context-window-exceeded` errors
  *      (those rollouts genuinely have too much history; retrying with the
  *      same input won't help).
+ *   3. Purge degraded extractions — delete `stage1_outputs` rows produced by
+ *      the tolerant-envelope fallback (job_status='succeeded' AND
+ *      rollout_slug='memory-items', the 2026-08-13 incident where the
+ *      policy-path prompt lost the envelope schema) plus their empty-shell
+ *      projection files under the rollout_summaries dir, so those rollouts
+ *      become eligible for a clean re-extraction.
  *
  * Idempotent. Safe to re-run. Uses Node 22+'s built-in `node:sqlite`
  * (no ABI mismatch with Electron's better-sqlite3).
  *
  * Usage:
- *   node scripts/reconcile-memory-state.mjs                # snapshot only
- *   node scripts/reconcile-memory-state.mjs --re-extract    # also clear backoff
- *   node scripts/reconcile-memory-state.mjs --db <path>     # override
+ *   node scripts/reconcile-memory-state.mjs                    # snapshot only
+ *   node scripts/reconcile-memory-state.mjs --re-extract        # also clear backoff
+ *   node scripts/reconcile-memory-state.mjs --purge-degraded    # also purge fallback shells
+ *   node scripts/reconcile-memory-state.mjs --db <path>         # override
+ *   node scripts/reconcile-memory-state.mjs --summaries-dir <path>  # rollout_summaries dir
  *
  * Exit codes:
  *   0  success
@@ -36,7 +44,7 @@
  *   2  database file missing
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -51,19 +59,23 @@ const DEFAULT_DB = path.join(
   'memory-state.db',
 );
 
+const DEFAULT_SUMMARIES_DIR = path.join(homedir(), '.duya', 'memory', 'rollout_summaries');
+
 // Errors that Plan 336 Tasks E/E2 fixed. Anything else is left for the
 // worker to handle on its natural backoff cadence.
 const REEXTRACTABLE_ERRORS = ['bad-job-status', 'invalid-json', 'schema-violation'];
 
 function parseArgs(argv) {
-  const out = { dbPath: DEFAULT_DB, reextract: false };
+  const out = { dbPath: DEFAULT_DB, reextract: false, purgeDegraded: false, summariesDir: DEFAULT_SUMMARIES_DIR };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--re-extract') out.reextract = true;
+    else if (a === '--purge-degraded') out.purgeDegraded = true;
     else if (a === '--db') out.dbPath = argv[++i];
+    else if (a === '--summaries-dir') out.summariesDir = argv[++i];
     else if (a === '--help' || a === '-h') {
       console.log(
-        'Usage: node scripts/reconcile-memory-state.mjs [--re-extract] [--db <path>]',
+        'Usage: node scripts/reconcile-memory-state.mjs [--re-extract] [--purge-degraded] [--db <path>] [--summaries-dir <path>]',
       );
       process.exit(0);
     }
@@ -123,6 +135,47 @@ function clearReextractableBackoff(db) {
     .run(...REEXTRACTABLE_ERRORS).changes;
 }
 
+/**
+ * Purge tolerant-fallback degraded extractions (2026-08-13 incident):
+ * stage1_outputs rows with job_status='succeeded' AND rollout_slug=
+ * 'memory-items' were produced without a narrative summary. Deleting the
+ * rows makes the rollouts eligible again (Case 1: never successfully
+ * extracted); deleting the empty-shell projection files keeps the
+ * rollout_summaries dir free of zero-information artifacts.
+ */
+function purgeDegradedOutputs(db, summariesDir) {
+  const degraded = db
+    .prepare(
+      `SELECT rollout_id, rollout_slug, generated_at FROM stage1_outputs
+        WHERE job_status = 'succeeded' AND rollout_slug = 'memory-items'`,
+    )
+    .all();
+
+  if (degraded.length === 0) {
+    return { purgedRows: 0, purgedFiles: [], rolloutIds: [] };
+  }
+
+  const purgedRows = db
+    .prepare(
+      `DELETE FROM stage1_outputs
+        WHERE job_status = 'succeeded' AND rollout_slug = 'memory-items'`,
+    )
+    .run().changes;
+
+  // Remove the matching empty-shell projection files. Only files ending in
+  // '-memory-items.md' are touched — that suffix is exclusively produced by
+  // the tolerant fallback, never by a healthy extraction.
+  let purgedFiles = [];
+  if (existsSync(summariesDir)) {
+    purgedFiles = readdirSync(summariesDir).filter((f) => f.endsWith('-memory-items.md'));
+    for (const f of purgedFiles) {
+      rmSync(path.join(summariesDir, f), { force: true });
+    }
+  }
+
+  return { purgedRows, purgedFiles, rolloutIds: degraded.map((d) => d.rollout_id) };
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!existsSync(args.dbPath)) {
@@ -133,16 +186,30 @@ function main() {
 
   const db = new DatabaseSync(args.dbPath);
 
-  console.log(`# reconcile-memory-state (${args.reextract ? 'APPLY re-extract' : 'SNAPSHOT only'})`);
+  const modes = [
+    args.reextract ? 'APPLY re-extract' : null,
+    args.purgeDegraded ? 'APPLY purge-degraded' : null,
+  ].filter(Boolean);
+  console.log(`# reconcile-memory-state (${modes.length > 0 ? modes.join(' + ') : 'SNAPSHOT only'})`);
   console.log(`db: ${args.dbPath}`);
   console.log(`now: ${new Date().toISOString()}\n`);
 
   const s = snapshot(db);
   console.log(JSON.stringify(s, null, 2));
 
+  if (args.purgeDegraded) {
+    const result = purgeDegradedOutputs(db, args.summariesDir);
+    console.log(`\npurged_degraded stage1_outputs rows: ${result.purgedRows}`);
+    console.log(`purged_degraded rollout_ids:\n  ${result.rolloutIds.join('\n  ') || '(none)'}`);
+    console.log(`purged_degraded summary files (${args.summariesDir}):\n  ${result.purgedFiles.join('\n  ') || '(none)'}`);
+  }
+
   if (args.reextract) {
     const cleared = clearReextractableBackoff(db);
     console.log(`\ncleared_lease_backoff (${REEXTRACTABLE_ERRORS.join('/')}): ${cleared}`);
+  }
+
+  if (args.purgeDegraded || args.reextract) {
     const after = snapshot(db);
     console.log('\nafter :', JSON.stringify(after, null, 2));
   }

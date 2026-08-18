@@ -25,14 +25,17 @@ import * as path from 'path';
 
 import {
   generateMemoryMdLive,
-  generateSummaryMdLive,
   generateIndexMdLive,
 } from '../../packages/agent/src/memory-state/curation_projection_live';
 import { cleanStagingTmps } from './curation_file_writer';
 
+// NOTE: summary.md is intentionally NOT a Phase 2 projection anymore.
+// Phase 3 (summary_synthesizer) owns it exclusively — it writes the
+// semantic digest (profile / rules / memory map / blind spots) with the
+// deterministic index as its fallback. Phase 2 only produces MEMORY.md
+// and the per-entity index.md files.
 const PROJECTION_FILES = [
   { relPath: 'MEMORY.md', generator: generateMemoryMdLive },
-  { relPath: 'summary.md', generator: generateSummaryMdLive },
 ] as const;
 
 /**
