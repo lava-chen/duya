@@ -38,6 +38,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   defaultProviderId: 'model.provider',
   memoryProviderId: 'memory.provider',
   memoryModelId: 'memory.model',
+  memoryRag: 'memory.rag',
   agentSettings: 'agent',
   uiPreferences: 'display',
   visionSettings: 'auxiliary.vision',
@@ -49,6 +50,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   defaultPermissionMode: 'agent.default_permission_mode',
   defaultIde: 'ide.default',
   customAgents: 'agents',
+  performanceSettings: 'performance',
 };
 
 type PortRole = 'renderer' | 'agent' | 'main';

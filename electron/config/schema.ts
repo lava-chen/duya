@@ -31,6 +31,28 @@ export interface MemoryConfig {
   user_profile_enabled: boolean;
   provider: string;
   model: string;
+  /** `[memory.rag]` — retrievable memory index (plan 428). */
+  rag?: MemoryRagConfig;
+}
+
+/**
+ * `[memory.rag]` — vector + keyword index over user-configured scan paths.
+ * Embedding provider/model resolve through the provider framework
+ * (`embedding_provider`/`embedding_model` empty → memory provider/model);
+ * credentials and endpoints are never stored here.
+ */
+export interface MemoryRagConfig {
+  enabled: boolean;
+  /** Index sqlite path; empty → `~/.duya/rag/memory-rag.db`. */
+  index_path: string;
+  /** Extra scan roots (absolute or `~/`-prefixed); the memory root is
+   *  always scanned first. */
+  scan_paths: string[];
+  embedding_enabled: boolean;
+  /** Provider id from the provider framework; empty → memory provider. */
+  embedding_provider: string;
+  /** Model id; empty → memory model. */
+  embedding_model: string;
 }
 
 /** `[ide]` — external IDE integration for the file preview "Open" action.
@@ -102,6 +124,12 @@ export interface VoiceConfig {
     language?: string;
     local?: {
       model?: string;
+      /** Explicit whisper.cpp CLI path; overrides detection. */
+      binary_path?: string;
+      /** Mirror for ggml model downloads (default: huggingface.co). */
+      model_url_base?: string;
+      /** Mirror for prebuilt runtime downloads (default: github releases). */
+      runtime_url_base?: string;
     };
     cloud?: {
       provider?: string;
@@ -237,6 +265,16 @@ export interface ProjectEntry {
   sandbox?: string;
 }
 
+/**
+ * `[performance]` (plan 426 Phase 3). `lowPower` gates renderer polling
+ * slowdown, backdrop-filter downgrade, worker TTL shortening, and main
+ * process service throttling. `'auto'` detects low-spec hardware once at
+ * startup (`totalmem < 8GB || cpus <= 4`); no hot reload.
+ */
+export interface PerformanceConfig {
+  lowPower: 'auto' | 'on' | 'off';
+}
+
 /** [apps] entry — reserved app/connector toggle (decision 17, not wired). */
 export interface AppEntry {
   enabled: boolean;
@@ -286,6 +324,8 @@ export interface DuyaConfig {
   personalities: Record<string, unknown>;
   /** [agents.<id>] — config-driven custom agent profiles (Plan 424). */
   agents: Record<string, CustomAgentConfig>;
+  /** [performance] — low-power mode switch (plan 426 Phase 3). */
+  performance: PerformanceConfig;
 }
 
 export const DEFAULT_CONFIG: DuyaConfig = {
@@ -293,7 +333,20 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   storage: { database_path: '', rollout_root: '', attachments_root: '' },
   model: { default: '', provider: '', base_url: '' },
   providers: {},
-  memory: { memory_enabled: true, user_profile_enabled: true, provider: '', model: '' },
+  memory: {
+    memory_enabled: true,
+    user_profile_enabled: true,
+    provider: '',
+    model: '',
+    rag: {
+      enabled: false,
+      index_path: '',
+      scan_paths: [],
+      embedding_enabled: true,
+      embedding_provider: '',
+      embedding_model: '',
+    },
+  },
   agent: {
     max_turns: 90,
     gateway_timeout: 1800,
@@ -332,7 +385,12 @@ export const DEFAULT_CONFIG: DuyaConfig = {
       no_speech_timeout_ms: 4000,
       chunk_ms: 200,
       language: 'zh',
-      local: { model: 'ggml-base.bin' },
+      local: {
+        model: 'ggml-base.bin',
+        binary_path: '',
+        model_url_base: '',
+        runtime_url_base: '',
+      },
       cloud: { provider: '', base_url: '', size: 'whisper-1' },
     },
   },
@@ -403,6 +461,13 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   quick_commands: {},
   personalities: {},
   agents: {},
+  performance: { lowPower: 'auto' },
+  steering: {
+    todo_gate: true,
+    anti_dead_loop: { enabled: true, nudge_at: 8, hard_nudge_at: 12, hard_stop_at: 16 },
+    tool_intent_nudge_max: 2,
+  },
+  hooks: {},
 };
 
 /** Deep-merge `partial` over a fresh copy of DEFAULT_CONFIG. */
