@@ -1,11 +1,24 @@
 /**
- * Google Search Content Extractor
- * Extracts search results with titles, links, and snippets
+ * Search Engine SERP Content Extractor.
+ * Extracts search results (titles, links, snippets) for google/bing/baidu/
+ * brave/yahoo and renders them as a clean Markdown result list.
+ *
+ * Google extraction follows OpenCLI's resilient strategy: scope to #rso, find
+ * every <a> containing an <h3>, walk up to the result container ([data-hveid])
+ * to source the snippet, and additionally capture the featured snippet and
+ * People-Also-Ask blocks — all typed so the renderer can lay them out.
  */
 
 import { BaseExtractor } from '../BaseExtractor.js';
 import type { ICDPClient } from '../../CDPClient.js';
 import type { PlatformContent, ExtractionOptions } from '../types.js';
+
+interface SerpItem {
+  type?: 'snippet' | 'result' | 'paa';
+  title: string;
+  url: string;
+  snippet: string;
+}
 
 interface GoogleResult {
   kind: 'ok' | 'error';
@@ -14,12 +27,120 @@ interface GoogleResult {
   detail?: string;
 }
 
+// ─── In-page collectors (typed item arrays) ────────────────────────────────
+// Each body is injected after a short sleep inside a single async IIFE and
+// must end with `return results;`.
+
+const GOOGLE_COLLECT = `
+  const results = [];
+  const seen = {};
+  const rso = document.querySelector('#rso');
+  if (!rso) return results;
+
+  // Featured / answer snippet block
+  const fe = rso.querySelector('.xpdopen .hgKElc') || rso.querySelector('.IZ6rdc');
+  if (fe) {
+    const block = fe.closest('[data-hveid]') || fe.parentElement;
+    const fLink = block ? block.querySelector('a[href]') : null;
+    const fUrl = fLink ? fLink.href : '';
+    if (fUrl) seen[fUrl] = true;
+    results.push({ type: 'snippet', title: fe.textContent.trim().slice(0, 200), url: fUrl, snippet: '' });
+  }
+
+  // All links containing an h3 within #rso
+  const links = rso.querySelectorAll('a');
+  for (let i = 0; i < links.length; i++) {
+    const a = links[i];
+    const h3 = a.querySelector('h3');
+    if (!h3) continue;
+    const href = a.href || '';
+    if (!/^https?:\\/\\//.test(href)) continue;
+    if (href.indexOf('google.com/search') >= 0 || href.indexOf('google.com/url') >= 0) continue;
+    if (seen[href]) continue;
+    seen[href] = true;
+
+    let c = a;
+    for (let j = 0; j < 6; j++) {
+      if (c.parentElement && c.parentElement !== rso) c = c.parentElement;
+      if (c.getAttribute && c.getAttribute('data-hveid')) break;
+    }
+
+    const titleText = h3.textContent.trim();
+    let sn = '';
+    const cands = c.querySelectorAll('span, div');
+    for (let k = 0; k < cands.length && !sn; k++) {
+      const el = cands[k];
+      if (el.querySelector('h3') || el.querySelector('a[href]')) continue;
+      const t = el.textContent.trim();
+      if (t.length < 40 || t.length > 500) continue;
+      if (t === titleText) continue;
+      if (t.indexOf('\u203a') >= 0) continue;
+      if (new RegExp('https?://').test(t.slice(0, 60))) continue;
+      sn = t;
+    }
+
+    results.push({ type: 'result', title: titleText.slice(0, 200), url: href, snippet: sn.slice(0, 300) });
+  }
+
+  // People Also Ask
+  const paa = document.querySelectorAll('[data-sgrd="true"]');
+  for (let i = 0; i < paa.length; i++) {
+    const q = paa[i].querySelector('span.CSkcDe');
+    if (q) results.push({ type: 'paa', title: q.textContent.trim().slice(0, 200), url: '', snippet: '' });
+  }
+  return results;
+`;
+
+const BRAVE_COLLECT = `
+  const results = [];
+  const items = document.querySelectorAll('.snippet');
+  for (let i = 0; i < items.length; i++) {
+    const el = items[i];
+    if (el.classList.contains('standalone') || el.classList.contains('ad')) continue;
+    const titleEl = el.querySelector('.search-snippet-title');
+    if (!titleEl) continue;
+    const linkEl = el.querySelector('.result-content a');
+    const href = linkEl ? linkEl.href || '' : '';
+    const snippetEl = el.querySelector('.generic-snippet .content');
+    const snippet = snippetEl ? snippetEl.textContent.trim() : '';
+    if (titleEl.textContent.trim() && href) {
+      results.push({ type: 'result', title: titleEl.textContent.trim().slice(0, 200), url: href, snippet: snippet.slice(0, 300) });
+    }
+  }
+  return results;
+`;
+
+const YAHOO_COLLECT = `
+  const resolve = (href) => {
+    if (!href) return '';
+    const m = href.match(/RU=([^/]+)\\/RK=/);
+    if (m && m[1]) { try { return decodeURIComponent(m[1]); } catch (e) {} }
+    return href;
+  };
+  const results = [];
+  const items = document.querySelectorAll('.algo');
+  for (let i = 0; i < items.length; i++) {
+    const el = items[i];
+    const h3 = el.querySelector('h3');
+    const linkEl = el.querySelector('.compTitle a');
+    if (!h3 || !linkEl) continue;
+    const href = resolve(linkEl.getAttribute('href') || '');
+    const snippetEl = el.querySelector('.compText');
+    const snippet = snippetEl ? snippetEl.textContent.trim() : '';
+    if (h3.textContent.trim() && href) {
+      results.push({ type: 'result', title: h3.textContent.trim().slice(0, 200), url: href, snippet: snippet.slice(0, 300) });
+    }
+  }
+  return results;
+`;
+
 export class GoogleSearchExtractor extends BaseExtractor {
   name = 'google-search';
 
   private hosts = ['google.com', 'www.google.com', 'google.co.jp', 'www.google.co.jp',
     'google.com.hk', 'www.google.com.hk', 'google.cn', 'www.google.cn',
-    'bing.com', 'www.bing.com', 'baidu.com', 'www.baidu.com'];
+    'bing.com', 'www.bing.com', 'baidu.com', 'www.baidu.com',
+    'search.brave.com', 'search.yahoo.com'];
 
   matches(url: string): boolean {
     const parsed = this.parseUrl(url);
@@ -29,7 +150,9 @@ export class GoogleSearchExtractor extends BaseExtractor {
                      parsed.pathname.includes('/search') ||
                      parsed.hostname.includes('google') ||
                      parsed.hostname.includes('bing') ||
-                     parsed.hostname.includes('baidu');
+                     parsed.hostname.includes('baidu') ||
+                     parsed.hostname.includes('brave') ||
+                     parsed.hostname.includes('yahoo');
     return isSearch;
   }
 
@@ -40,11 +163,15 @@ export class GoogleSearchExtractor extends BaseExtractor {
     }
 
     try {
-      const query = parsed.searchParams.get('q') || '';
+      const query = parsed.searchParams.get('q') || parsed.searchParams.get('p') || '';
       const hostname = parsed.hostname;
 
       if (hostname.includes('google')) {
         return this.extractGoogle(cdp, url, query, options);
+      } else if (hostname.includes('brave')) {
+        return this.extractWith(cdp, url, query, options, BRAVE_COLLECT, 'Brave Search Results');
+      } else if (hostname.includes('yahoo')) {
+        return this.extractWith(cdp, url, query, options, YAHOO_COLLECT, 'Yahoo Search Results');
       } else if (hostname.includes('bing')) {
         return this.extractBing(cdp, url, query, options);
       } else if (hostname.includes('baidu')) {
@@ -57,119 +184,87 @@ export class GoogleSearchExtractor extends BaseExtractor {
     }
   }
 
-  private async extractGoogle(cdp: ICDPClient, url: string, query: string, options?: ExtractionOptions): Promise<PlatformContent> {
-    const maxLength = options?.maxLength ?? 15000;
-
-    const script = [
-      '(async () => {',
-      '  const maxLength = ' + maxLength + ';',
-      '  const query = ' + JSON.stringify(query) + ';',
-      '  const url = ' + JSON.stringify(url) + ';',
-      '  try {',
-      "    await new Promise(r => setTimeout(r, 500));",
-      "    if (!window.location.hostname.includes('google') || !window.location.pathname.includes('/search')) {",
-      "      return { kind: 'error', detail: 'Not a Google search page' };",
-      '    }',
-      "    const searchInfo = (document.querySelector('#result-stats') || document.querySelector('.fBTc4'))?.textContent?.trim() || '';",
-      '    const results = [];',
-      // Use more specific selectors for Google search results
-      "    const resultEls = document.querySelectorAll('div.g[data-hveid], div[data-hveid] > div:first-child, div.BmP5Ef');",
-      "    // Alternative selectors if main ones don't work",
-      "    const altResultEls = document.querySelectorAll('div[data-hveid]');",
-      "    const allResults = resultEls.length > 0 ? resultEls : altResultEls;",
-      '    for (let i = 0; i < Math.min(allResults.length, 20); i++) {',
-      '      const el = allResults[i];',
-      // Skip elements that contain accessibility or utility text
-      "      const elText = el.textContent?.trim() || '';",
-      "      if (elText.includes('选择您要针对哪个元素') || elText.includes('无障碍功能') || elText.length < 20) continue;",
-      "      const titleEl = el.querySelector('h3') || el.querySelector('[role=heading]') || el.querySelector('a h3') || el.querySelector('a');",
-      "      const linkEl = titleEl?.closest('a') || el.querySelector('a[href][data-hveid]');",
-      '      const title = titleEl?.textContent?.trim() || "";',
-      '      let link = "";',
-      "      if (linkEl) { const href = linkEl.href || ''; if (href && !href.includes('google.com/url') && !href.includes('google.com/search')) link = href; }",
-      // Get snippet from multiple possible locations
-      "      const snippet = (el.querySelector('.VwiC3b') || el.querySelector('[data-sncf]') || el.querySelector('.style-scope') || el.querySelector('span:not([class])'))?.textContent?.trim() || '';",
-      // Get site info - try to get the actual domain from the URL or visible text
-      "      const siteEl = el.querySelector('cite') || el.querySelector('.iUh30') || el.querySelector('[role=text]');",
-      '      let site = siteEl?.textContent?.trim() || "";',
-      // Extract domain from URL if site text is not helpful
-      "      if (link && !site) { try { const u = new URL(link); site = u.hostname.replace('www.', ''); } catch {} }",
-      '      if (title && link) results.push({ title: title.substring(0, 200), link, snippet: snippet.substring(0, 300), site });',
-      '    }',
-      '    const paaEls = document.querySelectorAll(".RelatedQuestion");',
-      '    const paaResults = [];',
-      '    for (let i = 0; i < Math.min(paaEls.length, 5); i++) {',
-      '      const el = paaEls[i];',
-      "      const question = el.querySelector('.question')?.textContent?.trim() || '';",
-      "      const answer = el.querySelector('.answer')?.textContent?.trim() || '';",
-      '      if (question) { paaResults.push({ question, answer: answer.substring(0, 200) }); }',
-      '    }',
-      '    const lines = [];',
-      "    lines.push('# Search Results: ' + query);",
-      '    lines.push("");',
-      '    if (searchInfo) {',
-      "      lines.push('**' + searchInfo + '**');",
-      '      lines.push("");',
-      '    }',
-      "    lines.push('**URL:** ' + url);",
-      '    lines.push("");',
-      '    if (results.length > 0) {',
-      "      lines.push('---');",
-      '      lines.push("");',
-      "      lines.push('## Results (' + results.length + ')');",
-      '      lines.push("");',
-      '      for (let i = 0; i < results.length; i++) {',
-      '        const r = results[i];',
-      "        lines.push((i + 1) + '. **' + r.title + '**');",
-      '        if (r.site) lines.push("   " + r.site);',
-      '        if (r.link) lines.push("   " + r.link.substring(0, 100));',
-      '        if (r.snippet) lines.push("   " + r.snippet);',
-      '        lines.push("");',
-      '      }',
-      '    } else {',
-      "      lines.push('No search results found - page may still be loading');",
-      '      lines.push("");',
-      '    }',
-      '    if (paaResults.length > 0) {',
-      "      lines.push('---');",
-      '      lines.push("");',
-      "      lines.push('## People Also Ask');",
-      '      lines.push("");',
-      '      for (const p of paaResults) {',
-      "        lines.push('**Q:** ' + p.question);",
-      "        lines.push('**A:** ' + p.answer);",
-      '        lines.push("");',
-      '      }',
-      '    }',
-      '    let text = lines.join("\\n");',
-      '    if (text.length > maxLength) {',
-      "      text = text.substring(0, maxLength) + '\\n\\n*[Results truncated]*';",
-      '    }',
-      "    return { kind: 'ok', text, title: 'Search: ' + query };",
-      '  } catch(e) {',
-      "    return { kind: 'error', detail: e.message || String(e) };",
-      '  }',
-      '})()',
-    ].join('');
-
+  /**
+   * Run an in-page collector that returns a typed item array.
+   */
+  private async collectSerp(cdp: ICDPClient, body: string): Promise<SerpItem[]> {
+    const script = `(async () => { await new Promise(r => setTimeout(r, 500)); ${body} })()`;
     try {
-      console.log('[GoogleSearchExtractor] Starting extraction, URL:', url);
-      const result = await cdp.evaluate(script);
-      console.log('[GoogleSearchExtractor] Raw result:', JSON.stringify(result));
-      if (result && typeof result === 'object' && 'kind' in result) {
-        const googleResult = result as GoogleResult;
-        if (googleResult.kind === 'ok' && googleResult.text) {
-          return this.success('google-search', googleResult.text, undefined, {
-            title: googleResult.title
-          });
-        } else if (googleResult.kind === 'error') {
-          return this.error('google-search', googleResult.detail || 'Unknown error');
+      const res = await cdp.evaluate(script);
+      return Array.isArray(res) ? (res as SerpItem[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Render typed SERP items as a clean Markdown result list.
+   */
+  private renderSearchList(query: string, url: string, items: SerpItem[], maxLength: number, heading: string): string {
+    const lines: string[] = [];
+    lines.push(`# ${heading}: ${query}`);
+    lines.push('');
+    lines.push(`**URL:** ${url}`);
+    lines.push('');
+    if (items.length === 0) {
+      lines.push('No search results found - page may still be loading or blocked by consent/CAPTCHA.');
+    } else {
+      let n = 0;
+      let paaStarted = false;
+      for (const r of items) {
+        if (r.type === 'snippet') {
+          lines.push('');
+          lines.push(`**Featured snippet:** ${r.title}`);
+          if (r.url) lines.push(`  ${r.url}`);
+        } else if (r.type === 'paa') {
+          if (!paaStarted) {
+            lines.push('');
+            lines.push('## People Also Ask');
+            paaStarted = true;
+          }
+          lines.push(`- ${r.title}`);
+        } else {
+          n++;
+          lines.push('');
+          lines.push(`${n}. **${r.title}**`);
+          if (r.url) lines.push(`   ${r.url}`);
+          if (r.snippet) lines.push(`   ${r.snippet}`);
         }
       }
-      return this.error('google-search', 'Unexpected result format');
-    } catch (e) {
-      return this.error('google-search', `Evaluation error: ${e instanceof Error ? e.message : String(e)}`);
     }
+    let text = lines.join('\n');
+    if (text.length > maxLength) text = text.substring(0, maxLength) + '\n\n*[Results truncated]*';
+    return text;
+  }
+
+  private async extractGoogle(cdp: ICDPClient, url: string, query: string, options?: ExtractionOptions): Promise<PlatformContent> {
+    const maxLength = options?.maxLength ?? 15000;
+    const items = await this.collectSerp(cdp, GOOGLE_COLLECT);
+    if (items.length === 0) {
+      return this.error('google-search', 'No search results parsed on Google SERP');
+    }
+    const text = this.renderSearchList(query, url, items, maxLength, 'Google Search Results');
+    return this.success('google-search', text, undefined, { title: `Search: ${query}` });
+  }
+
+  /**
+   * Shared entry for engines that only produce standard `result` items.
+   */
+  private async extractWith(
+    cdp: ICDPClient,
+    url: string,
+    query: string,
+    options: ExtractionOptions | undefined,
+    body: string,
+    heading: string,
+  ): Promise<PlatformContent> {
+    const maxLength = options?.maxLength ?? 15000;
+    const items = await this.collectSerp(cdp, body);
+    if (items.length === 0) {
+      return this.error('google-search', `No search results parsed on ${heading} SERP`);
+    }
+    const text = this.renderSearchList(query, url, items, maxLength, heading);
+    return this.success('google-search', text, undefined, { title: `Search: ${query}` });
   }
 
   private async extractBing(cdp: ICDPClient, url: string, query: string, options?: ExtractionOptions): Promise<PlatformContent> {

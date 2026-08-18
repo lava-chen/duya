@@ -14,6 +14,22 @@ interface TwitterResult {
   detail?: string;
 }
 
+/** A single tweet gathered from the page's embedded JSON (`__INITIAL_STATE__`). */
+interface ThreadTweet {
+  id: string;
+  author: string;
+  text: string;
+  likes: number;
+  retweets: number;
+  created_at: string;
+}
+
+/** Discriminated result of the enhanced thread/article probe. */
+type EnhancedExtractionResult =
+  | { kind: 'thread'; tweets: ThreadTweet[] }
+  | { kind: 'article'; title: string; author: string; body: string }
+  | { kind: 'none' };
+
 export class TwitterExtractor extends BaseExtractor {
   name = 'twitter';
 
@@ -42,11 +58,22 @@ export class TwitterExtractor extends BaseExtractor {
         const tweetId = this.extractTweetId(pathname);
         if (tweetId) {
           await this.ensureOnPage(cdp, url);
+          // Try thread/article extraction from the page's embedded JSON first.
+          const enhanced = await this.extractThreadOrArticle(cdp, tweetId, url, options);
+          if (enhanced) return enhanced;
+
           const result = await this.extractTweet(cdp, tweetId, options);
           if (result.kind === 'ok' && result.text) {
             return this.success('tweet', result.text, undefined, { title: result.title });
           }
         }
+      }
+
+      // Long-form article page (x.com article route).
+      if (pathname.match(/\/(?:i\/)?articles?\/[0-9]+/)) {
+        await this.ensureOnPage(cdp, url);
+        const enhanced = await this.extractThreadOrArticle(cdp, null, url, options);
+        if (enhanced) return enhanced;
       }
 
       // Try to extract user profile or generic content
@@ -261,6 +288,227 @@ export class TwitterExtractor extends BaseExtractor {
         kind: 'error',
         detail: `Evaluation error: ${e instanceof Error ? e.message : String(e)}`,
       };
+    }
+  }
+
+  /**
+   * Probe the page's embedded `__INITIAL_STATE__` JSON for a full thread or a
+   * long-form article. Returns a `PlatformContent` for thread/article pages and
+   * `null` when there is nothing to enhance beyond a single tweet, so the
+   * caller falls back to the existing single-tweet extraction.
+   *
+   * The embedded state must be present (browser logged-in enough to hydrate a
+   * conversation/timeline); on logged-out or walled pages it is absent, so we
+   * degrade to `null` rather than erroring.
+   */
+  private async extractThreadOrArticle(
+    cdp: ICDPClient,
+    tweetId: string | null,
+    url: string,
+    options?: ExtractionOptions
+  ): Promise<PlatformContent | null> {
+    const maxLength = options?.maxLength ?? 12000;
+
+    const script = `
+      (async () => {
+        try {
+          const state = window.__INITIAL_STATE__;
+          if (!state || typeof state !== 'object') return { kind: 'none' };
+
+          const isObj = function (v) { return Boolean(v && typeof v === 'object' && !Array.isArray(v)); };
+          const ts = function (s) { const n = Date.parse(s || ''); return isNaN(n) ? 0 : n; };
+
+          // Convert an article's Draft.js content_state.blocks into Markdown.
+          const blocksToMarkdown = function (artResult) {
+            const contentState = isObj(artResult.content_state) ? artResult.content_state : {};
+            const blocks = Array.isArray(contentState.blocks) ? contentState.blocks : [];
+            if (blocks.length === 0) return '';
+            const rawEntityMap = contentState.entityMap || {};
+            const entityByKey = {};
+            if (Array.isArray(rawEntityMap)) {
+              for (const entry of rawEntityMap) {
+                if (entry && entry.key != null && entry.value) entityByKey[String(entry.key)] = entry.value;
+              }
+            } else if (isObj(rawEntityMap)) {
+              for (const key of Object.keys(rawEntityMap)) {
+                const entry = rawEntityMap[key];
+                entityByKey[String(key)] = entry && entry.value ? entry.value : entry;
+              }
+            }
+            const mediaUrlById = {};
+            const meVal = artResult.media_entities;
+            if (Array.isArray(meVal) || isObj(meVal)) {
+              const items = Array.isArray(meVal) ? meVal : Object.values(meVal);
+              for (const me of items) {
+                if (me && isObj(me) && me.media_id != null && me.media_info && typeof me.media_info.original_img_url === 'string') {
+                  mediaUrlById[String(me.media_id)] = me.media_info.original_img_url;
+                }
+              }
+            }
+            const nl = String.fromCharCode(10);
+            const parts = [];
+            let counter = 0;
+            for (const block of blocks) {
+              if (!isObj(block)) continue;
+              const type = block.type || 'unstyled';
+              if (type === 'atomic') {
+                const ranges = block.entityRanges || [];
+                const ek = ranges.length > 0 ? ranges[0].key : null;
+                const entity = ek == null ? null : entityByKey[String(ek)];
+                if (entity && entity.type === 'MEDIA') {
+                  const items = entity.data && entity.data.mediaItems ? entity.data.mediaItems : [];
+                  const mid = items.length > 0 ? items[0].mediaId : null;
+                  const imgUrl = mid == null ? null : mediaUrlById[String(mid)];
+                  if (imgUrl) {
+                    const cap = String((entity.data && entity.data.caption) || 'Image').replace(/\\]/g, '&#93;');
+                    parts.push('![' + cap + '](' + imgUrl + ')');
+                  }
+                }
+                continue;
+              }
+              const text = typeof block.text === 'string' ? block.text : '';
+              if (!text) continue;
+              if (type !== 'ordered-list-item') counter = 0;
+              if (type === 'header-one') parts.push('# ' + text);
+              else if (type === 'header-two') parts.push('## ' + text);
+              else if (type === 'header-three') parts.push('### ' + text);
+              else if (type === 'blockquote') parts.push('> ' + text);
+              else if (type === 'unordered-list-item') parts.push('- ' + text);
+              else if (type === 'ordered-list-item') { counter++; parts.push(counter + '. ' + text); }
+              else if (type === 'code-block') { const bt = String.fromCharCode(96); parts.push(bt + bt + bt + nl + text + nl + bt + bt + bt); }
+              else parts.push(text);
+            }
+            return parts.join(nl + nl);
+          };
+
+          const tweets = new Map();
+          let article = null;
+
+          const screenNameOf = function (userResults) {
+            const u = userResults && userResults.result;
+            const l = u && u.legacy;
+            const name = (l && l.screen_name) || (u && u.core && u.core.screen_name);
+            return typeof name === 'string' ? name : '';
+          };
+
+          const store = function (t, id) {
+            const key = String(id);
+            if (tweets.has(key)) return;
+            const l = t.legacy && isObj(t.legacy) ? t.legacy : {};
+            const noteNode = t.note_tweet && t.note_tweet.note_tweet_results && t.note_tweet.note_tweet_results.result;
+            const noteText = noteNode && typeof noteNode.text === 'string' ? noteNode.text : '';
+            const fullText = typeof l.full_text === 'string' ? l.full_text : '';
+            tweets.set(key, {
+              id: key,
+              author: screenNameOf(t.core && t.core.user_results) || 'unknown',
+              text: noteText || fullText,
+              likes: typeof l.favorite_count === 'number' ? l.favorite_count : 0,
+              retweets: typeof l.retweet_count === 'number' ? l.retweet_count : 0,
+              created_at: typeof l.created_at === 'string' ? l.created_at : '',
+              isNote: noteText.length > 0
+            });
+            if (!article) {
+              const artWrap = t.article && isObj(t.article) ? t.article : null;
+              const artResult = artWrap && artWrap.article_results && artWrap.article_results.result;
+              if (artResult && isObj(artResult)) {
+                const body = blocksToMarkdown(artResult);
+                if (body) {
+                  article = {
+                    author: screenNameOf(t.core && t.core.user_results) || '',
+                    title: typeof artResult.title === 'string' ? artResult.title : '(Untitled)',
+                    body: body
+                  };
+                }
+              }
+            }
+          };
+
+          // Bounded deep-walk of the embedded state to gather every tweet result
+          // node (the conversation's parent/replies plus the article holder).
+          const stack = [state];
+          let budget = 500000;
+          while (stack.length > 0 && budget > 0) {
+            budget--;
+            const cur = stack.pop();
+            if (cur === null || typeof cur !== 'object') continue;
+            if (Array.isArray(cur)) {
+              for (let i = 0; i < cur.length; i++) if (cur[i] !== null && typeof cur[i] === 'object') stack.push(cur[i]);
+              continue;
+            }
+            if (typeof cur.rest_id === 'string') store(cur, cur.rest_id);
+            for (const key of Object.keys(cur)) {
+              const v = cur[key];
+              if (v !== null && typeof v === 'object') stack.push(v);
+            }
+          }
+
+          // 1) Long-form article embedded in the state.
+          if (article) {
+            return { kind: 'article', title: article.title, author: article.author, body: article.body };
+          }
+
+          // 2) A focused long-form "note tweet".
+          const focalId = ${JSON.stringify(tweetId)};
+          const list = Array.from(tweets.values());
+          const focal = focalId ? list.find(function (t) { return t.id === focalId; }) : undefined;
+          if (focal && focal.isNote && focal.text) {
+            return { kind: 'article', title: '(Note Tweet)', author: focal.author, body: focal.text };
+          }
+
+          // 3) Full thread (tweet + neighbouring parent/replies) in chronological order.
+          if (list.length > 1) {
+            const sorted = list.slice().sort(function (a, b) { return ts(a.created_at) - ts(b.created_at); });
+            const out = sorted.map(function (t) {
+              return { id: t.id, author: t.author, text: t.text, likes: t.likes, retweets: t.retweets, created_at: t.created_at };
+            });
+            return { kind: 'thread', tweets: out };
+          }
+
+          return { kind: 'none' };
+        } catch {
+          return { kind: 'none' };
+        }
+      })()
+    `;
+
+    try {
+      const raw = await cdp.evaluate(script);
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+
+      const r = raw as EnhancedExtractionResult;
+
+      if (r.kind === 'article') {
+        let text = '# ' + r.title + '\n\nby @' + r.author + '\n\n---\n\n' + r.body;
+        if (text.length > maxLength) text = text.slice(0, maxLength) + '\n\n*[Content truncated]*';
+        return this.success('tweet', text, undefined, { title: r.title });
+      }
+
+      if (r.kind === 'thread') {
+        const lines: string[] = [];
+        lines.push('# Thread');
+        lines.push('');
+        lines.push('**Source:** ' + url);
+        lines.push('');
+        for (let i = 0; i < r.tweets.length; i++) {
+          const t = r.tweets[i];
+          lines.push('### ' + (i + 1) + '. @' + t.author + (t.created_at ? ' — ' + t.created_at : ''));
+          lines.push('');
+          lines.push(t.text);
+          if (t.likes > 0 || t.retweets > 0) {
+            lines.push('');
+            lines.push('> ❤️ ' + t.likes + ' · 🔁 ' + t.retweets);
+          }
+          lines.push('');
+        }
+        let text = lines.join('\n');
+        if (text.length > maxLength) text = text.slice(0, maxLength) + '\n\n*[Content truncated]*';
+        const threadTitle = r.tweets.length > 0 ? 'Thread by @' + r.tweets[0].author : 'Thread';
+        return this.success('thread', text, undefined, { title: threadTitle });
+      }
+
+      return null;
+    } catch {
+      return null;
     }
   }
 

@@ -159,27 +159,355 @@ export class YouTubeExtractor extends BaseExtractor {
           lines.push(description.substring(0, 3000));
         }
 
+        // --- Transcript / subtitles (best-effort, never fails the extract) ---
+        let transcriptMarkdown = null;
+        try {
+          const vid = videoId;
+          const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+          function parseJson3(text) {
+            let data = null;
+            try { data = JSON.parse(text); } catch { return null; }
+            if (!data || !Array.isArray(data.events)) return null;
+            const rows = [];
+            for (const ev of data.events) {
+              if (!ev || !Array.isArray(ev.segs)) continue;
+              const startMs = Number(ev.tStartMs || 0);
+              const durMs = Number(ev.dDurationMs || 0);
+              const line = ev.segs.map((seg) => (seg && seg.utf8) || '').join('').replace(/\\s+/g, ' ').trim();
+              if (!line) continue;
+              rows.push({ start: startMs / 1000, end: (startMs + durMs) / 1000, text: line });
+            }
+            return rows.length ? rows : null;
+          }
+
+          function timedtextMatches(u) {
+            try {
+              const p = new URL(u, location.origin);
+              return p.searchParams.get('v') === vid;
+            } catch { return false; }
+          }
+
+          function extractJsonAssignment(html, key) {
+            const markers = [key + '=', 'window[' + key + '] = '];
+            for (const marker of markers) {
+              let idx = html.indexOf(marker);
+              while (idx !== -1) {
+                const start = html.indexOf('{', idx + marker.length);
+                if (start !== -1) {
+                  let depth = 0, inStr = false, quote = '', escape = false;
+                  for (let i = start; i < html.length; i++) {
+                    const ch = html[i];
+                    if (escape) { escape = false; continue; }
+                    if (inStr) {
+                      if (ch === '\\\\') { escape = true; continue; }
+                      if (ch === quote) inStr = false;
+                      continue;
+                    }
+                    if (ch === '"' || ch === "'") { inStr = true; quote = ch; continue; }
+                    if (ch === '{') depth++;
+                    else if (ch === '}') { depth--; if (depth === 0) return html.substring(start, i + 1); }
+                  }
+                }
+                idx = html.indexOf(marker, idx + marker.length);
+              }
+            }
+            return null;
+          }
+
+          function attr(str, name) {
+            const needle = name + '="';
+            const idx = str.indexOf(needle);
+            if (idx === -1) return '';
+            const start = idx + needle.length;
+            const end = str.indexOf('"', start);
+            if (end === -1) return '';
+            return str.substring(start, end);
+          }
+
+          function decodeEnt(s) {
+            return s
+              .replace(/&amp;/g, '&')
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/&quot;/g, '"')
+              .replace(/&#39;/g, "'");
+          }
+
+          function parseCaptionXml(xml) {
+            const isFormat3 = xml.indexOf('<p t="') !== -1;
+            const marker = isFormat3 ? '<p ' : '<text ';
+            const endMarker = isFormat3 ? '</p>' : '</text>';
+            const rows = [];
+            let pos = 0;
+            while (true) {
+              const tagStart = xml.indexOf(marker, pos);
+              if (tagStart === -1) break;
+              const contentStart = xml.indexOf('>', tagStart);
+              if (contentStart === -1) break;
+              const bodyStart = contentStart + 1;
+              const tagEnd = xml.indexOf(endMarker, bodyStart);
+              if (tagEnd === -1) break;
+              const attrStr = xml.substring(tagStart + marker.length, contentStart);
+              const content = xml.substring(bodyStart, tagEnd);
+              let startSec = 0;
+              let durSec = 0;
+              if (isFormat3) {
+                startSec = (parseFloat(attr(attrStr, 't')) || 0) / 1000;
+                durSec = (parseFloat(attr(attrStr, 'd')) || 0) / 1000;
+              } else {
+                startSec = parseFloat(attr(attrStr, 'start')) || 0;
+                durSec = parseFloat(attr(attrStr, 'dur')) || 0;
+              }
+              const text = decodeEnt(content.replace(/<[^>]+>/g, '')).replace(/\\s+/g, ' ').trim();
+              if (text) rows.push({ start: startSec, end: startSec + durSec, text });
+              pos = tagEnd + endMarker.length;
+            }
+            return rows.length ? rows : null;
+          }
+
+          function pickTrack(list) {
+            return list.find((t) => t.languageCode === 'en' && t.kind !== 'asr')
+              || list.find((t) => t.languageCode === 'en')
+              || list.find((t) => t.kind !== 'asr')
+              || list[0];
+          }
+
+          async function tryPlayerCapture() {
+            const player = document.getElementById('movie_player');
+            if (!player || typeof player.setOption !== 'function') return null;
+            const tracklist = typeof player.getOption === 'function' ? player.getOption('captions', 'tracklist') : null;
+            let track = null;
+            if (Array.isArray(tracklist) && tracklist.length) {
+              track = pickTrack(tracklist);
+            } else {
+              const resp = typeof player.getPlayerResponse === 'function' ? player.getPlayerResponse() : null;
+              const tracks = resp && resp.captions && resp.captions.playerCaptionsTracklistRenderer
+                ? resp.captions.playerCaptionsTracklistRenderer.captionTracks
+                : null;
+              if (Array.isArray(tracks) && tracks.length) track = pickTrack(tracks);
+            }
+            if (!track) return null;
+            const origFetch = globalThis.fetch;
+            const OrigXHR = globalThis.XMLHttpRequest;
+            let captured = '';
+            try {
+              if (origFetch) {
+                globalThis.fetch = (...args) => {
+                  const res = origFetch.apply(globalThis, args);
+                  try {
+                    const req = args[0];
+                    const reqUrl = typeof req === 'string' ? req : (req && req.url) || '';
+                    if (reqUrl && reqUrl.includes('/api/timedtext') && timedtextMatches(reqUrl) && res && res.ok) {
+                      res.clone().text().then((t) => { if (t && !captured) captured = t; }).catch(() => {});
+                    }
+                  } catch {}
+                  return res;
+                };
+              }
+              if (OrigXHR) {
+                globalThis.XMLHttpRequest = class extends OrigXHR {
+                  open(method, url, ...rest) {
+                    this.__duyaTtUrl = typeof url === 'string' ? url : '';
+                    return super.open(method, url, ...rest);
+                  }
+                  send(...args) {
+                    this.addEventListener('load', () => {
+                      try {
+                        const u = this.__duyaTtUrl || this.responseURL || '';
+                        if (!u.includes('/api/timedtext') || !timedtextMatches(u)) return;
+                        if (this.status < 200 || this.status >= 300) return;
+                        const t = typeof this.responseText === 'string' ? this.responseText : '';
+                        if (t && !captured) captured = t;
+                      } catch {}
+                    });
+                    return super.send(...args);
+                  }
+                };
+              }
+              try { if (player.loadModule) player.loadModule('captions'); } catch {}
+              await sleep(500);
+              try { player.setOption('captions', 'track', track); } catch {}
+              try { if (player.playVideo) player.playVideo(); } catch {}
+              for (let i = 0; i < 20; i++) {
+                await sleep(400);
+                if (captured) {
+                  const parsed = parseJson3(captured);
+                  if (parsed) return parsed;
+                }
+                let urls = [];
+                try {
+                  urls = performance.getEntriesByType('resource').map((e) => e.name)
+                    .filter((u) => String(u).includes('/api/timedtext') && timedtextMatches(String(u)));
+                } catch {}
+                if (urls.length) {
+                  try {
+                    const resp = await fetch(String(urls[urls.length - 1]), { credentials: 'include' });
+                    if (resp.ok) {
+                      const parsed = parseJson3(await resp.text());
+                      if (parsed) return parsed;
+                    }
+                  } catch {}
+                }
+              }
+              return null;
+            } finally {
+              try { if (player.pauseVideo) player.pauseVideo(); } catch {}
+              if (origFetch) globalThis.fetch = origFetch;
+              if (OrigXHR) globalThis.XMLHttpRequest = OrigXHR;
+            }
+          }
+
+          async function tryPageFallback() {
+            try {
+              const resp = await fetch('/watch?v=' + encodeURIComponent(vid), { credentials: 'include' });
+              if (!resp.ok) return null;
+              const html = await resp.text();
+              const raw = extractJsonAssignment(html, 'ytInitialPlayerResponse');
+              if (!raw) return null;
+              const data = JSON.parse(raw);
+              const tracks = data && data.captions && data.captions.playerCaptionsTracklistRenderer
+                ? data.captions.playerCaptionsTracklistRenderer.captionTracks
+                : null;
+              if (!Array.isArray(tracks) || !tracks.length) return null;
+              const track = tracks.find((t) => t.kind !== 'asr') || tracks[0];
+              if (!track || typeof track.baseUrl !== 'string') return null;
+              const url = track.baseUrl + (track.baseUrl.indexOf('?') === -1 ? '?' : '&') + 'fmt=srv3';
+              const xresp = await fetch(url);
+              if (!xresp.ok) return null;
+              return parseCaptionXml(await xresp.text());
+            } catch { return null; }
+          }
+
+          let transcriptRows = await tryPlayerCapture();
+          if (!transcriptRows) transcriptRows = await tryPageFallback();
+
+          if (transcriptRows && transcriptRows.length) {
+            const SENTENCE_END = /[.!?\u3002\uFF01\uFF1F\uFF0E]["'\u2019\u201D)]*\s*$/;
+            function groupBySentence(segs) {
+              const groups = [];
+              let buffer = '', bufferStart = 0, lastStart = 0;
+              const flush = () => {
+                if (buffer.trim()) { groups.push({ start: bufferStart, text: buffer.trim(), speakerChange: false }); buffer = ''; }
+              };
+              for (const seg of segs) {
+                if (buffer && seg.start - lastStart > 20) flush();
+                if (buffer && seg.start - bufferStart > 30) flush();
+                if (!buffer) bufferStart = seg.start;
+                buffer += (buffer ? ' ' : '') + seg.text;
+                lastStart = seg.start;
+                if (SENTENCE_END.test(seg.text)) flush();
+              }
+              flush();
+              return groups;
+            }
+            function groupBySpeaker(segs) {
+              const turns = [];
+              let currentTurn = null, speakerIndex = -1, prevSegText = '';
+              for (const seg of segs) {
+                const isChange = /^>>/.test(seg.text);
+                const cleanText = seg.text.replace(/^>>\s*/, '').replace(/^-\s+/, '');
+                const prevEndsWithComma = /,\s*$/.test(prevSegText);
+                const prevEndedSentence = (SENTENCE_END.test(prevSegText) || !prevSegText) && !prevEndsWithComma;
+                const isRealChange = isChange && prevEndedSentence;
+                if (isRealChange) {
+                  if (currentTurn) turns.push(currentTurn);
+                  speakerIndex = (speakerIndex + 1) % 2;
+                  currentTurn = { start: seg.start, segments: [{ start: seg.start, text: cleanText }], speakerChange: true, speaker: speakerIndex };
+                } else {
+                  if (!currentTurn) currentTurn = { start: seg.start, segments: [], speakerChange: false };
+                  currentTurn.segments.push({ start: seg.start, text: cleanText });
+                }
+                prevSegText = cleanText;
+              }
+              if (currentTurn) turns.push(currentTurn);
+              const groups = [];
+              for (const turn of turns) {
+                const parts = groupBySentence(turn.segments);
+                for (let i = 0; i < parts.length; i++) {
+                  groups.push({ start: parts[i].start, text: parts[i].text, speakerChange: i === 0 && !!turn.speakerChange, speaker: turn.speaker });
+                }
+              }
+              return groups;
+            }
+            const hasSpeakers = transcriptRows.some((r) => /^>>/.test(r.text));
+            const groups = hasSpeakers ? groupBySpeaker(transcriptRows) : groupBySentence(transcriptRows);
+            function fmtTime(sec) {
+              const h = Math.floor(sec / 3600);
+              const m = Math.floor((sec % 3600) / 60);
+              const s = Math.floor(sec % 60);
+              return h > 0 ? h + ':' + String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0') : m + ':' + String(s).padStart(2, '0');
+            }
+            const out = [];
+            for (const g of groups) {
+              const ts = fmtTime(g.start);
+              if (g.speakerChange && g.speaker !== undefined) {
+                out.push('**Speaker ' + (g.speaker + 1) + ' [' + ts + ']** ' + g.text);
+              } else {
+                out.push('[' + ts + '] ' + g.text);
+              }
+            }
+            transcriptMarkdown = out.length ? out.join('\\n') : null;
+          }
+        } catch {}
+
+        if (transcriptMarkdown) {
+          lines.push('');
+          lines.push('---');
+          lines.push('');
+          lines.push('## Transcript');
+          lines.push('');
+          lines.push(transcriptMarkdown);
+        } else {
+          lines.push('');
+          lines.push('---');
+          lines.push('');
+          lines.push('*Transcript: not available for this video*');
+        }
+
         // Try to get comments
         const comments = [];
         const commentEls = document.querySelectorAll('ytd-comment-thread-renderer');
 
-        for (let i = 0; i < Math.min(commentEls.length, 10); i++) {
+        for (let i = 0; i < Math.min(commentEls.length, 25); i++) {
           const el = commentEls[i];
-          const authorEl = el.querySelector('#author-text');
-          const textEl = el.querySelector('#content-text');
-          const likeEl = el.querySelector('#like-count');
+          const root = el.querySelector('#comment') || el;
+          const authorEl = root.querySelector('#author-text');
+          const textEl = root.querySelector('#content-text');
+          const likeEl = root.querySelector('#like-count');
 
           const author = authorEl?.textContent?.trim() || 'Anonymous';
           const text = textEl?.textContent?.trim() || '';
           const likes = likeEl?.textContent?.trim() || '0';
 
-          if (text) {
-            comments.push({
-              author: author.replace(/^@/, ''),
-              text: text.substring(0, 500),
-              likes
-            });
+          if (!text) continue;
+
+          const replies = [];
+          const replyEls = el.querySelectorAll('ytd-comment-replies-renderer ytd-comment-renderer');
+          for (let r = 0; r < Math.min(replyEls.length, 5); r++) {
+            const rel = replyEls[r];
+            const rAuthorEl = rel.querySelector('#author-text');
+            const rTextEl = rel.querySelector('#content-text');
+            const rLikeEl = rel.querySelector('#like-count');
+            const rAuthor = rAuthorEl?.textContent?.trim() || 'Anonymous';
+            const rText = rTextEl?.textContent?.trim() || '';
+            const rLikes = rLikeEl?.textContent?.trim() || '0';
+
+            if (rText) {
+              replies.push({
+                author: rAuthor.replace(/^@/, ''),
+                text: rText.substring(0, 500),
+                likes: rLikes
+              });
+            }
           }
+
+          comments.push({
+            author: author.replace(/^@/, ''),
+            text: text.substring(0, 500),
+            likes,
+            replies
+          });
         }
 
         if (comments.length > 0) {
@@ -193,6 +521,11 @@ export class YouTubeExtractor extends BaseExtractor {
             lines.push('**' + c.author + '** • ' + c.likes + ' likes');
             lines.push('> ' + c.text.split('\\n')[0]);
             lines.push('');
+            for (const r of c.replies) {
+              lines.push('    ↳ **' + r.author + '** • ' + r.likes + ' likes');
+              lines.push('      > ' + r.text.split('\\n')[0]);
+              lines.push('');
+            }
           }
         }
 

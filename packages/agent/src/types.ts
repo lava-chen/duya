@@ -96,8 +96,8 @@ export interface Tool {
    * MCP dispatch metadata. Only MCP tools set this. Used by the
    * `executor` closure to call
    * `mcpManager.callTool(mcpInfo.serverName, mcpInfo.toolName, input)`
-   * and by the runtime permission gate (permission-gate.ts) to
-   * classify the tool's provenance.
+   * and by the runtime permission gate (`permissions.ts` /
+   * `decideMcpSource`) to classify the tool's provenance.
    *
    * `source` is the gate's `McpToolSource` bucket:
    *   - 'bundled'  : first-party / bootstrap fallback
