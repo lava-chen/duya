@@ -43,6 +43,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [417-deterministic-curation](./active/417-deterministic-curation.md) | Replace streaming LLM-as-curator with single-shot non-streaming call + deterministic file writes (M3 'result' w/o 'message_stop' 阻塞根因修复) | P0 | ✅ Tasks A–H 全部完成（9 commits, 2026-08-11）|
 | [418-tool-protocol-adaptation](./active/418-tool-protocol-adaptation.md) | 工具协议适配层 + Deferred Tools — 能力声明（ModelCompat toolResultTransport/supportsToolReferences）+ 文本回传形态 + 400 自动降级 + tool_reference（对齐 pi） | P0 | Phase 1 进行中 |
 | [419-permission-decision-bus](./active/419-permission-decision-bus.md) | 权限决策总线 — appState 批准标记通道修复（no-op → 真实）+ MCP 接入标准权限管线 + 类型化 PermissionContext + 信任模型细化 | P0 | ✅ P0 完成（2026-08-11）；P1/P2 待办 |
+| [428-harness-signal-contracts](./active/428-harness-signal-contracts.md) | Harness 信号契约修复 — is_error 贯通（executor→projector→anthropic）+ edit read 状态/mtime 追踪 + apply_patch 接入写权限（8/14-16 会话审计三大 P0） | P0 | ✅ Tasks A–C + 独立项全完成（2026-08-17）；手动会话验证待办 |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
@@ -64,6 +65,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [422-compaction-strategy-consolidation](./active/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model） | P0 | Implementation |
 | [424-config-driven-custom-agents](./active/424-config-driven-custom-agents.md) | 配置化自定义 Agent：config.toml `[agents.<id>]` 驱动 + 每 agent 独立 workspace/AGENTS.md + model/tools/plugins（对齐 openclaw；取代 420 DB 方向） | P1 | 读侧接线完成（Task 3-7）；创建层落地于 [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) |
 | [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) | 自定义 Agent 创建：对话式（内置 skill）+ CLI（`duya agent create/list/delete`）+ 设置页表单三端统一写 `~/.duya/config.toml` `[agents.<id>]` | P1 | ✅ 实现完成（Phase A 读侧 + Phase B 创建层，24 单测通过） |
+| [429-harness-gap-closure](./active/429-harness-gap-closure.md) | 现代 Agent Harness 差距整改：编辑验证闭环 / PreToolUse 阻断 / 文件级 checkpoint-rewind / Windows 沙箱 / 模型故障转移 / 子代理并行 UI（证据核验完成，分项方案已定） | P0（首项）/P1 | Planning |
 
 ### Conductor / Canvas
 
@@ -126,6 +128,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
+| [428-browser-search-tooling](./active/428-browser-search-tooling.md) | 浏览器搜索一等化：BrowserTool `search` operation（确定性引擎选择+SERP 解析返回结构化结果）+ 修复 `setNetworkEnvironment` 悬空；Phase 2+ 独立 WebSearch/WebFetch + 接入 research | P1 | ✅ Phase 1 完成（25 单测 + live smoke + typecheck:all 0 错）；CDP 真浏览器路径待实测 |
 | [314-no-project-session](./active/314-no-project-session.md) | No-project session — share `~/.duya/workspace`, sidebar "无项目" group | P1 | In progress |
 | [232-input-option-popover-alignment](./active/232-input-option-popover-alignment.md) | Shared searchable option-panel style for chat model and project/session pickers | P1 | In progress |
 | [308-turn-review-history](./active/308-turn-review-history.md) | Persisted per-chat-turn Git deltas, latest completed turn as Code Review default | P1 | In progress |
@@ -203,6 +206,8 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 | [411-goal-mode](./completed/411-goal-mode.md) | Goal 模式：自主多轮目标追踪与核验 — 10 态 GoalTracker + N-skeptic 对抗面板 + strategist + 停滞检测 + `goal_updated` 事件流 + 前端 GoalStatusCard | 2026-08-11 |
 | [423-deep-research-state-machine](./completed/423-deep-research-state-machine.md) | Deep Research 状态机化：research 从纯提示词 modifier 改造为 session 状态机（9 态 ResearchTracker + 按状态门控 + research_start/report/continue/fanout 工具 + 迭代停转自动收敛 + research_updated 卡片 + [research] 配置） | 2026-08-13 |
 | [411-agent-voice-setup](./completed/411-agent-voice-setup.md) | 语音首次使用 Agent 自动配置 — `duya voice` 配置写入子命令 + 内置 voice-setup skill + 首次点击麦自动注入引导消息（Phase 1-3 全部完成） | 2026-08-11 |
+| [427-voice-pipeline-overhaul](./completed/427-voice-pipeline-overhaul.md) | 语音输入链路整体修复 — fork IPC 传输（修空 chunk）+ 时间基准 VAD + 设备选择/断开 + whisper 一键下载 + 模型目录扩充 + 云端 provider 回退 + 听写追加语义 + 打包 + 渲染侧测试 | 2026-08-17 |
+| [426-hook-loop-bus](./completed/426-hook-loop-bus.md) | Hook Loop Bus — agent 循环转向统一到单一事件总线（PreTurn/PostToolUse/PreFinalize/PostTurn + 内建 todo-gate/premature-stop/tool-intent/dead-loop 钩子 + ModeCoordinator re-base + [steering]/[hooks] 配置面 + 全部注入走 runtime-context 通道不落盘） | 2026-08-17 |
 
 ### Canvas / Conductor
 
