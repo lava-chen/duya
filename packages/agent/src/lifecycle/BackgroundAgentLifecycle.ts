@@ -24,6 +24,14 @@ export interface RegisterInput {
  * get_task_output after its completion notification was enqueued. */
 export const DEFAULT_DRAINED_RETENTION_MS = 5 * 60 * 1000
 
+/**
+ * Callback fired whenever the number of in-flight (pending/running) tasks
+ * changes. The agent process wires this to an IPC `background_tasks:update`
+ * message so the Agent Server can exempt the parent session's worker from
+ * idle reaping while background sub-agents are still running inside it.
+ */
+export type InFlightChangeListener = (inFlight: number) => void
+
 export class BackgroundAgentLifecycle {
   private tasks = new Map<string, TaskRecord>()
   private drained = new Set<string>()
@@ -35,6 +43,33 @@ export class BackgroundAgentLifecycle {
   private drainsByReason: ('completed' | 'killed' | 'failed')[] = ['completed', 'killed', 'failed']
 
   constructor(private readonly drainedRetentionMs: number = DEFAULT_DRAINED_RETENTION_MS) {}
+
+  /** Set by the agent process to report in-flight count changes to the server. */
+  onInFlightChange: InFlightChangeListener | null = null
+
+  private lastReportedInFlight: number | null = null
+
+  /** Number of tasks still pending or running (not yet terminal). */
+  inFlightCount(): number {
+    let count = 0
+    for (const r of this.tasks.values()) {
+      if (r.status === 'pending' || r.status === 'running') count++
+    }
+    return count
+  }
+
+  /** Fire onInFlightChange only when the in-flight count actually changed. */
+  private reportInFlight(): void {
+    if (!this.onInFlightChange) return
+    const count = this.inFlightCount()
+    if (count === this.lastReportedInFlight) return
+    this.lastReportedInFlight = count
+    try {
+      this.onInFlightChange(count)
+    } catch (err) {
+      logger.warn('[SubAgent] onInFlightChange threw', { err })
+    }
+  }
   /**
    * Tasks whose terminal notification has already been emitted to the
    * message queue. Prevents the completed + AbortError catch branches in
@@ -76,6 +111,7 @@ export class BackgroundAgentLifecycle {
       agentName: input.agentName,
       outputFilePath: record.outputFilePath,
     }, 'SubAgent')
+    this.reportInFlight()
     return record
   }
 
@@ -97,6 +133,11 @@ export class BackgroundAgentLifecycle {
       subAgentSessionId: r.subAgentSessionId,
     }, 'SubAgent')
     for (const cb of r.subscribers) cb(r)
+    // A task leaving pending/running lowers the in-flight count; the server
+    // must learn about it so it can drop the worker keep-alive once drained.
+    if (next === 'completed' || next === 'killed' || next === 'failed') {
+      this.reportInFlight()
+    }
   }
 
   private isLegalTransition(from: TaskStatus, to: TaskStatus): boolean {
