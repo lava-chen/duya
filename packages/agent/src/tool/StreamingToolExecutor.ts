@@ -1039,7 +1039,7 @@ export class StreamingToolExecutor {
 
       if (result.success) {
         const content = result.backgrounded
-          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- Use get_task_output with task_ids=["${tool.id}"] to check progress later.`
+          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- You will be notified automatically when it completes — do not wait or poll for it. Use get_task_output only for a quick status snapshot (no timeout_ms).`
           : [
               executionPlan?.reason ? `[Shell] ${executionPlan.reason}` : undefined,
               typeof result.result === 'string'

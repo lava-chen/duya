@@ -443,7 +443,7 @@ export class WorkerPool {
           resolve({
             taskId: task.id,
             success: true,
-            result: `Command moved to background (PID: ${msg.pid}). Use get_task_output with task_ids=["${task.id}"] to check progress.`,
+            result: `Command moved to background (PID: ${msg.pid}). You will be notified automatically when it completes — do not wait or poll for it. Use get_task_output only for a quick status snapshot (no timeout_ms).`,
             backgrounded: true,
             outputFile: msg.outputFile as string,
             pid: msg.pid as number,

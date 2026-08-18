@@ -21,7 +21,7 @@ export const BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK: string =
 
 /** Guidance when the parent has nothing left but to wait on the child. */
 export const BACKGROUND_SUBAGENT_IDLE_NOTICE: string =
-  'You will be notified automatically when the subagent completes. Do not wait or poll for it.'
+  'Nothing else is pending here, so yield the turn — the completion notification will wake this session.'
 
 /** How many asks before the latest may still count as leftover parent exec. */
 const PRIOR_EXEC_LOOKBACK = 2

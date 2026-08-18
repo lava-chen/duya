@@ -49,9 +49,7 @@ describe('guidance constants', () => {
     expect(BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK).toContain(
       'Continue unfinished parent work now',
     );
-    expect(BACKGROUND_SUBAGENT_IDLE_NOTICE).toContain(
-      'You will be notified automatically',
-    );
-    expect(BACKGROUND_SUBAGENT_IDLE_NOTICE).toContain('Do not wait or poll');
+    expect(BACKGROUND_SUBAGENT_IDLE_NOTICE).toContain('yield the turn');
+    expect(BACKGROUND_SUBAGENT_IDLE_NOTICE).toContain('completion notification');
   });
 });
