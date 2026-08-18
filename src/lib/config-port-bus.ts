@@ -15,7 +15,8 @@ interface ConfigPort {
   getConfig: (key: string) => void;
   setConfig: (key: string, value: unknown) => void;
   onConfigUpdate: (handler: (config: unknown) => void) => () => void;
-  onConfigResponse: (handler: (data: { key: string; value: unknown }) => void) => () => void;
+  /** Optional: older preload builds do not expose the response channel. */
+  onConfigResponse?: (handler: (data: { key: string; value: unknown }) => void) => () => void;
 }
 
 const updateListeners = new Set<ConfigUpdateListener>();
@@ -35,21 +36,26 @@ function getPort(): ConfigPort | null {
 }
 
 function ensureSubscribed(): void {
-  if (stopUpdate && stopResponse) return;
   const p = getPort();
   if (!p) return;
 
-  stopUpdate = p.onConfigUpdate((config) => {
-    for (const listener of updateListeners) {
-      listener(config as Record<string, unknown>);
-    }
-  });
+  // Subscribe each channel at most once while it is active; a channel is
+  // re-established on demand after its last listener unsubscribes.
+  if (!stopUpdate) {
+    stopUpdate = p.onConfigUpdate((config) => {
+      for (const listener of updateListeners) {
+        listener(config as Record<string, unknown>);
+      }
+    });
+  }
 
-  stopResponse = p.onConfigResponse((data) => {
-    for (const listener of responseListeners) {
-      listener(data);
-    }
-  });
+  if (!stopResponse && typeof p.onConfigResponse === 'function') {
+    stopResponse = p.onConfigResponse((data) => {
+      for (const listener of responseListeners) {
+        listener(data);
+      }
+    });
+  }
 }
 
 export function subscribeConfigUpdates(listener: ConfigUpdateListener): () => void {

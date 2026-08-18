@@ -1,18 +1,19 @@
-// ModelProviderSelector.tsx - Multi-level model/provider/effort picker for the
+// ModelProviderSelector.tsx - Cascading provider/model/effort picker for the
 // chat composer. Trigger button shows "<model> <effort>". The first-level menu
-// lists Provider / Model / Thinking / Manage. Picking a provider drills into
-// that provider's model list (and applies it as the new provider), while Model
-// directly lists the current provider's models.
+// lists every provider directly, plus Thinking and Manage at the bottom.
+// Hovering/clicking a provider (or Thinking) opens a second-level flyout next
+// to that row listing the provider's models (or the effort options), so the
+// root menu stays visible while browsing.
 
 'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   CaretDownIcon,
-  CaretLeftIcon,
   CaretRightIcon,
   CheckIcon,
   SpinnerGapIcon,
+  GearSixIcon,
 } from '@/components/icons';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -48,7 +49,18 @@ interface ModelProviderSelectorProps {
   loading?: boolean;
 }
 
-type SubView = 'root' | 'provider' | 'model' | 'effort';
+type FlyoutView = 'models' | 'effort';
+
+interface FlyoutState {
+  view: FlyoutView;
+  providerId?: string;
+  /** Vertical offset of the anchor row within the popover (px). */
+  top: number;
+  /** Horizontal offset of the flyout relative to the root panel (px). */
+  left: number;
+  /** Max height so the flyout never extends past the viewport bottom. */
+  maxHeight: number;
+}
 
 /** Parse a prefixed model id `[providerName] modelId` → { providerName, modelId } */
 function parsePrefixed(id: string): { providerName: string | null; modelId: string } {
@@ -56,6 +68,8 @@ function parsePrefixed(id: string): { providerName: string | null; modelId: stri
   if (match) return { providerName: match[1], modelId: match[2] };
   return { providerName: null, modelId: id.replace(/^"|"$/g, '') };
 }
+
+const FLYOUT_WIDTH = 216;
 
 export function ModelProviderSelector({
   providerGroups,
@@ -70,9 +84,12 @@ export function ModelProviderSelector({
   const { t } = useTranslation();
   const { setCurrentView, setSettingsTab } = useConversationStore();
   const [open, setOpen] = useState(false);
-  const [subView, setSubView] = useState<SubView>('root');
-  const [drillProviderId, setDrillProviderId] = useState<string | null>(null);
+  const [flyout, setFlyout] = useState<FlyoutState | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rootPanelRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
+  const effortRowRef = useRef<HTMLButtonElement | null>(null);
 
   // Resolve the current provider group from the selected model's prefix.
   const selectedPrefixed = parsePrefixed(selectedModelId);
@@ -80,18 +97,18 @@ export function ModelProviderSelector({
     providerGroups.find((g) => g.name === selectedPrefixed.providerName) ??
     providerGroups[0] ??
     null;
-  const currentProviderModels = currentProvider?.models ?? [];
-  const selectedModel = currentProviderModels.find((m) => m.id === selectedModelId);
+  const selectedModel = currentProvider?.models.find((m) => m.id === selectedModelId);
   const modelLabel = selectedModel?.display_name || selectedPrefixed.modelId || t('messageInput.selectModel');
   const effortLabel =
     effortOptions.find((o) => o.value === (effortValue || ''))?.label ??
     t('messageInput.effortAuto');
 
-  // Close on click outside / Escape.
+  // Close on click outside.
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
+        setFlyout(null);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -102,35 +119,50 @@ export function ModelProviderSelector({
     if (disabled) return;
     setOpen((prev) => {
       const next = !prev;
-      if (next) setSubView('root');
+      if (!next) setFlyout(null);
       return next;
     });
   }, [disabled]);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      if (subView !== 'root') setSubView('root');
-      else setOpen(false);
-    }
-  }, [subView]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        setFlyout(null);
+      }
+    },
+    [],
+  );
 
-  const handleSelectProvider = useCallback((provider: ProviderModelGroup) => {
-    // Enter the chosen provider's model list; user picks a model, which applies
-    // the new provider + model.
-    setSubView('model');
-    // Track which provider the model sub-view belongs to via a ref-ish state.
-    setDrillProviderId(provider.id);
+  /** Open a second-level flyout anchored to `anchor` (a row inside the root panel). */
+  const openFlyout = useCallback((view: FlyoutView, anchor: HTMLElement | null, providerId?: string) => {
+    const panel = rootPanelRef.current;
+    if (!panel) return;
+    const panelRect = panel.getBoundingClientRect();
+    const top = anchor ? anchor.getBoundingClientRect().top - panelRect.top : 0;
+
+    // Overlap the root panel edge so the two panels look connected (no gap).
+    // Open to the right by default; flip to the left when it would overflow
+    // the viewport's right edge.
+    const overlap = 8;
+    const openRight = panelRect.right + FLYOUT_WIDTH - overlap <= window.innerWidth - 8;
+    const left = openRight ? panelRect.width - overlap : -(FLYOUT_WIDTH - overlap);
+
+    // Never extend past the viewport bottom: shrink the flyout height to the
+    // remaining space (it scrolls internally when there are many items).
+    const viewportBottom = window.innerHeight - 8;
+    const maxHeight = Math.max(160, Math.min(320, viewportBottom - (panelRect.top + top)));
+
+    setFlyout({ view, providerId, top, left, maxHeight });
   }, []);
-
-  const drillProvider = providerGroups.find((g) => g.id === drillProviderId) ?? currentProvider;
-  const drillModels = drillProvider?.models ?? [];
 
   const handleSelectModel = useCallback(
     (modelId: string) => {
       const provider = providerGroups.find((g) => g.models.some((m) => m.id === modelId));
       onSelectModel(modelId, provider?.id);
       setOpen(false);
+      setFlyout(null);
     },
     [onSelectModel, providerGroups],
   );
@@ -139,6 +171,7 @@ export function ModelProviderSelector({
     (value: string | null) => {
       onSelectEffort(value);
       setOpen(false);
+      setFlyout(null);
     },
     [onSelectEffort],
   );
@@ -147,23 +180,30 @@ export function ModelProviderSelector({
     setSettingsTab('providers');
     setCurrentView('settings');
     setOpen(false);
+    setFlyout(null);
   }, [setSettingsTab, setCurrentView]);
+
+  const flyoutProvider = flyout?.view === 'models'
+    ? providerGroups.find((g) => g.id === flyout.providerId)
+    : null;
+  const flyoutModels = flyoutProvider?.models ?? [];
 
   const menuRowStyle = (active: boolean): React.CSSProperties => ({
     backgroundColor: active ? 'var(--command-menu-selected)' : 'transparent',
     color: 'var(--text)',
   });
 
-  const menuGridStyle: React.CSSProperties = {
+  const listItemGridStyle: React.CSSProperties = {
     display: 'grid',
-    gridTemplateColumns: '1fr auto 16px',
+    gridTemplateColumns: '1fr auto',
     alignItems: 'center',
     gap: 8,
   };
 
-  const listItemGridStyle: React.CSSProperties = {
+  // Rows that show a trailing arrow as a third column (label / value / arrow).
+  const arrowRowGridStyle: React.CSSProperties = {
     display: 'grid',
-    gridTemplateColumns: '1fr auto',
+    gridTemplateColumns: '1fr auto 16px',
     alignItems: 'center',
     gap: 8,
   };
@@ -195,197 +235,179 @@ export function ModelProviderSelector({
       {open && (
         <div
           className="absolute left-0 z-50 bottom-full mb-1"
-          style={{ width: subView === 'root' ? 240 : 280, maxWidth: 320 }}
+          style={{ overflow: 'visible' }}
         >
           <div
-            className="command-menu-popover overflow-y-auto"
-            style={{
-              backgroundColor: 'var(--command-menu-bg)',
-              border: '1px solid var(--command-menu-border)',
-              borderRadius: 10,
-              boxShadow: 'var(--command-menu-shadow)',
-              padding: 3,
-              maxHeight: 400,
-            }}
+            ref={rootPanelRef}
+            className="relative"
           >
-            {subView === 'root' && (
-              <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                {/* Provider */}
-                <button
-                  type="button"
-                  role="option"
-                  onClick={() => setSubView('provider')}
-                  className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
-                >
-                  <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.provider')}</span>
-                  <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                    {currentProvider?.name ?? ''}
-                  </span>
-                  <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-                </button>
+            {/* First-level menu: providers + thinking + manage */}
+            <div
+              className="command-menu-popover"
+              style={{
+                backgroundColor: 'var(--command-menu-bg)',
+                border: '1px solid var(--command-menu-border)',
+                borderRadius: 10,
+                boxShadow: 'var(--command-menu-shadow)',
+                padding: 3,
+                width: 240,
+              }}
+            >
+              <div
+                ref={scrollRef}
+                role="listbox"
+                className="flex flex-col overflow-y-auto"
+                style={{ gap: 1, maxHeight: 320 }}
+              >
+                {providerGroups.length === 0 ? (
+                  <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                    {t('messageInput.noModelsAvailable')}
+                  </div>
+                ) : (
+                  providerGroups.map((provider) => {
+                    const isActive = provider.id === currentProvider?.id;
+                    return (
+                      <button
+                        key={provider.id}
+                        ref={(el) => { rowRefs.current.set(provider.id, el); }}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        onMouseEnter={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
+                        onClick={() => openFlyout('models', rowRefs.current.get(provider.id) ?? null, provider.id)}
+                        className="command-menu-row px-2.5 cursor-pointer select-none"
+                        style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                      >
+                        <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
+                          <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                            {provider.name}
+                          </span>
+                          <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                            {provider.models.length} model{provider.models.length === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                        <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
+                      </button>
+                    );
+                  })
+                )}
+              </div>
 
-                {/* Model */}
+              {/* Thinking + Manage footer */}
+              <div
+                className="flex flex-col"
+                style={{ gap: 1, marginTop: 3, borderTop: '1px solid var(--command-menu-border)', paddingTop: 3 }}
+              >
                 <button
+                  ref={effortRowRef}
                   type="button"
                   role="option"
-                  onClick={() => { setDrillProviderId(currentProvider?.id ?? null); setSubView('model'); }}
+                  onMouseEnter={() => openFlyout('effort', effortRowRef.current)}
+                  onClick={() => openFlyout('effort', effortRowRef.current)}
                   className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
-                >
-                  <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.model')}</span>
-                  <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{modelLabel}</span>
-                  <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
-                </button>
-
-                {/* Thinking effort */}
-                <button
-                  type="button"
-                  role="option"
-                  onClick={() => setSubView('effort')}
-                  className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
+                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...arrowRowGridStyle }}
                 >
                   <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.effort')}</span>
                   <span className="truncate text-right" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>{effortLabel}</span>
                   <CaretRightIcon size={12} style={{ color: 'var(--muted)' }} />
                 </button>
 
-                {/* Manage providers */}
                 <button
                   type="button"
                   role="option"
                   onClick={handleManageProviders}
                   className="command-menu-row px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...menuGridStyle }}
+                  style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(false), ...listItemGridStyle }}
                 >
-                  <span className="truncate text-left" style={{ fontSize: 12, fontWeight: 500 }}>{t('messageInput.manageProviders')}</span>
-                  <span />
-                  <span />
-                </button>
-              </div>
-            )}
-
-            {subView === 'provider' && (
-              <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                <button
-                  type="button"
-                  onClick={() => setSubView('root')}
-                  className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 28, paddingTop: 4, paddingBottom: 4, borderRadius: 6, color: 'var(--text)' }}
-                >
-                  <CaretLeftIcon size={12} style={{ color: 'var(--muted)', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{t('messageInput.provider')}</span>
-                </button>
-                {providerGroups.map((provider) => {
-                  const isActive = provider.id === currentProvider?.id;
-                  return (
-                    <button
-                      key={provider.id}
-                      type="button"
-                      role="option"
-                      aria-selected={isActive}
-                      onClick={() => handleSelectProvider(provider)}
-                      className="command-menu-row px-2.5 cursor-pointer select-none"
-                      style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                    >
-                      <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
-                        <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                          {provider.name}
-                        </span>
-                        <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                          {provider.models.length} model{provider.models.length === 1 ? '' : 's'}
-                        </span>
-                      </div>
-                      {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {subView === 'model' && (
-              <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                <button
-                  type="button"
-                  onClick={() => setSubView('root')}
-                  className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 28, paddingTop: 4, paddingBottom: 4, borderRadius: 6, color: 'var(--text)' }}
-                >
-                  <CaretLeftIcon size={12} style={{ color: 'var(--muted)', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>
-                    {drillProvider ? `${drillProvider.name} · ${t('messageInput.model')}` : t('messageInput.model')}
+                  <span className="truncate text-left flex items-center gap-1.5" style={{ fontSize: 12, fontWeight: 500 }}>
+                    <GearSixIcon size={13} className="shrink-0" style={{ color: 'var(--muted)' }} />
+                    {t('messageInput.manageProviders')}
                   </span>
+                  <span />
                 </button>
-                {drillModels.length === 0 ? (
-                  <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                    {t('messageInput.noModelsAvailable')}
+              </div>
+            </div>
+
+            {/* Second-level flyout: models for a provider, or effort options */}
+            {flyout && (
+              <div
+                className="command-menu-popover overflow-y-auto"
+                style={{
+                  position: 'absolute',
+                  top: flyout.top,
+                  left: flyout.left,
+                  width: FLYOUT_WIDTH,
+                  zIndex: 20,
+                  backgroundColor: 'var(--command-menu-bg)',
+                  border: '1px solid var(--command-menu-border)',
+                  borderRadius: 10,
+                  boxShadow: 'var(--command-menu-shadow)',
+                  padding: 3,
+                  maxHeight: flyout.maxHeight,
+                }}
+              >
+                {flyout.view === 'models' ? (
+                  <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
+                    {flyoutModels.length === 0 ? (
+                      <div className="px-2.5 py-2" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                        {t('messageInput.noModelsAvailable')}
+                      </div>
+                    ) : (
+                      flyoutModels.map((model) => {
+                        const isActive = model.id === selectedModelId;
+                        return (
+                          <button
+                            key={model.id}
+                            type="button"
+                            role="option"
+                            aria-selected={isActive}
+                            onClick={() => handleSelectModel(model.id)}
+                            className="command-menu-row px-2.5 cursor-pointer select-none"
+                            style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                          >
+                            <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
+                              <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                                {model.display_name}
+                              </span>
+                              {model.context_length ? (
+                                <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
+                                  {model.context_length >= 1000000
+                                    ? `${(model.context_length / 1000000).toFixed(1)}M`
+                                    : model.context_length >= 1000
+                                      ? `${(model.context_length / 1000).toFixed(0)}K`
+                                      : String(model.context_length)}
+                                </span>
+                              ) : null}
+                            </div>
+                            {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 ) : (
-                  drillModels.map((model) => {
-                    const isActive = model.id === selectedModelId;
-                    return (
-                      <button
-                        key={model.id}
-                        type="button"
-                        role="option"
-                        aria-selected={isActive}
-                        onClick={() => handleSelectModel(model.id)}
-                        className="command-menu-row px-2.5 cursor-pointer select-none"
-                        style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                      >
-                        <div className="min-w-0 flex items-baseline" style={{ gap: 8 }}>
-                          <span className="truncate" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                            {model.display_name}
+                  <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
+                    {effortOptions.map((option) => {
+                      const isActive = (effortValue || '') === option.value;
+                      return (
+                        <button
+                          key={option.value || 'auto'}
+                          type="button"
+                          role="option"
+                          aria-selected={isActive}
+                          onClick={() => handleSelectEffort(option.value || null)}
+                          className="command-menu-row px-2.5 cursor-pointer select-none"
+                          style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
+                        >
+                          <span className="truncate text-left" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
+                            {option.label}
                           </span>
-                          {model.context_length ? (
-                            <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)' }}>
-                              {model.context_length >= 1000000
-                                ? `${(model.context_length / 1000000).toFixed(1)}M`
-                                : model.context_length >= 1000
-                                  ? `${(model.context_length / 1000).toFixed(0)}K`
-                                  : String(model.context_length)}
-                            </span>
-                          ) : null}
-                        </div>
-                        {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
-                      </button>
-                    );
-                  })
+                          {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
+                        </button>
+                      );
+                    })}
+                  </div>
                 )}
-              </div>
-            )}
-
-            {subView === 'effort' && (
-              <div role="listbox" className="flex flex-col" style={{ gap: 1 }}>
-                <button
-                  type="button"
-                  onClick={() => setSubView('root')}
-                  className="command-menu-row flex items-center gap-2 px-2.5 cursor-pointer select-none"
-                  style={{ minHeight: 28, paddingTop: 4, paddingBottom: 4, borderRadius: 6, color: 'var(--text)' }}
-                >
-                  <CaretLeftIcon size={12} style={{ color: 'var(--muted)', flexShrink: 0 }} />
-                  <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)' }}>{t('messageInput.effort')}</span>
-                </button>
-                {effortOptions.map((option) => {
-                  const isActive = (effortValue || '') === option.value;
-                  return (
-                    <button
-                      key={option.value || 'auto'}
-                      type="button"
-                      role="option"
-                      aria-selected={isActive}
-                      onClick={() => handleSelectEffort(option.value || null)}
-                      className="command-menu-row px-2.5 cursor-pointer select-none"
-                      style={{ minHeight: 32, paddingTop: 4, paddingBottom: 4, borderRadius: 6, ...menuRowStyle(isActive), ...listItemGridStyle }}
-                    >
-                      <span className="truncate text-left" style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? 'var(--accent)' : 'var(--text)' }}>
-                        {option.label}
-                      </span>
-                      {isActive && <CheckIcon size={12} style={{ color: 'var(--accent)' }} />}
-                    </button>
-                  );
-                })}
               </div>
             )}
           </div>

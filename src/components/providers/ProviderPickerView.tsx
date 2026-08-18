@@ -7,8 +7,17 @@
  * non-media `QUICK_PRESETS` as a 2-column card grid; each
  * card shows the preset icon, name, description, and a
  * "configured" badge if a provider with the same protocol +
- * baseUrl already exists. Clicking a card navigates to the
- * `provider-edit` page via `enterProviderEdit({ presetKey })`.
+ * baseUrl already exists.
+ *
+ * Quick-connect (this redesign): clicking a simple preset card
+ * no longer navigates to the heavy `ProviderEditView`. The
+ * picker swaps the grid for a lightweight `ProviderQuickConnect`
+ * panel where the user only pastes the API key — models,
+ * baseUrl, protocol, and env defaults come from the @duya/ai
+ * catalog preset. Presets that need more than api_key/base_url
+ * (bedrock, vertex, anthropic-thirdparty, … route straight to
+ * the full edit page as before. The "configured" presets open
+ * the quick panel in update mode (masked key, existing id).
  *
  * Phase L3 visual: cards match the duya settings card
  * style (`bg-surface/40` + `rounded-2xl` + `border-border/50`
@@ -18,6 +27,7 @@
  * (plan 204 decision D204.1).
  */
 
+import { useState } from 'react';
 import { ArrowLeftIcon, PlusIcon, CheckCircleIcon } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import { PresetIcon } from '@/components/settings/PresetIcon';
@@ -25,12 +35,28 @@ import { QUICK_PRESETS, type QuickPreset } from '@/lib/provider-presets';
 import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useTranslation } from '@/hooks/useTranslation';
+import { ProviderQuickConnect } from './ProviderQuickConnect';
+import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
+
+/** Fields the quick-connect panel knows how to collect. */
+const QUICK_FIELDS = new Set(['name', 'api_key', 'base_url']);
+
+/**
+ * A preset is "simple" when every field it declares can be
+ * filled by the quick panel (or defaulted from the preset).
+ * Anything else (extra_env, model_mapping, model_names) needs
+ * the full `ProviderEditView`.
+ */
+function isQuickConnectPreset(preset: QuickPreset): boolean {
+  return preset.fields.every((f) => QUICK_FIELDS.has(f));
+}
 
 export function ProviderPickerView() {
   const { t } = useTranslation();
   const setSettingsTab = useConversationStore((s) => s.setSettingsTab);
   const enterProviderEdit = useConversationStore((s) => s.enterProviderEdit);
   const { data: providers = [] } = useProvidersQuery();
+  const [selected, setSelected] = useState<QuickPreset | null>(null);
 
   // Match the same filter used by `ProviderAddButton`. Media
   // presets are not LLM options.
@@ -38,21 +64,57 @@ export function ProviderPickerView() {
     (p) => p.category !== 'media',
   );
 
-  const isPresetConfigured = (preset: QuickPreset): boolean => {
-    return providers.some(
+  const findConfiguredProvider = (
+    preset: QuickPreset,
+  ): RendererLlmProviderDTO | undefined => {
+    return providers.find(
       (p) =>
         p.protocol === preset.protocol &&
         (preset.baseUrl === '' || p.baseUrl.startsWith(preset.baseUrl)),
     );
   };
 
+  const isPresetConfigured = (preset: QuickPreset): boolean => {
+    return !!findConfiguredProvider(preset);
+  };
+
   const handlePick = (preset: QuickPreset) => {
-    enterProviderEdit({ presetKey: preset.key });
+    if (isQuickConnectPreset(preset)) {
+      setSelected(preset);
+    } else {
+      enterProviderEdit({ presetKey: preset.key });
+    }
   };
 
   const handleBack = () => {
-    setSettingsTab('providers');
+    if (selected) {
+      setSelected(null);
+    } else {
+      setSettingsTab('providers');
+    }
   };
+
+  const handleAdvanced = () => {
+    if (!selected) return;
+    const existing = findConfiguredProvider(selected);
+    if (existing) {
+      enterProviderEdit({ providerId: existing.id });
+    } else {
+      enterProviderEdit({ presetKey: selected.key });
+    }
+  };
+
+  if (selected) {
+    return (
+      <ProviderQuickConnect
+        preset={selected}
+        existingProvider={findConfiguredProvider(selected) ?? null}
+        onBack={handleBack}
+        onAdvanced={handleAdvanced}
+        onConnected={() => setSettingsTab('providers')}
+      />
+    );
+  }
 
   return (
     <div data-testid="provider-picker-view" className="space-y-5 max-w-3xl">

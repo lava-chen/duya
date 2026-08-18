@@ -48,6 +48,7 @@ import { useQuotaNavigation } from './hooks/useQuotaNavigation';
 import { ProviderActions } from './ProviderActions';
 import { ProviderEmptyState } from './ProviderEmptyState';
 import { isQuotaSupported } from '@/lib/providers/canCheckQuota';
+import { findPresetByBaseUrl } from '@/lib/provider-presets';
 import type { AppId } from '@/lib/providers/hooks/queryKeys';
 import type { RendererLlmProviderDTO } from '@/lib/providers/ipc-types';
 import { SpinnerGapIcon } from '@/components/icons';
@@ -90,6 +91,11 @@ function getProviderIconKey(
   baseUrl: string | undefined,
 ): string {
   const url = (baseUrl ?? '').toLowerCase();
+  // Prefer the catalog's authoritative iconKey so every preset
+  // provider resolves to its LobeHub brand icon. Falls back to
+  // URL heuristics for custom / unlisted providers.
+  const preset = baseUrl ? findPresetByBaseUrl(baseUrl) : undefined;
+  if (preset) return preset.iconKey;
   if (providerType === 'ollama' || url.includes('ollama') || url.includes('11434')) {
     return 'ollama';
   }
