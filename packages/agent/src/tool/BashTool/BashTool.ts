@@ -699,8 +699,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
       }
       lines.push(`Background process started (PID: ${pid})`);
       lines.push(`Output file: ${outputFile}`);
-      lines.push(`Use ${GET_TASK_OUTPUT_TOOL_NAME} with task_ids=["${toolUseId}"] to check progress later.`);
       lines.push(`You will be notified automatically when it completes. Do not wait or poll for it.`);
+      lines.push(`Use ${GET_TASK_OUTPUT_TOOL_NAME} only for a quick status snapshot (no timeout_ms).`);
 
       return {
         id: crypto.randomUUID(),

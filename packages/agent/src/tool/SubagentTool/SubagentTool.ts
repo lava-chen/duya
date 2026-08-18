@@ -162,7 +162,13 @@ function extractMessageText(content: unknown): string {
 /** Render the model-facing background-spawn notice, aligned to Grok
  * `format_subagent_started_background`. When the parent still has unfinished
  * work we tell it to keep going; otherwise we tell it to yield the turn and
- * rely on the async completion notification instead of polling. */
+ * rely on the async completion notification instead of polling.
+ *
+ * Deliberately does NOT tell the model to block-wait via get_task_output:
+ * the terminal <task-notification> (with the final result and the output-file
+ * path) is delivered automatically, so waiting would double-receive the
+ * result. A get_task_output snapshot (no timeout_ms) is fine for a status
+ * check, never for blocking on this task. */
 function formatSubagentStartedBackground(
   subagentId: string,
   agentType: string,
@@ -178,7 +184,7 @@ function formatSubagentStartedBackground(
     `type: ${agentType}`,
     `description: ${description}`,
     ``,
-    `Use get_task_output with task_ids=["${subagentId}"] and timeout_ms to wait for results.`,
+    `It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output is for a quick status snapshot (no timeout_ms), never for a blocking wait.`,
     ``,
     guide,
   ].join('\n');
