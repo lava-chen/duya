@@ -12,6 +12,7 @@ import {
   SupportSection,
   MemorySection,
   VoiceSection,
+  PerformanceSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
 import { ProviderPickerView } from "@/components/providers/ProviderPickerView";
@@ -39,6 +40,7 @@ export function SettingsView() {
         {settingsTab === "support" && <SupportSection />}
         {settingsTab === "memory" && <MemorySection />}
         {settingsTab === "voice" && <VoiceSection />}
+        {settingsTab === "performance" && <PerformanceSection />}
       </div>
     </div>
   );

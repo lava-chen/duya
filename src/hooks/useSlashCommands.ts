@@ -12,7 +12,6 @@ import {
   GlobeSimpleIcon,
   ClockCounterClockwiseIcon,
   ListChecksIcon,
-  PaperclipIcon,
   FeatherIcon,
   PlugIcon,
   ChalkboardIcon,
@@ -20,6 +19,7 @@ import {
   TelescopeIcon,
   TargetArrowIcon,
   ChatCircleIcon,
+  PaperclipIcon,
 } from '@/components/icons';
 
 // Commands removed from the popover (handled elsewhere or deleted).
@@ -42,7 +42,13 @@ export interface UseSlashCommandsReturn {
   insertItem: (item: PopoverItem) => void;
   handleInputChange: (val: string) => Promise<void>;
   handleInsertSlash: () => void;
-  openCommandPopover: () => Promise<void>;
+  /** Static "add context" items (mode + MCP) shown when `@` is typed or the
+   *  `@添加上上下文` plus-menu row is picked. */
+  contextItems: PopoverItem[];
+  /** Builds the "use commands & skills" items (settings + registry commands +
+   *  loaded skills), used when `/` is typed or the `/使用指令和技能` row is
+   *  picked. Skills are fetched asynchronously, so this returns a promise. */
+  fetchCommandItems: () => Promise<PopoverItem[]>;
 }
 
 type SlashInputElement = HTMLTextAreaElement | HTMLDivElement;
@@ -128,22 +134,28 @@ export function useSlashCommands(opts: {
 
   const { t, locale } = useTranslation();
 
-  // Attachment item (rendered standalone at the top of the popover).
-  const addFilesItem = useMemo<PopoverItem>(() => {
+  // Static "add context" items — MCP server toggles + the MCP submenu entry.
+  // MCP lives under `@添加上上下文` (mode + plugin usage), not under settings.
+  const mcpItem = useMemo<PopoverItem>(() => {
     const isZh = locale === 'zh';
     return {
-      label: isZh ? '添加附件' : 'Add files',
-      value: '__add_files',
-      description: isZh ? '文件、图片' : 'Files or photos',
-      icon: PaperclipIcon,
-      kind: 'settings_action' as const,
-      group: 'attachments' as const,
+      label: isZh ? 'MCP 服务器' : 'MCP servers',
+      value: '__mcp',
+      description: isZh ? '工具开关' : 'Tool toggles',
+      icon: PlugIcon,
+      kind: 'settings_submenu' as const,
+      submenu: 'mcp' as const,
+      group: 'settings' as const,
+      category: 'context' as const,
     };
   }, [locale]);
 
-  // Static settings items (not slash commands, not filterable).
+  // Static settings items (not slash commands, not filterable). These belong
+  // to the `/使用指令和技能` category (settings + skills). MCP is excluded —
+  // it is part of `@添加上下文` instead.
   const settingsItems = useMemo<PopoverItem[]>(() => {
     const isZh = locale === 'zh';
+    const category = 'command' as const;
     return [
       {
         label: isZh ? '思考程度' : 'Thinking',
@@ -153,6 +165,7 @@ export function useSlashCommands(opts: {
         kind: 'settings_submenu' as const,
         submenu: 'thinking' as const,
         group: 'settings' as const,
+        category,
       },
       {
         label: isZh ? '输出风格' : 'Output style',
@@ -162,15 +175,7 @@ export function useSlashCommands(opts: {
         kind: 'settings_submenu' as const,
         submenu: 'style' as const,
         group: 'settings' as const,
-      },
-      {
-        label: isZh ? 'MCP 服务器' : 'MCP servers',
-        value: '__mcp',
-        description: isZh ? '工具开关' : 'Tool toggles',
-        icon: PlugIcon,
-        kind: 'settings_submenu' as const,
-        submenu: 'mcp' as const,
-        group: 'settings' as const,
+        category,
       },
       {
         label: isZh ? '压缩上下文' : 'Compact context',
@@ -179,6 +184,7 @@ export function useSlashCommands(opts: {
         icon: ArrowsInLineVerticalIcon,
         kind: 'settings_action' as const,
         group: 'settings' as const,
+        category,
       },
       {
         label: isZh ? '中途聊天' : 'Side chat',
@@ -188,13 +194,15 @@ export function useSlashCommands(opts: {
         kind: 'settings_submenu' as const,
         submenu: 'btw' as const,
         group: 'settings' as const,
+        category,
       },
     ];
   }, [locale]);
 
-  // Mode items (mutually exclusive single-select).
+  // Mode items (mutually exclusive single-select). Category: @添加上下文.
   const modeItems = useMemo<PopoverItem[]>(() => {
     const isZh = locale === 'zh';
+    const category = 'context' as const;
     return [
       {
         label: isZh ? 'Plan Mode' : 'Plan Mode',
@@ -204,6 +212,7 @@ export function useSlashCommands(opts: {
         kind: 'mode' as const,
         modeValue: 'plan-task',
         group: 'mode' as const,
+        category,
       },
       {
         label: 'Deep Research',
@@ -213,6 +222,7 @@ export function useSlashCommands(opts: {
         kind: 'mode' as const,
         modeValue: 'research',
         group: 'mode' as const,
+        category,
       },
       {
         label: isZh ? 'Conductor 画布' : 'Conductor Canvas',
@@ -222,6 +232,7 @@ export function useSlashCommands(opts: {
         kind: 'mode' as const,
         modeValue: 'conductor',
         group: 'mode' as const,
+        category,
       },
       {
         label: 'Goal',
@@ -231,6 +242,7 @@ export function useSlashCommands(opts: {
         kind: 'mode' as const,
         modeValue: 'goal',
         group: 'mode' as const,
+        category,
       },
     ];
   }, [locale]);
@@ -263,6 +275,7 @@ export function useSlashCommands(opts: {
           builtIn: true,
           kind: 'settings_action' as const,
           group: 'settings' as const,
+          category: 'command' as const,
         };
       });
   }, [locale]);
@@ -300,12 +313,34 @@ export function useSlashCommands(opts: {
     [triggerPos, popoverMode, closePopover, inputValue, popoverFilter, textareaRef, setInputValue],
   );
 
-  // Fetch all items: settings + mode + registry commands + dynamic skills.
-  const fetchSkills = useCallback(async () => {
-    const builtIns = [addFilesItem, ...modeItems, ...settingsItems, ...registryCommands];
+  // Attachment item — lives at the top of the `@` context popup (mode + MCP).
+  const addFilesItem = useMemo<PopoverItem>(() => {
+    const isZh = locale === 'zh';
+    return {
+      label: isZh ? '添加附件' : 'Add files',
+      value: '__add_files',
+      description: isZh ? '文件、图片' : 'Files or photos',
+      icon: PaperclipIcon,
+      kind: 'settings_action' as const,
+      group: 'attachments' as const,
+      category: 'context' as const,
+    };
+  }, [locale]);
+
+  // Static "add context" items — attachment + mode + MCP, shown for `@` and
+  // when the plus button is pressed. All static (no async fetch needed).
+  const contextItems = useMemo<PopoverItem[]>(
+    () => [addFilesItem, ...modeItems, mcpItem],
+    [addFilesItem, modeItems, mcpItem],
+  );
+
+  // Build the "use commands & skills" items (settings + registry commands +
+  // loaded skills) for typing `/`. Skills are loaded asynchronously.
+  const fetchCommandItems = useCallback(async () => {
+    const commandBuiltIns = [...settingsItems, ...registryCommands];
 
     if (!sessionId) {
-      return builtIns;
+      return commandBuiltIns;
     }
 
     try {
@@ -333,20 +368,21 @@ export function useSlashCommands(opts: {
                 description: rawDesc || fallbackDesc,
                 kind: 'agent_skill' as const,
                 group: 'skills' as const,
+                category: 'command' as const,
                 installedSource: skill.source === 'project' ? 'agents' : 'claude',
                 source: (skill.source as 'global' | 'project' | 'plugin' | 'installed' | 'sdk') || undefined,
                 skillRoot: typeof skill.skillRoot === 'string' ? skill.skillRoot : undefined,
               };
             });
-          return [...builtIns, ...skillItems];
+          return [...commandBuiltIns, ...skillItems];
         }
       }
-      return builtIns;
+      return commandBuiltIns;
     } catch (error) {
       console.error('[useSlashCommands] Error fetching skills:', error);
-      return builtIns;
+      return commandBuiltIns;
     }
-  }, [settingsItems, modeItems, registryCommands, sessionId]);
+  }, [settingsItems, registryCommands, sessionId]);
 
   // Handle input changes to detect @ and /
   const handleInputChange = useCallback(
@@ -365,9 +401,14 @@ export function useSlashCommands(opts: {
         setTriggerPos(trigger.triggerPos);
         setSelectedIndex(0);
 
+        // `/` → use commands & skills (settings + skills); `@` → add context
+        // (mode + MCP). Items are already restricted to the matching
+        // category, so the popover only shows the relevant group.
         if (trigger.mode === 'skill') {
-          const items = await fetchSkills();
+          const items = await fetchCommandItems();
           setPopoverItems(items);
+        } else if (trigger.mode === 'context') {
+          setPopoverItems(contextItems);
         }
         return;
       }
@@ -377,7 +418,7 @@ export function useSlashCommands(opts: {
         closePopover();
       }
     },
-    [fetchSkills, popoverMode, closePopover, textareaRef, setInputValue, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems],
+    [fetchCommandItems, contextItems, popoverMode, closePopover, textareaRef, setInputValue, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems],
   );
 
   // Insert `/` into textarea to trigger slash command popover
@@ -395,24 +436,11 @@ export function useSlashCommands(opts: {
     handleInputChange(newValue);
   }, [inputValue, handleInputChange, textareaRef, setInputValue]);
 
-  // Open the command popover via the plus button (no `/` inserted into input).
-  // Render built-ins instantly so the popover feels responsive; dynamic agent
-  // skills are appended in the background once the IPC call resolves.
-  const openCommandPopover = useCallback(async () => {
-    setPopoverMode('skill');
-    setPopoverFilter('');
-    setTriggerPos(null);
-    setSelectedIndex(0);
-    const builtIns = [addFilesItem, ...modeItems, ...settingsItems, ...registryCommands];
-    setPopoverItems(builtIns);
-    const fullItems = await fetchSkills();
-    setPopoverItems(fullItems);
-  }, [fetchSkills, settingsItems, modeItems, registryCommands, setPopoverMode, setPopoverFilter, setTriggerPos, setSelectedIndex, setPopoverItems]);
-
   return {
     insertItem,
     handleInputChange,
     handleInsertSlash,
-    openCommandPopover,
+    contextItems,
+    fetchCommandItems,
   };
 }

@@ -196,7 +196,12 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
       }
     });
 
-    text = textParts.join('');
+    // Join text blocks with a newline separator so block-level markdown
+    // (### heading, - list, 1. numbered, etc.) in a later block is not
+    // swallowed into the previous paragraph. Without this, LLM outputs
+    // that span multiple text blocks (separated by tool_use) get
+    // concatenated into a single inline paragraph.
+    text = textParts.length > 1 ? textParts.join('\n\n') : (textParts[0] ?? '');
     return { text, toolUses, thinkingContent };
   }
 

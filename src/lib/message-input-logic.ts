@@ -66,11 +66,11 @@ export function detectPopoverTrigger(
 ): TriggerResult | null {
   const beforeCursor = text.slice(0, cursorPos);
 
-  // Check for @ trigger (file mention)
+  // Check for @ trigger (add context: mode + MCP)
   const atMatch = beforeCursor.match(/@([^\s@]*)$/);
   if (atMatch) {
     return {
-      mode: 'file',
+      mode: 'context',
       filter: atMatch[1],
       triggerPos: cursorPos - atMatch[0].length,
     };
