@@ -1,6 +1,6 @@
 # 权限决策总线 (Permission Decision Bus)
 
-> **Status**: ✅ P0 完成（2026-08-11）；P1/P2 待办
+> **Status**: ✅ P0 完成（2026-08-11）；✅ P2 信任模型（2026-08-17）；P1 待办
 > **Priority**: P0
 > **Created**: 2026-08-11
 > **Depends on**: 418 权限门修复（用户反馈的两个问题已修，本 plan 是追根）
@@ -101,11 +101,26 @@ mode 的真正权威载体在 `_buildPermissionContext.appState.toolPermissionCo
 - 权限模式类型化：`ToolUseContext` 注入 `PermissionContext`（mode + rules + riskTier lookup），删除 `as unknown` 探测
 - 模块级 `approvedMcpToolUseIds` 在 appState 通道验证可靠后移除
 
-## Phase 2 — 信任模型（后续）
+## Phase 2 — 信任模型（✅ 2026-08-17 落地「非交互免审」）
 
 - `settings` 来源默认 allow（用户显式配置 = 信任信号）；`plugin`/`local` 保持 prompt
 - per-server 持久化批准（"记住我的决定"）
 - 权限请求生命周期统一（abort 清理 pending、超时语义一致）
+
+### P2 落地：后台/网关/MCP 非交互操作免审（2026-08-17）
+
+用户反馈：MCP 工具、gateway 各种工具、后台命令**不应因为拿不到用户批准而被卡死**。已随本次会话落地：
+
+| # | 文件 | 改动 |
+| - | --- | --- |
+| 1 | `packages/agent/src/mcp/permission-gate.ts` | `settings` 来源 MCP 默认 `allow`（用户显式配置 = 信任信号）；清理 switch 中不可达的 `settings` 分支 |
+| 2 | `packages/agent/src/mcp/apply.ts` | 无审批通道（headless/后台）时**隐式放行**并记录 WARN 日志，而非直接 deny |
+| 3 | `packages/agent/src/permissions/permissions.ts` | `dontAsk` 加入 bypass 模式集合（后台上下文等同 bypassPermissions）；`send_artifact`（gateway 工具）加入 `GLOBAL_ALWAYS_ALLOWED_TOOLS` |
+
+**验证**（全绿）：
+- `permission-gate.test.ts`（16）/ `permissions.test.ts`（23）/ `runtime-closure.test.ts`（23）共 62 条测试通过
+- `tsc --noEmit`（packages/agent）通过
+- 说明：P2 剩余两项（per-server 持久化批准、权限请求生命周期统一）仍待做
 
 ---
 

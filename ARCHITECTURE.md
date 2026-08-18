@@ -1816,6 +1816,64 @@ the same call order. The Agent normalizes complete legacy rounds before a
 provider request or persistence, so a corrected canvas tool call cannot leave
 strict Anthropic-compatible providers with an invalid history.
 
+## 语音输入（Voice STT，Plan 410/411/427）
+
+语音听写链路把麦克风 → 流式 STT → 文本追加进输入框，对齐 grok 的纯听写
+体验（不接 xAI API）。默认本地 whisper.cpp（隐私、离线），云端 OpenAI 兼容
+`/v1/audio/transcriptions` 可选。全链路代码在 `@duya/voice` + Electron Main +
+Renderer 三侧，打包后 worker 以 `resources/voice/worker.js` 提供。
+
+### 数据流
+
+```
+Renderer 采集                   Electron Main                    STT Worker (fork, Node)
+AudioWorklet(PCM16 下采样)  →  voice:transcribe-chunk →  SttWorker →  whisper.cpp / cloud fetch
+    200ms/块(~5 IPC/s)           [VoiceService + VAD]      fork IPC      → interim/final 事件
+        │                            │ (advanced 序列化,
+        │                            │  Int16Array 原生传递)
+        └──────── 文本 ◀────────────────┴── voice:interim / voice:final
+```
+
+### 关键设计
+
+- **传输**：Render → Main 用 IPC invoke；Main → Worker 改用 `fork` IPC 通道 +
+  v8 advanced serialization，PCM `Int16Array` 原生传递——旧的 JSON-lines 会把
+  `ArrayBuffer` 序列化成 `{}`，是历史致命断点。`stderr` 保留日志。
+- **VAD（时间基准）**：`packages/voice/src/vad.ts` 按 16 kHz 样本计数折算毫秒，
+  直接消费配置的 `endSilenceMs`/`noSpeechTimeoutMs`，与块大小无关（corrects
+  旧实现按"200ms/块"数块导致的 ~13ms 自动 finalize）。
+- **生命周期**：一次按压一个 worker；`start()` 先 dispose 旧 worker；
+  `stop()`/`cancel()`/`autoFinalize` 后 dispose 防泄漏；`cancel()` 发
+  `voice:cancelled`；autoFinalize 后 VAD reset。
+- **输入设备**：`voice-capture.ts` 的 `buildAudioConstraints(deviceId)` 映射
+  `input_device` → `{ exact }` 约束；设备断开（`track.onended`）触发中文提示并
+  自停；`getUserMedia` 异常映射为可操作中文文案。
+- **听写追加语义**：`src/lib/voice/dictation.ts` 纯函数——interim 显示为
+  `base + interim` 不提交，final 以单空格 join 提交到 base。
+- **引擎**（`electron/services/voice/index.ts`）：
+  - 本地：`detectWhisperBinary`（配置 `binary_path` → `~/.duya/voice/bin` →
+    PATH → 常见候选）+ `ModelManager`，缺失时经 `voice:runtime-download` /
+    `voice:model-download` 一键安装，进度走 `voice:download-progress`。
+  - 云端：provider 回退链 显式 → default → 第一个已配置；`voice:cloud-test`
+    用 0.2s 静音 WAV 实测端点；30s 超时 + interim 1.5s 节流。
+- **运行时管理**：`RuntimeManager` 从 GitHub Releases 拉取预编译 whisper.cpp
+  （动态资产解析 + 静态兜底 + 镜像/自定义 URL）。
+- **配置**：全部位于 `config.toml` `[voice]`，含 `stt.engine`、`stt.local.*`、
+  `stt.cloud.*`、`input_device` 等，设置页可视可编辑。
+- **CLI**：`duya voice doctor / setup / enable / disable / set`，走
+  `GET /v1/voice/env`、`POST /v1/voice/setup`、`POST /v1/voice/config`。
+
+### 关键文件
+
+| 侧 | 文件 |
+|----|------|
+| @duya/voice | `packages/voice/src/{vad,env,config,model-manager,runtime-manager,worker,stt/*}.ts` |
+| Main 服务 | `electron/services/voice/{index,stt-worker}.ts` |
+| IPC | `electron/ipc/voice-handlers.ts`（含 download/cloud-test） |
+| CLI | `packages/cli/src/commands/voice.ts` + `electron/cli/handlers/voice.ts` |
+| Renderer | `src/lib/voice/{types,errors,voice-capture,voice-devices,useVoiceInput,dictation}.ts` |
+| 设置页 | `src/components/settings/VoiceSection.tsx`；入口 `src/components/chat/VoiceButton.tsx` |
+
 ## Official app connections and Remote MCP
 
 `AppConnectionService` is the sole owner of application credentials. Google,
