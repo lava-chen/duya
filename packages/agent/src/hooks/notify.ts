@@ -23,6 +23,13 @@ import { logger } from '../utils/logger.js';
  * Emit the completion notification for a settled background hook task.
  * No-op when the task did not opt into rewaking.
  *
+ * Only COMPLETED (exit 0) tasks deliver a `<task-notification>` to the
+ * agent. A failed / killed background hook is logged and stays visible in
+ * the task registry + Settings → Hooks, but its raw crash text is NEVER
+ * injected into the model context — otherwise a broken hook (e.g. a
+ * missing script) spams a fresh failure notification into every turn
+ * (bug report 2026-08-19 #8).
+ *
  * @param task      The settled task (status completed/error/killed).
  * @param context   additionalContext to inline (stdout-derived), optional.
  */
@@ -32,17 +39,23 @@ export async function notifyHookTaskSettled(
 ): Promise<void> {
   if (!task.rewake) return;
 
-  const status =
-    task.status === 'completed' ? 'completed' : task.status === 'error' ? 'failed' : 'killed';
+  if (task.status !== 'completed') {
+    logger.warn(
+      `[Hooks] background ${task.event} hook failed (task ${task.id}) — not delivered to the agent: ` +
+        `${task.error ?? 'unknown error'}`,
+    );
+    return;
+  }
+
   const xml = buildTaskNotificationXml({
     taskId: task.id,
-    status,
+    status: 'completed',
     agentType: 'hook',
     agentName: task.hookType,
     description: task.event,
     outputFilePath: task.outputFile,
     finalMessage: context,
-    error: task.error,
+    error: undefined,
     maxResultChars: DEFAULT_MAX_RESULT_CHARS,
   });
 

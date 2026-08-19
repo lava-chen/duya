@@ -23,6 +23,7 @@ import type {
 import { expandHookTemplate } from './types.js';
 import { hookTaskRegistry, type HookBackgroundTask } from './task-registry.js';
 import { notifyHookTaskSettled } from './notify.js';
+import { hookCircuitBreaker, hookBreakerKey } from './circuit-breaker.js';
 import { logger } from '../utils/logger.js';
 
 export interface HookExecutionResult {
@@ -70,6 +71,30 @@ const PROCESS_TIMEOUT_RANGE: readonly [number, number] = [1_000, 300_000];
 // ============================================================================
 // command executor
 // ============================================================================
+
+/**
+ * Human-readable command line for a hook (breaker key + logs).
+ */
+export function hookCommandLine(hook: HookCommand): string {
+  if (hook.type === 'process') {
+    return [hook.command, ...(hook.args ?? [])].join(' ');
+  }
+  if (hook.type === 'http') return hook.url;
+  if (hook.type === 'prompt' || hook.type === 'agent') {
+    return `${hook.type}:${hook.prompt ?? ''}`;
+  }
+  return hook.command;
+}
+
+/**
+ * Circuit-breaker key for one dispatch of one hook.
+ */
+function breakerKeyFor(
+  input: BaseHookInput & { hook_event_name: string },
+  hook: HookCommand,
+): string {
+  return hookBreakerKey(input.session_id ?? '', input.hook_event_name, hookCommandLine(hook));
+}
 
 /**
  * Execute a `type: "command"` hook: spawn via the platform shell, pipe the
@@ -322,11 +347,17 @@ export type BackgroundHookLaunch =
  * Background tasks are NOT bounded by the sync timeout: they run until the
  * process exits or the session tears down (registry.finalizeAll). Fail-open:
  * spawn failure registers a killed task and returns ok:false.
+ *
+ * A failed background hook trips the per-session circuit breaker (see
+ * circuit-breaker.ts) so a broken hook stops being re-dispatched every
+ * turn; successful runs close it. `breakerKey` is optional for direct
+ * callers that already checked the breaker.
  */
 export function executeHookBackground(
   hook: BashCommandHook | ProcessCommandHook,
   input: BaseHookInput & { hook_event_name: string },
   opts: HookExecutionOptions,
+  breakerKey?: string,
 ): BackgroundHookLaunch {
   const spec: SpawnSpec =
     hook.type === 'process'
@@ -365,6 +396,7 @@ export function executeHookBackground(
   } catch (err) {
     const message = `spawn failed: ${err instanceof Error ? err.message : String(err)}`;
     hookTaskRegistry.markKilled(taskId, message);
+    if (breakerKey) hookCircuitBreaker.recordFailure(breakerKey);
     return { ok: false, error: message };
   }
 
@@ -390,6 +422,7 @@ export function executeHookBackground(
   child.stderr?.on('data', appendChunk);
   child.on('error', (err) => {
     hookTaskRegistry.markKilled(taskId, `spawn failed: ${err.message}`);
+    if (breakerKey) hookCircuitBreaker.recordFailure(breakerKey);
     void notifyHookTaskSettled(hookTaskRegistry.getTask(taskId)!);
   });
   child.on('close', (code) => {
@@ -397,6 +430,10 @@ export function executeHookBackground(
     const error =
       exitCode === 0 ? undefined : `hook process exited with code ${exitCode}`;
     hookTaskRegistry.markCompleted(taskId, exitCode, error);
+    if (breakerKey) {
+      if (exitCode === 0) hookCircuitBreaker.recordSuccess(breakerKey);
+      else hookCircuitBreaker.recordFailure(breakerKey);
+    }
     const settled = hookTaskRegistry.getTask(taskId);
     if (!settled) return;
     logger.info(
@@ -447,9 +484,24 @@ export async function executeHook(
   input: BaseHookInput & { hook_event_name: string },
   opts: HookExecutionOptions,
 ): Promise<HookExecutionResult> {
+  // Circuit breaker: a hook that has crashed repeatedly (spawn failure,
+  // module-not-found, timeout) is skipped until the cooldown expires so it
+  // stops spawning a failing process every turn (bug report 2026-08-19 #8).
+  const breakerKey = breakerKeyFor(input, hook);
+  const open = hookCircuitBreaker.describe(breakerKey);
+  if (open !== null) {
+    logger.warn(
+      `[Hooks] ${input.hook_event_name} hook suppressed (circuit breaker open — ${open}): ${hookCommandLine(hook)}`,
+    );
+    return {
+      ok: false,
+      error: `hook suppressed: circuit breaker open after repeated failures (${open})`,
+    };
+  }
+
   if (hook.type === 'command' || hook.type === 'process') {
     if (hook.async === true) {
-      const launched = executeHookBackground(hook, input, opts);
+      const launched = executeHookBackground(hook, input, opts, breakerKey);
       if (launched.ok) return { ok: true, backgroundTaskId: launched.taskId };
       return { ok: false, error: launched.error };
     }
@@ -469,6 +521,14 @@ export async function executeHook(
         return { ok: false, error: NOT_IMPLEMENTED_ERROR };
     }
   })();
+  // Infrastructure failures (spawn error / timeout / crash — no exitCode)
+  // trip the breaker; verifier-style non-zero exits (exitCode set, the
+  // process ran and reported) are by design and never trip it.
+  if (result.ok) {
+    hookCircuitBreaker.recordSuccess(breakerKey);
+  } else if (result.exitCode === undefined) {
+    hookCircuitBreaker.recordFailure(breakerKey);
+  }
   logger.debug(
     `[Hooks] ${input.hook_event_name} ${hook.type} hook completed in ${Date.now() - started}ms ` +
       `ok=${String(result.ok)}${result.exitCode !== undefined ? ` exit=${result.exitCode}` : ''}`,

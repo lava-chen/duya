@@ -18,6 +18,7 @@ import { LoopHookBus } from '../loop.js';
 import { expandHookTemplate } from '../types.js';
 import type { BaseHookInput, HooksSettings } from '../types.js';
 import { hookTaskRegistry } from '../task-registry.js';
+import { hookCircuitBreaker } from '../circuit-breaker.js';
 
 // The background completion path delivers via the mailbox — stub the DB write.
 vi.mock('../../lifecycle/mailboxBackgroundNotification.js', () => ({
@@ -62,6 +63,7 @@ async function waitFor(
 describe('executeHookBackground', () => {
   afterEach(() => {
     hookTaskRegistry.clear();
+    hookCircuitBreaker.clear();
     vi.mocked(sendBackgroundNotification).mockClear();
   });
 
@@ -117,7 +119,7 @@ describe('executeHookBackground', () => {
     expect(vi.mocked(sendBackgroundNotification)).not.toHaveBeenCalled();
   });
 
-  it('marks non-zero exits as error tasks', async () => {
+  it('marks non-zero exits as error tasks WITHOUT notifying the agent', async () => {
     const result = await executeHook(
       {
         type: 'command',
@@ -134,10 +136,10 @@ describe('executeHookBackground', () => {
     const task = hookTaskRegistry.getTask(taskId);
     expect(task?.status).toBe('error');
     expect(task?.exitCode).toBe(3);
-    // Failed tasks still notify when rewake is set (diagnostic content).
-    expect(vi.mocked(sendBackgroundNotification)).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(sendBackgroundNotification).mock.calls[0][0];
-    expect(call.xml).toContain('failed');
+    // A crashed / failed background hook is NEVER delivered to the agent
+    // (bug report 2026-08-19 #8) — the failure stays in the task registry
+    // and the log, but no <task-notification> reaches the model.
+    expect(vi.mocked(sendBackgroundNotification)).not.toHaveBeenCalled();
   });
 
   it('spawn failure surfaces as a killed task and fails open', async () => {
