@@ -372,11 +372,26 @@ export async function handleSetAgentSettings(req: IncomingMessage, res: ServerRe
   }
   // Allowlist: only fields the legacy `duya_config settings_set` could set.
   const allow = ['model', 'maxTokens', 'temperature', 'topP', 'topK', 'enableThinking', 'thinkingBudget'];
-  const patch: Record<string, unknown> = {};
+  // Map the legacy camelCase wire fields onto the canonical config.toml
+  // keys (snake_case). The default model lives at `model.default`, NOT
+  // `agent.model` — mirroring the migration mapping in
+  // `electron/config/migrate.ts` (`agentSettings.defaultModel -> model.default`,
+  // `maxTokens -> agent.max_tokens`). Writing camelCase keys into `[agent]`
+  // would leave values the runtime never reads.
+  const fieldTargets: Record<string, string> = {
+    model: 'model.default',
+    maxTokens: 'agent.max_tokens',
+    temperature: 'agent.temperature',
+    topP: 'agent.top_p',
+    topK: 'agent.top_k',
+    enableThinking: 'agent.enable_thinking',
+    thinkingBudget: 'agent.thinking_budget',
+  };
+  const applied: Record<string, unknown> = {};
   for (const k of allow) {
-    if (body[k] !== undefined) patch[k] = body[k];
+    if (body[k] !== undefined) applied[k] = body[k];
   }
-  if (Object.keys(patch).length === 0) {
+  if (Object.keys(applied).length === 0) {
     sendError(
       res,
       400,
@@ -386,12 +401,12 @@ export async function handleSetAgentSettings(req: IncomingMessage, res: ServerRe
     return;
   }
   try {
-    const current = getConfigStore().getByPath('agent');
-    const merged = { ...(current as unknown as Record<string, unknown>), ...patch };
-    getConfigStore().set('agent', merged);
+    for (const [k, v] of Object.entries(applied)) {
+      getConfigStore().set(fieldTargets[k], v);
+    }
     const ctx = readAuditContext(req);
-    await audit(ctx, 'config.settings.set', 'agent', Object.keys(patch).join(','));
-    sendJson(res, 200, { ok: true, changes: patch });
+    await audit(ctx, 'config.settings.set', 'agent', Object.keys(applied).join(','));
+    sendJson(res, 200, { ok: true, changes: applied });
   } catch (err) {
     const c = classify(err);
     sendError(res, c.status, c.code, c.message);

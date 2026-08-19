@@ -136,6 +136,10 @@ export function useUpsertProviderMutation() {
       qc.invalidateQueries({ queryKey: modelCapabilitiesQueryKey(input.llm.id) });
       qc.invalidateQueries({ queryKey: providerModelsQueryKey(input.llm.id) });
       qc.invalidateQueries({ queryKey: providerHealthQueryKey(input.llm.id) });
+      // Re-initialize live agent workers with the new provider config.
+      // Without this the worker keeps the boot-time LLM config and chat
+      // keeps failing after a provider/model edit in Settings.
+      void window.electronAPI?.agent?.reinitProvider().catch(() => {});
     },
   });
 }

@@ -60,6 +60,9 @@ export function useDeleteProviderMutation() {
       qc.invalidateQueries({ queryKey: modelCapabilitiesQueryKey(providerId) });
       qc.invalidateQueries({ queryKey: providerModelsQueryKey(providerId) });
       qc.invalidateQueries({ queryKey: providerHealthQueryKey(providerId) });
+      // Re-initialize live agent workers so they drop the deleted
+      // provider's boot-time config and pick up the new default.
+      void window.electronAPI?.agent?.reinitProvider().catch(() => {});
     },
   });
 }

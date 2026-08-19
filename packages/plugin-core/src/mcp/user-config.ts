@@ -45,6 +45,18 @@ function stringArray(value: unknown, field: string): string[] | undefined {
   return value.slice() as string[];
 }
 
+/**
+ * Read an extended MCP server field tolerating both the snake_case form the
+ * worker writes/validates (`allowed_agent_ids`) and the camelCase form the
+ * main-process ConfigStore persists (`allowedAgentIds`). snake_case wins when
+ * both are present; camelCase is accepted as a fallback so servers written by
+ * the main process (which serializes its camelCase `McpServerEntry` verbatim)
+ * are not silently stripped of scope/timeout settings on the worker side.
+ */
+function pickKey(entry: Record<string, unknown>, snake: string, camel: string): unknown {
+  return entry[snake] !== undefined ? entry[snake] : entry[camel];
+}
+
 function positiveNumber(value: unknown, field: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -99,12 +111,26 @@ export function parseUserMcpToml(text: string): UserMcpTomlServer[] {
       url: typeof entry.url === 'string' ? entry.url : undefined,
       headers: stringRecord(entry.headers, `mcp_servers.${name}.headers`),
       enabled: entry.enabled !== false,
-      allowedAgentIds: stringArray(entry.allowed_agent_ids, `mcp_servers.${name}.allowed_agent_ids`),
+      allowedAgentIds: stringArray(
+        pickKey(entry, 'allowed_agent_ids', 'allowedAgentIds'),
+        `mcp_servers.${name}.allowed_agent_ids`,
+      ),
       nameOverride:
-        typeof entry.name_override === 'string' ? entry.name_override : undefined,
-      startupTimeoutSec: positiveNumber(entry.startup_timeout_sec, `mcp_servers.${name}.startup_timeout_sec`),
-      toolTimeoutSec: positiveNumber(entry.tool_timeout_sec, `mcp_servers.${name}.tool_timeout_sec`),
-      toolTimeouts: numberRecord(entry.tool_timeouts, `mcp_servers.${name}.tool_timeouts`),
+        typeof pickKey(entry, 'name_override', 'nameOverride') === 'string'
+          ? (pickKey(entry, 'name_override', 'nameOverride') as string)
+          : undefined,
+      startupTimeoutSec: positiveNumber(
+        pickKey(entry, 'startup_timeout_sec', 'startupTimeoutSec'),
+        `mcp_servers.${name}.startup_timeout_sec`,
+      ),
+      toolTimeoutSec: positiveNumber(
+        pickKey(entry, 'tool_timeout_sec', 'toolTimeoutSec'),
+        `mcp_servers.${name}.tool_timeout_sec`,
+      ),
+      toolTimeouts: numberRecord(
+        pickKey(entry, 'tool_timeouts', 'toolTimeouts'),
+        `mcp_servers.${name}.tool_timeouts`,
+      ),
     });
   }
   return result;

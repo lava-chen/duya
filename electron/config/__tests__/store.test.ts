@@ -109,6 +109,25 @@ describe('ConfigStore', () => {
     expect(handler).not.toHaveBeenCalled();
     store.close();
   });
+
+  it('unparseable config.toml is backed up before set() can overwrite it', () => {
+    // Regression: a TOML parse failure (e.g. duplicate [hooks] table) used to
+    // silently reset the in-memory snapshot to defaults, so the next set()
+    // persisted the defaults over the user's real configuration (providers,
+    // model, mcp_servers) with no way to recover it.
+    const original = '[model]\ndefault = "deepseek-v4-flash"\nprovider = "deepseek"\n';
+    fs.writeFileSync(opts.configPath, original + '\n[hooks]\nfiles = []\n[hooks]\nfiles = []\n', 'utf-8');
+    const store = new ConfigStore(opts);
+    // Parse failed -> snapshot is defaults, but the corrupt file was preserved.
+    expect(store.get().model.default).toBe('');
+    const backups = fs.readdirSync(dir).filter((f) => f.startsWith('config.toml.corrupt-'));
+    expect(backups.length).toBe(1);
+    expect(fs.readFileSync(path.join(dir, backups[0]!), 'utf-8')).toContain('deepseek-v4-flash');
+    // A later set() must NOT destroy the only copy of the original bytes.
+    store.set('timezone', 'UTC');
+    expect(fs.readFileSync(path.join(dir, backups[0]!), 'utf-8')).toContain('deepseek-v4-flash');
+    store.close();
+  });
 });
 
 describe('diffConfigPaths', () => {

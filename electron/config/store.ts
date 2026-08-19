@@ -18,6 +18,32 @@ import { DEFAULT_CONFIG, mergeConfig, type DuyaConfig } from './schema';
 
 const logger = getLogger();
 
+/**
+ * Write a file atomically with a small retry loop for transient Windows
+ * lock errors (EPERM/EBUSY from antivirus scanners or a second app
+ * instance briefly holding the file). write-file-atomic already writes to
+ * a temp file + rename; the rename is the step that hits EPERM.
+ */
+function writeFileRetry(target: string, content: string, opts: { mode: number }): void {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileAtomic.sync(target, content, opts);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if ((code === 'EPERM' || code === 'EBUSY') && attempt < 2) {
+        // Synchronous wait so the retry happens before the caller moves on.
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
 export interface ConfigStoreOptions {
   configPath: string;
   secretsPath: string;
@@ -170,6 +196,19 @@ export class ConfigStore {
         disk = parse(raw) as Partial<DuyaConfig>;
       } catch (err) {
         logger.error('ConfigStore: failed to parse config.toml', err instanceof Error ? err : new Error(String(err)), { path: this.configPath }, LogComponent.ConfigManager);
+        // Preserve the unparseable file before any later persist() could
+        // overwrite it with the defaults. Without this backup, a single
+        // set() after a parse failure silently destroys the user's on-disk
+        // configuration (providers, model, mcp_servers, hooks) with no way
+        // to recover it. The backup keeps the raw bytes so the user can
+        // restore or manually repair.
+        try {
+          const backupPath = `${this.configPath}.corrupt-${Date.now()}`;
+          fs.copyFileSync(this.configPath, backupPath);
+          logger.error('ConfigStore: preserved unparseable config.toml copy', undefined, { path: this.configPath, backupPath }, LogComponent.ConfigManager);
+        } catch (backupErr) {
+          logger.error('ConfigStore: failed to back up unparseable config.toml', backupErr instanceof Error ? backupErr : new Error(String(backupErr)), { path: this.configPath }, LogComponent.ConfigManager);
+        }
       }
     }
     this.secrets = this.readSecrets();
@@ -193,16 +232,32 @@ export class ConfigStore {
     return cfg;
   }
 
-  private persist(): void {
+  private persist(): boolean {
     const { publicCfg, secrets } = this.splitSecrets(this.config);
     const dir = path.dirname(this.configPath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    writeFileAtomic.sync(this.configPath, stringify(publicCfg as unknown as Parameters<typeof stringify>[0]), { mode: 0o600 });
+    let ok = true;
+    try {
+      writeFileRetry(this.configPath, stringify(publicCfg as unknown as Parameters<typeof stringify>[0]), { mode: 0o600 });
+    } catch (err) {
+      ok = false;
+      // Never let a persistence failure (e.g. EPERM from antivirus or a
+      // concurrent second app instance holding the file) crash the Main
+      // process as an Uncaught Exception. The in-memory snapshot stays
+      // authoritative for this run; a later set() retries the write.
+      logger.error('ConfigStore: failed to persist config.toml', err instanceof Error ? err : new Error(String(err)), { path: this.configPath }, LogComponent.ConfigManager);
+    }
     if (Object.keys(secrets).length > 0 || fs.existsSync(this.secretsPath)) {
       const secretsDir = path.dirname(this.secretsPath);
       if (!fs.existsSync(secretsDir)) fs.mkdirSync(secretsDir, { recursive: true });
-      writeFileAtomic.sync(this.secretsPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+      try {
+        writeFileRetry(this.secretsPath, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+      } catch (err) {
+        ok = false;
+        logger.error('ConfigStore: failed to persist secrets.json', err instanceof Error ? err : new Error(String(err)), { path: this.secretsPath }, LogComponent.ConfigManager);
+      }
     }
+    return ok;
   }
 
   private splitSecrets(cfg: DuyaConfig): { publicCfg: DuyaConfig; secrets: Record<string, string> } {
@@ -222,10 +277,11 @@ export class ConfigStore {
     return getByPath(this.config, key);
   }
 
-  set(key: string, value: unknown): void {
+  set(key: string, value: unknown): boolean {
     setByPath(this.config, key, value);
-    this.persist();
+    const ok = this.persist();
     this.broadcast();
+    return ok;
   }
 
   subscribe(cb: () => void): () => void {

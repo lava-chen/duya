@@ -18,6 +18,7 @@ class FakeReader implements ProviderStoreReader {
   data: Record<string, ApiProvider> = {};
   defaultId: string | undefined = undefined;
   writeCount = 0;
+  private changeCb: (() => void) | undefined;
   readAll() {
     return { ...this.data };
   }
@@ -32,8 +33,15 @@ class FakeReader implements ProviderStoreReader {
     this.writeCount += 1;
     return true;
   }
-  onChange(_cb: () => void): () => void {
-    return () => {};
+  onChange(cb: () => void): () => void {
+    this.changeCb = cb;
+    return () => {
+      this.changeCb = undefined;
+    };
+  }
+  /** Simulate an external config.toml edit (CLI / manual) picked up by the watcher. */
+  emitChange(): void {
+    this.changeCb?.();
   }
 }
 
@@ -154,6 +162,36 @@ describe('ProviderStore — write path', () => {
     expect(store.deleteLlmProvider('a')).toBe(true);
     expect(store.listLlmProviders()).toHaveLength(0);
     expect(store.getActiveLlmProvider()).toBeUndefined();
+  });
+
+  it('reloads the cache when the config changes externally (CLI/manual edit)', () => {
+    // Simulate `duya config set` writing a new provider to config.toml
+    // while the app is running: the watcher triggers reader.onChange.
+    reader.data = {
+      a: makeLegacyAnthropic('a', true),
+      b: { ...makeLegacyAnthropic('b'), name: 'Brand New CLI Provider' },
+    };
+    reader.emitChange();
+    expect(store.listLlmProviders()).toHaveLength(2);
+    expect(store.getLlmProvider('b')?.name).toBe('Brand New CLI Provider');
+    // A save now re-persists the NEW snapshot, not the stale boot-time one.
+    const r = store.upsertLlmProvider(makeLlm({ id: 'b', name: 'B edited' }));
+    expect(r.ok).toBe(true);
+    expect(reader.data['a']).toBeTruthy(); // other providers survive the write
+    expect(reader.data['b'].name).toBe('B edited');
+  });
+
+  it('upsertLlmProvider surfaces a failed persist instead of fake success', () => {
+    const failReader = new FakeReader();
+    failReader.data = { a: makeLegacyAnthropic('a', true) };
+    failReader.writeAll = () => false; // simulate EPERM on config.toml
+    const s = new ProviderStore(failReader);
+    s.migrateAllLegacyProviders();
+    const r = s.upsertLlmProvider(makeLlm({ id: 'x', name: 'X' }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.code).toBe('persist_failed');
+    }
   });
 });
 

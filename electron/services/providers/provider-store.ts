@@ -68,6 +68,13 @@ export interface ProviderStoreReader {
   /** Soft default — the implicit fallback for chat/vision/etc. */
   readDefault(): ApiProvider | undefined;
   /**
+   * Persist the soft default provider id so it survives a restart.
+   * Optional: readers that don't implement it fall back to persisting
+   * only `isActive` on the provider rows (which does NOT survive a
+   * restart, since reads derive the default from `model.provider`).
+   */
+  writeDefault?(id: string | null): boolean;
+  /**
    * Soft pointer to the provider used by the memory worker.
    * Optional: readers that don't implement this fall back to
    * `readDefault` in the store.
@@ -184,6 +191,18 @@ export class ProviderStore {
       this.capabilityStore instanceof ModelCatalogStore
         ? this.capabilityStore
         : new ModelCatalogStore(this.capabilityStore);
+
+    // Keep the cache in sync with external config edits (CLI commands,
+    // manual edits picked up by the ConfigStore watcher). Without this,
+    // the renderer keeps showing the boot-time snapshot and a later save
+    // re-persists that stale snapshot over the new on-disk config.
+    this.reader.onChange?.(() => {
+      try {
+        this.migrateAllLegacyProviders();
+      } catch (err) {
+        logError('ProviderStore reload after config change failed', err);
+      }
+    });
   }
 
   // ===========================================================================
@@ -306,7 +325,16 @@ export class ProviderStore {
     }
     provider.meta.updatedAt = Date.now();
     this.cache.set(provider.id, provider);
-    this.persist();
+    try {
+      this.persist();
+    } catch (err) {
+      logError('ProviderStore.upsertLlmProvider persist failed', err);
+      return {
+        ok: false,
+        code: 'persist_failed',
+        message: 'Provider saved in memory but writing to config.toml failed. Check the app log and retry.',
+      };
+    }
     return { ok: true };
   }
 
@@ -315,7 +343,10 @@ export class ProviderStore {
     if (!this.cache.has(id)) return false;
     this.cache.delete(id);
     if (this.activeId === id) this.activeId = undefined;
-    if (this.defaultId === id) this.defaultId = undefined;
+    if (this.defaultId === id) {
+      this.defaultId = undefined;
+      this.reader.writeDefault?.(null);
+    }
     this.persist();
     return true;
   }
@@ -332,6 +363,11 @@ export class ProviderStore {
     this.ensureInitialized();
     if (id !== null && !this.cache.has(id)) return false;
     this.defaultId = id ?? undefined;
+    // Persist the default pointer (`model.provider`) so it survives a
+    // restart. `migrateAllLegacyProviders` derives `defaultId` from
+    // `readDefault()` → `model.provider` on boot, so without this write
+    // a runtime default would silently revert after an app restart.
+    this.reader.writeDefault?.(this.defaultId ?? null);
     // Keep `activeId` in sync so the legacy bridge still has a single
     // owner for the `ApiProvider.isActive` round-trip. After the legacy
     // `isActive` is removed (Task 15) this assignment is harmless.
@@ -636,15 +672,16 @@ export class ProviderStore {
       legacy.isActive = p.id === this.defaultId;
       map[p.id] = legacy;
     }
-    try {
-      this.reader.writeAll(map);
-      logInfo('ProviderStore.persist', {
-        count: Object.keys(map).length,
-        default: this.defaultId,
-      });
-    } catch (err) {
-      logError('ProviderStore.persist failed', err);
+    // Throws on failure so callers can surface the error instead of
+    // silently reporting success while config.toml never changed.
+    const ok = this.reader.writeAll(map);
+    if (!ok) {
+      throw new Error('ProviderStore: failed to persist providers to config.toml');
     }
+    logInfo('ProviderStore.persist', {
+      count: Object.keys(map).length,
+      default: this.defaultId,
+    });
   }
 }
 
