@@ -12,6 +12,8 @@ export interface AgentProfile {
   allowedTools?: string[];
   disallowedTools?: string[];
   defaultModel?: string;
+  /** Section gating (PromptProfileOverride) — persisted across reloads (Plan 420). */
+  promptProfile?: { enableSections?: string[]; disableSections?: string[] };
   /** Structural grouping: 'main' = user-facing main agents, others internal */
   kind: AgentProfileKind;
   userVisible: boolean;
@@ -28,6 +30,7 @@ interface RawAgentProfile {
   allowed_tools?: string;
   disallowed_tools?: string;
   default_model?: string;
+  prompt_profile?: string;
   profile_kind?: string;
   user_visible?: number;
   is_preset?: number;
@@ -44,6 +47,7 @@ function parseAgentProfile(raw: RawAgentProfile): AgentProfile {
     allowedTools: raw.allowed_tools ? JSON.parse(raw.allowed_tools) : undefined,
     disallowedTools: raw.disallowed_tools ? JSON.parse(raw.disallowed_tools) : undefined,
     defaultModel: raw.default_model,
+    promptProfile: raw.prompt_profile ? JSON.parse(raw.prompt_profile) : undefined,
     kind: (raw.profile_kind as AgentProfileKind) ?? 'main',
     userVisible: raw.user_visible === 1,
     isPreset: raw.is_preset === 1,

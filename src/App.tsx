@@ -369,9 +369,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
   }, [setActiveThread]);
 
   const handleSendMessage = useCallback(
-    // The permission mode is fixed to Auto (workspace-trust model). The
-    // session row remains the durable default; we still pass `auto` as a
-    // per-turn override so the worker never reverts to a stale stored mode.
+    // The user-chosen permission mode (Ask/Auto/Bypass) rides along as a
+    // per-turn override. The session row remains the durable default; we
+    // still pass an explicit override so the worker never reverts to a
+    // stale stored mode mid-turn.
     (
       content: string,
       model?: string,
@@ -383,6 +384,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       displayContent?: string,
       conductorMode?: boolean,
       queuedMailboxId?: string,
+      permissionMode?: 'ask' | 'auto' | 'bypass',
     ) => {
       if (!activeThreadId) return;
 
@@ -406,7 +408,9 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       // Conductor canvas binding lives on the session row; read it here so
       // both enqueueMessage and startStream carry the durable canvasId.
       const conductorCanvasId = activeThread?.conductorCanvasId ?? undefined;
-      const permissionModeOverride = 'auto' as const;
+      const permissionModeOverride = permissionMode === 'bypass' ? 'bypassPermissions'
+        : permissionMode === 'ask' ? 'default'
+        : 'auto';
 
       if (!canSend(activeThreadId)) {
         enqueueMessage(activeThreadId, {
@@ -576,6 +580,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               isStreaming={isStreaming || isFinalizing}
               isFinalizing={isFinalizing}
               hasQueuedMessages={hasQueuedMessages(activeThreadId)}
+              onLivePermissionChange={(mode) => {
+                const agentMode = mode === 'bypass' ? 'bypassPermissions' : mode === 'ask' ? 'default' : 'auto';
+                void window.electronAPI?.agent?.setAgentPermissionMode(activeThreadId, agentMode);
+              }}
             />
           )}
           {currentView === 'skills' && <SkillsView />}

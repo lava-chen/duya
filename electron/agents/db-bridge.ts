@@ -248,6 +248,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'goal:create': {
       const { goals } = getCoreStores();
+      // Idempotent upsert: each session may have at most one goal row
+      // (UNIQUE(session_id)), and workers re-initialize a session after a
+      // restart with no message history but a persisted goal row. Return
+      // the existing row instead of letting the INSERT violate the
+      // constraint (which surfaced as noisy ERROR spam in the worker).
+      const existing = goals.get(p.sessionId as string);
+      if (existing) return coreGoalToIpcRow(existing);
       const goal = goals.create({
         id: p.id as string,
         sessionId: p.session_id as string,

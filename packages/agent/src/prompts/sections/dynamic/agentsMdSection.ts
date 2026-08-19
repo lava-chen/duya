@@ -2,8 +2,9 @@
  * AGENTS.md Section - Dynamic prompt section for AGENTS.md instructions
  *
  * Refresh helper for AGENTS.md snapshots. The contents are rendered by
- * `getAgentsMdManager().buildAgentsMdPrompt()` and injected as the first user
- * message (Codex-compatible), not inside the system prompt.
+ * `getAgentsMdManager().buildAgentsMdPrompt()` and appended to the system
+ * prompt field (Plan 408 Phase 5, `<system-reminder>` wrapped) so they sit
+ * on the system-prefix cache breakpoint.
  */
 
 import { getAgentsMdManager } from '../../../agentsmd/index.js'

@@ -20,16 +20,30 @@ function compactDescription(description: string): string {
 }
 
 export function formatSkillCatalog(skills: PromptSkill[]): string {
-  const entries = [...skills]
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map(skill => `- \`${skill.name}\` - ${compactDescription(skill.description)}`)
+  // System skills (DUYA's own configuration/knowledge) are surfaced first so
+  // they win the model's attention for self-configuration / meta tasks instead
+  // of being buried in the alphabetical flat list. Everything else follows.
+  const byName = (list: PromptSkill[]): string[] =>
+    [...list]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map(skill => `- \`${skill.name}\` - ${compactDescription(skill.description)}`)
+
+  const blocks: string[] = []
+  const systemSkills = byName(skills.filter(s => s.source === 'system'))
+  const otherSkills = byName(skills.filter(s => s.source !== 'system'))
+  if (systemSkills.length > 0) {
+    blocks.push(`### System (DUYA itself)\n${systemSkills.join('\n')}`)
+  }
+  if (otherSkills.length > 0) {
+    blocks.push(`### Other skills\n${otherSkills.join('\n')}`)
+  }
 
   return `## Available skills
 
 <skills-catalog>
 Use \`Skill\` with a listed name to load its instructions. This index is not a substitute for the selected skill's \`SKILL.md\`.
 
-${entries.join('\n')}
+${blocks.join('\n\n')}
 </skills-catalog>`
 }
 

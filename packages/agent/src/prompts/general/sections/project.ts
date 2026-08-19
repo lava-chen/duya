@@ -2,8 +2,9 @@
  * General Agent — Project
  *
  * Merges `projectContinuity` + the AGENTS.md file index.
- * AGENTS.md contents are injected as the first user message (Codex-compatible)
- * rather than duplicated in the system prompt.
+ * AGENTS.md contents are appended to the system prompt field
+ * (`<system-reminder>` wrapped, Plan 408 Phase 5) rather than duplicated
+ * here — this section only lists the instruction files.
  *
  * Cache key: `project`. The build system clears this cache when
  * `initializeAgentsMd` reports the AGENTS.md snapshot changed.

@@ -1,6 +1,6 @@
 ---
 name: self-knowledge
-description: "DUYA self-knowledge and repository map. Use when the user asks about DUYA itself — its architecture, database schema, data flows, modules, build system, or current work status — or when starting work and you need to find the relevant docs before touching code. Trigger on 'DUYA 架构', '项目现在做到哪', '这个模块在哪', '怎么构建', '数据库结构', or any 'how does DUYA work' question. Do not use for generic coding questions that live in the user's own project."
+description: "DUYA 自我认知与仓库地图 — 用户问 DUYA 自身(架构/数据库/模块/构建/当前进度)时使用：'DUYA 架构'、'项目现在做到哪'、'这个模块在哪'、'怎么构建'、'数据库结构'。Also when starting work and you need to find the relevant docs before touching code. Not for generic coding questions in the user's own project."
 when-to-use: "Before non-trivial work in the DUYA repo: locate the right doc or plan first, then read code."
 allowed-tools: [Read, Glob, Grep]
 ---

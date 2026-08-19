@@ -6,6 +6,7 @@
 import type {
   AgentProfile,
   AgentProfileDbRow,
+  PromptProfileOverride,
 } from './types.js';
 import {
   PRESET_AGENT_PROFILES,
@@ -34,6 +35,7 @@ function rowToAgentProfile(row: AgentProfileDbRow): AgentProfile {
     disallowedTools: parseJson<string[] | undefined>(row.disallowed_tools, undefined),
     defaultModel: row.default_model ?? undefined,
     promptSystem: (row.prompt_system as AgentProfile['promptSystem']) ?? undefined,
+    promptProfile: parseJson<PromptProfileOverride | undefined>(row.prompt_profile, undefined),
     kind: (row.profile_kind as AgentProfile['kind']) ?? 'main',
     userVisible: row.user_visible === 1,
     isPreset: row.is_preset === 1,
@@ -52,6 +54,7 @@ function profileToRow(profile: AgentProfile): Omit<AgentProfileDbRow, 'created_a
     disallowed_tools: profile.disallowedTools ? JSON.stringify(profile.disallowedTools) : null,
     default_model: profile.defaultModel ?? null,
     prompt_system: profile.promptSystem ?? null,
+    prompt_profile: profile.promptProfile ? JSON.stringify(profile.promptProfile) : null,
     profile_kind: profile.kind ?? 'main',
     user_visible: profile.userVisible ? 1 : 0,
     is_preset: profile.isPreset ? 1 : 0,

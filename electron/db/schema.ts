@@ -2442,6 +2442,27 @@ const migrations: Migration[] = [
       // agent-process in-memory presets, not in this table.
     },
   },
+  {
+    id: 52,
+    name: 'add_prompt_system_and_prompt_profile_to_agent_profiles',
+    migrate(db: BetterSqlite3Db): void {
+      // prompt_system was referenced by db:agentProfile:create/update but
+      // never added to any schema or migration — fresh databases would
+      // throw "no such column" on create/update with prompt_system.
+      // prompt_profile (Plan 420) persists the profile's section gating
+      // (PromptProfileOverride) across reloads.
+      try {
+        db.exec(`ALTER TABLE agent_profiles ADD COLUMN prompt_system TEXT`);
+      } catch {
+        // Column already exists.
+      }
+      try {
+        db.exec(`ALTER TABLE agent_profiles ADD COLUMN prompt_profile TEXT`);
+      } catch {
+        // Column already exists.
+      }
+    },
+  },
 ];
 
 /**

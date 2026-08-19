@@ -126,23 +126,32 @@ export function shouldFallbackToPrompting(state: DenialTrackingState): boolean {
 /**
  * Tools that are safe and don't need any classifier checking.
  * Pure read-only or metadata operations with no security risk.
+ *
+ * Canonical form is lowercase because built-in tool names are lowercase
+ * (`glob`/`grep`/`read`/...); comparison is case-insensitive so a
+ * capitalized variant (e.g. `Glob`) still matches. Before this fix the
+ * allowlist only contained capitalized names while `hasPermissionsToUseTool`
+ * received the raw lowercase block name, so read-only tools like `glob`
+ * were never allowlisted and fell through to the LLM classifier (which
+ * could deny a glob over `~/.duya/memory` even in auto mode).
  */
 const SAFE_YOLO_ALLOWLISTED_TOOLS = new Set([
-  'Read',
-  'Glob',
-  'Grep',
-  'Task',
-  'TodoWrite',
-  'AskUserQuestion',
-  'ExitPlanMode',
-  'Skill',
-  'LSP',
+  'read',
+  'glob',
+  'grep',
+  'task',
+  'todo',
+  'todowrite',
+  'askuserquestion',
+  'exitplanmode',
+  'skill',
+  'lsp',
 ]);
 
 const CANVAS_TOOL_PREFIX = 'canvas_';
 
 export function isAutoModeAllowlistedTool(toolName: string): boolean {
-  if (SAFE_YOLO_ALLOWLISTED_TOOLS.has(toolName)) {
+  if (SAFE_YOLO_ALLOWLISTED_TOOLS.has(toolName.toLowerCase())) {
     return true;
   }
   // Conductor tools operate entirely on internal project state; never classify.

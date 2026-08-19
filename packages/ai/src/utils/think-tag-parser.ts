@@ -1,7 +1,7 @@
 /**
  * packages/ai/src/utils/think-tag-parser.ts
  *
- * Streaming state machine for parsing <think>...</think> tags.
+ * Streaming state machine for parsing think/reasoning tags.
  *
  * Some OpenAI-compatible providers (DeepSeek R1, Qwen, etc.) embed
  * reasoning inside <think> tags in the text delta instead of using
@@ -19,10 +19,37 @@ export interface ThinkTagParseResult {
 }
 
 // MiniMax emits reasoning wrapped in <thinking>...</thinking>, while
-// DeepSeek/Qwen use <think>...</think>. Support both so callers don't
-// need to know which provider produced the stream.
-const OPEN_TAGS = ['<think>', '<thinking>'];
-const CLOSE_TAGS = ['</think>', '</thinking>'];
+// DeepSeek/Qwen use <think>...</think>. MiniMax-M3 additionally emits
+// the namespaced variants (<mm:think>/</mm:think>, and occasionally
+// <minimax:think>/<antml:think>) — including a bare stray </mm:think>
+// close tag leaked into the text stream. Support all of them so callers
+// don't need to know which provider produced the stream.
+//
+// The tag list mirrors THINK_TAG_NAMES in
+// packages/gateway/src/stream/streaming-strategy.ts (stripThinkTags) so
+// the ai layer and the gateway bot path strip the same set of tags.
+const OPEN_TAGS = [
+  '<mm:think>',
+  '<antml:think>',
+  '<minimax:think>',
+  '<think>',
+  '<thinking>',
+  '<thought>',
+  '<reasoning>',
+  '<reflection>',
+  '<ant_thinking>',
+];
+const CLOSE_TAGS = [
+  '</mm:think>',
+  '</antml:think>',
+  '</minimax:think>',
+  '</think>',
+  '</thinking>',
+  '</thought>',
+  '</reasoning>',
+  '</reflection>',
+  '</ant_thinking>',
+];
 
 function findMatchingPrefix(buffer: string, candidates: string[]): string | null {
   for (const candidate of candidates) {
@@ -91,8 +118,10 @@ export class ThinkTagParser {
           }
           const closeTag = findMatchingPrefix(this.buffer, CLOSE_TAGS);
           if (closeTag) {
-            // Stray closing tag in text mode — emit as text
-            textOut.push(closeTag);
+            // Stray closing tag in text mode — drop it. Gateway-aligned:
+            // orphan think tags are stripped (MiniMax-M3 leaks a bare
+            // </mm:think> into the text stream); emitting it would render
+            // the tag to the user.
             this.buffer = this.buffer.slice(closeTag.length);
             continue;
           }

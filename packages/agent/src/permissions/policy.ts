@@ -566,6 +566,19 @@ export function checkPathSafety(
     };
   }
 
+  // DUYA's own config files are managed exclusively through the CLI
+  // (`duya config ...`, `duya hook ...`, `duya provider ...`) or the
+  // Settings UI. The agent must never edit them directly — an earlier
+  // hand-edit (a second [hooks] table appended to config.toml) made the
+  // whole file unparseable, which silently wiped every provider on the
+  // next settings write. Deny hard, even in bypass mode.
+  if (isWrite && isDuyaConfigPath(filePath)) {
+    return {
+      allowed: false,
+      reason: 'DUYA config files are read-only for the agent — use the duya CLI or Settings UI to change them',
+    };
+  }
+
   if (context && isBypassMode(context.mode)) {
     return { allowed: true };
   }
@@ -592,12 +605,92 @@ export function checkPathSafety(
     return { allowed: true };
   }
 
-  return {
-    allowed: true,
-    requiresUserConfirmation: true,
-    reason: 'Path outside working directory',
-  };
+  if (isWrite) {
+    // Writes outside the workspace always require confirmation.
+    return {
+      allowed: true,
+      requiresUserConfirmation: true,
+      reason: 'Path outside working directory',
+    };
+  }
+
+  // Reads outside the workspace are allowed by default (read-only, no
+  // destructive potential) EXCEPT for sensitive paths (SSH/AWS keys,
+  // credential stores, cookie databases, duya's own secrets) which still
+  // require explicit user confirmation. Before this change every
+  // out-of-workspace read asked, which made the Read tool feel as strict
+  // as Write even though it cannot modify anything.
+  if (isSensitiveReadPath(resolvedPath)) {
+    return {
+      allowed: true,
+      requiresUserConfirmation: true,
+      reason: 'Reading sensitive path requires confirmation',
+    };
+  }
+
+  return { allowed: true };
 }
+
+/**
+ * Sensitive locations that must stay behind a confirmation prompt even for
+ * read-only access: credential stores, private keys, cookie databases and
+ * duya's own secret/config files. Matching is case-insensitive on Windows
+ * and uses forward slashes (the caller normalizes the path).
+ */
+export function isSensitiveReadPath(resolvedPath: string): boolean {
+  const normalized = resolvedPath.replace(/\\/g, '/');
+  const target = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  return READ_SENSITIVE_PATH_PATTERNS.some((pattern) => pattern.test(target));
+}
+
+/**
+ * DUYA's own config files under `~/.duya`. The agent must never write
+ * these — configuration changes go through the CLI / Settings UI so the
+ * ConfigStore stays the single writer and a malformed hand-edit can
+ * never corrupt the app config. Matching is case-insensitive on Windows
+ * and uses forward slashes (the caller normalizes the path).
+ */
+export function isDuyaConfigPath(resolvedPath: string): boolean {
+  const normalized = resolvedPath.replace(/\\/g, '/');
+  const target = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+  return DUYA_CONFIG_FILE_PATTERNS.some((pattern) => pattern.test(target));
+}
+
+const DUYA_CONFIG_FILE_PATTERNS: RegExp[] = [
+  // ~/.duya managed config files. The `.corrupt-*` backups are NOT
+  // included: they are inert recovery copies and may be cleaned up.
+  /\.duya\/config\.toml$/,
+  /\.duya\/secrets\.json$/,
+  /\.duya\/mcp\.toml$/,
+  /\.duya\/cronjob\.toml$/,
+  /\.duya\/settings\.json$/,
+];
+
+// Compiled once; `target` is pre-lowercased on Windows so the patterns can
+// stay lowercase.
+const READ_SENSITIVE_PATH_PATTERNS: RegExp[] = [
+  // User credential / key stores
+  /\/\.ssh(\/|$)/,
+  /\/\.aws(\/|$)/,
+  /\/\.gnupg(\/|$)/,
+  /\/\.config\/gh(\/|$)/,
+  /\/\.password-store(\/|$)/,
+  /\/\.git-credentials$/,
+  /\/\.netrc$/,
+  /\/\.npmrc$/,
+  // Private key files anywhere outside the workspace
+  /\.(?:pem|p12|pfx|key)$/,
+  // duya's own secrets (provider API keys live in config.toml / secrets.json)
+  /\/\.duya\/secrets\.json$/,
+  /\/\.duya\/config\.toml$/,
+  /\/\.duya\/mcp\.toml$/,
+  // Windows credential vault / DPAPI
+  /\/microsoft\/credentials(\/|$)/,
+  // Browser cookie databases
+  /\/google\/chrome(?:\/[^/]*)?\/user data\/[^/]+\/cookies$/,
+  /\/microsoft\/edge(?:\/[^/]*)?\/user data\/[^/]+\/cookies$/,
+  /\/mozilla\/firefox\/profiles\/[^/]+\/cookies\.sqlite$/
+];
 
 function isSoftBlockedPath(resolvedPath: string): boolean {
   const normalized = resolvedPath.replace(/\\/g, '/');
@@ -956,8 +1049,11 @@ export function isToolWithinWorkspace(
   input: Record<string, unknown>,
   context: ToolPermissionContext,
 ): boolean {
-  const fileSystemTools = ['Bash', 'Write', 'Edit', 'Read', 'Glob', 'Grep', 'apply_patch']
-  if (!fileSystemTools.includes(toolName)) {
+  // Tool names are lowercase at the permission gate (block name as emitted by
+  // the model: `glob`, `grep`, `read`, ...). Compare case-insensitively so the
+  // legacy capitalized forms (`Glob`, `Grep`, `Read`, `Bash`) still match.
+  const fileSystemTools = ['bash', 'write', 'edit', 'read', 'glob', 'grep', 'apply_patch']
+  if (!fileSystemTools.includes(toolName.toLowerCase())) {
     return false
   }
 

@@ -55,4 +55,40 @@ describe('PRESET_AGENT_PROFILES', () => {
     expect(curator.allowedTools).toContain('write');
     expect(explore.disallowedTools).toContain('write');
   });
+
+  it('gateway profile keeps full tooling (write/edit/todo/duya_cli/vision)', () => {
+    const gateway = PRESET_AGENT_PROFILES.find((p) => p.id === 'gateway');
+    expect(gateway).toBeDefined();
+    expect(gateway!.promptSystem).toBe('gateway');
+    const allTools = [
+      'read', 'write', 'edit', 'grep', 'glob', 'bash', 'powershell',
+      'todo', 'duya_cli', 'vision_analyze', 'send_artifact', 'skill',
+    ];
+    const result = resolveAllowedTools(gateway!, allTools);
+    for (const t of allTools) {
+      expect(result.allowed).toContain(t);
+    }
+  });
+
+  it('gateway profile still denies desktop-only, recursive, and mode-switching tools', () => {
+    const gateway = PRESET_AGENT_PROFILES.find((p) => p.id === 'gateway')!;
+    const allTools = [
+      'read', 'write', 'edit', 'todo', 'duya_cli', 'vision_analyze',
+      'canvas:create', 'show_widget', 'AskUserQuestion', 'task', 'memory',
+      'read_module', 'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
+    ];
+    const result = resolveAllowedTools(gateway, allTools);
+    for (const t of ['canvas:create', 'show_widget', 'AskUserQuestion', 'task', 'memory', 'read_module', 'EnterPlanMode', 'ExitPlanMode', 'SwitchMode']) {
+      expect(result.denied).toContain(t);
+    }
+  });
+
+  it('gateway profile re-enables memory/sessionGuidance/skills/tasks prompt sections', () => {
+    const gateway = PRESET_AGENT_PROFILES.find((p) => p.id === 'gateway')!;
+    const disabled = gateway.promptProfile?.disableSections ?? [];
+    expect(disabled).not.toContain('memory');
+    expect(disabled).not.toContain('sessionGuidance');
+    expect(disabled).not.toContain('skills');
+    expect(disabled).not.toContain('generalTaskGuidance');
+  });
 });
