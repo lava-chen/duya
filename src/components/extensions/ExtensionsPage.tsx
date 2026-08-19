@@ -35,6 +35,7 @@ import { MCPSubPage } from "./MCPSubPage";
 import { SkillsSubPage, type SkillSummary } from "./SkillsSubPage";
 import { MarketplaceModal } from "./MarketplaceModal";
 import { PluginDetailView } from "@/components/settings/capabilities/PluginDetailView";
+import { SettingsSection } from "@/components/settings/ui";
 import { PlugIcon, PlusIcon, ChatCircleIcon, FileIcon } from "@/components/icons";
 import {
   ArrowLeftIcon,
@@ -846,26 +847,22 @@ export function ExtensionsPage() {
     <div className="settings-page-content">
       <div className="settings-content">
         {/* Header */}
-        <div className="flex items-start justify-between gap-4 mb-4">
-          <div>
-            <h2 className="text-[1.15rem] font-bold tracking-tight text-foreground">
-              {t("settings.extensions" as never)}
-            </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {t("settings.extensions.description" as never)}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setMarketplaceOpen(true)}
-            >
-              <PlugIcon size={14} />
-              {t("marketplace.title" as never)}
-            </Button>
-          </div>
-        </div>
+        <SettingsSection
+          title={t("settings.extensions" as never)}
+          description={t("settings.extensions.description" as never)}
+          action={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setMarketplaceOpen(true)}
+              >
+                <PlugIcon size={14} />
+                {t("marketplace.title" as never)}
+              </Button>
+            </div>
+          }
+        >
 
         {/* Tabs + search + action */}
         <div className="flex items-center justify-between gap-4 mb-4">
@@ -1106,6 +1103,7 @@ export function ExtensionsPage() {
             void reloadSkills();
           }}
         />
+        </SettingsSection>
       </div>
     </div>
   );

@@ -6,10 +6,21 @@
  * consistently reported, and metadata flows through to UI.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+// Patch home dir so ReadTool's `~/.duya` config root resolves under the test
+// temp dir. Keeps the real os.tmpdir for the shared tmpDir fixtures.
+let testHome = '';
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return {
+    ...actual,
+    homedir: () => (testHome ? testHome : actual.homedir()),
+  };
+});
 import {
   ReadTool,
   _resetSharedParser,
@@ -85,6 +96,32 @@ describe('ReadTool text mode (legacy)', () => {
     const result = await tool.execute({ file_path: join(tmpDir, 'missing.txt') });
     expect(result.error).toBe(true);
     expect(result.result).toMatch(/not found|ENOENT/);
+  });
+
+  it('appends the self-config hint when reading files under ~/.duya', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'duya-readtool-home-'));
+    testHome = home;
+    try {
+      // config root = <home>/.duya
+      const cfgDir = join(home, '.duya');
+      mkdirSync(cfgDir, { recursive: true });
+      const cfgFile = join(cfgDir, 'config.toml');
+      writeFileSync(cfgFile, '[model]\nprovider = "openai"\n');
+
+      const inside = await tool.execute({ file_path: cfgFile });
+      expect(inside.error).toBeFalsy();
+      expect(inside.result).toContain('DUYA self-config hint');
+      expect(inside.result).toContain('duya` CLI');
+
+      const outside = join(tmpDir, 'normal.txt');
+      writeFileSync(outside, 'project file');
+      const result = await tool.execute({ file_path: outside });
+      expect(result.error).toBeFalsy();
+      expect(result.result).not.toContain('DUYA self-config hint');
+    } finally {
+      testHome = '';
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it('re-reads the same unmodified file deterministically (no dedup stub)', async () => {

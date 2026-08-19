@@ -17,6 +17,8 @@
  */
 
 import { readFile, stat, open } from 'node:fs/promises';
+import * as os from 'node:os';
+import { join, sep } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
 import type {
@@ -140,6 +142,53 @@ function parsePageRange(pages: string): { first: number; last: number | null } |
 
 function normalizePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
+}
+
+// ---------------------------------------------------------------------------
+// DUYA self-config protection
+//
+// Reading files under `~/.duya` (config.toml, secrets.json, etc.) is a flag
+// that the model may be about to self-modify DUYA's own configuration, which
+// almost always corrupts it (hand-editing bypasses the ConfigStore atomic
+// writes, secret splitting, validation and reload IPC). Instead of silently
+// returning the file, append a hint in the result telling the model to go
+// through the `duya` CLI / the self-config skill. See AGENTS.md and
+// packages/agent/skills/.system/self-config/SKILL.md.
+// ---------------------------------------------------------------------------
+
+/** Config root `~/.duya` (or the test-namespace root under DUYA_TEST). */
+function resolveDuyaConfigRoot(): string {
+  const base = join(os.homedir(), '.duya');
+  if (process.env.DUYA_TEST === '1') {
+    const ns = process.env.DUYA_TEST_NAMESPACE;
+    if (ns && /^[a-zA-Z0-9_-]+$/.test(ns)) return join(base, 'test-namespaces', ns);
+  }
+  return base;
+}
+
+const SELF_CONFIG_HINT =
+  'Do NOT modify this file directly — it is DUYA\'s own runtime configuration ' +
+  '(DO NOT hand-edit configuration or secrets files inside ~/.duya). Use the ' +
+  '`duya` CLI commands (or the self-config skill) to change DUYA settings so ' +
+  'the change is applied, validated, and reloaded correctly.';
+
+function isWithinDuyaConfigRoot(resolvedPath: string): boolean {
+  const root = resolveDuyaConfigRoot();
+  const normalized = resolvedPath.replace(/\\/g, '/');
+  const rootNorm = root.replace(/\\/g, '/');
+  return normalized === rootNorm || normalized.startsWith(rootNorm + '/');
+}
+
+/**
+ * Append the self-config hint to a successful read result when the file
+ * lives under `~/.duya`. Read-only access is fine; the hint simply steers
+ * subsequent edits away from direct config.toml/secrets.json mutation.
+ */
+function appendSelfConfigHint(result: string, resolvedPath: string): string {
+  if (isWithinDuyaConfigRoot(resolvedPath)) {
+    return `${result}\n\n[DUYA self-config hint] ${SELF_CONFIG_HINT}`;
+  }
+  return result;
 }
 
 function parseLineRange(lineRange?: { start: number; end: number }): { start: number; end: number } | undefined {
@@ -303,7 +352,14 @@ export class ReadTool extends BaseTool {
         };
       }
     }
-    return this.dispatch(validation.data, id, workingDirectory, context);
+    const result = await this.dispatch(validation.data, id, workingDirectory, context);
+    // Steer any read of DUYA's own config root toward the CLI / self-config
+    // skill instead of direct mutation, on both the text and doc paths.
+    result.result = appendSelfConfigHint(
+      result.result,
+      expandPath(validation.data.file_path, workingDirectory),
+    );
+    return result;
   }
 
   private async dispatch(

@@ -7,6 +7,7 @@ import { FileIcon } from '../icons';
 import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 import { useLinkOpener } from '@/hooks/useLinkOpener';
+import { useLinkFavicon } from '@/lib/link-favicon';
 
 // Inline media: renders <img> thumbnails that open the lightbox on click,
 // or <video controls> elements for common video extensions so the same
@@ -189,55 +190,16 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   );
 }
 
-// Per-origin favicon cache so repeated links to the same site don't each
-// hit the (cached) IPC. `null` means "no icon resolved" and is cached too.
-const faviconCache = new Map<string, string | null>();
-
-interface DuyaGlobal {
-  getLinkFavicon?: (url: string) => Promise<string | null>;
-}
-
 function LinkFavicon({ url }: { url: string }) {
-  const [src, setSrc] = useState<string | null>(null);
-
-  useEffect(() => {
-    let origin: string;
-    try {
-      origin = new URL(url).origin;
-    } catch {
-      return;
-    }
-    const cached = faviconCache.get(origin);
-    if (cached !== undefined) {
-      setSrc(cached);
-      return;
-    }
-    let cancelled = false;
-    const duya = (window as Window & { duya?: DuyaGlobal }).duya;
-    duya
-      ?.getLinkFavicon?.(url)
-      .then((f) => {
-        if (cancelled) return;
-        faviconCache.set(origin, f);
-        setSrc(f);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        faviconCache.set(origin, null);
-        setSrc(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [url]);
-
-  if (!src) return null;
+  const favicon = useLinkFavicon(url);
+  const [imgFailed, setImgFailed] = useState(false);
+  if (!favicon || imgFailed) return null;
   return (
     <img
-      src={src}
+      src={favicon}
       alt=""
       loading="lazy"
-      onError={() => setSrc(null)}
+      onError={() => setImgFailed(true)}
       className="markdown-link-external__favicon"
     />
   );

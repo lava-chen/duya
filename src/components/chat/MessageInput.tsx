@@ -375,6 +375,12 @@ export function MessageInput({
   const cleanInitialModel = (modelName || '').replace(/^"|"$/g, '');
   const [selectedModel, setSelectedModel] = useState<string>(cleanInitialModel);
   const [selectedEffort, setSelectedEffort] = useState<string | undefined>(effort);
+  // Keep the local selector in sync with the parent's effort. The parent
+  // restores the per-session/global effort asynchronously after mount, so
+  // the initial useState value alone would silently drift back to Auto.
+  useEffect(() => {
+    setSelectedEffort(effort);
+  }, [effort]);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [hasProvider, setHasProvider] = useState(false);

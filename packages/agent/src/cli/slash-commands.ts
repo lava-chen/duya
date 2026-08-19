@@ -754,6 +754,26 @@ export function initSlashCommands(): void {
     },
   });
 
+  // Media generation (plan image-gen): /image <prompt> generates an image
+  // directly through the [image_generation] provider config.
+  registerSlashCommand({
+    name: 'image',
+    description: 'Generate an image: /image <prompt> [--model <m>] [--size <WxH>]',
+    category: 'Tools & Skills',
+    cliOnly: true,
+    argsHint: '<prompt> [--model <model>] [--size <WxH>]',
+    handler: async (args) => {
+      const { runImageCommand } = await import('./imageCmds.js');
+      const text = (args ?? '').trim();
+      if (!text) {
+        console.log(color('[ERR] Usage: /image <prompt> [--model <model>] [--size <WxH>]', Colors.RED));
+        return true;
+      }
+      const code = await runImageCommand(text, {});
+      return code === 0;
+    },
+  });
+
   // Info
   registerSlashCommand({
     name: 'help',
