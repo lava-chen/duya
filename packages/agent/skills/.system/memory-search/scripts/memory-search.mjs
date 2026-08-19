@@ -20,9 +20,40 @@
  *   UserPromptSubmit = [{ hooks = [{ type = "process", command = "node",
  *     args = ["C:/path/to/duya/packages/agent/skills/.system/memory-search/scripts/memory-search.mjs"],
  *     timeoutMs = 30000 }] }]
+ *
+ * The shared core (`memory-rag-lib.mjs`) ships in the same scripts/ dir;
+ * keep the two copies in sync with `scripts/memory-rag-lib.mjs` when
+ * changing the core (they are byte-identical today).
  */
 
-import {
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// ============================================================================
+// Shared core resolution
+// ============================================================================
+//
+// memory-rag-lib.mjs ships NEXT TO this file (same scripts/ dir) so the
+// skill is self-contained and works from any install location
+// (`~/.duya/skills/.system/memory-search/scripts/`, bundled resources, or a
+// dev checkout). The old dev-only layout (lib at repo-root `scripts/`, six
+// `../` up) is kept as a fallback so pre-fix checkouts keep working.
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const libCandidates = [
+  path.join(scriptDir, 'memory-rag-lib.mjs'),
+  path.resolve(scriptDir, '../../../../../../scripts/memory-rag-lib.mjs'),
+];
+const libPath = libCandidates.find((p) => fs.existsSync(p));
+if (!libPath) {
+  process.stderr.write(
+    `memory-search: cannot find memory-rag-lib.mjs next to ${scriptDir}\n` +
+      '  Reinstall the memory-search skill (duya skill sync) to restore it.\n',
+  );
+  process.exit(1);
+}
+const {
   resolveConfigDir,
   readRagSettings,
   resolveIndexPath,
@@ -31,7 +62,7 @@ import {
   formatContext,
   appendSystemLog,
   filterPrompt,
-} from '../../../../../../scripts/memory-rag-lib.mjs';
+} = await import(pathToFileURL(libPath).href);
 
 // ============================================================================
 // Hook mode (plan 87 contract)
