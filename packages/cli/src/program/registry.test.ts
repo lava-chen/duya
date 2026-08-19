@@ -44,10 +44,12 @@ describe('CLI_DESCRIPTORS — frozen v1.0.0', () => {
     'install-cli',
     'uninstall-cli',
     'agent',
+    'hook',
+    'memory',
     'config',
   ];
 
-  it('has all 19 expected top-level command paths', () => {
+  it('has all 21 expected top-level command paths', () => {
     const actual = CLI_DESCRIPTORS.map((d) => d.name);
     expect(actual).toEqual(EXPECTED_PATHS);
   });

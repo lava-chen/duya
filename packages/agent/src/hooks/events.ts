@@ -10,13 +10,20 @@
  * collected as `additionalContext` for the caller (fail-open: a broken
  * hook logs WARN and is skipped, never breaking the agent).
  *
- * Synchronous blocking semantics (no async/asyncRewake): every matched hook
- * awaits completion in configured array order before the next runs.
+ * Synchronous blocking semantics by default: every matched hook awaits
+ * completion in configured array order before the next runs. `async: true`
+ * command/process hooks (non-decision events only) instead launch in the
+ * background and return immediately — their result arrives later via a
+ * mailbox background_notification (see ./notify.ts), never blocking the
+ * agent loop.
  */
 
 import { readHooksConfig } from './config.js';
-import { executeHook } from './executor.js';
-import type { BaseHookInput, HookEvent, HookMatcher, HooksSettings } from './types.js';
+import {
+  executeHook,
+  type HookExecutionResult,
+} from './executor.js';
+import type { BaseHookInput, HookCommand, HookEvent, HookMatcher, HooksSettings } from './types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConfigHooksRunnerOptions {
@@ -40,6 +47,8 @@ export interface EventHookRunResult {
    * failure text (those stay silent, fail-open).
    */
   contexts: string[];
+  /** Background (async: true) hook task ids launched this dispatch. */
+  backgroundTasks: string[];
 }
 
 /**
@@ -57,6 +66,13 @@ export interface EventHookMatcherTargets {
   toolName?: string;
 }
 
+/**
+ * Events whose semantics are a decision gate: the agent must see the hook
+ * result before proceeding, so `async: true` is meaningless — it is
+ * downgraded to sync with a WARN.
+ */
+const DECISION_EVENTS: ReadonlySet<HookEvent> = new Set<HookEvent>(['PreToolUse']);
+
 export class ConfigHooksRunner {
   private readonly settings: HooksSettings | undefined;
   private readonly cwd: string;
@@ -70,8 +86,13 @@ export class ConfigHooksRunner {
 
   /**
    * Dispatch one event. Matchers run in configured array order; within a
-   * matched matcher, hooks run sequentially. Throwing / failing hooks are
-   * skipped with a WARN. Returns what ran and what to surface back.
+   * matched matcher, hooks run sequentially. Sync hooks block the chain
+   * (await completion); `async: true` command/process hooks launch in the
+   * background and return immediately — their result arrives later via a
+   * mailbox notification, like any background bash task. Decision events
+   * (PreToolUse) ignore `async` (WARN + downgrade). Throwing / failing
+   * hooks are skipped with a WARN. Returns what ran and what to surface
+   * back.
    */
   async run(
     event: HookEvent,
@@ -79,16 +100,23 @@ export class ConfigHooksRunner {
     targets?: EventHookMatcherTargets,
   ): Promise<EventHookRunResult> {
     const matchers = this.settings?.[event];
-    if (!matchers || matchers.length === 0) return { executed: 0, contexts: [] };
+    if (!matchers || matchers.length === 0) {
+      return { executed: 0, contexts: [], backgroundTasks: [] };
+    }
 
     const contexts: string[] = [];
+    const backgroundTasks: string[] = [];
     let executed = 0;
     for (const matcher of matchers) {
       if (!matcherApplies(matcher, targets)) continue;
       for (const hook of matcher.hooks) {
         executed++;
         try {
-          const result = await executeHook(hook, input, { cwd: this.cwd, vars: this.vars });
+          const result = await executeHookSafe(hook, input, event, {
+            cwd: this.cwd,
+            vars: this.vars,
+            backgroundTasks,
+          });
           if (result.ok) {
             if (result.additionalContext) contexts.push(result.additionalContext);
             continue;
@@ -111,8 +139,37 @@ export class ConfigHooksRunner {
         }
       }
     }
-    return { executed, contexts };
+    return { executed, contexts, backgroundTasks };
   }
+}
+
+/**
+ * Run one hook. Async-capable command/process hooks on non-decision events
+ * launch in the background via executeHook (recorded in backgroundTasks,
+ * no blocking); decision events downgrade async to sync with a WARN.
+ */
+async function executeHookSafe(
+  hook: HookCommand,
+  input: EventHookInput,
+  event: HookEvent,
+  opts: {
+    cwd: string;
+    vars: Record<string, string>;
+    backgroundTasks: string[];
+  },
+): Promise<HookExecutionResult> {
+  let effective = hook;
+  if ((hook.type === 'command' || hook.type === 'process') && hook.async === true) {
+    if (DECISION_EVENTS.has(event)) {
+      logger.warn(
+        `[Hooks] ${event} is a decision event — async ignored, running ${hook.type} hook synchronously`,
+      );
+      effective = { ...hook, async: false };
+    }
+  }
+  const result = await executeHook(effective, input, opts);
+  if (result.backgroundTaskId) opts.backgroundTasks.push(result.backgroundTaskId);
+  return result;
 }
 
 /**

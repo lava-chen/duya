@@ -142,6 +142,18 @@ workerManager.setMessageHandler((sessionId, msg) => {
     return;
   }
 
+  if (msg.type === 'hook_task:update' && msg.sessionId === sessionId) {
+    // Forward the background hook task snapshot (async hooks) so the main
+    // process can rebroadcast to every BrowserWindow. The renderer
+    // subscribes via electronAPI.onHookTaskUpdate().
+    process.send?.({
+      type: 'hook_task:update',
+      sessionId,
+      tasks: msg.tasks,
+    });
+    return;
+  }
+
   if (msg.type === 'interagent:invoke') {
     // Fire and forget — errors are handled internally and sent as chat:error
     void interagentRouter.handleInvoke({

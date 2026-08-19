@@ -16,16 +16,12 @@
  * hard_nudge_at = 12
  * hard_stop_at = 16
  *
+ * # User hooks are declared in hook.json files (the ecosystem shape shared
+ * # with Claude Code settings.json / ZCode plugin hooks.json); the config
+ * # only records their paths. `~` is expanded; relative paths resolve
+ * # against the config root (~/.duya).
  * [hooks]
- * PreTurn = [{ hooks = [{ type = "command", command = "echo hi" }] }]
- *
- * # Post-edit verifier: after any file-edit tool round, run typecheck and
- * # feed failures back to the model. When the command exits non-zero its
- * # diagnostic (stderr + code) is injected into the next model turn; exit 0
- * # both signals success and still re-emits any stdout as additionalContext.
- * PostToolUse = [{ matcher = "Edit|Write|ApplyPatch|MultiEdit", hooks = [
- *   { type = "command", command = "npm run typecheck:all 2>&1" },
- * ]}]
+ * files = ["~/duya-hooks.json", "E:/projects/x/hooks.json"]
  * ```
  *
  * Env overrides: `DUYA_STEERING_TODO_GATE`, `DUYA_STEERING_ANTI_DEAD_LOOP`,
@@ -41,7 +37,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parse } from '@iarna/toml';
-import { HooksSettingsSchema, type HooksSettings } from './types.js';
+import { z } from 'zod';
+import type { HooksSettings } from './types.js';
+import { parseHooksJsonContent, mergeHooksSettings } from './hooks-json.js';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================
@@ -183,39 +181,106 @@ export function getSteeringConfig(): SteeringConfig {
 // ============================================================================
 
 /**
- * Read the `[hooks]` section. Returns undefined when the section is absent
- * or fails HooksSettingsSchema validation — hooks are strictly optional and
- * misconfiguration must never break the agent loop (fail-open).
+ * The `[hooks]` section only records hook.json file paths; the hook content
+ * itself lives in those JSON files (see ./hooks-json.ts).
  */
-export function readHooksConfig(): HooksSettings | undefined {
-  try {
-    const configPath = path.join(resolveConfigRoot(), 'config.toml');
-    if (!fs.existsSync(configPath)) return undefined;
-    return _readHooksConfigFromRaw(fs.readFileSync(configPath, 'utf-8'));
-  } catch {
-    return undefined;
-  }
+
+/** Injectable file reader for tests (avoid touching the real filesystem). */
+export interface HooksConfigFileDeps {
+  /** Read a hook.json file body; throws on I/O failure. */
+  readFile?: (filePath: string) => string;
+  /** Base directory for resolving relative paths (defaults to the config root). */
+  baseDir?: string;
 }
 
 /**
- * Test-friendly variant: parse the `[hooks]` section from a TOML string
- * without touching the filesystem. Returns undefined when the section is
- * absent or invalid.
+ * Expand `~` and resolve a hook.json path against the config root.
+ * Relative paths are anchored at `~/.duya` (the config file's directory) so
+ * a path written in config.toml behaves like a path written next to it.
  */
-export function _readHooksConfigFromRaw(raw: string): HooksSettings | undefined {
+export function resolveHookFilePath(rawPath: string, baseDir: string): string {
+  if (rawPath === '~') return os.homedir();
+  if (rawPath.startsWith('~/') || rawPath.startsWith('~\\')) {
+    return path.join(os.homedir(), rawPath.slice(2));
+  }
+  return path.isAbsolute(rawPath) ? rawPath : path.resolve(baseDir, rawPath);
+}
+
+/**
+ * Read the `[hooks]` section. Returns undefined when the section is absent,
+ * `files` is missing/empty, any referenced file fails to parse, or the
+ * section fails validation — hooks are strictly optional and
+ * misconfiguration must never break the agent loop (fail-open, per-file
+ * WARNs from the loader). NOT cached — each call re-reads config.toml and
+ * every hook file so edits apply to the next streamChat (hot reload).
+ */
+export function readHooksConfig(): HooksSettings | undefined {
+  const configPath = path.join(resolveConfigRoot(), 'config.toml');
+  if (!fs.existsSync(configPath)) return undefined;
+  return _readHooksConfigFromRaw(fs.readFileSync(configPath, 'utf-8'), {
+    baseDir: resolveConfigRoot(),
+    readFile: (p) => fs.readFileSync(p, 'utf-8'),
+  });
+}
+
+/**
+ * Test-friendly variant: parse the `[hooks]` section from a TOML string and
+ * load every referenced hook.json via the injected reader. Returns undefined
+ * when the section is absent or invalid.
+ */
+export function _readHooksConfigFromRaw(
+  raw: string,
+  deps: HooksConfigFileDeps = {},
+): HooksSettings | undefined {
+  let doc: { hooks?: unknown };
   try {
-    const doc = parse(raw) as { hooks?: unknown };
-    if (!doc.hooks || typeof doc.hooks !== 'object') return undefined;
-    // strict(): unknown event keys (typos) fail validation and surface as a
-    // WARN instead of silently producing a hooks section that never fires.
-    return HooksSettingsSchema.strict().parse(doc.hooks);
+    doc = parse(raw) as { hooks?: unknown };
+  } catch {
+    return undefined;
+  }
+  const hooks = doc.hooks;
+  if (hooks === undefined || hooks === null || typeof hooks !== 'object' || Array.isArray(hooks)) {
+    return undefined;
+  }
+
+  // strict(): unknown keys inside `[hooks]` (typos, or the legacy inline
+  // event-keyed shape) fail validation and surface as a WARN instead of
+  // silently producing a hooks section that never fires.
+  let files: string[];
+  try {
+    const parsed = HooksTomlSchema.strict().parse(hooks);
+    files = parsed.files ?? [];
   } catch (err) {
     logger.warn(
       `[HooksConfig] invalid [hooks] section ignored: ${err instanceof Error ? err.message : String(err)}`,
     );
     return undefined;
   }
+  if (files.length === 0) return undefined;
+
+  const baseDir = deps.baseDir ?? resolveConfigRoot();
+  const readFile = deps.readFile ?? ((p: string) => fs.readFileSync(p, 'utf-8'));
+  const parts: Array<HooksSettings | undefined> = [];
+  for (const entry of files) {
+    const filePath = resolveHookFilePath(entry, baseDir);
+    let body: string;
+    try {
+      body = readFile(filePath);
+    } catch (err) {
+      logger.warn(
+        `[HooksConfig] hook file not readable (skipped): ${filePath} (${err instanceof Error ? err.message : String(err)})`,
+      );
+      continue;
+    }
+    parts.push(parseHooksJsonContent(body, filePath));
+  }
+  return mergeHooksSettings(parts);
 }
+
+/** Hook-file list schema for the `[hooks]` section. */
+const HooksTomlSchema = z.object({
+  files: z.array(z.string()).optional(),
+});
 
 // ============================================================================
 // helpers

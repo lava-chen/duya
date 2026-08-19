@@ -353,43 +353,119 @@ Describe how this skill applies.
 
 ## Hook Config Format
 
-Hook config files are JSON files referenced by `capabilities.hooks[].handler`:
+Hook config files (`hooks.json`) use the ecosystem shape shared with Claude
+Code `settings.json` / ZCode plugin `hooks.json`: a top-level `hooks` object
+mapping event → matcher groups → hook commands. `description` is optional
+and ignored. No conversion needed — a hook file written for Claude Code or
+ZCode loads into DUYA unchanged.
 
 ```json
 {
-  "hooks": [
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash(git *)",
-      "command": {
-        "type": "command",
-        "command": "echo 'git operation detected'",
-        "timeout": 5000
+  "description": "Optional human-readable note (ignored)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["./payload/scan.mjs"],
+            "timeoutMs": 120000
+          }
+        ]
       }
-    },
-    {
-      "event": "FileChanged",
-      "command": {
-        "type": "prompt",
-        "prompt": "A file has changed. Should we run checks?",
-        "timeout": 10000
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "codegraph prompt-hook" }
+        ]
       }
-    }
-  ]
+    ]
+  }
 }
 ```
 
-**Hook command types:**
-- `command` — Run a shell command
-- `prompt` — Send a prompt to the LLM for evaluation
-- `http` — HTTP callback (posts to a URL)
-- `agent` — Run a sub-agent for verification
+**Matchers** are bare regexes matched against the tool name (e.g.
+`"Edit|Write|MultiEdit"`, `"Bash"`); omit `matcher` to match every call of
+that event.
 
-**Hook events:**
-`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `PermissionRequest`,
-`UserPromptSubmit`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`,
-`SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `ConfigChange`,
-`FileChanged`, `WorktreeCreate`, `WorktreeRemove`
+**Hook command types:**
+- `command` — Run a shell command (spawned via the platform shell, `timeout`
+  in seconds, default 60s)
+- `process` — Run an executable directly with an explicit `args` array (no
+  shell; `timeoutMs` in milliseconds, default 60000; `command`/`args` support
+  `${KEY}` placeholder expansion for plugin roots / session paths)
+- `http` — HTTP callback (POSTs the hook input as JSON to `url`)
+- `prompt` — Send a prompt to the LLM for evaluation (schema only, not yet
+  implemented in the agent loop)
+- `agent` — Run a sub-agent for verification (schema only, not yet
+  implemented in the agent loop)
+
+All command types accept `if`, `statusMessage`, `once`, `timeout`/`timeoutMs`
+(schema-level; `timeout`/`timeoutMs` are enforced by the executor, the rest
+are reserved for the full plan-87 protocol).
+
+**Background hooks (`async: true`):**
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "process",
+            "command": "node",
+            "args": ["./rag-retrieve.mjs"],
+            "async": true,
+            "asyncRewake": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+- `async: true` (command/process only) launches the hook in the background:
+  the agent loop never blocks, output streams to an on-disk log
+  (`%TEMP%/duya-hook-<uuid>.log`), and the task appears in Settings → Hooks
+  under "Background hook tasks".
+- `asyncRewake: true` delivers the finished result back into the session as
+  a background notification the next turn — the model gets the hook's
+  `additionalContext` (or its exit diagnostics) automatically, exactly like
+  a completed background bash task. Default `false` = fire-and-forget
+  (result only in the log file).
+- Background hooks are NOT bounded by `timeout`/`timeoutMs`; they run until
+  the process exits or the session tears down.
+- Decision events (`PreToolUse`) never run in the background: `async: true`
+  there is ignored with a WARN and the hook runs synchronously — the agent
+  must see the gate result before dispatching the tool.
+- `http`/`prompt`/`agent` hooks ignore `async` (http is inherently bounded;
+  prompt/agent are not yet implemented).
+
+**Hook events:** the 30-event vocabulary in `packages/agent/src/hooks/types.ts`
+(`HOOK_EVENTS`) — including `PreToolUse`, `PostToolUse`,
+`PostToolUseFailure`, `UserPromptSubmit`, `SessionStart`, `SessionEnd`,
+`Stop`, `PermissionDenied`, `SubagentStart/Stop`, `TaskCreated/Completed`,
+`PreCompact`/`PostCompact`, `Elicitation`/`ElicitationResult`, `FileChanged`,
+`CwdChanged`, `WorktreeCreate/Remove`, `ConfigChange`, `InstructionsLoaded`,
+`PreTurn`/`PostTurn`/`PreFinalize`, … (only the dispatched subset actually
+fires — see `ConfigHooksRunner` call sites in `DuyaAgent.streamChat`).
+
+**User hooks outside plugins:** a standalone hook.json can be registered in
+`~/.duya/config.toml` — the config only records paths, the content lives in
+the JSON files:
+
+```toml
+[hooks]
+files = ["~/duya-hooks.json", "E:/projects/x/hooks.json"]
+```
+
+`~` is expanded; relative paths resolve against the config root (`~/.duya`).
+Multiple files merge per event (all fire, in file order).
 
 ---
 
@@ -551,6 +627,7 @@ Validator checks against `electron/plugins/manifest.ts` expectations:
 | Type | Purpose | Example |
 |------|---------|---------|
 | `command` | Run shell command | `"echo 'done'"` |
+| `process` | Run executable (no shell, `args` array) | `{"command": "node", "args": ["scan.mjs"]}` |
 | `prompt` | Ask LLM | `"Should we continue?"` |
 | `http` | HTTP request | `{"url": "https://..."}` |
 | `agent` | Run sub-agent | `{"prompt": "..."}` |
@@ -603,6 +680,12 @@ git tag v0.1.0 && git push origin v0.1.0
 
 ### Hook not firing
 
-- Hook event name must match exactly (case-sensitive)
-- Handler path must resolve to a valid `.json` file
+- Hook event name must match exactly (case-sensitive) — only the dispatched
+  subset of `HOOK_EVENTS` fires (see `ConfigHooksRunner` call sites in
+  `DuyaAgent.streamChat`)
+- The hook.json path in `[hooks] files` must resolve to a valid `.json` file
+  with a top-level `hooks` object
+- `async: true` hooks never block: check Settings → Hooks → Background hook
+  tasks for the task status/output, or the log file
+- Check the agent log for `[HooksConfig]` / `[Hooks]` WARN lines
 - Enable debug logging: `export DUYA_LOG_LEVEL=debug`

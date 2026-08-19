@@ -189,17 +189,21 @@ function createHooksTemplate(pluginDir) {
   ensureDir(hooksDir);
 
   const hooksJson = {
-    hooks: [
-      {
-        event: 'PreToolUse',
-        matcher: 'Bash(*)',
-        command: {
-          type: 'command',
-          command: 'echo "Hook triggered"',
-          timeout: 5000,
+    description: 'Sample DUYA hooks (ecosystem shape shared with Claude Code / ZCode)',
+    hooks: {
+      PreToolUse: [
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: 'echo "Hook triggered"',
+              timeout: 5000,
+            },
+          ],
         },
-      },
-    ],
+      ],
+    },
   };
 
   fs.writeFileSync(path.join(hooksDir, 'hooks.json'), JSON.stringify(hooksJson, null, 2), 'utf8');

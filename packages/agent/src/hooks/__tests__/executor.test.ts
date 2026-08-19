@@ -12,11 +12,18 @@ import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from 'vitest
 import * as http from 'node:http';
 import * as os from 'node:os';
 import { AddressInfo } from 'node:net';
-import { executeHook, executeHookCommand, executeHttpHook, executeProcessHook } from '../executor.js';
+import { executeHook, executeHookCommand, executeHttpHook, executeProcessHook, resolveProcessSpawn } from '../executor.js';
 import { createConfiguredLoopHooks } from '../config-loop.js';
 import { LoopHookBus } from '../loop.js';
 import { expandHookTemplate } from '../types.js';
 import type { BaseHookInput, HooksSettings } from '../types.js';
+import { hookTaskRegistry } from '../task-registry.js';
+
+// The background completion path delivers via the mailbox — stub the DB write.
+vi.mock('../../lifecycle/mailboxBackgroundNotification.js', () => ({
+  sendBackgroundNotification: vi.fn().mockResolvedValue(undefined),
+}));
+import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
 
 const CWD = os.tmpdir();
 
@@ -34,9 +41,158 @@ function cmdPlain(text: string): string {
   return `node -e "process.stdout.write('${text}')"`;
 }
 
+/** Poll until the predicate passes or the timeout elapses. */
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs: number = 5000,
+  intervalMs: number = 25,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error('waitFor: condition not met before timeout');
+}
+
+// ============================================================================
+// background executor (async: true)
+// ============================================================================
+
+describe('executeHookBackground', () => {
+  afterEach(() => {
+    hookTaskRegistry.clear();
+    vi.mocked(sendBackgroundNotification).mockClear();
+  });
+
+  it('launches async command hooks without blocking and settles the registry', async () => {
+    const started = Date.now();
+    const result = await executeHook(
+      { type: 'command', command: cmdJsonContext('bg-ctx'), async: true, asyncRewake: true },
+      { ...baseInput(), hook_event_name: 'UserPromptSubmit' },
+      { cwd: CWD },
+    );
+    expect(Date.now() - started).toBeLessThan(500); // not awaited
+    expect(result.ok).toBe(true);
+    expect(result.backgroundTaskId).toBeDefined();
+    const taskId = result.backgroundTaskId!;
+
+    await waitFor(() => hookTaskRegistry.getTask(taskId)?.status !== 'running');
+    const task = hookTaskRegistry.getTask(taskId);
+    expect(task?.status).toBe('completed');
+    expect(task?.exitCode).toBe(0);
+    expect(task?.rewake).toBe(true);
+    expect(task?.event).toBe('UserPromptSubmit');
+
+    // Output landed in the task output file.
+    const out = hookTaskRegistry.readOutput(taskId);
+    expect(out?.text).toContain('bg-ctx');
+
+    // asyncRewake → the completion notification was delivered.
+    expect(vi.mocked(sendBackgroundNotification)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sendBackgroundNotification).mock.calls[0][0];
+    expect(call.sessionId).toBe('s1');
+    expect(call.taskId).toBe(taskId);
+    expect(call.xml).toContain('task-notification');
+    expect(call.xml).toContain('bg-ctx');
+  });
+
+  it('launches async process hooks with ${VAR} expansion', async () => {
+    const result = await executeHook(
+      {
+        type: 'process',
+        command: 'node',
+        args: ['-e', 'process.stdout.write(JSON.stringify({additionalContext:"proc-bg"}))'],
+        async: true,
+      },
+      { ...baseInput(), hook_event_name: 'SessionStart' },
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    const taskId = result.backgroundTaskId!;
+    await waitFor(() => hookTaskRegistry.getTask(taskId)?.status !== 'running');
+    const task = hookTaskRegistry.getTask(taskId);
+    expect(task?.status).toBe('completed');
+    // No rewake → no notification.
+    expect(vi.mocked(sendBackgroundNotification)).not.toHaveBeenCalled();
+  });
+
+  it('marks non-zero exits as error tasks', async () => {
+    const result = await executeHook(
+      {
+        type: 'command',
+        command: 'node -e "process.exit(3)"',
+        async: true,
+        asyncRewake: true,
+      },
+      { ...baseInput(), hook_event_name: 'Stop' },
+      { cwd: CWD },
+    );
+    expect(result.ok).toBe(true);
+    const taskId = result.backgroundTaskId!;
+    await waitFor(() => hookTaskRegistry.getTask(taskId)?.status !== 'running');
+    const task = hookTaskRegistry.getTask(taskId);
+    expect(task?.status).toBe('error');
+    expect(task?.exitCode).toBe(3);
+    // Failed tasks still notify when rewake is set (diagnostic content).
+    expect(vi.mocked(sendBackgroundNotification)).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sendBackgroundNotification).mock.calls[0][0];
+    expect(call.xml).toContain('failed');
+  });
+
+  it('spawn failure surfaces as a killed task and fails open', async () => {
+    const result = await executeHook(
+      {
+        type: 'command',
+        command: 'definitely-not-a-real-binary-xyz',
+        async: true,
+        asyncRewake: true,
+      },
+      { ...baseInput(), hook_event_name: 'Stop' },
+      { cwd: CWD },
+    );
+    // With shell:true the shell reports the missing binary as exit 1, so
+    // the task settles as error (fail-open, like bash background tasks).
+    expect(result.ok).toBe(true);
+    expect(result.backgroundTaskId).toBeDefined();
+    const taskId = result.backgroundTaskId!;
+    await waitFor(() => hookTaskRegistry.getTask(taskId)?.status !== 'running');
+    expect(hookTaskRegistry.getTask(taskId)?.status).toBe('error');
+    expect(hookTaskRegistry.getTask(taskId)?.exitCode).toBe(1);
+  });
+});
+
 // ============================================================================
 // command executor
 // ============================================================================
+
+describe('resolveProcessSpawn', () => {
+  it('re-execs a `node` process hook via the host binary with ELECTRON_RUN_AS_NODE', () => {
+    const resolved = resolveProcessSpawn({ command: 'node', args: ['x.mjs'], shell: false });
+    expect(resolved.command).toBe(process.execPath);
+    expect(resolved.env?.ELECTRON_RUN_AS_NODE).toBe('1');
+  });
+
+  it('handles node.exe and case variants', () => {
+    for (const cmd of ['node.exe', 'NODE.EXE', 'C:\\Tools\\node.exe']) {
+      const resolved = resolveProcessSpawn({ command: cmd, args: [], shell: false });
+      expect(resolved.command).toBe(process.execPath);
+      expect(resolved.env?.ELECTRON_RUN_AS_NODE).toBe('1');
+    }
+  });
+
+  it('leaves non-node commands untouched and does not inject the env var', () => {
+    const resolved = resolveProcessSpawn({ command: 'python', args: ['s.py'], shell: false });
+    expect(resolved.command).toBe('python');
+    expect(resolved.env).toBeUndefined();
+  });
+
+  it('never rewrites shell-wrapped commands', () => {
+    const resolved = resolveProcessSpawn({ command: 'node -e \"x()\"', args: [], shell: true });
+    expect(resolved.command).toBe('node -e \"x()\"');
+    expect(resolved.env).toBeUndefined();
+  });
+});
 
 describe('executeHookCommand', () => {
   it('uses additionalContext from JSON stdout on exit 0', async () => {

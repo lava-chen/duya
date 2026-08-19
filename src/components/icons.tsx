@@ -76,6 +76,7 @@ import {
   IconFolder,
   IconFolderOpen,
   IconGitBranch as TablerIconGitBranch,
+  IconWebhook as TablerIconWebhook,
   IconArchive,
   IconEye,
   IconEyeOff,
@@ -290,6 +291,7 @@ export const XCircleIcon = wrapIcon(IconCircleX);
 export const FolderIcon = wrapIcon(IconFolder);
 export const FolderOpenIcon = wrapIcon(IconFolderOpen);
 export const GitBranchIcon = wrapIcon(TablerIconGitBranch);
+export const WebhookIcon = wrapIcon(TablerIconWebhook);
 export const ArchiveIcon = wrapIcon(IconArchive);
 export const EyeIcon = wrapIcon(IconEye);
 export const EyeSlashIcon = wrapIcon(IconEyeOff);

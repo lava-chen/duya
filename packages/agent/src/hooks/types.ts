@@ -552,6 +552,8 @@ export const ProcessCommandHookSchema = z.object({
   statusMessage: z.string().optional().describe('Custom status message while hook runs'),
   if: z.string().optional().describe('Permission rule syntax to filter when hook runs'),
   once: z.boolean().optional().describe('If true, runs once and is removed'),
+  async: z.boolean().optional().describe('If true, runs in background without blocking'),
+  asyncRewake: z.boolean().optional().describe('If true, wakes model when async hook completes'),
 });
 
 /**

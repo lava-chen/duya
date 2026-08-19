@@ -109,6 +109,20 @@ export function spawnAgentServer(): Promise<number> {
         return;
       }
 
+      if (msg.type === 'hook_task:update' && typeof msg.sessionId === 'string') {
+        // Rebroadcast the background hook task snapshot to every renderer.
+        // The renderer's useHookTasks hook filters by activeThreadId.
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('hook_task:update', {
+              sessionId: msg.sessionId,
+              tasks: Array.isArray(msg.tasks) ? msg.tasks : [],
+            });
+          }
+        }
+        return;
+      }
+
       if (msg.type === 'db:request') {
         handleDbRequest(msg).then((response) => {
           if (!child.killed) {

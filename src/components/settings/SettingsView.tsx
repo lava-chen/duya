@@ -11,6 +11,7 @@ import {
   AgentsSection,
   SupportSection,
   MemorySection,
+  HooksSection,
   VoiceSection,
   PerformanceSection,
 } from "@/components/settings";
@@ -39,6 +40,7 @@ export function SettingsView() {
         {settingsTab === "agents" && <AgentsSection />}
         {settingsTab === "support" && <SupportSection />}
         {settingsTab === "memory" && <MemorySection />}
+        {settingsTab === "hooks" && <HooksSection />}
         {settingsTab === "voice" && <VoiceSection />}
         {settingsTab === "performance" && <PerformanceSection />}
       </div>
