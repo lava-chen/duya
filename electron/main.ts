@@ -171,6 +171,25 @@ if (gotTheLock) {
 
     logEnvironmentDiagnostic();
 
+    // ============================================================
+    // Step 0.75: Subagent transcript root unification (~/.duya)
+    // ============================================================
+    // Commit 28c8c8bb moved OutputFileWriter transcripts from the OS
+    // app-data directory to ~/.duya/subagent-transcripts. Copy any legacy
+    // files so the canonical root holds everything while historical
+    // <output-file> notification paths keep resolving. Idempotent; never
+    // blocks startup (a handful of small copies at most).
+    try {
+      const { migrateSubagentTranscripts } = await import('./services/subagent-transcript-migration');
+      migrateSubagentTranscripts();
+    } catch (err) {
+      logger.warn(
+        'Subagent transcript migration failed to load; skipping',
+        { error: err instanceof Error ? err.message : String(err) },
+        'Main',
+      );
+    }
+
     // Project databases are independent from DUYA's application database.
     // Register this handler before boot DB initialization so renderer code can
     // never observe the preload API without its matching main-process route,
