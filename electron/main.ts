@@ -1,10 +1,10 @@
-import { app, BrowserWindow, ipcMain, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
 import { randomUUID } from 'crypto';
 import { platform as getPlatform, tmpdir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryWakeupHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -34,12 +34,7 @@ import { initUpdater, checkForUpdates, downloadUpdate, installUpdate, getUpdater
 import { scanSkillFile, type SkillFinding, type SkillScanResult } from '../packages/agent/src/security/skillScanner.js';
 import { initDocumentParser, getDocumentParser } from './services/document-parser/index';
 import { resolveMemoryModel } from './services/providers/memory-model-resolution';
-import {
-  refreshMemoryRagIndex,
-  resolveScanRoots,
-  defaultRagIndexPath,
-} from './memory/rag_index';
-import { createEmbeddingClient } from './memory/rag_embedding_client';
+import { createRagIndexExecutor, type RagRefreshResult } from './memory/rag_refresh';
 import { toLegacyApiProvider } from '../src/lib/providers/legacy';
 
 // IPC handlers (extracted from main.ts)
@@ -63,6 +58,7 @@ import { registerImportHandlers } from './import/import-handlers';
 import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers';
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
+import { registerHooksHandlers } from './ipc/hooks-handlers';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -159,6 +155,15 @@ function runAfterWindowReady(fn: () => void): void {
 if (gotTheLock) {
   app.whenReady().then(async () => {
     app.name = 'DUYA';
+
+    // Dev-mode renderer disk cache can serve stale module transforms
+    // whose `?v=<optimize hash>` imports 404 after Vite re-optimizes
+    // deps with a different hash (Vite's module ETag is derived from
+    // the source file, not the transformed output). Clear it once at
+    // startup so dev windows always refetch fresh module graphs.
+    if (!app.isPackaged) {
+      session.defaultSession.clearCache().catch(() => {});
+    }
     if (process.platform === 'win32') {
       app.setAppUserModelId('com.duya.app');
     }
@@ -452,51 +457,11 @@ if (gotTheLock) {
           // index after each successful curation run. Enabled via
           // `[memory.rag].enabled`; the embedding client resolves through
           // the provider framework (falling back to keyword-only when the
-          // provider has no embeddings endpoint).
-          let ragRefresh: ((memoryRoot: string) => Promise<void>) | undefined;
+          // provider has no embeddings endpoint). Shared executor built in
+          // `memory/rag_refresh.ts` (also used by CLI / Settings rebuild).
+          let ragRefresh: ((memoryRoot: string) => Promise<RagRefreshResult | undefined>) | undefined;
           try {
-            const ragCfg = getConfigStore().getByPath('memory.rag') as
-              | { enabled?: boolean; index_path?: string; scan_paths?: string[]; embedding_enabled?: boolean; embedding_provider?: string; embedding_model?: string }
-              | undefined;
-            if (ragCfg?.enabled) {
-              const homeDir = os.homedir();
-              const scanPaths = ragCfg.scan_paths ?? [];
-              const dbPath =
-                ragCfg.index_path && ragCfg.index_path.trim() !== ''
-                  ? ragCfg.index_path
-                  : defaultRagIndexPath(homeDir);
-              const embeddingEnabled = ragCfg.embedding_enabled !== false;
-              // Singleton facade — same instance used above for the memory
-              // LLM client.
-              const providerStore = getProviderStore();
-              const embeddingClient = createEmbeddingClient(providerStore, {
-                providerId: ragCfg.embedding_provider || undefined,
-                modelId: ragCfg.embedding_model || undefined,
-              });
-              const memProvider = providerStore.getMemoryLlmProvider();
-              const embeddingLabel = [
-                ragCfg.embedding_provider || memProvider?.id || '',
-                ragCfg.embedding_model || providerStore.getMemoryModel() || '',
-              ]
-                .filter(Boolean)
-                .join('/');
-              ragRefresh = async (root: string): Promise<void> => {
-                const result = await refreshMemoryRagIndex(
-                  resolveScanRoots(root, scanPaths, homeDir),
-                  {
-                    dbPath,
-                    embeddingEnabled,
-                    embeddingClient,
-                    embeddingLabel,
-                  },
-                );
-                logger.info(
-                  'RAG index refreshed',
-                  { documents: result.documents, embedded: result.embedded, scanRoots: result.scanRoots.length },
-                  LogComponent.DB,
-                );
-              };
-            }
+            ragRefresh = createRagIndexExecutor()?.refresh;
           } catch (ragErr) {
             logger.warn(
               'RAG index refresh setup failed; disabled',
@@ -544,10 +509,10 @@ if (gotTheLock) {
               llmClient,
               curation,
             },
-            // Plan 426 Phase 6.1: low-power mode raises the tick floor to
-            // 5s and throttles catalogSync to 5min.
+            // Phase 1 sweep every 5 min; low-power mode raises the tick
+            // floor to 5s and throttles catalogSync to 5min.
             applyLowPowerOverrides(
-              { instancesPerMinute: 60, concurrency: 2 },
+              { extractEveryMs: 5 * 60_000, concurrency: 2 },
               isLowPowerEnabled(),
             ),
           );
@@ -888,8 +853,10 @@ registerBrowserCookieHandlers();
 registerGitHandlers();
 registerMemoryListHandlers();
 registerMemorySystemLogHandlers();
+registerMemoryRagRebuildHandler();
 registerMemoryWakeupHandlers();
 registerVoiceHandlers();
+registerHooksHandlers();
 
 // =============================================================================
 // Graceful Shutdown

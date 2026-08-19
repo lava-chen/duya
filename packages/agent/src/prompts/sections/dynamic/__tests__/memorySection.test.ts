@@ -118,4 +118,41 @@ describe('getMemorySection layout rendering', () => {
 
     expect(section).not.toContain('IGNORE PREVIOUS INSTRUCTIONS');
   });
+
+  it('describes the RAG background hook when [memory.rag] is enabled', () => {
+    fs.writeFileSync(
+      path.join(env.duyaRoot, 'config.toml'),
+      '[memory.rag]\nenabled = true\nindex_path = ""\nscan_paths = []\n',
+      'utf8',
+    );
+
+    const section = getMemorySection(makeCtx('/tmp'));
+
+    expect(section).toContain('RAG memory retrieval (background hook)');
+    expect(section).toContain('UserPromptSubmit');
+    expect(section).toContain('相关记忆');
+    expect(section).not.toContain('self-config');
+  });
+
+  it('notes RAG is off and points to the self-config skill when unconfigured', () => {
+    const section = getMemorySection(makeCtx('/tmp'));
+
+    expect(section).toContain('RAG memory retrieval: not enabled');
+    expect(section).toContain('self-config');
+  });
+
+  it('treats a malformed config.toml as RAG disabled (fail-open)', () => {
+    fs.writeFileSync(path.join(env.duyaRoot, 'config.toml'), '[memory.rag\nenabled = = true', 'utf8');
+
+    const section = getMemorySection(makeCtx('/tmp'));
+
+    expect(section).toContain('RAG memory retrieval: not enabled');
+  });
+
+  it('no longer instructs the model to emit <duya-mem-citation> blocks', () => {
+    const section = getMemorySection(makeCtx('/tmp'));
+
+    expect(section).not.toContain('duya-mem-citation');
+    expect(section).not.toContain('citation_entries');
+  });
 });

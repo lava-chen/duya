@@ -17,6 +17,7 @@ import {
   listSystemLog,
   type ListSystemLogOpts,
 } from '../../packages/agent/src/memory-state/system_log';
+import { rebuildRagIndexNow, type RagRebuildResult } from '../memory/rag_refresh';
 
 const logger = getLogger();
 
@@ -124,6 +125,27 @@ export function registerMemoryListHandlers(): void {
 export interface MemorySystemLogResponse {
   entries: ReturnType<typeof listSystemLog>['entries'];
   total: number;
+}
+
+/**
+ * Register the `memory:rag-rebuild` IPC handler. Idempotent.
+ *
+ * Rebuilds the retrievable memory index on demand (Settings → Memory →
+ * Retrieval → "Rebuild index now"). Same code path as the CLI
+ * `POST /v1/memory/rebuild`; on success one `rag_index_rebuilt_manual`
+ * event lands in the memory system log.
+ */
+export function registerMemoryRagRebuildHandler(): void {
+  ipcMain.removeHandler('memory:rag-rebuild');
+  ipcMain.handle('memory:rag-rebuild', async (): Promise<RagRebuildResult> => {
+    try {
+      return await rebuildRagIndexNow();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn('memory:rag-rebuild failed', { error: message }, LogComponent.DB);
+      return { ok: false, error: message };
+    }
+  });
 }
 
 /**

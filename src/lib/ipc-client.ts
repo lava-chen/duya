@@ -1040,7 +1040,7 @@ export async function listMemoryIPC(): Promise<{ entries: MemoryEntry[]; enabled
  */
 export interface MemorySystemLogEntry {
   ts: number;
-  phase: 'phase1' | 'phase2' | 'system';
+  phase: 'phase1' | 'phase2' | 'phase3' | 'system';
   event_type: string;
   level: 'info' | 'warn' | 'error';
   message: string;
@@ -1052,9 +1052,23 @@ export interface MemorySystemLogEntry {
 
 export interface ListMemorySystemLogIPCArgs {
   limit?: number;
-  phase?: 'phase1' | 'phase2' | 'system';
+  phase?: 'phase1' | 'phase2' | 'phase3' | 'system';
   runId?: string;
   since?: number;
+}
+
+export interface RagRebuildIPCResult {
+  ok: boolean;
+  error?: string;
+  documents?: number;
+  embedded?: number;
+  scanRoots?: string[];
+  durationMs?: number;
+}
+
+/** Trigger an on-demand rebuild of the retrievable memory (RAG) index. */
+export async function ragRebuildMemoryIPC(): Promise<RagRebuildIPCResult> {
+  return window.electronAPI!.memory.ragRebuild()
 }
 
 export async function listMemorySystemLogIPC(
