@@ -7,6 +7,7 @@
 
 import { ipcMain, BrowserWindow } from 'electron';
 import { getAgentProcessPool } from './process-pool/agent-process-pool';
+import { getAgentServerPort } from './agent-server-lifecycle';
 import { toLLMProvider, type ApiProvider } from '../config/provider-types';
 import { getCoreStores } from '../db/core-connection';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -227,18 +228,54 @@ export function registerAgentHandlers(): void {
     };
   });
 
-  // Live mid-run permission-mode switch. Fire-and-forget: forward the new
-  // agent mode to the running worker's agent subprocess, which re-reads it on
-  // every permission decision (built-in and MCP alike).
-  ipcMain.handle('agent:set-permission-mode', (_event, payload: { sessionId: string; mode: string }) => {
+  // Live mid-run permission-mode switch. The composer selector changes the
+  // session row (durable) and calls this IPC so the RUNNING worker picks up
+  // the mode immediately — the next permission decision (built-in and MCP
+  // alike) is made under the new mode, even mid-generation.
+  //
+  // Forwarding target: the Agent Server's HTTP API. Chat runs on the Agent
+  // Server's WorkerManager, NOT on the main-process AgentProcessPool —
+  // previously this handler sent `permission:set` to the pool, which never
+  // had the session's process, so live switches were silently dropped
+  // (isRunning always false) and only took effect on the next chat:start.
+  ipcMain.handle('agent:set-permission-mode', async (_event, payload: { sessionId: string; mode: string }) => {
     const { sessionId, mode } = payload ?? {};
-    if (!sessionId) return false;
-    const pool = getAgentProcessPool();
-    const sent = pool.isRunning(sessionId)
-      ? pool.send(sessionId, { type: 'permission:set', mode })
-      : false;
-    getLogger().info('Live permission mode update', { sessionId, mode, forwarded: sent }, LogComponent.AgentCommunicator);
-    return sent;
+    if (!sessionId || !mode) return false;
+    const port = getAgentServerPort();
+    if (!port) {
+      getLogger().warn(
+        'Live permission mode update skipped: Agent Server not ready',
+        { sessionId, mode },
+        LogComponent.AgentCommunicator,
+      );
+      return false;
+    }
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/sessions/${encodeURIComponent(sessionId)}/permission-mode`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode }),
+        },
+      );
+      getLogger().info(
+        'Live permission mode update',
+        { sessionId, mode, status: response.status },
+        LogComponent.AgentCommunicator,
+      );
+      return response.ok;
+    } catch (err) {
+      // The worker may legitimately be gone (idle reaper) — the session row
+      // was already updated by the renderer, so the next chat:start applies
+      // the mode. Log and degrade instead of failing the UI interaction.
+      getLogger().warn(
+        'Live permission mode update failed (session row fallback applies on next chat:start)',
+        { sessionId, mode, error: err instanceof Error ? err.message : String(err) },
+        LogComponent.AgentCommunicator,
+      );
+      return false;
+    }
   });
 
   // Resolve the soft-default provider, falling back to the first

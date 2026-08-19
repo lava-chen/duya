@@ -22,6 +22,10 @@ PromptsRegistry.register('gateway', gatewayConfig)
 /**
  * Resolve the prompt system name from an agent profile.
  * Defaults to 'general' if no promptSystem is specified.
+ *
+ * Note: built-in sub-agents (explore/plan) and the cron profile do not set
+ * promptSystem and therefore run on the 'general' composition, relying on
+ * their promptProfile.disableSections to suppress irrelevant sections.
  */
 export function resolvePromptSystemName(
   promptSystem?: 'general' | 'code' | 'research' | 'gateway' | string,

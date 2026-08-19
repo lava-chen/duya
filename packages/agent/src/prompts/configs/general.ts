@@ -10,8 +10,10 @@
  * by volatility: global preferences first, then environment state,
  * then task-level constraints.
  *
- * Memory section restored: guides the agent to read auto-generated memory
- * projection files under ~/.duya/memory/ and use the Memory tool for writes.
+ * Memory section: guides the agent to read auto-generated memory
+ * projection files under ~/.duya/memory/ and to request updates via
+ * ad-hoc note files in extensions/ad_hoc/ (no Memory tool in the read
+ * path; updates are consolidated by the background memory worker).
  */
 
 import type { PromptSystemConfig } from '../PromptSystem.js'
@@ -54,7 +56,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'system', compute: getSystemSection },
     { name: 'tasks', compute: getTasksSection },
     { name: 'destructiveActions', compute: getDestructiveActionsSection },
-    { name: 'tools', compute: (ctx) => getToolsSection(ctx, []) },
+    { name: 'tools', compute: getToolsSection },
     {
       name: 'skillUsage',
       compute: (ctx) => ctx.enabledTools.has(TOOL_NAMES.SKILL) ? getSkillUsageSection(ctx) : null,

@@ -6,13 +6,10 @@
  * the previous `toolUsage` section.
  */
 
-import type { PromptContext, ToolPromptContribution } from '../../types.js'
+import type { PromptContext } from '../../types.js'
 import { TOOL_NAMES } from '../../types.js'
 
-export function getToolsSection(
-  ctx: PromptContext,
-  toolContributions: ToolPromptContribution[],
-): string {
+export function getToolsSection(ctx: PromptContext): string {
   const hasTodoTool = ctx.enabledTools.has(TOOL_NAMES.TODO) || ctx.enabledTools.has(TOOL_NAMES.TASK) || ctx.enabledTools.has(TOOL_NAMES.TODO_WRITE)
   const hasEmbeddedSearchTools = ctx.hasEmbeddedSearchTools ?? false
   const isReplModeEnabled = ctx.isReplModeEnabled ?? false
@@ -55,16 +52,6 @@ ${items.map(item => ` - ${item}`).join('\n')}`
     `You can call multiple tools in parallel when they are independent.`,
   ].filter(item => item !== null)
 
-  let toolSpecificGuidance = ''
-  if (toolContributions.length > 0) {
-    const guidanceItems = toolContributions
-      .filter(tc => tc.usageGuidance)
-      .map(tc => `${tc.toolName}: ${tc.usageGuidance}`)
-    if (guidanceItems.length > 0) {
-      toolSpecificGuidance = '\n\n' + guidanceItems.join('\n')
-    }
-  }
-
   const flatItems: string[] = []
   for (const item of items) {
     if (Array.isArray(item)) {
@@ -75,5 +62,5 @@ ${items.map(item => ` - ${item}`).join('\n')}`
   }
 
   return `# Using your tools
-${flatItems.join('\n')}${toolSpecificGuidance}`
+${flatItems.join('\n')}`
 }

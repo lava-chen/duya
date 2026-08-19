@@ -1144,8 +1144,10 @@ export function parseAnthropicEvent(
         const textDelta = typeof delta.text === 'string' ? delta.text : String(delta.text);
 
         // MiniMax Anthropic-compatible endpoint occasionally wraps reasoning
-        // in <thinking>...</thinking> inside text deltas. Split the stream
-        // into thinking/text channels so the UI can render reasoning.
+        // in <thinking>...</thinking> (and MiniMax-M3 in the namespaced
+        // <mm:think>/<minimax:think>/<antml:think> variants) inside text
+        // deltas. Split the stream into thinking/text channels so the UI can
+        // render reasoning.
         if (state.isMiniMax && state.thinkParser) {
           const { thinking, text } = state.thinkParser.feed(textDelta);
           const events: AssistantMessageEvent[] = [];
@@ -1963,8 +1965,8 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         }
       }
 
-      // Flush any remaining <think>/<thinking> tag buffer from MiniMax text
-      // deltas so trailing reasoning or text is not lost.
+      // Flush any remaining think-tag buffer (e.g. <think>/<thinking>/<mm:think>)
+      // from MiniMax text deltas so trailing reasoning or text is not lost.
       if (state.thinkParser) {
         const { thinking, text } = state.thinkParser.flush();
         if (thinking) {

@@ -96,6 +96,7 @@ export interface AgentProfileDbRow {
   disallowed_tools: string | null;
   default_model: string | null;
   prompt_system: string | null;
+  prompt_profile: string | null;
   profile_kind: string | null;
   user_visible: number;
   is_preset: number;
@@ -227,39 +228,33 @@ export const SPECIAL_AGENT_PROFILES: AgentProfile[] = [
     kind: 'special',
     name: 'Gateway',
     description: 'Channel agent for messaging platforms — handles tasks directly and can consult other sessions when useful',
-    // Gateway is a capable channel agent. It allows ['*'] then denies:
-    //   - write tools that require a desktop permission surface
-    //   - interactive/UI/canvas/management tools (no desktop surface)
+    // Gateway is a capable channel agent with full desktop-level tooling
+    // (write/edit, shell, todo, vision, self-management via duya_cli).
+    // It still denies:
+    //   - interactive/UI/canvas tools (no desktop surface in a channel)
     //   - recursive subagent spawning (avoid runaway)
-    // Read-only shell commands are intentionally available so channel tasks
-    // such as locating and sending a local file can complete without making
-    // the user copy data into the gateway workspace first.
+    //   - interactive permission/mode flows that need a desktop UI
     identityPrompt:
       'You are Duya, a capable channel agent running in a messaging platform. ' +
       'Handle the user\'s request directly with the tools available to you. ' +
       'Use other sessions only when their existing context is genuinely relevant.',
     allowedTools: ['*'],
     disallowedTools: [
-      // Write operations need an interactive permission surface that channel
-      // sessions do not have. Bash/PowerShell remain available; their own
-      // security classifier gates commands that require approval.
-      'write', 'edit',
       // Interactive/UI/canvas — no desktop surface in a channel.
       'canvas:*',
       'show_widget',
       'AskUserQuestion',
       // Recursive subagent spawning — avoid runaway in a stateless channel.
       'task',
-      // Self-management — gateway has no desktop settings UI to drive.
-      'duya_cli',
       'memory',
       'read_module',
-      'todo',
       'EnterPlanMode', 'ExitPlanMode', 'SwitchMode',
-      'vision_analyze',
     ],
     promptProfile: {
-      disableSections: ['memory', 'memoryContent', 'sessionGuidance', 'skills', 'generalTaskGuidance', 'rules', 'personality', 'agentsMd', 'projectContinuity'],
+      // Code-profile-only sections (no-ops in the gateway config) stay
+      // disabled; memory/sessionGuidance/skills/tasks are enabled for
+      // full-capability parity with the desktop agent.
+      disableSections: ['memoryContent', 'rules', 'personality', 'agentsMd', 'projectContinuity'],
     },
     promptSystem: 'gateway',
     userVisible: false,

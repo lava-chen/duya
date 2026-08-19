@@ -936,6 +936,55 @@ function handleDeleteChat(
   sendJson(res, 200, { ok: true, interrupted });
 }
 
+// Live permission-mode switch (desktop composer selector → running worker).
+// Forwards `permission:set` to the worker so the running agent re-reads the
+// mode on every permission decision without waiting for the next chat:start.
+// Fire-and-forget semantics: the worker may be idle (no process) — the DB
+// row is the durable fallback for the next chat:start.
+const VALID_AGENT_MODES = ['default', 'auto', 'bypassPermissions'] as const;
+
+function handlePostPermissionMode(
+  sessionId: string,
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  deps: RouterDeps,
+): void {
+  const { workerManager, httpLogger } = deps;
+
+  let body = '';
+  req.on('data', (chunk: Buffer) => {
+    body += chunk.toString();
+  });
+
+  req.on('end', () => {
+    let parsed: { mode?: unknown };
+    try {
+      parsed = body ? JSON.parse(body) : {};
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body' });
+      return;
+    }
+
+    const mode = parsed.mode;
+    if (typeof mode !== 'string' || !(VALID_AGENT_MODES as readonly string[]).includes(mode)) {
+      sendJson(res, 400, {
+        error: `Invalid mode. Must be one of: ${VALID_AGENT_MODES.join(', ')}`,
+      });
+      return;
+    }
+
+    httpLogger.info('Live permission-mode switch requested', { sessionId, mode });
+    const sent = workerManager.sendCommand(sessionId, {
+      type: 'permission:set',
+      // sessionId is required by the agent process to keep per-session state
+      // isolated (same contract as permission:resolve).
+      sessionId,
+      mode,
+    });
+    sendJson(res, sent ? 200 : 404, sent ? { ok: true } : { error: 'Worker not available' });
+  });
+}
+
 function handlePostPermission(
   sessionId: string,
   req: http.IncomingMessage,
@@ -1760,6 +1809,10 @@ function handleSessionsRoute(
     }
     if (pathParts.length === 3 && pathParts[2] === 'permission') {
       handlePostPermission(sessionId, req, res, deps);
+      return;
+    }
+    if (pathParts.length === 3 && pathParts[2] === 'permission-mode') {
+      handlePostPermissionMode(sessionId, req, res, deps);
       return;
     }
   }
