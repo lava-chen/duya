@@ -121,7 +121,7 @@ describe('handleSetAgentSettings — field mapping', () => {
     const { res, capture } = makeRes();
     await handleSetAgentSettings(makeReq({ model: 'claude-x' }), res);
 
-    expect(capture.status, JSON.stringify(capture.body)).toBe(200);
+    expect(capture.status).toBe(200);
     expect(getConfigStore().getByPath('model.default')).toBe('claude-x');
     // The default model must NOT live under the agent block.
     expect((getConfigStore().getByPath('agent') as Record<string, unknown>).model).toBeUndefined();
