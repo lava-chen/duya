@@ -23,7 +23,8 @@
 
 import type { LoopHookDispatchContext, LoopHookRegistration } from './loop.js';
 import { readHooksConfig } from './config.js';
-import { executeHook, executeHookBackground } from './executor.js';
+import { executeHook, executeHookBackground, hookCommandLine } from './executor.js';
+import { hookCircuitBreaker, hookBreakerKey } from './circuit-breaker.js';
 import type { BaseHookInput, HookMatcher, HookCommand, HooksSettings } from './types.js';
 import { logger } from '../utils/logger.js';
 
@@ -91,7 +92,21 @@ function buildRegistration(
           // turn they belong to may already be gone).
           if (hook.type === 'command' || hook.type === 'process') {
             if (hook.async === true) {
-              const launched = executeHookBackground(hook, input, { cwd });
+              // Same circuit breaker as the dispatcher: a broken async hook
+              // stops being re-launched every turn after repeated failures.
+              const key = hookBreakerKey(
+                input.session_id ?? '',
+                input.hook_event_name,
+                hookCommandLine(hook),
+              );
+              const open = hookCircuitBreaker.describe(key);
+              if (open !== null) {
+                logger.warn(
+                  `[ConfigHook] ${event} hook suppressed (circuit breaker open — ${open}): ${hookCommandLine(hook)}`,
+                );
+                continue;
+              }
+              const launched = executeHookBackground(hook, input, { cwd }, key);
               if (launched.ok) continue;
               logger.warn(
                 `[ConfigHook] ${event} background hook failed to launch (skipped): ${launched.error}`,
