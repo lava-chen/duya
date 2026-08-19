@@ -1,6 +1,8 @@
 # DUYA 架构文档
 
-> 更新时间：2026-05-11（修正技术栈：移除不存在的 Zero Router，更新安全扫描器描述、BashClassifier 为 stub 实现、Gateway 组件名称）
+> 更新时间：2026-08-19（提示词系统章节重写：PromptSystem 声明式配置 + 四套 config + profile 段门控；Gateway 工具权限放开与完整提示词）
+>
+> 历史更新：2026-05-11（修正技术栈：移除不存在的 Zero Router，更新安全扫描器描述、BashClassifier 为 stub 实现、Gateway 组件名称）
 >
 > 历史更新：2026-04-24（新增安全扫描系统与提示词系统工程文档）
 >
@@ -148,12 +150,19 @@ DUYA 采用 **Multi-Agent Process** 模式，每个 Agent 运行在独立的 **C
   Agent Server request's top-level `workingDirectory` and
   `defaultWorkspaceDirectory`; placing it only under `options` does not
   initialize the worker cwd.
-- The Gateway profile can use read/search plus Bash/PowerShell. Read-only shell
-  commands execute directly, while the shell security classifier retains
-  confirmation requirements for risky commands.
-- Desktop-only, recursive-agent, and mode-switching tools are excluded from
-  the Gateway profile. The incomplete file-backed Team/Swarm tools were
-  removed in Plan 242 rather than maintained as permanently blocked entries.
+- The Gateway profile allows the full tool surface — write/edit, Bash/
+  PowerShell, todo, duya_cli self-management, vision, browser, skill,
+  send_artifact — and only denies desktop-only interactive tools
+  (canvas:* / show_widget / AskUserQuestion / read_module), recursive
+  subagent spawning (`task`), and plan-mode switching
+  (EnterPlanMode/ExitPlanMode/SwitchMode). The shell security classifier
+  retains confirmation requirements for risky commands.
+- The Gateway system prompt is the full general composition (memory,
+  skills, MCP, environment, session guidance, vision) plus the
+  gateway-unique intro / gatewayRole / toneAndStyle sections;
+  `duyaDesktopContext` is excluded (it self-describes as inapplicable to
+  IM channels). AGENTS.md is loaded via the same preBuildHook as the
+  desktop agents.
 - Channel media delivery accepts accessible absolute paths through
   `MEDIA:<absolute-path>`; a file does not need to be copied into the Gateway
   workspace first.
@@ -594,58 +603,62 @@ BashClassifier 在 DUYA 中未启用，命令分类由 SkillScanner 的 `executi
 
 ### 提示词系统
 
-DUYA 采用模块化的提示词工程架构，支持动态组装和缓存优化。
+DUYA 采用**声明式配置驱动**的提示词组装：一个 `PromptSystem` 类 + 四份 `PromptSystemConfig`
+（general / code / research / gateway），由 `PromptsRegistry` 按 agent profile 解析。
 
 #### 架构概览
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Prompt System Architecture                   │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
-│  │  PromptManager  │  │  Section Cache  │  │   Sections      │ │
-│  │                 │  │                 │  │                 │ │
-│  │ - Orchestration │  │ - Static cache  │  │ - intro.ts      │ │
-│  │ - Mode control  │  │ - Volatile sect │  │ - system.ts     │ │
-│  │ - Context build │  │ - Boundary      │  │ - taskHandling  │ │
-│  │                 │  │   marker        │  │ - actions.ts    │ │
-│  └────────┬────────┘  └─────────────────┘  │ - toolUsage.ts  │ │
-│           │                                │ - toneAndStyle  │ │
-│           ▼                                │ - outputEff...  │ │
-│  ┌─────────────────┐                       │ - dynamic/*     │ │
-│  │  SystemPrompt   │                       └─────────────────┘ │
-│  │  (string[])     │                                          │
-│  └─────────────────┘                                          │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                  Prompt System Architecture                   │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  ┌───────────────┐   ┌────────────────┐   ┌───────────────┐  │
+│  │  AgentProfile │   │ PromptsRegistry │   │  PromptSystem │  │
+│  │ .promptSystem │──▶│ (name→config)  │──▶│ (单一具体类)  │  │
+│  └───────────────┘   └────────────────┘   └───────┬───────┘  │
+│  ┌─────────────────┐         ┌────────────────────┘          │
+│  │ .promptProfile  │         │  staticSections（缓存）       │
+│  │ enable/disable  │────────▶│  dynamicSections（每轮重算）  │
+│  │ 段级门控        │         │  preBuildHook / contextExtender│
+│  └─────────────────┘         └────────────┬────────────────┘  │
+│                                            ▼                  │
+│                    ┌──────────────────────────────────┐       │
+│                    │ [Static] + BOUNDARY + [Dynamic]  │       │
+│                    └──────────────────────────────────┘       │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 #### 核心组件
 
 | 组件 | 文件 | 职责 |
 |------|------|------|
-| **PromptManager** | `packages/agent/src/prompts/PromptManager.ts` | 提示词组装、缓存管理、模式控制 |
-| **Section Types** | `packages/agent/src/prompts/types.ts` | 类型定义、常量、PromptMode |
-| **Section Helpers** | `packages/agent/src/prompts/constants/promptSections.ts` | cached/volatile section 工厂函数 |
-| **Intro Section** | `packages/agent/src/prompts/sections/intro.ts` | Agent身份介绍 |
-| **System Section** | `packages/agent/src/prompts/sections/system.ts` | 核心系统指令 |
-| **TaskHandling** | `packages/agent/src/prompts/sections/taskHandling.ts` | 任务处理指导 |
-| **Actions Section** | `packages/agent/src/prompts/sections/actions.ts` | 谨慎行动准则 |
-| **ToolUsage Section** | `packages/agent/src/prompts/sections/toolUsage.ts` | 工具使用指导 |
-| **Dynamic Sections** | `packages/agent/src/prompts/sections/dynamic/*.ts` | 动态内容（环境、平台、语言等）|
+| **PromptSystem** | `packages/agent/src/prompts/PromptSystem.ts` | 单一具体类：static 缓存 + dynamic 每轮重算 + profile 段门控 + hooks |
+| **PromptSystemConfig** | `packages/agent/src/prompts/configs/{general,code,research,gateway}.ts` | 四套声明式配置：静态段 / 动态段 / preBuildHook / contextExtender |
+| **PromptsRegistry** | `packages/agent/src/prompts/registry.ts` | 注册表 + `resolvePromptSystemName`（profile 未指定时默认 general） |
+| **Profile 段门控** | `packages/agent/src/prompts/modes/index.ts` | `isSectionEnabled`：按 profile 的 enableSections/disableSections 过滤段落 |
+| **General 段** | `packages/agent/src/prompts/general/sections/*.ts` | identity/communication/finalAnswer/system/tasks/destructiveActions/tools/skillUsage/project 等 |
+| **Code 段** | `packages/agent/src/prompts/code/sections/*.ts` | code 自有 identity/system/personality/workingWithTheUser/rules |
+| **Gateway 段** | `packages/agent/src/prompts/gateway/sections/*.ts` | intro（渠道身份）/ gatewayRole / toneAndStyle（渠道独有） |
+| **Research 段** | `packages/agent/src/prompts/research/sections/*.ts` | research 状态机相关段落 |
+| **Dynamic 段** | `packages/agent/src/prompts/sections/dynamic/*.ts` | language/outputStyle/platform/environment/mcp/skills/scratchpad/memory/sessionSearch/recentSessions/sessionGuidance/vision 等（每轮重算） |
+| **Mode modifiers** | `packages/agent/src/prompts/modes/` | plan-task/research/conductor/goal 叠加：工具注入 + prompt 前缀/后缀 + ToolUseContext |
+
+#### 四套配置的组成
+
+| | general | code | research | gateway |
+|---|---|---|---|---|
+| 身份/行为段 | identity + communication + finalAnswer | code 自有 identity/system + workingWithTheUser | research 自有 | **intro（渠道身份）+ gatewayRole + toneAndStyle** |
+| 静态段 | 10 | 8 | research 自有 | 11（general 主体 + gateway 3 独有） |
+| 动态段 | 13 | 12 | research 自有 | 13（与 general 一致） |
+| duyaDesktopContext | ✅ | ✅ | — | ❌（段落自述不适用于 IM 渠道） |
+| AGENTS.md（preBuildHook） | ✅ initializeAgentsMd | ✅ | — | ✅ initializeAgentsMd |
 
 #### Section 类型
 
-**Static Sections（可缓存）**：
-- 内容在会话期间不变
-- 使用 `cachedPromptSection()` 创建
-- 例如：intro, system, taskHandling, actions
+**Static Sections（可缓存）**：内容在会话内不变，例如 intro、system、tasks、destructiveActions、tools。
 
-**Volatile Sections（动态）**：
-- 每轮重新计算
-- 使用 `volatilePromptSection()` 创建
-- 例如：environment, platform, language, mcpInstructions
+**Dynamic Sections（每轮重算）**：`buildSystemPrompt` 每次 `streamChat` 调用一次，例如 language、environment、memory、mcp、skills、sessionGuidance。
 
 **缓存边界标记**：
 
@@ -655,6 +668,10 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY_
 // 提示词结构：
 // [Static Sections] + BOUNDARY + [Dynamic Sections]
 ```
+
+#### AGENTS.md 注入（Plan 408 Phase 5）
+
+AGENTS.md 以 `<system-reminder>` 包裹拼入 **system 字段**（`AgentsMdManager.buildAgentsMdSection()`），落在 system-prefix 缓存断点上；`preBuildHook`（initializeAgentsMd）在构建前刷新快照，`omitClaudeMd` 子代理跳过。详见下文 Plan 408 章节。
 
 #### Project-grounded harness invariants (Plan 226)
 
@@ -1262,6 +1279,20 @@ Phase 3 改动要点:`DuyaAgent.streamChat` 维护 streamChat-local `discoveredT
 
 27 个单测覆盖 Phase 1/2/3 全链路([packages/agent/tests/unit/ToolSearchTool.test.ts](./packages/agent/tests/unit/ToolSearchTool.test.ts) 17 条 + [packages/agent/tests/unit/tool-search-discovery.test.ts](./packages/agent/tests/unit/tool-search-discovery.test.ts) 10 条),全绿。
 
+## 图像生成（plan image-gen）
+
+`image_generate` 是一个**可发现但不默认暴露**的媒体生成工具（`exposeMode: 'discoverable'`），Agent 通过 `tool_search` 按需发现，配置在 `~/.duya/config.toml` 的 `[image_generation]` 段：
+
+| 项 | 说明 |
+| --- | --- |
+| `packages/agent/src/tool/ImageGenerateTool/image-generation-config.ts` | `[image_generation]` 配置读取：`enabled` / `provider` (`openai` \| `fal`) / `model` / `base_url` / `api_key` / `size` / `quality` / `output_dir` / `timeout_ms`，env 覆盖（`DUYA_IMAGE_*`、`IMAGE_GENERATION_API_KEY` / `OPENAI_API_KEY` / `FAL_KEY`），带进程级缓存 |
+| `packages/agent/src/tool/ImageGenerateTool/provider.ts` | 双后端适配：OpenAI Images API（gpt-image-1/2、dall-e-3，支持参考图编辑）与 fal.ai（Flux 系，`fal-ai/` 前缀自动补全）；错误分类（401/429/超时/网络）映射为可操作提示；结果落盘到 `output_dir`（默认 `~/.duya/media/generated`） |
+| `packages/agent/src/tool/ImageGenerateTool/ImageGenerateTool.ts` | 工具类（`image_generate`），携带 `getPrompt()` 使用指南；注册于 `createBuiltinRegistry`（discoverable + `inputSchemaSummary`） |
+| `packages/agent/src/cli/imageCmds.ts` + `packages/agent/src/cli/index.ts` | `duya image "<prompt>"` 子命令（`--provider/--model/--size/--quality/--output/--output-name/--json`）与 `duya image:config`（查看生效配置，不打印密钥） |
+| `packages/agent/src/cli/slash-commands.ts` | REPL `/image <prompt>` 指令（cliOnly） |
+
+工具默认关闭（`enabled = false`）；配置 `enabled = true` + API key 后，Agent 搜到即可调用。29+6 个单测覆盖配置解析、双 provider 请求/落盘/错误映射、discoverable 生命周期（默认不可见 → `tool_search` 发现后注入）与 CLI 行为。
+
 ## 工具协议适配层 + Deferred Tools (Plan 418)
 
 `tool_search`(Plan 241) 解决**应用层**的按需工具发现;Plan 418 解决**传输层**的协议兼容——不同 Anthropic 兼容端点的 content 块 schema 不同,直接按 Anthropic 标准发送 `tool_use`/`tool_result` 块会被拒绝(例:DeepSeek `/anthropic` 端点只接受 `text | tool_reference | image | document`)。详见 [docs/exec-plans/active/418-tool-protocol-adaptation.md](./docs/exec-plans/active/418-tool-protocol-adaptation.md)。
@@ -1535,6 +1566,36 @@ leaving `for await ... streamChat` blocked until `withHardDeadline` fired
   queryEligibleInputs → claimRun → git backup → single-shot → dispositions →
   completeRun/failRun. `failRun` leaves inputs NULL (re-eligible).
 
+**Stage 1 policy adaptive loop (Plan 433, 2026-08-18): incremental edits**
+
+The stage1_policy adaptive loop moved from full-file rewrites to surgical,
+id-anchored edits. Root cause of the old flow: the curator was told to emit
+`op="update"` with the FULL new policy text, and `assembleUserPrompt` never
+included the current policy — so every update regenerated the whole policy
+from scratch, shaped only by the latest session (observed: 22 full rewrites
+in 5 days, `+964/-917`, session details baked into the global policy).
+
+- `packages/agent/src/memory-rollout/stage1_policy_editor.ts` — canonical
+  anchored policy format: fixed sections `### S1..S9:` (eight dimensions +
+  general rules, titles immutable) with `- [r:<id>]` rule bullets. Provides
+  `parsePolicy`/`serializePolicy`/`migrateLegacyPolicy` (format-only legacy
+  conversion with hash-stable ids)/`normalizePolicy`/`readPolicyForPrompt`/
+  `applyPolicyEdits` (upsert_rule/remove_rule by section+rule id, ≤3 edits
+  per run, ≤500 chars/rule, ≤8 KiB total, unknown ids recorded non-fatal,
+  version bump only on real content change).
+- `curation_response_parser.ts` — `stage1_policy` response contract is now
+  `{op: "edit"|"no_change", edits: [{op, section, rule_id, text?, reason}]}`;
+  the old full-content `update` shape is removed.
+- `curation_single_shot.ts` — the current policy (anchored, with version) is
+  included in the curator user prompt as `current_stage1_policy`; the
+  self-improvement section mandates surgical edits, an evidence gate
+  (missing dimension must recur in ≥2 rollouts), and content discipline
+  (capture-when-X phrasing, no session facts, no inference licenses). A
+  hard min-interval guard (default 30 min) between policy writes stops
+  rapid-fire churn; `policyErrors` surfaces rejected edits non-fatally.
+- Live policy migrated to the anchored format once (v22 → v23); legacy
+  files auto-migrate in-memory on read and on-disk on first write.
+
 **Retired (Plan 417):**
 
 - `curation_agent_runner.ts` — streaming agent runner (deleted)
@@ -1552,6 +1613,53 @@ leaving `for await ... streamChat` blocked until `withHardDeadline` fired
 
 - Stage 1 `queryExistingKeys` (`packages/agent/src/memory-rollout/extractor.ts`) — reads `canonical_key` from active files
 - Settings `memory:list` (`electron/ipc/memory-handlers.ts`) — reads entries from active files
+
+### Memory RAG index (Plan 430)
+
+After each successful curation cycle the worker rebuilds a retrievable index
+over the memory files so user prompts can retrieve relevant memories:
+
+- **Scan roots**: the memory root always scans first; `[memory.rag].scan_paths`
+  appends arbitrary user directories (`~` expanded, deduped). Under the memory
+  root only generated projections are excluded (`MEMORY.md`, `summary.md`,
+  `**/index.md`, `stage1_policy.md`, `rollout_summaries/`, `memory-config/`,
+  `.git`, `*.tmp`); `extensions/ad_hoc/**` is indexed. Other roots exclude only
+  `.git` / `.tmp` / `node_modules`.
+- **Index**: `electron/memory/rag_index.ts` writes `~/.duya/rag/memory-rag.db`
+  (`documents` PK `(root, rel_path)` + `documents_fts` FTS5 trigram + `meta`).
+  Embeddings are stored per document (batch 32); any embedding failure degrades
+  to keyword-only (`meta.embedding_enabled`).
+- **Embedding provider**: `electron/memory/rag_embedding_client.ts` resolves the
+  client through the provider framework — explicit `[memory.rag]`
+  `embedding_provider`/`embedding_model`, else the memory provider/model. No
+  credentials or endpoints are stored under `[memory.rag]`. Anthropic has no
+  embeddings API → keyword-only. `AIClient` gained an optional `embed()` in
+  `packages/ai` (OpenAI `/embeddings`, Ollama `/api/embed`; retry wrapper and
+  lazy proxy forward it).
+- **Refresh hook**: `RunCurationCycleOpts.ragRefresh` is invoked at the end of
+  every successful run (after Phase 3 summary synthesis), failure only logs
+  `rag_index_refresh_failed` to the system log.
+- **Retrieval hook**: `scripts/memory-rag-hook.mjs` (registered by adding a
+  hook.json path under `[hooks] files` in `~/.duya/config.toml`, firing on
+  `UserPromptSubmit`) reads the index + provider config, does cosine
+  top-5 (vector) merged with FTS5 OR keyword hits, and emits
+  `{"additionalContext": "### 相关记忆 …"}`. The agent injects
+  UserPromptSubmit hook contexts into the first model turn via
+  `buildPromptContextMessage` (`packages/agent/src/agent/DuyaAgent.ts`),
+  same runtime-context channel as loop-hook nudges.
+- **Self-service CLI + skill (plan 431)**: `duya memory doctor / setup /
+  status / enable / disable / set` evaluates the machine (CPU / RAM tier /
+  disk free / low-power, `electron/cli/handlers/memory.ts`), recommends an
+  embedding provider/model through the provider framework, and writes
+  `[memory.rag]` via `getConfigStore().set('memory.rag', …)`. The built-in
+  `.system/memory-setup` skill teaches the agent to drive this flow
+  (`packages/agent/skills/.system/memory-setup/SKILL.md`).
+- **Settings UI (plan 432)**: the Memory settings panel
+  (`src/components/settings/MemorySection.tsx`) hosts a `MemoryRagCard`
+  (`src/components/settings/MemoryRagCard.tsx`) that edits `[memory.rag]`
+  through the config MessagePort (`memoryRag` flat key) — enabled toggle,
+  scan-path add/remove rows, index path, embedding provider/model, and the
+  vector-embeddings toggle.
 
 ## 相关文档
 

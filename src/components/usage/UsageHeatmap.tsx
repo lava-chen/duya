@@ -5,6 +5,7 @@ import { formatNumber } from '@/hooks/useUsageData';
 interface DailyContribution {
   date: string;
   value: number;
+  sessions?: number;
 }
 
 interface UsageHeatmapProps {
@@ -12,24 +13,21 @@ interface UsageHeatmapProps {
   data: DailyContribution[];
 }
 
-const WEEKS = 53;
+const WEEKS = 20;
 const DAYS_IN_WEEK = 7;
+const CELL_SIZE = 18;
+const CELL_GAP = 3;
 
 export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
   const { t } = useTranslation();
+  const [hoveredCell, setHoveredCell] = useState<string | null>(null);
   const [tooltip, setTooltip] = useState<{
     x: number;
     y: number;
     date: string;
     value: number;
+    sessions?: number;
   } | null>(null);
-
-  const DAY_LABELS = [
-    t('common.mon'),
-    t('common.wed'),
-    t('common.fri'),
-  ];
-  const MONTH_LABELS = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
 
   // Map date -> value for O(1) lookups.
   const valueByDate = useMemo(() => {
@@ -46,7 +44,7 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
   // Build a GitHub-style grid: columns are weeks (most recent on the right),
   // rows are days of the week starting Sunday. `totalDays` sized so the
   // rightmost column ends on today.
-  const { weeks, monthPositions } = useMemo(() => {
+  const { weeks } = useMemo(() => {
     const today = new Date();
     const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const start = new Date(end);
@@ -66,29 +64,31 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
       cursor.setDate(cursor.getDate() + 1);
     }
 
-    // Month labels at the first week (column) containing the 1st of each month.
-    const positions: { month: string; week: number; label: string }[] = [];
-    const seen = new Set<number>();
-    for (const cell of cells) {
-      const m = cell.date.getMonth();
-      if (cell.date.getDate() === 1 && !seen.has(m)) {
-        seen.add(m);
-        positions.push({ month: String(m + 1), week: cell.week, label: MONTH_LABELS[m] });
-      }
-    }
-
-    return { weeks: cells, monthPositions: positions };
+    return { weeks: cells };
   }, []);
 
   const gridCells = useMemo(() => weeks.map((cell) => ({ ...cell, value: 0 })), [weeks]);
+
+  // Map date -> sessions for O(1) lookups.
+  const sessionsByDate = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const d of data) {
+      if (d.sessions !== undefined) map.set(d.date, d.sessions);
+    }
+    return map;
+  }, [data]);
 
   // Fill values into grid cells.
   const filledGrid = useMemo(() => {
     return gridCells.map((cell) => {
       const key = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
-      return { ...cell, value: valueByDate.get(key) ?? 0 };
+      return {
+        ...cell,
+        value: valueByDate.get(key) ?? 0,
+        sessions: sessionsByDate.get(key),
+      };
     });
-  }, [gridCells, valueByDate]);
+  }, [gridCells, valueByDate, sessionsByDate]);
 
   // Group cells by week (column), each column holds 7 day rows (0..6).
   const columns = useMemo(() => {
@@ -112,22 +112,25 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
   );
 
   const handleCellHover = useCallback(
-    (cell: { date: Date; value: number; day: number; week: number }, event: React.MouseEvent) => {
-      const key = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
+    (cell: { date: Date; value: number; day: number; week: number; sessions?: number }, event: React.MouseEvent) => {
+      const key = `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}`;
+      setHoveredCell(key);
+      const dateStr = `${cell.date.getFullYear()}-${String(cell.date.getMonth() + 1).padStart(2, '0')}-${String(cell.date.getDate()).padStart(2, '0')}`;
       setTooltip({
         x: event.clientX,
         y: event.clientY,
-        date: key,
+        date: dateStr,
         value: cell.value,
+        sessions: cell.sessions,
       });
     },
     [],
   );
 
-  const handleCellLeave = useCallback(() => setTooltip(null), []);
-
-  // x pixel offset for each month label (weeks are the column index).
-  const monthOffset = (week: number) => week * (13 + 2) + 4;
+  const handleCellLeave = useCallback(() => {
+    setHoveredCell(null);
+    setTooltip(null);
+  }, []);
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-[var(--bg-canvas)] p-4">
@@ -141,62 +144,35 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
           {t('usage.noActivityData')}
         </div>
       ) : (
-        <div className="overflow-x-auto">
-          <div style={{ display: 'flex', gap: 4 }}>
-            {/* Weekday labels column */}
-            <div className="flex flex-col" style={{ width: 26, gap: 2, marginRight: 4 }}>
-              <div style={{ height: 16 }} />
-              {[1, 3, 5].map((dayRow) => (
-                <div
-                  key={dayRow}
-                  className="text-[9px] text-[var(--muted)] leading-none flex items-center"
-                  style={{ height: 13, paddingTop: dayRow === 1 ? 0 : 0 }}
-                >
-                  {dayRow === 1 ? DAY_LABELS[0] : dayRow === 3 ? DAY_LABELS[1] : DAY_LABELS[2]}
+        <div>
+          {/* Grid - no axis labels, no scroll */}
+          <div className="flex">
+            <div className="flex gap-[3px]">
+              {columns.map((col, colIdx) => (
+                <div key={colIdx} className="flex flex-col gap-[3px]">
+                  {Array.from({ length: DAYS_IN_WEEK }, (_, r) => {
+                    const cell = col.find((c) => c.day === r);
+                    if (!cell) return <div key={r} style={{ width: CELL_SIZE, height: CELL_SIZE }} />;
+                    return (
+                      <div
+                        key={r}
+                        className="rounded-[3px] cursor-pointer"
+                        style={{
+                          width: CELL_SIZE,
+                          height: CELL_SIZE,
+                          backgroundColor: getColor(cell.value),
+                          border: cell.value <= 0 ? '1px solid var(--border)' : 'none',
+                          outline: hoveredCell === `${cell.date.getFullYear()}-${cell.date.getMonth()}-${cell.date.getDate()}` ? '2px solid var(--accent)' : 'none',
+                          outlineOffset: '-1px',
+                        }}
+                        onMouseEnter={(e) => handleCellHover(cell, e)}
+                        onMouseMove={(e) => handleCellHover(cell, e)}
+                        onMouseLeave={handleCellLeave}
+                      />
+                    );
+                  })}
                 </div>
               ))}
-            </div>
-
-            {/* Grid */}
-            <div className="flex flex-col gap-[3px]">
-              {/* Month labels */}
-              <div className="flex relative" style={{ height: 16 }}>
-                {monthPositions.map((mp) => (
-                  <span
-                    key={mp.month}
-                    className="text-[9px] text-[var(--muted)] absolute"
-                    style={{ left: monthOffset(mp.week) }}
-                  >
-                    {mp.label}
-                  </span>
-                ))}
-              </div>
-              {/* Day cells */}
-              <div className="flex gap-[3px]">
-                {columns.map((col, colIdx) => (
-                  <div key={colIdx} className="flex flex-col gap-[3px]">
-                    {Array.from({ length: DAYS_IN_WEEK }, (_, r) => {
-                      const cell = col.find((c) => c.day === r);
-                      if (!cell) return <div key={r} style={{ width: 13, height: 13 }} />;
-                      return (
-                        <div
-                          key={r}
-                          className="rounded-[3px] cursor-pointer transition-all duration-150 hover:scale-125 hover:z-10 hover:ring-1 hover:ring-[var(--border)]"
-                          style={{
-                            width: 13,
-                            height: 13,
-                            backgroundColor: getColor(cell.value),
-                            border: cell.value <= 0 ? '1px solid var(--border)' : 'none',
-                          }}
-                          onMouseEnter={(e) => handleCellHover(cell, e)}
-                          onMouseMove={(e) => handleCellHover(cell, e)}
-                          onMouseLeave={handleCellLeave}
-                        />
-                      );
-                    })}
-                  </div>
-                ))}
-              </div>
             </div>
           </div>
 
@@ -207,8 +183,10 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
               {[0, 0.25, 0.5, 0.75, 1].map((level) => (
                 <div
                   key={level}
-                  className="w-[13px] h-[13px] rounded-[3px]"
+                  className="rounded-[3px]"
                   style={{
+                    width: CELL_SIZE,
+                    height: CELL_SIZE,
                     backgroundColor:
                       level === 0
                         ? 'var(--surface)'
@@ -225,15 +203,20 @@ export const UsageHeatmap: React.FC<UsageHeatmapProps> = ({ data }) => {
 
       {tooltip && (
         <div
-          className="fixed z-[100] pointer-events-none bg-[var(--main-bg)] border border-[var(--border)] rounded-lg shadow-lg p-2 text-xs"
+          className="fixed z-[100] pointer-events-none bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg px-3 py-2 text-xs"
           style={{
-            left: tooltip.x > window.innerWidth - 160 ? tooltip.x - 130 : tooltip.x + 10,
+            left: tooltip.x > window.innerWidth - 180 ? tooltip.x - 160 : tooltip.x + 12,
             top: tooltip.y - 10,
           }}
         >
-          <div className="font-semibold text-[var(--text)]">{tooltip.date}</div>
+          <div className="font-medium text-[var(--text)]">
+            {tooltip.date}
+          </div>
           <div className="text-[var(--muted)]">
             {formatNumber(tooltip.value)} {t('usage.tokens')}
+            {tooltip.sessions !== undefined && tooltip.sessions > 0 && (
+              <> · {tooltip.sessions} {t('usage.sessionsShort')}</>
+            )}
           </div>
         </div>
       )}

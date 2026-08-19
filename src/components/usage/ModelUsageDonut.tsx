@@ -92,7 +92,7 @@ export const ModelUsageDonut: React.FC<ModelUsageDonutProps> = ({ modelUsage, to
         </div>
 
         {/* Legend list */}
-        <div className="flex-1 w-full min-w-0 space-y-1.5">
+        <div className="flex-1 w-full min-w-0 space-y-1.5 overflow-hidden">
           {list.slice(0, 6).map((entry) => {
             const color = MODEL_PALETTE[entry.colorIndex % MODEL_PALETTE.length];
             const isActive = hovered === null || hovered === entry.colorIndex;
@@ -105,17 +105,17 @@ export const ModelUsageDonut: React.FC<ModelUsageDonutProps> = ({ modelUsage, to
                 onMouseLeave={() => setHovered(null)}
               >
                 <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--muted)]" title={entry.model}>
-                  {entry.model}
-                </span>
-                <span className="text-[12px] font-medium text-[var(--text)] shrink-0">
+                <span className="text-[11px] font-medium text-[var(--text)] shrink-0 w-9 text-right tabular-nums">
                   {(entry.percentage * 100).toFixed(1)}%
                 </span>
-                <span className="text-[11px] text-[var(--muted)] w-14 text-right shrink-0">
+                <span className="text-[11px] text-[var(--muted)] shrink-0 w-11 text-right tabular-nums">
                   {formatNumber(entry.tokens)}
                 </span>
-                <span className="text-[11px] text-[var(--muted)] w-12 text-right shrink-0 hidden sm:inline">
+                <span className="text-[11px] text-[var(--muted)] shrink-0 w-9 text-right tabular-nums hidden sm:inline">
                   {formatCurrency(entry.cost)}
+                </span>
+                <span className="flex-1 min-w-0 truncate text-[12px] text-[var(--muted)]" title={entry.model}>
+                  {entry.model}
                 </span>
               </div>
             );

@@ -117,6 +117,7 @@ export class AutomationScheduler {
       providerId: provider.id,
       workingDirectory: prepareAutomationWorkspace(job.workingDirectory),
       cronId: job.id,
+      prompt: job.prompt,
     });
 
     void this.executeCron(job, true, { runId, sessionId }).catch((error) => {

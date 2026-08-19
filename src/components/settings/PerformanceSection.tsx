@@ -29,7 +29,6 @@ export function PerformanceSection() {
       <SettingsSection
         title={t("settings.performance.title")}
         description={t("settings.performance.description")}
-        icon={<LightningIcon size={18} />}
       >
         <SettingsCard>
           <SettingsRow

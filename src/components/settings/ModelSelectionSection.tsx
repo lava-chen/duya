@@ -302,7 +302,6 @@ export function ModelSelectionSection() {
       <SettingsSection
         title={t(tKey('settings.modelSelection')) || 'Model Selection'}
         description={t(tKey('settings.modelSelectionDesc')) || 'Configure models for different tasks'}
-        icon={<CpuIcon size={20} />}
       >
         <SettingsCard>
           <div className="space-y-6 py-4">
