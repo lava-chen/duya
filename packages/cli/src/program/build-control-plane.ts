@@ -146,6 +146,7 @@ export function buildControlPlane(program: Command): void {
             configUser: typeof opts.user === 'string' ? opts.user : undefined,
             configStyleId: typeof opts.styleId === 'string' ? opts.styleId : undefined,
             configInclude: typeof opts.include === 'string' ? opts.include : undefined,
+            configClear: opts.clear === true,
             configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
             configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
             configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,

@@ -109,6 +109,7 @@ export interface CliInvocation {
   configUser?: string;
   configStyleId?: string;
   configInclude?: string;
+  configClear?: boolean;
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];
@@ -217,6 +218,7 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
         configUser: inv.configUser,
         configStyleId: inv.configStyleId,
         configInclude: inv.configInclude,
+        configClear: inv.configClear,
         configArgs: inv.configArgs,
         configEnv: inv.configEnv,
         configAgents: inv.configAgents,
