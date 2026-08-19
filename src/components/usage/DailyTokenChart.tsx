@@ -17,6 +17,9 @@ const SEGMENT_COLORS = {
   cacheWrite: 'var(--warning)',
 };
 
+// Filter out entries with obviously wrong dates (before 2020)
+const MIN_VALID_YEAR = 2020;
+
 export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, modelUsage }) => {
   const { t } = useTranslation();
   const [mode, setMode] = useState<ChartMode>('tokens');
@@ -28,7 +31,10 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
     entry: DailyUsageEntry;
   } | null>(null);
 
-  const days = dailyData ?? [];
+  const days = (dailyData ?? []).filter((d) => {
+    const year = parseInt(d.date.slice(0, 4), 10);
+    return !isNaN(year) && year >= MIN_VALID_YEAR;
+  });
   const models = modelUsage ?? [];
 
   const SEGMENT_LABELS = {
@@ -62,34 +68,20 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
     }));
   }, [days, mode]);
 
-  // Use sqrt scaling to make small values more visible
-  const { maxTotalValue, maxSegmentValue, getScaledHeight } = useMemo(() => {
+  // Linear scaling
+  const { maxTotalValue, getScaledHeight } = useMemo(() => {
     if (chartData.length === 0) {
-      return { maxTotalValue: 1, maxSegmentValue: 1, getScaledHeight: (v: number) => v };
+      return { maxTotalValue: 1, getScaledHeight: (_v: number) => 0 };
     }
 
     const totalValues = chartData.map((d) => d.totalValue);
-    const allSegments = chartData.flatMap((d) => [
-      d.segments.input,
-      d.segments.output,
-      d.segments.cacheRead,
-      d.segments.cacheWrite,
-    ]);
-
     const maxTotal = Math.max(...totalValues, 1);
-    const maxSegment = Math.max(...allSegments, 1);
-    const sqrtMaxTotal = Math.sqrt(maxTotal);
-    const sqrtMaxSegment = Math.sqrt(maxSegment);
 
     return {
       maxTotalValue: maxTotal,
-      maxSegmentValue: maxSegment,
-      getScaledHeight: (value: number, isSegment = false) => {
+      getScaledHeight: (value: number) => {
         if (value <= 0) return 0;
-        // Use sqrt scaling: small values become more visible
-        const sqrtMax = isSegment ? sqrtMaxSegment : sqrtMaxTotal;
-        const scaled = (Math.sqrt(value) / sqrtMax) * 100;
-        return Math.max(scaled, 4); // Minimum 4% height for non-zero values
+        return (value / maxTotal) * 100;
       },
     };
   }, [chartData]);
@@ -192,14 +184,13 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
         </div>
       ) : (
         <>
-          <div className="flex items-end gap-1 h-48 px-2">
+          <div className="flex items-end gap-[2px] h-48 px-2">
             {chartData.map((entry, index) => {
               const barHeight = getScaledHeight(entry.totalValue);
               const isHovered = hoveredIndex === index;
 
               const benchProps = {
-                className: `flex flex-col justify-end group cursor-pointer h-full ${chartData.length <= 30 ? 'flex-1' : 'flex-shrink-0'}`,
-                style: { width: chartData.length <= 30 ? undefined : '12px', maxWidth: '40px' },
+                className: 'flex flex-col justify-end group cursor-pointer h-full flex-1',
                 onMouseEnter: (e: React.MouseEvent) => handleBarHover(index, e),
                 onMouseMove: (e: React.MouseEvent) => handleBarHover(index, e),
                 onMouseLeave: handleBarLeave,
@@ -209,12 +200,12 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
                 return (
                   <div key={entry.date} {...benchProps}>
                     <div
-                      className="w-full rounded-t transition-all duration-200"
+                      className="w-full rounded-t-sm transition-all duration-150"
                       style={{
                         height: `${barHeight}%`,
                         backgroundColor: 'var(--accent)',
-                        opacity: isHovered ? 1 : 0.7,
-                        minHeight: entry.totalValue > 0 ? '4px' : '0',
+                        opacity: isHovered ? 1 : 0.75,
+                        minHeight: entry.totalValue > 0 ? '2px' : '0',
                       }}
                     />
                   </div>
@@ -227,11 +218,11 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
                   .slice(0, 8);
                 return (
                   <div key={entry.date} {...benchProps}>
-                    <div className="w-full flex flex-col-reverse rounded-t overflow-hidden" style={{ height: `${barHeight}%` }}>
+                    <div className="w-full flex flex-col-reverse rounded-t-sm overflow-hidden" style={{ height: `${barHeight}%` }}>
                       {modelSegs.map(([model, value]) => (
                         <div
                           key={model}
-                          className="w-full transition-all duration-200"
+                          className="w-full transition-all duration-150"
                           style={{
                             height: `${entry.totalValue > 0 ? (value / entry.totalValue) * 100 : 0}%`,
                             backgroundColor: modelColorMap.get(model) ?? 'var(--muted)',
@@ -248,18 +239,18 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
                 );
               }
 
-              // Stacked breakdown - scale segments relative to max segment value
+              // Stacked breakdown
               const segmentKeys = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
               return (
                 <div key={entry.date} {...benchProps}>
-                  <div className="w-full flex flex-col-reverse rounded-t overflow-hidden" style={{ height: `${getScaledHeight(entry.totalValue)}%` }}>
+                  <div className="w-full flex flex-col-reverse rounded-t-sm overflow-hidden" style={{ height: `${barHeight}%` }}>
                     {segmentKeys.map((key) => {
                       const segmentValue = entry.segments[key];
                       const segmentRatio = entry.totalValue > 0 ? segmentValue / entry.totalValue : 0;
                       return (
                         <div
                           key={key}
-                          className="w-full transition-all duration-200"
+                          className="w-full transition-all duration-150"
                           style={{
                             height: `${segmentRatio * 100}%`,
                             backgroundColor: SEGMENT_COLORS[key],
@@ -273,15 +264,6 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
                 </div>
               );
             })}
-          </div>
-
-          <div className="flex justify-between mt-2 px-2">
-            <span className="text-[10px] text-[var(--muted)]">
-              {chartData[0]?.date}
-            </span>
-            <span className="text-[10px] text-[var(--muted)]">
-              {chartData[chartData.length - 1]?.date}
-            </span>
           </div>
 
           {stackMode === 'breakdown' && (
@@ -318,14 +300,14 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
 
       {tooltip && (
         <div
-          className="fixed z-50 pointer-events-none bg-[var(--main-bg)] border border-[var(--border)] rounded-lg shadow-lg p-3 text-xs"
+          className="fixed z-50 pointer-events-none bg-[var(--surface)] border border-[var(--border)] rounded-lg shadow-lg px-3 py-2 text-xs"
           style={{
-            left: tooltip.x + 10,
+            left: tooltip.x > window.innerWidth - 200 ? tooltip.x - 180 : tooltip.x + 12,
             top: tooltip.y - 10,
           }}
         >
-          <div className="font-semibold text-[var(--text)] mb-1">{tooltip.entry.date}</div>
-          <div className="text-[var(--muted)]">
+          <div className="font-medium text-[var(--text)] mb-1">{tooltip.entry.date}</div>
+          <div className="text-[var(--muted)] space-y-0.5">
             {stackMode === 'model' ? (
               <>
                 <div>{t('usage.totalBtn')}: {formatNumber(tooltip.entry.tokens)}</div>
@@ -347,19 +329,19 @@ export const DailyTokenChart: React.FC<DailyTokenChartProps> = ({ dailyData, mod
                 <div>{t('usage.totalBtn')}: {formatNumber(tooltip.entry.tokens)}</div>
                 <div>{t('usage.inputTokens')}: {formatNumber(tooltip.entry.input)}</div>
                 <div>{t('usage.outputTokens')}: {formatNumber(tooltip.entry.output)}</div>
-                <div>{t('usage.cacheRead')}: {formatNumber(tooltip.entry.cacheRead)}</div>
-                <div>{t('usage.cacheWrite')}: {formatNumber(tooltip.entry.cacheWrite)}</div>
+                {tooltip.entry.cacheRead > 0 && <div>{t('usage.cacheRead')}: {formatNumber(tooltip.entry.cacheRead)}</div>}
+                {tooltip.entry.cacheWrite > 0 && <div>{t('usage.cacheWrite')}: {formatNumber(tooltip.entry.cacheWrite)}</div>}
               </>
             ) : (
               <>
                 <div>{t('usage.totalBtn')}: {formatCurrency(tooltip.entry.cost)}</div>
                 <div>{t('usage.inputTokens')}: {formatCurrency(tooltip.entry.inputCost)}</div>
                 <div>{t('usage.outputTokens')}: {formatCurrency(tooltip.entry.outputCost)}</div>
-                <div>{t('usage.cacheRead')}: {formatCurrency(tooltip.entry.cacheReadCost)}</div>
-                <div>{t('usage.cacheWrite')}: {formatCurrency(tooltip.entry.cacheWriteCost)}</div>
+                {tooltip.entry.cacheReadCost > 0 && <div>{t('usage.cacheRead')}: {formatCurrency(tooltip.entry.cacheReadCost)}</div>}
+                {tooltip.entry.cacheWriteCost > 0 && <div>{t('usage.cacheWrite')}: {formatCurrency(tooltip.entry.cacheWriteCost)}</div>}
               </>
             )}
-            <div className="mt-1 pt-1 border-t border-[var(--border)]">
+            <div className="mt-1 pt-1 border-t border-[var(--border)] text-[var(--muted)]">
               {tooltip.entry.messageCount} {t('usage.messagesShort')} · {tooltip.entry.sessionCount} {t('usage.sessionsShort')}
             </div>
           </div>

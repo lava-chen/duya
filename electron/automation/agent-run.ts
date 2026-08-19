@@ -18,6 +18,7 @@ import * as http from 'node:http';
 import { BrowserWindow } from 'electron';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getCoreStores } from '../db/core-connection';
+import { ipcMessageToNewEvent } from '../ipc/core-db-adapters';
 import { getLogger, LogComponent } from '../logging/logger';
 import { toLLMProvider } from '../config/provider-types.js';
 import { resolveCronProvider } from './provider';
@@ -54,6 +55,12 @@ export interface RunPromptResult {
  * POST when the session row is missing (router 404), so this MUST run first.
  * Idempotent: reuses an existing row for the same session id (runCronNow may
  * create it eagerly so the UI can open the run view immediately).
+ *
+ * Also pre-inserts the cron prompt as a durable user message (deterministic
+ * id → idempotent across the eager runCronNow create + runCronInSession
+ * reuse). The worker's same-content duplicate check at turn start reuses this
+ * row instead of inserting a second copy at turn end, so opening the run view
+ * shows the task immediately and the transcript stays clean.
  */
 export function createCronSessionRow(params: {
   sessionId: string;
@@ -62,31 +69,56 @@ export function createCronSessionRow(params: {
   providerId: string;
   workingDirectory: string;
   cronId: string;
+  prompt: string;
 }): void {
-  const { sessions } = getCoreStores();
-  if (sessions.get(params.sessionId)) return;
-  sessions.create({
-    id: params.sessionId,
-    title: params.title,
-    model: params.model,
-    providerId: params.providerId,
-    workingDirectory: params.workingDirectory,
-    status: 'active',
-    mode: 'chat',
-    permissionMode: 'default',
-    extensions: {
-      source: 'cron',
-      cron_job_id: params.cronId,
-      system_prompt: '',
-      context_summary: '',
-      context_summary_updated_at: 0,
-    },
-  });
+  const { sessions, messageLog } = getCoreStores();
+  const created = !sessions.get(params.sessionId);
+  if (created) {
+    sessions.create({
+      id: params.sessionId,
+      title: params.title,
+      model: params.model,
+      providerId: params.providerId,
+      workingDirectory: params.workingDirectory,
+      status: 'active',
+      mode: 'chat',
+      // Cron runs are headless: there is no user to answer an ask-mode
+      // permission prompt, so 'default' would auto-deny every out-of-
+      // workspace edit after the 5-minute prompt timeout (observed:
+      // "Permission denied by user" on edit + eventual "cron run timeout").
+      // 'auto' trusts the workspace and routes workspace escapes through the
+      // LLM classifier, which can approve legitimate scheduled work. Same
+      // model the gateway sessions use (GATEWAY_PERMISSION_PROFILE).
+      permissionMode: 'auto',
+      extensions: {
+        source: 'cron',
+        cron_job_id: params.cronId,
+        system_prompt: '',
+        context_summary: '',
+        context_summary_updated_at: 0,
+      },
+    });
+  }
+  if (params.prompt.trim().length > 0) {
+    messageLog.appendBatch([
+      ipcMessageToNewEvent(
+        params.sessionId,
+        {
+          id: `cron-prompt:${params.sessionId}`,
+          role: 'user',
+          content: params.prompt,
+          msg_type: 'text',
+          timestamp: Date.now(),
+        },
+        null,
+      ),
+    ]);
+  }
   // A cron run is created by the main process, outside any renderer action,
   // so the normal `sync:threads-changed` path (renderer → main → other
   // windows) never fires for it. Broadcast to every window so the session
   // list and sidebar cron group pick up the new run without a manual refresh.
-  broadcastThreadsChanged(params.sessionId);
+  if (created) broadcastThreadsChanged(params.sessionId);
 }
 
 /**
@@ -241,6 +273,7 @@ export async function runCronInSession(job: AutomationCron, sessionId: string): 
     providerId: provider.id,
     workingDirectory,
     cronId: job.id,
+    prompt: job.prompt,
   });
 
   getLogger().info('Cron run starting', {

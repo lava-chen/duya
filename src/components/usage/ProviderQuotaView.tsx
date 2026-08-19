@@ -197,7 +197,7 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
             {t("usage.backToUsage")}
           </Button>
           <div>
-            <h2 className="text-xl font-bold text-[var(--text)] font-[family-name:--font-copernicus]">
+            <h2 className="text-[1.15rem] font-bold tracking-tight text-[var(--text)] font-[family-name:--font-copernicus]">
               {t("usage.providerQuotaTitle")}
             </h2>
             <p className="text-sm text-[var(--muted)]">{t("usage.providerQuotaSubtitle")}</p>

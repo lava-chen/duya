@@ -375,7 +375,6 @@ export function VoiceSection() {
       <SettingsSection
         title="语音输入"
         description="配置语音转文字（STT）输入：本地 Whisper 或云端 OpenAI 兼容接口。"
-        icon={<MicrophoneIcon size={18} />}
       >
         <SettingsCard>
           <SettingsToggle

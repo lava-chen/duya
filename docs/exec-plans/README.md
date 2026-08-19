@@ -138,6 +138,10 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [44-skills-sync-fix](./active/44-skills-sync-fix.md) | Skills sync fix | P0 | In Progress |
 | [25-skills-completion-plan](./active/25-skills-completion-plan.md) | Official Skill completion plan (hermes-agent 等) | P1 | 进行中 |
 | [414-skills-system-cleanup-and-system-skills](./active/414-skills-system-cleanup-and-system-skills.md) | Skills 体系清理 + 系统级内置 skills（.system 机制，Codex 式） | P1 | ✅ 代码完成，测试通过 |
+| [430-memory-rag-hook](./active/430-memory-rag-hook.md) | Memory RAG — curation 后多扫描路径向量+关键词索引（[memory.rag] 配置，embedding 复用 provider 框架）+ UserPromptSubmit hook 检索注入首轮对话 | P0 | ✅ 代码完成，测试通过（2026-08-18） |
+| [431-memory-setup-cli-and-skill](./active/431-memory-setup-cli-and-skill.md) | Memory 自配置 — `duya memory doctor/setup/status/enable/disable/set`（机器评估+embedding 推荐+[memory.rag] 写入）+ 内置 `.system/memory-setup` skill | P0 | ✅ 代码完成，测试通过（2026-08-18） |
+| [432-memory-rag-settings-ui](./active/432-memory-rag-settings-ui.md) | 前端记忆设置界面加 RAG 配置卡片（enabled 开关 / scan_paths 增删行 / index_path / embedding provider+model / embedding_enabled） | P0 | ✅ 代码完成，测试通过（2026-08-18） |
+| [433-stage1-policy-incremental-edits](./active/433-stage1-policy-incremental-edits.md) | Stage 1 政策改为增量编辑：锚定格式（S1–S9 + [r:id] 规则）+ curator 可见当前政策 + edits[] 协议（upsert/remove_rule）+ 证据门控 + 30min 间隔，杜绝整文件重写 | P0 | In progress |
 | [416-inline-task-row](./active/416-inline-task-row.md) | 任务胶囊从输入框外移到输入框内部顶部，弹窗样式对齐 settings 弹窗 | P1 | 🟡 Planning |
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |

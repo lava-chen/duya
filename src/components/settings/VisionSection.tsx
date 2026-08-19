@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect } from "react";
 import {
-  EyeIcon,
   CheckCircleIcon,
   XCircleIcon,
   SpinnerGapIcon,
@@ -106,7 +105,6 @@ export function VisionSection() {
           t(tKey('settings.visionDesc')) ||
           'Configure a separate vision model for image understanding and multimodal tasks.'
         }
-        icon={<EyeIcon size={20} />}
       >
         <SettingsCard>
           <SettingsToggle
