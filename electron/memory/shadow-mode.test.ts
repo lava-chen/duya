@@ -365,7 +365,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
 
   it('1. fresh DB, empty eligible set — tick returns 0', async () => {
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 2,
       reconcileOnStart: false,
       idleMs: 1,
@@ -381,7 +381,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'I prefer tabs over spaces.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -407,7 +407,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Hello world.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -434,7 +434,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Original message.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -473,7 +473,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Casual chat.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -499,7 +499,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Test message.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -534,7 +534,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     expect(acquireResult.status).toBe('acquired');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -588,7 +588,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
       );
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
       idleMs: 1,
@@ -619,7 +619,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
       .get() as { n: number };
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -640,7 +640,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'Test message.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,
@@ -663,7 +663,7 @@ describe('shadow-mode e2e (Plan 305 Phase D)', () => {
     insertMessage(fixture.mainDb, rolloutId, 'user', 'I prefer tabs over spaces.');
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
       idleMs: 1,

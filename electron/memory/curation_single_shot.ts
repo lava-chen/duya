@@ -38,7 +38,10 @@ import type { AIClient } from '@duya/ai';
 import { parseCurationResponse, CurationParseError } from './curation_response_parser';
 import { applyCurationActions, resolveAreaPath, type ApplyResult } from './curation_file_writer';
 import type { CurationResponse } from './curation_response_parser';
-import { writePolicy } from '../../packages/agent/src/memory-rollout/stage1_prompt_loader';
+import {
+  applyPolicyEdits,
+  readPolicyForPrompt,
+} from '../../packages/agent/src/memory-rollout/stage1_policy_editor';
 
 /**
  * Input shape — matches the rows `CurationInput[]` returned by
@@ -72,11 +75,18 @@ export interface SingleShotCurationOpts {
   /** Override the default curator system prompt (test hook). */
   systemPrompt?: string;
   /**
-   * Path to `stage1_policy.md`. When provided and the LLM emits a
-   * `stage1_policy.update` suggestion, the policy file is rewritten
-   * (atomic write + version bump) so Stage 1 extraction adapts.
+   * Path to `stage1_policy.md`. When provided and the LLM emits
+   * `stage1_policy.edits`, the edits are applied deterministically
+   * (surgical rule upserts/removals, anchored by section + rule id) so
+   * Stage 1 extraction adapts without full-file rewrites.
    */
   policyPath?: string;
+  /**
+   * Minimum interval between policy writes (ms). 0 disables. Default 30
+   * minutes — stops the observed rapid-fire rewrite churn (5 writes in
+   * 105 minutes) while still allowing several legitimate updates a day.
+   */
+  policyMinIntervalMs?: number;
 }
 
 export interface RunResult {
@@ -94,13 +104,20 @@ export interface RunResult {
   errors: ApplyResult['errors'];
   /** Top-level error if the LLM call / parse itself failed. */
   error?: string;
-  /** True when the LLM's stage1_policy.update was written to disk. */
+  /** True when the LLM's stage1_policy edits were written to disk. */
   policyUpdated?: boolean;
   /** New stage1_policy version after a successful write (0 if untouched). */
   policyVersion?: number;
+  /**
+   * Non-fatal policy edit rejections (unknown section/rule id, size cap,
+   * rate-limit skip). The run itself still succeeded.
+   */
+  policyErrors?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 4 * 60_000;
+/** Default minimum interval between policy writes (ms). */
+const DEFAULT_POLICY_MIN_INTERVAL_MS = 30 * 60_000;
 
 const CURATOR_SYSTEM_PROMPT = `\
 You are the Memory Curator agent for the DUYA desktop client.
@@ -307,7 +324,7 @@ still emit the decision.
 - Output ONE JSON object. No prose before or after. No markdown
   code-fence unless the host wraps it for you.
 
-# Self-improvement: teach Stage 1 to watch missing dimensions
+# Self-improvement: keep Stage 1 sharp — edit the policy as extraction constraints
 
 You are not just a sink for the current batch — you are the curator of
 what future batches will even SEE. Stage 1 is the FIRST filter: it turns
@@ -318,36 +335,65 @@ never absorb it — so keeping Stage 1 sharp is part of your job.
 Stage 1 works from a hard contract (12 claim types, immutable) plus an
 editable policy file. The policy is the ONLY lever you have on Stage 1.
 
-Emit a "stage1_policy" update when a dimension from the eight above is
-RECURRING in user behavior but consistently absent from the rollouts you
-see. Concrete signals it is time to update:
-- The same kind of signal appears in rollout after rollout but never as
-  an extracted item (e.g. user keeps discussing their plans, but no
-  summary ever contains goal/commitment items).
-- A stable fact you know exists (project path, toolchain, workflow) was
-  missing from every summary of a session where it clearly appeared.
-- You keep having to infer something from scattered prose that Stage 1
-  could have captured directly.
+The CURRENT policy is included in your input as \`current_stage1_policy\`
+(anchored sections S1..S9, each rule carrying a stable \`[r:<id>]\` id).
+Sections and ids are FIXED — you edit rules inside them, never the
+skeleton. Your edits are applied deterministically: one run changes at
+most 3 rules, and every other byte of the policy stays exactly as it is.
 
-When you update:
-  - op="update" with the FULL new policy text (markdown, <=8 KiB). Stage 1
-    appends it after its immutable hard contract; do NOT repeat the hard
-    contract. Structure the policy as a dimension checklist: which
-    dimensions to watch (reuse the eight names), how to recognize each,
-    which claim types to prefer, example signals, and any extraction
-    rules specific to this user (e.g. "always capture project paths
-    verbatim", "record the user's news sources").
-  - reason: <=500 chars, which dimension was missing and how this change
-    fixes future rollouts.
-  - Otherwise emit op="no_change" (or omit the field).
+Think of the policy as a set of extraction CONSTRAINTS, not a checklist:
+each rule tells Stage 1 "in which situation, capture what, to what depth".
+Two kinds of rules you maintain:
 
-Do NOT update the policy for one-off observations — only for recurring
-patterns that repeated rollouts keep missing. A policy update is a
-commitment to watch a dimension permanently; do not churn it.
+1. GENERIC CONSTRAINTS (sections S1, S3..S8, S9) — boundary and quality
+   rules that apply to every rollout: paths kept verbatim, only explicitly
+   stated preferences recorded, absolute dates, and so on. Phrase them as
+   "when X appears, capture Y with Z detail", never as bare trigger lists.
 
-Before updating, check the panorama you were given: if the dimension is
+2. FOCUS-DOMAIN RULES (section S2, rule ids [r:focus-<slug>]) — the
+   positive-feedback loop. When the rollouts show the user investing in a
+   NEW domain across sessions (a new creative idea, a new academic focus,
+   a new project line), add ONE rule per domain so Stage 1 deep-captures
+   it:
+   "用户当前关注「<domain>」：凡涉及该领域，捕捉用户的观察与想法、进展与里程碑、新要求或偏好、提到的论文/工具/人。"
+   Keep the domain name in the rule id (r:focus-<slug>). Update the rule
+   when the domain's scope or emphasis evolves; remove it when the domain
+   stops appearing for many cycles. Each domain gets at most one rule.
+
+Evidence gate (hard) — for BOTH rule kinds:
+- The pattern (a missing dimension, or a new domain) must appear in >=2
+  rollouts of this batch, or be a repeat across cycles. A one-off
+  observation gets absorbed as an action, NOT a policy edit.
+- A single-session topic is NOT a domain. Let a new focus prove itself
+  over two or three cycles before adding its rule.
+- A policy edit is a commitment; do not churn it.
+
+How to edit (surgical protocol):
+- \`upsert_rule\`: ONE rule at a time. Reuse an existing rule_id to fix or
+  sharpen its wording; invent a new id only for a genuinely new rule
+  (including [r:focus-<slug>] domain rules). \`text\` is the full bullet
+  WITHOUT the \`[r:<id>]\` prefix, <=500 chars.
+- \`remove_rule\`: delete a rule that has become wrong, noisy, obsolete
+  (domain faded out), or that licenses bad inference.
+- NEVER emit the full policy. NEVER rename sections, reorder rules, or
+  restructure the file. At most 3 edits per run.
+
+Content discipline (what a rule may say):
+- Rules state what to CAPTURE and to what depth — never an inference
+  license: "interpret any question as a goal" or "record observed style
+  as preference even without correction".
+- Session facts do NOT belong in the policy: specific project paths,
+  single failures, one-off workflows, topic snapshots ("user asked about
+  PDF->xlsx this week"). Those belong in global/areas|preferences actions
+  as claims. The one exception is a focus-domain rule: it names the domain
+  (a durable topic) plus the capture points, never a single session's
+  details.
+- Keep rules phrased as durable extraction guidance, not as claims about
+  the user.
+
+Before editing, check the panorama you were given: if the dimension is
 already well-covered in existing memory, the problem may be Stage 1
-missing it (update the policy) — but if it is genuinely new territory,
+missing it (edit the policy) — but if it is genuinely new territory,
 start by absorbing what you have and let the pattern prove itself over
 two or three more cycles.
 
@@ -366,9 +412,14 @@ two or three more cycles.
     }
   ],
   "stage1_policy": {
-    "op": "update|no_change",
-    "content": "<=8192 chars, full new Stage 1 policy markdown (op=update only)",
-    "reason": "<=500 chars, why the extraction focus changed (op=update only)"
+    "op": "edit|no_change",
+    "edits": [
+      { "op": "upsert_rule|remove_rule", "section": "S1..S9",
+        "rule_id": "<existing-or-new kebab id, e.g. focus-<domain> for S2 domain rules>",
+        "text": "<=500 chars, constraint text without [r:id] (upsert_rule only)",
+        "reason": "<=200 chars, why this rule changes" }
+    ],
+    "reason": "<=500 chars, why the extraction constraints changed (op=edit only)"
   },
   "new_categories": [
     {
@@ -380,17 +431,23 @@ two or three more cycles.
 
 /**
  * Assemble the user prompt: list of input rollouts + existing area
- * content. Rollout bodies come from `input.summaryMarkdown` (read
- * from `stage1_outputs` by the caller) — the DB is the source of
- * truth; the `rollout_summaries/` files are D11-named projections and
- * must not be resolved by `inputKey` here.
+ * content + current Stage 1 policy. Rollout bodies come from
+ * `input.summaryMarkdown` (read from `stage1_outputs` by the caller) —
+ * the DB is the source of truth; the `rollout_summaries/` files are
+ * D11-named projections and must not be resolved by `inputKey` here.
  *
  * The existing area map is keyed by `rollout_slug` so the curator only
  * sees areas that the current batch actually targets.
+ *
+ * `current_stage1_policy` is the anchored-normalized policy with its
+ * version. Without this baseline the curator had to regenerate the whole
+ * policy from scratch on every update (Plan 433 root cause B) — with it,
+ * the curator emits surgical edits against known section/rule ids.
  */
 async function assembleUserPrompt(
   memoryRoot: string,
   inputs: ReadonlyArray<CurationInputForPrompt>,
+  policyPath?: string,
 ): Promise<string> {
   const rolloutBlock = await Promise.all(
     inputs.map(async (input) => {
@@ -475,6 +532,13 @@ async function assembleUserPrompt(
   // Most recently updated first, so the curator sees the freshest focus.
   panorama.sort((a, b) => b.updated.localeCompare(a.updated));
 
+  // Current Stage 1 policy (anchored form + version). Null when no
+  // policyPath is configured or the file does not exist yet.
+  let currentPolicy: { version: number; content: string } | null = null;
+  if (policyPath) {
+    currentPolicy = await readPolicyForPrompt(policyPath);
+  }
+
   const payload = {
     inputs: rolloutBlock,
     existing_areas: existingAreas,
@@ -483,6 +547,7 @@ async function assembleUserPrompt(
       note: 'Every canonical file you may update. "updated" is the date the file was last written. If a dimension from your checklist has no entry here, that dimension is blank in memory.',
       files: panorama,
     },
+    current_stage1_policy: currentPolicy,
   };
   return JSON.stringify(payload, null, 2);
 }
@@ -536,9 +601,10 @@ export async function runSingleShotCuration(
   let topLevelError: string | undefined;
   let policyUpdated: boolean | undefined;
   let policyVersion: number | undefined;
+  let policyErrors: string[] = [];
 
   try {
-    const userPrompt = await assembleUserPrompt(opts.memoryRoot, opts.inputs);
+    const userPrompt = await assembleUserPrompt(opts.memoryRoot, opts.inputs, opts.policyPath);
     const messages: Parameters<AIClient['chat']>[0] = [
       { role: 'user', content: userPrompt },
     ];
@@ -595,40 +661,65 @@ export async function runSingleShotCuration(
         }
       }
 
-      // Adaptive loop: if the curator asked Stage 1 to watch a missing
-      // dimension, write the new policy (atomic + version bump). The
-      // extractor reloads it on mtime change, so the very next extraction
-      // uses the richer focus.
+      // Adaptive loop: if the curator proposed surgical policy edits
+      // (Plan 433 — incremental, anchored by section + rule id, at most
+      // 3 per run), apply them deterministically. The extractor reloads
+      // the policy on mtime change, so the next extraction uses the
+      // richer focus. A policy edit changes ONE rule, never the file.
       //
-      // Guard: when EVERY input in this batch has an empty body, the
+      // Guard 1: when EVERY input in this batch has an empty body, the
       // curator saw no real content and its policy "diagnosis" is a
       // hallucination (historically: it blamed Stage 1 for files it
-      // could not read and churned the policy every run). Skip the
-      // write in that case.
+      // could not read and churned the policy every run). Skip.
+      //
+      // Guard 2: minimum interval between policy writes (default 30
+      // minutes) — stops the rapid-fire rewrite churn observed in
+      // 2026-08-12..17 (5 writes in 105 minutes).
       const suggestion = response.stage1_policy;
       const hasAnyBody = opts.inputs.some(
         (i) => (i.summaryMarkdown ?? '').trim().length > 0,
       );
-      if (suggestion?.op === 'update' && !hasAnyBody) {
+      if (suggestion?.op === 'edit' && !hasAnyBody) {
         console.warn(
-          '[memory] stage1_policy update skipped: all inputs in this batch have empty summaries',
+          '[memory] stage1_policy edit skipped: all inputs in this batch have empty summaries',
         );
-      } else if (suggestion?.op === 'update' && opts.policyPath && suggestion.content) {
-        try {
-          const res = await writePolicy(opts.policyPath, suggestion.content);
-          policyUpdated = res.changed;
-          policyVersion = res.version;
-          if (res.changed) {
+      } else if (suggestion?.op === 'edit' && opts.policyPath && suggestion.edits) {
+        const minIntervalMs = opts.policyMinIntervalMs ?? DEFAULT_POLICY_MIN_INTERVAL_MS;
+        if (minIntervalMs > 0) {
+          try {
+            const stat = await fs.stat(opts.policyPath);
+            const ageMs = Date.now() - stat.mtimeMs;
+            if (ageMs < minIntervalMs) {
+              policyErrors.push(
+                `rate-limited: last policy write ${Math.round(ageMs / 1000)}s ago (< ${Math.round(minIntervalMs / 1000)}s)`,
+              );
+              console.warn(`[memory] stage1_policy edit skipped: ${policyErrors[policyErrors.length - 1]}`);
+            }
+          } catch {
+            // File missing — first write is always allowed.
+          }
+        }
+        if (policyErrors.length === 0) {
+          try {
+            const res = await applyPolicyEdits(opts.policyPath, suggestion.edits);
+            policyUpdated = res.changed;
+            policyVersion = res.version;
+            policyErrors = res.errors;
+            if (res.changed) {
+              console.warn(
+                `[memory] stage1_policy updated to v${res.version} (${res.hash.slice(0, 8)})`,
+              );
+            }
+            for (const errMsg of res.errors) {
+              console.warn(`[memory] stage1_policy edit rejected: ${errMsg}`);
+            }
+          } catch (err) {
+            // Policy write failure is non-fatal — the run still succeeded.
             console.warn(
-              `[memory] stage1_policy updated to v${res.version} (${res.hash.slice(0, 8)})`,
+              '[memory] stage1_policy write failed',
+              err instanceof Error ? err.message : String(err),
             );
           }
-        } catch (err) {
-          // Policy write failure is non-fatal — the run still succeeded.
-          console.warn(
-            '[memory] stage1_policy write failed',
-            err instanceof Error ? err.message : String(err),
-          );
         }
       }
     }
@@ -652,5 +743,6 @@ export async function runSingleShotCuration(
     ...(topLevelError !== undefined ? { error: topLevelError } : {}),
     ...(policyUpdated !== undefined ? { policyUpdated } : {}),
     ...(policyVersion !== undefined ? { policyVersion } : {}),
+    ...(policyErrors.length > 0 ? { policyErrors } : {}),
   };
 }

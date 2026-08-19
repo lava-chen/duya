@@ -86,6 +86,19 @@ function makeLlm(): AIClient {
   return { chat: vi.fn() } as unknown as AIClient;
 }
 
+/** Daily system-log JSONL path for today (writeSystemLog uses Date.now()). */
+function todayLogPath(logRoot: string): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return path.join(
+    logRoot,
+    'memory-system-log',
+    String(d.getFullYear()),
+    pad(d.getMonth() + 1),
+    `${pad(d.getDate())}.jsonl`,
+  );
+}
+
 describe('runCurationCycle', () => {
   let env: OrchEnv;
   let db: Database;
@@ -261,5 +274,87 @@ describe('runCurationCycle', () => {
         { inputKind: 'rollout', inputKey: 'r3', contentHash: 'h3', disposition: 'absorbed' },
       ],
     }));
+  });
+
+  it('6. ragRefresh success — writes rag_index_refreshed to the system log', async () => {
+    const prevLogRoot = process.env.DUYA_MEMORY_LOG_ROOT;
+    const logRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-log-'));
+    process.env.DUYA_MEMORY_LOG_ROOT = logRoot;
+    try {
+      const inputs = [rollout('r1', 1), rollout('r2', 2), rollout('r3', 3)];
+      mocks.queryEligibleInputs.mockReturnValue(inputs);
+      mocks.claimRun.mockReturnValue({ runId: 'run-6', lockToken: 'tok-6' });
+      mocks.runSingleShotCuration.mockResolvedValue(successReply());
+      const ragRefresh = vi.fn().mockResolvedValue({
+        documents: 12,
+        embedded: 9,
+        scanRoots: [env.memoryRoot],
+        durationMs: 42,
+      });
+
+      const result = await runCurationCycle(db, {
+        memoryRoot: env.memoryRoot,
+        configRoot: env.configRoot,
+        providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
+        workerId: 'w1',
+        sessionId: 'session-1',
+        llmClient: llm,
+        ragRefresh,
+        now: T0,
+      });
+
+      expect(result.success).toBe(true);
+      expect(ragRefresh).toHaveBeenCalledWith(env.memoryRoot);
+      const log = fs.readFileSync(todayLogPath(logRoot), 'utf8');
+      const events = log.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      const refreshed = events.find((e) => e.event_type === 'rag_index_refreshed');
+      expect(refreshed).toBeDefined();
+      expect(refreshed.phase).toBe('phase3');
+      expect(refreshed.level).toBe('info');
+      expect(refreshed.detail).toMatchObject({ documents: 12, embedded: 9 });
+      expect(refreshed.run_id).toBe('run-6');
+    } finally {
+      if (prevLogRoot === undefined) delete process.env.DUYA_MEMORY_LOG_ROOT;
+      else process.env.DUYA_MEMORY_LOG_ROOT = prevLogRoot;
+      fs.rmSync(logRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('7. ragRefresh failure — writes rag_index_refresh_failed, run stays successful', async () => {
+    const prevLogRoot = process.env.DUYA_MEMORY_LOG_ROOT;
+    const logRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-log-'));
+    process.env.DUYA_MEMORY_LOG_ROOT = logRoot;
+    try {
+      const inputs = [rollout('r1', 1), rollout('r2', 2), rollout('r3', 3)];
+      mocks.queryEligibleInputs.mockReturnValue(inputs);
+      mocks.claimRun.mockReturnValue({ runId: 'run-7', lockToken: 'tok-7' });
+      mocks.runSingleShotCuration.mockResolvedValue(successReply());
+      const ragRefresh = vi.fn().mockRejectedValue(new Error('sqlite locked'));
+
+      const result = await runCurationCycle(db, {
+        memoryRoot: env.memoryRoot,
+        configRoot: env.configRoot,
+        providerConfig: { apiKey: 'k', model: 'm', baseUrl: 'u', provider: 'anthropic' },
+        workerId: 'w1',
+        sessionId: 'session-1',
+        llmClient: llm,
+        ragRefresh,
+        now: T0,
+      });
+
+      // The refresh failure must never downgrade the run.
+      expect(result.success).toBe(true);
+      const log = fs.readFileSync(todayLogPath(logRoot), 'utf8');
+      const events = log.split('\n').filter(Boolean).map((l) => JSON.parse(l));
+      expect(events.find((e) => e.event_type === 'rag_index_refresh_failed')).toMatchObject({
+        phase: 'phase3',
+        level: 'warn',
+        detail: { error: 'sqlite locked' },
+      });
+    } finally {
+      if (prevLogRoot === undefined) delete process.env.DUYA_MEMORY_LOG_ROOT;
+      else process.env.DUYA_MEMORY_LOG_ROOT = prevLogRoot;
+      fs.rmSync(logRoot, { recursive: true, force: true });
+    }
   });
 });

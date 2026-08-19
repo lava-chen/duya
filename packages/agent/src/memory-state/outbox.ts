@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
+import { getDuyaMemoryRoot } from './memory_paths.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -96,7 +97,7 @@ export function computeContentHash(content: string): string {
 // ---------------------------------------------------------------------------
 
 function defaultMemoryRoot(): string {
-  return path.join(os.homedir(), '.duya', 'memory');
+  return getDuyaMemoryRoot() ?? path.join(os.homedir(), '.duya', 'memory');
 }
 
 function isWithin(candidate: string, roots: string[], allowEqual: boolean): boolean {
