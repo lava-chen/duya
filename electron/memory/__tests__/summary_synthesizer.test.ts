@@ -142,6 +142,69 @@ describe('synthesizeSummary', () => {
     expect(res.success).toBe(true);
   });
 
+  it('salvages the digest when a keywords array exceeds the schema cap', async () => {
+    // 2026-08-17 regression: LLM returned >8 keywords per memory_map entry
+    // and the whole digest fell back to the deterministic index.
+    const overlong = JSON.stringify({
+      profile: 'User works on the DUYA desktop agent.',
+      top_rules: [],
+      memory_map: [
+        {
+          topic: 'canvas tooling',
+          keywords: ['k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'k7', 'k8', 'k9', 'k10'],
+          files: ['global/areas/canvas-tooling.md', 'f2.md', 'f3.md', 'f4.md', 'f5.md', 'f6.md', 'f7.md'],
+        },
+      ],
+      gaps: [],
+    });
+    const res = await synthesizeSummary({
+      memoryRoot: fx.memoryRoot,
+      llmClient: mockLlm(overlong),
+    });
+    expect(res.success).toBe(true);
+    expect(res.content).toContain('## Who is this user');
+    expect(res.content).toContain('canvas tooling');
+    expect(res.content).toContain('k1, k2, k3, k4, k5, k6, k7, k8');
+    expect(res.content).not.toContain('k9');
+  });
+
+  it('clamps oversized maps and out-of-range priorities instead of failing', async () => {
+    const tooBig = JSON.stringify({
+      profile: 'User works on the DUYA desktop agent.',
+      top_rules: [
+        { rule: 'R1', source: 's', priority: 99 },
+        { rule: 'R2', source: 's' },
+        { rule: '', source: 's' },
+      ],
+      memory_map: Array.from({ length: 20 }, (_, i) => ({
+        topic: `topic-${i}`,
+        keywords: ['kw'],
+        files: ['f.md'],
+      })),
+      gaps: ['g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7'],
+    });
+    const res = await synthesizeSummary({
+      memoryRoot: fx.memoryRoot,
+      llmClient: mockLlm(tooBig),
+    });
+    expect(res.success).toBe(true);
+    expect(res.content).toContain('## Rules that matter');
+    expect(res.content).toContain('**R1**');
+    // priority 99 was clamped to 10, so R1 sorts before the unset R2 (99)
+    expect(res.content.indexOf('**R1**')).toBeLessThan(res.content.indexOf('**R2**'));
+  });
+
+  it('still falls back when even the lenient parse cannot salvage the response', async () => {
+    const broken = JSON.stringify({ profile: 123, top_rules: 'nope', memory_map: {}, gaps: 5 });
+    const res = await synthesizeSummary({
+      memoryRoot: fx.memoryRoot,
+      llmClient: mockLlm(broken),
+    });
+    expect(res.success).toBe(false);
+    expect(res.error).toMatch(/lenient parse failed/);
+    expect(res.content).toContain('Memory Summary');
+  });
+
   it('returns success:false + deterministic fallback content on junk response', async () => {
     const res = await synthesizeSummary({
       memoryRoot: fx.memoryRoot,

@@ -30,6 +30,15 @@
 
 import { z } from 'zod';
 
+import {
+  POLICY_EDIT_OPTS,
+  POLICY_RULE_ID_RE,
+  POLICY_SECTION_RE,
+  POLICY_SECTION_IDS,
+  MAX_EDITS_PER_RUN,
+  MAX_RULE_TEXT,
+} from '../../packages/agent/src/memory-rollout/stage1_policy_editor';
+
 export type CurationOp = 'append' | 'replace' | 'no_op';
 export type CurationDisposition = 'absorbed' | 'no_signal' | 'uncertain';
 
@@ -46,20 +55,39 @@ export interface CurationDecision {
   reason: string;
 }
 
+export type PolicyEditOp = 'upsert_rule' | 'remove_rule';
+
 /**
- * Optional Stage-1 policy suggestion emitted by the curator.
+ * One surgical policy edit (Plan 433). Targets a rule inside a fixed
+ * section by its stable id — it never carries full policy text, so a
+ * single curation run cannot rewrite the policy.
+ */
+export interface PolicyRuleEdit {
+  op: PolicyEditOp;
+  /** Fixed section id: S1..S9 (see POLICY_SECTION_DEFS). */
+  section: string;
+  /** Stable rule id, the `[r:<id>]` anchor inside the section. */
+  rule_id: string;
+  /** Full bullet text WITHOUT the `[r:<id>]` prefix. Required for upsert_rule. */
+  text?: string;
+  /** Why this rule changed. */
+  reason?: string;
+}
+
+/**
+ * Stage-1 policy suggestion emitted by the curator.
  *
- * When the curator notices a dimension the Stage 1 extractor is missing
- * (a recurring signal that the 12 claim types + current policy never
- * surface), it can request a policy update. `content` is the FULL new
- * policy text (appended to STAGE1_HARD_CONTRACT at extraction time), not
- * a diff. `no_change` means leave the file alone.
+ * `edit` carries a small list of surgical `upsert_rule` / `remove_rule`
+ * edits applied deterministically by `applyPolicyEdits`. The old
+ * full-content `update` shape was removed in Plan 433: it made every
+ * curation run rewrite the whole policy from scratch, shaped by the
+ * latest session only. `no_change` means leave the file alone.
  */
 export interface Stage1PolicySuggestion {
-  op: 'update' | 'no_change';
-  /** Full replacement policy markdown (max 8 KiB). Required when op=update. */
-  content?: string;
-  /** Why the extraction focus changed. Required when op=update. */
+  op: 'edit' | 'no_change';
+  /** 1..MAX_EDITS_PER_RUN surgical edits. Required when op=edit. */
+  edits?: PolicyRuleEdit[];
+  /** Why the extraction focus changed. Required when op=edit. */
   reason?: string;
 }
 
@@ -120,16 +148,33 @@ export const CurationDecisionSchema = z.object({
   reason: z.string().min(1).max(500),
 });
 
+export const PolicyRuleEditSchema = z.object({
+  op: z.enum(POLICY_EDIT_OPTS),
+  section: z.string().regex(POLICY_SECTION_RE, {
+    message: 'section must match S<n>',
+  }).refine((s) => POLICY_SECTION_IDS.has(s), {
+    message: 'section must be one of S1..S9',
+  }),
+  rule_id: z.string().regex(POLICY_RULE_ID_RE, {
+    message: 'rule_id must be kebab-case, <=40 chars',
+  }),
+  text: z.string().max(MAX_RULE_TEXT).optional(),
+  reason: z.string().max(200).optional(),
+}).refine(
+  (e) => e.op === 'remove_rule' || (typeof e.text === 'string' && e.text.trim().length > 0),
+  { message: 'upsert_rule requires non-empty text' },
+);
+
 export const Stage1PolicySchema = z.object({
-  op: z.enum(['update', 'no_change']),
-  content: z.string().max(8192).optional(),
+  op: z.enum(['edit', 'no_change']),
+  edits: z.array(PolicyRuleEditSchema).min(1).max(MAX_EDITS_PER_RUN).optional(),
   reason: z.string().max(500).optional(),
 }).refine(
-  (s) => s.op === 'no_change' || (typeof s.content === 'string' && s.content.length > 0),
-  { message: 'stage1_policy.update requires non-empty content' },
+  (s) => s.op === 'no_change' || (Array.isArray(s.edits) && s.edits.length >= 1),
+  { message: 'stage1_policy.edit requires at least one edit' },
 ).refine(
-  (s) => s.op === 'no_change' || (typeof s.reason === 'string' && s.reason.length > 0),
-  { message: 'stage1_policy.update requires a reason' },
+  (s) => s.op === 'no_change' || (typeof s.reason === 'string' && s.reason.trim().length > 0),
+  { message: 'stage1_policy.edit requires a reason' },
 );
 
 export const CurationResponseSchema = z.object({

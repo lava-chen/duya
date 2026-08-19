@@ -67,8 +67,22 @@ const VALID_REPLY = JSON.stringify({
 });
 
 const inputs: CurationInputForPrompt[] = [
-  { inputKind: 'rollout', inputKey: 'r-1', contentHash: 'h1', outputUpdatedAt: 1, rolloutSlug: 'foo' },
-  { inputKind: 'rollout', inputKey: 'r-2', contentHash: 'h2', outputUpdatedAt: 2, rolloutSlug: 'foo' },
+  {
+    inputKind: 'rollout',
+    inputKey: 'r-1',
+    contentHash: 'h1',
+    outputUpdatedAt: 1,
+    rolloutSlug: 'foo',
+    summaryMarkdown: '# summary r-1\nrule: never lie',
+  },
+  {
+    inputKind: 'rollout',
+    inputKey: 'r-2',
+    contentHash: 'h2',
+    outputUpdatedAt: 2,
+    rolloutSlug: 'foo',
+    summaryMarkdown: '# summary r-2\nchitchat',
+  },
 ];
 
 describe('runSingleShotCuration — happy path', () => {
@@ -272,19 +286,132 @@ describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('9. LLM emits stage1_policy.update → policy file written + version bumped', async () => {
+  it('9. LLM emits stage1_policy edits → policy file updated + version bumped', async () => {
     const policyDir = path.join(root, 'memory-config');
     fs.mkdirSync(policyDir, { recursive: true });
     const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(
+      policyPath,
+      '### S2: ACTIVE FOCUS\n\n- [r:stated-goals] capture when the user states a goal\n',
+      'utf8',
+    );
     fs.writeFileSync(policyPath + '.version', '3', 'utf8');
 
     const llm = createMockLLMClient(JSON.stringify({
       decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'no durable claim' }],
       actions: [],
       stage1_policy: {
-        op: 'update',
-        content: '# Focus\n\nWatch goal and commitment signals from user planning talk.',
-        reason: 'user keeps discussing career plans; summaries miss them',
+        op: 'edit',
+        edits: [{
+          op: 'upsert_rule',
+          section: 'S2',
+          rule_id: 'commitment-watch',
+          text: 'capture explicit commitments too',
+          reason: 'commitments missing from summaries',
+        }],
+        reason: 'user keeps discussing plans; summaries miss them',
+      },
+    }));
+
+    const result = await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+      policyPath,
+      policyMinIntervalMs: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyUpdated).toBe(true);
+    expect(result.policyVersion).toBe(4); // bumped 3 -> 4
+    const content = fs.readFileSync(policyPath, 'utf8');
+    expect(content).toContain('- [r:stated-goals] capture when the user states a goal'); // untouched
+    expect(content).toContain('- [r:commitment-watch] capture explicit commitments too');
+    expect(fs.readFileSync(policyPath + '.version', 'utf8').trim()).toBe('4');
+  });
+
+  it('9b. curator prompt includes current_stage1_policy baseline', async () => {
+    const policyDir = path.join(root, 'memory-config');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(
+      policyPath,
+      '### S2: ACTIVE FOCUS\n\n- [r:stated-goals] capture when the user states a goal\n',
+      'utf8',
+    );
+    fs.writeFileSync(policyPath + '.version', '3', 'utf8');
+
+    let seenUserPrompt = '';
+    const llm: AIClient = {
+      streamChat: undefined as unknown as AIClient['streamChat'],
+      async chat(messages: Message[]) {
+        seenUserPrompt = typeof messages[0].content === 'string' ? messages[0].content : '';
+        return { content: JSON.stringify({ decisions: [], actions: [], stage1_policy: { op: 'no_change' } }), usage: {} };
+      },
+    } as unknown as AIClient;
+
+    await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+      policyPath,
+    });
+
+    const payload = JSON.parse(seenUserPrompt);
+    expect(payload.current_stage1_policy).not.toBeNull();
+    expect(payload.current_stage1_policy.version).toBe(3);
+    expect(payload.current_stage1_policy.content).toContain('### S2: ACTIVE FOCUS');
+  });
+
+  it('9c. policy edits rejected by the editor surface in policyErrors (non-fatal)', async () => {
+    const policyDir = path.join(root, 'memory-config');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(
+      policyPath,
+      '### S2: ACTIVE FOCUS\n\n- [r:stated-goals] capture when the user states a goal\n',
+      'utf8',
+    );
+
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'no durable claim' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [{ op: 'remove_rule', section: 'S2', rule_id: 'does-not-exist', reason: 'cleanup' }],
+        reason: 'stale rule',
+      },
+    }));
+
+    const result = await runSingleShotCuration({
+      memoryRoot: root,
+      inputs,
+      llmClient: llm,
+      policyPath,
+      policyMinIntervalMs: 0,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.policyUpdated).toBe(false);
+    expect(result.policyErrors?.[0]).toMatch(/not found/);
+  });
+
+  it('9d. rate-limited policy edits are skipped (min interval)', async () => {
+    const policyDir = path.join(root, 'memory-config');
+    fs.mkdirSync(policyDir, { recursive: true });
+    const policyPath = path.join(policyDir, 'stage1_policy.md');
+    fs.writeFileSync(policyPath, '### S2: ACTIVE FOCUS\n\n- [r:stated-goals] x\n', 'utf8');
+    fs.writeFileSync(policyPath + '.version', '3', 'utf8');
+    // Fresh mtime → within the default 30-minute window.
+    fs.utimesSync(policyPath, new Date(), new Date());
+
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'no durable claim' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [{ op: 'upsert_rule', section: 'S2', rule_id: 'new-rule', text: 'new', reason: 'x' }],
+        reason: 'new signal',
       },
     }));
 
@@ -296,10 +423,9 @@ describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.policyUpdated).toBe(true);
-    expect(result.policyVersion).toBe(4); // bumped 3 -> 4
-    expect(fs.readFileSync(policyPath, 'utf8')).toContain('goal and commitment');
-    expect(fs.readFileSync(policyPath + '.version', 'utf8').trim()).toBe('4');
+    expect(result.policyUpdated).toBeUndefined();
+    expect(result.policyErrors?.[0]).toMatch(/rate-limited/);
+    expect(fs.readFileSync(policyPath, 'utf8')).not.toContain('[r:new-rule]');
   });
 
   it('10. stage1_policy.no_change → policy file untouched', async () => {
@@ -333,9 +459,9 @@ describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
       decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'noise' }],
       actions: [],
       stage1_policy: {
-        op: 'update',
-        content: 'x',
-        reason: 'y',
+        op: 'edit',
+        edits: [{ op: 'upsert_rule', section: 'S1', rule_id: 'x', text: 't', reason: 'y' }],
+        reason: 'z',
       },
     }));
 

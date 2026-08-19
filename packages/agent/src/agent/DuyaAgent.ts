@@ -68,6 +68,7 @@ import path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { isMemoryEnabled } from '../memory-rollout/wakeup.js';
+import { getDuyaMemoryRoot } from '../memory-state/memory_paths.js';
 
 // Mode System imports (the class is the only consumer in this file;
 // the public re-exports live in src/index.ts).
@@ -513,10 +514,7 @@ export class duyaAgent {
    * the home directory is unavailable.
    */
   private memoryRootPath(): string | null {
-    if (process.env.DUYA_MEMORY_ROOT) return process.env.DUYA_MEMORY_ROOT;
-    const home = os.homedir();
-    if (!home) return null;
-    return path.join(home, '.duya', 'memory');
+    return getDuyaMemoryRoot()
   }
 
   /**

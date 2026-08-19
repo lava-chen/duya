@@ -136,7 +136,7 @@ describe('memory-worker curation path (Plan 406)', () => {
     ]);
     mocks.runCurationCycle.mockResolvedValue({ skipped: false, success: true, runId: 'run-1', durationMs: 5 });
 
-    const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
+    const h = startMemoryWorker(toDeps(f), { extractEveryMs: 60_000 });
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
@@ -151,7 +151,7 @@ describe('memory-worker curation path (Plan 406)', () => {
       { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 60_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
     ]);
 
-    const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
+    const h = startMemoryWorker(toDeps(f), { extractEveryMs: 60_000 });
     const result = await h.curationTickForTest();
 
     expect(mocks.runCurationCycle).not.toHaveBeenCalled();
@@ -164,7 +164,7 @@ describe('memory-worker curation path (Plan 406)', () => {
     ]);
     mocks.runCurationCycle.mockResolvedValue({ skipped: false, success: true, runId: 'run-1', durationMs: 5 });
 
-    const h = startMemoryWorker(toDeps(f), { instancesPerMinute: 1 });
+    const h = startMemoryWorker(toDeps(f), { extractEveryMs: 60_000 });
     const result = await h.forceSweep();
 
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);

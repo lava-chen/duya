@@ -341,7 +341,7 @@ describe('memory-worker (Plan 305 Phase A)', () => {
 
   it('1. start then pause then resume — isPaused reflects state', () => {
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       sweepOutboxEveryMs: 60_000,
       reconcileOnStart: false,
@@ -355,8 +355,8 @@ describe('memory-worker (Plan 305 Phase A)', () => {
   });
 
   it('2. two startMemoryWorker calls return the same handle', () => {
-    const h1 = startMemoryWorker(toDeps(fixture), { instancesPerMinute: 1 });
-    const h2 = startMemoryWorker(toDeps(fixture), { instancesPerMinute: 60 });
+    const h1 = startMemoryWorker(toDeps(fixture), { extractEveryMs: 60_000 });
+    const h2 = startMemoryWorker(toDeps(fixture), { extractEveryMs: 60_000 });
     expect(h2).toBe(h1);
     // Same workerId proves identity.
     expect(h2.workerId).toBe(h1.workerId);
@@ -364,7 +364,7 @@ describe('memory-worker (Plan 305 Phase A)', () => {
 
   it('3. forceSweep on empty eligible set returns zero counts', async () => {
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
     });
@@ -384,7 +384,7 @@ describe('memory-worker (Plan 305 Phase A)', () => {
     // Use a fast tick so we'd see a tick within the test window if it
     // weren't paused.
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 600, // 10 ticks/sec
+      extractEveryMs: 100, // fast tick (floored to 1s)
       concurrency: 1,
       reconcileOnStart: false,
       paused: true,
@@ -421,7 +421,7 @@ describe('memory-worker (Plan 305 Phase A)', () => {
     );
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: false,
     });
@@ -471,7 +471,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
   it('1. first startup with empty memory dir — 0 written, 0 removed, 0 mismatched', async () => {
     // Empty DB + empty filesystem → reconcile has nothing to write or remove.
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
     });
@@ -495,7 +495,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     const row = insertStage1Output(fixture.memoryDb, { raw_memory: '# Memory\n\n- **pref-a** — user prefers concise replies' });
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
     });
@@ -532,7 +532,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     expect(fs.existsSync(orphanPath)).toBe(true);
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
     });
@@ -557,7 +557,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     insertStage1Output(fixture.memoryDb, { raw_memory: '# Memory\n\n- **pref-b** — user prefers tabs over spaces' });
 
     const h = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
     });
@@ -577,7 +577,7 @@ describe('memory-worker (Plan 305 Phase C — reconcile + outbox sweeper)', () =
     _resetMemoryWorkerForTesting();
 
     const h2 = startMemoryWorker(toDeps(fixture), {
-      instancesPerMinute: 1,
+      extractEveryMs: 60_000,
       concurrency: 1,
       reconcileOnStart: true,
     });

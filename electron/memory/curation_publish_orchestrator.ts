@@ -24,6 +24,7 @@ import {
   SYNTH_HASH_FILENAME,
 } from './summary_synthesizer';
 import { writeSystemLog } from '../../packages/agent/src/memory-state/system_log';
+import type { RagRefreshResult } from './rag_index';
 
 /**
  * End-to-end curation cycle orchestrator (Plan 417 Task B).
@@ -87,8 +88,9 @@ export interface RunCurationCycleOpts {
    * Post-run RAG index refresh (plan 428). Invoked with the memory root
    * after every successful cycle once all files are settled on disk.
    * Best-effort: failures are logged via the system log, never thrown.
+   * Resolves the refresh result so the cycle can record it.
    */
-  ragRefresh?: (memoryRoot: string) => Promise<void>;
+  ragRefresh?: (memoryRoot: string) => Promise<RagRefreshResult | undefined>;
   now?: number;
 }
 
@@ -391,7 +393,23 @@ export async function runCurationCycle(
     // disk. Best-effort: a refresh failure never downgrades the run.
     if (opts.ragRefresh) {
       try {
-        await opts.ragRefresh(opts.memoryRoot);
+        const result = await opts.ragRefresh(opts.memoryRoot);
+        writeSystemLog({
+          phase: 'phase3',
+          eventType: 'rag_index_refreshed',
+          level: 'info',
+          message: 'RAG index refreshed after curation run',
+          detail: result
+            ? {
+                documents: result.documents,
+                embedded: result.embedded,
+                scanRoots: result.scanRoots,
+                durationMs: result.durationMs,
+              }
+            : { documents: 0, embedded: 0 },
+          runId,
+          sessionId: opts.sessionId,
+        });
       } catch (err) {
         writeSystemLog({
           phase: 'phase3',

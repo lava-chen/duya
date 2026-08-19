@@ -115,8 +115,12 @@ export interface CurationWorkerDeps {
 }
 
 export interface MemoryWorkerConfig {
-  /** Tick frequency in invocations per minute. Default 60 (once per second). */
-  instancesPerMinute: number;
+  /**
+   * Tick interval in ms (Phase 1 extraction sweep). Default 300_000
+   * (5 min). The tick checks the rollout catalog for eligible sessions,
+   * syncs the catalog when stale, and drains the outbox.
+   */
+  extractEveryMs: number;
   /** Parallel extracts per tick. Default 2 (limits LLM rate-limit risk). */
   concurrency: number;
   /** Outbox drain interval in ms. Default 60_000. */
@@ -204,7 +208,7 @@ export interface MemoryWorkerHandle {
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
-  instancesPerMinute: 60,
+  extractEveryMs: 5 * 60_000, // 5 min between Phase 1 sweep ticks
   concurrency: 2,
   sweepOutboxEveryMs: 60_000,
   reconcileOnStart: true,
@@ -227,15 +231,15 @@ export const DEFAULT_WORKER_CONFIG: MemoryWorkerConfig = {
 // Low-power overrides (plan 426 Phase 6.1)
 // ---------------------------------------------------------------------------
 
-/** Low-power tick floor: 5s between extraction ticks (vs 1s default). */
+/** Low-power tick floor: 5s between extraction ticks (vs 5min default). */
 export const LOW_POWER_MIN_TICK_MS = 5_000;
 /** Low-power catalogSync throttle (vs 60s default). */
 export const LOW_POWER_CATALOG_SYNC_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Apply low-power overrides to caller-provided worker config (plan 426
- * Phase 6.1). `instancesPerMinute` is capped so the effective tick
- * interval floors at LOW_POWER_MIN_TICK_MS, and `catalogSyncIntervalMs`
+ * Phase 6.1). `extractEveryMs` is floored so the effective tick interval
+ * is at least LOW_POWER_MIN_TICK_MS, and `catalogSyncIntervalMs`
  * is throttled to at least LOW_POWER_CATALOG_SYNC_INTERVAL_MS. Pure —
  * callers pass the resolved lowPower flag (see services/low-power.ts).
  */
@@ -247,9 +251,9 @@ export function applyLowPowerOverrides(
   const base = { ...DEFAULT_WORKER_CONFIG, ...cfg };
   return {
     ...cfg,
-    instancesPerMinute: Math.min(
-      base.instancesPerMinute,
-      Math.floor(60_000 / LOW_POWER_MIN_TICK_MS),
+    extractEveryMs: Math.max(
+      base.extractEveryMs,
+      LOW_POWER_MIN_TICK_MS,
     ),
     catalogSyncIntervalMs: Math.max(
       base.catalogSyncIntervalMs,
@@ -431,7 +435,7 @@ function createWorker(
     lastPhase1ExplainAt: 0,
   };
 
-  const tickIntervalMs = Math.max(1_000, Math.floor(60_000 / Math.max(1, cfg.instancesPerMinute)));
+  const tickIntervalMs = Math.max(1_000, cfg.extractEveryMs);
 
   // Phase 2 curation cycle — single-flight Hybrid scheduler (design §9.1).
   // After Phase D (Task 11) the legacy `consolidatorTick` is deleted, so

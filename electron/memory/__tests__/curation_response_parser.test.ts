@@ -152,31 +152,82 @@ describe('CurationResponseSchema — direct', () => {
     expect(result.success).toBe(false);
   });
 
-  it('14. stage1_policy.update with content+reason validates', () => {
+  it('14. stage1_policy.edit with edits+reason validates', () => {
     const withPolicy = {
       decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
       actions: [],
       stage1_policy: {
-        op: 'update',
-        content: '# Focus\n\nWatch goal and commitment signals.',
-        reason: 'user keeps discussing plans',
+        op: 'edit',
+        edits: [
+          { op: 'upsert_rule', section: 'S2', rule_id: 'stated-goals', text: 'capture when the user states a goal', reason: 'goals missing from summaries' },
+        ],
+        reason: 'user keeps discussing plans; summaries miss them',
       },
     };
     const result = CurationResponseSchema.safeParse(withPolicy);
     expect(result.success).toBe(true);
   });
 
-  it('15. stage1_policy.update without content is rejected', () => {
+  it('15. stage1_policy.edit without edits is rejected', () => {
     const bad = {
       decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
       actions: [],
-      stage1_policy: { op: 'update', reason: 'no content' },
+      stage1_policy: { op: 'edit', reason: 'no edits' },
     };
     const result = CurationResponseSchema.safeParse(bad);
     expect(result.success).toBe(false);
   });
 
-  it('16. stage1_policy.no_change without content validates', () => {
+  it('15b. more than 3 edits per run is rejected', () => {
+    const tooMany = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [1, 2, 3, 4].map((i) => ({ op: 'upsert_rule', section: 'S1', rule_id: `r-${i}`, text: 'x', reason: 'y' })),
+        reason: 'z',
+      },
+    };
+    const result = CurationResponseSchema.safeParse(tooMany);
+    expect(result.success).toBe(false);
+  });
+
+  it('15c. upsert_rule without text is rejected; bad section/rule_id rejected', () => {
+    const noText = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [{ op: 'upsert_rule', section: 'S1', rule_id: 'x', reason: 'y' }],
+        reason: 'z',
+      },
+    };
+    expect(CurationResponseSchema.safeParse(noText).success).toBe(false);
+
+    const badSection = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [{ op: 'upsert_rule', section: 'S99', rule_id: 'x', text: 't', reason: 'y' }],
+        reason: 'z',
+      },
+    };
+    expect(CurationResponseSchema.safeParse(badSection).success).toBe(false);
+
+    const badId = {
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        edits: [{ op: 'remove_rule', section: 'S1', rule_id: 'UPPER-Case', reason: 'y' }],
+        reason: 'z',
+      },
+    };
+    expect(CurationResponseSchema.safeParse(badId).success).toBe(false);
+  });
+
+  it('16. stage1_policy.no_change without edits validates', () => {
     const ok = {
       decisions: [{ rollout_id: 'r-1', disposition: 'no_signal', reason: 'r' }],
       actions: [],

@@ -219,7 +219,83 @@ function extractJsonObject(raw: string): string {
 function parseSemanticSummary(raw: string): SemanticSummary {
   const json = extractJsonObject(raw);
   const parsed = JSON.parse(json) as unknown;
-  return SemanticSummarySchema.parse(parsed);
+  try {
+    return SemanticSummarySchema.parse(parsed);
+  } catch (strictError) {
+    // Lenient retry (root cause of the 2026-08-17 fallback streak): a
+    // single over-long `keywords` array (or any per-field overflow) used
+    // to discard the whole digest and leave summary.md as a pure
+    // deterministic index. Normalize over-long arrays and malformed
+    // entries, then retry before giving up to the fallback.
+    const normalized = normalizeSemanticSummary(parsed);
+    try {
+      return SemanticSummarySchema.parse(normalized);
+    } catch (lenientError) {
+      throw new Error(
+        `lenient parse failed: ${lenientError instanceof Error ? lenientError.message : String(lenientError)}`,
+      );
+    }
+  }
+}
+
+/**
+ * Lenient normalization for the strict-parse retry: trims every array to
+ * its schema cap and drops malformed entries, so one oversized list no
+ * longer invalidates the entire digest. String fields are truncated to
+ * their schema maxima and numeric priorities are clamped. The mandatory
+ * `profile` field is left untouched — without it there is nothing to
+ * salvage and the caller falls back.
+ */
+function normalizeSemanticSummary(parsed: unknown): unknown {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return parsed;
+  const obj = parsed as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...obj };
+
+  const asStringArray = (v: unknown, maxLen: number, cap: number): string[] =>
+    Array.isArray(v)
+      ? v
+          .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+          .map((s) => s.slice(0, maxLen))
+          .slice(0, cap)
+      : [];
+
+  if (Array.isArray(out.top_rules)) {
+    out.top_rules = out.top_rules
+      .filter(
+        (r): r is Record<string, unknown> =>
+          typeof r === 'object' && r !== null && !Array.isArray(r),
+      )
+      .map((r) => ({
+        rule: typeof r.rule === 'string' ? r.rule.slice(0, 500) : '',
+        source: typeof r.source === 'string' ? r.source.slice(0, 200) : '',
+        ...(typeof r.priority === 'number' && Number.isFinite(r.priority)
+          ? { priority: Math.min(10, Math.max(1, Math.round(r.priority))) }
+          : {}),
+      }))
+      .filter((r) => r.rule.trim().length > 0)
+      .slice(0, MAX_RULES);
+  }
+
+  if (Array.isArray(out.memory_map)) {
+    out.memory_map = out.memory_map
+      .filter(
+        (e): e is Record<string, unknown> =>
+          typeof e === 'object' && e !== null && !Array.isArray(e),
+      )
+      .map((e) => ({
+        topic: typeof e.topic === 'string' ? e.topic.slice(0, 120) : '',
+        keywords: asStringArray(e.keywords, 60, 8),
+        files: asStringArray(e.files, 200, 6),
+      }))
+      .filter((e) => e.topic.trim().length > 0)
+      .slice(0, MAX_MAP);
+  }
+
+  if (Array.isArray(out.gaps)) {
+    out.gaps = asStringArray(out.gaps, 400, MAX_GAPS);
+  }
+
+  return out;
 }
 
 // ---------------------------------------------------------------------------

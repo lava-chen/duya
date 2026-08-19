@@ -1,8 +1,8 @@
 /**
  * Unit tests for low-power config overrides (plan 426 Phase 6.1).
  *
- * Pure-function coverage: lowPower caps `instancesPerMinute` so the
- * effective tick interval floors at 5s and throttles catalogSync to
+ * Pure-function coverage: lowPower floors `extractEveryMs` so the
+ * effective tick interval is at least 5s and throttles catalogSync to
  * 5min; disabled lowPower is a no-op.
  */
 import { describe, it, expect } from 'vitest';
@@ -14,14 +14,18 @@ import {
 
 describe('applyLowPowerOverrides (plan 426 Phase 6.1)', () => {
   it('returns the input unchanged when lowPower is off', () => {
-    const cfg = { instancesPerMinute: 60, concurrency: 2 };
+    const cfg = { extractEveryMs: 300_000, concurrency: 2 };
     expect(applyLowPowerOverrides(cfg, false)).toBe(cfg);
   });
 
-  it('caps instancesPerMinute so the tick interval floors at 5s', () => {
-    const out = applyLowPowerOverrides({ instancesPerMinute: 60, concurrency: 2 }, true);
-    expect(out.instancesPerMinute).toBe(Math.floor(60_000 / LOW_POWER_MIN_TICK_MS));
-    expect(out.instancesPerMinute).toBe(12); // 60_000 / 12 = 5_000ms tick
+  it('floors extractEveryMs at 5s (never faster), keeps slower configs', () => {
+    // Default 5min is already slower than the 5s floor — untouched.
+    const out = applyLowPowerOverrides({ extractEveryMs: 300_000, concurrency: 2 }, true);
+    expect(out.extractEveryMs).toBe(300_000);
+    // An explicit 2s interval is raised to the 5s low-power floor.
+    const fast = applyLowPowerOverrides({ extractEveryMs: 2_000, concurrency: 2 }, true);
+    expect(fast.extractEveryMs).toBe(LOW_POWER_MIN_TICK_MS);
+    expect(fast.extractEveryMs).toBe(5_000);
   });
 
   it('throttles catalogSync to 5min when unset (default 60s raised)', () => {
@@ -32,10 +36,10 @@ describe('applyLowPowerOverrides (plan 426 Phase 6.1)', () => {
 
   it('never speeds up slower caller configs', () => {
     const out = applyLowPowerOverrides(
-      { instancesPerMinute: 1, catalogSyncIntervalMs: 600_000 },
+      { extractEveryMs: 60_000, catalogSyncIntervalMs: 600_000 },
       true,
     );
-    expect(out.instancesPerMinute).toBe(1);
+    expect(out.extractEveryMs).toBe(60_000);
     expect(out.catalogSyncIntervalMs).toBe(600_000);
   });
 });

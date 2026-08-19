@@ -30,6 +30,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { Database } from 'better-sqlite3';
+import { getDuyaMemoryRoot } from './memory_paths.js';
 import { computeContentHash, enqueueProjectionOutbox } from './outbox.js';
 import {
   deriveRolloutSummaryFilename,
@@ -79,7 +80,7 @@ const COMPAT_FILENAME_RE =
 
 export function reconcileProjections(db: Database, opts: ReconcileOptions = {}): ReconcileReport {
   const startedAt = opts.now ?? Date.now();
-  const rootDir = opts.rootDir ?? path.join(os.homedir(), '.duya', 'memory');
+  const rootDir = opts.rootDir ?? getDuyaMemoryRoot() ?? path.join(os.homedir(), '.duya', 'memory');
   const dryRun = opts.dryRun ?? false;
 
   const rows = db.prepare('SELECT * FROM stage1_outputs').all() as Stage1OutputRow[];
