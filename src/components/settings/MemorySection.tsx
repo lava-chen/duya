@@ -17,6 +17,7 @@ import {
 } from "@/components/settings/ui";
 import { listMemoryIPC, listMemorySystemLogIPC, type MemorySystemLogEntry } from "@/lib/ipc-client";
 import type { MemoryEntry } from "@/types";
+import { MemoryRagCard } from "./MemoryRagCard";
 
 interface GroupedEntries {
   you: MemoryEntry[];
@@ -113,7 +114,6 @@ export function MemorySection() {
       <SettingsSection
         title={t("settings.memory.title")}
         description={t("settings.memory.description")}
-        icon={<BrainIcon size={20} />}
       >
         <SettingsCard>
           <SettingsToggle
@@ -132,6 +132,8 @@ export function MemorySection() {
             }
           />
         </SettingsCard>
+
+        <MemoryRagCard />
       </SettingsSection>
 
       {loading ? (
@@ -213,12 +215,13 @@ function MemoryGroup({
   );
 }
 
-type LogPhaseFilter = "all" | "phase1" | "phase2";
+type LogPhaseFilter = "all" | "phase1" | "phase2" | "phase3";
 
 const PHASE_FILTERS: { value: LogPhaseFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "phase1", label: "Phase 1" },
   { value: "phase2", label: "Phase 2" },
+  { value: "phase3", label: "Phase 3" },
 ];
 
 const EVENT_LABELS: Record<string, string> = {
@@ -233,6 +236,17 @@ const EVENT_LABELS: Record<string, string> = {
   curation_run_abandoned: "Curation abandoned",
   curation_file_changed: "File changed",
   curation_policy_updated: "Policy updated",
+  // Phase 3 — semantic summary + RAG index refresh
+  summary_synthesized: "Summary synthesized",
+  summary_synthesis_fallback: "Summary fallback",
+  summary_synthesis_failed: "Summary failed",
+  rag_index_refreshed: "RAG index refreshed",
+  rag_index_refresh_failed: "RAG index refresh failed",
+  rag_index_rebuilt_manual: "RAG index rebuilt (manual)",
+  // System — retrieval hook events
+  rag_hook_retrieved: "RAG hook retrieved",
+  rag_hook_no_hits: "RAG hook no hits",
+  rag_hook_error: "RAG hook error",
 };
 
 function formatLogTime(ts: number, locale: string): string {
@@ -334,7 +348,7 @@ function ActivityLog() {
                           ? "bg-destructive"
                           : entry.level === "warn"
                           ? "bg-warning"
-                          : entry.phase === "phase2"
+                          : entry.phase === "phase2" || entry.phase === "phase3"
                           ? "bg-accent"
                           : "bg-primary/50"
                       }`}

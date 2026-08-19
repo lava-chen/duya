@@ -374,6 +374,7 @@ vi.mock('../../conductor/document-service', () => ({
 // Import AFTER all vi.mock() calls so the module under test picks up
 // the mocked dependencies.
 import { registerDbHandlers } from '../db-handlers';
+import { getDatabase } from '../../db/index';
 
 // ─── Helper ───
 
@@ -782,6 +783,77 @@ describe('db-handlers (core store thin forward)', () => {
         'query',
       )) as unknown[];
       expect(result).toEqual([]);
+    });
+  });
+
+  // ==================== Agent Profile Handlers ====================
+
+  describe('db:agentProfile (prompt_profile persistence, Plan 420)', () => {
+    // Fake in-memory SQLite surface covering the agent_profiles
+    // INSERT/UPDATE/SELECT statements used by the handlers.
+    function makeFakeDb() {
+      const rows = new Map<string, Record<string, unknown>>();
+      return {
+        prepare: (sql: string) => ({
+          run: (params: unknown) => {
+            const p = params as Record<string, unknown>;
+            if (sql.includes('INSERT INTO agent_profiles')) {
+              rows.set(p.id as string, { ...p });
+            } else if (sql.includes('UPDATE agent_profiles')) {
+              rows.set(p.id as string, { ...(rows.get(p.id as string) ?? {}), ...p });
+            }
+            return { changes: 1, lastInsertRowid: 1 };
+          },
+          get: (arg: unknown) => {
+            const id = typeof arg === 'string' ? arg : (arg as Record<string, unknown>).id;
+            return rows.get(id as string);
+          },
+          all: () => Array.from(rows.values()),
+        }),
+      };
+    }
+
+    it('persists prompt_profile through create and round-trips it on get', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+
+      const created = (await invokeHandler('db:agentProfile:create', {}, {
+        id: 'my-agent',
+        name: 'My Agent',
+        prompt_profile: { disableSections: ['memory'], enableSections: ['rules'] },
+      })) as Record<string, unknown>;
+      expect(created.prompt_profile).toBe(
+        JSON.stringify({ disableSections: ['memory'], enableSections: ['rules'] }),
+      );
+
+      const fetched = (await invokeHandler('db:agentProfile:get', {}, 'my-agent')) as Record<string, unknown>;
+      expect(fetched.prompt_profile).toBe(
+        JSON.stringify({ disableSections: ['memory'], enableSections: ['rules'] }),
+      );
+    });
+
+    it('updates prompt_profile via fieldMap and persists the new value', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      await invokeHandler('db:agentProfile:create', {}, {
+        id: 'my-agent',
+        name: 'My Agent',
+        prompt_profile: { disableSections: ['memory'] },
+      });
+
+      const updated = (await invokeHandler('db:agentProfile:update', {}, 'my-agent', {
+        prompt_profile: { disableSections: ['memory', 'skills'] },
+      })) as Record<string, unknown>;
+      expect(updated.prompt_profile).toBe(
+        JSON.stringify({ disableSections: ['memory', 'skills'] }),
+      );
+    });
+
+    it('stores null prompt_profile when absent (backward compatible)', async () => {
+      vi.mocked(getDatabase).mockReturnValue(makeFakeDb() as never);
+      const created = (await invokeHandler('db:agentProfile:create', {}, {
+        id: 'plain-agent',
+        name: 'Plain',
+      })) as Record<string, unknown>;
+      expect(created.prompt_profile).toBeNull();
     });
   });
 });
