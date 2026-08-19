@@ -113,6 +113,18 @@ export interface CliInvocation {
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];
+  // Plan 102 — `duya agent create` argv surface (in-process tool parity
+  // with the external CLI's build-control-plane routing).
+  agentId?: string;
+  agentName?: string;
+  agentDescription?: string;
+  agentWorkspace?: string;
+  agentModel?: string;
+  agentInstructionsFile?: string;
+  agentToolsProfile?: string;
+  agentAllow?: string[] | string;
+  agentDeny?: string[] | string;
+  agentPlugins?: string[] | string;
   // Plan 200 P4 — plugin list / install / uninstall flags.
   enabled?: boolean;
   verbose?: boolean;
@@ -125,6 +137,57 @@ export interface CliRunResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+}
+
+/**
+ * Thrown when CLI command code calls `process.exit()` while running
+ * inside the in-process agent runner.
+ *
+ * The CLI command modules (`commands/mcp.ts`, `commands/agent.ts`,
+ * `commands/config.ts`) were written for the standalone `duya` binary
+ * where `process.exit(code)` is the correct way to terminate with a
+ * non-zero status. When the same code is dispatched in-process via
+ * `buildAgentRunner` (the `duya_cli` agent tool), a bare
+ * `process.exit()` kills the whole agent worker mid-chat — it bypasses
+ * the worker's crash handlers, leaves no crash log, and swallows the
+ * hint written to stderr (captureStreams had replaced the stream). The
+ * guard below converts the exit into a thrown error that
+ * `buildAgentRunner` maps back into the regular result envelope.
+ */
+export class InProcessCliExit extends Error {
+  readonly code: number;
+
+  constructor(code: number) {
+    super(`CLI command called process.exit(${code}) inside the in-process runner`);
+    this.name = 'InProcessCliExit';
+    this.code = typeof code === 'number' && Number.isFinite(code) ? code : 0;
+  }
+}
+
+/**
+ * Symbol key used by captureStreams to attach partial stdout/stderr to
+ * a thrown error, so a hint written to stderr right before a
+ * process.exit() call survives into the result envelope.
+ */
+const CAPTURED_CHUNKS: unique symbol = Symbol('duya.cli.capturedChunks');
+
+/**
+ * Temporarily replace `process.exit` with a throwing stub for the
+ * duration of one in-process CLI dispatch. Returns a restore function.
+ *
+ * Scope: ONLY the in-process runner. The standalone `duya` CLI
+ * (`buildControlPlane`) never installs this guard, so its
+ * `process.exit()` semantics are unchanged.
+ */
+function guardProcessExit(): () => void {
+  const original = process.exit;
+  const guarded: typeof process.exit = ((code?: unknown): never => {
+    throw new InProcessCliExit(typeof code === 'number' ? code : 0);
+  }) as unknown as typeof process.exit;
+  (process as { exit: typeof process.exit }).exit = guarded;
+  return () => {
+    (process as { exit: typeof process.exit }).exit = original;
+  };
 }
 
 /**
@@ -222,6 +285,16 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
         configArgs: inv.configArgs,
         configEnv: inv.configEnv,
         configAgents: inv.configAgents,
+        agentId: inv.agentId,
+        agentName: inv.agentName,
+        agentDescription: inv.agentDescription,
+        agentWorkspace: inv.agentWorkspace,
+        agentModel: inv.agentModel,
+        agentInstructionsFile: inv.agentInstructionsFile,
+        agentToolsProfile: inv.agentToolsProfile,
+        agentAllow: inv.agentAllow,
+        agentDeny: inv.agentDeny,
+        agentPlugins: inv.agentPlugins,
         enabled: inv.enabled,
         verbose: inv.verbose,
         fromPath: inv.fromPath,
@@ -232,8 +305,32 @@ export function buildAgentRunner(): (inv: CliInvocation) => Promise<CliRunResult
 
     // Capture stdout/stderr for the duration of sub.run so the
     // agent's TTY is not polluted. Restore originals in `finally`.
-    const { value, stdout, stderr } = await captureStreams(async () => sub.run(ctx));
-    return { exitCode: value, stdout, stderr };
+    //
+    // Guard process.exit: command code written for the standalone CLI
+    // may call process.exit(code) on API failures (see writeErrorAndExit
+    // in commands/mcp.ts / agent.ts / config.ts). Inside the agent
+    // worker that would kill the whole process mid-chat with exit code
+    // 1, no crash log and no stderr. Convert it to the regular result
+    // envelope instead (exit code + captured output).
+    const restoreExit = guardProcessExit();
+    try {
+      const { value, stdout, stderr } = await captureStreams(async () => sub.run(ctx));
+      return { exitCode: value, stdout, stderr };
+    } catch (err) {
+      if (err instanceof InProcessCliExit) {
+        const captured = (err as unknown as Record<PropertyKey, unknown>)[CAPTURED_CHUNKS] as
+          | { stdout: string; stderr: string }
+          | undefined;
+        return {
+          exitCode: err.code,
+          stdout: captured?.stdout ?? '',
+          stderr: captured?.stderr ?? `command aborted with exit code ${err.code}`,
+        };
+      }
+      throw err;
+    } finally {
+      restoreExit();
+    }
   };
 }
 
@@ -292,6 +389,17 @@ async function captureStreams<T>(fn: () => Promise<T>): Promise<{ value: T; stdo
       stdout: Buffer.concat(outChunks).toString('utf-8'),
       stderr: Buffer.concat(errChunks).toString('utf-8'),
     };
+  } catch (err) {
+    // Attach partial output to the thrown error so callers can surface
+    // hints written to stdout/stderr before the failure (e.g. a hint
+    // written right before process.exit was intercepted).
+    if (err !== null && (typeof err === 'object' || typeof err === 'function')) {
+      (err as Record<PropertyKey, unknown>)[CAPTURED_CHUNKS] = {
+        stdout: Buffer.concat(outChunks).toString('utf-8'),
+        stderr: Buffer.concat(errChunks).toString('utf-8'),
+      };
+    }
+    throw err;
   } finally {
     (process.stdout as unknown as { write: typeof origStdout }).write = origStdout;
     (process.stderr as unknown as { write: typeof origStderr }).write = origStderr;
