@@ -8,6 +8,8 @@
  * `duya memory enable`   — turn memory RAG on (`memory.rag.enabled = true`)
  * `duya memory disable`  — turn memory RAG off (`memory.rag.enabled = false`)
  * `duya memory set`      — write a single `memory.rag.<path>` value
+ * `duya memory search`   — query the retrievable memory index directly (read-only)
+ * `duya memory rebuild`  — rebuild the retrievable memory index on demand
  *
  * Thin wrappers over the `/v1/memory/*` routes (plan 431). The write ops
  * require `--yes` in non-interactive mode, matching the Phase 7 contract.
@@ -75,6 +77,30 @@ interface MemoryConfigResponse {
   value: unknown;
 }
 
+interface MemorySearchHit {
+  title: string;
+  path: string;
+  snippet: string;
+  score: number;
+}
+
+interface MemorySearchResponse {
+  ok: boolean;
+  mode?: 'vector' | 'hybrid' | 'keyword';
+  skipped?: boolean;
+  hits?: MemorySearchHit[];
+  error?: string;
+}
+
+interface MemoryRebuildResponse {
+  ok: boolean;
+  documents?: number;
+  embedded?: number;
+  scanRoots?: string[];
+  durationMs?: number;
+  error?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
@@ -117,6 +143,28 @@ function renderStatusText(body: MemoryStatusResponse): string {
     lines.push(`scan paths: ${body.scanPaths.join(', ')}`);
   }
   return lines.join('\n');
+}
+
+function renderSearchText(body: MemorySearchResponse): string {
+  if (body.ok !== true) return `memory search failed: ${body.error ?? 'unknown error'}`;
+  const hits = body.hits ?? [];
+  if (body.skipped === true) return '(query skipped: too short or filler)\n';
+  if (hits.length === 0) return '(no related memories found)\n';
+  const lines = [`${hits.length} hit(s) (mode: ${body.mode ?? 'keyword'}):`, ''];
+  for (const h of hits) {
+    lines.push(`- ${h.title}`);
+    if (h.snippet) lines.push(`  ${h.snippet}`);
+    lines.push(`  path: ${h.path}`);
+  }
+  return lines.join('\n');
+}
+
+function renderRebuildText(body: MemoryRebuildResponse): string {
+  if (body.ok !== true) return `memory rebuild failed: ${body.error ?? 'unknown error'}`;
+  return [
+    `index rebuilt: ${body.documents ?? 0} documents, ${body.embedded ?? 0} embedded in ${body.durationMs ?? 0} ms`,
+    `scan roots: ${(body.scanRoots ?? []).join(', ') || '(none)'}`,
+  ].join('\n');
 }
 
 function reportError(err: unknown): ExitCode {
@@ -230,9 +278,25 @@ async function writeMemoryConfig(
   }
 }
 
-function coerceValue(raw: string): boolean | string {
+function coerceValue(raw: string): boolean | string | string[] {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
+  // `scan_paths` accepts a JSON array: duya memory set scan_paths '["~/notes"]'
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (
+        Array.isArray(parsed) &&
+        parsed.every((x): x is string => typeof x === 'string')
+      ) {
+        return parsed;
+      }
+    } catch {
+      // Not a valid JSON array — fall through and store the raw string
+      // (the server rejects invalid scan_paths values).
+    }
+  }
   return raw;
 }
 
@@ -248,8 +312,62 @@ export async function runMemorySet(ctx: CliSubcommandContext): Promise<ExitCode>
   const path = ctx.args[0];
   const valueRaw = ctx.args[1];
   if (!path || valueRaw === undefined) {
-    process.stderr.write('memory set <path> <value> — path and value are required (e.g. `enabled true`, `embedding_model bge-m3`)\n');
+    process.stderr.write('memory set <path> <value> — path and value are required (e.g. `enabled true`, `embedding_model bge-m3`, `scan_paths \'["~/notes"]\'`)\n');
     return 64;
   }
   return writeMemoryConfig(ctx, path, coerceValue(valueRaw));
+}
+
+// ---------------------------------------------------------------------------
+// `duya memory search` / `duya memory rebuild`
+// ---------------------------------------------------------------------------
+
+/**
+ * `duya memory search <query>` — query the retrievable memory index
+ * directly (POST /v1/memory/search). Read-only; a 400 response (RAG not
+ * enabled / index missing) is rendered as a normal error, not a crash.
+ */
+export async function runMemorySearch(ctx: CliSubcommandContext): Promise<ExitCode> {
+  const query = ctx.args[0];
+  if (!query) {
+    process.stderr.write('memory search <query> — query is required (min 3 chars)\n');
+    return 64;
+  }
+  const body: Record<string, unknown> = { query };
+  const limitRaw = typeof ctx.options.limit === 'string' ? ctx.options.limit : undefined;
+  if (limitRaw !== undefined && /^\d+$/.test(limitRaw)) {
+    body.limit = Math.min(Math.max(parseInt(limitRaw, 10), 1), 20);
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<MemorySearchResponse>('/v1/memory/search', body);
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else {
+      process.stdout.write(renderSearchText(result) + '\n');
+    }
+    return result.ok === true ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
+/**
+ * `duya memory rebuild` — rebuild the retrievable memory index on demand
+ * (POST /v1/memory/rebuild). Write op: `--yes` required in non-TTY.
+ */
+export async function runMemoryRebuild(ctx: CliSubcommandContext): Promise<ExitCode> {
+  if (!requireYes(ctx)) return 3;
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<MemoryRebuildResponse>('/v1/memory/rebuild', {});
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else {
+      process.stdout.write(renderRebuildText(result) + '\n');
+    }
+    return result.ok === true ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
 }
