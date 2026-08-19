@@ -43,6 +43,13 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   show_widget: ToolBatch.SYSTEM,
   SwitchMode: ToolBatch.SYSTEM,
 
+  // duya_cli — unified CLI control-plane entry point (plan 99). It can
+  // perform both reads (list/info/status) and writes (config set, mcp add,
+  // cron create), so it is pinned to SYSTEM (exclusive, serial) to keep
+  // the same semantics the fail-closed default already gave it while
+  // silencing the "Unknown tool" warning on every call.
+  duya_cli: ToolBatch.SYSTEM,
+
   // Plan mode tools — SYSTEM
   enter_plan_mode: ToolBatch.SYSTEM,
   EnterPlanMode: ToolBatch.SYSTEM,
