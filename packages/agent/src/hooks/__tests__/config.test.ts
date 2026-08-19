@@ -157,19 +157,68 @@ describe('readSteeringConfig', () => {
 });
 
 describe('_readHooksConfigFromRaw', () => {
-  it('parses a valid [hooks] section', () => {
-    const raw = [
-      '[hooks]',
-      'PreTurn = [{ hooks = [{ type = "command", command = "echo hi" }] }]',
-      'PostToolUse = [{ matcher = "Read", hooks = [{ type = "http", url = "http://127.0.0.1:1/x" }] }]',
-      '',
-    ].join('\n');
-    const settings = _readHooksConfigFromRaw(raw);
+  const hookFile = (hooks: Record<string, unknown>): string =>
+    JSON.stringify({ description: 'test hooks', hooks });
+
+  it('loads hook.json files referenced by [hooks] files', () => {
+    const raw = '[hooks]\nfiles = ["~/hooks/a.json", "rel/b.json"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      baseDir: 'C:\\duya-root',
+      readFile: (p) => {
+        if (p.includes('a.json'))
+          return hookFile({
+            PreTurn: [{ hooks: [{ type: 'command', command: 'echo hi' }] }],
+          });
+        if (p.includes('b.json'))
+          return hookFile({
+            PostToolUse: [
+              { matcher: 'Read', hooks: [{ type: 'http', url: 'http://127.0.0.1:1/x' }] },
+            ],
+          });
+        throw new Error('unexpected file ' + p);
+      },
+    });
     expect(settings).toBeDefined();
     expect(settings?.PreTurn).toHaveLength(1);
     expect(settings?.PreTurn?.[0].hooks[0]).toEqual({ type: 'command', command: 'echo hi' });
     expect(settings?.PostToolUse?.[0].matcher).toBe('Read');
     expect(settings?.PostToolUse?.[0].hooks[0].type).toBe('http');
+  });
+
+  it('merges same-event matcher groups from multiple files in file order', () => {
+    const raw = '[hooks]\nfiles = ["a.json", "b.json"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: (p) =>
+        p.includes('a.json')
+          ? hookFile({ PostToolUse: [{ hooks: [{ type: 'command', command: 'a' }] }] })
+          : hookFile({ PostToolUse: [{ hooks: [{ type: 'command', command: 'b' }] }] }),
+    });
+    expect(settings?.PostToolUse?.map((m) => m.hooks[0].command)).toEqual(['a', 'b']);
+  });
+
+  it('expands ~ and resolves relative paths against the base dir', () => {
+    const raw = '[hooks]\nfiles = ["~/h.json", "sub/h.json"]\n';
+    const seen: string[] = [];
+    _readHooksConfigFromRaw(raw, {
+      baseDir: 'C:\\duya-root',
+      readFile: (p) => {
+        seen.push(p);
+        return hookFile({});
+      },
+    });
+    expect(seen[0]).toBe(path.join(os.homedir(), 'h.json'));
+    expect(seen[1]).toBe(path.resolve('C:\\duya-root', 'sub/h.json'));
+  });
+
+  it('skips unreadable files with a WARN and keeps the rest', () => {
+    const raw = '[hooks]\nfiles = ["missing.json", "ok.json"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: (p) => {
+        if (p.includes('missing')) throw new Error('ENOENT');
+        return hookFile({ Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] });
+      },
+    });
+    expect(settings?.Stop).toHaveLength(1);
   });
 
   it('returns undefined when the section is absent', () => {
@@ -178,19 +227,40 @@ describe('_readHooksConfigFromRaw', () => {
   });
 
   it('returns undefined on an invalid section', () => {
-    // Matchers must be an array of objects with a `hooks` array.
-    expect(_readHooksConfigFromRaw('[hooks]\nPreTurn = "not-an-array"\n')).toBeUndefined();
-    // Unknown event keys fail the strict schema.
-    expect(_readHooksConfigFromRaw('[hooks]\nNotAnEvent = [{ hooks = [] }]\n')).toBeUndefined();
+    // files must be an array of strings.
+    expect(_readHooksConfigFromRaw('[hooks]\nfiles = "a.json"\n')).toBeUndefined();
+    // Unknown keys fail the strict schema (legacy inline shape no longer valid).
+    expect(
+      _readHooksConfigFromRaw('[hooks]\nPreTurn = [{ hooks = [] }]\n'),
+    ).toBeUndefined();
     // Malformed TOML.
     expect(_readHooksConfigFromRaw('[hooks\nbroken {{{')).toBeUndefined();
+    // Empty files list means no hooks.
+    expect(_readHooksConfigFromRaw('[hooks]\nfiles = []\n')).toBeUndefined();
+  });
+
+  it('tolerates a hook.json with a broken hooks object', () => {
+    const raw = '[hooks]\nfiles = ["bad.json"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: () => JSON.stringify({ hooks: { NotAnEvent: [] } }),
+    });
+    expect(settings).toBeUndefined();
   });
 });
 
 describe('readHooksConfig', () => {
-  it('reads and validates [hooks] from the namespaced config.toml', () => {
+  it('reads hook.json files from the namespaced config.toml', () => {
     stubTestNamespace();
-    writeConfigToml('[hooks]\nPostTurn = [{ hooks = [{ type = "command", command = "echo done" }] }]\n');
+    const root = path.join(os.homedir(), '.duya', 'test-namespaces', TEST_NS);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'user-hooks.json'),
+      JSON.stringify({
+        hooks: { PostTurn: [{ hooks: [{ type: 'command', command: 'echo done' }] }] },
+      }),
+      'utf-8',
+    );
+    writeConfigToml('[hooks]\nfiles = ["user-hooks.json"]\n');
     const settings = readHooksConfig();
     expect(settings?.PostTurn).toHaveLength(1);
     expect(settings?.PostTurn?.[0].hooks[0]).toMatchObject({ type: 'command', command: 'echo done' });
@@ -205,7 +275,7 @@ describe('readHooksConfig', () => {
     stubTestNamespace();
     writeConfigToml('[goal]\nenabled = true\n');
     expect(readHooksConfig()).toBeUndefined();
-    writeConfigToml('[hooks]\nPreTurn = 3\n');
+    writeConfigToml('[hooks]\nfiles = 3\n');
     expect(readHooksConfig()).toBeUndefined();
   });
 });

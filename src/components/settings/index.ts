@@ -10,6 +10,7 @@ export { default as BrowserExtensionSection } from "./BrowserExtensionSection";
 export { SupportSection } from "./SupportSection";
 export { CapabilitiesSection } from "./CapabilitiesSection";
 export { MemorySection } from "./MemorySection";
+export { HooksSection } from "./HooksSection";
 export { VoiceSection } from "./VoiceSection";
 export { PerformanceSection } from "./PerformanceSection";
 // Plan 205: `ProviderConnectDialog` is still used by the

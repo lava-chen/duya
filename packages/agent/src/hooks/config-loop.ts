@@ -23,8 +23,8 @@
 
 import type { LoopHookDispatchContext, LoopHookRegistration } from './loop.js';
 import { readHooksConfig } from './config.js';
-import { executeHook } from './executor.js';
-import type { BaseHookInput, HookMatcher, HooksSettings } from './types.js';
+import { executeHook, executeHookBackground } from './executor.js';
+import type { BaseHookInput, HookMatcher, HookCommand, HooksSettings } from './types.js';
 import { logger } from '../utils/logger.js';
 
 /** After every builtin steering hook (10/20/30) — user hooks steer last. */
@@ -85,6 +85,20 @@ function buildRegistration(
       for (const matcher of matchers) {
         if (!matcherMatches(matcher, ctx, event)) continue;
         for (const hook of matcher.hooks) {
+          // `async: true` command/process hooks launch in the background and
+          // deliver their result via a mailbox notification when they settle
+          // — the loop never blocks and there is no inject for them (the
+          // turn they belong to may already be gone).
+          if (hook.type === 'command' || hook.type === 'process') {
+            if (hook.async === true) {
+              const launched = executeHookBackground(hook, input, { cwd });
+              if (launched.ok) continue;
+              logger.warn(
+                `[ConfigHook] ${event} background hook failed to launch (skipped): ${launched.error}`,
+              );
+              continue;
+            }
+          }
           const result = await executeHook(hook, input, { cwd });
           if (result.ok) {
             if (result.additionalContext) contexts.push(result.additionalContext);

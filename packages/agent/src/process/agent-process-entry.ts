@@ -57,6 +57,7 @@ import { duyaAgent } from '../agent/DuyaAgent.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
+import { hookTaskRegistry } from '../hooks/task-registry.js';
 import { backgroundAgentLifecycle } from '../lifecycle/BackgroundAgentLifecycle.js';
 import { sendEvent, parseStdin, type WorkerCommand } from './worker-protocol.js';
 import { resolveChatStartAgentMode } from './permission-profile-bridge.js';
@@ -290,6 +291,30 @@ function scheduleBashTaskPush(): void {
 }
 
 getBashTaskRegistry().onAnyChange(scheduleBashTaskPush);
+
+// ----------------------------------------------------------------------------
+// Background hook tasks — push snapshot to renderer on any change.
+// ----------------------------------------------------------------------------
+const HOOK_TASK_PUSH_THROTTLE_MS = 300;
+let hookTaskPushScheduled = false;
+
+function pushHookTaskSnapshot(): void {
+  const activeSessionId = sessionId;
+  if (!activeSessionId) return;
+  const tasks = hookTaskRegistry.listTasks();
+  sendToMain({ type: 'hook_task:update', sessionId: activeSessionId, tasks });
+}
+
+function scheduleHookTaskPush(): void {
+  if (hookTaskPushScheduled) return;
+  hookTaskPushScheduled = true;
+  setTimeout(() => {
+    hookTaskPushScheduled = false;
+    pushHookTaskSnapshot();
+  }, HOOK_TASK_PUSH_THROTTLE_MS);
+}
+
+hookTaskRegistry.onAnyChange(scheduleHookTaskPush);
 
 // ----------------------------------------------------------------------------
 // Background sub-agent in-flight reporting — keep the parent worker alive.
@@ -3079,6 +3104,9 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 // shouldCompact / getContextStats), so we only need to ensure
                 // the DB row exists — the accumulators (tokens_used,
                 // time_used_seconds) are read back on the next turn report.
+                // Both branches below converge on get-then-create so a re-init
+                // (row exists, message history empty) never trips the
+                // UNIQUE(session_id) constraint.
                 try {
                   const existingGoal = await goalDb.get(sessionId!) as Record<string, unknown> | undefined;
                   if (!existingGoal) {
@@ -3098,19 +3126,23 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
                 log(`[Agent-Process] No existing messages found in DB for session ${sessionId}`);
                 // Plan 331 Phase 2.4: even for a brand-new session, create
                 // the session_goals row so the first turn report has a row
-                // to increment. Safe to call unconditionally — if a row
-                // already exists (e.g. re-init), the UNIQUE(session_id)
-                // constraint will reject the duplicate and we log + ignore.
+                // to increment. Get-then-create keeps this idempotent — a
+                // leftover goal row from an earlier run of the same session
+                // is restored instead of rejected by the UNIQUE constraint.
                 try {
-                  const { randomUUID } = await import('node:crypto');
-                  await goalDb.create({
-                    id: randomUUID(),
-                    session_id: sessionId!,
-                  });
-                  log(`[Agent-Process] Created new session_goals row for ${sessionId} (new session)`);
+                  const existingGoal = await goalDb.get(sessionId!) as Record<string, unknown> | undefined;
+                  if (existingGoal) {
+                    log(`[Agent-Process] Restored session_goals for ${sessionId}: tokens_used=${existingGoal.tokens_used}, status=${existingGoal.status}`);
+                  } else {
+                    const { randomUUID } = await import('node:crypto');
+                    await goalDb.create({
+                      id: randomUUID(),
+                      session_id: sessionId!,
+                    });
+                    log(`[Agent-Process] Created new session_goals row for ${sessionId} (new session)`);
+                  }
                 } catch (err) {
-                  // Likely UNIQUE constraint violation if re-init; not fatal.
-                  warn('[Agent-Process] session_goals create (new session):', err);
+                  warn('[Agent-Process] Failed to restore/create session goal:', err);
                 }
               }
             } catch (err) {

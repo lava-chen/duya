@@ -1,13 +1,17 @@
 {
-  "hooks": [
-    {
-      "event": "PreToolUse",
-      "matcher": "{{ToolName}}(*)",
-      "command": {
-        "type": "command",
-        "command": "echo 'Hook triggered'",
-        "timeout": 5000
+  "description": "Sample DUYA hooks (ecosystem shape shared with Claude Code / ZCode)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Hook triggered'",
+            "timeout": 5000
+          }
+        ]
       }
-    }
-  ]
+    ]
+  }
 }

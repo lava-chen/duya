@@ -4,6 +4,7 @@ import type {
   ProjectDatabaseRequest,
 } from '../packages/conductor/src/database/types'
 import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
+import type { HookTaskSnapshot } from '../src/types/hook-task'
 import type { UsageSummary } from '../src/types/usage'
 // Plan 312 — App Connection status DTO is the only shape returned to the
 // renderer. Token fields never appear here.
@@ -319,7 +320,7 @@ export interface MemoryAPI {
   systemLog: (opts?: Record<string, unknown>) => Promise<{
     entries: Array<{
       ts: number
-      phase: 'phase1' | 'phase2' | 'system'
+      phase: 'phase1' | 'phase2' | 'phase3' | 'system'
       event_type: string
       level: 'info' | 'warn' | 'error'
       message: string
@@ -329,6 +330,14 @@ export interface MemoryAPI {
       session_id?: string | null
     }>
     total: number
+  }>
+  ragRebuild: () => Promise<{
+    ok: boolean
+    error?: string
+    documents?: number
+    embedded?: number
+    scanRoots?: string[]
+    durationMs?: number
   }>
 }
 
@@ -569,6 +578,28 @@ export interface ConfigAgentsAPI {
   create: (id: string, input: Record<string, unknown>) => Promise<unknown>;
   update: (id: string, input: Record<string, unknown>) => Promise<unknown>;
   delete: (id: string) => Promise<boolean>;
+}
+
+export interface HookRow {
+  name: string;
+  command: string;
+  source: string;
+  kind: 'builtin' | 'config';
+  matcher?: string;
+}
+
+export interface HookEventGroup {
+  event: string;
+  hooks: HookRow[];
+}
+
+export interface HookOverview {
+  configPath: string;
+  events: HookEventGroup[];
+}
+
+export interface HooksAPI {
+  overview: () => Promise<HookOverview>;
 }
 
 export interface BrowserExtensionStatus {
@@ -907,6 +938,7 @@ export interface ElectronAPI {
     reply?: string
   }) => void) => () => void
   onBashTaskUpdate: (callback: (data: { sessionId: string; tasks: BashBackgroundTaskSnapshot[] }) => void) => () => void
+  onHookTaskUpdate: (callback: (data: { sessionId: string; tasks: HookTaskSnapshot[] }) => void) => () => void
   app: {
     getVersion: () => Promise<string>
     quit: () => Promise<void>
@@ -994,6 +1026,7 @@ export interface ElectronAPI {
   parser: DocumentParserAPI
   agentProfile: AgentProfileAPI
   configAgents: ConfigAgentsAPI
+  hooks: HooksAPI
   plugin: PluginAPI
   appConnection: AppConnectionAPI
   terminal: TerminalAPI
@@ -1425,6 +1458,18 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.removeListener('bash_task:update', handler);
     };
   },
+  onHookTaskUpdate: (
+    callback: (data: { sessionId: string; tasks: HookTaskSnapshot[] }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      data: { sessionId: string; tasks: HookTaskSnapshot[] },
+    ) => callback(data);
+    ipcRenderer.on('hook_task:update', handler);
+    return () => {
+      ipcRenderer.removeListener('hook_task:update', handler);
+    };
+  },
   app: {
     getVersion: () => ipcRenderer.invoke('app:get-version'),
     quit: () => ipcRenderer.invoke('app:quit'),
@@ -1665,6 +1710,7 @@ const electronAPI: ElectronAPI = {
   memory: {
     list: () => ipcRenderer.invoke('memory:list'),
     systemLog: (opts?: Record<string, unknown>) => ipcRenderer.invoke('memory:system-log', opts ?? {}),
+    ragRebuild: () => ipcRenderer.invoke('memory:rag-rebuild'),
   },
   permission: {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('db:permission:create', data),
@@ -1826,6 +1872,9 @@ const electronAPI: ElectronAPI = {
     create: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:create', id, input),
     update: (id: string, input: Record<string, unknown>) => ipcRenderer.invoke('config:agents:update', id, input),
     delete: (id: string) => ipcRenderer.invoke('config:agents:delete', id),
+  },
+  hooks: {
+    overview: () => ipcRenderer.invoke('hooks:overview'),
   },
   recap: {
     request: (sessionId: string) => ipcRenderer.invoke('recap:request', sessionId),

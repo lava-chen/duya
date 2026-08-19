@@ -36,7 +36,7 @@ function toList(v: unknown): string[] | undefined {
 
 function buildOptions(cmd: Command, sub: CliSubcommand): void {
   const seen = new Set<string>();
-  const declared = (opt: { flags: string; description: string }): void => {
+  const declared = (opt: { flags: string; description: string; collect?: boolean }): void => {
     // Dedup by the leading `--name` of the flag spec so the
     // descriptor's explicit `--limit` is not re-registered when
     // `pagination: true` also adds it. Commander 14 throws on
@@ -44,6 +44,14 @@ function buildOptions(cmd: Command, sub: CliSubcommand): void {
     const head = opt.flags.split(/\s|<|=>/)[0] ?? opt.flags;
     if (seen.has(head)) return;
     seen.add(head);
+    // Repeatable `<value>` flags must collect into an array (Commander
+    // keeps only the last value otherwise), matching what run() expects
+    // via configArgs / configEnv / configAgents (Array.isArray branch).
+    if (opt.collect && /<[^>]+>/.test(opt.flags)) {
+      const collect = (val: string, prev: string[] = []): string[] => [...prev, val];
+      cmd.option(opt.flags, opt.description, collect, []);
+      return;
+    }
     cmd.option(opt.flags, opt.description);
   };
   for (const opt of sub.options ?? []) declared(opt);
@@ -141,6 +149,10 @@ export function buildControlPlane(program: Command): void {
             configArgs: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
             configEnv: Array.isArray(opts.env) ? (opts.env as string[]) : undefined,
             configAgents: Array.isArray(opts.agent) ? (opts.agent as string[]) : undefined,
+            // Plan 431 — `duya memory` argv surface.
+            memoryAuto: opts.auto === true,
+            memoryProvider: typeof opts.provider === 'string' ? opts.provider : undefined,
+            memoryModel: typeof opts.model === 'string' ? opts.model : undefined,
             // Plan 102 — `duya agent` argv surface.
             agentId: typeof opts.id === 'string' ? opts.id : undefined,
             agentName: typeof opts.name === 'string' ? opts.name : undefined,

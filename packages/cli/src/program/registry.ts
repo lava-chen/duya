@@ -51,7 +51,9 @@ export type CliCommandPath =
   | 'uninstall-cli'
   | 'config'
   | 'agent'
-  | 'voice';
+  | 'voice'
+  | 'hook'
+  | 'memory';
 
 /**
  * Normalized invocation that every subcommand `run` function receives.
@@ -107,6 +109,10 @@ export interface CliSubcommandOptions {
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];
+  // Plan 431 — `duya memory` argv surface.
+  memoryAuto?: boolean;
+  memoryProvider?: string;
+  memoryModel?: string;
   // Plan 102 — `duya agent` argv surface (custom config-driven agents),
   // forwarded from build-control-plane.ts.
   agentId?: string;
@@ -158,6 +164,10 @@ export interface CliSubcommandArg {
 export interface CliSubcommandOption {
   flags: string;
   description: string;
+  /** Collect repeated occurrences of a `<value>` option into an array.
+   *  Without this, Commander keeps only the last value (a string), so a
+   *  repeatable flag like `--arg a --arg b` silently loses all but `b`. */
+  collect?: boolean;
 }
 
 export interface CliCommandDescriptor {

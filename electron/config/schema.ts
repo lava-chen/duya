@@ -467,7 +467,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
     anti_dead_loop: { enabled: true, nudge_at: 8, hard_nudge_at: 12, hard_stop_at: 16 },
     tool_intent_nudge_max: 2,
   },
-  hooks: {},
+  hooks: { files: [] },
 };
 
 /** Deep-merge `partial` over a fresh copy of DEFAULT_CONFIG. */

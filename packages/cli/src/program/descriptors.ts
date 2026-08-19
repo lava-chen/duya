@@ -75,6 +75,8 @@ import {
   runConfigValidate,
 } from '../commands/config.js';
 import { runAgentList, runAgentCreate, runAgentDelete } from '../commands/agent.js';
+import { runHookListCommand, runHookValidateCommand, runHookAddCommand, runHookRemoveCommand } from '../commands/hooks.js';
+import { runMemoryDoctor, runMemorySetup, runMemoryStatus, runMemoryEnable, runMemoryDisable, runMemorySet } from '../commands/memory.js';
 
 import {
   type CliSubcommand,
@@ -336,9 +338,9 @@ const subMCPAdd: CliSubcommand = {
   options: [
     { flags: '--server <name>', description: 'Unique MCP server name' },
     { flags: '--command <cmd>', description: 'Command to run (npx, uvx, node, etc.)' },
-    { flags: '--arg <value>', description: 'Command argument (repeatable)' },
-    { flags: '--env <KEY=VAL>', description: 'Environment variable (repeatable, KEY=VAL form)' },
-    { flags: '--agent <id>', description: 'Agent profile id allowed to use this server (repeatable)' },
+    { flags: '--arg <value>', description: 'Command argument (repeatable)', collect: true },
+    { flags: '--env <KEY=VAL>', description: 'Environment variable (repeatable, KEY=VAL form)', collect: true },
+    { flags: '--agent <id>', description: 'Agent profile id allowed to use this server (repeatable)', collect: true },
     { flags: '--yes', description: 'Skip confirmation prompt' },
   ],
   run: (ctx) => runMCPAddCommand(ctx),
@@ -357,7 +359,7 @@ const subMCPAssign: CliSubcommand = {
   write: true,
   args: [{ name: 'name', required: true, description: 'MCP server name' }],
   options: [
-    { flags: '--agent <id>', description: 'Agent profile id (repeatable; empty = all)' },
+    { flags: '--agent <id>', description: 'Agent profile id (repeatable; empty = all)', collect: true },
     { flags: '--yes', description: 'Skip confirmation prompt' },
   ],
   run: (ctx) => runMCPAssignCommand(ctx),
@@ -956,6 +958,88 @@ const subSessionImport: CliSubcommand = {
 };
 
 // ============================================================================
+// `duya hook` — hook.json registration (list / validate / add / remove)
+// ============================================================================
+
+const subHookList: CliSubcommand = {
+  description: 'List hook.json files registered under [hooks] files, with per-file parse status',
+  run: (ctx) => adaptLegacy(runHookListCommand as LegacyFn, [])(ctx),
+};
+
+const subHookValidate: CliSubcommand = {
+  description: 'Validate a hook.json path without writing (readable + well-formed hooks object)',
+  args: [{ name: 'path', required: true, description: 'Path to hook.json (absolute, or relative to ~/.duya; ~ allowed)' }],
+  run: (ctx) => adaptLegacy(runHookValidateCommand as LegacyFn, [0])(ctx),
+};
+
+const subHookAdd: CliSubcommand = {
+  description: 'Validate and register a hook.json path under [hooks] files. Write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'path', required: true, description: 'Path to hook.json (absolute, or relative to ~/.duya; ~ allowed)' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => adaptLegacy(runHookAddCommand as LegacyFn, [0])(ctx),
+};
+
+const subHookRemove: CliSubcommand = {
+  description: 'Remove a hook.json path from [hooks] files. Write op; --yes required in non-TTY.',
+  write: true,
+  args: [{ name: 'path', required: true, description: 'Path to hook.json (as registered, or any equivalent form)' }],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => adaptLegacy(runHookRemoveCommand as LegacyFn, [0])(ctx),
+};
+
+// ============================================================================
+// `duya memory` — memory RAG diagnostics + config writes (plan 431)
+// ============================================================================
+
+const subMemoryDoctor: CliSubcommand = {
+  description: 'Machine evaluation + current [memory.rag] config + embedding provider/model recommendation (read-only)',
+  run: (ctx) => runMemoryDoctor(ctx),
+};
+
+const subMemoryStatus: CliSubcommand = {
+  description: 'Show memory RAG config + index state (documents / embedding) (read-only)',
+  run: (ctx) => runMemoryStatus(ctx),
+};
+
+const subMemorySetup: CliSubcommand = {
+  description: 'Enable [memory.rag] and set the embedding provider/model (--auto or --provider/--model). Write op; --yes required in non-TTY.',
+  write: true,
+  options: [
+    { flags: '--auto', description: 'Use the backend hardware/config recommendation' },
+    { flags: '--provider <provider>', description: 'Embedding provider id; requires --model' },
+    { flags: '--model <model>', description: 'Embedding model id (optional with --provider)' },
+    { flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' },
+  ],
+  run: (ctx) => runMemorySetup(ctx),
+};
+
+const subMemoryEnable: CliSubcommand = {
+  description: 'Enable memory RAG (`memory.rag.enabled = true`). Write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runMemoryEnable(ctx),
+};
+
+const subMemoryDisable: CliSubcommand = {
+  description: 'Disable memory RAG (`memory.rag.enabled = false`). Write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runMemoryDisable(ctx),
+};
+
+const subMemorySet: CliSubcommand = {
+  description: 'Write a single `memory.rag.<path>` value (e.g. `enabled true`, `embedding_model bge-m3`). Write op; --yes required in non-TTY.',
+  write: true,
+  args: [
+    { name: 'path', required: true, description: 'memory.rag key (enabled | index_path | scan_paths | embedding_enabled | embedding_provider | embedding_model)' },
+    { name: 'value', required: true, description: 'Value (true/false coerced to boolean)' },
+  ],
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runMemorySet(ctx),
+};
+
+// ============================================================================
 // Top-level descriptors (frozen order — drives help output)
 // ============================================================================
 
@@ -1129,6 +1213,28 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       create: subAgentCreate,
       list: subAgentList,
       delete: subAgentDelete,
+    },
+  },
+  {
+    name: 'hook',
+    description: 'Manage hook.json files registered under [hooks] files (list / validate / add / remove)',
+    subcommands: {
+      list: subHookList,
+      validate: subHookValidate,
+      add: subHookAdd,
+      remove: subHookRemove,
+    },
+  },
+  {
+    name: 'memory',
+    description: 'Memory RAG diagnostics and config (doctor / status / setup / enable / disable / set)',
+    subcommands: {
+      doctor: subMemoryDoctor,
+      status: subMemoryStatus,
+      setup: subMemorySetup,
+      enable: subMemoryEnable,
+      disable: subMemoryDisable,
+      set: subMemorySet,
     },
   },
   {

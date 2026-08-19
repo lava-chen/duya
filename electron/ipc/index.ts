@@ -20,7 +20,12 @@ import { registerPluginHandlers } from './plugin-handlers';
 import { registerProjectDatabaseHandlers } from './project-database-handlers';
 import { registerGitHandlers } from './git-handlers';
 import { registerMemoryWakeupHandlers } from './memory-wakeup';
-import { registerMemoryListHandlers, registerMemorySystemLogHandlers } from './memory-handlers';
+import {
+  registerMemoryListHandlers,
+  registerMemorySystemLogHandlers,
+  registerMemoryRagRebuildHandler,
+} from './memory-handlers';
+import { registerHooksHandlers } from './hooks-handlers';
 
 export {
   registerSystemHandlers,
@@ -43,4 +48,6 @@ export {
   registerMemoryWakeupHandlers,
   registerMemoryListHandlers,
   registerMemorySystemLogHandlers,
+  registerMemoryRagRebuildHandler,
+  registerHooksHandlers,
 };

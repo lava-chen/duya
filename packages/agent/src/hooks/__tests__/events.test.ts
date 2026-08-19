@@ -11,6 +11,12 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as os from 'node:os';
 import { ConfigHooksRunner, type EventHookInput } from '../events.js';
 import type { HooksSettings } from '../types.js';
+import { hookTaskRegistry } from '../task-registry.js';
+
+// The background completion path delivers via the mailbox — stub the DB write.
+vi.mock('../../lifecycle/mailboxBackgroundNotification.js', () => ({
+  sendBackgroundNotification: vi.fn().mockResolvedValue(undefined),
+}));
 
 const CWD = os.tmpdir();
 
@@ -26,6 +32,7 @@ function cmdJsonContext(ctx: string): string {
 describe('ConfigHooksRunner', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    hookTaskRegistry.clear();
   });
 
   it('returns executed=0 when the event has no matchers', async () => {
@@ -33,6 +40,7 @@ describe('ConfigHooksRunner', () => {
     expect(await runner.run('SessionStart', eventInput('SessionStart'))).toEqual({
       executed: 0,
       contexts: [],
+      backgroundTasks: [],
     });
   });
 
@@ -40,7 +48,11 @@ describe('ConfigHooksRunner', () => {
     vi.stubEnv('DUYA_TEST', '1');
     vi.stubEnv('DUYA_TEST_NAMESPACE', 'hooks-events-test');
     const runner = new ConfigHooksRunner({ cwd: CWD });
-    expect(await runner.run('Stop', eventInput('Stop'))).toEqual({ executed: 0, contexts: [] });
+    expect(await runner.run('Stop', eventInput('Stop'))).toEqual({
+      executed: 0,
+      contexts: [],
+      backgroundTasks: [],
+    });
   });
 
   it('executes matched hooks in configured order and collects contexts', async () => {
@@ -154,5 +166,55 @@ describe('ConfigHooksRunner', () => {
     const runner = new ConfigHooksRunner({ settings, cwd: CWD, vars: { sessionId: 'abc-123' } });
     const result = await runner.run('SessionStart', eventInput('SessionStart'));
     expect(result.contexts).toEqual(['sess=abc-123']);
+  });
+
+  it('launches async: true hooks in the background without blocking', async () => {
+    // The hook sleeps 1s — if it blocked, the dispatch would take ~1s.
+    const settings: HooksSettings = {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            {
+              type: 'command',
+              command: 'node -e "setTimeout(()=>{},1000)"',
+              async: true,
+              asyncRewake: true,
+            },
+          ],
+        },
+      ],
+    };
+    const runner = new ConfigHooksRunner({ settings, cwd: CWD });
+    const started = Date.now();
+    const result = await runner.run('UserPromptSubmit', eventInput('UserPromptSubmit'));
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(result.executed).toBe(1);
+    expect(result.contexts).toEqual([]);
+    expect(result.backgroundTasks).toHaveLength(1);
+  });
+
+  it('downgrades async: true to sync on decision events (PreToolUse)', async () => {
+    // If downgraded, the dispatch waits for the 300ms hook and the
+    // background task list stays empty.
+    const settings: HooksSettings = {
+      PreToolUse: [
+        {
+          matcher: 'Edit',
+          hooks: [
+            {
+              type: 'command',
+              command: cmdJsonContext('sync-after-all'),
+              async: true,
+            },
+          ],
+        },
+      ],
+    };
+    const runner = new ConfigHooksRunner({ settings, cwd: CWD });
+    const result = await runner.run('PreToolUse', eventInput('PreToolUse'), { toolName: 'Edit' });
+    expect(result.backgroundTasks).toEqual([]);
+    // The sync downgrade still collects stdout as context.
+    expect(result.contexts).toEqual(['sync-after-all']);
+    expect(result.executed).toBe(1);
   });
 });

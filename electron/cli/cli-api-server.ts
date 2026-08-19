@@ -101,6 +101,15 @@ import {
 } from './handlers/backup.js';
 import { handleSecurityAudit, handleSecurityFix } from './handlers/security.js';
 import { handleVoiceEnvDoctor, handleVoiceSetup, handleVoiceConfig } from './handlers/voice.js';
+import { handleHookList, handleHookValidate, handleHookAdd, handleHookRemove } from './handlers/hooks.js';
+import {
+  handleMemoryDoctor,
+  handleMemorySetup,
+  handleMemoryStatus,
+  handleMemoryConfig,
+  handleMemoryRebuild,
+  handleMemorySearch,
+} from './handlers/memory.js';
 import {
   handleSendMessage,
   handleSkillInstall,
@@ -542,6 +551,74 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // POST /v1/voice/config
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'voice' && parts[2] === 'config') {
     void handleVoiceConfig(req, res);
+    return;
+  }
+
+  // ============================================================================
+  // `duya memory` — memory RAG diagnostics + config writes (plan 431)
+  // ============================================================================
+
+  // GET /v1/memory/doctor
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'doctor') {
+    handleMemoryDoctor(req, res);
+    return;
+  }
+
+  // GET /v1/memory/status
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'status') {
+    handleMemoryStatus(req, res);
+    return;
+  }
+
+  // POST /v1/memory/setup
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'setup') {
+    void handleMemorySetup(req, res);
+    return;
+  }
+
+  // POST /v1/memory/config
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'config') {
+    void handleMemoryConfig(req, res);
+    return;
+  }
+
+  // POST /v1/memory/rebuild — rebuild the retrievable memory index now
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'rebuild') {
+    void handleMemoryRebuild(req, res);
+    return;
+  }
+
+  // POST /v1/memory/search — search the retrievable memory index
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'memory' && parts[2] === 'search') {
+    void handleMemorySearch(req, res);
+    return;
+  }
+
+  // ============================================================================
+  // `duya hook` — hook.json registration (list / validate / add / remove)
+  // ============================================================================
+
+  // GET /v1/hooks/list
+  if (req.method === 'GET' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'hooks' && parts[2] === 'list') {
+    handleHookList(req, res);
+    return;
+  }
+
+  // POST /v1/hooks/validate
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'hooks' && parts[2] === 'validate') {
+    void handleHookValidate(req, res);
+    return;
+  }
+
+  // POST /v1/hooks/add
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'hooks' && parts[2] === 'add') {
+    void handleHookAdd(req, res);
+    return;
+  }
+
+  // POST /v1/hooks/remove
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'hooks' && parts[2] === 'remove') {
+    void handleHookRemove(req, res);
     return;
   }
 

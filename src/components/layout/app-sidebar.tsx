@@ -27,6 +27,7 @@ import {
   FolderOpenIcon,
   DotsThreeIcon,
   BrainIcon,
+  WebhookIcon,
   MicrophoneIcon,
   CaretRightIcon,
   CaretDownIcon,
@@ -108,6 +109,7 @@ const settingsNavGroups: {
     items: [
       { id: 'providers', labelKey: 'settings.providers', icon: KeyIcon },
       { id: 'agents', labelKey: 'settings.agents', icon: RobotIcon },
+      { id: 'hooks', labelKey: 'settings.hooks', icon: WebhookIcon },
       { id: 'memory', labelKey: 'settings.memory', icon: BrainIcon },
       { id: 'browser', labelKey: 'settings.browser', icon: ChromeIcon },
       { id: 'channels', labelKey: 'settings.channels', icon: ChannelIcon },
