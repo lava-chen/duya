@@ -46,4 +46,45 @@ describe('user MCP TOML', () => {
       'enabled must be a boolean',
     );
   });
+
+  it('tolerates camelCase extended fields written by the main-process ConfigStore', () => {
+    // The main process serializes its camelCase McpServerEntry verbatim into
+    // config.toml (allowedAgentIds, nameOverride, ...). The worker must not
+    // silently drop scope/timeout settings just because the key is camelCase.
+    const parsed = parseUserMcpToml(`
+[mcp_servers.foo]
+command = "node"
+args = ["-y", "@foo/mcp"]
+enabled = true
+allowedAgentIds = ["code", "researcher"]
+nameOverride = "foo"
+startupTimeoutSec = 15
+toolTimeoutSec = 60
+toolTimeouts = { "list" = 120 }
+`);
+    expect(parsed).toEqual([
+      {
+        name: 'foo',
+        command: 'node',
+        args: ['-y', '@foo/mcp'],
+        enabled: true,
+        allowedAgentIds: ['code', 'researcher'],
+        nameOverride: 'foo',
+        startupTimeoutSec: 15,
+        toolTimeoutSec: 60,
+        toolTimeouts: { list: 120 },
+      },
+    ]);
+  });
+
+  it('prefers snake_case extended fields when both spellings are present', () => {
+    const parsed = parseUserMcpToml(`
+[mcp_servers.foo]
+command = "node"
+enabled = true
+allowedAgentIds = ["camel"]
+allowed_agent_ids = ["snake"]
+`);
+    expect(parsed[0]?.allowedAgentIds).toEqual(['snake']);
+  });
 });

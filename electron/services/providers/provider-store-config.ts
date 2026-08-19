@@ -37,6 +37,14 @@ export class ConfigStoreReader implements ProviderStoreReader {
     return id ? this.readOne(id) : undefined;
   }
 
+  writeDefault(id: string | null): boolean {
+    // `model.provider` is the persistent default pointer (readDefault reads
+    // it on boot). Without this write, a default set at runtime would be
+    // lost on restart because only `providers.<id>.isActive` gets persisted.
+    this.store.set('model.provider', id ?? '');
+    return true;
+  }
+
   readMemory(): ApiProvider | undefined {
     const id = this.store.getByPath('memory.provider') as string;
     return id ? this.readOne(id) : this.readDefault();
@@ -69,8 +77,10 @@ export class ConfigStoreReader implements ProviderStoreReader {
         apiKey: p.apiKey,
       };
     }
-    this.store.set('providers', providers);
-    return true;
+    // Propagate the persist result so ProviderStore can surface a
+    // failed write (e.g. EPERM) to the renderer instead of silently
+    // reporting success while config.toml never changed.
+    return this.store.set('providers', providers);
   }
 
   onChange(cb: () => void): () => void {
