@@ -14,6 +14,14 @@ describe('BUILTIN_CATALOG', () => {
     expect(BUILTIN_CATALOG.get('ollama')).toBeDefined();
   });
 
+  it('contains lm-studio', () => {
+    const entry = BUILTIN_CATALOG.get('lm-studio');
+    expect(entry).toBeDefined();
+    expect(entry?.protocol).toBe('openai-chat');
+    expect(entry?.baseUrl).toBe('http://localhost:1234/v1');
+    expect(entry?.providerCategory).toBe('local');
+  });
+
   it('contains minimax-cn', () => {
     expect(BUILTIN_CATALOG.get('minimax-cn')).toBeDefined();
   });

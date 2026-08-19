@@ -697,6 +697,45 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     legacyProtocol: 'ollama',
   },
 
+  // ── LM Studio ──
+  {
+    id: 'lm-studio',
+    name: 'LM Studio',
+    descriptionZh: 'LM Studio — 本地运行模型，OpenAI 兼容 API',
+    protocol: 'openai-chat',
+    authTypes: ['auth_token'],
+    baseUrl: 'http://localhost:1234/v1',
+    envOverrides: {
+      OPENAI_API_KEY: 'lm-studio',
+    },
+    defaultModels: [
+      { modelId: 'qwen2.5-coder-7b-instruct', displayName: 'Qwen 2.5 Coder 7B' },
+      { modelId: 'llama-3.1-8b-instruct', displayName: 'Llama 3.1 8B Instruct' },
+      { modelId: 'deepseek-r1-distill-qwen-7b', displayName: 'DeepSeek R1 Distill Qwen 7B' },
+      { modelId: 'gemma-2-9b-it', displayName: 'Gemma 2 9B IT' },
+      { modelId: 'mistral-7b-instruct-v0.3', displayName: 'Mistral 7B Instruct v0.3' },
+    ],
+    fields: ['base_url', 'model_names'],
+    iconKey: 'lm-studio',
+    meta: {
+      docsUrl: 'https://lmstudio.ai/docs',
+      billingModel: 'free',
+      notes: [
+        '需要本地安装 LM Studio (https://lmstudio.ai)',
+        '使用 OpenAI 兼容 API 端点 (默认 http://localhost:1234/v1)',
+        '模型列表自动从 /v1/models 拉取，需先在 LM Studio 中加载模型',
+        'API Key 可填写任意值，本地运行无需验证',
+        'Agent 工具调用需要选择支持 function calling 的模型',
+      ],
+    },
+    providerCategory: 'local',
+    authFields: BASE_URL_AUTH_FIELDS,
+    modelsSource: { type: 'openai-compatible-models', path: '/models' },
+    endpointCandidates: ['http://localhost:1234/v1', 'http://127.0.0.1:1234/v1'],
+    websiteUrl: 'https://lmstudio.ai',
+    legacyProtocol: 'openai-compatible',
+  },
+
   // ── LiteLLM ──
   {
     id: 'litellm',
