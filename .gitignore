@@ -165,6 +165,9 @@ _dbg-out.txt
 # Local codegraph index
 .codegraph/
 
+# Local zcode / introspection index
+.zcode/
+
 # Ad-hoc scratch scripts left in repo root
 /test-*.mjs
 /*.cjs
