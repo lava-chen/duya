@@ -11,6 +11,7 @@ import Google from "@lobehub/icons/es/Google";
 import Volcengine from "@lobehub/icons/es/Volcengine";
 import Bailian from "@lobehub/icons/es/Bailian";
 import Ollama from "@lobehub/icons/es/Ollama";
+import LmStudio from "@lobehub/icons/es/LmStudio";
 import DeepSeek from "@lobehub/icons/es/DeepSeek";
 import Stepfun from "@lobehub/icons/es/Stepfun";
 import XAI from "@lobehub/icons/es/XAI";
@@ -50,6 +51,8 @@ export function PresetIcon({ iconKey, size = 18 }: PresetIconProps) {
       return <Bailian {...iconProps} />;
     case "ollama":
       return <Ollama {...iconProps} />;
+    case "lm-studio":
+      return <LmStudio {...iconProps} />;
     case "deepseek":
       return <DeepSeek {...iconProps} />;
     case "stepfun":
