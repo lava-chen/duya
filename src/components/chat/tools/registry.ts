@@ -18,6 +18,7 @@ import {
   ListChecksIcon,
   TablerMessageCircleIcon,
   EyeIcon,
+  ImageIcon,
   SquaresFourIcon,
   AiGatewayIcon,
 } from '@/components/icons';
@@ -263,6 +264,22 @@ export const TOOL_REGISTRY: ToolRendererDef[] = [
         return name.length > 60 ? name.slice(0, 57) + '…' : name;
       }
       return 'vision';
+    },
+  },
+  {
+    // image_generate — AI image generation (plan image-gen). Summary
+    // shows the prompt so the chrome reads the request instead of the
+    // raw tool name; the saved file path is surfaced in the result.
+    match: (n) => n.toLowerCase() === 'image_generate',
+    icon: ImageIcon,
+    labelKey: null,
+    getSummary: (input) => {
+      const inp = (input || {}) as Record<string, unknown>;
+      const prompt = typeof inp.prompt === 'string' ? inp.prompt.trim() : '';
+      if (prompt) {
+        return prompt.length > 60 ? prompt.slice(0, 57) + '…' : prompt;
+      }
+      return 'image_generate';
     },
   },
   {

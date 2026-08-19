@@ -608,108 +608,6 @@ html[data-font="system"] .message-content li {
   color: #bfdbfe;
 }
 
-/* Memory citation popover — matches the reference screenshot: a dense, dark,
- * rounded bubble anchored to the memory-chip button in the message action
- * bar. Hovering the button (or the popover itself while the cursor is
- * crossing the gap) keeps it open. Clicking the button opens the cited
- * file in the side preview panel. */
-.memory-popover {
-  position: absolute;
-  z-index: 60;
-  left: 0;
-  bottom: calc(100% + 10px);
-  min-width: 280px;
-  max-width: min(480px, 60vw);
-  padding: 12px 14px;
-  border-radius: 12px;
-  color: #e6e6e6;
-  background: rgba(40, 40, 42, 0.985);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  box-shadow:
-    0 16px 40px -12px rgba(0, 0, 0, 0.6),
-    0 4px 10px -4px rgba(0, 0, 0, 0.35),
-    0 0 0 0.5px rgba(255, 255, 255, 0.02) inset;
-  -webkit-backdrop-filter: saturate(180%) blur(22px);
-  backdrop-filter: saturate(180%) blur(22px);
-  pointer-events: auto;
-  transform-origin: left bottom;
-  animation: memory-popover-in 120ms ease-out;
-}
-
-@keyframes memory-popover-in {
-  from { opacity: 0; transform: translateY(4px) scale(0.985); }
-  to   { opacity: 1; transform: translateY(0)    scale(1); }
-}
-
-.memory-popover__title {
-  margin: 0 0 8px 0;
-  font-size: 12.5px;
-  font-weight: 650;
-  letter-spacing: 0.01em;
-  color: #f2f2f2;
-  opacity: 0.95;
-}
-
-.memory-popover__list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.memory-popover__item {
-  font-size: 13px;
-  line-height: 1.45;
-  color: #d9d9d9;
-  padding-left: 14px;
-  position: relative;
-  word-break: break-word;
-}
-
-.memory-popover__item::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 9px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #a78bfa;
-  opacity: 0.85;
-}
-
-.memory-popover__item-empty-note {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  color: #c4b5fd;
-}
-
-/* Arrow caret pointing down at the trigger button */
-.memory-popover::after {
-  content: '';
-  position: absolute;
-  left: 20px;
-  bottom: -5.5px;
-  width: 10px;
-  height: 10px;
-  transform: rotate(45deg);
-  background: inherit;
-  border-right: 1px solid rgba(255, 255, 255, 0.09);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 2px;
-  clip-path: polygon(100% 0, 100% 100%, 0 100%);
-}
-
-.memory-popover__hint {
-  margin-top: 9px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 11.5px;
-  color: #a8a8a8;
-}
-
 /* Keep dark theme inline code background as before */
 [data-theme="dark"] .prose code,
 [data-theme="dark"] .prose-sm code,
@@ -13970,7 +13868,6 @@ html[data-message-font-size="large"] .prose h3 {
    blurs are a major frame cost on integrated GPUs, so the heaviest
    frosted-glass surfaces switch to solid translucent backgrounds and
    every remaining blur is disabled globally. */
-[data-lowpower] .memory-popover,
 [data-lowpower] .conductor-panel,
 [data-lowpower] .conductor-zoom-pill,
 [data-lowpower] .conductor-popover {

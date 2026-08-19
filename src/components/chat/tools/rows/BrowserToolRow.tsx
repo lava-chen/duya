@@ -1,9 +1,11 @@
-// BrowserToolRow — renders browser tool actions (parallel_fetch, navigate,
-// etc.) as a search-result row.
+// BrowserToolRow — renders browser tool actions (search, parallel_fetch,
+// navigate, etc.).
 //
-// Parallel fetch: magnifier header + expandable one-line link list.
-// Single-page fetch: renders the fetched page directly (title + link on a
-// single line) with no "搜索「query」" collapsible header.
+// - search / parallel_fetch: magnifier header (query + engine on one line)
+//   + expandable card that renders the raw tool-result markdown inside
+//   (no result-count guessing — the markdown is the source of truth).
+// - Single-page fetch (navigate / go_back): renders the fetched page
+//   directly (favicon + title + link on a single line) with no header.
 
 'use client';
 
@@ -18,6 +20,8 @@ import {
   XCircleIcon,
   ChromeIcon,
 } from '@/components/icons';
+import { useLinkFavicon } from '@/lib/link-favicon';
+import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { getStatus } from '../registry';
 import type { ToolAction, ToolStatus } from '../types';
 
@@ -92,6 +96,30 @@ function extractQueryText(input: unknown): string | undefined {
   return undefined;
 }
 
+const ENGINE_LABELS: Record<string, string> = {
+  google: 'Google',
+  bing: 'Bing',
+  baidu: '百度',
+  duckduckgo: 'DuckDuckGo',
+  brave: 'Brave',
+  yahoo: 'Yahoo',
+};
+
+/**
+ * Resolve the search engine shown in the row: the `engineUsed` reported in
+ * the result markdown wins (it is the authoritative engine that actually
+ * served the SERP), otherwise the `engine` requested in the tool input.
+ * `auto` / `unknown` resolve to nothing so the row shows no engine badge.
+ */
+export function extractEngineText(tool: ToolAction): string | undefined {
+  const input = (tool.input ?? {}) as Record<string, unknown>;
+  const requested = typeof input.engine === 'string' ? input.engine : '';
+  const used = tool.result?.match(/- Engine:\s*([^\s(]+)/)?.[1];
+  const engine = (used || requested || '').trim().toLowerCase();
+  if (!engine || engine === 'auto' || engine === 'unknown') return undefined;
+  return ENGINE_LABELS[engine] ?? engine;
+}
+
 function parseParallelFetchMarkdown(result: string): BrowserResultItem[] {
   const items: BrowserResultItem[] = [];
   const headerRe = /^####\s*\[[^\]]*\]\s*(.+)$/gm;
@@ -122,7 +150,8 @@ function parseSinglePageMarkdown(result: string): BrowserResultItem[] {
 }
 
 export function extractBrowserResults(tool: ToolAction): BrowserResultItem[] {
-  // Prefer structured metadata produced by BrowserTool.execute.
+  // Prefer structured metadata produced by BrowserTool.execute and
+  // forwarded through the SSE tool_result event.
   const metadata = (tool.metadata ?? {}) as { browserResults?: BrowserResultItem[] };
   if (Array.isArray(metadata.browserResults) && metadata.browserResults.length > 0) {
     return metadata.browserResults.filter((r): r is BrowserResultItem => typeof r.url === 'string');
@@ -158,6 +187,18 @@ export function extractBrowserResults(tool: ToolAction): BrowserResultItem[] {
   return [];
 }
 
+/**
+ * Strip the model-facing envelope (`[completed] browser\n…\n[Duration: Nms]`)
+ * from a tool result so the expandable card shows only the real content.
+ */
+function stripToolEnvelope(result: string | undefined): string {
+  if (!result) return '';
+  return result
+    .replace(/^\[completed\]\s+\S+\s*\n/, '')
+    .replace(/\n\[Duration:\s*\d+ms\]\s*$/, '')
+    .trim();
+}
+
 function StatusIcon({ status }: { status: ToolStatus }) {
   if (status === 'running') {
     return <SpinnerGapIcon size={14} className="shrink-0 animate-spin text-muted-foreground/50" />;
@@ -168,25 +209,40 @@ function StatusIcon({ status }: { status: ToolStatus }) {
   return <CheckCircleIcon size={14} className="shrink-0 text-green-500" />;
 }
 
-// Single one-line link row shared by the single-page case and the parallel
-// expanded list. Icon + title + domain, all kept on one truncated line.
+// Single one-line link row used for navigate / go_back page links. The link
+// icon is replaced by the site favicon once it resolves (and only then —
+// resolution failures keep the placeholder icon).
 function ResultLink({ item }: { item: BrowserResultItem }) {
+  const favicon = useLinkFavicon(item.url);
+  const [imgFailed, setImgFailed] = useState(false);
+  const showFavicon = !!favicon && !imgFailed;
+
   return (
     <a
       href={item.url}
       target="_blank"
       rel="noreferrer"
-      title={item.url}
+      title={item.error || item.url}
       onClick={(e) => {
         e.preventDefault();
         window.open(item.url, '_blank', 'noopener,noreferrer');
       }}
       className="group flex w-full items-center gap-2 min-w-0 text-sm rounded-sm hover:bg-muted/30 transition-colors"
     >
-      <LinkSimpleIcon
-        size={13}
-        className="shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground/70 transition-colors"
-      />
+      {showFavicon ? (
+        <img
+          src={favicon}
+          alt=""
+          loading="lazy"
+          onError={() => setImgFailed(true)}
+          className="shrink-0 size-3.5 rounded-[3px] object-contain"
+        />
+      ) : (
+        <LinkSimpleIcon
+          size={13}
+          className="shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground/70 transition-colors"
+        />
+      )}
       <span className="truncate text-foreground/90 underline underline-offset-2 decoration-border group-hover:text-foreground">
         {item.title || item.url}
       </span>
@@ -203,17 +259,16 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
 
   const items = useMemo(() => extractBrowserResults(tool), [tool]);
   const query = useMemo(() => extractQueryText(tool.input), [tool.input]);
+  const engine = useMemo(() => extractEngineText(tool), [tool]);
   const isRunning = status === 'running';
   const hasItems = items.length > 0;
   const input = (tool.input ?? {}) as Record<string, unknown>;
   const operation = typeof input.operation === 'string' ? input.operation : '';
   const isParallel = operation === 'parallel_fetch';
+  const isSearch = operation === 'search';
+  const isSearchCard = isParallel || isSearch;
   const isPageOp = operation === 'navigate' || operation === 'go_back';
-  const canExpand = isParallel && hasItems && !isRunning;
-  const successfulCount = useMemo(
-    () => items.filter((i) => i.success !== false && !i.error).length,
-    [items],
-  );
+  const canExpand = isSearchCard && !!tool.result && !isRunning;
 
   // Single-page fetch: render the page directly, no "搜索「query」" header.
   if (isPageOp && hasItems) {
@@ -225,8 +280,9 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
   }
 
   // Other browser actions (click/type/screenshot/tabs/…): a plain one-line
-  // status row. Only parallel_fetch reads as a search — nothing else should.
-  if (!isParallel) {
+  // status row. Only parallel_fetch / search read as a search — nothing
+  // else should.
+  if (!isSearchCard) {
     return (
       <div className="flex items-center gap-2 px-2 py-1 min-h-6 text-sm">
         <ChromeIcon size={14} className="shrink-0 text-muted-foreground/60" />
@@ -243,12 +299,9 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
     );
   }
 
-  const headerLabel = query ? `搜索「${query}」` : '并行抓取网页';
-  const subLabel = isRunning
-    ? '…'
-    : query
-      ? `${items.length} 个结果`
-      : `${successfulCount}/${items.length} 个网页`;
+  const headerLabel = query ? `搜索「${query}」` : isParallel ? '并行抓取网页' : '搜索';
+  const cardLabel = isParallel ? '并行抓取结果' : '搜索结果';
+  const displayResult = useMemo(() => stripToolEnvelope(tool.result), [tool.result]);
 
   return (
     <div>
@@ -257,17 +310,21 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
         disabled={!canExpand}
         onClick={() => canExpand && setExpanded((prev) => !prev)}
         className={
-          'group flex w-full items-start gap-2 px-2 py-1 min-h-6 text-sm rounded-sm transition-colors ' +
+          'group flex w-full items-center gap-2 px-2 py-1 min-h-6 text-sm rounded-sm transition-colors ' +
           (canExpand ? 'cursor-pointer hover:bg-muted/30' : 'cursor-default')
         }
       >
         <MagnifyingGlassIcon
           size={14}
-          className="shrink-0 mt-0.5 text-muted-foreground/60 group-hover:text-muted-foreground/80 transition-colors"
+          className="shrink-0 text-muted-foreground/60 group-hover:text-muted-foreground/80 transition-colors"
         />
-        <span className="flex items-baseline gap-1.5 flex-1 min-w-0 text-left">
-          <span className="text-foreground/90">{headerLabel}</span>
-          <span className="text-muted-foreground/60 text-[11px]">{subLabel}</span>
+        <span className="flex items-center gap-1.5 flex-1 min-w-0 text-left">
+          <span className="truncate text-foreground/90">{headerLabel}</span>
+          {engine && (
+            <span className="whitespace-nowrap shrink-0 rounded-sm bg-muted/60 px-1 py-px text-[10px] leading-4 text-muted-foreground/80">
+              {engine}
+            </span>
+          )}
         </span>
         {canExpand && (
           <ChevronDownIcon
@@ -294,15 +351,18 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
             transition={{ duration: 0.2, ease: 'easeInOut' }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="ml-5 pr-2 pb-1 space-y-0.5">
-              {items.map((item, index) => (
-                <div
-                  key={`${item.url}-${index}`}
-                  className="flex items-center gap-2 min-w-0"
-                >
-                  <ResultLink item={item} />
-                </div>
-              ))}
+            <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
+              {/* Card label — same chrome as the bash tool card */}
+              <div className="text-[11px] tool-card-muted font-medium mb-1.5">
+                {cardLabel}
+                {engine ? ` · ${engine}` : ''}
+              </div>
+              {/* Raw tool-result markdown */}
+              <div className="text-[13px] leading-relaxed max-h-[300px] overflow-auto pr-1">
+                <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none">
+                  {displayResult}
+                </MarkdownRenderer>
+              </div>
             </div>
           </motion.div>
         )}

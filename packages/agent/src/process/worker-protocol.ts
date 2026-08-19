@@ -231,6 +231,9 @@ export interface SubagentToolResultEvent {
   result: string;
   error?: boolean;
   duration_ms?: number;
+  /** Structured tool-result metadata (e.g. browserResults for browser
+   *  search / parallel_fetch) forwarded for rich renderer tool rows. */
+  metadata?: Record<string, unknown>;
 }
 
 export interface SubagentToolProgressEvent {

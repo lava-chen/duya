@@ -171,8 +171,13 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       cronPermissionMode: (raw.cronPermissionMode as AppSettings["cronPermissionMode"]) ?? defaults.cronPermissionMode,
       // Default workspace directory for creating new projects
       workspaceDir: raw.workspaceDir || undefined,
-      // Default thinking effort for new chat sessions
-      defaultThinkingEffort: raw.defaultThinkingEffort || undefined,
+      // Default thinking effort for new chat sessions. `save()` writes the
+      // literal 'null' when the user resets to Auto; treat it as unset so
+      // the composer shows Auto instead of a bogus 'null' effort.
+      defaultThinkingEffort: (() => {
+        const v = raw.defaultThinkingEffort;
+        return v && v !== 'null' ? v : undefined;
+      })(),
       // Memory system toggle
       memoryEnabled: raw.memoryEnabled === "true",
     };

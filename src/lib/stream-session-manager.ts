@@ -1369,6 +1369,7 @@ class StreamSessionManager {
               content: String(event.result),
               is_error: !!event.error,
               duration_ms: (event as { duration_ms?: number }).duration_ms,
+              metadata: (event as { metadata?: Record<string, unknown> }).metadata,
             });
           }
           break;
@@ -1709,7 +1710,17 @@ class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
-  private handleToolResultEvent(sessionId: string, streamId: string, result: { tool_use_id: string; content: string; is_error: boolean; duration_ms?: number }): void {
+  private handleToolResultEvent(
+    sessionId: string,
+    streamId: string,
+    result: {
+      tool_use_id: string;
+      content: string;
+      is_error: boolean;
+      duration_ms?: number;
+      metadata?: Record<string, unknown>;
+    },
+  ): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     const existingResultIndex = s.toolResults.findIndex((existing) => existing.tool_use_id === result.tool_use_id);
@@ -1724,6 +1735,7 @@ class StreamSessionManager {
       content: result.content,
       is_error: result.is_error,
       duration_ms: result.duration_ms,
+      metadata: result.metadata,
     };
     if (existingResultIndex !== -1) {
       s.toolResults = s.toolResults.map((existing, index) => index === existingResultIndex ? info : existing);

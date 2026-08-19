@@ -348,6 +348,7 @@ export class AgentSSEClient {
           result: eventObj.result,
           error: eventObj.error as string | undefined,
           duration_ms: (eventObj as { duration_ms?: number }).duration_ms,
+          metadata: (eventObj as { metadata?: Record<string, unknown> }).metadata,
         });
         break;
       case 'tool_progress':

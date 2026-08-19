@@ -1024,4 +1024,31 @@ program
     await runSetupWizard(section);
   })
 
+// `duya image` — generate an image directly (plan image-gen). Reads
+// [image_generation] from ~/.duya/config.toml; every option overrides it.
+program
+  .command('image <prompt>')
+  .description('Generate an image via the configured provider ([image_generation] in config.toml)')
+  .option('--provider <provider>', 'Provider: openai or fal (overrides config)')
+  .option('--model <model>', 'Model id, e.g. gpt-image-1 or fal-ai/flux/dev (overrides config)')
+  .option('--size <size>', 'Output size, e.g. 1024x1024 (overrides config)')
+  .option('--quality <quality>', 'Quality: auto, low, medium, high (overrides config)')
+  .option('--output <dir>', 'Output directory (overrides config)')
+  .option('--output-name <name>', 'Output file base name (no extension)')
+  .option('--json', 'Emit machine-readable JSON')
+  .action(async (prompt, options) => {
+    const { runImageCommand } = await import('./imageCmds.js');
+    const code = await runImageCommand(prompt, options);
+    if (code !== 0) process.exit(code);
+  })
+
+// `duya image:config` — print the effective image generation config.
+program
+  .command('image:config')
+  .description('Show the effective [image_generation] configuration')
+  .action(async () => {
+    const { printImageConfigSummary } = await import('./imageCmds.js');
+    printImageConfigSummary();
+  })
+
 program.parse();

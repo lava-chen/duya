@@ -508,14 +508,25 @@ export class AgentServerClient {
     }
   }
 
-  async getSessionStatus(sessionId: string): Promise<{ state: string; lastEventId: number } | null> {
+  /**
+   * Query the agent server's session state. The server's `/status` endpoint
+   * reports the state under `status` (see SessionStatus in agent-sse-client.ts;
+   * the values are the uppercase SessionState strings, e.g. 'STREAMING').
+   * Consumers compare it against 'STREAMING' to detect an in-flight run
+   * started outside the renderer (e.g. a cron run kicked off by the
+   * main-process scheduler) so they can attach to the live SSE stream
+   * instead of showing a blank view.
+   */
+  async getSessionStatus(sessionId: string): Promise<{ status: string; lastEventId: number } | null> {
     const baseUrl = await this.getBaseUrl();
     if (!baseUrl) return null;
 
     try {
       const response = await fetch(`${baseUrl}/sessions/${sessionId}/status`);
       if (!response.ok) return null;
-      return (await response.json()) as { state: string; lastEventId: number };
+      const data = (await response.json()) as { status?: string; lastEventId?: number };
+      if (typeof data.status !== 'string') return null;
+      return { status: data.status, lastEventId: data.lastEventId ?? 0 };
     } catch {
       return null;
     }

@@ -48,6 +48,20 @@ import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
 import type { ConductorCanvas } from '@duya/conductor/renderer/types/conductor';
 
+export type PermissionModeUi = 'ask' | 'auto' | 'bypass';
+
+/** Session-row `permission_profile` → composer selector mode. Unknown values fall back to Auto. */
+function permissionProfileToUi(profile: string | null | undefined): PermissionModeUi {
+  if (profile === 'default') return 'ask';
+  if (profile === 'full_access') return 'bypass';
+  return 'auto';
+}
+
+/** Composer selector mode → session-row `permission_profile`. */
+function permissionModeUiToProfile(mode: PermissionModeUi): string {
+  return mode === 'bypass' ? 'full_access' : mode === 'ask' ? 'default' : 'auto';
+}
+
 interface ChatViewProps {
   sessionId: string;
   messages: Message[];
@@ -145,11 +159,14 @@ export function ChatView({
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
   // Permission mode restored as a composer selector (Ask / Auto / Bypass).
   // Defaults to Auto (workspace-trust) to preserve the previous behavior.
+  // The choice is persisted to the session row (permission_profile) so it
+  // survives session switches and is the worker's durable default.
   const [permissionMode, setPermissionMode] = useState<'ask' | 'auto' | 'bypass'>('auto');
   const handlePermissionModeChange = useCallback((mode: 'ask' | 'auto' | 'bypass') => {
     setPermissionMode(mode);
     onLivePermissionChange?.(mode);
-  }, [onLivePermissionChange]);
+    updateThreadIPC(sessionId, { permissionProfile: permissionModeUiToProfile(mode) }).catch(console.error);
+  }, [onLivePermissionChange, sessionId]);
 
   // Sync effort from settings when settings load for the first time.
   useEffect(() => {
@@ -559,9 +576,10 @@ export function ChatView({
               updateThreadIPC(sessionId, { model: modelName }).catch(console.error);
             }
 
-            // Note: permission profile is fixed to Auto (workspace-trust);
-            // data.thread.permissionProfile is kept in the DB for backward
-            // compatibility but is no longer surfaced in the UI.
+            // Restore the permission-mode selector from the session row so
+            // the composer shows the mode the worker will actually use, and
+            // the user always sees the current mode after switching sessions.
+            setPermissionMode(permissionProfileToUi(data.thread.permissionProfile));
 
             // Load agent profile binding. The profile is fixed at session
             // creation (no in-session agent switching), so only sync the id.
@@ -760,12 +778,15 @@ export function ChatView({
     attachTryingRef.current = true;
     try {
       const status = await getAgentServerClient().getSessionStatus(sid);
-      if (attachCancelledRef.current || !status || status.state !== 'STREAMING') return;
+      if (attachCancelledRef.current || !status || status.status !== 'STREAMING') return;
       await attachToExistingStream(sid);
       if (!attachCancelledRef.current) attachDidAttachRef.current = true;
     } catch {
-      // Agent Server unreachable or session finished — keep retrying; the
-      // persisted transcript still renders in the meantime.
+      // Attach failed (e.g. the run finished between the status probe and the
+      // GET /chat, or the agent server went away). Force a persisted-transcript
+      // reload so a completed run still renders without a manual refresh;
+      // harmless for transient failures while the retry loop keeps polling.
+      void loadThreadMessagesRef.current(sid, { force: true });
     } finally {
       attachTryingRef.current = false;
     }

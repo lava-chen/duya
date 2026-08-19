@@ -79,7 +79,7 @@ export type SettingsTab =
   | 'general' | 'appearance' | 'providers'
   | 'provider-picker' | 'provider-edit'
   | 'extensions' | 'channels' | 'browser' | 'security'
-  | 'usage' | 'agents' | 'support' | 'memory' | 'voice' | 'performance';
+  | 'usage' | 'agents' | 'support' | 'memory' | 'hooks' | 'voice' | 'performance';
 
 /**
  * Plan 205: the target of the `provider-edit` page. Either
@@ -529,7 +529,7 @@ export const useConversationStore = create<ConversationState>()(
           let isStreaming = false;
           try {
             const status = await getAgentServerClient().getSessionStatus(threadId);
-            if (status && status.state === 'STREAMING') {
+            if (status && status.status === 'STREAMING') {
               console.log(`[Store] Session is STREAMING: ${threadId.slice(0, 8)}`);
               isStreaming = true;
             }

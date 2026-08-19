@@ -1560,6 +1560,12 @@ export class StreamingToolExecutor {
         content: resultContent,
         tool_call_id: tool.id,
         duration_ms: durationMs,
+        // Forward structured tool-result metadata (e.g. browserResults for
+        // browser tool search/parallel_fetch) so the renderer can build
+        // rich tool rows without parsing the markdown result. Provider
+        // adapters only serialize role/content/tool_call_id, so this never
+        // leaks into the LLM payload.
+        metadata: (result.metadata ?? undefined) as Message['metadata'],
       };
       if (result.images && result.images.length > 0) {
         toolMessage.content = [

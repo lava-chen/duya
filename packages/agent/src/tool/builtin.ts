@@ -37,6 +37,7 @@ import { briefTool } from './BriefTool/BriefTool.js';
 import { sessionSearchTool } from './SessionSearchTool/index.js';
 import { messageSessionTool } from './MessageSessionTool/index.js';
 import { VisionTool } from './VisionTool/VisionTool.js';
+import { imageGenerateTool } from './ImageGenerateTool/index.js';
 import { duyaCliTool } from './DuyaCliTool/index.js';
 import { askUserQuestionTool } from './AskUserQuestionTool/AskUserQuestionTool.js';
 import { moduleTool } from './ModuleTool/ModuleTool.js';
@@ -159,6 +160,14 @@ export function createBuiltinRegistry(
   registry.register(messageSessionTool.toTool(), messageSessionTool, { exposeMode: 'discoverable' });
   const visionTool = new VisionTool();
   registry.register(visionTool, visionTool, { exposeMode: 'always' });
+
+  // image_generate — media generation tool (plan image-gen). Registered
+  // discoverable: it stays off the default tool surface and is reached via
+  // `tool_search`. Config lives under `[image_generation]` in config.toml.
+  registry.register(imageGenerateTool.toTool(), imageGenerateTool, {
+    exposeMode: 'discoverable',
+    inputSchemaSummary: 'prompt (required), size, quality, reference_image, output_path',
+  });
   // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
   // See `docs/exec-plans/active/99-duya-cli-argv-and-deprecate-cron-tool.md`.
 
@@ -307,6 +316,7 @@ export { browserTool } from './BrowserTool/BrowserTool.js';
 export { skillTool } from './SkillTool/SkillTool.js';
 export { briefTool } from './BriefTool/BriefTool.js';
 export { VisionTool } from './VisionTool/VisionTool.js';
+export { imageGenerateTool, IMAGE_GENERATE_TOOL_NAME, ImageGenerateTool } from './ImageGenerateTool/index.js';
 export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/index.js';
 // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
 // duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.

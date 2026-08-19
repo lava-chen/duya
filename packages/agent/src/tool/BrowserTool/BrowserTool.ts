@@ -263,7 +263,10 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
               browserResults: result.results.map((item: Record<string, unknown>) => ({
                 url: String(item.url ?? ''),
                 title: typeof item.title === 'string' && item.title ? item.title : undefined,
-                success: item.success === true,
+                // parallel_fetch items carry an explicit success flag; search
+                // items have none (any returned item is a live result), so
+                // treat anything that is not explicitly `false` as success.
+                success: item.success !== false,
                 error: typeof item.error === 'string' ? item.error : undefined,
               })),
             }
