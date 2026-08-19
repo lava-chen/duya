@@ -359,6 +359,43 @@ export async function handleMemoryConfig(req: http.IncomingMessage, res: http.Se
       sendJson(res, 400, { ok: false, error: `unknown memory.rag key: ${key}` });
       return;
     }
+    // `scan_paths` must stay an array. A JSON-array string (e.g. from
+    // `duya memory set scan_paths '["~/notes"]'`) is normalized here so a
+    // bad client can never persist a string that readRagConfig() then
+    // silently drops (bug report 2026-08-19 #5).
+    if (key === 'scan_paths') {
+      let value = body.value;
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed === '') {
+          value = [];
+        } else if (trimmed.startsWith('[')) {
+          try {
+            const parsed = JSON.parse(trimmed) as unknown;
+            if (Array.isArray(parsed)) {
+              value = parsed.map(String);
+            } else {
+              sendJson(res, 400, { ok: false, error: 'scan_paths must be a JSON array of strings' });
+              return;
+            }
+          } catch {
+            sendJson(res, 400, { ok: false, error: 'scan_paths must be a JSON array of strings' });
+            return;
+          }
+        } else {
+          // Single path shorthand.
+          value = [value];
+        }
+      } else if (Array.isArray(value)) {
+        value = value.map(String);
+      } else {
+        sendJson(res, 400, { ok: false, error: 'scan_paths must be a JSON array of strings' });
+        return;
+      }
+      getConfigStore().set('memory.rag.scan_paths', value);
+      sendJson(res, 200, { ok: true, path: key, value });
+      return;
+    }
     getConfigStore().set(`memory.rag.${key}`, body.value);
     sendJson(res, 200, { ok: true, path: key, value: body.value });
   } catch (err) {

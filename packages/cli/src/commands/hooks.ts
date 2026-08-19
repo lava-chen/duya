@@ -112,22 +112,92 @@ function renderWriteText(r: HookWriteDTO, verb: string): string {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function reportError(err: unknown): number {
+/** Machine-readable error code for a CliApiError (bug report 2026-08-19 #7). */
+function apiErrorCode(err: CliApiError): string {
+  switch (err.kind) {
+    case 'app_not_running':
+    case 'connection_refused':
+      return 'app_not_running';
+    case 'timeout':
+      return 'timeout';
+    case 'auth_failed':
+      return 'auth_failed';
+    case 'not_found':
+      return 'not_found';
+    case 'malformed_response':
+      return 'malformed_response';
+    default:
+      return 'server_error';
+  }
+}
+
+/** Whether a retry (possibly after fixing the cause) is likely to help. */
+function apiErrorRetryable(err: CliApiError): boolean {
+  return (
+    err.kind === 'app_not_running' ||
+    err.kind === 'connection_refused' ||
+    err.kind === 'timeout' ||
+    err.kind === 'auth_failed' ||
+    err.kind === 'server_error'
+  );
+}
+
+/**
+ * Render an error envelope. In JSON mode the body is machine-readable
+ * ({ ok, code, error, hint, retryable }); in text mode the hint is
+ * written to stderr. Returns the exit code.
+ */
+function reportError(err: unknown, format?: OutputFormat): number {
   if (err instanceof CliApiError) {
-    process.stderr.write(err.hint + '\n');
+    if (format === 'json') {
+      process.stdout.write(
+        renderJson({
+          ok: false,
+          code: apiErrorCode(err),
+          error: err.message,
+          hint: err.hint,
+          retryable: apiErrorRetryable(err),
+        }) + '\n',
+      );
+    } else {
+      process.stderr.write(err.hint + '\n');
+    }
     return err.isAppUnavailable() ? 2 : 1;
   }
-  process.stderr.write(`Unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+  if (format === 'json') {
+    process.stdout.write(
+      renderJson({
+        ok: false,
+        code: 'unknown',
+        error: err instanceof Error ? err.message : String(err),
+        hint: 'Unexpected error; check the desktop app log',
+        retryable: true,
+      }) + '\n',
+    );
+  } else {
+    process.stderr.write(`Unexpected error: ${err instanceof Error ? err.message : String(err)}\n`);
+  }
   return 1;
 }
 
 /** Write-op gate: `--yes` required in non-interactive mode (mirrors plugin.ts). */
-function requireYes(yes: boolean, action: string): boolean {
+function requireYes(yes: boolean, action: string, format?: OutputFormat): boolean {
   if (yes) return true;
   if (!stdin.isTTY) {
-    process.stderr.write(
-      `interactive_required: ${action} requires --yes in non-interactive mode\n`,
-    );
+    const message = `interactive_required: ${action} requires --yes in non-interactive mode`;
+    if (format === 'json') {
+      process.stdout.write(
+        renderJson({
+          ok: false,
+          code: 'interactive_required',
+          error: message,
+          hint: `retry with --yes: ${action} --yes`,
+          retryable: true,
+        }) + '\n',
+      );
+    } else {
+      process.stderr.write(message + '\n');
+    }
     return false;
   }
   return true;
@@ -148,7 +218,7 @@ export async function runHookListCommand(format: OutputFormat): Promise<number> 
     }
     return body.ok === true ? 0 : 1;
   } catch (err) {
-    return reportError(err);
+    return reportError(err, format);
   }
 }
 
@@ -167,7 +237,7 @@ export async function runHookValidateCommand(format: OutputFormat, rawPath: stri
     }
     return body.ok === true ? 0 : 1;
   } catch (err) {
-    return reportError(err);
+    return reportError(err, format);
   }
 }
 
@@ -176,7 +246,7 @@ export async function runHookAddCommand(format: OutputFormat, rawPath: string, y
     process.stderr.write('path argument required (path to hook.json)\n');
     return 64;
   }
-  if (!requireYes(yes, 'duya hook add')) return 3;
+  if (!requireYes(yes, 'duya hook add', format)) return 3;
   try {
     const client = await CliApiClient.connect();
     const body = await client.post<HookWriteDTO>('/v1/hooks/add', { path: rawPath });
@@ -187,7 +257,7 @@ export async function runHookAddCommand(format: OutputFormat, rawPath: string, y
     }
     return body.ok === true ? 0 : 1;
   } catch (err) {
-    return reportError(err);
+    return reportError(err, format);
   }
 }
 
@@ -196,7 +266,7 @@ export async function runHookRemoveCommand(format: OutputFormat, rawPath: string
     process.stderr.write('path argument required (path to hook.json)\n');
     return 64;
   }
-  if (!requireYes(yes, 'duya hook remove')) return 3;
+  if (!requireYes(yes, 'duya hook remove', format)) return 3;
   try {
     const client = await CliApiClient.connect();
     const body = await client.post<HookWriteDTO>('/v1/hooks/remove', { path: rawPath });
@@ -211,6 +281,6 @@ export async function runHookRemoveCommand(format: OutputFormat, rawPath: string
     }
     return body.ok === true ? 0 : 1;
   } catch (err) {
-    return reportError(err);
+    return reportError(err, format);
   }
 }

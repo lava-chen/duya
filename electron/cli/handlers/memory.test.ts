@@ -224,6 +224,37 @@ describe('handleMemoryConfig', () => {
     expect(saved).toEqual(['~/notes', 'E:/docs']);
   });
 
+  it('normalizes a JSON-array string scan_paths value (bug 2026-08-19 #5)', async () => {
+    const { res, capture } = makeRes();
+    await handleMemoryConfig(
+      makeReq({ path: 'scan_paths', value: '["~/notes","E:/docs"]' }) as IncomingMessage,
+      res,
+    );
+    expect(capture.status).toBe(200);
+    const saved = realStore.getByPath('memory.rag.scan_paths') as string[];
+    expect(saved).toEqual(['~/notes', 'E:/docs']);
+  });
+
+  it('treats a bare scan_paths string as a single-element array', async () => {
+    const { res, capture } = makeRes();
+    await handleMemoryConfig(
+      makeReq({ path: 'scan_paths', value: 'E:/docs' }) as IncomingMessage,
+      res,
+    );
+    expect(capture.status).toBe(200);
+    const saved = realStore.getByPath('memory.rag.scan_paths') as string[];
+    expect(saved).toEqual(['E:/docs']);
+  });
+
+  it('rejects an invalid scan_paths JSON value', async () => {
+    const { res, capture } = makeRes();
+    await handleMemoryConfig(
+      makeReq({ path: 'scan_paths', value: '["unterminated' }) as IncomingMessage,
+      res,
+    );
+    expect(capture.status).toBe(400);
+  });
+
   it('rejects an unknown key', async () => {
     const { res, capture } = makeRes();
     await handleMemoryConfig(makeReq({ path: 'evil', value: 1 }) as IncomingMessage, res);
@@ -281,6 +312,35 @@ describe('handleMemoryRebuild', () => {
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
     expect(events.find((e) => e.event_type === 'rag_index_rebuilt_manual')).toBeDefined();
+  });
+
+  it('includes configured [memory.rag].scan_paths in the rebuild (bug 2026-08-19 #5)', async () => {
+    realStore.set('memory.rag', {
+      enabled: true,
+      index_path: '',
+      scan_paths: [join(mockHome.dir, 'notes')],
+      embedding_enabled: false,
+      embedding_provider: '',
+      embedding_model: '',
+    });
+    const memoryDir = join(mockHome.dir, '.duya', 'memory');
+    mkdirSync(memoryDir, { recursive: true });
+    writeFileSync(join(memoryDir, 'hydrology.md'), '# Hydrology\nDam crest elevation notes.\n', 'utf8');
+    const notesDir = join(mockHome.dir, 'notes');
+    mkdirSync(notesDir, { recursive: true });
+    writeFileSync(join(notesDir, 'notes.md'), '# Notes\nMeeting minutes.\n', 'utf8');
+
+    const { res, capture } = makeRes();
+    await handleMemoryRebuild(makeReq({}) as IncomingMessage, res);
+
+    expect(capture.status).toBe(200);
+    const body = capture.body as { ok: boolean; documents: number; scanRoots: string[] };
+    expect(body.ok).toBe(true);
+    expect(body.documents).toBe(2);
+    expect(body.scanRoots).toEqual([
+      join(mockHome.dir, '.duya', 'memory'),
+      join(mockHome.dir, 'notes'),
+    ]);
   });
 
   it('rejects with 400 when rag is not enabled', async () => {

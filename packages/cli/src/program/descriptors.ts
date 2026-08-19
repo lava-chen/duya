@@ -76,7 +76,7 @@ import {
 } from '../commands/config.js';
 import { runAgentList, runAgentCreate, runAgentDelete } from '../commands/agent.js';
 import { runHookListCommand, runHookValidateCommand, runHookAddCommand, runHookRemoveCommand } from '../commands/hooks.js';
-import { runMemoryDoctor, runMemorySetup, runMemoryStatus, runMemoryEnable, runMemoryDisable, runMemorySet } from '../commands/memory.js';
+import { runMemoryDoctor, runMemorySetup, runMemoryStatus, runMemoryEnable, runMemoryDisable, runMemorySet, runMemorySearch, runMemoryRebuild } from '../commands/memory.js';
 
 import {
   type CliSubcommand,
@@ -134,6 +134,20 @@ function adaptIdFirst(
 
 /**
  * Adapter for skill-style write ops that need `yes`.
+ *
+ * Legacy shape: `fn(id, yes, format)` — the resource id comes first,
+ * the `--yes` flag second, the output format last (used by
+ * `plugin enable/disable` and `skill enable/disable`).
+ *
+ * IMPORTANT — adapter contract: a legacy function whose signature
+ * includes a `yes` parameter MUST receive `ctx.options.yes` from the
+ * descriptor layer. `adaptLegacy` / `adaptIdFirst` never forward it, so
+ * a write op wired through them would always fail with
+ * `interactive_required` in non-TTY mode (the `hook add/remove` bug
+ * fixed below). When the legacy signature puts `format` FIRST and `yes`
+ * LAST (`fn(format, ...args, yes)`, e.g. the hook commands), do not use
+ * this adapter — write `run: (ctx) => fn(ctx.format, ctx.args[0] ?? '',
+ * ctx.options.yes === true)` inline (see `subHookAdd`).
  */
 function adaptWrite(
   fn: LegacyFn,
@@ -413,7 +427,7 @@ const subChannelSendTest: CliSubcommand = {
 };
 
 const subChannelSend: CliSubcommand = {
-  description: 'Proactively send a plain text message to a channel via the gateway (no inbound trigger).',
+  description: 'Proactively send a plain text message (and optional file attachment) to a channel via the gateway (no inbound trigger).',
   write: true,
   args: [
     { name: 'channelId', required: false, description: 'Channel id (platform:chatId form); omit when using --platform/--chat' },
@@ -423,6 +437,7 @@ const subChannelSend: CliSubcommand = {
     { flags: '--platform <platform>', description: 'Platform (telegram/qq/feishu); requires --chat' },
     { flags: '--chat <chatId>', description: 'Platform chat id; requires --platform' },
     { flags: '--text <text>', description: 'Message text (alternative to the positional arg)' },
+    { flags: '--file <path>', description: 'Send a local file attachment (used as the media caption when --text/positional text is present)' },
   ],
   run: (ctx) => runChannelCommand.send(ctx),
 };
@@ -977,7 +992,11 @@ const subHookAdd: CliSubcommand = {
   write: true,
   args: [{ name: 'path', required: true, description: 'Path to hook.json (absolute, or relative to ~/.duya; ~ allowed)' }],
   options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
-  run: (ctx) => adaptLegacy(runHookAddCommand as LegacyFn, [0])(ctx),
+  // Legacy signature is (format, path, yes): `adaptLegacy` would never
+  // forward `ctx.options.yes`, so the command would always reject in
+  // non-TTY mode (bug report 2026-08-19 #1). Call it directly.
+  run: async (ctx) =>
+    ok(await runHookAddCommand(ctx.format, ctx.args[0] ?? '', ctx.options.yes === true)),
 };
 
 const subHookRemove: CliSubcommand = {
@@ -985,7 +1004,8 @@ const subHookRemove: CliSubcommand = {
   write: true,
   args: [{ name: 'path', required: true, description: 'Path to hook.json (as registered, or any equivalent form)' }],
   options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
-  run: (ctx) => adaptLegacy(runHookRemoveCommand as LegacyFn, [0])(ctx),
+  run: async (ctx) =>
+    ok(await runHookRemoveCommand(ctx.format, ctx.args[0] ?? '', ctx.options.yes === true)),
 };
 
 // ============================================================================
@@ -1029,14 +1049,28 @@ const subMemoryDisable: CliSubcommand = {
 };
 
 const subMemorySet: CliSubcommand = {
-  description: 'Write a single `memory.rag.<path>` value (e.g. `enabled true`, `embedding_model bge-m3`). Write op; --yes required in non-TTY.',
+  description: 'Write a single `memory.rag.<path>` value (e.g. `enabled true`, `embedding_model bge-m3`, `scan_paths ["~/notes"]`). Write op; --yes required in non-TTY.',
   write: true,
   args: [
     { name: 'path', required: true, description: 'memory.rag key (enabled | index_path | scan_paths | embedding_enabled | embedding_provider | embedding_model)' },
-    { name: 'value', required: true, description: 'Value (true/false coerced to boolean)' },
+    { name: 'value', required: true, description: 'Value (true/false coerced to boolean; scan_paths accepts a JSON array like ["~/notes"] )' },
   ],
   options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
   run: (ctx) => runMemorySet(ctx),
+};
+
+const subMemorySearch: CliSubcommand = {
+  description: 'Query the retrievable memory index directly (CLI bypass of the UserPromptSubmit retrieval hook). Read-only.',
+  args: [{ name: 'query', required: true, description: 'Search text (min 3 chars)' }],
+  options: [{ flags: '--limit <n>', description: 'Max hits 1–20 (default 5)' }],
+  run: (ctx) => runMemorySearch(ctx),
+};
+
+const subMemoryRebuild: CliSubcommand = {
+  description: 'Rebuild the retrievable memory index now (includes [memory.rag].scan_paths). Write op; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt (required in non-interactive mode)' }],
+  run: (ctx) => runMemoryRebuild(ctx),
 };
 
 // ============================================================================
@@ -1227,7 +1261,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'memory',
-    description: 'Memory RAG diagnostics and config (doctor / status / setup / enable / disable / set)',
+    description: 'Memory RAG diagnostics, config, search and rebuild (doctor / status / setup / enable / disable / set / search / rebuild)',
     subcommands: {
       doctor: subMemoryDoctor,
       status: subMemoryStatus,
@@ -1235,6 +1269,8 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       enable: subMemoryEnable,
       disable: subMemoryDisable,
       set: subMemorySet,
+      search: subMemorySearch,
+      rebuild: subMemoryRebuild,
     },
   },
   {
