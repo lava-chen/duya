@@ -93,7 +93,8 @@ function makeRes(): { res: ServerResponse; capture: CapturedResponse } {
 }
 
 function makeReq(body: unknown): IncomingMessage {
-  return Readable.from([Buffer.from(JSON.stringify(body))]) as unknown as IncomingMessage;
+  const stream = Readable.from([Buffer.from(JSON.stringify(body))]);
+  return Object.assign(stream, { headers: {} }) as unknown as IncomingMessage;
 }
 
 let tmpDir: string;
