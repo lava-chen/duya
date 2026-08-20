@@ -308,6 +308,93 @@ describe('reconcileProjections (D12)', () => {
       deriveRolloutSummaryFilename({ rollout_id: ID_A, rollout_slug: 'ab', generated_at: T0 })
     ).toContain('-rollout.md');
   });
+
+  // Regression tests for non-uuid rollout_ids (bug fixed 2026-08-20).
+  //
+  // The original matcher used
+  //   r.rollout_id.replace(/-/g, '').toLowerCase().startsWith(shortid)
+  // which only works when the shortid happens to be the first chars
+  // of the dash-stripped id. For `gw-...` (WeChat gateway) and
+  // `cron:...` (cron bridge) ids the prefix check fails because the
+  // scheme prefix (`gw`, `cron`) survives dash-stripping, so the
+  // file is misclassified as an orphan and deleted on every reconcile.
+  // The fix compares `rolloutShortId(rollout_id) === shortid`, which
+  // mirrors the writer's derivation exactly. These tests pin the
+  // behaviour for every id shape we ship.
+
+  it('a gw-prefixed rollout id (WeChat gateway) is not treated as an orphan', () => {
+    const gwId = 'gw-1786781272165-42mihpi2';
+    const id = insertStage1Output(db, {
+      rollout_id: gwId,
+      generated_at: T0,
+      rollout_slug: 'ai-data-center-water-impact-research',
+    });
+    writeConsistentProjection(db, fixture.memoryRoot, id);
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.removed).toHaveLength(0);
+    expect(outboxRows(db)).toHaveLength(0);
+  });
+
+  it('a cron-prefixed rollout id (cron bridge) is not treated as an orphan', () => {
+    const cronId =
+      'cron:81079b80-b366-4397-af4c-68a685410a0d:1786892440674:d8d59ccb-7253-4098-b966-eda1d275b438';
+    const id = insertStage1Output(db, {
+      rollout_id: cronId,
+      generated_at: T0,
+      rollout_slug: 'duya-website-doc-sync-empty-window',
+    });
+    writeConsistentProjection(db, fixture.memoryRoot, id);
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.removed).toHaveLength(0);
+    expect(outboxRows(db)).toHaveLength(0);
+  });
+
+  it('a mixed-case UUID rollout id is not treated as an orphan (lowercases)', () => {
+    const mixedId = 'ABCD1234-EFAB-CDEF-1234-567890ABCDEF';
+    const id = insertStage1Output(db, {
+      rollout_id: mixedId,
+      generated_at: T0,
+      rollout_slug: 'mixed-case-rollout',
+    });
+    writeConsistentProjection(db, fixture.memoryRoot, id);
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.removed).toHaveLength(0);
+    expect(outboxRows(db)).toHaveLength(0);
+  });
+
+  it('repeated reconcile runs do not enqueue redundant outbox rows (no write/delete loop)', () => {
+    // Pin the original symptom: an unchanged session whose file
+    // existed before the fix caused the outbox to accumulate ~24
+    // write+delete pairs per day for that file. After the fix, every
+    // reconcile pass over an unchanged, content-matched row must be
+    // a no-op.
+    const gwId = 'gw-1786781272165-42mihpi2';
+    const id = insertStage1Output(db, {
+      rollout_id: gwId,
+      generated_at: T0,
+      rollout_slug: 'ai-data-center-water-impact-research',
+    });
+    writeConsistentProjection(db, fixture.memoryRoot, id);
+
+    for (let i = 0; i < 5; i++) {
+      const report = reconcileProjections(db, {
+        rootDir: fixture.memoryRoot,
+        now: T0 + i * 60_000,
+      });
+      expect(report.written).toHaveLength(0);
+      expect(report.removed).toHaveLength(0);
+    }
+    expect(outboxRows(db)).toHaveLength(0);
+  });
 });
 
 describe('purgeDegradedOutputs', () => {
