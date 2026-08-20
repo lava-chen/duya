@@ -1,6 +1,6 @@
 {
   "name": "duya",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "AI Agent Desktop Client (Beta)",
   "author": "lava-chen",
   "private": true,
@@ -24,6 +24,10 @@
     "build:cli-bundle": "node scripts/build-cli-bundle.mjs",
     "rebuild:agent": "npm run build:agent && npm run bundle:agent",
     "preview": "vite preview",
+    "preelectron:dev": "node scripts/ensure-sqlite-abi.mjs electron",
+    "preelectron:dev:nohmr": "node scripts/ensure-sqlite-abi.mjs electron",
+    "preelectron:build": "node scripts/ensure-sqlite-abi.mjs electron",
+    "preelectron:preview": "node scripts/ensure-sqlite-abi.mjs electron",
     "electron:dev": "npm run build:gateway && npm run bundle:agent && npm run build:voice && npm run build:cli-bundle && node scripts/build-electron.mjs && concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:dev:nohmr": "npm run build:gateway && npm run bundle:agent && npm run build:voice && npm run build:cli-bundle && node scripts/build-electron.mjs && cross-env DUYA_NO_HMR=1 concurrently -k \"vite --port 3000 --strictPort\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build:agent && npm run bundle:agent && npm run build:cli-bundle && npm run build:gateway && npm run bundle:gateway && npm run build:voice && vite build && node scripts/build-electron.mjs",
@@ -43,6 +47,12 @@
     "typecheck:conductor": "npm run -w @duya/conductor typecheck",
     "typecheck:voice": "npm run -w @duya/voice typecheck",
     "typecheck:all": "npm run typecheck:web && npm run typecheck:agent && npm run typecheck:cli && npm run typecheck:conductor && npm run typecheck:voice",
+    "pretest": "node scripts/ensure-sqlite-abi.mjs node",
+    "pretest:watch": "node scripts/ensure-sqlite-abi.mjs node",
+    "pretest:coverage": "node scripts/ensure-sqlite-abi.mjs node",
+    "pretest:e2e": "node scripts/ensure-sqlite-abi.mjs electron",
+    "pretest:e2e:smoke": "node scripts/ensure-sqlite-abi.mjs electron",
+    "pretest:e2e:ipc": "node scripts/ensure-sqlite-abi.mjs electron",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -56,7 +66,7 @@
     "showcase:compose-gif": "node scripts/showcase/compose-gif.mjs",
     "postinstall": "electron-builder install-app-deps",
     "rebuild": "electron-rebuild",
-    "rebuild:node": "npm rebuild better-sqlite3"
+    "rebuild:node": "node scripts/ensure-sqlite-abi.mjs node"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
