@@ -35,6 +35,7 @@ import { computeContentHash, enqueueProjectionOutbox } from './outbox.js';
 import {
   deriveRolloutSummaryFilename,
   renderRolloutSummaryFile,
+  rolloutShortId,
   type Stage1OutputRow,
 } from './projectionContent.js';
 
@@ -131,9 +132,21 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
       const match = D11_FILENAME_RE.exec(entry) ?? COMPAT_FILENAME_RE.exec(entry);
       const shortid = match?.groups?.shortid;
       if (!shortid) continue;
-      const candidates = rows.filter((r) =>
-        r.rollout_id.replace(/-/g, '').toLowerCase().startsWith(shortid)
-      );
+      // Compare by `rolloutShortId()` so the matcher mirrors the exact
+      // algorithm the writer used to mint the filename. The previous
+      // implementation used a `replace(/-/g, '').startsWith(shortid)`
+      // prefix check that only happened to work for UUID-style ids —
+      // for ids with a non-hex prefix (e.g. `gw-...` WeChat gateway
+      // sessions, `cron:...` cron sessions) the dash-stripped rollout
+      // id starts with `gw` or `cron`, not the file's shortid. That
+      // mismatch caused the file to be misidentified as an orphan on
+      // every reconcile, spawning a delete/write loop in the outbox
+      // (observed in the wild: ~72 outbox rows per session over 3
+      // days for an unchanged rollout). Doing the prefix check on the
+      // canonical `rolloutShortId` (hex-stripped, lowercase) handles
+      // every shape correctly AND keeps the legacy 4-char-shortid
+      // back-compat that test #6 pins.
+      const candidates = rows.filter((r) => rolloutShortId(r.rollout_id).startsWith(shortid));
       let matched: Stage1OutputRow | undefined;
       if (candidates.length === 1) {
         matched = candidates[0];

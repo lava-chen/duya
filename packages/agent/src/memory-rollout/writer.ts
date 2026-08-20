@@ -81,6 +81,15 @@ function formatUtcFilenameTimestamp(ms: number): string {
 /**
  * Build a filename with a custom shortid length (for collision extension).
  * Shape: `<YYYY-MM-DD>T<HH-MM-SS>-<shortid>-<slug>.md` in UTC.
+ *
+ * Mirrors the shortid logic in `projectionContent.ts::rolloutShortId`:
+ * strip the leading `scheme:` prefix (e.g. `cron:`) and any non-hex
+ * characters, then truncate to `shortidLen` chars. Using the same
+ * algorithm here keeps the collision-extension path aligned with the
+ * base derivation, so a file written under this path is recognized by
+ * `reconcileProjections` as belonging to the same rollout (otherwise
+ * the extension would mint a shortid that doesn't match any row and
+ * the file would be misclassified as an orphan on the next reconcile).
  */
 function buildFilenameWithShortidLen(
   rolloutId: string,
@@ -88,7 +97,7 @@ function buildFilenameWithShortidLen(
   generatedAt: number,
   shortidLen: number
 ): string {
-  const shortid = rolloutId.replace(/-/g, '').slice(0, shortidLen).toLowerCase();
+  const shortid = rolloutShortId(rolloutId).slice(0, shortidLen);
   return `${formatUtcFilenameTimestamp(generatedAt)}-${shortid}-${sanitizeRolloutSlug(slug)}.md`;
 }
 
