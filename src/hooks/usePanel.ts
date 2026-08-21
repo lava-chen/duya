@@ -254,7 +254,12 @@ export function resolvePanelWidth({
 
   // The tightest of: page ceiling, ratio cap, and chat-minimum cap.
   const upperBound = Math.min(maximumWidth, maxByRatio, maxWithChat);
-  return Math.max(fallback, Math.min(desired, upperBound));
+  // The page's minWidth may exceed upperBound on narrow workspaces.
+  // In that case we still cap at upperBound so the chat column never
+  // shrinks below MIN_CHAT_WIDTH (otherwise the panel flexes past the
+  // visible window). The user can resize the panel down further.
+  const safeLower = Math.min(fallback, upperBound);
+  return Math.max(safeLower, Math.min(desired, upperBound));
 }
 
 export function PanelProvider({ children }: { children: React.ReactNode }) {
