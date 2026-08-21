@@ -128,23 +128,6 @@ function isOllama(protocol: string | undefined, baseUrl: string | undefined): bo
 }
 
 /**
- * A local / loopback endpoint (LM Studio at `http://localhost:1234/v1`,
- * Ollama, a LAN-hosted OpenAI-compatible server, etc.) does not require
- * an API key. Used to relax the credential guard below so users can
- * fetch a model list from a self-hosted runtime that has no auth.
- */
-function isLocalEndpoint(baseUrl: string | undefined): boolean {
-  if (!baseUrl) return false;
-  const lower = baseUrl.toLowerCase();
-  return (
-    lower.includes('localhost') ||
-    lower.includes('127.0.0.1') ||
-    lower.includes('0.0.0.0') ||
-    lower.includes('::1')
-  );
-}
-
-/**
  * Known Anthropic-compat trailing path segments. When the
  * baseUrl ends with one of these, the user is hitting an
  * Anthropic-shaped sub-endpoint (DeepSeek, GLM, Bailian,
@@ -535,51 +518,6 @@ function classifyError(
     message: m.slice(0, 200),
     suggestion: `请检查配置是否正确。当前 URL: ${baseUrl || '未设置'}`,
   };
-}
-
-/**
- * LM Studio exposes its own richer model list at `GET /api/v1/models` on the
- * host root. Unlike the OpenAI-compatible `/v1/models`, each entry carries
- * `key`, `loaded_instances[].config.context_length` (the real *active* context
- * for loaded models) and `max_context_length`. We prefer it for local
- * endpoints so the renderer can seed a correct per-model context window
- * instead of assuming 200K/1M. Returns `null` when the host isn't LM Studio
- * (endpoint 404s) so the caller falls back to the standard candidates.
- */
-async function fetchLocalRichModels(
-  baseUrl: string,
-  controllerTimeoutMs: number,
-): Promise<FetchedModel[] | null> {
-  const root = (baseUrl.trim().replace(/\/+$/, '') || '').replace(
-    /\/(v1|v1beta|v1alpha)$/i,
-    '',
-  );
-  if (!root || !root.includes('://')) return null;
-
-  const hosts = new Set<string>();
-  hosts.add(root);
-  hosts.add(root.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1'));
-
-  for (const host of hosts) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), controllerTimeoutMs);
-    try {
-      const response = await fetch(`${host}/api/v1/models`, {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      if (!response.ok) continue;
-      const json = (await response.json().catch(() => null)) as unknown;
-      const models = extractModels(json);
-      if (models && models.length > 0) return models;
-    } catch {
-      clearTimeout(timeoutId);
-      // Not reachable / not LM Studio → try the next host variant.
-    }
-  }
-  return null;
 }
 
 export async function fetchProviderModels(

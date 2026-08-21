@@ -1242,7 +1242,11 @@ function handleSessionPortMessage(sessionId: string, data: Record<string, unknow
       try {
         handler(payload)
       } catch (error) {
-              }
+        // Don't swallow errors silently — surface them so a misbehaving
+        // handler (e.g. one that uses `require` from a bundled renderer
+        // module running in the preload world) doesn't kill the port.
+        console.error('[preload] Agent port handler error:', error, 'sessionId:', sessionId, 'type:', type)
+      }
     })
   }
 }
@@ -1571,7 +1575,18 @@ const electronAPI: ElectronAPI = {
         info.port.postMessage({ type, sessionId, payload })
       },
       onMessage: (handler: (data: unknown) => void) => {
-        const onMsg = (e: MessageEvent) => handler(e.data)
+        const onMsg = (e: MessageEvent) => {
+          try {
+            handler(e.data)
+          } catch (err) {
+            // Handler runs in the preload world (the closure is created
+            // here, even when the handler itself was registered from the
+            // renderer via contextBridge). Catch and log so one bad
+            // handler can't tear down the MessagePort — otherwise every
+            // subsequent message on this session would be lost.
+            console.error('[preload] Agent port handler error:', err)
+          }
+        }
         info.port.onmessage = onMsg
         return () => {
           info.port.onmessage = null

@@ -3412,6 +3412,27 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             sendToMain({ type: 'compact:error', sessionId, message: 'Agent not initialized' });
             break;
           }
+          // Plan 422: lazy-load messages if the worker has not yet seen this
+          // session via chat:start. The /compact popover button is dispatched
+          // independently of chat:start, so without this the worker would call
+          // agent.compact() on an empty timeline and return strategy: 'none'
+          // — the symptom the user hit on a 332-message session.
+          try {
+            if (sessionId) {
+              const dbCount = await messageDb.getCount(sessionId) as number
+              if (dbCount > 0 && agent.getMessages().length === 0) {
+                const loaded = await messageDb.loadMessages(sessionId) as { messages: MessageRow[] }
+                const attachmentMap = getAttachmentsForSession(sessionId)
+                const allMsgs = loaded.messages.map(row => messageRowToMessage(row, attachmentMap))
+                const validated = validateMessageHistory(allMsgs)
+                agent.setMessages(validated)
+                existingMessageCount = validated.length
+                log('[Agent-Process] Compact: lazy-loaded ' + validated.length + ' messages from DB')
+              }
+            }
+          } catch (loadErr) {
+            log('[Agent-Process] Compact: lazy-load failed (continuing):', loadErr)
+          }
           try {
             // Extract optional compact options from message
             const compactMsg = msg as unknown as {

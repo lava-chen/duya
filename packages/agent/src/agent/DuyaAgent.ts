@@ -3322,7 +3322,12 @@ export class duyaAgent {
     removedCount: number;
   }> {
     if (this.messages.length === 0) {
-      return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0, removedCount: 0 };
+      // Plan 422: align with grok-build — an empty timeline is a hard error,
+      // not a silent no-op. The pre-flight check inside CompactionManager.compact
+      // enforces the same invariant; we let it throw here so the worker emits a
+      // `compact:error` SSE event instead of `compact:done { strategy: 'none' }`,
+      // which the UI previously misreported as "0 messages compacted".
+      throw new Error('Compaction failed: conversation is empty (timeline not hydrated?)')
     }
 
     const compactEntry = await this.compactionController.compactProactive(options);

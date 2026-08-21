@@ -20,6 +20,7 @@
  */
 
 import type { Message } from '../types.js';
+import type { MessageContent } from '../types.js';
 import type { EnhancedCompactionResult } from '../compact/CompactionManager.js';
 import { estimateMessagesTokens } from '../compact/tokenBudget.js';
 import {
@@ -302,8 +303,39 @@ export class MessageCompactionController {
     if (previousCompaction) {
       entry.previousCompactionId = previousCompaction.id;
     }
-    if (reinjectedSystemMessages.length > 0) {
-      entry.reinjectedSystemMessages = reinjectedSystemMessages;
+    // Plan 422 + grok alignment: legacy_system messages (AGENTS.md, project
+    // instructions, etc.) are extracted into the system prompt via
+    // extractLegacySystemSegments BEFORE compaction, but
+    // buildAgentContext excludes them from `context.messages` once they fall
+    // inside a compaction boundary. Without re-injection, project
+    // instructions vanish from the next turn. grok solves this with
+    // reinjectedSystemMessages; we do the same — find legacy_system entries
+    // in the timeline whose message.id is in compactedMessageIds and capture
+    // their content so extractLegacySystemSegments can rebuild the segments.
+    const timelineEntries = this.timeline.snapshot()
+    const compactedIdsSet = new Set(compactedMessageIds)
+    const legacySystemReinjected: (string | readonly MessageContent[])[] = []
+    const seenLegacyIds = new Set<string>()
+    for (const entry of timelineEntries) {
+      if (entry.type !== 'message') continue
+      const msg = entry.message
+      if (
+        msg.role === 'legacy_system' &&
+        typeof msg.id === 'string' &&
+        compactedIdsSet.has(msg.id) &&
+        !seenLegacyIds.has(msg.id) &&
+        msg.payload?.content
+      ) {
+        seenLegacyIds.add(msg.id)
+        legacySystemReinjected.push(msg.payload.content)
+      }
+    }
+    const combinedReinjected = [
+      ...legacySystemReinjected,
+      ...reinjectedSystemMessages,
+    ]
+    if (combinedReinjected.length > 0) {
+      entry.reinjectedSystemMessages = combinedReinjected
     }
 
     this.timeline.appendCompaction(entry);
