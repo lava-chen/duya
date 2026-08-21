@@ -671,8 +671,8 @@ html[data-theme="dark"] .terminal-banner-error {
  * is left when it is unavailable. */
 .markdown-link-external__favicon {
   display: inline-block;
-  width: 0.7em;
-  height: 0.7em;
+  width: 0.85em;
+  height: 0.85em;
   /* Drop the favicon slightly below the text baseline so its visual
    * center sits on the x-height rather than the baseline. */
   vertical-align: -0.15em;

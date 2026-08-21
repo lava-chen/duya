@@ -126,6 +126,35 @@ describe('CompactionManager', () => {
     });
   });
 
+  describe('preflight (plan 422 — grok alignment)', () => {
+    it('throws "conversation is empty" when messages is []', async () => {
+      await expect(manager.compact([])).rejects.toThrow(/conversation is empty/)
+    })
+
+    it('throws "conversation is empty" when messages is non-array', async () => {
+      // The preflight rejects anything that isn't an array of messages, so a
+      // future caller can't sneak null/undefined past the type checker.
+      await expect(manager.compact(null as unknown as never)).rejects.toThrow(/conversation is empty/)
+    })
+
+    it('does not invoke the strategy when preflight throws', async () => {
+      const summarizer = vi.fn(async () => 'should not be called')
+      manager.setSummarizer(summarizer)
+      await expect(manager.compact([])).rejects.toThrow()
+      expect(summarizer).not.toHaveBeenCalled()
+    })
+
+    it('emits a compaction_error event when preflight throws', async () => {
+      const handler = vi.fn()
+      manager.addEventHandler(handler)
+      await expect(manager.compact([])).rejects.toThrow()
+      const errorEvents = handler.mock.calls.filter(([ev]) => ev.type === 'compaction_error')
+      expect(errorEvents).toHaveLength(1)
+      const payload = errorEvents[0][0] as { type: 'compaction_error'; error: string }
+      expect(payload.error).toMatch(/conversation is empty/)
+    })
+  })
+
   describe('prefire (two-pass)', () => {
     const manyMessages = (n: number): Message[] =>
       Array.from({ length: n }, (_, i) =>

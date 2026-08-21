@@ -84,6 +84,16 @@ function messageEntry(id: string, message: AgentMessage): MessageEntry {
   return { type: 'message', id, parentId: null, createdAt: CREATED_AT, message };
 }
 
+function legacySystem(id: string, content: string): AgentMessage {
+  return {
+    role: 'legacy_system',
+    timestamp: CREATED_AT,
+    visibility: 'visible',
+    id,
+    payload: { content, contributorId: 'legacy-system', placement: 'history-prefix' as const },
+  } as AgentMessage;
+}
+
 let idCounter = 0;
 function nextId(prefix: string): string {
   idCounter += 1;
@@ -549,4 +559,48 @@ describe('MessageCompactionController', () => {
       );
     });
   });
+  describe('plan 422 — legacy_system reinjection (grok build_compacted_history alignment)', () => {
+    it('captures legacy_system content from the compacted range into reinjectedSystemMessages', async () => {
+      const timeline = new MessageTimeline()
+      const AGENTS_MD = '<agents_md>project conventions: tabs not spaces</agents_md>'
+      timeline.appendMessage(messageEntry('e-legacy-1', legacySystem('legacy-1', AGENTS_MD)))
+      timeline.appendMessage(messageEntry('e-u1', user('u1', 'first')))
+      timeline.appendMessage(messageEntry('e-a1', assistant('a1', 'first reply')))
+      timeline.appendMessage(messageEntry('e-u2', user('u2', 'kept')))
+      timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'kept reply')))
+
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      )
+      const controller = createController(timeline, manager)
+
+      const entry = (await controller.compactProactive())!
+      expect(entry.reinjectedSystemMessages).toBeDefined()
+      expect(entry.reinjectedSystemMessages).toContain(AGENTS_MD)
+    })
+
+    it('captures multiple legacy_system entries in order', async () => {
+      const timeline = new MessageTimeline()
+      const A = '<system_reminder>instruction A</system_reminder>'
+      const B = '<system_reminder>instruction B</system_reminder>'
+      timeline.appendMessage(messageEntry('e-l1', legacySystem('l1', A)))
+      timeline.appendMessage(messageEntry('e-l2', legacySystem('l2', B)))
+      timeline.appendMessage(messageEntry('e-u1', user('u1', 'q')))
+      timeline.appendMessage(messageEntry('e-a1', assistant('a1', 'r')))
+      timeline.appendMessage(messageEntry('e-u2', user('u2', 'q2')))
+      timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'r2')))
+
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      )
+      const controller = createController(timeline, manager)
+
+      const entry = (await controller.compactProactive())!
+      const reinjected = entry.reinjectedSystemMessages ?? []
+      expect(reinjected.indexOf(A)).toBeGreaterThanOrEqual(0)
+      expect(reinjected.indexOf(B)).toBeGreaterThanOrEqual(0)
+      expect(reinjected.indexOf(A)).toBeLessThan(reinjected.indexOf(B))
+    })
+  })
+
 });

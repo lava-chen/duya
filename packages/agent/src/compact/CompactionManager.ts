@@ -24,7 +24,7 @@ import {
   CompactSuppression,
   isRetryableCompactFailure,
 } from './compactErrors.js'
-import { fitCompactedToBudget } from './historySanitize.js'
+import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
 
 /**
  * Compute a stable fingerprint of the messages that must change when the
@@ -287,6 +287,26 @@ export class CompactionManager {
   }
 
   /**
+   * Pre-flight checks (plan 422 alignment with grok-build).
+   *
+   * grok runs four hard checks before invoking the summary sampler
+   * (`compaction.rs:901+`) and aborts with a typed CompactFailure on
+   * any failure. We mirror the most critical one (empty conversation)
+   * at the manager layer so a fresh / unloaded worker surfaces an
+   * explicit `compact:error` SSE event instead of the silent
+   * `strategy: 'none'` no-op that masquerades as success in the UI.
+   *
+   * The other three (`simplified_messages.is_empty()`,
+   * `system_message is None`, no system in simplified) live in the
+   * strategy because they require splitting system vs conversation.
+   */
+  private preflight(messages: readonly Message[]): void {
+    if (!Array.isArray(messages) || messages.length === 0) {
+      throw new Error('Compaction failed: conversation is empty')
+    }
+  }
+
+  /**
    * Execute compaction using the appropriate strategy with optional reinjection
    */
   async compact(
@@ -324,6 +344,11 @@ export class CompactionManager {
         ...(options ?? {}),
         ...(prefireSummary ? { previousSummary: prefireSummary } : {}),
       }
+
+      // Plan 422: hard pre-flight before sampling so a malformed /
+      // unloaded timeline throws a typed error instead of silently
+      // returning strategy: 'none'.
+      this.preflight(messages)
 
       const baseResult = await strategy.compact(messages, this.getStats(), compactOptions)
 
@@ -363,6 +388,48 @@ export class CompactionManager {
       this.contextTokens = estimateMessagesTokens(finalMessages)
       this.budget.setContextTokens(this.contextTokens)
       this.consecutiveFailures = 0
+
+      // Plan 422: validate-after-sanitize fallback (grok build_compacted_history
+      // alignment). sanitizeCompactedHistory strips orphan tool_results whose
+      // tool_use is missing from the kept portion. If the strategy accidentally
+      // produced something sanitize could not fully clean (e.g. an in-block
+      // tool_use_id that resolves only after reordering), validate finds the
+      // remaining orphans and we strip them with a logged warning. Without
+      // this, the next LLM call would 400 on provider tool_use/tool_result
+      // mismatch.
+      {
+        const violations = validateCompactedHistory(finalMessages)
+        if (violations.length > 0) {
+          logger.warn(
+            'Compaction: post-validate still found orphan tool_results, stripping',
+            { count: violations.length, ids: violations },
+            'Compaction',
+          )
+          const toolUseIds = new Set<string>()
+          for (const msg of finalMessages) {
+            if (!Array.isArray(msg.content)) continue
+            for (const block of msg.content) {
+              if (block.type === 'tool_use' && typeof block.id === 'string') {
+                toolUseIds.add(block.id)
+              }
+            }
+          }
+          finalMessages = finalMessages
+            .map((msg) => {
+              if (!Array.isArray(msg.content)) return msg
+              const cleaned = msg.content.filter(
+                (b) =>
+                  !(b.type === 'tool_result' &&
+                    typeof (b as { tool_use_id?: string }).tool_use_id === 'string' &&
+                    !toolUseIds.has((b as { tool_use_id: string }).tool_use_id)),
+              )
+              return cleaned.length === msg.content.length ? msg : { ...msg, content: cleaned }
+            })
+            .filter((msg) =>
+              !(Array.isArray(msg.content) && msg.content.length === 0),
+            )
+        }
+      }
 
       // Degrade gracefully if the compacted history still overflows the budget.
       const budgetTokens = this.budget.maxTokens - this.budget.reservedTokens
