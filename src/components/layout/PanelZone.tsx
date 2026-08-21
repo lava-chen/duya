@@ -101,7 +101,11 @@ export function PanelZone() {
       const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
       const upperBound = Math.min(activePanelMaxWidth, maxByRatio, maxWithChat);
       const lowerBound = Math.max(MIN_PANEL_WIDTH, activePanelMinWidth);
-      setPanelWidth(Math.max(lowerBound, Math.min(nextWidth, upperBound)));
+      // When lowerBound > upperBound (narrow workspace), clamp to
+      // upperBound so the drag never pushes the panel past the chat
+      // column's protected minimum width.
+      const safeLower = Math.min(lowerBound, upperBound);
+      setPanelWidth(Math.max(safeLower, Math.min(nextWidth, upperBound)));
     },
     [activePanelMaxRatio, activePanelMaxWidth, activePanelMinWidth, setPanelWidth]
   );

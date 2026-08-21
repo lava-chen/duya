@@ -87,8 +87,11 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     icon: FileTextIcon,
     multiInstance: true,
     available: true,
-    minWidth: 640,
-    preferredWidth: 820,
+    // Code/markdown preview stays readable down to ~360px; the previous
+    // 640/820 values forced the panel past the visible window on 1280px
+    // laptops with the standard left sidebar.
+    minWidth: 360,
+    preferredWidth: 480,
     defaultExpanded: false,
     component: FilePreviewPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
