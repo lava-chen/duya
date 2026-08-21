@@ -508,7 +508,11 @@ export interface FileTreeNode {
 
 export interface FilesAPI {
   browse: (dirPath: string, maxDepth?: number) => Promise<{ success: boolean; error?: string; tree: FileTreeNode[] }>
-  preview: (targetPath: string, rootPath: string) => Promise<{
+  preview: (
+    targetPath: string,
+    rootPath: string,
+    options?: { standalone?: boolean },
+  ) => Promise<{
     success: boolean
     error?: string
     kind?: 'text' | 'image' | 'pdf' | 'unsupported'
@@ -1781,7 +1785,8 @@ const electronAPI: ElectronAPI = {
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
-    preview: (targetPath: string, rootPath: string) => ipcRenderer.invoke('files:preview', targetPath, rootPath),
+    preview: (targetPath: string, rootPath: string, options?: { standalone?: boolean }) =>
+      ipcRenderer.invoke('files:preview', targetPath, rootPath, options),
     delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
   },

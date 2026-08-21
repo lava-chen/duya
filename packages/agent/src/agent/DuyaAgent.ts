@@ -225,6 +225,13 @@ export class duyaAgent {
    */
   private resolvedModes?: ResolvedMode;
   /**
+   * Estimated tokens of the system prompt + tool definitions of the last
+   * LLM request (excluding message history). Used by the live context
+   * ring's no-usage fallback — mirrors pi's estimateContextTokens prefix
+   * accounting, which adds systemPrompt + tools when no usage block exists.
+   */
+  private lastSystemContextTokensEstimate = 0;
+  /**
    * Mode context for the current streamChat call. Holds
    * `toolUseContextPatch` (consumed by the tool executor) and
    * `state` (read by mode prompt builders and hooks).
@@ -1218,6 +1225,14 @@ export class duyaAgent {
         // contexts) into the provider payload. These are never persisted to
         // the durable history.
         await this._injectRuntimeContext(llmMessages, options, deferredContexts);
+        // Cache the system-prompt + tool-surface estimate for the live
+        // context ring's no-usage fallback. Only the provider contract is
+        // counted (name/description/input_schema), mirroring what is
+        // serialized into the request body.
+        this.lastSystemContextTokensEstimate = this._estimateSystemAndToolsTokens(
+          systemPromptContent,
+          tools,
+        );
         try {
           options?.onSystemPromptReady?.({
             systemPrompt: systemPromptContent,
@@ -3172,6 +3187,36 @@ export class duyaAgent {
   getContextStats() {
     this.compactionManager.updateContextTokens(this.messages);
     return this.compactionManager.getStats();
+  }
+
+  /**
+   * Estimated tokens of the system prompt + tool definitions of the last
+   * LLM request (excluding message history). 0 until the first streamChat
+   * call builds a prompt — callers should fall back to their own system
+   * prompt estimate when 0.
+   */
+  getSystemContextTokensEstimate(): number {
+    return this.lastSystemContextTokensEstimate;
+  }
+
+  /**
+   * Rough character→token estimate for the system prompt + tool-definition
+   * surface, using the same CJK-aware heuristic as tokenBudget
+   * (CJK ≈ 2.5 chars/token, ASCII ≈ 4 chars/token). Only the provider
+   * contract fields (name/description/input_schema) are counted.
+   */
+  private _estimateSystemAndToolsTokens(systemPrompt: string, tools: Tool[]): number {
+    const contract = tools.map(({ name, description, input_schema }) => ({
+      name,
+      description,
+      input_schema,
+    }));
+    const text = `${systemPrompt}\n${JSON.stringify(contract)}`;
+    if (!text) return 0;
+    const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+    const cjkCount = (text.match(cjkRegex) || []).length;
+    const otherCount = text.length - cjkCount;
+    return Math.ceil(cjkCount / 2.5) + Math.ceil(otherCount / 4);
   }
 
   /**

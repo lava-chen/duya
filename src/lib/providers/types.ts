@@ -151,6 +151,19 @@ export interface ModelCapability {
   supportsVision?: boolean;
   supportsReasoning?: boolean;
   supportsPromptCache?: boolean;
+  /**
+   * Per-model reasoning-effort options (LM Studio
+   * `capabilities.reasoning.allowed_options` normalized). The chat
+   * effort dropdown uses this list when non-empty, falling back to
+   * the static catalog default.
+   */
+  reasoningEffortOptions?: string[];
+  /**
+   * Whether the model is currently loaded in a local runtime (LM
+   * Studio `loaded_instances.length > 0` or Ollama loaded state).
+   * Surfaced as a small dot in model lists.
+   */
+  isLoaded?: boolean;
   pricing?: {
     inputPerMillion?: number;
     outputPerMillion?: number;

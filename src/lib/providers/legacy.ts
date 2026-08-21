@@ -35,11 +35,13 @@ export function inferCategoryFromLegacyProviderType(
   baseUrl?: string,
 ): ProviderCategory {
   const url = (baseUrl || '').toLowerCase();
-  // Local heuristic: localhost:11434 / 127.0.0.1:11434 -> local
+  // Local heuristic: localhost:11434 (Ollama) / 127.0.0.1:11434 / localhost:1234 (LM Studio) -> local
   if (
     providerType === 'ollama'
     || url.includes('localhost:11434')
     || url.includes('127.0.0.1:11434')
+    || url.includes('localhost:1234')
+    || url.includes('127.0.0.1:1234')
   ) {
     return 'local';
   }
@@ -55,6 +57,43 @@ export function inferCategoryFromLegacyProviderType(
   }
   // openai-compatible / gemini-image / unknown -> custom
   return 'custom';
+}
+
+/**
+ * Whether a provider is a local / keyless OpenAI-compatible runtime that
+ * does NOT need an API key to function (Ollama / LM Studio).
+ *
+ * IMPORTANT: the catalog's LM Studio preset saves `legacyProtocol =
+ * 'openai-compatible'` (not `'lm-studio'`) as the actual `providerType`,
+ * so the ONLY reliable discriminator at runtime is the baseUrl port. We
+ * intentionally do NOT special-case `providerType === 'lm-studio'`: that
+ * value is a preset key, never a persisted providerType. Trying to
+ * match it in `inferCategoryFromLegacyProviderType` previously broke the
+ * TS compiler because `ApiProvider['providerType']` is a closed union.
+ *
+ * Used by chat-side filters (MessageInput / NewChatView / WelcomeView)
+ * that previously hard-coded `providerType === 'ollama'` and silently
+ * dropped LM Studio models from the input dropdown. Mirrors openclaw's
+ * `LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER` convention — duya injects
+ * `OPENAI_API_KEY='lm-studio'` from the catalog's `envOverrides`, so the
+ * actual request goes out with a non-empty placeholder header; this
+ * helper is for UI gating only.
+ */
+export function isKeylessLocalProvider(
+  providerType: string | undefined | null,
+  baseUrl?: string,
+): boolean {
+  if (providerType === 'ollama') return true;
+  const url = (baseUrl || '').toLowerCase();
+  if (!url) return false;
+  return (
+    url.includes('localhost:11434')
+    || url.includes('127.0.0.1:11434')
+    || url.includes('0.0.0.0:11434')
+    || url.includes('localhost:1234')
+    || url.includes('127.0.0.1:1234')
+    || url.includes('0.0.0.0:1234')
+  );
 }
 
 /**

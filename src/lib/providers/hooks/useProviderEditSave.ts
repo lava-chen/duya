@@ -22,7 +22,10 @@
 
 import { useCallback } from 'react';
 import { useUpsertProviderMutation } from './useUpsertProviderMutation';
-import { findPresetByKey } from '@/lib/providers';
+import {
+  findPresetByKey,
+  inferApiFormatFromLegacyProviderType,
+} from '@/lib/providers';
 import { QUICK_PRESETS, type QuickPreset } from '@/lib/provider-presets';
 import type { LlmProvider } from '@/lib/providers';
 import type { ModelCompat } from '@duya/ai';
@@ -138,7 +141,21 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
       const category =
         newPreset?.category ??
         (data.provider_type === 'openai-compatible' ? 'custom' : 'custom');
-      const apiFormat = newPreset?.apiFormat ?? (data.provider_type as never);
+      // `findPresetByKey` keys on the catalog id (e.g. 'lm-studio'), but
+      // `data.provider_type` is the legacy protocol discriminator
+      // (e.g. 'openai-compatible' — see `mapCatalogProtocolToPresetProtocol`
+      // in `@/lib/provider-presets`). When the lookup misses, fall back to
+      // `inferApiFormatFromLegacyProviderType` so we never feed an
+      // unrecognised string into `LlmProvider.apiFormat`. Without this,
+      // LM Studio / other openai-chat presets crash the electron
+      // `validateProvider` check with `unsupported apiFormat: openai-compatible`.
+      const apiFormat =
+        newPreset?.apiFormat ??
+        inferApiFormatFromLegacyProviderType(
+          data.provider_type as Parameters<
+            typeof inferApiFormatFromLegacyProviderType
+          >[0],
+        );
       const ui = newPreset?.ui;
 
       // Plan 209: build the LlmProvider WITHOUT stamping the

@@ -193,3 +193,60 @@ export function getEffortOptionsForModel(
 
   return options;
 }
+
+/**
+ * Capability-driven effort option builder for runtime-discovered
+ * models. LM Studio reports a per-model `allowed_options` list
+ * (normalized via `normalizeReasoningEffortOptions` into a
+ * `string[]`). For models whose list lives in the runtime
+ * capability record, this builder produces the matching effort
+ * dropdown without needing a static catalog entry.
+ *
+ * Returns `null` when the capability is missing, the model does
+ * not support reasoning, or the per-model options are absent.
+ * Callers (MessageInput / SlashCommandPopover) MUST fall back to
+ * `getEffortOptionsForModel(modelId)` in that case so static
+ * catalog models (OpenAI / Anthropic / etc.) keep working.
+ *
+ * The returned shape matches `getEffortOptionsForModel` so callers
+ * don't need to branch on the source. Unrecognized effort strings
+ * (anything outside the canonical `ModelThinkingLevel` set) are
+ * passed through verbatim with a synthetic level keyed off the
+ * lowercase string — callers can map via `EFFORT_LABELS` or render
+ * the raw token.
+ */
+export function getEffortOptionsForCapability(
+  cap: {
+    supportsReasoning?: boolean;
+    reasoningEffortOptions?: string[];
+  } | null | undefined,
+): Array<{ value: string; level: ModelThinkingLevel }> | null {
+  if (!cap || cap.supportsReasoning !== true) return null;
+  const options = cap.reasoningEffortOptions;
+  if (!Array.isArray(options) || options.length === 0) return null;
+
+  const out: Array<{ value: string; level: ModelThinkingLevel }> = [
+    { value: '', level: 'off' },
+  ];
+  for (const raw of options) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (trimmed.length === 0) continue;
+    // Coerce to a known ModelThinkingLevel where possible. Falls
+    // back to the raw lowercase token so a model-specific effort
+    // name still renders correctly.
+    const known = (
+      [
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ] as const
+    ).find((l) => l === trimmed.toLowerCase());
+    const level: ModelThinkingLevel = known ?? (trimmed.toLowerCase() as ModelThinkingLevel);
+    out.push({ value: trimmed, level });
+  }
+  return out;
+}

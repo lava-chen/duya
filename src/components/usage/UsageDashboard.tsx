@@ -55,13 +55,8 @@ export const UsageDashboard: React.FC = () => {
     }
   };
 
-  if (view === 'quota') {
-    return <ProviderQuotaView onBack={() => setView('stats')} />;
-  }
-
-  const hasData = !!data && data.aggregates.messages.total > 0;
-
-  // Filter daily data by time range, then recompute aggregates
+  // Filter daily data by time range, then recompute aggregates.
+  // Must run before any early return so hook order is stable across renders.
   const filteredData = useMemo(() => {
     if (!data) return null;
     if (timeRange === 'all') return data;
@@ -142,6 +137,12 @@ export const UsageDashboard: React.FC = () => {
 
     return { ...data, totals, aggregates, dailyData, modelUsage: sortedModels };
   }, [data, timeRange]);
+
+  if (view === 'quota') {
+    return <ProviderQuotaView onBack={() => setView('stats')} />;
+  }
+
+  const hasData = !!data && data.aggregates.messages.total > 0;
 
   return (
     <div className="w-full max-w-6xl mx-auto space-y-6">

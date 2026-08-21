@@ -17,6 +17,9 @@ export interface LiveContextUsage {
   outputTokens: number;
   cacheHitTokens?: number;
   cacheCreationTokens?: number;
+  /** Estimated tokens of the system prompt + tool definitions (excludes
+   *  message history; used by the no-usage local estimate fallback). */
+  systemTokens?: number;
   /** Session-cumulative totals (pi-style ↑/↓/R/W/$ footer). */
   totalInput?: number;
   /** Raw (uncached) cumulative input — for the cost estimate. */

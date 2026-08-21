@@ -171,25 +171,42 @@ export function registerFilesHandlers(): void {
     }
   });
 
-  ipcMain.handle('files:preview', async (_event, targetPath: string, rootPath: string) => {
+  ipcMain.handle(
+    'files:preview',
+    async (_event, targetPath: string, rootPath: string, options?: { standalone?: boolean }) => {
     try {
-      if (!targetPath || typeof targetPath !== 'string' || !rootPath || typeof rootPath !== 'string') {
+      // Standalone mode (opt-in via `options.standalone === true`): the
+      // renderer only sets this when the user explicitly clicked an
+      // in-chat link to a file outside the chat workspace — in that
+      // case we just want the file's content, no project root to
+      // verify against. `rootPath` is allowed to be empty in this mode.
+      // All other paths remain project-scoped and keep the existing
+      // isInsideRoot safety check.
+      const standalone = options?.standalone === true;
+
+      if (!targetPath || typeof targetPath !== 'string') {
+        return { success: false, error: 'Invalid preview path' };
+      }
+      if (!standalone && (!rootPath || typeof rootPath !== 'string')) {
         return { success: false, error: 'Invalid preview path' };
       }
 
-      const resolvedRoot = path.resolve(rootPath);
       const resolvedTarget = path.resolve(targetPath);
-      if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
-        return { success: false, error: 'Project directory does not exist' };
-      }
       if (!fs.existsSync(resolvedTarget) || !fs.statSync(resolvedTarget).isFile()) {
         return { success: false, error: 'Preview file does not exist' };
       }
 
-      const realRoot = fs.realpathSync(resolvedRoot);
       const realTarget = fs.realpathSync(resolvedTarget);
-      if (!isInsideRoot(realTarget, realRoot)) {
-        return { success: false, error: 'Preview path is outside the project directory' };
+
+      if (!standalone) {
+        const resolvedRoot = path.resolve(rootPath);
+        if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
+          return { success: false, error: 'Project directory does not exist' };
+        }
+        const realRoot = fs.realpathSync(resolvedRoot);
+        if (!isInsideRoot(realTarget, realRoot)) {
+          return { success: false, error: 'Preview path is outside the project directory' };
+        }
       }
 
       const stat = fs.statSync(realTarget);

@@ -260,6 +260,11 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
   const items = useMemo(() => extractBrowserResults(tool), [tool]);
   const query = useMemo(() => extractQueryText(tool.input), [tool.input]);
   const engine = useMemo(() => extractEngineText(tool), [tool]);
+  // `displayResult` must be computed before any early returns so the hook
+  // count stays stable across operation types (navigate vs. search vs.
+  // click/...). Earlier returns below intentionally short-circuit before
+  // `displayResult` is read, but the memo still runs.
+  const displayResult = useMemo(() => stripToolEnvelope(tool.result), [tool.result]);
   const isRunning = status === 'running';
   const hasItems = items.length > 0;
   const input = (tool.input ?? {}) as Record<string, unknown>;
@@ -301,7 +306,6 @@ export function BrowserToolRow({ tool }: BrowserToolRowProps) {
 
   const headerLabel = query ? `搜索「${query}」` : isParallel ? '并行抓取网页' : '搜索';
   const cardLabel = isParallel ? '并行抓取结果' : '搜索结果';
-  const displayResult = useMemo(() => stripToolEnvelope(tool.result), [tool.result]);
 
   return (
     <div>

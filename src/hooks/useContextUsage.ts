@@ -242,7 +242,13 @@ export function useContextUsage(
         const inputTokens = normalizeInputTokens(rawInput, cacheRead, cacheCreation);
 
         if (latestUsed === undefined) {
-          latestUsed = usage.total_tokens || inputTokens + outputTokens;
+          // Prefer normalized input + output over total_tokens: the worker
+          // synthesizes total_tokens as raw input + output (or trusts the
+          // provider), either of which typically EXCLUDES cache read/write,
+          // while the live path prices the full prompt (input + cache).
+          // Using the normalized sum keeps the ring consistent between the
+          // live snapshot and the persisted scan.
+          latestUsed = inputTokens + outputTokens;
           latestInput = inputTokens;
           latestOutput = outputTokens;
           latestCacheRead = cacheRead;
@@ -313,23 +319,30 @@ export function useContextUsage(
 
     // No assistant message with tokenUsage yet — fall back to a local
     // estimate so the ring isn't stuck at 0 for new sessions or turns
-    // that only have user attachments.
-    const estimatedUsed = messages.reduce((sum, msg) => {
-      if (msg.role === 'user') {
-        const text = typeof msg.content === 'string'
-          ? msg.content
-          : msg.content.map((b) => (typeof b === 'string' ? b : (b as { text?: string }).text || '')).join('');
-        let tokens = estimateTokens(text);
-        for (const att of msg.attachments || []) {
-          const isImage = (att.type ?? '').startsWith('image/');
-          tokens += isImage
-            ? Math.max(700, estimateTokens(att.text ?? ''))
-            : estimateTokens(att.text ?? '');
+    // that only have user attachments. Include the system prompt + tool
+    // overhead when the worker broadcast an estimate (pi's
+    // estimateContextTokens adds the systemPrompt + tools prefix when no
+    // usage block exists) — without it a brand-new session would show only
+    // the user's few hundred chars while the real request costs 10K+.
+    const systemTokens = live?.systemTokens ?? 0;
+    const estimatedUsed =
+      systemTokens +
+      messages.reduce((sum, msg) => {
+        if (msg.role === 'user') {
+          const text = typeof msg.content === 'string'
+            ? msg.content
+            : msg.content.map((b) => (typeof b === 'string' ? b : (b as { text?: string }).text || '')).join('');
+          let tokens = estimateTokens(text);
+          for (const att of msg.attachments || []) {
+            const isImage = (att.type ?? '').startsWith('image/');
+            tokens += isImage
+              ? Math.max(700, estimateTokens(att.text ?? ''))
+              : estimateTokens(att.text ?? '');
+          }
+          return sum + tokens;
         }
-        return sum + tokens;
-      }
-      return sum;
-    }, 0);
+        return sum;
+      }, 0);
 
     if (estimatedUsed > 0) {
       const ratio = resolvedContextWindow ? estimatedUsed / resolvedContextWindow : 0;
