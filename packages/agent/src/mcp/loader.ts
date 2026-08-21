@@ -72,6 +72,8 @@ export function resolvedToLegacyConfig(r: ResolvedMCPServerConfig): MCPServerCon
     startupTimeoutSec: r.rawConfig.startupTimeoutSec,
     toolTimeoutSec: r.rawConfig.toolTimeoutSec,
     toolTimeouts: r.rawConfig.toolTimeouts,
+    envPassthrough: r.rawConfig.envPassthrough,
+    useShell: r.rawConfig.useShell,
   };
 }
 

@@ -326,10 +326,9 @@ export function syncSessionFromMainDb(opts: {
     // catalog row retains provenance for memory entries that cite it.
     const now = Date.now();
     const txn = memoryDb.transaction(() => {
-      markRolloutDeleted(memoryDb, sessionId, now);
+      return markRolloutDeleted(memoryDb, sessionId, now);
     });
-    txn();
-    return { status: 'tombstoned' };
+    return txn();
   }
 
   const session = coreSessionToChatRow(coreSession);
@@ -564,6 +563,13 @@ function activeSync(
  * in the core DB. The session row is still present in the core
  * `sessions` table, so we can read its `agent_type`, `mode`, etc. for
  * the INSERT branch (in case there's no existing rollout row to update).
+ *
+ * Idempotent: when the catalog row is already tombstoned, the sync is a
+ * no-op (heartbeat only) and returns 'unchanged'. This matters because
+ * the memory-worker runs the catalog sync on a fixed 60s tick: without
+ * the guard, ONE persistently-deleted session would be re-counted as a
+ * fresh tombstone on every tick, flooding the system log with
+ * `catalog_sync: … 1 tombstoned` lines and corrupting the Memory metrics.
  */
 function tombstoneRollout(
   memoryDb: Database,
@@ -571,10 +577,30 @@ function tombstoneRollout(
   now: number
 ): SyncSessionResult {
   const existing = memoryDb
-    .prepare('SELECT first_seen_at, source_fingerprint, generation FROM rollout_catalog WHERE rollout_id = ?')
+    .prepare(
+      'SELECT first_seen_at, source_fingerprint, generation, source_status, source_deleted_at FROM rollout_catalog WHERE rollout_id = ?'
+    )
     .get(session.id) as
-    | { first_seen_at: number; source_fingerprint: string | null; generation: number }
+    | {
+        first_seen_at: number;
+        source_fingerprint: string | null;
+        generation: number;
+        source_status: string;
+        source_deleted_at: number | null;
+      }
     | undefined;
+
+  // Already tombstoned — heartbeat only, no re-count.
+  if (
+    existing &&
+    existing.source_status === 'deleted' &&
+    existing.source_deleted_at !== null
+  ) {
+    memoryDb
+      .prepare('UPDATE rollout_catalog SET last_seen_at = ? WHERE rollout_id = ?')
+      .run(now, session.id);
+    return { status: 'unchanged' };
+  }
 
   memoryDb.prepare(UPSERT_TOMBSTONE_SQL).run({
     rollout_id: session.id,
@@ -599,12 +625,42 @@ function tombstoneRollout(
  * The catalog row's prior metadata is preserved; only `source_status`,
  * `source_deleted_at`, and `last_seen_at` are touched.
  *
- * If no rollout row exists yet, there is nothing to tombstone — log
- * and skip. We cannot synthesize a row without knowing the original
- * `agent_type` (CHECK constraint).
+ * Idempotent: if the row is already tombstoned, this is a heartbeat-only
+ * no-op returning 'unchanged' (see tombstoneRollout). If no rollout row
+ * exists yet, there is nothing to tombstone — log and return 'unchanged'.
+ * We cannot synthesize a row without knowing the original `agent_type`
+ * (CHECK constraint).
  */
-function markRolloutDeleted(memoryDb: Database, sessionId: string, now: number): void {
-  const result = memoryDb
+function markRolloutDeleted(
+  memoryDb: Database,
+  sessionId: string,
+  now: number
+): SyncSessionResult {
+  const existing = memoryDb
+    .prepare('SELECT source_status, source_deleted_at FROM rollout_catalog WHERE rollout_id = ?')
+    .get(sessionId) as
+    | { source_status: string; source_deleted_at: number | null }
+    | undefined;
+
+  if (!existing) {
+    const logger = getLogger();
+    logger.warn(
+      'memory-state: cannot tombstone missing rollout (no existing row)',
+      { sessionId },
+      LogComponent.DB
+    );
+    return { status: 'unchanged' };
+  }
+
+  // Already tombstoned — heartbeat only, no re-count.
+  if (existing.source_status === 'deleted' && existing.source_deleted_at !== null) {
+    memoryDb
+      .prepare('UPDATE rollout_catalog SET last_seen_at = ? WHERE rollout_id = ?')
+      .run(now, sessionId);
+    return { status: 'unchanged' };
+  }
+
+  memoryDb
     .prepare(
       `UPDATE rollout_catalog
          SET source_status = 'deleted',
@@ -614,12 +670,5 @@ function markRolloutDeleted(memoryDb: Database, sessionId: string, now: number):
     )
     .run(now, now, sessionId);
 
-  if (result.changes === 0) {
-    const logger = getLogger();
-    logger.warn(
-      'memory-state: cannot tombstone missing rollout (no existing row)',
-      { sessionId },
-      LogComponent.DB
-    );
-  }
+  return { status: 'tombstoned' };
 }

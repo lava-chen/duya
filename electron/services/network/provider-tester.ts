@@ -176,6 +176,10 @@ export async function testProviderConnection(body: TestProviderBody): Promise<Co
 
   let apiUrl = base_url || 'https://api.anthropic.com';
   apiUrl = apiUrl.replace(/\/+$/, '');
+  // Local-server alias: `localhost` may resolve to ::1 first, which local
+  // runtimes (LM Studio etc.) don't listen on → ECONNREFUSED. Use 127.0.0.1
+  // so the test reaches the IPv4 socket regardless of resolver ordering.
+  apiUrl = apiUrl.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1');
 
   if (isOpenAICompatible) {
     if (!apiUrl.endsWith('/v1/chat/completions')) {

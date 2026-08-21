@@ -76,7 +76,10 @@ export async function summarizeGoalCompletion(
       promptMessages,
       toolUseContext: context,
       isAsync: false,
-      maxTurns: maxTurns ?? 6,
+      // No implicit cap. The summarizer runs as a child `DuyaAgent`,
+      // which is uncapped by default (pi-aligned). Callers can still
+      // pass `maxTurns` explicitly.
+      maxTurns,
       availableTools: context.options.tools,
       description: `Goal summarizer: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),

@@ -33,6 +33,12 @@ export interface ModelOption {
   id: string;
   display_name: string;
   context_length?: number;
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+  format?: string | null;
+  isLoaded?: boolean;
+  reasoningEffortOptions?: string[];
 }
 
 interface ModelProviderSelectorProps {

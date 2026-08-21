@@ -60,6 +60,7 @@ const {
   resolveProvider,
   retrieve,
   formatContext,
+  buildSnippet,
   appendSystemLog,
   filterPrompt,
 } = await import(pathToFileURL(libPath).href);
@@ -130,7 +131,7 @@ function formatCliHits(hits) {
   const lines = [];
   for (const h of hits) {
     lines.push(`- ${h.title}`);
-    const summary = String(h.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    const summary = buildSnippet(h.content, h.matched_terms);
     if (summary) lines.push(`  ${summary}`);
     lines.push(`  path: ${h.root ? `${h.root}/` : ''}${h.rel_path}`);
   }
@@ -185,7 +186,7 @@ async function main() {
       const { hits, mode } = await searchAndReport(prompt, null, configDir);
       if (opts.json) {
         process.stdout.write(
-          JSON.stringify({ ok: true, mode, hits: hits.map((h) => ({ title: h.title, path: h.rel_path, snippet: String(h.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 160) })) }),
+          JSON.stringify({ ok: true, mode, hits: hits.map((h) => ({ title: h.title, path: h.rel_path, snippet: buildSnippet(h.content, h.matched_terms) })) }),
         );
       } else {
         const out = formatCliHits(hits);

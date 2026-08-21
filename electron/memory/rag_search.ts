@@ -20,6 +20,7 @@ import { getProviderStore } from '../services/providers/provider-store-electron'
 import { defaultRagIndexPath, type EmbeddingClient } from './rag_index';
 import { createEmbeddingClient } from './rag_embedding_client';
 import { loadBetterSqlite3Ctor } from '../memory-state/db';
+import { buildSnippet, extractTerms } from './rag_snippet';
 
 /** CLI-side minimum query length (mirrors MIN_PROMPT_CHARS in the hook). */
 export const MIN_QUERY_CHARS = 3;
@@ -97,10 +98,9 @@ interface ScoredRow {
   score: number;
   /** Semantic cosine, kept for tie-breaking keyword-ratio ties. */
   cos?: number;
+  /** Query terms to anchor the snippet window on (may be empty for vector-only hits). */
+  matchedTerms?: string[];
 }
-
-/** CJK ranges — 2-char CJK terms get a LIKE fallback (trigram needs >=3 chars). */
-const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 /**
  * FTS5 trigram OR-semantics keyword search (mirrors the hook core) plus a
@@ -109,19 +109,10 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
  * cosine scores instead of flooding the merge with a constant 1.0.
  */
 function keywordSearch(db: Database, query: string): ScoredRow[] {
-  const cleaned = query.replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-  const terms = cleaned
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-  if (terms.length === 0) return [];
-
-  const trigramTerms = terms.filter((t) => t.length >= 3);
-  const shortCjkTerms = terms.filter((t) => t.length === 2 && CJK_RE.test(t));
-  // Only usable terms count for discovery AND scoring: 2-char non-CJK
-  // tokens ("go", "ok") are noise — they would only dilute the ratio.
-  const usableTerms = [...trigramTerms, ...shortCjkTerms];
+  const usableTerms = extractTerms(query);
   if (usableTerms.length === 0) return [];
+  const trigramTerms = usableTerms.filter((t) => t.length >= 3);
+  const shortCjkTerms = usableTerms.filter((t) => t.length === 2);
 
   // Candidate set keyed by rowid, shared by both sources (dedupes hits).
   const candidates = new Map<number, { row: ScoredRow; matched: Set<string> }>();
@@ -186,7 +177,7 @@ function keywordSearch(db: Database, query: string): ScoredRow[] {
       if (haystack.includes(t.toLowerCase())) matched.add(t);
     }
     if (matched.size === 0) continue;
-    out.push({ ...row, score: matched.size / usableTerms.length });
+    out.push({ ...row, score: matched.size / usableTerms.length, matchedTerms: [...matched] });
   }
   out.sort((a, b) => b.score - a.score);
   return out;
@@ -269,7 +260,17 @@ export async function searchMemoryIndex(
               continue;
             }
             const score = cosine(queryVec, vec);
-            if (score > 0) scored.push({ root: r.root, relPath: r.rel_path, title: r.title, content: r.content, score, cos: score });
+            if (score > 0) {
+              scored.push({
+                root: r.root,
+                relPath: r.rel_path,
+                title: r.title,
+                content: r.content,
+                score,
+                cos: score,
+                matchedTerms: extractTerms(trimmed),
+              });
+            }
           }
         }
       } catch {
@@ -292,7 +293,7 @@ export async function searchMemoryIndex(
     const hits: RagSearchHit[] = scored.slice(0, limit).map((s) => ({
       title: s.title,
       path: path.join(s.root, s.relPath),
-      snippet: s.content.replace(/\s+/g, ' ').trim().slice(0, 160),
+      snippet: buildSnippet(s.content, s.matchedTerms),
       score: s.score,
     }));
     return { ok: true, mode, skipped: false, hits };

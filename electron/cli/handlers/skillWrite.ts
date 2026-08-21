@@ -69,7 +69,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 function buildEnabledDTO(
   id: string,
   name: string,
-  source: 'bundled' | 'user' | 'plugin',
+  source: 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system',
   sourceId: string | undefined,
   enabled: boolean,
 ): SkillListItem {
@@ -85,10 +85,15 @@ async function applyOverride(
   enabled: boolean,
   correlationId: string | undefined,
 ): Promise<{ ok: true; item: SkillListItem } | { ok: false; reason: string }> {
-  // Validate id format: bundled:*, user:*, plugin:*:*
-  const idMatch = id.match(/^(bundled|user|plugin):/);
+  // Validate id format: bundled:*, user:*, project:*, custom:*, plugin:*:*, system:*
+  const idMatch = id.match(/^(bundled|user|project|custom|plugin|system):/);
   if (!idMatch) {
     return { ok: false, reason: 'invalid id format' };
+  }
+
+  // System skills are always enabled by design (plan 414); refuse toggles.
+  if (idMatch[1] === 'system') {
+    return { ok: false, reason: 'system skills cannot be toggled' };
   }
 
   const current = getOverrides();

@@ -6,7 +6,7 @@ import {
   buildForkedMessages,
   buildChildMessage,
   buildWorktreeNotice,
-} from '../../../src/tool/AgentTool/forkSubagent.js';
+} from '../../../src/tool/SubagentTool/forkSubagent.js';
 import type { AssistantMessage, ToolUseContentBlock } from '../../../src/types.js';
 
 describe('forkSubagent', () => {
@@ -56,8 +56,11 @@ describe('forkSubagent', () => {
       expect(FORK_AGENT.tools).toEqual(['*']);
     });
 
-    it('should have maxTurns set', () => {
-      expect(FORK_AGENT.maxTurns).toBe(200);
+    it('should not impose an implicit maxTurns (fork inherits uncapped loop)', () => {
+      // The fork path used to cap the child at 200 turns. With pi-aligned
+      // uncapped design, `maxTurns` is left unset so the child inherits
+      // the parent loop's natural-exit semantics.
+      expect(FORK_AGENT.maxTurns).toBeUndefined();
     });
 
     it('should have model set to inherit', () => {

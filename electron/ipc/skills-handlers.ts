@@ -20,6 +20,12 @@ import type { SkillConfigEntry } from '../config/schema';
 import { getPluginManager } from '../plugins/PluginManager';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import * as crypto from 'crypto';
+import { getBundledSkillsDir } from '../plugins/catalog';
+import {
+  ensureSystemSkillsSynced,
+  listSystemSkillsForGui,
+  listSystemSkillNames,
+} from '../skills/system-skills-gui';
 
 type SkillEnabledOverrides = Record<string, boolean>;
 
@@ -427,11 +433,17 @@ export function registerSkillsHandlers(): void {
         loadSkillsFromDir(userSkillsDir, 'user', undefined, resolveUserDirSource);
       }
 
-      // Load project skills
-      const projectSkillsDir = path.join(process.cwd(), '.duya', 'skills');
-      if (fs.existsSync(projectSkillsDir) && projectSkillsDir !== userSkillsDir) {
-        logger.info('Loading project skills', { dir: projectSkillsDir }, LogComponent.Skills);
-        loadSkillsFromDir(projectSkillsDir, 'project');
+      // Load project skills (cross-agent standard <cwd>/.agent/skills first,
+      // then duya's own <cwd>/.duya/skills so the latter wins collisions)
+      const projectSkillsDirs = [
+        path.join(process.cwd(), '.agent', 'skills'),
+        path.join(process.cwd(), '.duya', 'skills'),
+      ];
+      for (const projectSkillsDir of projectSkillsDirs) {
+        if (fs.existsSync(projectSkillsDir) && projectSkillsDir !== userSkillsDir) {
+          logger.info('Loading project skills', { dir: projectSkillsDir }, LogComponent.Skills);
+          loadSkillsFromDir(projectSkillsDir, 'project');
+        }
       }
 
       // Load custom skills from configured skill_path
@@ -439,8 +451,8 @@ export function registerSkillsHandlers(): void {
       if (customSkillPath && fs.existsSync(customSkillPath)) {
         const normalizedCustomPath = path.normalize(customSkillPath);
         const normalizedUserDir = path.normalize(userSkillsDir);
-        const normalizedProjectDir = path.normalize(projectSkillsDir);
-        if (normalizedCustomPath !== normalizedUserDir && normalizedCustomPath !== normalizedProjectDir) {
+        const normalizedProjectDirs = new Set(projectSkillsDirs.map(d => path.normalize(d)));
+        if (normalizedCustomPath !== normalizedUserDir && !normalizedProjectDirs.has(normalizedCustomPath)) {
           logger.info('Loading custom skills from skill_path', { dir: customSkillPath }, LogComponent.Skills);
           loadSkillsFromDir(customSkillPath, 'custom');
         }
@@ -475,10 +487,22 @@ export function registerSkillsHandlers(): void {
         logger.warn('Failed to scan builtin plugin skills', { error: String(e) }, LogComponent.Skills);
       }
 
+      // System-level skills (.system): sync the bundled copies into the
+      // user skills directory (~/.duya/skills/.system) so they are ordinary
+      // visible files, then surface them read-only (source 'system', always
+      // enabled). The agent still loads them from the bundled directory.
+      ensureSystemSkillsSynced(userSkillsDir, getBundledSkillsDir());
+      for (const systemSkill of listSystemSkillsForGui(userSkillsDir)) {
+        if (loadedNames.has(systemSkill.name)) continue;
+        loadedNames.add(systemSkill.name);
+        skills.push(systemSkill);
+      }
+
       const skillOverrides = readSkillOverrides();
       const skillsWithState = skills.map(skill => ({
         ...skill,
-        enabled: skillOverrides[skill.name] !== false,
+        // System skills are never disableable; ignore stale overrides.
+        enabled: skill.source === 'system' ? true : skillOverrides[skill.name] !== false,
       }));
 
       logger.info(`Loaded ${skills.length} skills total`, undefined, LogComponent.Skills);
@@ -504,6 +528,15 @@ export function registerSkillsHandlers(): void {
   ipcMain.handle('skills:setEnabled', async (_event, skillName: string, enabled: boolean) => {
     try {
       const store = getConfigStore();
+      // System skills (.system) are always enabled by design (plan 414);
+      // refuse toggles defensively even if a stale renderer sends one.
+      const userSkillsDir = path.join(homedir(), '.duya', 'skills');
+      ensureSystemSkillsSynced(userSkillsDir, getBundledSkillsDir());
+      const systemSkillNames = new Set(listSystemSkillNames(userSkillsDir));
+      if (systemSkillNames.has(skillName)) {
+        getLogger().info(`Refusing to toggle system skill '${skillName}'`, undefined, LogComponent.Skills);
+        return { success: true, overrides: readSkillOverrides() };
+      }
       const without = (store.get().skills ?? []).filter((e) => e.name !== skillName);
       if (enabled) {
         store.set('skills', without);

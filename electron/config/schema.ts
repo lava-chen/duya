@@ -20,6 +20,10 @@ export interface ModelConfig {
 export interface ProviderEntry {
   id: string;
   name: string;
+  /** User-facing alias (nickname) for the provider, independent of
+   *  the vendor name. Optional. Persisted to `config.toml` and
+   *  loaded into the whole app via the provider DTO. */
+  alias?: string;
   providerType: string;
   baseUrl: string;
   options?: Record<string, unknown>;
@@ -63,7 +67,14 @@ export interface IdeConfig {
 }
 
 export interface AgentConfig {
-  max_turns: number;
+  /**
+   * Optional per-run agentic-turn cap. Absent (the default) means
+   * uncapped — the agent loop runs until natural completion, token
+   * exhaustion, abort, or a tool `terminate: true` signal. Pi-aligned
+   * design: no implicit fallback. Set this to a positive integer as an
+   * opt-in safety net for long-running automation.
+   */
+  max_turns?: number;
   gateway_timeout: number;
   restart_drain_timeout: number;
   tool_use_enforcement: string;
@@ -348,7 +359,8 @@ export const DEFAULT_CONFIG: DuyaConfig = {
     },
   },
   agent: {
-    max_turns: 90,
+    // No `max_turns` default — the agent is uncapped unless the user
+    // explicitly sets it in `~/.duya/config.toml` (pi-aligned).
     gateway_timeout: 1800,
     restart_drain_timeout: 60,
     tool_use_enforcement: 'auto',

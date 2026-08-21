@@ -2219,6 +2219,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       todoGate: { enabled: steering.todoGateEnabled },
       antiDeadLoop: { ...steering.antiDeadLoop },
       toolIntentNudgeMax: steering.toolIntentNudgeMax,
+      disabledLoopHooks: steering.disabledLoopHooks,
     });
 
     log('[Agent-Process] streamChat started, agentProfileId:', msg.options?.agentProfileId || '(none)', 'iterating events...');
@@ -2511,6 +2512,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         // append, sliced from the count captured before the stream started.
         const newMessages = agentMessages.slice(turnStartMessageCount);
         applyRequestDisplayContent(newMessages, msg.options?.displayContent);
+        // Plan 437: also persist any hook messages emitted during this
+        // turn. The agent core accumulates them via the
+        // ConfigHooksRunner.onHookInvoked callback and we drain the
+        // buffer at the same stable boundary so hook history survives
+        // reload alongside tool_use / tool_result.
+        const hookMessages = agent.drainPendingHookMessages();
+        if (hookMessages.length > 0) {
+          newMessages.push(...hookMessages);
+          log(`[Agent-Process] Persisting ${hookMessages.length} hook message(s) for session ${msg.sessionId}`);
+        }
         const lastNewAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
         log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total), lastNewAssistant token_usage present=${!!(lastNewAssistant && (lastNewAssistant as Record<string, unknown>).token_usage)}`);
         const result = await appendMessages(msg.sessionId, newMessages);
@@ -2895,6 +2906,14 @@ function buildMcpReloadedEvent(result: MCPApplyResult): Record<string, unknown> 
  * active server / tool keys, the full issues list, and the
  * apply reason + committedAt. Heavier than `mcp:reloaded`; only
  * emitted on explicit `mcp:status:get` requests.
+ *
+ * Phase 3 enrichment: also surface a per-server `mcpStatus` block
+ * (connectionStatus + tool list + annotations) keyed by
+ * `scopedServerName`. The main-process capability-management
+ * aggregator consumes this so the settings UI / popovers can
+ * show live "connected / disconnected" dots and the actual tool
+ * list without a second IPC. The data is sourced from the
+ * agent's live `MCPManager.getAllClients()` — nothing stale.
  */
 function buildMcpStatusSnapshot(): Record<string, unknown> {
   if (!agent) {
@@ -2907,6 +2926,7 @@ function buildMcpStatusSnapshot(): Record<string, unknown> {
       issues: [],
       reason: null,
       committedAt: null,
+      mcpStatus: {},
     };
   }
   const snapshot = agent.activeMCPRuntimeSnapshot;
@@ -2920,8 +2940,10 @@ function buildMcpStatusSnapshot(): Record<string, unknown> {
       issues: [],
       reason: null,
       committedAt: null,
+      mcpStatus: collectMcpStatusByServer(agent.getActiveMCPManager()),
     };
   }
+
   return {
     type: 'mcp:status:snapshot',
     hasAgent: true,
@@ -2933,7 +2955,56 @@ function buildMcpStatusSnapshot(): Record<string, unknown> {
     issues: snapshot.loadResult.issues,
     connectionIssues: snapshot.connectionIssues,
     registrationIssues: snapshot.registrationIssues,
+    mcpStatus: collectMcpStatusByServer(agent.getActiveMCPManager()),
   };
+}
+
+/**
+ * Walk the live MCPManager and produce a per-server status map.
+ * Empty when no runtime is active (initial boot before PHASE B2
+ * commits).
+ */
+function collectMcpStatusByServer(
+  manager: ReturnType<NonNullable<typeof agent>['getActiveMCPManager']>,
+): Record<
+  string,
+  {
+    connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error';
+    toolCount: number;
+    tools: Array<{
+      name: string;
+      description: string;
+      annotations: Record<string, unknown> | undefined;
+    }>;
+  }
+> {
+  if (!manager) return {};
+  const out: Record<
+    string,
+    {
+      connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error';
+      toolCount: number;
+      tools: Array<{
+        name: string;
+        description: string;
+        annotations: Record<string, unknown> | undefined;
+      }>;
+    }
+  > = {};
+  for (const client of manager.getAllClients()) {
+    const status = client.getStatus();
+    const tools = client.getTools();
+    out[client.getName()] = {
+      connectionStatus: status,
+      toolCount: tools.length,
+      tools: tools.map((t: { name: string; description: string; annotations?: Record<string, unknown> }) => ({
+        name: t.name,
+        description: t.description,
+        annotations: t.annotations,
+      })),
+    };
+  }
+  return out;
 }
 
 async function reloadMCP(): Promise<void> {

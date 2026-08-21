@@ -253,7 +253,7 @@ export function getLocalPluginPaths(): Map<string, string> {
  * - Dev: `<repo>/packages/agent/skills`
  * - Prod: `<resourcesPath>/agent/skills` (electron-builder extraResources)
  */
-function getBundledSkillsDir(): string {
+export function getBundledSkillsDir(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'agent', 'skills');
   }

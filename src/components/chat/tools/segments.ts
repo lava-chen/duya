@@ -7,12 +7,17 @@
 //   - `thinking` joins the run alongside tools (it does NOT break the
 //     group) so a [tool, thinking, tool] sequence stays one group with
 //     three interleaved entries.
-//   - `text` and `widget` (and any future non-tool, non-thinking kind)
-//     flush the run.
+//   - `hook` (plan 437) is rendered as its own standalone row — it
+//     flushes the surrounding tool run so the user gets a focused hook
+//     card instead of hooks being absorbed into a tool group. Hooks
+//     are not LLM tool calls; reading them as separate signals keeps
+//     the chat flow clean.
+//   - `text` and `widget` (and any future non-tool, non-thinking,
+//     non-hook kind) flush the run.
 //
 // Inside a group, entries preserve the original action order — the
-// Group component dispatches each entry to `ToolActionRow` or
-// `ThinkingRow` by `entry.kind`.
+// Group component dispatches each entry to `ToolActionRow`,
+// `ThinkingRow`, or `HookActionRow` by `entry.kind`.
 
 import type { ActionItem, Segment, SegmentEntry } from './types';
 
@@ -40,6 +45,12 @@ export function computeSegments(actions: ActionItem[]): Segment[] {
         content: action.content,
         isStreaming: action.isStreaming,
       });
+    } else if (action.kind === 'hook') {
+      // Plan 437: hooks are their own row. Flush the surrounding run
+      // first (so tool groups stay tight), then push a single-entry
+      // segment for this hook.
+      flush();
+      segments.push({ kind: 'single', entry: { kind: 'hook', hook: action.hook } });
     } else {
       // text / widget (and any future kind) flush the run.
       flush();

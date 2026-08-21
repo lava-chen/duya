@@ -331,7 +331,10 @@ async function runOneSkeptic(params: {
       promptMessages,
       toolUseContext: context,
       isAsync: false,
-      maxTurns: maxTurns ?? 10,
+      // No implicit cap. The verifier runs as a child `DuyaAgent`, which
+      // is now uncapped by default (pi-aligned). Callers can still pass
+      // `maxTurns` explicitly as a safety net.
+      maxTurns,
       availableTools: context.options.tools,
       description: `Goal verifier ${skepticIndex + 1}/${count}: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),
@@ -661,7 +664,8 @@ export async function runStrategist(params: {
       promptMessages,
       toolUseContext: context,
       isAsync: false,
-      maxTurns: maxTurns ?? 10,
+      // No implicit cap (see verifier note above).
+      maxTurns,
       availableTools: context.options.tools,
       description: `Goal strategist: ${objective.slice(0, 60)}`,
       agentId: crypto.randomUUID(),

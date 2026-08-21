@@ -53,9 +53,9 @@ export const DEFAULT_CONFIG: DUYAConfig = {
   terminal: {
     backend: 'local',
   },
-  agent: {
-    maxTurns: 90,
-  },
+  // `agent` block intentionally has no `maxTurns` default. The agent is
+  // uncapped unless the user explicitly sets `agent.max_turns` in
+  // `~/.duya/config.toml` (pi-aligned). See `DUYAConfig.agent.maxTurns`.
   compression: {
     enabled: true,
     threshold: 0.50,

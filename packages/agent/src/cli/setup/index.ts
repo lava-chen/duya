@@ -404,15 +404,22 @@ async function setupAgentSettings(): Promise<void> {
   printInfo('Configure agent behavior and limits.');
   console.log();
 
-  // Max iterations
-  const currentMaxTurns = getCliSetting('max_turns') || '90';
+  // Max iterations. The agent is uncapped by default (pi-aligned). Users
+  // may still opt into a hard ceiling here; `0` means unlimited and is
+  // the new default.
+  const currentMaxTurns = getCliSetting('max_turns') || '0';
   const maxTurnsStr = await promptText({
-    message: 'Maximum tool-calling iterations per conversation:',
+    message: 'Maximum tool-calling iterations per conversation (0 = unlimited):',
     default: currentMaxTurns,
   });
-  const maxTurns = parseInt(maxTurnsStr, 10) || 90;
+  const parsed = parseInt(maxTurnsStr, 10);
+  const maxTurns = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
   setCliSetting('max_turns', String(maxTurns));
-  printSuccess(`Max iterations set to ${maxTurns}`);
+  printSuccess(
+    maxTurns === 0
+      ? 'Max iterations: unlimited'
+      : `Max iterations set to ${maxTurns}`,
+  );
 
   // Working mode
   const currentMode = getCliSetting('agent_mode') || 'code';
@@ -561,8 +568,9 @@ function printSetupSummary(): void {
     console.log();
   }
 
-  // Settings
-  const maxTurns = getCliSetting('max_turns') || '90';
+  // Settings. `0` (or unset) means unlimited (pi-aligned).
+  const maxTurnsRaw = getCliSetting('max_turns');
+  const maxTurns = maxTurnsRaw && maxTurnsRaw !== '0' ? maxTurnsRaw : 'unlimited';
   const mode = getCliSetting('agent_mode') || 'code';
   const displayMode = getCliSetting('tool_display_mode') || 'verbose';
   console.log(color('Agent Settings:', Colors.YELLOW));

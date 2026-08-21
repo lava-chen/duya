@@ -1,80 +1,57 @@
 /**
  * src/components/providers/ProviderEditView.tsx
  *
- * Plan 209 + redesign: inline edit page (NOT a modal) for
- * configuring a single provider. Modeled after the cc-switch /
- * Claude-Code / Codex settings layout:
+ * Provider edit page — minimal, two-list layout:
  *
  *   ← Back     Edit <Provider Name>           [🗑 Delete]
  *
- *   ── 1. IDENTITY ──────────────────────────────
- *   Identity                    miniamx-cn          (read-only pill)
- *   Display Name                [ MiniMax (CN) ]     (editable)
- *   Notes                       [ 公司专用账号 ]     (editable)
+ *   ── 1. 服务商信息 ─────────────────────────────────────
+ *   别名 (Alias)              [ 公司专用账号 ]
+ *   显示名称 (Name)           [ MiniMax (CN) ]
+ *   Base URL                 [ https://... ]
+ *   API Key                  [ ••••• ] [👁]
+ *   备注 (Notes)              [ ... ]            (optional)
  *
- *   ── 2. CONNECTION ────────────────────────────
- *   Website                                       [打开 ↗]
- *   Get API Key                                    [打开 ↗]
- *   API format                 anthropic            (read-only pill)
- *   Auth Token                 [ ••••• ] [👁]
- *   Base URL                   [ https://... ]      (editable)
+ *   ── 2. 模型 ───────────────────────────────────────────
+ *   ⓘ 0 enabled                 [拉取模型列表] [清空]
+ *   ✓ claude-sonnet-4-6             [200K][1M]   [✕]
+ *   ✓ claude-sonnet-4-6-1m          [200K][1M]   [✕]
+ *   ...
  *
- *   ── 3. MODELS (primary) ──────────────────────
- *   ⓘ 0 enabled                 [↗ 拉取模型列表] [清空]
- *   ✓ claude-sonnet-4-6            200K  1M    [✕]
- *   + 添加模型…  + 添加自定义模型 id…
- *
- *   ── 4. ADVANCED (collapsed) ──────────────────
- *   ▸ 高级选项 (role mapping, env vars, title model)
- *
- *   ── 5. FOOTER (sticky, separated) ────────────
+ *   ── FOOTER (sticky) ──────────────────────────────────
  *                                  [取消] [测试连接] [保存]
  *
  * Design rules:
- * - All dropdowns render through antd `Select` (Portal-based)
- *   so they are never clipped by ancestor overflow / sticky
- *   footers / scroll containers.
- * - Read-only values render as a muted value pill, NOT an
- *   input — so the user cannot mistake them for editable
- *   fields.
- * - Editable fields use `SettingsInputRow` / `SettingsSelectRow`
- *   so each row is `label + description on the left, control
- *   on the right`.
- * - Dividers between rows are subtle (`divide-border/30`-style)
- *   so the page reads as a list, not as a stack of cards.
- * - The footer is sticky at the bottom of the scroll
- *   container and has a faint top border so it never
- *   occludes the last row.
+ * - Sections use no icon, just a plain title + description,
+ *   so the layout matches the rest of Settings.
+ * - Model list rows carry one `[200K]` / `[1M]` toggle. The active
+ *   value is the closest preset <= the picked context; clicking the
+ *   active one clears the override. The chosen context is
+ *   persisted to `options.model_context[modelId]` in config.toml
+ *   and resolved at runtime by `ProviderStore.resolveRuntimeCapability`,
+ *   so the session agent picks the correct 1M model variant.
+ * - The fetch button reads from the provider's API via
+ *   `fetchProviderModelsIPC`; the resulting models merge with the
+ *   built-in catalog defaults so unknown models still appear.
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { Select } from 'antd';
 import {
   SpinnerGapIcon,
   CheckCircleIcon,
   XCircleIcon,
   CircleNotchIcon,
   ArrowLeftIcon,
-  ArrowUpRightIcon,
-  EyeIcon,
-  EyeSlashIcon,
   TrashIcon,
-  PlusIcon,
   XIcon,
   CheckIcon,
-  InfoIcon,
 } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { useTranslation } from '@/hooks/useTranslation';
-import { PresetIcon } from '@/components/settings/PresetIcon';
 import {
   SettingsSection,
   SettingsCard,
-  SettingsRow,
-  SettingsToggle,
-  SettingsSelect,
-  SettingsSelectRow,
   SettingsInputRow,
 } from '@/components/settings/ui';
 import { useApiKeyState } from '@/components/settings/forms/hooks/useApiKeyState';
@@ -82,16 +59,15 @@ import { useBaseUrlState } from '@/components/settings/forms/hooks/useBaseUrlSta
 import { useModelSelection } from '@/components/settings/forms/hooks/useModelSelection';
 import { usePresetDraft } from '@/components/settings/forms/hooks/usePresetDraft';
 import { useProviderModels } from '@/components/providers/hooks/useProviderModels';
+import { ModelCapabilityBadges } from '@/components/providers/ModelCapabilityBadges';
 import { useProvidersQuery } from '@/lib/providers/hooks/useProvidersQuery';
 import { useProviderEditSave } from '@/lib/providers/hooks/useProviderEditSave';
 import { isMaskedKey } from '@/lib/providers/secret';
 import { getPreset, findPresetByBaseUrl, type QuickPreset } from '@/lib/provider-presets';
-import type { ModelCompat, OpenAIThinkingFormat } from '@duya/ai';
 import { useConversationStore } from '@/stores/conversation-store';
 import { cn } from '@/lib/utils';
 import {
   testProviderIPC,
-  listModelCapabilitiesIPC,
   type FetchedModel,
 } from '@/lib/ipc-client';
 
@@ -100,29 +76,26 @@ const CONTEXT_PRESETS: Array<{ value: number; label: string }> = [
   { value: 1_000_000, label: '1M' },
 ];
 
-/**
- * Plan 7.3: dropdown options for the OpenAI thinking format override.
- * The empty string represents "auto" (use built-in preset or protocol
- * default). The remaining values mirror `OpenAIThinkingFormat` from
- * `@duya/ai`.
- */
-const THINKING_FORMAT_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: '', label: 'Auto (use preset default)' },
-  { value: 'openai-standard', label: 'openai-standard' },
-  { value: 'reasoning-content', label: 'reasoning-content' },
-  { value: 'qwen-style', label: 'qwen-style' },
-  { value: 'glm-style', label: 'glm-style' },
-  { value: 'think-tag-fallback', label: 'think-tag-fallback' },
-];
-
-function groupByVendor(models: FetchedModel[]): Record<string, FetchedModel[]> {
-  const out: Record<string, FetchedModel[]> = {};
-  for (const m of models) {
-    const vendor = m.ownedBy || 'Other';
-    if (!out[vendor]) out[vendor] = [];
-    out[vendor].push(m);
+/** Resolve the "currently picked" context preset for a model, or
+ *  null when the user has cleared the override. Picks the largest
+ *  preset that is <= the current value (so 200K lights up for a
+ *  200K pick, 1M lights up for a 1M pick). */
+function activeContextPreset(
+  ctx: number | null | undefined,
+): { value: number; label: string } | null {
+  if (!ctx || ctx <= 0) return null;
+  for (let i = CONTEXT_PRESETS.length - 1; i >= 0; i--) {
+    if (CONTEXT_PRESETS[i].value <= ctx) return CONTEXT_PRESETS[i];
   }
-  return out;
+  return null;
+}
+
+/** Human-readable tokens: 262144 -> "256K", 131072 -> "128K", 8192 -> "8K". */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  const k = n / 1000;
+  if (n >= 1000) return `${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}K`;
+  return String(n);
 }
 
 export function ProviderEditView() {
@@ -188,60 +161,51 @@ export function ProviderEditView() {
     }
   }, [editProvider, preset]);
 
-  const initialCustom = useMemo(() => {
-    if (!editProvider) return [];
-    try {
-      const opts =
-        typeof editProvider.options === 'string'
-          ? JSON.parse(editProvider.options || '{}')
-          : editProvider.options || {};
-      return (opts as { custom_models?: string[] }).custom_models || [];
-    } catch {
-      return [];
-    }
-  }, [editProvider]);
-
-  // Plan 205 fix-up: per-model context windows are stored in a
-  // separate capability table (not in `options_json`), so the
-  // edit form has to fetch them explicitly when the user lands
-  // on the page. The hook then uses this map to seed its
-  // internal state so the 1M/200K buttons reflect the
-  // previously-saved value.
+  // Per-model context windows are persisted in two places (legacy DB
+  // capability rows + the new `options.model_context` map in
+  // config.toml). The view hydrates a single map for the form by
+  // preferring the config map and falling back to the capability
+  // table — so the `[1M] / [200K]` buttons reflect what the session
+  // agent will actually use at runtime.
   const [initialContextWindows, setInitialContextWindows] = useState<
     Record<string, number>
   >({});
 
-  // Hydrate `initialContextWindows` from the capability table
-  // when the user opens the edit page. Best-effort: a transient
-  // IPC failure means the buttons start un-set, but the user
-  // can still pick 1M/200K and the change will be persisted on
-  // the next click (see `useProviderModels.setContextWindow`).
+  // User-editable alias (nickname). Independent of the vendor `name`.
+  const [alias, setAlias] = useState('');
+
+  // Hydrate `initialContextWindows` and `alias` from the edit
+  // provider DTO whenever the user lands on / switches to a
+  // different provider. Reads the `options.model_context` map from
+  // config.toml directly — no async IPC needed since the DTO already
+  // carries the parsed options.
   useEffect(() => {
-    const providerId = editProvider?.id;
-    if (!providerId) {
+    if (!editProvider) {
       setInitialContextWindows({});
+      setAlias('');
       return;
     }
-    let cancelled = false;
-    void listModelCapabilitiesIPC({ providerId })
-      .then((caps) => {
-        if (cancelled) return;
-        const next: Record<string, number> = {};
-        for (const c of caps) {
-          if (typeof c.contextWindow === 'number' && c.contextWindow > 0) {
-            next[c.modelId] = c.contextWindow;
-          }
-        }
-        setInitialContextWindows(next);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setInitialContextWindows({});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [editProvider?.id]);
+    let opts: Record<string, unknown> = {};
+    try {
+      opts =
+        typeof editProvider.options === 'string'
+          ? JSON.parse(editProvider.options || '{}')
+          : editProvider.options || {};
+    } catch {
+      opts = {};
+    }
+    const ctxMap = opts.model_context as Record<string, number> | undefined;
+    if (ctxMap && typeof ctxMap === 'object') {
+      const next: Record<string, number> = {};
+      for (const [k, v] of Object.entries(ctxMap)) {
+        if (typeof v === 'number' && v > 0) next[k] = v;
+      }
+      setInitialContextWindows(next);
+    } else {
+      setInitialContextWindows({});
+    }
+    setAlias(editProvider.alias ?? '');
+  }, [editProvider?.id, editProvider?.options, editProvider]);
 
   // Catalog default models for the selected preset, mapped to
   // FetchedModel shape so they seed the model list immediately.
@@ -292,7 +256,6 @@ export function ProviderEditView() {
     // forwarded as-is.
     apiKey: apiKeyState.apiKey || apiKeyState.maskedApiKey,
     initialEnabled,
-    initialCustomModels: initialCustom,
     initialContextWindows,
     // Seed the model list with catalog defaults so the user
     // sees available models immediately without needing to
@@ -319,15 +282,6 @@ export function ProviderEditView() {
   // Auth Token show/hide (local state — not persisted).
   const [apiKeyRevealed, setApiKeyRevealed] = useState(false);
 
-  // Plan 7.3: Model compat override state. These fields let the
-  // user override the built-in preset compat flags (e.g. when a
-  // custom endpoint uses reasoning-content instead of
-  // think-tag-fallback). Empty/unset values are not emitted, so
-  // the built-in preset compat is used as the fallback.
-  const [compatThinkingFormat, setCompatThinkingFormat] = useState<string>('');
-  const [compatForceAdaptive, setCompatForceAdaptive] = useState<boolean>(false);
-  const [compatFixedTemp, setCompatFixedTemp] = useState<string>('');
-
   useEffect(() => {
     if (!preset) return;
     setError(null);
@@ -349,36 +303,11 @@ export function ProviderEditView() {
       } else {
         apiKeyState.setMasked(editProvider.apiKey || '');
       }
-      // Plan 7.3: hydrate compat overrides from the persisted
-      // `options.compatOverrides` field (round-tripped via
-      // `options_json` in the legacy storage layer).
-      try {
-        const opts =
-          typeof editProvider.options === 'string'
-            ? JSON.parse(editProvider.options || '{}')
-            : editProvider.options || {};
-        const co = (opts as { compatOverrides?: ModelCompat }).compatOverrides;
-        setCompatThinkingFormat(co?.openAIThinkingFormat ?? '');
-        setCompatForceAdaptive(co?.forceAdaptiveThinking ?? false);
-        setCompatFixedTemp(
-          typeof co?.fixedTemperature === 'number'
-            ? String(co.fixedTemperature)
-            : '',
-        );
-      } catch {
-        setCompatThinkingFormat('');
-        setCompatForceAdaptive(false);
-        setCompatFixedTemp('');
-      }
     } else {
       baseUrlState.setBaseUrl(preset.baseUrl);
       presetDraft.setName(preset.name);
       apiKeyState.setApiKey('');
       setNotes('');
-      // Plan 7.3: reset compat overrides for new providers.
-      setCompatThinkingFormat('');
-      setCompatForceAdaptive(false);
-      setCompatFixedTemp('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset, isEdit, editProvider?.id]);
@@ -413,27 +342,8 @@ export function ProviderEditView() {
     models.enable(modelId);
   };
 
-  const handleAddCustom = () => {
-    // No-op helper — kept for legacy references if any. The
-    // active path is `handleAddCustomSubmit` below, which
-    // reads the free-text input by id and pushes through
-    // `models.addCustom()`.
-  };
-
-  const handleAddCustomSubmit = () => {
-    const el = document.getElementById(
-      'provider-edit-add-custom-input',
-    ) as HTMLInputElement | null;
-    const id = el?.value.trim() || '';
-    if (!id) return;
-    if (models.addCustom(id)) {
-      if (el) el.value = '';
-    }
-  };
-
   const handleRemoveModel = (modelId: string) => {
     models.disable(modelId);
-    models.removeCustom(modelId);
   };
 
   const handleSetContextWindow = (modelId: string, ctx: number) => {
@@ -527,28 +437,19 @@ export function ProviderEditView() {
       optionsJson.enabled_models = models.enabled;
       optionsJson.defaultModel = models.enabled[0];
     }
-    if (models.customModels.length > 0) {
-      optionsJson.custom_models = models.customModels;
-    }
 
-    // Plan 7.3: build compat overrides object from the three UI
-    // fields. Only emit fields the user explicitly set so the
-    // built-in preset compat fills in the gaps via findModelCompat.
-    const compatOverrides: ModelCompat = {};
-    if (compatThinkingFormat) {
-      compatOverrides.openAIThinkingFormat =
-        compatThinkingFormat as OpenAIThinkingFormat;
+    // Per-model context windows from the [200K]/[1M] toggles.
+    // Only emit positive values — clicking the active preset
+    // clears it. The map is persisted to config.toml as
+    // `options.model_context` and consumed at runtime by
+    // `ProviderStore.resolveRuntimeCapability` so the session
+    // agent picks the correct 1M model variant.
+    const ctxMap: Record<string, number> = {};
+    for (const [modelId, ctx] of models.contextWindows.entries()) {
+      if (typeof ctx === 'number' && ctx > 0) ctxMap[modelId] = ctx;
     }
-    if (compatForceAdaptive) {
-      compatOverrides.forceAdaptiveThinking = true;
-    }
-    const parsedTemp = parseFloat(compatFixedTemp);
-    if (!Number.isNaN(parsedTemp)) {
-      compatOverrides.fixedTemperature = parsedTemp;
-    }
-    const hasCompatOverrides = Object.keys(compatOverrides).length > 0;
-    if (hasCompatOverrides) {
-      optionsJson.compatOverrides = compatOverrides;
+    if (Object.keys(ctxMap).length > 0) {
+      optionsJson.model_context = ctxMap;
     }
 
     const optionsJsonString =
@@ -561,19 +462,21 @@ export function ProviderEditView() {
           ? ''
           : undefined;
 
+    const aliasTrimmed = alias.trim();
+
     try {
       await save(
         {
           name: presetDraft.draftLlmProvider?.name?.trim() || preset.name,
+          alias: aliasTrimmed || undefined,
           provider_type: preset.provider_type,
           protocol: preset.protocol,
           base_url: baseUrlState.baseUrl.trim() || preset.baseUrl,
           api_key: apiKeyArg,
           // Preserve the existing on-disk env vars so we
           // don't accidentally wipe them on save. The UI no
-          // longer exposes them (the Advanced section is
-          // gone), but the field still exists on the disk
-          // schema and may carry preset defaults like
+          // longer exposes them, but the field still exists on
+          // the disk schema and may carry preset defaults like
           // `API_TIMEOUT_MS`.
           extra_env:
             editProvider?.extraEnv && editProvider.extraEnv !== '{}'
@@ -582,10 +485,6 @@ export function ProviderEditView() {
           enabled_models: models.enabled,
           options: optionsJson,
           options_json: optionsJsonString,
-          // Plan 7.3: forward compat overrides to the save hook so
-          // it can set the top-level `compatOverrides` field on
-          // the LlmProvider (consumed by toRuntimeConfig).
-          compatOverrides: hasCompatOverrides ? compatOverrides : undefined,
           notes: notes.trim() || undefined,
           preset_id: target?.presetKey,
           existing_provider_dto: editProvider
@@ -612,29 +511,6 @@ export function ProviderEditView() {
 
   // ── Render data ──
   const enabledSet = new Set(models.enabled);
-  const grouped = groupByVendor(models.fetched);
-  const availableCount = models.fetched.filter(
-    (m) => !enabledSet.has(m.id),
-  ).length;
-  const vendors = Object.keys(grouped).sort();
-
-  // Ant `Select` options for the "Add model" picker. We list every
-  // fetched model that isn't already enabled, grouped by vendor.
-  const modelSelectOptions: Array<{ value: string; label: string }> = [];
-  for (const vendor of vendors) {
-    const list = grouped[vendor].filter((m) => !enabledSet.has(m.id));
-    for (const m of list) {
-      modelSelectOptions.push({
-        value: m.id,
-        label: m.id,
-      });
-    }
-  }
-
-  // Plan 209 / add-mode: stable id derived from preset.key so
-  // we never silently overwrite an entry created via the
-  // onboarding flow that already uses the same id.
-  const vendorId = isEdit ? editProvider!.id : preset.key;
 
   // The "display value" for the Auth Token input. When the
   // hook is in 'cleared' state we show ''; otherwise show the
@@ -678,101 +554,52 @@ export function ProviderEditView() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        {/* ── 1. IDENTITY ─────────────────────────────── */}
+      <form onSubmit={handleSubmit} className="space-y-8">
+        {/* ── LIST 1: 服务商信息 ───────────────────────── */}
         <SettingsSection
-          title={t('provider.section.identity')}
-          description={t('provider.section.identityDesc')}
-          icon={
-            <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground">
-              <PresetIcon iconKey={preset.iconKey} size={16} />
-            </div>
+          title={
+            locale === 'zh' ? '服务商信息' : 'Service information'
+          }
+          description={
+            locale === 'zh'
+              ? '设置别名、显示名、连接参数与凭据。'
+              : 'Alias, display name, connection and credentials.'
           }
         >
           <SettingsCard divided>
-            {/* Read-only vendor id (mono pill) */}
-            <SettingsRow
-              label={t('provider.vendorId')}
-              description={t('provider.vendorIdReadonly')}
-            >
-              <span
-                data-testid="provider-edit-vendor-id"
-                className="font-mono text-sm text-muted-foreground bg-muted/40 px-2.5 py-1 rounded select-all"
-              >
-                {vendorId}
-              </span>
-            </SettingsRow>
+            {/* Alias — editable */}
+            <SettingsInputRow
+              label={locale === 'zh' ? '别名' : 'Alias'}
+              description={
+                locale === 'zh'
+                  ? '用于区分同一服务商的多个账号，例如「公司专用」「个人」。'
+                  : 'Distinguish multiple accounts of the same vendor, e.g. "Work", "Personal".'
+              }
+              value={alias}
+              onChange={setAlias}
+              placeholder={
+                locale === 'zh' ? '选填,留空使用显示名' : 'Optional, falls back to display name'
+              }
+              data-testid="provider-edit-alias"
+            />
 
             {/* Display name — editable */}
             <SettingsInputRow
-              label={t('provider.displayName')}
+              label={locale === 'zh' ? '显示名称' : 'Display name'}
               value={presetDraft.draftLlmProvider?.name || ''}
               onChange={(v) => presetDraft.setName(v)}
               placeholder={preset.name}
             />
 
-            {/* Notes (专用名称) — always editable, sits in
-                the Identity section so the user can label
-                multiple accounts of the same vendor. */}
-            <SettingsInputRow
-              label={t('provider.notes')}
-              value={notes}
-              onChange={setNotes}
-              placeholder={t('provider.notesPlaceholder')}
-            />
-          </SettingsCard>
-        </SettingsSection>
-
-        {/* ── 2. CONNECTION ────────────────────────────── */}
-        <SettingsSection
-          title={t('provider.section.connection')}
-          description={t('provider.section.connectionDesc')}
-          icon={
-            <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground">
-              <CircleNotchIcon size={16} />
-            </div>
-          }
-        >
-          <SettingsCard divided>
-            {/* Vendor website (read-only row with secondary button) */}
-            {preset.meta?.docsUrl && (
-              <SettingsRow label={t('provider.websiteUrl')}>
-                <a
-                  href={preset.meta.docsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                >
-                  <ArrowUpRightIcon size={12} />
-                  {t('common.open')}
-                </a>
-              </SettingsRow>
+            {/* Base URL */}
+            {preset.fields.includes('base_url') && (
+              <SettingsInputRow
+                label={locale === 'zh' ? 'Base URL' : 'Base URL'}
+                value={baseUrlState.baseUrl}
+                onChange={(v) => baseUrlState.setBaseUrl(v)}
+                placeholder={preset.baseUrl}
+              />
             )}
-
-            {/* Get API Key link */}
-            {preset.meta?.apiKeyUrl && (
-              <SettingsRow label={t('provider.getApiKey')}>
-                <a
-                  href={preset.meta.apiKeyUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 transition-colors"
-                >
-                  <ArrowUpRightIcon size={12} />
-                  {t('common.open')}
-                </a>
-              </SettingsRow>
-            )}
-
-            {/* API format (read-only pill) */}
-            <SettingsRow
-              label={t('provider.apiFormat')}
-              description={t('provider.apiFormatHint')}
-            >
-              <span className="font-mono text-sm text-muted-foreground bg-muted/40 px-2.5 py-1 rounded">
-                {preset.protocol}
-              </span>
-            </SettingsRow>
 
             {/* Auth Token — real editable input with show/hide */}
             {preset.fields.includes('api_key') && (
@@ -794,8 +621,7 @@ export function ProviderEditView() {
               />
             )}
 
-            {/* Show/Hide button — outside the input so it can
-                sit in the row's right-hand area. */}
+            {/* Show/Hide button — under the API Key row. */}
             {preset.fields.includes('api_key') && (
               <div className="px-4 py-2 flex justify-end border-t border-border/30">
                 <Button
@@ -803,36 +629,34 @@ export function ProviderEditView() {
                   size="sm"
                   onClick={() => setApiKeyRevealed((v) => !v)}
                 >
-                  {apiKeyRevealed ? (
-                    <EyeSlashIcon size={12} />
-                  ) : (
-                    <EyeIcon size={12} />
-                  )}
-                  {apiKeyRevealed ? t('provider.hideKey') : t('provider.showKey')}
+                  {apiKeyRevealed
+                    ? t('provider.hideKey')
+                    : t('provider.showKey')}
                 </Button>
               </div>
             )}
 
-            {/* Base URL */}
-            {preset.fields.includes('base_url') && (
-              <SettingsInputRow
-                label={t('provider.baseUrl')}
-                value={baseUrlState.baseUrl}
-                onChange={(v) => baseUrlState.setBaseUrl(v)}
-                placeholder={preset.baseUrl}
-              />
-            )}
+            {/* Notes (备注) — optional. */}
+            <SettingsInputRow
+              label={locale === 'zh' ? '备注' : 'Notes'}
+              value={notes}
+              onChange={setNotes}
+              placeholder={
+                locale === 'zh'
+                  ? '选填,例如账号用途'
+                  : 'Optional, e.g. account purpose'
+              }
+            />
           </SettingsCard>
         </SettingsSection>
 
-        {/* ── 3. MODELS (primary) ──────────────────────── */}
+        {/* ── LIST 2: 模型 ──────────────────────────────── */}
         <SettingsSection
-          title={t('provider.section.models')}
-          description={t('provider.section.modelsDesc')}
-          icon={
-            <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground">
-              <CheckIcon size={16} />
-            </div>
+          title={locale === 'zh' ? '模型' : 'Models'}
+          description={
+            locale === 'zh'
+              ? '从此服务商的可用模型中勾选要启用的项。点击 [200K] / [1M] 切换上下文长度,选择会保存到 config 并立即作用于会话。'
+              : 'Enable the models you want to use. Toggle [200K] / [1M] to pick the context window — the choice is persisted to config and applied to the session agent immediately.'
           }
           action={
             <div className="flex items-center gap-1.5">
@@ -842,7 +666,6 @@ export function ProviderEditView() {
                   size="sm"
                   onClick={handleClearAll}
                 >
-                  <XIcon size={12} />
                   {t('provider.clearAll')}
                 </Button>
               )}
@@ -853,10 +676,8 @@ export function ProviderEditView() {
                 disabled={models.isFetching}
                 data-testid="provider-edit-fetch-models"
               >
-                {models.isFetching ? (
+                {models.isFetching && (
                   <SpinnerGapIcon size={12} className="animate-spin" />
-                ) : (
-                  <ArrowUpRightIcon size={12} />
                 )}
                 {t('provider.modelInput.fetch')}
               </Button>
@@ -877,10 +698,6 @@ export function ProviderEditView() {
             {/* Empty state */}
             {models.enabled.length === 0 ? (
               <div className="px-4 py-8 flex flex-col items-center gap-2 text-center">
-                <InfoIcon
-                  size={20}
-                  className="text-muted-foreground/60"
-                />
                 <p className="text-sm text-muted-foreground">
                   {t('provider.modelInput.noEnabledHint')}
                 </p>
@@ -891,10 +708,8 @@ export function ProviderEditView() {
                   disabled={models.isFetching}
                   className="hover:underline"
                 >
-                  {models.isFetching ? (
+                  {models.isFetching && (
                     <SpinnerGapIcon size={12} className="animate-spin" />
-                  ) : (
-                    <ArrowUpRightIcon size={12} />
                   )}
                   {t('provider.modelInput.fetch')}
                 </Button>
@@ -905,8 +720,14 @@ export function ProviderEditView() {
                 className="divide-y divide-border/20"
               >
                 {models.enabled.map((modelId) => {
-                  const isCustom = models.customModels.includes(modelId);
                   const ctx = models.contextWindows.get(modelId) ?? null;
+                  const activePreset = activeContextPreset(ctx);
+                  // Look up rich capability flags from the fetched
+                  // list (populated by `useProviderModels` after a
+                  // successful `/api/v1/models` roundtrip). Enabled
+                  // rows whose model id is not in the fetched list
+                  // simply render no badges — caller-friendly.
+                  const fetched = models.fetched.find((m) => m.id === modelId);
                   return (
                     <li
                       key={modelId}
@@ -918,18 +739,28 @@ export function ProviderEditView() {
                         className="text-accent shrink-0"
                       />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-mono truncate">
-                          {modelId}
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-sm font-mono truncate">
+                            {modelId}
+                          </span>
+                          <ModelCapabilityBadges
+                            variant="inline"
+                            vision={fetched?.supportsVision}
+                            toolUse={fetched?.supportsToolUse}
+                            reasoning={fetched?.supportsReasoning}
+                            format={fetched?.format}
+                            isLoaded={fetched?.isLoaded}
+                          />
                         </div>
-                        {isCustom && (
-                          <div className="text-[10px] text-muted-foreground/70 mt-0.5">
-                            {t('provider.custom')}
+                        {ctx != null && ctx > 0 && (
+                          <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
+                            context {formatTokens(ctx)}
                           </div>
                         )}
                       </div>
                       <div className="shrink-0 flex items-center gap-1">
                         {CONTEXT_PRESETS.map((presetCtx) => {
-                          const active = ctx === presetCtx.value;
+                          const active = activePreset?.value === presetCtx.value;
                           return (
                             <button
                               key={presetCtx.value}
@@ -969,39 +800,58 @@ export function ProviderEditView() {
               </ul>
             )}
 
-            {/* Add model — antd Select (Portal-based, cannot be clipped) */}
+            {/* Add model — plain text search + add buttons. No
+                portal-based select needed: the model list is a
+                plain list and we only need to surface what the
+                fetch returned. The user types an id to add. */}
             <div className="px-4 py-3 border-t border-border/30 space-y-2">
               {models.fetched.length > 0 ? (
-                <Select
-                  showSearch
-                  allowClear={false}
-                  value={null}
-                  placeholder={
-                    availableCount > 0
-                      ? `${t('provider.addModel')}…`
-                      : t('provider.modelInput.noMatch')
-                  }
-                  disabled={availableCount === 0}
-                  onChange={(v) => {
-                    if (typeof v === 'string') {
-                      handleAddFromList(v);
-                    }
-                  }}
-                  // The Portal-based dropdown escapes any
-                  // overflow:hidden / sticky-footer ancestor and
-                  // renders at the body level.
-                  className="w-full settings-select-antd"
-                  classNames={{ popup: { root: 'settings-select-dropdown' } }}
-                  // Width matches the trigger.
-                  popupMatchSelectWidth
-                  // Filter on user-typed query.
-                  filterOption={(input, option) =>
-                    String(option?.value ?? '')
-                      .toLowerCase()
-                      .includes(input.toLowerCase())
-                  }
-                  options={modelSelectOptions}
-                />
+                <details className="group">
+                  <summary
+                    className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none"
+                    data-testid="provider-edit-add-toggle"
+                  >
+                    +{' '}
+                    {locale === 'zh'
+                      ? `从已拉取的 ${models.fetched.length} 个模型中添加`
+                      : `Add from ${models.fetched.length} fetched models`}
+                  </summary>
+                  <ul className="mt-2 max-h-48 overflow-y-auto rounded border border-border/30 bg-muted/30">
+                    {models.fetched
+                      .filter((m) => !enabledSet.has(m.id))
+                      .map((m) => (
+                        <li key={m.id}>
+                          <button
+                            type="button"
+                            onClick={() => handleAddFromList(m.id)}
+                            className="w-full text-left px-3 py-1.5 text-xs font-mono hover:bg-accent/10 transition-colors flex items-center gap-2"
+                            data-testid={`provider-edit-add-${m.id}`}
+                          >
+                            <span className="truncate">{m.id}</span>
+                            <ModelCapabilityBadges
+                              variant="inline"
+                              vision={m.supportsVision}
+                              toolUse={m.supportsToolUse}
+                              reasoning={m.supportsReasoning}
+                              format={m.format}
+                              isLoaded={m.isLoaded}
+                            />
+                            {m.ownedBy ? (
+                              <span className="ml-auto text-muted-foreground/70 shrink-0">
+                                {m.ownedBy}
+                              </span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    {models.fetched.filter((m) => !enabledSet.has(m.id))
+                      .length === 0 && (
+                      <li className="px-3 py-2 text-xs text-muted-foreground">
+                        {t('provider.modelInput.noMatch')}
+                      </li>
+                    )}
+                  </ul>
+                </details>
               ) : (
                 <Button
                   variant="secondary"
@@ -1010,88 +860,13 @@ export function ProviderEditView() {
                   disabled={models.isFetching}
                   className="w-full border-dashed"
                 >
-                  {models.isFetching ? (
+                  {models.isFetching && (
                     <SpinnerGapIcon size={12} className="animate-spin" />
-                  ) : (
-                    <PlusIcon size={12} />
                   )}
                   {t('provider.fetchFirstHint')}
                 </Button>
               )}
-
-              {/* Custom model id — direct inline input */}
-              <div className="flex items-center gap-2">
-                <input
-                  id="provider-edit-add-custom-input"
-                  type="text"
-                  placeholder={t('provider.customPlaceholder')}
-                  data-testid="provider-edit-add-custom"
-                  className="flex-1 px-3 py-1.5 rounded-md text-sm bg-surface/40 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent/50 font-mono"
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleAddCustomSubmit}
-                  data-testid="provider-edit-add-custom-submit"
-                >
-                  <PlusIcon size={12} />
-                  {t('provider.add')}
-                </Button>
-              </div>
             </div>
-          </SettingsCard>
-        </SettingsSection>
-
-        {/* ── 4. COMPAT OVERRIDES (advanced) ─────────── */}
-        <SettingsSection
-          title={locale === 'zh' ? '模型兼容性覆盖' : 'Model Compatibility Overrides'}
-          description={
-            locale === 'zh'
-              ? '覆盖内置预设的兼容性标志。留空则使用预设默认值。'
-              : 'Override built-in preset compat flags. Leave empty to use preset defaults.'
-          }
-          icon={
-            <div className="w-7 h-7 rounded-lg bg-muted flex items-center justify-center text-muted-foreground">
-              <InfoIcon size={16} />
-            </div>
-          }
-        >
-          <SettingsCard divided>
-            <SettingsSelectRow
-              label="OpenAI Thinking Format"
-              description={
-                locale === 'zh'
-                  ? '推理内容的序列化格式。Auto 表示使用预设默认值。'
-                  : 'Wire format for reasoning content. Auto uses the preset default.'
-              }
-              value={compatThinkingFormat}
-              onValueChange={(v) => setCompatThinkingFormat(v)}
-              options={THINKING_FORMAT_OPTIONS}
-            />
-
-            <SettingsToggle
-              label="Force Adaptive Thinking"
-              description={
-                locale === 'zh'
-                  ? '即使模型未声明为推理模型，也强制启用自适应思考。'
-                  : 'Force adaptive thinking even if the model is not declared as a reasoning model.'
-              }
-              checked={compatForceAdaptive}
-              onCheckedChange={setCompatForceAdaptive}
-            />
-
-            <SettingsInputRow
-              label="Fixed Temperature"
-              description={
-                locale === 'zh'
-                  ? '固定温度值（如 0.7）。留空则不覆盖。'
-                  : 'Fixed temperature value (e.g. 0.7). Leave empty to not override.'
-              }
-              value={compatFixedTemp}
-              onChange={setCompatFixedTemp}
-              placeholder="0.7"
-              type="text"
-            />
           </SettingsCard>
         </SettingsSection>
 

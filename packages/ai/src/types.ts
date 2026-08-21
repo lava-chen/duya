@@ -179,7 +179,7 @@ export interface PermissionRequestEvent {
 }
 
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error' | 'hook_invoked';
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -190,6 +190,29 @@ export interface AgentProgressEvent {
   agentName?: string;
   agentDescription?: string;
   sessionId?: string;
+  /**
+   * Plan 437: when `type === 'hook_invoked'`, the rest of the payload
+   * (hookEventName / hookType / hookName / additionalContext / status /
+   * durationMs / async / seq / ...) is carried as a nested object so
+   * the existing flat envelope passes through unchanged. The renderer
+   * unwraps this in `handleAgentProgressEvent`.
+   */
+  hookEvent?: {
+    hookEventName: string;
+    hookType: 'command' | 'process' | 'prompt' | 'http' | 'agent';
+    hookName: string;
+    matcher?: string;
+    additionalContext?: string;
+    exitCode?: number;
+    async: boolean;
+    backgroundTaskId?: string;
+    durationMs: number;
+    status: 'ok' | 'error' | 'timeout' | 'skipped';
+    errorMessage?: string;
+    seq: number;
+    toolName?: string;
+    toolUseId?: string;
+  };
 }
 
 export type SSEEvent =

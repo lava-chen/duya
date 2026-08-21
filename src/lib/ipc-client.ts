@@ -71,6 +71,7 @@ export interface Message {
 export interface Provider {
   id: string
   name: string
+  alias?: string
   providerType: string
   baseUrl: string
   apiKey: string
@@ -194,6 +195,7 @@ interface DbMessage {
 interface BackendProvider {
   id: string
   name: string
+  alias?: string
   providerType: string
   baseUrl: string
   apiKey: string
@@ -213,6 +215,7 @@ function backendProviderToProvider(db: BackendProvider): Provider {
   return {
     id: db.id,
     name: db.name,
+    alias: db.alias,
     providerType: db.providerType,
     baseUrl: db.baseUrl,
     apiKey: db.apiKey,
@@ -601,6 +604,20 @@ export interface ModelCapabilityDTO {
   supportsVision?: boolean
   supportsReasoning?: boolean
   supportsPromptCache?: boolean
+  /**
+   * Per-model reasoning-effort options (LM Studio
+   * `capabilities.reasoning.allowed_options` normalized). The chat
+   * effort dropdown uses this list when non-empty, falling back to
+   * the static catalog default. Empty / undefined means "no per-model
+   * list — use the global options".
+   */
+  reasoningEffortOptions?: string[]
+  /**
+   * Whether the model is currently loaded into a local runtime (LM
+   * Studio `loaded_instances.length > 0` or Ollama loaded state).
+   * Surfaced as a small dot in model lists.
+   */
+  isLoaded?: boolean
   pricing?: Record<string, unknown>
   source: 'preset' | 'models-api' | 'user' | 'probe'
   updatedAt: number
@@ -894,6 +911,72 @@ export async function getOllamaModelsIPC(baseUrl: string): Promise<OllamaModelsR
 export interface FetchedModel {
   id: string;
   ownedBy: string | null;
+  /**
+   * Active context window (tokens) for the model. LM Studio distinguishes
+   * the model's absolute cap (`max_context_length`) from the currently
+   * loaded instance's config (`loaded_instances[0].config.context_length`).
+   * We prefer the loaded value so the renderer can show what is actually
+   * hot, and fall back to `max_context_length` when the model is not
+   * loaded. Lets the renderer seed a per-model context window instead of
+   * assuming 200K/1M.
+   */
+  contextLength?: number;
+  /**
+   * Absolute context-window ceiling of the model (tokens), independent of
+   * whether it is currently loaded. Sourced from LM Studio
+   * `max_context_length`. When this is larger than `contextLength`, the
+   * user can increase the loaded context up to this limit. `undefined`
+   * when the source API does not expose it (e.g. plain OpenAI `/v1/models`).
+   */
+  contextWindowMax?: number;
+  /**
+   * Whether the model accepts image input. Sourced from LM Studio
+   * `capabilities.vision`. `undefined` when the source does not expose
+   * it (e.g. plain OpenAI `/v1/models`).
+   */
+  supportsVision?: boolean;
+  /**
+   * Whether the model is trained for function/tool calling. Sourced from
+   * LM Studio `capabilities.trained_for_tool_use`. `undefined` when the
+   * source does not expose it. Critical for agent mode — a text-only
+   * chat model MUST NOT be wired with the tool-use loop.
+   */
+  supportsToolUse?: boolean;
+  /**
+   * Whether the model emits a separate reasoning/thinking stream.
+   * Sourced from LM Studio `capabilities.reasoning.allowed_options`
+   * (when at least one non-`off` option is listed) or
+   * `capabilities.reasoning.default` (when no `allowed_options`). Used
+   * by the agent loop to decide whether to surface `<thinking>` blocks
+   * and whether to send `reasoning_effort` in the request.
+   */
+  supportsReasoning?: boolean;
+  /**
+   * Model quantization/format family (e.g. `'gguf'`, `'mlx'` for LM
+   * Studio). Display-only — surfaced as a small badge in the settings
+   * model list so users can tell CPU-optimized GGUF from Apple-Silicon
+   * MLX variants at a glance.
+   */
+  format?: string | null;
+  /**
+   * Whether the model is currently loaded into the LM Studio / Ollama
+   * runtime. Sourced from `loaded_instances.length > 0` (with at least
+   * one valid numeric `context_length`). Lets the user tell "this
+   * model is hot and ready" from "this is a known model that the user
+   * has to load first". Surfaced as a small dot in the chat dropdown.
+   */
+  isLoaded?: boolean;
+  /**
+   * The actual reasoning-effort options the model accepts, sourced from
+   * LM Studio `capabilities.reasoning.allowed_options` (after
+   * normalization: lowercased / trimmed / deduped, excluding `'off'`
+   * and `'on'` which are binary toggles not effort levels). Drives the
+   * chat-side effort dropdown so e.g. a model with `[low, medium]`
+   * shows only those two options instead of the static `[minimal,
+   * low, medium, high, xhigh, max]` fallback. Empty array when the
+   * source did not enumerate options or the model does not reason.
+   */
+  reasoningEffortOptions?: string[];
 }
 
 export interface FetchProviderModelsResult {

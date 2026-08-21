@@ -185,8 +185,8 @@ describe('handleHookAdd / handleHookRemove', () => {
     expect((cap2.body as { already: boolean }).already).toBe(true);
     expect((cap2.body as { files: string[] }).files).toEqual([p]);
 
-    // Persisted to config.toml.
-    expect(realStore.getByPath('hooks')).toEqual({ files: [p] });
+    // Persisted to config.toml (disabled list preserved alongside files).
+    expect(realStore.getByPath('hooks')).toEqual({ files: [p], disabled: [] });
   });
 
   it('rejects adding an invalid file (422) and does not write', async () => {
@@ -195,6 +195,23 @@ describe('handleHookAdd / handleHookRemove', () => {
     expect(capture.status).toBe(422);
     // Nothing was persisted (schema default is an empty files array).
     expect(realStore.getByPath('hooks')).toEqual({ files: [] });
+  });
+
+  it('preserves the disabled id list when adding/removing files', async () => {
+    const p = join(tmpDir, 'ok.json');
+    writeFileSync(p, validHookJson(), 'utf-8');
+    const disabled = ['file:ok.json:PreToolUse:0:0'];
+    realStore.set('hooks', { files: [], disabled });
+
+    const { res: addRes, capture: addCap } = makeRes();
+    await handleHookAdd(makeReq({ path: p }), addRes);
+    expect(addCap.status).toBe(200);
+    expect(realStore.getByPath('hooks')).toEqual({ files: [p], disabled });
+
+    const { res: rmRes, capture: rmCap } = makeRes();
+    await handleHookRemove(makeReq({ path: p }), rmRes);
+    expect(rmCap.status).toBe(200);
+    expect(realStore.getByPath('hooks')).toEqual({ files: [], disabled });
   });
 
   it('removes a registered file', async () => {

@@ -196,6 +196,8 @@ function expandCandidate(
       startupTimeoutSec: c.rawConfig.startupTimeoutSec,
       toolTimeoutSec: c.rawConfig.toolTimeoutSec,
       toolTimeouts: c.rawConfig.toolTimeouts,
+      envPassthrough: c.rawConfig.envPassthrough,
+      useShell: c.rawConfig.useShell,
     },
     {
       environment: ctx.environment,
@@ -571,6 +573,8 @@ function processCandidate(
       startupTimeoutSec: c.rawConfig.startupTimeoutSec,
       toolTimeoutSec: c.rawConfig.toolTimeoutSec,
       toolTimeouts: c.rawConfig.toolTimeouts,
+      envPassthrough: c.rawConfig.envPassthrough,
+      useShell: c.rawConfig.useShell,
     },
     discoveryStatus: status,
     allowedAgentIds: c.rawConfig.allowedAgentIds,

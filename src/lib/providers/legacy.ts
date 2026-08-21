@@ -140,6 +140,7 @@ export function migrateLegacyApiProvider(
   return {
     id: apiProvider.id,
     name: apiProvider.name,
+    alias: apiProvider.alias,
     category,
     apiFormat,
     auth: {
@@ -196,6 +197,7 @@ export function toLegacyApiProvider(provider: LlmProvider): ApiProvider {
   return {
     id: provider.id,
     name: provider.name,
+    alias: provider.alias,
     providerType: legacyProtocol,
     baseUrl: provider.endpoints.baseUrl,
     apiKey: provider.auth.apiKey ?? '',
@@ -251,6 +253,7 @@ export function maskApiProvider(provider: ApiProvider): MaskedApiProvider {
   return {
     id: provider.id,
     name: provider.name,
+    alias: provider.alias,
     providerType: provider.providerType,
     baseUrl: provider.baseUrl ?? '',
     apiKey: maskedKey,

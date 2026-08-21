@@ -274,6 +274,15 @@ export function parseCurationResponse(raw: string): CurationResponse {
     );
   }
 
+  // Normalize diagnostic `reason` strings before schema validation.
+  // `reason` fields are metadata only — they never land on disk — so an
+  // over-long reason must not fail the whole curation run (recurring
+  // `stage1_policy.edits.0.reason: Too big: expected string to have
+  // <=200 characters`). Truncate to the schema caps instead; the model
+  // is told the limits in the prompt but does not always obey, and a
+  // retry with feedback still produced the same violation.
+  normalizeReasons(parsed);
+
   const result = CurationResponseSchema.safeParse(parsed);
   if (!result.success) {
     throw new CurationParseError(
@@ -284,4 +293,51 @@ export function parseCurationResponse(raw: string): CurationResponse {
   }
 
   return result.data as CurationResponse;
+}
+
+/**
+ * Truncate every `reason` string in a parsed curation response to its
+ * schema cap, in place. Caps: `decisions`/`actions`/`new_categories`
+ * reason ≤ 500 chars; `stage1_policy.edits[].reason` ≤ 200 chars.
+ * Everything else is left untouched. Unknown shapes are skipped safely
+ * (a string at a `reason` key always belongs to one of the above).
+ */
+function normalizeReasons(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const item of value) normalizeReasons(item);
+    return;
+  }
+  if (value === null || typeof value !== 'object') return;
+  const obj = value as Record<string, unknown>;
+  // Top-level `stage1_policy` subtree: policy.reason cap is 500,
+  // edits[].reason cap is 200.
+  if (obj.stage1_policy && typeof obj.stage1_policy === 'object') {
+    const policy = obj.stage1_policy as Record<string, unknown>;
+    if (typeof policy.reason === 'string' && policy.reason.length > 500) {
+      policy.reason = policy.reason.slice(0, 500);
+    }
+    if (Array.isArray(policy.edits)) {
+      for (const edit of policy.edits) {
+        if (edit && typeof edit === 'object') {
+          const e = edit as Record<string, unknown>;
+          if (typeof e.reason === 'string' && e.reason.length > 200) {
+            e.reason = e.reason.slice(0, 200);
+          }
+        }
+      }
+    }
+  }
+  // `decisions`, `actions`, `new_categories` reasons cap at 500.
+  for (const key of ['decisions', 'actions', 'new_categories']) {
+    const arr = obj[key];
+    if (!Array.isArray(arr)) continue;
+    for (const item of arr) {
+      if (item && typeof item === 'object') {
+        const it = item as Record<string, unknown>;
+        if (typeof it.reason === 'string' && it.reason.length > 500) {
+          it.reason = it.reason.slice(0, 500);
+        }
+      }
+    }
+  }
 }

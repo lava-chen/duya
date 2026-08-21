@@ -551,7 +551,9 @@ html[data-font="system"] .message-content li {
    * proportional body text without dwarfing it. */
   font-size: 14px;
   /* Semibold so file names stand out from the surrounding regular-weight
-   * body text without becoming visually heavy. */
+   * body text without becoming visually heavy. The baseline stays put
+   * because the parent is `inline-block` (no flex centering), so the
+   * glyph metric shift from 400 → 600 stays inside the line box. */
   font-weight: 600;
   line-height: inherit;
   margin: 0;
@@ -568,8 +570,48 @@ html[data-font="system"] .message-content li {
   transition: color 150ms ease, text-decoration-color 150ms ease;
   /* inline-block + vertical-align:baseline lines up the link's text
    * baseline with the surrounding paragraph instead of being lifted
-   * by a flex-centered icon. */
+   * by a flex-centered icon (the previous `inline-flex; align-items:
+   * center` placed the icon mid-line and visually raised the pill). */
   vertical-align: baseline;
+}
+
+/* === Terminal banner shown above the partial streaming view when
+   the stream ended abnormally (interrupted / errored). The transient
+   view stays mounted so the user can read the last partial text;
+   this banner explains why it stopped and why nothing more is coming. */
+.terminal-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+  max-width: 100%;
+}
+
+.terminal-banner-aborted {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+.terminal-banner-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border-radius: 0.5rem;
+  white-space: normal;
+  word-break: break-word;
+}
+
+html[data-theme="dark"] .terminal-banner-aborted {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+html[data-theme="dark"] .terminal-banner-error {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
 }
 
 .markdown-file-link:hover {
@@ -588,6 +630,11 @@ html[data-font="system"] .message-content li {
 }
 
 .markdown-file-link > svg {
+  /* The icon is now an inline-block (the parent is no longer a flex
+  container) and is visually anchored to the text baseline via a small
+  negative vertical-align. This keeps the icon from sitting mid-line
+  the way `align-items: center` used to push it, which made the link
+  look visibly higher than surrounding body text. */
   display: inline-block;
   width: 13px;
   height: 13px;
@@ -2512,7 +2559,7 @@ a {
 
 .settings-info-banner .font-medium {
   font-weight: 500;
-  color: #2563eb;
+  color: #0ea5e9;
 }
 
 .settings-info-banner .text-muted-foreground {

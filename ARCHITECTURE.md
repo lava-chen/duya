@@ -1447,10 +1447,10 @@ authorized connection.
 
 | 来源 | 目录 | 加载方式 | 安全扫描 | 用户 GUI 可见 |
 |---|---|---|---|---|
-| `system`（系统级内置） | `packages/agent/skills/.system/` | `loadSkills()` 末尾**无条件加载**（不受 `syncBundled` 影响） | **跳过**（信任） | 否（`skills:list` 不扫该目录） |
+| `system`（系统级内置） | `packages/agent/skills/.system/`（同步副本 `~/.duya/skills/.system/`） | `loadSkills()` 末尾**无条件加载**（不受 `syncBundled` 影响；agent 跳过用户目录 `.system` 副本，只从内置目录加载） | **跳过**（信任） | **可见但只读**（plan 434 起；`skills:list` 返回 `source: 'system'`，不可禁用） |
 | `bundled`（普通内置） | `packages/agent/skills/<category>/` | 生产不自动加载（`syncBundled: false`，走 plugin marketplace 按需安装） | 跳过 | 同步后可见 |
 | `user` | `~/.duya/skills/` | `loadSkills()` | 扫描 | 是 |
-| `project` | `<cwd>/.duya/skills/` | `loadSkills()` | 扫描 | 是 |
+| `project` | `<cwd>/.agent/skills/`（跨 agent 标准）+ `<cwd>/.duya/skills/` | `loadSkills()`（后者后加载，同名覆盖前者） | 扫描 | 是 |
 | `plugin` | 插件 `installPath/skills/` | `discoverPluginSkillPaths()` → `additionalPaths` | 扫描 | 是 |
 
 ### 系统级 skills（`.system/`，Codex 式）
@@ -1459,11 +1459,13 @@ authorized connection.
   `resources/agent/skills/.system/`，由 `electron-builder.yml` 的
   `extraResources` 自动包含）。
 - 特征：**永远加载**、**跳过安全扫描**（`source === 'system'`）、**不可被
-  用户禁用**（跳过 `skillEnabledOverrides` 过滤与 agent 进程二次过滤）、
-  不进 GUI `skills:list` 与 CLI `GET /v1/skills`，但通过
-  `listModelInvocable()` 对 agent 可见可调用。
+  用户禁用**（跳过 `skillEnabledOverrides` 过滤与 agent 进程二次过滤；GUI
+  开关隐藏 + `skills:setEnabled` 拒绝）。plan 414 起不进 CLI `GET /v1/skills`，
+  但通过 `listModelInvocable()` 对 agent 可见可调用；plan 434 起**进 GUI
+  `skills:list`**（只读展示，可查看 SKILL.md 内容）。
 - 内容为"自我知识/自我配置"类：`self-config`（配置 `~/.duya/config.toml`、
-  `secrets.json` 等）、`self-knowledge`（仓库/文档地图）、
+  `secrets.json` 等）、`memory-search`（记忆 RAG 检索/钩子）、
+  `self-knowledge`（仓库/文档地图）、
   `plugin-mcp-builder`（插件 + MCP 扩展指南）。
 - 同名冲突：系统级 skills 在 `loadSkills()` **最后注册**，覆盖同名用户 skill。
 
@@ -1475,8 +1477,19 @@ authorized connection.
 - 禁用过滤：`loader.ts` + `agent-process-entry.ts`（均跳过 `source === 'system'`）
 - 同步：`packages/agent/src/skills/skillsSync.ts`（跳过 `.` 前缀目录，`.system/`
   不会被同步到用户目录）
-- GUI/CLI 列表：`electron/ipc/skills-handlers.ts`、`packages/agent/src/skills/skillService.ts`
-  （均不扫描 `.system/`）
+- GUI/CLI 列表：`electron/ipc/skills-handlers.ts`（`skills:list` 先同步内置 `.system` 到
+  `~/.duya/skills/.system/` 再读取，见 `electron/skills/system-skills-gui.ts`）、
+  `packages/agent/src/skills/skillService.ts`（plan 435 起 CLI `GET /v1/skills` 覆盖
+  user/project/custom/system/plugin/bundled 全来源，system 恒 enabled 不可禁用）
+
+### Skill 目录对模型暴露（plan 434，对齐 pi）
+
+- 模型可见载体：prompt 动态段 `skillsMetadata.ts`（`<available_skills>` XML），
+  每个 skill 带 `name` / `description` / `location`（SKILL.md 绝对路径），
+  系统级排序置顶；加载指引 = read `<location>`（主，pi 式）或 `Skill` 工具
+  （回退，按 name 返回指令）。
+- 门控：`enabledTools` 含 `Skill` 或 `Read` 时注入；`Skill` 工具保留作回退
+  （`tool/SkillTool/`，`exposeMode: 'always'`）。
 
 ## Memory: bounded projection and rg retrieval
 
@@ -1660,6 +1673,51 @@ over the memory files so user prompts can retrieve relevant memories:
   through the config MessagePort (`memoryRag` flat key) — enabled toggle,
   scan-path add/remove rows, index path, embedding provider/model, and the
   vector-embeddings toggle.
+
+## Hook 设置与开关（plan 87 词汇面 + Settings 页面）
+
+- **配置面**：`~/.duya/config.toml` 的 `[hooks] files` 记录 hook.json 路径；
+  `[hooks] disabled` 记录被关闭的单个 hook id（`file:<entry>:<event>:<matcherIdx>:<hookIdx>`）；
+  `[steering] disabled_loop_hooks` 记录被关闭的内置循环钩子 id（`builtin.*`，与
+  `todo_gate=false` / `anti_dead_loop.enabled=false` / `tool_intent_nudge_max=0` 取并集）。
+  两段都由 agent 每次 `streamChat` 热读（`packages/agent/src/hooks/config.ts`
+  `readSteeringConfig` / `readHooksConfig`），修改下次运行即生效。
+- **agent 侧过滤**：`filterDisabledHooks`（config.ts）按 `hookDisabledId` 从 hook.json
+  加载结果中剔除被禁 hook；`createBuiltinLoopHooks`（builtin.ts）对 `disabled` 集合中的
+  id 直接不注册。
+- **故障策略（2026-08-19 修复）**：
+  - 熔断：`HookCircuitBreaker`（`packages/agent/src/hooks/circuit-breaker.ts`）按
+    `session:event:command` 统计连续基础设施失败（spawn 失败 / 超时 / 非零退出且无诊断
+    输出）。连续 3 次失败后熔断 5 分钟（半开一次探针运行，失败立即重开，成功即复位），
+    崩溃的 hook 不再每轮重复 spawn 刷屏。verifier 语义（进程正常运行并报告问题，
+    非零退出带诊断）不计入熔断。
+  - 不投递崩溃：后台（`async` + `asyncRewake`）hook 仅 `completed`（exit 0）才向
+    agent 投递 `<task-notification>`；失败 / 被杀任务保留在 registry 与 Settings → Hooks
+    可见，但原始崩溃文本（如 ERR_MODULE_NOT_FOUND 堆栈）绝不注入模型上下文
+    （`packages/agent/src/hooks/notify.ts`）。
+- **IPC**：`hooks:overview`（只读投影，`electron/ipc/hooks-handlers.ts`）返回每个 hook 的
+  `id` / `enabled` / `json`（配置型 hook 的 JSON 视图）；`hooks:set-disabled(id, enabled)`
+  写入 config.toml（builtin → `[steering] disabled_loop_hooks`，config → `[hooks] disabled`），
+  preload `HooksAPI` / `src/lib/hooks-ipc.ts` 透传。`duya hook add/remove`（
+  `electron/cli/handlers/hooks.ts`）持久化 `files` 时保留 `disabled`。
+- **UI**：`src/components/settings/HooksSection.tsx` 每个 hook 行带开关（持久化到 config），
+  配置型 hook 可点击弹出 JSON 配置弹窗（只读 + 复制）。
+- **Chat-flow rows（plan 437）**：每次 `ConfigHooksRunner.run()` 调用
+  通过 `onHookInvoked(hookEvent)` 回调向 agent core 报告本次 hook
+  执行结果（事件名 / 匹配 hook / 状态 / 耗时 / additionalContext
+  / async task id 等）。Agent core 在 SSE 上以
+  `agent_progress { type: 'hook_invoked' }` 事件下发，渲染层把
+  `StreamingEvent { type: 'hook_invocation' }` 转成
+  `ActionItem { kind: 'hook', hook }`，由 `HookActionRow`（图标
+  `WebhookIcon` + 事件名 + hook 名）渲染，展开卡片显示真实
+  additionalContext / verifier 诊断 / async task id / 错误信息。hook
+  行作为独立段（不与其他 tool / thinking 合组），与 tool_use 行
+  一样点击展开。持久化：`agent-process-entry.ts` 在 turn-end 边界
+  通过 `appendMessages` 把 hook 落库为 `msg_type: 'hook_invocation'`
+  的系统消息（`tool_name` 存事件名、`tool_input` JSON 存结构化字段），
+  reload / 跨设备同步会通过 `MessageItem.messageToActionItems` 重新
+  读回。Settings → Hooks 增设 `display.showHookInvocations`（默认 ON），
+  关闭后实时和重载路径都过滤掉 hook 行。
 
 ## 相关文档
 

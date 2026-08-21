@@ -68,6 +68,28 @@ export interface CapabilityMcpFields {
   connectionStatus: CapabilityMcpConnectionStatus;
   toolCount?: number;
   lastIssue?: CapabilityMcpIssue;
+  /**
+   * Per-server tool list captured from the worker's MCP runtime.
+   * Filled by the capability-management aggregator from the latest
+   * `mcp:status:snapshot` SSE event; absent for servers that never
+   * successfully completed `listTools` (transport mismatch, spawn
+   * failure, etc.). Tool annotations follow MCP spec (`tools/list`
+   * returns `annotations?: { readOnly?, destructive?, openWorld? }`).
+   */
+  tools?: McpToolDTO[];
+}
+
+export interface McpToolDTO {
+  /** Original tool name from the MCP server (no provider-name prefix). */
+  name: string;
+  description?: string;
+  annotations?: McpToolAnnotations;
+}
+
+export interface McpToolAnnotations {
+  readOnly?: boolean;
+  destructive?: boolean;
+  openWorld?: boolean;
 }
 
 export type CapabilitySkillSecurityVerdict = 'safe' | 'caution' | 'dangerous' | 'unknown';

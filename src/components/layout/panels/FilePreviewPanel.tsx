@@ -216,14 +216,19 @@ function lineCountOf(content: string): number {
 const PreviewMarkdownContent = memo(function PreviewMarkdownContent({
   content,
   truncatedHint,
+  baseDirectory,
 }: {
   content: string;
   truncatedHint: string;
+  baseDirectory?: string;
 }) {
   return (
     <div className="file-preview-text markdown">
       {truncatedHint && <div className="file-preview-truncated">{truncatedHint}</div>}
-      <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
+      <MarkdownRenderer
+        className="prose dark:prose-invert max-w-none file-preview-markdown"
+        baseDirectory={baseDirectory}
+      >
         {content}
       </MarkdownRenderer>
     </div>
@@ -899,7 +904,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </div>
         )}
         {!loading && preview?.success && preview.kind === "text" && isMarkdown && (
-          <PreviewMarkdownContent content={preview.content || ""} truncatedHint={truncatedHint} />
+          <PreviewMarkdownContent
+            content={preview.content || ""}
+            truncatedHint={truncatedHint}
+            baseDirectory={getDirectoryPath(filePath)}
+          />
         )}
         {selection && (
           <Button

@@ -79,6 +79,44 @@ describe('parseCurationResponse — happy paths', () => {
     const result = parseCurationResponse('Done.\n' + VALID);
     expect(result.decisions[0].rollout_id).toBe('r-1');
   });
+
+  it('3a. over-long policy-edit reason is truncated (<=200), run still parses', () => {
+    const longReason = 'x'.repeat(500);
+    const blob = JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [],
+      stage1_policy: {
+        op: 'edit',
+        reason: longReason,
+        edits: [
+          {
+            op: 'upsert_rule',
+            section: 'S1',
+            rule_id: 'no-over-long-reasons',
+            text: 'keep reasons short',
+            reason: longReason,
+          },
+        ],
+      },
+    });
+    // Must NOT throw — this is the 19.jsonl recurring failure.
+    const result = parseCurationResponse(blob);
+    expect(result.stage1_policy?.edits?.[0].reason).toHaveLength(200);
+    expect(result.stage1_policy?.reason).toHaveLength(500);
+  });
+
+  it('3b. over-long decision/action reasons are truncated (<=500), run still parses', () => {
+    const longReason = 'y'.repeat(900);
+    const blob = JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: longReason }],
+      actions: [
+        { op: 'append', area_path: 'global/areas/foo.md', content: 'c', reason: longReason },
+      ],
+    });
+    const result = parseCurationResponse(blob);
+    expect(result.decisions[0].reason).toHaveLength(500);
+    expect(result.actions[0].reason).toHaveLength(500);
+  });
 });
 
 describe('parseCurationResponse — failure modes', () => {

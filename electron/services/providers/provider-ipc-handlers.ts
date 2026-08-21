@@ -208,7 +208,10 @@ export function registerProviderIpcHandlers(opts?: {
 
   // --- get a single capability record (Phase 3) ---
   ipcMain.handle('provider:getModelCapability', (_event, payload: { providerId: string; modelId: string }) => {
-    return store.getModelCapability(payload?.providerId, payload?.modelId);
+    // Return the merged runtime capability (config marker > DB override >
+    // built-in baseline) so the chat context ring and the edit page
+    // agree with what the session agent actually uses.
+    return store.resolveRuntimeCapability(payload?.providerId, payload?.modelId);
   });
 
   // --- delete a capability record (Phase 3) ---

@@ -1,16 +1,19 @@
 // ThinkingRow — collapsible row for the agent's "thinking" content.
 //
-// Collapsed header shows a short preview (bold or heading extracted
-// from the content, otherwise a 120-char trimmed snippet) via the
-// shared ActionRowChrome so the chrome matches every other tool row.
+// Collapsed header shows the static summary (bold or heading extracted
+// from the content, otherwise a 120-char trimmed snippet) once the
+// stream finishes; while the stream is live it shows the shimmer
+// placeholder only. Driving the preview through the typewriter while
+// the card was collapsed caused the header to "scroll" character by
+// character every animation frame, which read as busy/chatty chrome.
+// Users who want the live stream can click to expand.
 //
-// Expanded view replaces the header preview with the full content
-// inside a `.tool-card` panel — the same surface used by BashToolRow,
+// Expanded view replaces the header with the full content inside a
+// `.tool-card` panel — the same surface used by BashToolRow,
 // FileEditToolRow, etc. — and clamps the inner scroll container at
 // `max-h-[160px]` so a long thought doesn't push the chat out of
-// view. While streaming the typewriter paces the preview in the
-// collapsed header (matches the previous behaviour); on expand the
-// full stream is shown.
+// view. The expanded body keeps the typewriter so the live stream is
+// visible to anyone who actively opened the card.
 
 'use client';
 
@@ -44,7 +47,6 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
   const [hovered, setHovered] = useState(false);
 
   const streamedContent = useAdaptiveTypewriter(content, !!isStreaming);
-  const previewSource = isStreaming ? streamedContent : content;
 
   // Localized fallback strings — previously hardcoded as 'Thinking...'
   // / 'Thought' / '思考' literals, which broke locale consistency
@@ -52,9 +54,16 @@ export function ThinkingRow({ content, isStreaming }: ThinkingRowProps) {
   const placeholder = t('streaming.toolAction.thinking.placeholder');
   const emptyFallback = t('streaming.toolAction.thinking.empty');
 
+  // While the stream is live the collapsed card shows the shimmer only,
+  // never the typewriter-driven preview text. Driving `previewSource`
+  // through `streamedContent` made the header's preview rebuild every
+  // animation frame and "scroll" character by character, which read as a
+  // busy/chatty chrome while the user hadn't asked to expand the row.
+  // The expanded body (below) still renders `displayedContent` with the
+  // full typewriter so anyone who clicks in still sees the live stream.
   const summary = (() => {
     if (isStreaming) {
-      return makePreview(previewSource) || placeholder;
+      return placeholder;
     }
     const boldMatch = content.match(/\*\*(.+?)\*\*/);
     if (boldMatch) return boldMatch[1];

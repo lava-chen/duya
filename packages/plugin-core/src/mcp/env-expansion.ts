@@ -230,6 +230,8 @@ export function expandMcpServerConfig(
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    envPassthrough?: 'allowlist' | 'inherit';
+    useShell?: boolean;
   },
   ctx: {
     environment: Record<string, string>;
@@ -248,6 +250,8 @@ export function expandMcpServerConfig(
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    envPassthrough?: 'allowlist' | 'inherit';
+    useShell?: boolean;
   };
   missingVars: string[];
   missingKeys: string[];
@@ -297,6 +301,8 @@ export function expandMcpServerConfig(
       startupTimeoutSec: config.startupTimeoutSec,
       toolTimeoutSec: config.toolTimeoutSec,
       toolTimeouts: config.toolTimeouts,
+      envPassthrough: config.envPassthrough,
+      useShell: config.useShell,
     },
     missingVars,
     missingKeys,

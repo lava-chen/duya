@@ -29,6 +29,7 @@ import {
   CheckIcon,
 } from '@/components/icons';
 import type { FetchedModel } from '@/lib/ipc-client';
+import { ModelCapabilityBadges } from '@/components/providers/ModelCapabilityBadges';
 import { useTranslation } from '@/hooks/useTranslation';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
@@ -175,6 +176,14 @@ export function ModelInputWithFetch({
                           {m.id === value && <CheckIcon size={10} />}
                         </span>
                         <span className="truncate">{m.id}</span>
+                        <ModelCapabilityBadges
+                          variant="inline"
+                          vision={m.supportsVision}
+                          toolUse={m.supportsToolUse}
+                          reasoning={m.supportsReasoning}
+                          format={m.format}
+                          isLoaded={m.isLoaded}
+                        />
                       </Button>
                     ))}
                   </div>

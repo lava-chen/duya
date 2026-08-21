@@ -81,6 +81,10 @@ export interface ProviderMeta {
 export interface LlmProvider {
   id: string;
   name: string;
+  /** User-facing alias (nickname) for the provider, independent of
+   *  the vendor `name`. Optional — persisted to `config.toml`
+   *  (`[providers.<id>].alias`) and surfaced in the renderer DTO. */
+  alias?: string;
   category: ProviderCategory;
   apiFormat: ApiFormat;
   auth: AuthConfig;
@@ -206,6 +210,9 @@ export interface ValidationResult {
 export interface ApiProvider {
   id: string;
   name: string;
+  /** User-facing alias (nickname), distinct from the vendor `name`.
+   *  Round-trips through `config.toml` via the config reader/writer. */
+  alias?: string;
   providerType:
     | 'anthropic'
     | 'openai'
@@ -232,6 +239,7 @@ export interface ApiProvider {
 export interface MaskedApiProvider {
   id: string;
   name: string;
+  alias?: string;
   providerType: ApiProvider['providerType'];
   baseUrl: string;
   apiKey: string;

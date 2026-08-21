@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import type React from "react";
 import {
   PlusIcon,
   TrashIcon,
@@ -112,6 +113,101 @@ function formDataToServer(formData: MCPServerFormData): MCPServerConfig {
   };
 }
 
+// ============================================================================
+// Phase 3 (MCP runtime status UI) helpers
+// ============================================================================
+
+type McpConnectionStatus = 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+
+function statusColor(status: McpConnectionStatus | undefined): {
+  bg: string;
+  fg: string;
+  border: string;
+} {
+  switch (status) {
+    case 'connected':
+      return { bg: 'bg-green-500/15', fg: 'text-green-700 dark:text-green-400', border: 'border-green-500/30' };
+    case 'connecting':
+      return { bg: 'bg-amber-500/15', fg: 'text-amber-700 dark:text-amber-400', border: 'border-amber-500/30' };
+    case 'error':
+      return { bg: 'bg-red-500/15', fg: 'text-red-700 dark:text-red-400', border: 'border-red-500/30' };
+    case 'disconnected':
+      return { bg: 'bg-zinc-500/15', fg: 'text-zinc-600 dark:text-zinc-400', border: 'border-zinc-500/30' };
+    default:
+      return { bg: 'bg-muted', fg: 'text-muted-foreground', border: 'border-border/50' };
+  }
+}
+
+function statusLabel(status: McpConnectionStatus | undefined): string {
+  switch (status) {
+    case 'connected':
+      return 'Connected';
+    case 'connecting':
+      return 'Connecting…';
+    case 'error':
+      return 'Failed';
+    case 'disconnected':
+      return 'Disconnected';
+    default:
+      return 'Unknown';
+  }
+}
+
+function StatusDot({ status }: { status: McpConnectionStatus | undefined }): React.ReactElement {
+  const dot =
+    status === 'connected'
+      ? 'bg-green-500'
+      : status === 'connecting'
+        ? 'bg-amber-500'
+        : status === 'error'
+          ? 'bg-red-500'
+          : status === 'disconnected'
+            ? 'bg-zinc-500'
+            : 'bg-zinc-400';
+  return (
+    <span
+      aria-label={`mcp status ${status ?? 'unknown'}`}
+      title={statusLabel(status)}
+      className={cn(
+        'inline-block h-2.5 w-2.5 rounded-full ring-2',
+        dot,
+        status === 'connected' ? 'ring-green-500/20' : 'ring-transparent',
+      )}
+    />
+  );
+}
+
+function ToolAnnotationBadge({
+  annotations,
+}: {
+  annotations: { readOnly?: boolean; destructive?: boolean; openWorld?: boolean } | undefined;
+}): React.ReactElement | null {
+  if (!annotations) return null;
+  const tags: Array<{ key: string; label: string; cls: string }> = [];
+  if (annotations.readOnly) {
+    tags.push({ key: 'read-only', label: 'read-only', cls: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/20' });
+  }
+  if (annotations.destructive) {
+    tags.push({ key: 'destructive', label: 'destructive', cls: 'bg-red-500/10 text-red-700 dark:text-red-400 border-red-500/20' });
+  }
+  if (annotations.openWorld) {
+    tags.push({ key: 'open-world', label: 'open-world', cls: 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20' });
+  }
+  if (tags.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1">
+      {tags.map((t) => (
+        <span
+          key={t.key}
+          className={cn('inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] font-medium', t.cls)}
+        >
+          {t.label}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 export function MCPSection() {
   const { t } = useTranslation();
   const { settings, save, loading } = useSettings();
@@ -131,6 +227,11 @@ export function MCPSection() {
 
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
   const [inventory, setInventory] = useState<MCPInventorySnapshotDTO | null>(null);
+  // Phase 3 (MCP runtime status UI): track which server cards are
+  // expanded so the tool list is lazy. Reconnect button state is
+  // local to each row to debounce double-clicks.
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
+  const [reconnecting, setReconnecting] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     listAgentProfiles().then(setAgentProfiles).catch(() => setAgentProfiles([]));
@@ -143,6 +244,27 @@ export function MCPSection() {
     }).catch(() => setInventory(null));
   }, [settings.mcpServers]);
 
+  // Phase 3: also refresh inventory when the SSE `mcp:reloaded` /
+  // `mcp:status:snapshot` events arrive. The capability-management
+  // hook above handles the snapshot; this picks up the lightweight
+  // `mcp:reloaded` summary that does not carry the full payload.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const api = (window as unknown as {
+      electronAPI?: { sse?: { onAgentServerEvent?: (cb: (e: { type: string }) => void) => () => void } };
+    }).electronAPI;
+    if (!api?.sse?.onAgentServerEvent) return;
+    return api.sse.onAgentServerEvent((event) => {
+      if (
+        event.type === 'mcp:reloaded' ||
+        event.type === 'mcp:status:snapshot' ||
+        event.type === 'mcp:reload:error'
+      ) {
+        fetchMCPInventorySnapshot().then(setInventory).catch(() => setInventory(null));
+      }
+    });
+  }, []);
+
   // mcp.toml is the writable source. Inventory deliberately omits spawn
   // details, so using it here would erase command/env data on the next save.
   const servers = (settings.mcpServers ?? []).map((server) => ({
@@ -150,6 +272,62 @@ export function MCPSection() {
     enabled: server.enabled !== false,
   })) as MCPServerConfig[];
   const pluginMCPs: MCPPluginDeclaredServerDTO[] = inventory?.pluginDeclaredServers ?? [];
+
+  // Phase 3: per-server runtime status from the worker's
+  // `mcp:status:snapshot` SSE event (sourced via the
+  // capability-management aggregator). Keyed by display name.
+  type RuntimeRow = {
+    connectionStatus: McpConnectionStatus;
+    toolCount: number;
+    tools?: Array<{
+      name: string;
+      description: string;
+      annotations?: {
+        readOnly?: boolean;
+        destructive?: boolean;
+        openWorld?: boolean;
+        [key: string]: unknown;
+      };
+    }>;
+    lastIssue?: { phase: 'connection' | 'registration' | 'discovery'; humanMessage: string; severity: 'critical' | 'warning' | 'info' };
+  };
+  const runtimeByName = new Map<string, RuntimeRow>();
+  for (const eff of inventory?.effectiveServers ?? []) {
+    if (!eff.name) continue;
+    runtimeByName.set(eff.name, {
+      connectionStatus: eff.connectionStatus,
+      toolCount: eff.tools?.length ?? 0,
+      tools: eff.tools,
+      lastIssue: eff.lastIssue,
+    });
+  }
+
+  const toggleExpanded = useCallback((name: string) => {
+    setExpandedServers((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  const handleReconnect = useCallback(async (name: string) => {
+    setReconnecting((prev) => new Set(prev).add(name));
+    try {
+      const api = (window as unknown as {
+        electronAPI?: { settings?: { reloadMcp?: () => Promise<unknown> } };
+      }).electronAPI;
+      await api?.settings?.reloadMcp?.();
+    } catch (err) {
+      console.warn('[MCPSection] reconnect failed:', err);
+    } finally {
+      setReconnecting((prev) => {
+        const next = new Set(prev);
+        next.delete(name);
+        return next;
+      });
+    }
+  }, []);
 
   const existingServerIds = new Set(servers.map((s) => s.name));
 
@@ -440,26 +618,67 @@ export function MCPSection() {
         </SettingsCard>
       ) : (
         <>
-          {servers.map((server) => (
+          {servers.map((server) => {
+            const runtime = runtimeByName.get(server.name);
+            const isExpanded = expandedServers.has(server.name);
+            const isReconnecting = reconnecting.has(server.name);
+            const runtimeStatus = runtime?.connectionStatus;
+            const showReconnect =
+              server.enabled && (runtimeStatus === 'error' || runtimeStatus === 'disconnected');
+            return (
             <SettingsCard key={server.name} className="mb-4">
               <div className="py-4">
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left hover:bg-muted/30 rounded-lg -m-2 p-2 transition-colors"
+                    onClick={() => toggleExpanded(server.name)}
+                    aria-expanded={isExpanded}
+                    aria-controls={`mcp-tools-${server.name}`}
+                  >
                     <div
                       className={cn(
-                        "w-10 h-10 rounded-lg flex items-center justify-center",
+                        "w-10 h-10 rounded-lg flex items-center justify-center relative",
                         server.enabled
                           ? "bg-green-500/10 text-green-600"
                           : "bg-muted text-muted-foreground"
                       )}
                     >
                       <AiGatewayIcon size={20} />
+                      <span className="absolute -bottom-0.5 -right-0.5">
+                        <StatusDot status={runtimeStatus} />
+                      </span>
                     </div>
-                    <div>
-                      <h3 className="font-medium text-foreground">{server.name}</h3>
-                      <p className="text-sm text-muted-foreground font-mono mt-0.5">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-medium text-foreground truncate">{server.name}</h3>
+                        {runtime && (
+                          <span className={cn(
+                            "text-[10px] px-1.5 py-0.5 rounded border font-medium shrink-0",
+                            statusColor(runtimeStatus).bg,
+                            statusColor(runtimeStatus).fg,
+                            statusColor(runtimeStatus).border,
+                          )}>
+                            {statusLabel(runtimeStatus)}
+                          </span>
+                        )}
+                        {typeof runtime?.toolCount === 'number' && runtime.toolCount > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0">
+                            {runtime.toolCount} tool{runtime.toolCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                          {isExpanded ? '▴' : '▾'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-muted-foreground font-mono mt-0.5 truncate">
                         {server.command} {stringifyArgs(server.args)}
                       </p>
+                      {runtime?.lastIssue && runtimeStatus !== 'connected' && (
+                        <p className="text-xs mt-1 text-red-600 dark:text-red-400 truncate" title={runtime.lastIssue.humanMessage}>
+                          {runtime.lastIssue.humanMessage}
+                        </p>
+                      )}
                       {server.env && Object.keys(server.env).length > 0 && (
                         <p className="text-xs text-muted-foreground mt-1">
                           Env: {Object.keys(server.env).join(", ")}
@@ -482,8 +701,21 @@ export function MCPSection() {
                         </div>
                       )}
                     </div>
-                  </div>
-                  <div className="flex items-center gap-1">
+                  </button>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {showReconnect && (
+                      <IconButton
+                        variant="default"
+                        size="sm"
+                        aria-label="Reconnect"
+                        title="Reconnect"
+                        disabled={isReconnecting}
+                        className="text-amber-600 hover:bg-amber-500/10"
+                        onClick={() => handleReconnect(server.name)}
+                      >
+                        <AiGatewayIcon size={18} />
+                      </IconButton>
+                    )}
                     <IconButton
                       variant="default"
                       size="sm"
@@ -514,9 +746,45 @@ export function MCPSection() {
                     </IconButton>
                   </div>
                 </div>
+                {isExpanded && (
+                  <div id={`mcp-tools-${server.name}`} className="mt-3 pl-12">
+                    {runtime?.tools && runtime.tools.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Tools ({runtime.tools.length})
+                        </div>
+                        {runtime.tools.map((tool) => (
+                          <div
+                            key={tool.name}
+                            className="rounded-md border border-border/40 bg-muted/30 px-2.5 py-1.5"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs">{tool.name}</span>
+                              <ToolAnnotationBadge annotations={tool.annotations} />
+                            </div>
+                            {tool.description && (
+                              <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                                {tool.description}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground italic">
+                        {runtimeStatus === 'connected'
+                          ? 'No tools advertised by this server.'
+                          : runtimeStatus === 'error' || runtimeStatus === 'disconnected'
+                            ? 'Tools unavailable while the server is not connected.'
+                            : 'Tool list not yet received (waiting for the next status snapshot).'}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </SettingsCard>
-          ))}
+            );
+          })}
           <div className="flex justify-end gap-2">
             <Button
               variant="primary"
@@ -542,20 +810,51 @@ export function MCPSection() {
           <h3 className="text-sm font-semibold text-muted-foreground mb-3">
             MCP Servers from Plugins
           </h3>
-          {pluginMCPs.map((pmcp) => (
+          {pluginMCPs.map((pmcp) => {
+            const runtime = runtimeByName.get(pmcp.name);
+            const isExpanded = expandedServers.has(pmcp.name);
+            const isReconnecting = reconnecting.has(pmcp.name);
+            const runtimeStatus = runtime?.connectionStatus;
+            const showReconnect =
+              pmcp.effective && (runtimeStatus === 'error' || runtimeStatus === 'disconnected');
+            return (
             <SettingsCard key={`${pmcp.pluginId}-${pmcp.name}`} className="mb-3">
               <div className="py-4">
                 <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600">
+                  <button
+                    type="button"
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left hover:bg-muted/30 rounded-lg -m-2 p-2 transition-colors"
+                    onClick={() => toggleExpanded(pmcp.name)}
+                    aria-expanded={isExpanded}
+                    aria-controls={`mcp-tools-plugin-${pmcp.name}`}
+                  >
+                    <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-blue-500/10 text-blue-600 relative">
                       <AiGatewayIcon size={20} />
+                      <span className="absolute -bottom-0.5 -right-0.5">
+                        <StatusDot status={runtimeStatus} />
+                      </span>
                     </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-medium text-foreground">{pmcp.name}</h3>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-medium text-foreground truncate">{pmcp.name}</h3>
                         <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 font-medium">
                           Plugin
                         </span>
+                        {runtime && (
+                          <span className={cn(
+                            "text-[10px] px-1.5 py-0.5 rounded border font-medium",
+                            statusColor(runtimeStatus).bg,
+                            statusColor(runtimeStatus).fg,
+                            statusColor(runtimeStatus).border,
+                          )}>
+                            {statusLabel(runtimeStatus)}
+                          </span>
+                        )}
+                        {typeof runtime?.toolCount === 'number' && runtime.toolCount > 0 && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                            {runtime.toolCount} tool{runtime.toolCount === 1 ? '' : 's'}
+                          </span>
+                        )}
                         {pmcp.effective ? (
                           <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 font-medium">
                             Effective
@@ -565,10 +864,18 @@ export function MCPSection() {
                             Shadowed
                           </span>
                         )}
+                        <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                          {isExpanded ? '▴' : '▾'}
+                        </span>
                       </div>
-                      <p className="text-sm text-muted-foreground font-mono mt-0.5">
+                      <p className="text-sm text-muted-foreground font-mono mt-0.5 truncate">
                         {pmcp.command} {pmcp.args.join(' ')}
                       </p>
+                      {runtime?.lastIssue && runtimeStatus !== 'connected' && (
+                        <p className="text-xs mt-1 text-red-600 dark:text-red-400 truncate" title={runtime.lastIssue.humanMessage}>
+                          {runtime.lastIssue.humanMessage}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground mt-1">
                         Provided by: {pmcp.pluginName}
                         {!pmcp.providerEnabled ? ' (plugin disabled)' : ''}
@@ -579,11 +886,60 @@ export function MCPSection() {
                         </p>
                       )}
                     </div>
-                  </div>
+                  </button>
+                  {showReconnect && (
+                    <IconButton
+                      variant="default"
+                      size="sm"
+                      aria-label="Reconnect"
+                      title="Reconnect"
+                      disabled={isReconnecting}
+                      className="text-amber-600 hover:bg-amber-500/10 shrink-0"
+                      onClick={() => handleReconnect(pmcp.name)}
+                    >
+                      <AiGatewayIcon size={18} />
+                    </IconButton>
+                  )}
                 </div>
+                {isExpanded && (
+                  <div id={`mcp-tools-plugin-${pmcp.name}`} className="mt-3 pl-12">
+                    {runtime?.tools && runtime.tools.length > 0 ? (
+                      <div className="space-y-1.5">
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Tools ({runtime.tools.length})
+                        </div>
+                        {runtime.tools.map((tool) => (
+                          <div
+                            key={tool.name}
+                            className="rounded-md border border-border/40 bg-muted/30 px-2.5 py-1.5"
+                          >
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-xs">{tool.name}</span>
+                              <ToolAnnotationBadge annotations={tool.annotations} />
+                            </div>
+                            {tool.description && (
+                              <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">
+                                {tool.description}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-muted-foreground italic">
+                        {runtimeStatus === 'connected'
+                          ? 'No tools advertised by this server.'
+                          : runtimeStatus === 'error' || runtimeStatus === 'disconnected'
+                            ? 'Tools unavailable while the server is not connected.'
+                            : 'Tool list not yet received (waiting for the next status snapshot).'}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </SettingsCard>
-          ))}
+            );
+          })}
         </div>
       )}
 

@@ -602,6 +602,50 @@ export type HttpHook = Extract<HookCommand, { type: 'http' }>;
 export type AgentHook = Extract<HookCommand, { type: 'agent' }>;
 
 /**
+ * Plan 437: `agent_progress` sub-type emitted once per matched hook after
+ * `ConfigHooksRunner` finishes a dispatch. Carries the data the chat-flow
+ * hook row needs to render its collapsed chrome (icon + verb + hook name +
+ * duration + status) and its expanded card (additionalContext / verifier
+ * diagnostic / error message / async task id).
+ *
+ * Wire shape is intentionally flat so the existing `chat:agent_progress`
+ * envelope passes through without further mapping — the renderer picks it
+ * up via `handleAgentProgressEvent` and unwraps the same way it unwraps
+ * sub-agent progress events today.
+ */
+export interface HookInvokedEvent {
+  type: 'hook_invoked';
+  /** Hook lifecycle event that fired (e.g. `PreToolUse`, `PostToolUse`). */
+  hookEventName: HookEvent;
+  /** Matched hook executor type. */
+  hookType: HookCommand['type'];
+  /** Human-readable hook identifier — `hookCommandLine(hook)`, capped. */
+  hookName: string;
+  /** Matcher pattern that fired (e.g. `"Bash"`). Undefined when matcher omitted. */
+  matcher?: string;
+  /** additionalContext returned to the agent (or empty for verifier-only). */
+  additionalContext?: string;
+  /** Non-zero exit code when a verifier hook ran with problems. */
+  exitCode?: number;
+  /** True for `async: true` command hooks that returned a background task id. */
+  async: boolean;
+  /** Background task id (only set when async === true). */
+  backgroundTaskId?: string;
+  /** Wall-clock duration of the hook execution in ms. */
+  durationMs: number;
+  /** Outcome of the dispatch. */
+  status: 'ok' | 'error' | 'timeout' | 'skipped';
+  /** Reason when status is not 'ok' (always present for non-ok statuses). */
+  errorMessage?: string;
+  /** Per-dispatch sequence so the renderer can order hooks fired in the same turn. */
+  seq: number;
+  /** Tool name when the event is tool-scoped (PreToolUse / PostToolUse / ...). */
+  toolName?: string;
+  /** Associated tool_use_id when tool-scoped. */
+  toolUseId?: string;
+}
+
+/**
  * Hook matcher configuration
  */
 export const HookMatcherSchema = z.object({

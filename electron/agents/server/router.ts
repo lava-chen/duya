@@ -91,24 +91,142 @@ export function parsePath(url: string): { pathname: string; parts: string[] } {
   return { pathname, parts };
 }
 
-function mapEventType(eventType: string): string {
-  if (eventType === 'chat:done') return 'done';
-  if (eventType === 'chat:error') return 'error';
-  if (eventType === 'chat:text') return 'text';
-  if (eventType === 'chat:thinking') return 'thinking';
-  if (eventType === 'chat:tool_use_started') return 'tool_use_started';
-  if (eventType === 'chat:tool_use') return 'tool_use';
-  if (eventType === 'chat:tool_result') return 'tool_result';
-  if (eventType === 'chat:tool_progress') return 'tool_progress';
-  if (eventType === 'chat:permission') return 'permission';
-  if (eventType === 'chat:status') return 'status';
-  if (eventType === 'chat:mode_changed') return 'mode_changed';
-  if (eventType === 'chat:goal_updated') return 'goal_updated';
-  if (eventType === 'chat:retry') return 'retry';
-  if (eventType === 'checkpoint') return 'checkpoint';
-  if (eventType === 'ready') return 'ready';
-  if (eventType === 'memory_warning') return 'memory_warning';
-  return 'message';
+/**
+ * Normalize a worker event (a JSON line parsed from the worker's stdout) into
+ * the SSE-serializable `{ type, data }` contract consumed by every agent-server
+ * client. Both the renderer's POST chat (`handlePostChatSSE`) and its GET
+ * reconnect/attach (`handleGetChat`) MUST emit this identical shape; the
+ * renderer's `AgentServerClient` reads text via `event.data.content`, so a raw
+ * worker frame like `{ type: 'chat:text', data: 'hello' }` would silently drop
+ * the payload (empty `data.content`), which manifests as a run view that spins
+ * in "loading" with no message stream. Returns `null` for internal
+ * control-plane events (`pong`, `memory:wakeup`) that must never reach SSE.
+ */
+function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, unknown> | null {
+  const msgType = event.type as string;
+  // Internal heartbeat — never forwarded to SSE clients.
+  if (msgType === 'pong') return null;
+  // Plan 305 Phase B: `memory:wakeup` is only a control-plane trigger (the
+  // POST handler runs MemoryWorker.forceSweep()); the GET (attach) handler
+  // must not re-trigger the sweep, so skip it there too.
+  if (msgType === 'memory:wakeup') return null;
+
+  let sseEvent: Record<string, unknown> = event;
+
+  if (msgType === 'chat:text' || msgType === 'chat:thinking') {
+    sseEvent = {
+      type: msgType.replace('chat:', ''), // 'text' or 'thinking'
+      data: { content: event.data || event.content },
+    };
+  } else if (msgType === 'chat:tool_use_started') {
+    sseEvent = {
+      type: 'tool_use_started',
+      data: { id: event.id, name: event.name, input: event.input },
+    };
+  } else if (msgType === 'chat:tool_use') {
+    sseEvent = {
+      type: 'tool_use',
+      data: { id: event.id, name: event.name, input: event.input },
+    };
+  } else if (msgType === 'chat:tool_result') {
+    sseEvent = {
+      type: 'tool_result',
+      data: { id: event.id, result: event.result, error: event.error, duration_ms: event.duration_ms, metadata: event.metadata },
+    };
+  } else if (msgType === 'chat:tool_progress') {
+    sseEvent = {
+      type: 'tool_progress',
+      data: event,
+    };
+  } else if (msgType === 'chat:permission') {
+    sseEvent = {
+      type: 'permission',
+      data: event.request,
+    };
+  } else if (msgType === 'chat:context_usage' || msgType === 'chat:token_usage') {
+    sseEvent = {
+      type: msgType.replace('chat:', ''), // 'context_usage' or 'token_usage'
+      data: event,
+    };
+  } else if (msgType === 'chat:status') {
+    sseEvent = {
+      type: 'status',
+      data: { message: event.status || event.message },
+    };
+  } else if (msgType === 'chat:mode_changed') {
+    // Plan 224 follow-up: agent runtime mode switched (EnterPlanMode /
+    // ExitPlanMode / SwitchMode tool). Forward mode + source so the renderer
+    // can sync input-box chip/glow.
+    sseEvent = {
+      type: 'mode_changed',
+      data: { mode: event.mode, source: event.source, reason: event.reason },
+    };
+  } else if (msgType === 'chat:goal_updated') {
+    // Plan 411: goal tracker state changed. Forward the flat payload (already
+    // carries objective/state/tokens at the top level); drop the `type` field.
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: 'goal_updated', data: rest };
+  } else if (msgType === 'chat:agent_progress') {
+    sseEvent = {
+      type: msgType.replace('chat:', ''),
+      data: event,
+    };
+  } else if (msgType === 'chat:research_continue') {
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: 'research_continue', data: rest };
+  } else if (msgType === 'chat:research_evidence') {
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: 'research_evidence', data: rest };
+  } else if (msgType === 'chat:research_report') {
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: 'research_report', data: rest };
+  } else if (msgType.startsWith('chat:research_')) {
+    // Worker emits `chat:research_*` where convertSSEToAgentMessage spreads the
+    // inner `data` object onto the top level (no nested `data` key). Re-wrap so
+    // the renderer sees `{ type, data: { from, to, ... } }` like every other
+    // chat:* path.
+    const { type: _t, ...rest } = event;
+    sseEvent = { type: msgType.replace('chat:', ''), data: rest };
+  } else if (msgType === 'chat:done') {
+    sseEvent = { type: 'done', data: event };
+  } else if (msgType === 'chat:error') {
+    // Normalize to { type: 'error', data: { message, code? } } so the renderer
+    // dispatches through the same `case 'error'` path and can show tailored
+    // banners for provider error codes (rate_limit_error, usage_limit_exceeded).
+    sseEvent = {
+      type: 'error',
+      data: { message: event.message || 'Unknown error', code: event.code },
+    };
+  } else if (msgType === 'chat:db_persisted') {
+    sseEvent = { type: 'db_persisted', data: event };
+  } else if (msgType === 'chat:title_generated') {
+    sseEvent = { type: 'title_generated', data: event };
+  } else if (msgType === 'mcp:reloaded') {
+    // Phase 2A diagnostic chain: post-apply summary. Pass through as-is so the
+    // renderer / settings UI can consume the activeServerKeys + counts.
+    sseEvent = { type: 'mcp:reloaded', data: event };
+  } else if (msgType === 'mcp:status:snapshot') {
+    // Phase 3: cache the per-server runtime status so the capability
+    // aggregator (`buildCrossSourceMCPCapabilities`) can populate
+    // `connectionStatus` and `tools[]` from live data instead of the
+    // last-apply issue list. The SSE event still ships to the
+    // renderer unchanged.
+    // Fire-and-forget: normalizeWorkerEvent is synchronous (called from
+    // sync onData handlers on the SSE forward path), so a dynamic import
+    // cannot be awaited here. Cache the snapshot but never let an ingest
+    // failure break the SSE stream.
+    void import('../../services/capability-management/mcp-runtime-store.js')
+      .then((mod) => mod.setLastMCpStatusSnapshot(event))
+      .catch((err) => {
+        // Defensive: never break the SSE forward path on a bad payload.
+        console.warn('[agents/router] mcp-runtime-store ingest failed:', err);
+      });
+    sseEvent = { type: 'mcp:status:snapshot', data: event };
+  } else if (msgType === 'mcp:reload:error') {
+    sseEvent = { type: 'mcp:reload:error', data: event };
+  }
+
+  return sseEvent;
 }
 
 /**
@@ -514,12 +632,6 @@ function handlePostChatSSE(
 
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
-
-        // Worker sends events directly (no 'data' wrapper since it's from sendEvent)
-        // But we need to handle the format where content might be at event.data for some types
-        let sseEvent: Record<string, unknown> = event;
-
-        // Convert worker event format to SSE format
         const msgType = event.type as string;
 
         // Filter out pong events (internal heartbeat, not for SSE clients)
@@ -546,126 +658,10 @@ function handlePostChatSSE(
           continue;
         }
 
-        if (msgType === 'chat:text' || msgType === 'chat:thinking') {
-          sseEvent = {
-            type: msgType.replace('chat:', ''), // 'text' or 'thinking'
-            data: { content: event.data || event.content },
-          };
-        } else if (msgType === 'chat:tool_use_started') {
-          sseEvent = {
-            type: 'tool_use_started',
-            data: { id: event.id, name: event.name, input: event.input },
-          };
-        } else if (msgType === 'chat:tool_use') {
-          sseEvent = {
-            type: 'tool_use',
-            data: { id: event.id, name: event.name, input: event.input },
-          };
-        } else if (msgType === 'chat:tool_result') {
-          sseEvent = {
-            type: 'tool_result',
-            data: { id: event.id, result: event.result, error: event.error, duration_ms: event.duration_ms, metadata: event.metadata },
-          };
-        } else if (msgType === 'chat:tool_progress') {
-          sseEvent = {
-            type: 'tool_progress',
-            data: event,
-          };
-        } else if (msgType === 'chat:permission') {
-          sseEvent = {
-            type: 'permission',
-            data: event.request,
-          };
-        } else if (msgType === 'chat:context_usage' || msgType === 'chat:token_usage') {
-          sseEvent = {
-            type: msgType.replace('chat:', ''), // 'context_usage' or 'token_usage'
-            data: event,
-          };
-        } else if (msgType === 'chat:status') {
-          sseEvent = {
-            type: 'status',
-            data: { message: event.status || event.message },
-          };
-        } else if (msgType === 'chat:mode_changed') {
-          // Plan 224 follow-up: agent runtime mode switched via
-          // EnterPlanMode / ExitPlanMode / SwitchMode tool. Forward the
-          // mode + source so the renderer can sync input-box chip/glow.
-          sseEvent = {
-            type: 'mode_changed',
-            data: {
-              mode: event.mode,
-              source: event.source,
-              reason: event.reason,
-            },
-          };
-        } else if (msgType === 'chat:goal_updated') {
-          // Plan 411: goal tracker state changed (start / verdict / pause /
-          // budget). Forward the flat payload so the renderer can render a
-          // goal status card. The payload already carries objective/state/
-          // tokens at the top level.
-          const { type: _t, ...rest } = event as Record<string, unknown>;
-          sseEvent = {
-            type: 'goal_updated',
-            data: rest,
-          };
-        } else if (msgType === 'ready') {
-          // 'ready' type is already correct format
-        } else if (msgType === 'chat:agent_progress') {
-          sseEvent = {
-            type: msgType.replace('chat:', ''),
-            data: event,
-          };
-        } else if (msgType.startsWith('chat:research_')) {
-          // Worker emits `chat:research_*` events where convertSSEToAgentMessage
-          // spreads the inner `data` object onto the top level (no nested `data`
-          // key). Re-wrap so the renderer sees `{ type, data: { from, to, ... } }`
-          // matching the contract used by every other chat:* path.
-          const { type: _t, ...rest } = event as Record<string, unknown>;
-          sseEvent = {
-            type: msgType.replace('chat:', ''),
-            data: rest,
-          };
-        } else if (msgType === 'chat:research_continue') {
-          const { type: _t, ...rest } = event as Record<string, unknown>;
-          sseEvent = { type: 'research_continue', data: rest };
-        } else if (msgType === 'chat:research_evidence') {
-          const { type: _t, ...rest } = event as Record<string, unknown>;
-          sseEvent = { type: 'research_evidence', data: rest };
-        } else if (msgType === 'chat:research_report') {
-          const { type: _t, ...rest } = event as Record<string, unknown>;
-          sseEvent = { type: 'research_report', data: rest };
-        } else if (msgType === 'chat:done') {
-          sseEvent = { type: 'done', data: event };
-        } else if (msgType === 'chat:error') {
-          // Normalize to { type: 'error', data: { message, code? } } so the
-          // renderer can dispatch through the same `case 'error'` path used
-          // by every other chat:* event. Surface provider `code` (e.g.
-          // `rate_limit_error`, `usage_limit_exceeded`) so the UI can
-          // render a tailored banner when the model provider rate-limits us.
-          sseEvent = {
-            type: 'error',
-            data: {
-              message: (event.message as string) || 'Unknown error',
-              code: event.code,
-            },
-          };
-        } else if (msgType === 'chat:db_persisted') {
-          sseEvent = { type: 'db_persisted', data: event };
-        } else if (msgType === 'chat:title_generated') {
-          sseEvent = { type: 'title_generated', data: event };
-        } else if (msgType === 'mcp:reloaded') {
-          // Phase 2A diagnostic chain: post-apply summary. Pass
-          // through as-is so renderer / settings UI can consume
-          // the activeServerKeys + counts directly.
-          sseEvent = { type: 'mcp:reloaded', data: event };
-        } else if (msgType === 'mcp:status:snapshot') {
-          // Phase 2A diagnostic chain: full snapshot returned in
-          // response to a `mcp:status:get` command. The settings
-          // page renders this directly.
-          sseEvent = { type: 'mcp:status:snapshot', data: event };
-        } else if (msgType === 'mcp:reload:error') {
-          sseEvent = { type: 'mcp:reload:error', data: event };
-        }
+        const sseEvent = normalizeWorkerEvent(event);
+        // normalizeWorkerEvent only returns null for the already-skipped
+        // control-plane events; guard defensively anyway.
+        if (!sseEvent) continue;
 
         const eventType = sseEvent.type || 'unknown';
 
@@ -1605,40 +1601,39 @@ function handleGetChat(
 
       try {
         const event = JSON.parse(line);
-        const eventType = event.type || 'unknown';
+        const sse = normalizeWorkerEvent(event);
+        if (!sse) continue;
 
+        const eventType = sse.type || 'unknown';
         seqNum++;
 
-        if (eventType === 'chat:done') {
-          res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(event)}\n\n`);
+        if (eventType === 'done') {
+          res.write(`event: done\nid: ${seqNum}\ndata: ${JSON.stringify(sse)}\n\n`);
           doneReceived = true;
           res.end();
           child.stdout!.removeListener('data', onData);
           return;
         }
 
-        if (eventType === 'chat:error') {
+        if (eventType === 'error') {
           // Normalize to { type: 'error', data: { message, code? } } so the
           // renderer dispatches through the same `case 'error'` path used
           // by every other chat:* event, and can show tailored banners for
           // provider error codes (rate_limit_error, usage_limit_exceeded).
-          const errorMessage = event.message || 'Unknown error';
-          sessionManager.failSession(sessionId, errorMessage, true);
-          res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify({
-            type: 'error',
-            data: {
-              message: errorMessage,
-              code: event.code,
-            },
-          })}\n\n`);
+          const errData = (sse.data ?? {}) as { message?: string };
+          sessionManager.failSession(sessionId, errData.message || 'Unknown error', true);
+          res.write(`event: error\nid: ${seqNum}\ndata: ${JSON.stringify(sse)}\n\n`);
           doneReceived = true;
           res.end();
           child.stdout!.removeListener('data', onData);
           return;
         }
 
-        const sseEventType = mapEventType(eventType);
-        res.write(`event: ${sseEventType}\nid: ${seqNum}\ndata: ${JSON.stringify(event)}\n\n`);
+        // Forward the SAME normalized contract as handlePostChatSSE. Writing the
+        // raw worker frame here (as this block did before) drops the payload on
+        // the renderer (its AgentServerClient reads text via event.data.content),
+        // which surfaced as a cron run view stuck in "loading" with no stream.
+        res.write(`event: ${eventType}\nid: ${seqNum}\ndata: ${JSON.stringify(sse)}\n\n`);
       } catch {
         multiLineBuffer = rawLine;
       }

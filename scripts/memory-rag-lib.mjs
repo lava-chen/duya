@@ -217,10 +217,37 @@ async function embedQuery(text, provider) {
 export function loadSqlite() {
   const customPath = process.env.DUYA_BETTER_SQLITE3_PATH;
   if (customPath) {
-    const localRequire = createRequire(path.join(customPath, 'package.json'));
-    return localRequire('better-sqlite3');
+    try {
+      const localRequire = createRequire(path.join(customPath, 'package.json'));
+      return localRequire('better-sqlite3');
+    } catch (err) {
+      // Fall through to plain resolution — the packaged path may be
+      // stale/missing in a dev checkout. The plain-require error (if any)
+      // is more actionable for the developer than the packaged-path one.
+      const wrapped = new Error(
+        `DUYA_BETTER_SQLITE3_PATH (${customPath}) failed to load better-sqlite3: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      wrapped.cause = err;
+      console.warn(wrapped.message);
+    }
   }
-  return require('better-sqlite3');
+  try {
+    return require('better-sqlite3');
+  } catch (err) {
+    // NODE_MODULE_VERSION mismatch (Electron-ABI build loaded under plain
+    // Node, or vice versa). Convert the bare dlopen error into an
+    // actionable message; fail-open callers degrade to empty context.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/NODE_MODULE_VERSION|was compiled against a different Node.js version/i.test(msg)) {
+      throw new Error(
+        'better-sqlite3 was compiled for a different Node ABI than this process. ' +
+          'Run `npm run rebuild:node` for plain-Node (CLI/tests) usage, or `npm run rebuild` ' +
+          '(electron-rebuild) for the Electron runtime. Original error: ' +
+          msg,
+      );
+    }
+    throw new Error(`better-sqlite3 failed to load: ${msg}`);
+  }
 }
 
 function cosine(a, b) {
@@ -241,6 +268,112 @@ function cosine(a, b) {
 const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
 
 /**
+ * Extract the usable search terms from a prompt (the term selection used
+ * inside keywordSearch): >=3-char tokens plus 2-char CJK tokens. Shared
+ * with retrieve() so vector-only rows can carry the same term set for
+ * snippet windowing (buildSnippet falls back to the body head when none
+ * of the terms appear literally).
+ */
+export function extractTerms(prompt) {
+  const cleaned = String(prompt ?? '')
+    .replace(/["\\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+  const terms = cleaned
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  const trigramTerms = terms.filter((t) => t.length >= 3);
+  const shortCjkTerms = terms.filter((t) => t.length === 2 && CJK_RE.test(t));
+  // Only usable terms count for discovery AND scoring: 2-char non-CJK
+  // tokens ("go", "ok") are noise — they would only dilute the ratio.
+  return [...trigramTerms, ...shortCjkTerms];
+}
+
+// ============================================================================
+// Snippet construction (term-windowed previews)
+// ============================================================================
+
+/** Default snippet window length (characters of normalized body text). */
+export const SNIPPET_MAX_LEN = 220;
+
+/** Fraction of the window allocated to context before the first match. */
+const SNIPPET_BEFORE_FRACTION = 0.4;
+
+/**
+ * Drop a leading YAML frontmatter block (`---` … `---` with the closing
+ * delimiter on its own line) so snippet windows start at the real body
+ * instead of polluting the preview with metadata. Memory docs put their
+ * Summary at the top of the body, so after stripping, the file-head
+ * fallback window is the Summary again.
+ */
+export function stripFrontmatter(raw) {
+  const text = String(raw ?? '');
+  if (!/^---\s*\n/.test(text)) return text;
+  const lines = text.split('\n');
+  const close = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  if (close === -1) return text;
+  return lines.slice(close + 1).join('\n');
+}
+
+/**
+ * Build a snippet around the first literal occurrence of any query term
+ * instead of the fixed file-head window. Vector-only hits (no literal
+ * term) fall back to the body head. The output is single-line normalized
+ * (whitespace collapsed), word-aligned at both ends, bounded to
+ * `maxLen`, and prefixed/suffixed with "…" whenever the window does not
+ * span the whole body — so a clipped preview is never mistaken for the
+ * full document.
+ */
+export function buildSnippet(content, terms, opts = {}) {
+  const maxLen = typeof opts.maxLen === 'number' ? opts.maxLen : SNIPPET_MAX_LEN;
+  const body = stripFrontmatter(content);
+  const norm = body.replace(/\s+/g, ' ').trim();
+  if (!norm) return '';
+  if (maxLen >= norm.length) return norm;
+
+  const usable = (terms ?? [])
+    .map((t) => String(t).trim().toLowerCase())
+    .filter((t) => t.length >= 2)
+    .filter((t, i, a) => a.indexOf(t) === i);
+
+  const lower = norm.toLowerCase();
+  let idx = -1;
+  for (const t of usable) {
+    const at = lower.indexOf(t);
+    if (at >= 0 && (idx === -1 || at < idx)) idx = at;
+  }
+
+  let start;
+  let end;
+  if (idx === -1) {
+    start = 0;
+    end = Math.min(norm.length, maxLen);
+  } else {
+    const before = Math.floor(maxLen * SNIPPET_BEFORE_FRACTION);
+    start = Math.max(0, idx - before);
+    end = Math.min(norm.length, start + maxLen);
+  }
+
+  // Word-aligned boundaries: never start or end mid-word. Skipping past
+  // the match itself (ws + 1 > idx) would defeat the windowing, so only
+  // advance when the match survives. The trailing side trims a short
+  // dangling partial word back instead of overshooting maxLen.
+  if (start > 0) {
+    const ws = norm.indexOf(' ', start);
+    if (ws !== -1 && ws < end && ws + 1 <= idx) start = ws + 1;
+  }
+  if (end < norm.length) {
+    const lastWs = norm.lastIndexOf(' ', end);
+    if (lastWs > idx && end - lastWs < 24) end = lastWs;
+  }
+
+  const slice = norm.slice(start, end).trim();
+  return (start > 0 ? '…' : '') + slice + (end < norm.length ? '…' : '');
+}
+
+/**
  * FTS5 trigram match over prompt terms (OR semantics, CJK friendly) plus
  * a LIKE fallback for 2-char CJK terms (调度/钩子 — trigram cannot form a
  * 2-gram token). Rows are ranked by bm25 (not arbitrary rowid order) and
@@ -249,19 +382,10 @@ const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
  * matching one of four scores 0.25. Malformed queries return no hits.
  */
 export function keywordSearch(db, prompt) {
-  const cleaned = prompt.replace(/["\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
-  const terms = cleaned
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-  if (terms.length === 0) return [];
-
-  const trigramTerms = terms.filter((t) => t.length >= 3);
-  const shortCjkTerms = terms.filter((t) => t.length === 2 && CJK_RE.test(t));
-  // Only usable terms count for discovery AND scoring: 2-char non-CJK
-  // tokens ("go", "ok") are noise — they would only dilute the ratio.
-  const usableTerms = [...trigramTerms, ...shortCjkTerms];
+  const usableTerms = extractTerms(prompt);
   if (usableTerms.length === 0) return [];
+  const trigramTerms = usableTerms.filter((t) => t.length >= 3);
+  const shortCjkTerms = usableTerms.filter((t) => t.length === 2);
 
   // Candidate set keyed by rowid, shared by both sources (dedupes hits).
   const candidates = new Map(); // rowid -> { row, matched: Set<string> }
@@ -313,6 +437,9 @@ export function keywordSearch(db, prompt) {
       title: row.title,
       content: row.content,
       score: matched.size / usableTerms.length,
+      // Literal terms found in this row — snippet windowing anchors on
+      // the earliest occurrence (vector-only rows carry extractTerms()).
+      matched_terms: [...matched],
     });
   }
   out.sort((a, b) => b.score - a.score);
@@ -353,7 +480,12 @@ export async function retrieve(dbPath, prompt, provider, settings) {
             continue;
           }
           const score = cosine(queryVec, vec);
-          if (score > 0) scored.push({ row: r, score, cos: score });
+          if (score > 0) {
+            // Vector rows carry the prompt terms for snippet windowing;
+            // buildSnippet falls back to the body head when no term
+            // appears literally (semantic-only match).
+            scored.push({ row: { ...r, matched_terms: extractTerms(prompt) }, score, cos: score });
+          }
         }
       } catch (err) {
         // Record the degradation reason for the system log, then fall
@@ -374,23 +506,116 @@ export async function retrieve(dbPath, prompt, provider, settings) {
     // semantic cosine so rowid order never decides the ranking.
     scored.sort((a, b) => b.score - a.score || (b.cos ?? 0) - (a.cos ?? 0));
     const mode = !provider ? 'keyword' : vectorUsed ? (keywordUsed ? 'hybrid' : 'vector') : 'keyword';
-    return { rows: scored.slice(0, 5).map((s) => s.row), mode, fallbackReason };
+    // Plan 437: cap the hit list at 3 (down from 5). Plan 430 sent up to
+    // 5 full bodies which bloated the additionalContext block; the new
+    // hybrid (full body for top hit, snippet for the rest) keeps the
+    // top hit informative while the breadcrumb previews stay cheap.
+    return { rows: scored.slice(0, 3).map((s) => s.row), mode, fallbackReason };
   } finally {
     db.close();
   }
 }
 
-/** Render retrieved rows as the injected `### 相关记忆` context block. */
-export function formatContext(hits) {
-  if (hits.length === 0) return '';
-  const lines = ['### 相关记忆'];
-  for (const h of hits) {
-    const summary = String(h.content ?? '').replace(/\s+/g, ' ').trim().slice(0, 160);
-    lines.push(`- ${h.title}`);
-    if (summary) lines.push(`  ${summary}`);
-    lines.push(`  path: ${path.join(h.root, h.rel_path)}`);
+// ============================================================================
+// Context formatting
+// ============================================================================
+
+/**
+ * Per-hit body cap (chars of the frontmatter-stripped body) used by
+ * {@link formatContext} for the **top hit only**. The top hit is the
+ * memory the user is most likely asking about — plan 430 ships its
+ * full body so the model doesn't have to spend a tool call to read it.
+ * Lower-ranked hits fall back to {@link SNIPPET_MAX_LEN}-windowed
+ * snippets around the matched terms, since per plan 430 the previous
+ * snippet-only design was useless for the top hit but is acceptable as
+ * a breadcrumb for the rest (the path stays visible so the model can
+ * `read` any of them on demand).
+ */
+export const FORMAT_TOP_HIT_BODY_CHARS = 4_000;
+
+/**
+ * Window length used by {@link formatContext} for non-top hits —
+ * identical to {@link SNIPPET_MAX_LEN} so the breadcrumb preview keeps
+ * the same readability characteristics as a free-standing snippet.
+ */
+export const FORMAT_OTHER_HIT_SNIPPET_CHARS = SNIPPET_MAX_LEN;
+
+/**
+ * Total additionalContext budget. The hook executor caps JSON stdout at
+ * 64 KB and the model context is the bigger ceiling; we use 8 KB so the
+ * rendered block stays small enough to read at a glance, and a low-
+ * ranked hit can be dropped instead of the block being arbitrarily
+ * clipped mid-paragraph. Plan 430 used 24 KB (top-5 full bodies) which
+ * the user reported as too noisy in the chat-flow hook row (plan 437);
+ * this keeps the top hit intact and snippets everything else.
+ */
+export const FORMAT_TOTAL_CHARS = 8_000;
+
+/**
+ * Render retrieved rows as the injected `### 相关记忆` context block.
+ *
+ * Hybrid (plan 437): the top hit ships its full body so the model has
+ * the answer in-context (plan 430 contract — the previous snippet-only
+ * output was useless because the path is rarely readable mid-session
+ * and snippets miss the part of the doc the user is asking about).
+ * Lower-ranked hits ship a {@link buildSnippet}-windowed preview around
+ * the matched terms + path, so the model can decide which one to read
+ * in full via the `read` tool. Bodies are hard-capped per-hit
+ * ({@link FORMAT_TOP_HIT_BODY_CHARS} / {@link SNIPPET_MAX_LEN}) and the
+ * union is hard-capped to {@link FORMAT_TOTAL_CHARS}; lower-ranked hits
+ * are dropped (not clipped mid-doc) when the union would exceed the
+ * total budget, so the highest-scored memories always land intact.
+ *
+ * @param hits  ordered rows from `retrieve()` (already relevance-ranked).
+ * @param opts  perHitBody override (testing); total override (testing).
+ */
+export function formatContext(hits, opts = {}) {
+  if (!Array.isArray(hits) || hits.length === 0) return '';
+  const topBody = typeof opts.perHitBody === 'number' ? opts.perHitBody : FORMAT_TOP_HIT_BODY_CHARS;
+  const total = typeof opts.total === 'number' ? opts.total : FORMAT_TOTAL_CHARS;
+
+  const blocks = [];
+  let used = '### 相关记忆'.length;
+  for (let i = 0; i < hits.length; i += 1) {
+    const h = hits[i];
+    const body = stripFrontmatter(String(h.content ?? '')).trim();
+    let bodySlice;
+    let truncated = false;
+    if (i === 0) {
+      // Top hit: full body (plan 430 contract), hard-capped.
+      bodySlice = body;
+      if (bodySlice.length > topBody) {
+        bodySlice = bodySlice.slice(0, topBody);
+        truncated = true;
+      }
+    } else {
+      // Non-top hit: snippet windowed around the matched terms (or the
+      // body head when no term matches — vector-only rows). Snippet
+      // anchors on the prompt's terms so the breadcrumb actually shows
+      // the part the user asked about.
+      bodySlice = buildSnippet(body, h.matched_terms ?? [], {
+        maxLen: FORMAT_OTHER_HIT_SNIPPET_CHARS,
+      });
+      if (!bodySlice) {
+        // Empty body or zero-length snippet — drop this hit whole rather
+        // than emit a useless empty bullet.
+        continue;
+      }
+    }
+    const header = `- ${h.title}\n  path: ${path.join(h.root, h.rel_path)}`;
+    const block = truncated
+      ? `${header}\n\n${bodySlice}\n\n<!-- read-full: this hit was truncated to ${topBody} chars; the path above points at the full memory file -->`
+      : `${header}\n\n${bodySlice}`;
+    const blockLen = block.length + 2; // trailing "\n\n" between hits
+    if (used + blockLen > total) {
+      // Lower-ranked hits are dropped whole — never half-clipped.
+      break;
+    }
+    blocks.push(block);
+    used += blockLen;
   }
-  return lines.join('\n');
+  if (blocks.length === 0) return '';
+  return ['### 相关记忆', ...blocks].join('\n\n');
 }
 
 // ============================================================================

@@ -28,7 +28,9 @@ describe('ConfigStore', () => {
     const store = new ConfigStore(opts);
     const cfg = store.get();
     expect(cfg._config_version).toBe(1);
-    expect(cfg.agent.max_turns).toBe(90);
+    // No implicit `agent.max_turns` — agent is uncapped by default
+    // (pi-aligned). Users can opt-in via `agent.max_turns` in config.toml.
+    expect(cfg.agent.max_turns).toBeUndefined();
   });
 
   it('set() updates snapshot by dotted path and persists TOML', () => {

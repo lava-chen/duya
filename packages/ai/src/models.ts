@@ -234,7 +234,7 @@ export function getEffortOptionsForCapability(
     if (trimmed.length === 0) continue;
     // Coerce to a known ModelThinkingLevel where possible. Falls
     // back to the raw lowercase token so a model-specific effort
-    // name still renders correctly.
+    // name (e.g. `'xhigh'`) still renders correctly.
     const known = (
       [
         'minimal',

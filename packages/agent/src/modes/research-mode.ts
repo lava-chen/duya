@@ -18,15 +18,11 @@
  * orchestrator. Clarification uses the standard ask_user_question tool.
  */
 
-import type { ModeModifier, ModeModifierContext, StreamOptionsPatch } from './types.js';
+import type { ModeModifier } from './types.js';
 import { researchModeTracker } from './research-mode/research-tracker.js';
 import { getResearchTools } from './research-mode/research-tools.js';
 import { getResearchConfig } from './research-mode/research-config.js';
 import type { ModeTracker } from './engine/tracker.js';
-
-/** Cap on research iterations per streamChat call (aligned with the agent's
- * default `maxTurns = 100`; consumed via `beforeStream`). */
-const RESEARCH_MAX_ITERATIONS = 100;
 
 /**
  * System prompt prefix prepended in research mode.
@@ -174,12 +170,5 @@ export const researchMode: ModeModifier = {
 
   prompt: {
     prefix: RESEARCH_MODE_PROMPT,
-  },
-
-  hooks: {
-    // Deep research is a long, multi-round loop — raise the per-call cap.
-    beforeStream: (_ctx: ModeModifierContext): StreamOptionsPatch => ({
-      maxIterations: RESEARCH_MAX_ITERATIONS,
-    }),
   },
 };

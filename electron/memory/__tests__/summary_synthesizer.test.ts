@@ -69,6 +69,22 @@ function mockLlm(reply: string): AIClient {
   } as unknown as AIClient;
 }
 
+/**
+ * Capture the user prompt passed to the LLM (for input-assembly
+ * assertions). Returns a chat mock whose `__lastUserPrompt()` accessor
+ * returns the last `{ role: 'user' }` content string.
+ */
+function mockLlmWithCapture(reply: string): AIClient & { __lastUserPrompt: () => string } {
+  let last = '';
+  const client = mockLlm(reply);
+  const chat = client.chat as ReturnType<typeof vi.fn>;
+  chat.mockImplementation(async (messages: Array<{ role: string; content: string }>) => {
+    last = messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n');
+    return { content: reply, usage: { input_tokens: 1, output_tokens: 1 } };
+  });
+  return Object.assign(client, { __lastUserPrompt: () => last });
+}
+
 const VALID_JSON = JSON.stringify({
   profile: 'User works on the DUYA desktop agent. Prefers concise Chinese replies.',
   top_rules: [
@@ -225,5 +241,43 @@ describe('synthesizeSummary', () => {
     expect(res.success).toBe(false);
     expect(res.error).toMatch(/empty/);
     expect(res.content).toContain('Memory Summary');
+  });
+
+  it('passes the CURRENT semantic digest into the prompt as the edit baseline', async () => {
+    // Pre-write a good summary.md (semantic block + deterministic index).
+    const prevDigest = [
+      '## Who is this user',
+      '',
+      'User is a Chinese-speaking engineer building the DUYA desktop agent.',
+      '',
+      '## Rules that matter',
+      '',
+      '1. **When canvas locks, use the fallback.** — `global/areas/canvas-tooling.md`',
+    ].join('\n');
+    const index = [
+      '## Essentials',
+      '',
+      '- **area:canvas-tooling**: ... → global/areas/canvas-tooling.md',
+    ].join('\n');
+    fs.writeFileSync(path.join(fx.memoryRoot, 'summary.md'), prevDigest + '\n\n' + index, 'utf8');
+
+    const llm = mockLlmWithCapture(VALID_JSON);
+    await synthesizeSummary({ memoryRoot: fx.memoryRoot, llmClient: llm });
+
+    const prompt = llm.__lastUserPrompt();
+    expect(prompt).toContain('current_semantic_summary');
+    expect(prompt).toContain('User is a Chinese-speaking engineer building the DUYA desktop agent.');
+    expect(prompt).toContain('When canvas locks, use the fallback.');
+    expect(prompt).toContain('EDIT IN PLACE');
+  });
+
+  it('omits the edit baseline when no summary.md exists yet (first synthesis)', async () => {
+    const llm = mockLlmWithCapture(VALID_JSON);
+    await synthesizeSummary({ memoryRoot: fx.memoryRoot, llmClient: llm });
+
+    const prompt = llm.__lastUserPrompt();
+    expect(prompt).not.toContain('current_semantic_summary');
+    expect(prompt).not.toContain('EDIT IN PLACE');
+    expect(prompt).toContain('canvas-tooling.md'); // canonical files still present
   });
 });

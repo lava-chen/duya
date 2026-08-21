@@ -1,6 +1,6 @@
 // message.ts - Chat message and session types
 
-export type MsgType = 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'viz';
+export type MsgType = 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'viz' | 'hook_invocation';
 
 export interface ContentBlock {
   type: string;
@@ -43,11 +43,9 @@ export interface Message {
    * notification XML into the message array. */
   isTaskNotification?: boolean;
   /** Renderer-only metadata. Never persisted to the DB; the value lives in
-   * the Zustand conversation store and is lost on reload. P2-β sets
-   * `interrupted: true` here when App.tsx.handleInterrupt (Esc /
-   * chat:interrupt) cuts the stream mid-flight, so the chrome can
-   * surface a "Stopped" badge on the partial assistant message. */
-  metadata?: { interrupted?: boolean; [key: string]: unknown };
+   * the Zustand conversation store and is lost on reload. Reserved for
+   * transient UI hints that don't belong on the durable Message row. */
+  metadata?: { [key: string]: unknown };
 }
 
 export interface ToolUseInfo {

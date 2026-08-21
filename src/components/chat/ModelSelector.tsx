@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/OptionPanel';
 import type { ModelOption } from '@duya/conductor/renderer';
 export type { ModelOption } from '@duya/conductor/renderer';
+import { ModelCapabilityBadges } from '@/components/providers/ModelCapabilityBadges';
 
 interface ModelSelectorProps {
   models: ModelOption[];
@@ -87,12 +88,31 @@ export function ModelSelector({
     return String(ctx);
   };
 
+  // Build capability hint suffix for the dropdown label. Kept inline
+  // (not via <ModelCapabilityBadges>) because the chat input bar is
+  // width-constrained — a tiny suffix like "qwen2.5 · vision,tool-use"
+  // reads better than 3 colored pills at this scale.
+  const capabilitySuffix = (
+    flags: Pick<ModelOption, 'supportsVision' | 'supportsToolUse' | 'supportsReasoning' | 'isLoaded'>,
+  ): string => {
+    const tags: string[] = [];
+    if (flags.supportsVision === true) tags.push('vision');
+    if (flags.supportsToolUse === true) tags.push('tool-use');
+    if (flags.supportsReasoning === true) tags.push('reasoning');
+    const base = tags.length === 0 ? '' : ` · ${tags.join(',')}`;
+    // "loaded" gets a separate trailing marker so users can spot the
+    // hot model even when scrolling past a long capability list.
+    return flags.isLoaded === true ? `${base} · ●` : base;
+  };
+
   const modelItems: OptionPanelItem[] = models.map((model) => ({
     id: model.id,
-    label: model.display_name,
+    label: `${model.display_name}${capabilitySuffix(model)}`,
     description: model.id,
     meta: formatContext(model.context_length),
-    searchText: `${model.display_name} ${model.id}`,
+    // Include capability flags in the search text so users can
+    // type "vision" to filter down to image-capable models.
+    searchText: `${model.display_name} ${model.id} ${capabilitySuffix(model).replace(/^[ ·]+/, '')}`.trim(),
   }));
 
   const renderOptionPanel = (className: string) => (
