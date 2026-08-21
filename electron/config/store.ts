@@ -19,29 +19,80 @@ import { DEFAULT_CONFIG, mergeConfig, type DuyaConfig } from './schema';
 const logger = getLogger();
 
 /**
- * Write a file atomically with a small retry loop for transient Windows
- * lock errors (EPERM/EBUSY from antivirus scanners or a second app
- * instance briefly holding the file). write-file-atomic already writes to
- * a temp file + rename; the rename is the step that hits EPERM.
+ * Synchronous sleep that does not depend on the libuv timer loop, so it
+ * works inside the synchronous writeFileRetry retry path without yielding
+ * to other I/O.
+ */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Atomic rename on Windows needs DELETE permission on the target file.
+ * External holders — Windows Defender real-time scan, OneDrive/Dropbox
+ * sync clients, a second DUYA instance, or an editor with the file
+ * open — often open config.toml with FILE_SHARE_READ but not
+ * FILE_SHARE_DELETE. When that happens `fs.renameSync` throws EPERM.
+ *
+ * Strategy:
+ *   1. Try the standard atomic write (tmp + rename) a few times with
+ *      short backoff to absorb transient scan locks.
+ *   2. If every atomic attempt fails with EPERM/EBUSY, fall back to
+ *      copyFileSync from a fresh tmp to the destination. CopyFile does
+ *      NOT require DELETE on the target — it writes through the open
+ *      handle — so it succeeds in the persistent-holder case where
+ *      rename never will. Atomicity is lost, but losing the user's edit
+ *      entirely is worse than risking a torn write.
  */
 function writeFileRetry(target: string, content: string, opts: { mode: number }): void {
+  const backoffs = [80, 160, 320];
   let lastErr: unknown;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt <= backoffs.length; attempt++) {
     try {
       writeFileAtomic.sync(target, content, opts);
       return;
     } catch (err) {
       lastErr = err;
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if ((code === 'EPERM' || code === 'EBUSY') && attempt < 2) {
-        // Synchronous wait so the retry happens before the caller moves on.
-        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150 * (attempt + 1));
+      if ((code === 'EPERM' || code === 'EBUSY') && attempt < backoffs.length) {
+        sleepSync(backoffs[attempt]!);
         continue;
       }
-      throw err;
+      // Non-retryable (ENOSPC, EISDIR, …) or final retryable: try the
+      // copy-based fallback. write-file-atomic already unlinked its tmp.
+      break;
     }
   }
-  throw lastErr;
+  writeFileCopyFallback(target, content, lastErr);
+}
+
+/**
+ * Non-atomic copy fallback for `writeFileRetry`. Writes `content` to a
+ * uniquely-named tmp file in the target directory, then copies that tmp
+ * over the target with `fs.copyFileSync`. On success the tmp is unlinked.
+ * On failure the tmp is also unlinked and the original error is rethrown.
+ */
+function writeFileCopyFallback(target: string, content: string, lastErr: unknown): void {
+  const dir = path.dirname(target);
+  const tmpPath = path.join(dir, `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmpPath, content, { mode: 0o600 });
+    try {
+      fs.copyFileSync(tmpPath, target);
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
+    logger.warn(
+      'ConfigStore: atomic rename failed repeatedly, used copy fallback (config write is no longer crash-safe until next successful atomic write)',
+      undefined,
+      { path: target, lastError: (lastErr as NodeJS.ErrnoException | undefined)?.code ?? 'unknown' },
+      LogComponent.ConfigManager,
+    );
+  } catch {
+    // Both paths failed. Throw the original EPERM so the caller logs the
+    // root cause; the copy failure is just a downstream symptom.
+    throw lastErr;
+  }
 }
 
 export interface ConfigStoreOptions {
@@ -117,7 +168,49 @@ export class ConfigStore {
     this.secretsPath = opts.secretsPath;
     this.secrets = {};
     this.config = this.load();
+    this.sweepStaleTmpFiles();
     this.startWatching();
+  }
+
+  /**
+   * Remove leftover `<config|secrets>.<digits>` tmp files left in the
+   * config directory by previous write-file-atomic invocations that
+   * crashed mid-rename (e.g. process killed during `upsertLlmProvider`).
+   * write-file-atomic's tmp naming is `<basename>.<pid><random>` —
+   * the suffix is a long run of digits (≥6 in practice). Without this
+   * sweep these accumulate over time and clutter the user's config
+   * directory; they also confuse the parent-directory watcher into
+   * spurious reload cycles that the deep-equality check then ignores.
+   *
+   * Safe by construction:
+   *   - Our own writeFileCopyFallback writes `.${basename}.<pid>.<ts>.tmp`
+   *     (contains a `.tmp` suffix), which does not match the digit-only
+   *     pattern, so we never delete our own in-flight tmp.
+   *   - Unlink errors are swallowed; a single locked stale file is not
+   *     worth a startup failure.
+   */
+  private sweepStaleTmpFiles(): void {
+    const dir = path.dirname(this.configPath);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return; // directory may not exist on first run
+    }
+    const bases = [path.basename(this.configPath), path.basename(this.secretsPath)];
+    for (const name of entries) {
+      const base = bases.find((b) => name.startsWith(`${b}.`));
+      if (!base) continue;
+      const suffix = name.slice(base.length + 1);
+      // Require ≥6 digits to avoid ever matching a real user file like
+      // `config.toml.2024`. write-file-atomic uses ~9 digits.
+      if (!/^\d{6,}$/.test(suffix)) continue;
+      try {
+        fs.unlinkSync(path.join(dir, name));
+      } catch {
+        // best effort: skip files held by another process
+      }
+    }
   }
 
   // ==== external file watch ====
