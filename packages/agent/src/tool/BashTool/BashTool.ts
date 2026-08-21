@@ -23,6 +23,7 @@ import type {
 } from '../types.js';
 import { SandboxManager, getActiveProvider, executeIsolated, wrapCommand } from '../../sandbox/index.js';
 import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
+import { killProcessTree } from '../../utils/processTreeKill.js';
 import {
   analyzeShellFailure,
   normalizeShellCommandForExecution,
@@ -458,11 +459,40 @@ export class BashTool extends BaseTool implements ToolExecutor {
         w => w.severity !== 'critical' && w.severity !== 'high'
       );
 
-      const result = await execa(
+      // execa's default kill only terminates the direct shell child.
+      // On Windows that is `TerminateProcess(pid)` — it does NOT reach
+      // bash's grandchildren (cargo / rustc / link.exe / MSYS2 subshells),
+      // which then run as orphans holding file handles and keeping the
+      // foreground tool call from truly ending. Wire up our own
+      // process-tree kill that runs alongside execa's default. On Unix,
+      // bash was not spawned with `detached: true` so we fall back to
+      // SIGKILL on the direct PID — still better than execa's no-op when
+      // the child has already been replaced by another shell layer.
+      const subprocess = execa(
         shellInfo.path,
         shellProvider.buildArgs(finalCommand),
         options,
       );
+      const treeKillAbort = () => {
+        const pid = subprocess.pid;
+        if (pid) {
+          void killProcessTree(pid);
+        }
+      };
+      context?.abortController?.signal.addEventListener('abort', treeKillAbort, { once: true });
+
+      let result;
+      try {
+        result = await subprocess;
+      } catch (err) {
+        // Belt-and-suspenders: if execa reported the child as gone but the
+        // tree is still alive (Windows MSYS2 / cargo chain), make sure
+        // we tear it down before propagating.
+        treeKillAbort();
+        throw err;
+      } finally {
+        context?.abortController?.signal.removeEventListener('abort', treeKillAbort);
+      }
 
       let output = [result.stdout, result.stderr]
         .filter(Boolean)
