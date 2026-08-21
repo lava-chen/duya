@@ -7,6 +7,12 @@
 import type { Icon } from '@/components/icons';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { TranslationKey } from '@/i18n';
+import type { HookAction } from '@/types/hooks';
+
+// Re-export so row / chrome / group files can `import type { HookAction }
+// from '@/components/chat/tools/types'` and stay co-located with the rest
+// of the chat-tool chrome.
+export type { HookAction };
 
 /**
  * A single tool_use + tool_result pair as it flows through the action
@@ -29,24 +35,30 @@ export interface ToolAction {
 /**
  * One element of the action stream. Tool actions are routed through
  * `ToolActionRow`; thinking / text / widget actions are rendered as
- * standalone rows that break the group run.
+ * standalone rows that break the group run. Hook actions (plan 437)
+ * render through `HookActionRow` and also break the run — they are not
+ * LLM tool calls and should read as separate signals interleaved with
+ * the model's prose.
  */
 export type ActionItem =
   | { kind: 'thinking'; content: string; isStreaming?: boolean }
   | { kind: 'tool'; tool: ToolAction; streamingToolOutput?: string }
   | { kind: 'text'; content: string }
-  | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string };
+  | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string }
+  | { kind: 'hook'; hook: HookAction };
 
 /**
  * One element of a Segment's run. Tool actions render through
- * `ToolActionRow`; thinking rows render through `ThinkingRow`. Both
- * kinds share the same ordering inside a group, so a sequence like
- * [tool, thinking, tool] becomes a single Group with three entries
- * interleaved in their original action order.
+ * `ToolActionRow`; thinking rows render through `ThinkingRow`; hook
+ * actions render through `HookActionRow`. Tool + thinking + hook share
+ * the same ordering inside a group, so a sequence like [tool, hook,
+ * thinking, tool] becomes a single Group with four entries interleaved
+ * in their original action order.
  */
 export type SegmentEntry =
   | { kind: 'tool'; tool: ToolAction }
-  | { kind: 'thinking'; content: string; isStreaming?: boolean };
+  | { kind: 'thinking'; content: string; isStreaming?: boolean }
+  | { kind: 'hook'; hook: HookAction };
 
 /**
  * Segment produced by `computeSegments`. A run of consecutive tool /

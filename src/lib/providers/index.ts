@@ -12,6 +12,7 @@ export * from './types';
 export {
   inferApiFormatFromLegacyProviderType,
   inferCategoryFromLegacyProviderType,
+  isKeylessLocalProvider,
   migrateLegacyApiProvider,
   toLegacyApiProvider,
   maskApiProvider,

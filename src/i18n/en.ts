@@ -102,19 +102,13 @@ const en = {
   'streaming.denied': 'Denied',
   'streaming.workingFor': 'Working for',
   'streaming.tools': 'tools',
-  // P2-β: surfaces the "Stopped" badge on an assistant message that
-  // App.tsx.handleInterrupt (Esc / chat:interrupt) marked as
-  // metadata.interrupted = true. The tooltip explains how the message
-  // got into this state; rolledBack is reserved for future use when
-  // the partial assistant message is fully removed from the thread.
   'streaming.interrupted': 'Stopped',
-  'streaming.interruptedTooltip': 'Interrupted by user (Esc)',
-  'streaming.rolledBack': 'Message rolled back',
   'streaming.done': 'Done',
   'streaming.runningLonger': 'Running longer than usual',
   'streaming.toolMayStuck': 'Tool may be stuck',
   'streaming.timedOut': 'Tool timed out after {seconds}s',
   'streaming.forceStop': 'Force stop',
+  'streaming.errorGeneric': 'Agent ended with an error',
   'streaming.streaming': 'streaming...',
   'streaming.visionAnalyzingStart': 'Calling vision model...',
   'streaming.visionAnalyzingProgress': 'Analyzing image {current}/{total}...',
@@ -314,6 +308,21 @@ const en = {
   'streaming.toolAction.thinking.empty': 'Thought',
   'streaming.toolAction.thinking.title': 'Thought',
 
+  // Plan 437: HookActionRow chrome strings. The verb is "Hook" in
+  // collapsed mode, the summary is "<eventName> · <hookName>", and the
+  // expanded card has dedicated copy for verifier / async / error
+  // states. Kept concise so they read naturally next to a long stream
+  // of tool rows.
+  'streaming.toolAction.hook.collapsed': 'Hook',
+  'streaming.toolAction.hook.expanded': 'Hook {hookEventName}',
+  'streaming.toolAction.hook.noOutput': 'Hook completed with no output',
+  'streaming.toolAction.hook.async': 'async',
+  'streaming.toolAction.hook.asyncHint': 'Running in background — result will arrive via notification',
+  'streaming.toolAction.hook.verifierPrefix': 'Verifier reported',
+  'streaming.toolAction.hook.skipped': 'Hook skipped (circuit breaker open)',
+  'streaming.toolAction.hook.timeout': 'Hook timed out',
+  'streaming.toolAction.hook.errorPrefix': 'Hook failed',
+
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
   'permission.allowOnce': 'Allow Once',
@@ -445,6 +454,14 @@ const en = {
   'settings.hooks.backgroundTasks': 'Background hook tasks (async)',
   'settings.hooks.builtin': 'Built-in',
   'settings.hooks.config': 'Configured',
+  'settings.hooks.viewJson': 'View JSON config',
+  'settings.hooks.toggle': 'Toggle',
+  'settings.hooks.copyJson': 'Copy JSON',
+  'settings.hooks.copied': 'Copied',
+  'settings.hooks.updateFailed': 'Failed to update hook',
+  // Plan 437: chat-flow visibility toggle for hook rows.
+  'settings.hooks.showInChat': 'Show hook invocations in chat',
+  'settings.hooks.showInChatDesc': 'Render one row per hook invocation (PreToolUse, PostToolUse, UserPromptSubmit, …) in the message flow. Click a row to expand the additionalContext the hook returned to the agent. Turn this off for a quieter chat log when many hooks are configured.',
   'settings.memory': 'Memory',
   'settings.language': 'Language',
   'settings.languageDesc': 'Choose the display language',
@@ -1561,6 +1578,7 @@ const en = {
   'skills.securityStatus': 'Security Status',
   'skills.trusted': 'Trusted',
   'skills.trustedBuiltin': 'Trusted (Built-in)',
+  'skills.systemBuiltin': 'System built-in',
   'skills.blocked': 'Blocked',
   'skills.caution': 'Caution - Security Findings Detected',
   'skills.safe': 'Safe',

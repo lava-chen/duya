@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
-import { markdownComponents } from './markdownComponents';
+import { markdownComponents, MarkdownBaseDirectoryContext } from './markdownComponents';
 import { useTranslation } from '@/hooks/useTranslation';
 
 /**
@@ -183,12 +183,18 @@ interface MarkdownRendererProps {
   children: string;
   className?: string;
   showFrontmatterCard?: boolean;
+  /** Directory the markdown source lives in. Relative file links inside
+   *  the content resolve against this instead of the active chat thread's
+   *  workspace (used by the sidebar file preview so a markdown file's own
+   *  links point at its siblings). */
+  baseDirectory?: string;
 }
 
 export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   children,
   className,
   showFrontmatterCard = false,
+  baseDirectory,
 }) => {
   const processed = preprocessBareImageLinks(
     preprocessMarkdownImagePaths(
@@ -198,6 +204,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   const { meta, content } = parseFrontmatter(processed);
 
   return (
+    <MarkdownBaseDirectoryContext.Provider value={baseDirectory ?? null}>
     <div className={className || 'prose prose-sm dark:prose-invert max-w-none message-content'}>
       {showFrontmatterCard && meta && <FrontmatterCard meta={meta} />}
       <ReactMarkdown
@@ -208,5 +215,6 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
         {content}
       </ReactMarkdown>
     </div>
+    </MarkdownBaseDirectoryContext.Provider>
   );
 };

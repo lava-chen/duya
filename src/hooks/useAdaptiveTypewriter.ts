@@ -10,6 +10,84 @@ const MIN_CHARS_PER_FRAME = 1;   // Floor: at least one char per frame
 const MAX_CHARS_PER_FRAME = 80;  // Cap: avoid giant single-frame jumps
 const HEADROOM_FACTOR = 1.2;     // Stay 20% faster than arrival rate
 
+// Build a `{ parity, lastBalanced }` snapshot of `text` up to `to`,
+// skipping backticks inside fenced code blocks (``` ... ``` / ~~~ ...).
+// A single linear pass is O(to); callers that need multiple snapshots
+// across adjacent positions should reuse this directly instead of
+// calling it from scratch each time.
+interface BacktickSnapshot {
+  parity: number;            // 0 = balanced, 1 = half-open at `to`
+  lastBalanced: number;      // rightmost balanced prefix length, or -1
+}
+function buildBacktickSnapshot(text: string, to: number): BacktickSnapshot {
+  if (to <= 0) return { parity: 0, lastBalanced: -1 };
+  let parity = 0;
+  let lastBalanced = -1;
+  let fenceChar: string | null = null;
+  let fenceLen = 0;
+  let cursor = 0;
+  while (cursor < to) {
+    let lineEnd = text.indexOf('\n', cursor);
+    if (lineEnd === -1 || lineEnd > to) lineEnd = to;
+    const line = text.slice(cursor, lineEnd);
+    const fenceMatch = line.match(/^[ ]{0,3}([`]{3,}|~{3,})/);
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!;
+      if (fenceChar === null) {
+        fenceChar = marker[0]!;
+        fenceLen = marker.length;
+      } else if (marker[0] === fenceChar && marker.length >= fenceLen) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+    } else if (fenceChar === null) {
+      for (let i = 0; i < line.length; i++) {
+        if (line[i] !== '`') continue;
+        parity ^= 1;
+        if (parity === 0) lastBalanced = cursor + i + 1;
+      }
+    }
+    if (lineEnd === to) break;
+    cursor = lineEnd + 1;
+  }
+  return { parity, lastBalanced };
+}
+
+// Pull a candidate cut position back to the nearest point where the
+// visible prefix of `text` contains an even number of backticks, so the
+// rendered slice never contains an unterminated inline-code span. When
+// the candidate already sits on a balanced boundary it is returned
+// as-is. When it does not, the function rewinds to the most recent
+// balanced boundary the snapshot can locate before `candidate`. The
+// snapshot is built in a single O(to) pass, so the search itself is
+// O(1) — no walk back one character at a time.
+export function snapToBalancedBacktickBoundary(text: string, candidate: number): number {
+  if (candidate <= 0) return candidate;
+  // Clamp out-of-range candidates to the buffer length so callers don't
+  // need a separate guard. Reaching the end of the buffer is a no-op for
+  // the typewriter — the flush path bypasses this helper entirely.
+  if (candidate >= text.length) return text.length;
+  const snap = buildBacktickSnapshot(text, candidate);
+  if (snap.parity === 0) return candidate;
+  // Parity is odd at `candidate` — rewind to the most recent balanced
+  // prefix we already located. If there is no prior boundary inside the
+  // scanned prefix (lastBalanced === -1), fall back to 0 so the next
+  // frame can finish rendering without a half-open code span.
+  return snap.lastBalanced >= 0 ? snap.lastBalanced : 0;
+}
+
+// Snap a candidate index back to the start of the UTF-16 code unit it
+// falls on, so we never slice a surrogate pair in half. The first high
+// surrogate at position p is always followed by a low surrogate at p+1;
+// if candidate lands on that low surrogate, step back one unit.
+export function snapToCharBoundary(text: string, candidate: number): number {
+  if (candidate <= 0 || candidate >= text.length) return candidate;
+  const code = text.charCodeAt(candidate);
+  // 0xDC00..0xDFFF = low surrogate. Step back so we return the whole pair.
+  if (code >= 0xDC00 && code <= 0xDFFF) return candidate - 1;
+  return candidate;
+}
+
 export function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
   // Displayed slice length (number of chars shown so far)
   const displayedRef = useRef(0);
@@ -61,10 +139,19 @@ export function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): s
 
     // Advance cursor
     if (cur < targetLen) {
-      const next = Math.min(targetLen, cur + charsPerFrameRef.current);
+      let next = Math.min(targetLen, cur + charsPerFrameRef.current);
+      // Never slice in the middle of a markdown inline-code span: an odd
+      // number of backticks inside the visible slice turns into a half-
+      // open span that react-markdown will pair against the *next* matching
+      // backtick (potentially across a list item or paragraph), producing
+      // a string of orphaned code pills mid-stream. Snap the cut to the
+      // nearest character where the prefix has an even backtick count, so
+      // every visible frame is a well-formed slice of the cumulative text.
+      next = snapToBalancedBacktickBoundary(fullText, next);
+      // And never slice a UTF-16 surrogate pair in half.
+      next = snapToCharBoundary(fullText, next);
       displayedRef.current = next;
-      // Slice at a safe UTF-16 boundary (avoid splitting surrogates)
-      setDisplayed(targetRef.current.slice(0, next));
+      setDisplayed(fullText.slice(0, next));
     }
 
     rafRef.current = requestAnimationFrame(tick);

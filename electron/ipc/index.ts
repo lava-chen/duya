@@ -26,6 +26,7 @@ import {
   registerMemoryRagRebuildHandler,
 } from './memory-handlers';
 import { registerHooksHandlers } from './hooks-handlers';
+import { registerMcpReloadIpcHandler } from './mcp-handlers';
 
 export {
   registerSystemHandlers,
@@ -50,4 +51,5 @@ export {
   registerMemorySystemLogHandlers,
   registerMemoryRagRebuildHandler,
   registerHooksHandlers,
+  registerMcpReloadIpcHandler,
 };

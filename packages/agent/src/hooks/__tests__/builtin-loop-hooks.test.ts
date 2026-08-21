@@ -263,3 +263,43 @@ describe('buildTodoGateInjection', () => {
     expect(buildTodoGateInjection([{ subject: 'a' }], 'req')).toContain('Objective: req');
   });
 });
+
+describe('disabled loop hooks', () => {
+  const make = (disabled?: string[]): LoopHookRegistration[] =>
+    createBuiltinLoopHooks({
+      sessionId: 's1',
+      todoGateEnabled: true,
+      antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
+      toolIntentNudgeMax: 2,
+      disabled,
+    });
+
+  it('registers all four builtin hooks by default', () => {
+    const ids = make().map((r) => r.id).sort();
+    expect(ids).toEqual([
+      'builtin.dead-loop-nudge',
+      'builtin.premature-stop',
+      'builtin.todo-gate',
+      'builtin.tool-intent',
+    ]);
+  });
+
+  it('skips ids in the disabled set (an unregistered hook cannot fire)', () => {
+    const ids = make(['builtin.todo-gate', 'builtin.premature-stop']).map((r) => r.id);
+    expect(ids).not.toContain('builtin.todo-gate');
+    expect(ids).not.toContain('builtin.premature-stop');
+    expect(ids).toContain('builtin.tool-intent');
+    expect(ids).toContain('builtin.dead-loop-nudge');
+  });
+
+  it('todoGateEnabled still gates todo-gate independently of the disabled set', () => {
+    const ids = createBuiltinLoopHooks({
+      sessionId: 's1',
+      todoGateEnabled: false,
+      antiDeadLoop: { enabled: true, nudgeAt: 3, hardNudgeAt: 6 },
+      toolIntentNudgeMax: 2,
+    })
+      .map((r) => r.id);
+    expect(ids).not.toContain('builtin.todo-gate');
+  });
+});

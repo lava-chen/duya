@@ -30,7 +30,10 @@ import {
 } from '@/lib/message-input-logic';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
 
-import { getEffortOptionsForModel } from '@duya/ai';
+import {
+  getEffortOptionsForCapability,
+  getEffortOptionsForModel,
+} from '@duya/ai';
 import { useAttachments, makeFileTreeRefAttachment } from '@/hooks/useAttachments';
 import { AttachmentBar } from './AttachmentBar';
 import {
@@ -46,6 +49,8 @@ import {
 import { useTranslation } from '@/hooks/useTranslation';
 import { listProvidersIPC, listOutputStylesIPC, type Provider } from '@/lib/ipc-client';
 import { saveDraftIPC, getDraftIPC } from '@/lib/ipc-client';
+import { isKeylessLocalProvider } from '@/lib/providers';
+import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
 import { RichTextInput } from './RichTextInput';
@@ -222,8 +227,29 @@ const EFFORT_LABELS: Partial<Record<string, string>> = {
 function useEffortOptions(
   t: (key: 'messageInput.effortAuto' | 'messageInput.effortLow' | 'messageInput.effortMedium' | 'messageInput.effortHigh' | 'messageInput.effortMax') => string,
   modelId?: string,
+  capability?: {
+  supportsReasoning?: boolean;
+  reasoningEffortOptions?: string[];
+} | null,
 ): EffortOption[] {
-  // Try to get model-specific options from @duya/ai
+  // 1. Prefer per-model capability options (LM Studio's
+  //    `capabilities.reasoning.allowed_options` after normalization).
+  //    This makes the effort dropdown reflect exactly the levels the
+  //    running model supports, instead of the static catalog's
+  //    full list — important for LM Studio users running a quantized
+  //    7B that only exposes `[low, medium]`.
+  if (capability) {
+    const capOptions = getEffortOptionsForCapability(capability);
+    if (capOptions) {
+      return capOptions.map((opt) => {
+        const inline = EFFORT_LABELS[opt.level];
+        if (inline) return { value: opt.value, label: inline };
+        return { value: opt.value, label: opt.level };
+      });
+    }
+  }
+  // 2. Fall back to the static @duya/ai catalog (OpenAI o1/o3,
+  //    Anthropic extended-thinking, etc.).
   if (modelId) {
     const modelOptions = getEffortOptionsForModel(modelId);
     if (modelOptions) {
@@ -420,6 +446,18 @@ export function MessageInput({
     enabled?: boolean;
     writable?: boolean;
     source?: 'settings' | 'plugin' | 'bundled';
+    connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+    toolCount?: number;
+    tools?: Array<{
+      name: string;
+      description?: string;
+      annotations?: {
+        readOnly?: boolean;
+        destructive?: boolean;
+        openWorld?: boolean;
+      };
+    }>;
+    lastIssue?: { phase: 'connection' | 'registration' | 'discovery'; humanMessage: string; severity: 'critical' | 'warning' | 'info' };
   }>>([]);
   const [responseStyles, setResponseStyles] = useState<Array<{ id: string; name: string; description?: string; prompt: string; keepCodingInstructions?: boolean; isBuiltin?: boolean }>>([]);
   const [selectedStyleId, setSelectedStyleId] = useState<string | null>(null);
@@ -993,11 +1031,11 @@ export function MessageInput({
         // state is a misnomer from the single-active era — it
         // tracks the default, not a hard lock.)
         const defaultProvider = providers.find(
-          (p) => p.isDefault && (p.hasApiKey || p.providerType === 'ollama'),
+          (p) => p.isDefault && (p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl)),
         );
         const activeProvider =
           defaultProvider ?? providers.find(
-            (p) => p.hasApiKey || p.providerType === 'ollama',
+            (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
           );
 
         if (activeProvider) {
@@ -1013,8 +1051,9 @@ export function MessageInput({
         const providerMap = new Map<string, string>(); // modelId -> providerId
 
         for (const provider of providers) {
-          // Skip providers without API key (except Ollama)
-          if (!provider.hasApiKey && provider.providerType !== 'ollama') {
+          // Skip providers without API key (except Ollama / LM Studio,
+          // which are local OpenAI-compatible runtimes with no auth).
+          if (!provider.hasApiKey && !isKeylessLocalProvider(provider.providerType, provider.baseUrl)) {
             continue;
           }
 
@@ -1050,14 +1089,46 @@ export function MessageInput({
             const prefixedId = `[${providerName}] ${cleanId}`;
             if (!modelIds.has(prefixedId)) {
               modelIds.add(prefixedId);
-              allModels.push({ id: prefixedId, display_name: cleanId });
+              // Pull capability flags (vision / tool-use / reasoning /
+              // format / isLoaded / reasoning-effort-options) from the
+              // in-memory capability service so the chat input
+              // dropdown can render them as badges without a second
+              // IPC roundtrip. The service is seeded by
+              // `useProviderModels` after a successful
+              // `/api/v1/models` fetch, so models whose provider was
+              // never fetched simply lack flags (graceful degradation).
+              const cap = modelCapabilityService.getModelCapability(provider.id, cleanId);
+              allModels.push({
+                id: prefixedId,
+                display_name: cleanId,
+                ...(cap?.contextWindow && cap.contextWindow > 0
+                  ? { context_length: cap.contextWindow }
+                  : {}),
+                ...(cap?.supportsVision !== undefined
+                  ? { supportsVision: cap.supportsVision }
+                  : {}),
+                ...(cap?.supportsToolUse !== undefined
+                  ? { supportsToolUse: cap.supportsToolUse }
+                  : {}),
+                ...(cap?.supportsReasoning !== undefined
+                  ? { supportsReasoning: cap.supportsReasoning }
+                  : {}),
+                ...(cap?.reasoningEffortOptions !== undefined && cap.reasoningEffortOptions.length > 0
+                  ? { reasoningEffortOptions: cap.reasoningEffortOptions }
+                  : {}),
+                ...(cap?.isLoaded === true ? { isLoaded: true } : {}),
+              });
               providerMap.set(prefixedId, provider.id);
             }
           }
         }
 
         setAvailableModels(allModels);
-        setProviders(providers.filter((p) => p.hasApiKey || p.providerType === 'ollama'));
+        setProviders(
+          providers.filter(
+            (p) => p.hasApiKey || isKeylessLocalProvider(p.providerType, p.baseUrl),
+          ),
+        );
         setModelProviderMap(providerMap);
         setModelsLoading(false);
         return;
@@ -1102,6 +1173,68 @@ export function MessageInput({
     };
   }, [fetchModels, hasProvider, sessionId]);
 
+  // Refresh the MCP server list. Shared by the initial load and the
+  // manual "reconnect" action in the input-box MCP menu: both re-pull
+  // the capability snapshot so the live connection status + tool list
+  // reflect what the worker actually has running after a reload.
+  const refreshMcpServers = useCallback(async () => {
+    const snapshot = await fetchMCPInventorySnapshot();
+    if (snapshot) {
+      const servers = snapshot.effectiveServers
+        .filter((s) => s.name)
+        .map((s) => ({
+          name: s.name,
+          description: s.command || s.url,
+          enabled: s.effectiveEnabled,
+          writable: s.writable,
+          source: s.source,
+          // Live runtime status from worker's mcp:status:snapshot
+          // via the capability-management aggregator.
+          connectionStatus: s.connectionStatus,
+          toolCount: s.tools?.length,
+          tools: s.tools,
+          lastIssue: s.lastIssue,
+        }));
+      setMcpServers(servers);
+      return;
+    } else if (window.electronAPI?.settings?.getMcpServers) {
+      const mcpResult = await window.electronAPI.settings.getMcpServers();
+      if (mcpResult.success && Array.isArray(mcpResult.data)) {
+        setMcpServers(
+          mcpResult.data
+            .filter((item: { name?: string }) => typeof item?.name === 'string' && item.name.length > 0)
+            .map((item: { name: string; command?: string; enabled?: boolean }) => ({
+              name: item.name,
+              description: item.command,
+              enabled: item.enabled !== false,
+            }))
+        );
+        return;
+      } else {
+        setMcpServers([]);
+        return;
+      }
+    } else if (window.electronAPI?.settingsDb?.getJson) {
+      const mcpData = await window.electronAPI.settingsDb.getJson<
+        Array<{ name?: string; command?: string; enabled?: boolean }> | Record<string, { description?: string; enabled?: boolean }>
+      >('mcpServers', []);
+      const servers = Array.isArray(mcpData)
+        ? mcpData
+            .filter((item): item is { name: string; command?: string; enabled?: boolean } => typeof item?.name === 'string' && item.name.length > 0)
+            .map((item) => ({
+              name: item.name,
+              description: item.command,
+              enabled: item.enabled !== false,
+            }))
+        : Object.entries(mcpData || {}).map(([name, config]) => ({
+            name,
+            description: config?.description,
+            enabled: config?.enabled !== false,
+          }));
+      setMcpServers(servers);
+    }
+  }, []);
+
   // Fetch skills, MCP servers, and output styles
   useEffect(() => {
     const fetchSkillsAndMcp = async () => {
@@ -1124,52 +1257,7 @@ export function MessageInput({
 
         // Fetch MCP servers from inventory snapshot (includes both
         // settings-configured and plugin-declared servers)
-        const snapshot = await fetchMCPInventorySnapshot();
-        if (snapshot) {
-          const servers = snapshot.effectiveServers
-            .filter((s) => s.name)
-            .map((s) => ({
-              name: s.name,
-              description: s.command || s.url,
-              enabled: s.effectiveEnabled,
-              writable: s.writable,
-              source: s.source,
-            }));
-          setMcpServers(servers);
-        } else if (window.electronAPI?.settings?.getMcpServers) {
-          const mcpResult = await window.electronAPI.settings.getMcpServers();
-          if (mcpResult.success && Array.isArray(mcpResult.data)) {
-            setMcpServers(
-              mcpResult.data
-                .filter((item: { name?: string }) => typeof item?.name === 'string' && item.name.length > 0)
-                .map((item: { name: string; command?: string; enabled?: boolean }) => ({
-                  name: item.name,
-                  description: item.command,
-                  enabled: item.enabled !== false,
-                }))
-            );
-          } else {
-            setMcpServers([]);
-          }
-        } else if (window.electronAPI?.settingsDb?.getJson) {
-          const mcpData = await window.electronAPI.settingsDb.getJson<
-            Array<{ name?: string; command?: string; enabled?: boolean }> | Record<string, { description?: string; enabled?: boolean }>
-          >('mcpServers', []);
-          const servers = Array.isArray(mcpData)
-            ? mcpData
-                .filter((item): item is { name: string; command?: string; enabled?: boolean } => typeof item?.name === 'string' && item.name.length > 0)
-                .map((item) => ({
-                  name: item.name,
-                  description: item.command,
-                  enabled: item.enabled !== false,
-                }))
-            : Object.entries(mcpData || {}).map(([name, config]) => ({
-                name,
-                description: config?.description,
-                enabled: config?.enabled !== false,
-              }));
-          setMcpServers(servers);
-        }
+        await refreshMcpServers();
 
         // Fetch output styles
         try {
@@ -1184,7 +1272,7 @@ export function MessageInput({
     };
 
     fetchSkillsAndMcp();
-  }, [sessionId]);
+  }, [sessionId, refreshMcpServers]);
 
   // Load draft when session changes
   useEffect(() => {
@@ -1273,9 +1361,17 @@ export function MessageInput({
     return match ? match[2] : selectedModel;
   }, [selectedModel]);
 
+  const selectedModelCapability = useMemo(() => {
+    if (!rawSelectedModelId) return null;
+    const providerId = modelProviderMap.get(selectedModel);
+    if (!providerId) return null;
+    return modelCapabilityService.getModelCapability(providerId, rawSelectedModelId);
+  }, [rawSelectedModelId, selectedModel, modelProviderMap]);
+
   const modelEffortOptions = useMemo(
-    () => useEffortOptions(t, rawSelectedModelId),
-    [t, rawSelectedModelId],
+    () =>
+      useEffortOptions(t, rawSelectedModelId, selectedModelCapability),
+    [t, rawSelectedModelId, selectedModelCapability],
   );
 
   // Handle model change
@@ -1682,6 +1778,7 @@ export function MessageInput({
           // Strip the `[provider] ` prefix so @duya/ai sees the raw model id
           // (e.g. 'MiniMax-M3') it can look up in allProviderModels.
           modelId={selectedModel.replace(/^\[[^\]]+\]\s*/, '')}
+          providerId={modelProviderMap.get(selectedModel)}
           responseStyles={responseStyles.map(s => ({ id: s.id, name: s.name, description: s.description }))}
           selectedStyle={selectedStyleId}
           onSelectStyle={(styleId) => setSelectedStyleId(styleId)}
@@ -1707,6 +1804,20 @@ export function MessageInput({
                   server.name === serverName ? { ...server, enabled } : server,
                 ));
               }
+            })();
+          }}
+          onReloadMcp={() => {
+            // Force a worker-side MCP reload (reconnect), then re-pull the
+            // snapshot so the status/tools reflect the reconnection.
+            void (async () => {
+              if (window.electronAPI?.settings?.reloadMcp) {
+                try {
+                  await window.electronAPI.settings.reloadMcp();
+                } catch {
+                  // best-effort: reload may fail if the agent server is down
+                }
+              }
+              await refreshMcpServers();
             })();
           }}
           onAddFiles={() => fileInputRef.current?.click()}

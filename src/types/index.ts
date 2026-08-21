@@ -128,4 +128,11 @@ export interface AppSettings {
   defaultThinkingEffort?: string | null;
   // Memory system toggle
   memoryEnabled: boolean;
+  // Plan 437: when true, the chat flow renders one row per plan-87 hook
+  // invocation (PreToolUse, PostToolUse, UserPromptSubmit, …). When
+  // false, hook events are still collected for the agent (so the model
+  // sees additionalContext as before) but no UI rows appear. Default
+  // ON so existing users see the new feature; toggle lives in Settings
+  // → Hooks.
+  showHookInvocations: boolean;
 }

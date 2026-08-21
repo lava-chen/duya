@@ -14,7 +14,10 @@ describe('DuyaConfig schema', () => {
     const merged = mergeConfig({ storage: { database_path: '/custom/db' } });
     expect(merged.storage.database_path).toBe('/custom/db');
     expect(merged.security.secrets_encrypted).toBe(false);
-    expect(merged.agent.max_turns).toBe(90);
+    // `agent.max_turns` is intentionally absent from DEFAULT_CONFIG — the
+    // agent is uncapped by default (pi-aligned). mergeConfig must not
+    // synthesise one from defaults.
+    expect(merged.agent.max_turns).toBeUndefined();
   });
 
   it('DEFAULT_CONFIG reserves Codex-aligned blocks (skills/projects/features/apps)', () => {

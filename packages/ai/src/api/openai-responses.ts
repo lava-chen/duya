@@ -29,6 +29,7 @@ import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { getTemperature } from '../utils/simple-options.js';
 import { sortToolsByName } from '../utils/tool-order.js';
+import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
 
 // =============================================================================
 // Types
@@ -350,8 +351,15 @@ function mapStatus(
  * — in production, this would need to be per-conversation.
  */
 export function createOpenAIResponsesClient(options: AIClientOptions): AIClient {
+  // Local-runtime compatibility shim: same rationale as
+  // `openai-completions.ts#createOpenAICompletionsClient`. LM Studio
+  // and Ollama don't authenticate clients, but the OpenAI Node SDK
+  // constructor refuses to instantiate without a key. Inject the
+  // placeholder when the caller's `apiKey` is empty so the SDK doesn't
+  // throw on first contact with a local install. The Bearer header is
+  // ignored by LM Studio / Ollama so the placeholder is safe.
   const client = new OpenAI({
-    apiKey: options.apiKey,
+    apiKey: localRuntimeApiKeyOrPlaceholder(options.apiKey),
     baseURL: options.baseURL,
     defaultHeaders: options.headers,
   });

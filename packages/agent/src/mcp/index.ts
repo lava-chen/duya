@@ -200,16 +200,27 @@ class MCPClient {
         startupMs,
         `listTools for "${this.config.name}"`,
       );
-      this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown }) => {
+      this.tools = toolsResponse.tools.map((tool: { name: string; description?: string; inputSchema?: unknown; annotations?: unknown }) => {
         // Security layer 3 (prompt injection scan): warn on suspicious tool
         // descriptions. Does not block — false positives would break legit
         // server descriptions. Warning only — the actual source-based
         // blocking gate lives in the permission system (`decideMcpSource`).
         scanMcpDescription(this.config.name, tool.name, tool.description || '');
+        // MCP `tools/list` may include `annotations` (readOnly,
+        // destructive, openWorld). The SDK types are permissive
+        // (Record<string, unknown>) and we keep them verbatim so the
+        // `mcp:status:snapshot` SSE event can surface them to the
+        // settings UI without a second IPC round-trip.
+        const rawAnnotations = tool.annotations;
+        const annotations =
+          rawAnnotations && typeof rawAnnotations === 'object' && !Array.isArray(rawAnnotations)
+            ? (rawAnnotations as Record<string, unknown>)
+            : undefined;
         return {
           name: tool.name,
           description: tool.description || '',
           input_schema: tool.inputSchema as Record<string, unknown>,
+          ...(annotations ? { annotations } : {}),
         };
       });
 

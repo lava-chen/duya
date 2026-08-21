@@ -40,3 +40,37 @@ export async function notifyMcpConfigChanged(): Promise<void> {
     // Silently ignore - agent server may not be running.
   }
 }
+
+/**
+ * Ask every attached worker for its live MCP runtime snapshot.
+ *
+ * POST /mcp/status broadcasts `mcp:status:get` to all workers; each
+ * worker replies with a `mcp:status:snapshot` event that the router
+ * ingests into `mcp-runtime-store`. That store is the source for the
+ * capability aggregator's `connectionStatus` + `tools`, so pulling it
+ * right after a reload is what makes the status dot / tool list in the
+ * settings / input-box UI actually reflect the reconnection.
+ *
+ * Best-effort: a 2s timeout swallows network errors so a stopped agent
+ * server does not break the caller.
+ */
+export async function requestMcpStatusSnapshot(): Promise<void> {
+  const url = await getAgentServerUrl();
+  if (!url) return;
+  try {
+    await new Promise<void>((resolve) => {
+      const reqObj = http.request(`${url}/mcp/status`, { method: 'POST' }, (res) => {
+        res.resume();
+        resolve();
+      });
+      reqObj.on('error', () => resolve());
+      reqObj.setTimeout(2000, () => {
+        reqObj.destroy();
+        resolve();
+      });
+      reqObj.end();
+    });
+  } catch {
+    // Silently ignore - agent server may not be running.
+  }
+}

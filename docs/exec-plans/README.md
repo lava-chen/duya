@@ -101,6 +101,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [85-builtin-plugin-flexibilization](./active/85-builtin-plugin-flexibilization.md) | Built-in Plugin convention-over-configuration | P0 | Planning |
 | [86-schema-manifest-llm-friendly](./active/86-schema-manifest-llm-friendly.md) | Schema lenient — Agent-readable `plugin.md` layered design | P0 | Planning |
 | [87-hook-system-full-enhancement](./active/87-hook-system-full-enhancement.md) | Hook system full upgrade — 4 types + 29 events + Async + Matcher | P0 | Planning |
+| [437-hook-row-in-message-flow](./active/437-hook-row-in-message-flow.md) | Hook invocation rows in chat flow — plan-87 hook events render like tool rows with icon + name + click-to-expand additionalContext; persist + settings toggle | P1 | All 6 phases implemented; typecheck clean |
 | [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | Multi-source plugin discovery — GitHub/NPM/Git/URL/Local + priority merge | P1 | Planning |
 | [89-plugin-lifecycle-version](./active/89-plugin-lifecycle-version.md) | Plugin lifecycle & versioning — versioned cache + Scope + dependency validation + auto-update | P1 | Planning |
 | [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | Plugin marketplace — catalog + enterprise policy + spoof-protection + sync | P1 | Planning |
@@ -142,6 +143,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [431-memory-setup-cli-and-skill](./active/431-memory-setup-cli-and-skill.md) | Memory 自配置 — `duya memory doctor/setup/status/enable/disable/set`（机器评估+embedding 推荐+[memory.rag] 写入）+ 内置 `.system/memory-setup` skill | P0 | ✅ 代码完成，测试通过（2026-08-18） |
 | [432-memory-rag-settings-ui](./active/432-memory-rag-settings-ui.md) | 前端记忆设置界面加 RAG 配置卡片（enabled 开关 / scan_paths 增删行 / index_path / embedding provider+model / embedding_enabled） | P0 | ✅ 代码完成，测试通过（2026-08-18） |
 | [433-stage1-policy-incremental-edits](./active/433-stage1-policy-incremental-edits.md) | Stage 1 政策改为增量编辑：锚定格式（S1–S9 + [r:id] 规则）+ curator 可见当前政策 + edits[] 协议（upsert/remove_rule）+ 证据门控 + 30min 间隔，杜绝整文件重写 | P0 | In progress |
+| [434-skill-tool-expose-and-system-gui](./active/434-skill-tool-expose-and-system-gui.md) | Skill 目录 XML 化对齐 pi（`<available_skills>` + location + read 加载）+ 系统级内置 skill（`.system`）GUI 可见但只读 | P1 | ✅ 代码完成，测试通过（2026-08-20） |
+| [435-cli-skill-listing-alignment](./active/435-cli-skill-listing-alignment.md) | CLI `duya skill list` 显示层对齐 GUI：skillService 补齐 project/custom/system 来源 + resolver 优先级扩展 + system 不可禁用 | P1 | ✅ 代码完成，测试通过（2026-08-20） |
 | [416-inline-task-row](./active/416-inline-task-row.md) | 任务胶囊从输入框外移到输入框内部顶部，弹窗样式对齐 settings 弹窗 | P1 | 🟡 Planning |
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |

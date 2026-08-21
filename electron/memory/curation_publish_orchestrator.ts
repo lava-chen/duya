@@ -446,7 +446,15 @@ export async function runCurationCycle(
     eventType: 'curation_run_failed',
     level: 'error',
     message: `Curation run ${runId} failed (${errMsg})`,
-    detail: { error: errMsg, action_errors: result.errors },
+    detail: {
+      error: errMsg,
+      action_errors: result.errors,
+      // Surface the zod issues that rejected the curator's structured
+      // output — the recurring `parse failed: response failed schema
+      // validation` is unactionable without knowing WHICH fields failed.
+      ...(result.parseIssues !== undefined ? { parse_issues: result.parseIssues } : {}),
+      ...(result.parseRetried ? { parse_retried: true } : {}),
+    },
     runId,
     sessionId: opts.sessionId,
   });

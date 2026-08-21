@@ -135,6 +135,12 @@ describe('resolveSubcommand', () => {
     }
   });
 
+  it('resolves mcp list as a read subcommand (no write gate)', () => {
+    const r = resolveSubcommand(CLI_DESCRIPTORS, 'mcp', 'list');
+    expect(r).not.toBeNull();
+    expect(r?.sub.write ?? false).toBe(false);
+  });
+
   it('config subcommands have a unique flat name (no 3-level nesting)', () => {
     const configDesc = CLI_DESCRIPTORS.find((d) => d.name === 'config');
     expect(configDesc).toBeDefined();

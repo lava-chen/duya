@@ -144,8 +144,8 @@ function handleMessage(msg: MainToGatewayMessage): void {
     }
 
     case 'gateway:send': {
-      const sendMsg = msg as { id: string; platform: string; platformChatId: string; text: string };
-      gatewayManager?.sendMessage(sendMsg.platform, sendMsg.platformChatId, sendMsg.text)
+      const sendMsg = msg as { id: string; platform: string; platformChatId: string; text: string; filePath?: string };
+      gatewayManager?.sendMessage(sendMsg.platform, sendMsg.platformChatId, sendMsg.text, sendMsg.filePath)
         .then((result) => {
           send({ type: 'gateway:send:response', id: sendMsg.id, ...result });
         })

@@ -119,7 +119,7 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
   const { t } = useTranslation();
   if (!security?.scanned) return null;
 
-  if (source === "bundled" || source === "builtin-directory") {
+  if (source === "bundled" || source === "builtin-directory" || source === "system") {
     return (
       <span className="flex items-center gap-1 text-[0.7rem] text-emerald-600 dark:text-emerald-400">
         <ShieldIcon size={12} />
@@ -163,6 +163,7 @@ function SkillListItem({
   isEnabled?: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       className="group flex items-center gap-3 py-3 hover:bg-muted/40 transition-colors cursor-pointer"
@@ -176,6 +177,12 @@ function SkillListItem({
         <p className="text-sm text-muted-foreground leading-tight truncate flex-1">{skill.description}</p>
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        {skill.source === "system" && (
+          <span className="flex items-center gap-1 text-[0.7rem] font-medium text-muted-foreground border border-border/60 rounded px-1.5 py-0.5">
+            <span aria-hidden>⚙️</span>
+            {t('skills.systemBuiltin')}
+          </span>
+        )}
         <SecurityBadge security={skill.security} source={skill.source} />
         {isEnabled && (
           <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center">
@@ -352,7 +359,7 @@ function SkillDetailModal({
 
   const securityStatus = useMemo(() => {
     if (!skill.security?.scanned) return null;
-    if (skill.source === "bundled" || skill.source === "builtin-directory") {
+    if (skill.source === "bundled" || skill.source === "builtin-directory" || skill.source === "system") {
       return { label: t("skills.trustedBuiltin"), variant: "safe" as const };
     }
     if (skill.security.verdict === "dangerous") {
@@ -398,22 +405,25 @@ function SkillDetailModal({
                 {author && <p className="text-sm text-muted-foreground">by {author}</p>}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={isEnabled}
-                  onClick={() => onToggleEnabled(skill)}
-                  disabled={isToggling}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--main-bg)] disabled:opacity-60 ${
-                    isEnabled ? "bg-[var(--success)]" : "bg-[var(--muted)]"
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      isEnabled ? "translate-x-6" : "translate-x-1"
-                    }`}
-                  />
-                </button>
+                {skill.source === "system" ? (
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground border border-border/60 rounded-lg px-2 py-1">
+                    <span aria-hidden>⚙️</span>
+                    {t('skills.systemBuiltin')}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isEnabled}
+                    onClick={() => onToggleEnabled(skill)}
+                    disabled={isToggling}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--main-bg)] disabled:opacity-60 ${isEnabled ? "bg-[var(--success)]" : "bg-[var(--muted)]"}`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isEnabled ? "translate-x-6" : "translate-x-1"}`}
+                    />
+                  </button>
+                )}
                 <IconButton variant="ghost" size="md" aria-label="More options">
                   <DotsThreeIcon size={20} />
                 </IconButton>
@@ -467,6 +477,7 @@ function SkillDetailModal({
             {skill.security?.scanned &&
               skill.source !== "bundled" &&
               skill.source !== "builtin-directory" &&
+              skill.source !== "system" &&
               skill.security.verdict !== "safe" && (
                 <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">
                   <p className="text-xs text-muted-foreground flex-1">{t("skills.skillBlocked")}</p>

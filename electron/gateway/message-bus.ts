@@ -1001,6 +1001,7 @@ export function requestChannelSend(
   platform: string,
   platformChatId: string,
   text: string,
+  filePath?: string,
 ): Promise<{ ok: boolean; error?: string; platformMsgId?: string }> {
   return new Promise((resolve, reject) => {
     const proc = getGatewayProcess();
@@ -1016,7 +1017,7 @@ export function requestChannelSend(
     }, 15_000);
 
     _channelSendRequests.set(id, { resolve, reject, timeout });
-    proc.send({ type: 'gateway:send', id, platform, platformChatId, text });
+    proc.send({ type: 'gateway:send', id, platform, platformChatId, text, ...(filePath ? { filePath } : {}) });
   });
 }
 

@@ -5,6 +5,7 @@ import { useConversationStore } from "@/stores/conversation-store";
 import { getActiveProviderIPC } from "@/lib/ipc-client";
 import { useTranslation } from "@/hooks/useTranslation";
 import { useSettings } from "@/hooks/useSettings";
+import { isKeylessLocalProvider } from "@/lib/providers";
 import { MessageInput } from "@/components/chat/MessageInput";
 import { AgentModeSelector, getProfileIdForMode } from "@/components/chat/AgentModeSelector";
 import { SessionSelector } from "./SessionSelector";
@@ -122,7 +123,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
     try {
       const provider = await getActiveProviderIPC();
       if (!provider) return null;
-      const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+      const isUsable = provider.hasApiKey || isKeylessLocalProvider(provider.providerType, provider.baseUrl);
       if (!isUsable) return null;
 
       let modelId = '';
@@ -218,7 +219,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       try {
         const provider = await getActiveProviderIPC();
         if (cancelled || !provider) return;
-        const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+        const isUsable = provider.hasApiKey || isKeylessLocalProvider(provider.providerType, provider.baseUrl);
         if (!isUsable) return;
 
         let modelId = '';

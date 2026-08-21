@@ -20,7 +20,6 @@ export type RuntimeContextSource =
   | 'dead_loop_nudge'
   | 'premature_stop'
   | 'tool_intent'
-  | 'max_turns_wrapup'
   | 'custom';
 
 /**
@@ -251,7 +250,6 @@ export const STARTS_PROMPT_TURN: Record<RuntimeContextSource, boolean> = {
   dead_loop_nudge: false,
   premature_stop: false,
   tool_intent: false,
-  max_turns_wrapup: false,
   custom: false,
 };
 

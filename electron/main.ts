@@ -59,6 +59,7 @@ import { registerProjectDatabaseHandlers } from './ipc/project-database-handlers
 import { registerGitHandlers } from './ipc/git-handlers';
 import { registerVoiceHandlers } from './ipc/voice-handlers';
 import { registerHooksHandlers } from './ipc/hooks-handlers';
+import { registerMcpReloadIpcHandler } from './ipc/mcp-handlers';
 import { ConductorExecutorProxy } from './conductor/executor-proxy';
 import { getJsonSetting } from './db/queries/settings';
 
@@ -857,6 +858,7 @@ registerMemoryRagRebuildHandler();
 registerMemoryWakeupHandlers();
 registerVoiceHandlers();
 registerHooksHandlers();
+registerMcpReloadIpcHandler();
 
 // =============================================================================
 // Graceful Shutdown

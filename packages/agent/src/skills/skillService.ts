@@ -1,12 +1,13 @@
 /**
  * packages/agent/src/skills/skillService.ts
  *
- * Domain reader/service for skills. Single source of truth for
- * the available-skill set, used by both the GUI IPC handler
- * (`skills:list`) and the CLI API server (`GET /v1/skills`).
+ * Domain reader/service for skills. Shared pure layer for the CLI API
+ * server (`GET /v1/skills`) and capability management. The GUI IPC handler
+ * (`skills:list`) keeps its own richer scan (content + security findings);
+ * both surfaces converge on the same source set.
  *
- * The service uses the shared resolver for winner selection and
- * applies the user's name-scoped `enabled` override.
+ * Uses the shared resolver for winner selection and applies the user's
+ * name-scoped `enabled` override. System skills are always enabled.
  *
  * Output is a strict DTO with no absolute paths, no SKILL.md
  * content, no internal precedence numbers.
@@ -31,7 +32,7 @@ function parseAllowedTools(v: unknown): string[] {
   return [];
 }
 
-export type SkillSource = 'bundled' | 'user' | 'plugin';
+export type SkillSource = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system';
 
 export interface SkillListItem {
   id: string;
@@ -64,6 +65,12 @@ interface InternalCandidate {
 
 interface DiscoverArgs {
   userSkillsDir: string;
+  /** Project skills dirs (<cwd>/.agent/skills, <cwd>/.duya/skills), optional. */
+  projectSkillsDirs?: string[];
+  /** Custom skill dir (agent.skill_path), optional. */
+  customSkillDir?: string;
+  /** System skills dir (<userSkillsDir>/.system), optional. */
+  systemSkillsDir?: string;
   /** Map of pluginId → plugin install path. */
   pluginInstallPaths: Record<string, string>;
   /** Pre-fetched overrides. */
@@ -254,6 +261,74 @@ function discoverCandidates(args: DiscoverArgs): InternalCandidate[] {
     }
   }
 
+  // project: scan the project skills dirs (<cwd>/.agent/skills, <cwd>/.duya/skills)
+  for (const projectDir of args.projectSkillsDirs ?? []) {
+    if (!existsSync(projectDir)) continue;
+    const entries = readdirSync(projectDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (!e.isDirectory()) continue;
+      const entryPath = join(projectDir, e.name);
+      const descriptionPath = join(entryPath, 'DESCRIPTION.md');
+      if (existsSync(descriptionPath)) continue;
+      const fm = readFrontmatter(entryPath);
+      if (!fm) continue;
+      out.push({
+        candidate: { name: e.name, origin: 'project', hasMarker: false },
+        meta: {
+          description: fm.description,
+          frontmatter: fm.frontmatter,
+          category: fm.category,
+          sourceDir: entryPath,
+        },
+      });
+    }
+  }
+
+  // custom: scan the configured skill_path
+  if (args.customSkillDir && existsSync(args.customSkillDir)) {
+    const entries = readdirSync(args.customSkillDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (!e.isDirectory()) continue;
+      const entryPath = join(args.customSkillDir, e.name);
+      const descriptionPath = join(entryPath, 'DESCRIPTION.md');
+      if (existsSync(descriptionPath)) continue;
+      const fm = readFrontmatter(entryPath);
+      if (!fm) continue;
+      out.push({
+        candidate: { name: e.name, origin: 'custom', hasMarker: false },
+        meta: {
+          description: fm.description,
+          frontmatter: fm.frontmatter,
+          category: fm.category,
+          sourceDir: entryPath,
+        },
+      });
+    }
+  }
+
+  // system: scan the .system skills dir (synced user-dir copy)
+  if (args.systemSkillsDir && existsSync(args.systemSkillsDir)) {
+    const entries = readdirSync(args.systemSkillsDir, { withFileTypes: true });
+    for (const e of entries) {
+      if (e.name.startsWith('.')) continue;
+      if (!e.isDirectory()) continue;
+      const entryPath = join(args.systemSkillsDir, e.name);
+      const fm = readFrontmatter(entryPath);
+      if (!fm) continue;
+      out.push({
+        candidate: { name: e.name, origin: 'system', hasMarker: false },
+        meta: {
+          description: fm.description,
+          frontmatter: fm.frontmatter,
+          category: fm.category,
+          sourceDir: entryPath,
+        },
+      });
+    }
+  }
+
   return out;
 }
 
@@ -309,7 +384,8 @@ export function resolveAvailableSkills(args: DiscoverArgs): {
  * Public list DTO. Applies name-scoped `enabled` override.
  */
 export function toListDTO(winner: AvailableSkill & { meta?: InternalCandidate['meta'] }, overrides: Record<string, boolean>): SkillListItem {
-  const enabled = overrides[winner.name] !== false;
+  // System skills are never disableable (plan 414); ignore stale overrides.
+  const enabled = winner.origin === 'system' ? true : overrides[winner.name] !== false;
   return {
     id: idFor(winner),
     name: winner.name,
@@ -342,6 +418,9 @@ export function toInfoDTO(winner: AvailableSkill & { meta?: InternalCandidate['m
 
 export interface SkillServiceListArgs {
   userSkillsDir: string;
+  projectSkillsDirs?: string[];
+  customSkillDir?: string;
+  systemSkillsDir?: string;
   pluginInstallPaths: Record<string, string>;
   overrides: Record<string, boolean>;
 }

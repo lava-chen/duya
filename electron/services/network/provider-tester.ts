@@ -1,5 +1,36 @@
 import { fetchOllamaModels } from './model-detector';
 
+const OLLAMA_KEYWORDS = ['localhost:11434', '127.0.0.1:11434', 'ollama'];
+const LM_STUDIO_KEYWORDS = ['localhost:1234', '127.0.0.1:1234', 'lm-studio'];
+
+/**
+ * Loopback / local-runtime detector that exempts both Ollama (`:11434`)
+ * and LM Studio (`:1234`) from the "API Key required" guard in
+ * `testProviderConnection`. Mirrors `model-fetcher.ts#isLocalEndpoint`
+ * (which uses `localhost` / `127.0.0.1` substring checks) but adds the
+ * per-runtime port knowledge so an LM Studio install on a non-default
+ * port is still classified as local. Openclaw's
+ * `LMSTUDIO_DEFAULT_BASE_URL = http://localhost:1234` is the convention
+ * we mirror here.
+ */
+function isLocalRuntimeEndpoint(
+  providerType: string | undefined,
+  baseUrl: string | undefined,
+): boolean {
+  // Provider type is a fast-path (avoids lowercasing the URL when the
+  // preset has already classified itself). LM Studio is intentionally
+  // NOT special-cased here: its catalog preset saves
+  // `legacyProtocol: 'openai-compatible'`, so the runtime providerType
+  // is never `'lm-studio'`. URL port detection below catches it.
+  if (providerType === 'ollama') return true;
+  const url = (baseUrl || '').toLowerCase();
+  if (!url) return false;
+  return (
+    OLLAMA_KEYWORDS.some((k) => url.includes(k)) ||
+    LM_STUDIO_KEYWORDS.some((k) => url.includes(k))
+  );
+}
+
 export interface TestProviderBody {
   provider_type?: string;
   base_url?: string;
@@ -79,7 +110,14 @@ function classifyError(error: unknown, baseUrl?: string): ConnectionTestResult['
 export async function testProviderConnection(body: TestProviderBody): Promise<ConnectionTestResult> {
   const { provider_type, base_url, api_key, model, auth_style } = body;
 
-  if (!api_key && auth_style !== 'env_only') {
+  // Local OpenAI-compatible runtimes (Ollama at :11434, LM Studio at :1234)
+  // run without auth, so an empty API key is fine for them. Mirrors the
+  // `isLocalEndpoint` guard in `model-fetcher.ts` so the connection test
+  // does not 401 / "API Key is required" for a fresh local install.
+  // `auth_style === 'env_only'` covers AWS Bedrock / Vertex, which the
+  // local-runtime fallback below would otherwise flag.
+  const isLocal = isLocalRuntimeEndpoint(provider_type, base_url);
+  if (!api_key && auth_style !== 'env_only' && !isLocal) {
     return {
       success: false,
       error: {
@@ -138,6 +176,10 @@ export async function testProviderConnection(body: TestProviderBody): Promise<Co
 
   let apiUrl = base_url || 'https://api.anthropic.com';
   apiUrl = apiUrl.replace(/\/+$/, '');
+  // Local-server alias: `localhost` may resolve to ::1 first, which local
+  // runtimes (LM Studio etc.) don't listen on → ECONNREFUSED. Use 127.0.0.1
+  // so the test reaches the IPv4 socket regardless of resolver ordering.
+  apiUrl = apiUrl.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1');
 
   if (isOpenAICompatible) {
     if (!apiUrl.endsWith('/v1/chat/completions')) {

@@ -106,7 +106,8 @@ reference file, not both; prefer references for detailed material.
 3. **Create the skill folder.** Choose a location:
    - Built-in (ships with DUYA): `packages/agent/skills/<category>/<skill>/`
    - User: `~/.duya/skills/<skill>/`
-   - Project: `.duya/skills/<skill>/`
+   - Project: `.agent/skills/<skill>/` (cross-agent standard) or
+     `.duya/skills/<skill>/`
    Create the folder and a `SKILL.md` with frontmatter + a body outline.
 4. **Edit the skill.** Write it for another DUYA instance to use. Start with
    the reusable resources (scripts/references/assets), then write SKILL.md.

@@ -469,6 +469,57 @@ describe('memory-state catalogSync', () => {
     expect(rollout?.['source_deleted_at']).toBeTypeOf('number');
   });
 
+  it('12a. re-sync of an already-tombstoned session (soft-deleted) → unchanged, no re-count', () => {
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    syncAll();
+
+    sessions.update('sess-1', { status: 'deleted' });
+    const first = syncOne('sess-1');
+    expect(first.status).toBe('tombstoned');
+    const deletedAt = getRollout(memoryDb, 'sess-1')?.['source_deleted_at'];
+
+    // Second sync must NOT count a fresh tombstone.
+    const second = syncOne('sess-1');
+    expect(second.status).toBe('unchanged');
+    const after = getRollout(memoryDb, 'sess-1');
+    expect(after?.['source_status']).toBe('deleted');
+    // Provenance preserved; only the heartbeat moved.
+    expect(after?.['source_deleted_at']).toBe(deletedAt);
+  });
+
+  it('12b. syncAll with a persistently-deleted session counts it as tombstoned exactly once', () => {
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    syncAll();
+
+    sessions.update('sess-1', { status: 'deleted' });
+
+    const firstRun = syncAll();
+    expect(firstRun.tombstoned).toBe(1);
+
+    // Every subsequent tick: 0 tombstoned — this is the log-spam fix.
+    const secondRun = syncAll();
+    expect(secondRun.tombstoned).toBe(0);
+    const thirdRun = syncAll();
+    expect(thirdRun.tombstoned).toBe(0);
+  });
+
+  it('12c. re-sync of a hard-deleted (row-removed) session → unchanged, no re-count', () => {
+    insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
+    insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });
+    syncAll();
+
+    coreDb.prepare('DELETE FROM sessions WHERE id = ?').run('sess-1');
+    const first = syncOne('sess-1');
+    expect(first.status).toBe('tombstoned');
+
+    const second = syncOne('sess-1');
+    expect(second.status).toBe('unchanged');
+    const after = getRollout(memoryDb, 'sess-1');
+    expect(after?.['source_status']).toBe('deleted');
+  });
+
   it('13. markSourceMissing flips source_status to missing and sets source_missing_at', () => {
     insertSession(sessions, { id: 'sess-1', working_directory: 'D:/projects/alpha' });
     insertMessageIndex(coreDb, { id: 'm1', session_id: 'sess-1', created_at: 1000 });

@@ -382,8 +382,14 @@ export async function handleChannelSend(
     return;
   }
   const text = asString(body.text);
-  if (!text) {
-    sendJson(res, 400, { error: { code: 'missing_arg', message: 'text required' } });
+  const filePathRaw = asString(body.filePath) ?? asString(body.file);
+  if (!text && !filePathRaw) {
+    sendJson(res, 400, { error: { code: 'missing_arg', message: 'text (or filePath) required' } });
+    return;
+  }
+  const filePath = filePathRaw ? resolve(filePathRaw) : undefined;
+  if (filePath && !existsSync(filePath)) {
+    sendJson(res, 404, { error: { code: 'path_not_found', message: filePath } });
     return;
   }
   const target = resolveChannelTarget(body);
@@ -392,14 +398,14 @@ export async function handleChannelSend(
     return;
   }
   try {
-    const result = await requestChannelSend(target.platform, target.platformChatId, text);
+    const result = await requestChannelSend(target.platform, target.platformChatId, text ?? '', filePath);
     if (result.ok) {
       await recordAudit(
         req,
         correlationId,
         'channel.send',
         `${target.platform}:${target.platformChatId}`,
-        `msg_id=${result.platformMsgId ?? ''} text=${text.slice(0, 64)}`,
+        `msg_id=${result.platformMsgId ?? ''} text=${(text ?? '').slice(0, 64)}${filePath ? ` file=${filePath}` : ''}`,
       );
     }
     sendJson(res, result.ok ? 200 : 502, {

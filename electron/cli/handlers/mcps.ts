@@ -3,17 +3,20 @@
  *
  * CLI API handlers for MCP server control plane.
  *
- * Write surface (Plan 99 §3.3 Phase 7 + Plan 102):
+ * Surface (Plan 99 §3.3 Phase 7 + Plan 102, list re-added for `duya mcp list`):
+ *   GET    /v1/mcps             → list configured MCP servers (returns { servers: UserMcpTomlServer[] })
  *   POST   /v1/mcps             → add MCP server (body: { name, command, args?, env?, allowedAgentIds? })
  *   DELETE /v1/mcps/:name       → remove MCP server
  *   PATCH  /v1/mcps/:name       → assign allowed agent profiles
  *
- * The read surface (`GET /v1/mcps`, `GET /v1/mcps/:id`) and the
- * `POST /v1/mcps/:name/test` smoke-spawn endpoint were removed with
- * the old `MCPInventoryService` framework. The worker's
- * `mcp:status:snapshot` SSE event + capability-management snapshot
- * are now the single source of truth for the effective MCP set; the
- * CLI no longer exposes a parallel read path.
+ * The `GET /v1/mcps/:id` single-server read endpoint and the
+ * `POST /v1/mcps/:name/test` smoke-spawn endpoint remain removed.
+ * Live connection status (connected / disconnected / tool count)
+ * is still owned by the worker's `mcp:status:snapshot` SSE event
+ * plus the capability-management snapshot — those are the runtime
+ * truth. This list returns the *configured* MCP entries (the same
+ * store that `add`/`remove`/`assign` read and write), so it never
+ * drifts from the write surface.
  *
  * The write path reads from / writes to `agentSettings.mcpServers`
  * in ConfigManager (matches the legacy `duya_config mcp_server_*`
@@ -25,6 +28,7 @@ import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAu
 import { readUserMcpToml, writeUserMcpToml } from '../../services/mcp-config';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
 
 // ---------------------------------------------------------------------------
 // Common helpers
@@ -41,6 +45,28 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function sendError(res: ServerResponse, status: number, code: string, message: string): void {
   sendJson(res, status, { error: { code, message } });
+}
+
+// ---------------------------------------------------------------------------
+// Read surface (`duya mcp list`)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /v1/mcps — return every configured MCP server.
+ *
+ * Read-only. Returns `{ servers: UserMcpTomlServer[] }` so the CLI
+ * can render a table or emit JSON. Live connection status is NOT
+ * included here; it lives in the worker's `mcp:status:snapshot`
+ * SSE event and the capability-management snapshot.
+ */
+export async function handleListMCP(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const servers = await readUserMcpToml();
+    const payload: { servers: UserMcpTomlServer[] } = { servers };
+    sendJson(res, 200, payload);
+  } catch (err) {
+    sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
+  }
 }
 
 // ---------------------------------------------------------------------------

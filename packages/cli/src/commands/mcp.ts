@@ -1,28 +1,33 @@
 /**
  * packages/cli/src/commands/mcp.ts
  *
- * `duya mcp …` — write MCP server configuration.
+ * `duya mcp …` — manage MCP server configuration.
  *
- * Writes: add / remove / assign (Plan 99 §3.3 Phase 7 + Plan 102).
- * The `mcp add` write op is the agent-facing replacement for
- * `duya_config mcp_server_add`; it routes through the same audit
- * path as cron writes (`kind: 'mcp.add'`).
+ * Surface (Plan 99 §3.3 Phase 7 + Plan 102, list re-added for
+ * `duya mcp list`):
+ *   list    — `GET    /v1/mcps`              (read configured entries)
+ *   add     — `POST   /v1/mcps`              (Plan 102, replaces `duya_config mcp_server_add`)
+ *   remove  — `DELETE /v1/mcps/:name`        (Plan 102, replaces `duya_config mcp_server_remove`)
+ *   assign  — `PATCH  /v1/mcps/:name`        (Plan 102, replaces `duya_config mcp_server_assign`)
  *
- * The read subcommands (`mcp list`, `mcp info`) and the
- * `mcp test` smoke-spawn subcommand were removed with the old
- * MCP inventory framework. The worker's `mcp:status:snapshot` SSE
- * event + capability-management snapshot are now the single source
- * of truth for the effective MCP set; the CLI no longer exposes a
- * parallel read path.
+ * The `mcp info` single-server read and the `mcp test` smoke-spawn
+ * subcommands remain removed. Live connection status
+ * (connected / disconnected / tool count) is still owned by the
+ * worker's `mcp:status:snapshot` SSE event plus the
+ * capability-management snapshot — those are the runtime truth.
+ * `mcp list` returns the *configured* entries (the same store that
+ * add/remove/assign read and write), so the read and write surfaces
+ * never drift.
  */
 
 import { CliApiClient } from '../api/client.js';
 import { CliApiError } from '../api/errors.js';
-import { renderJson } from '../api/format.js';
+import { renderJson, type OutputFormat } from '../api/format.js';
 import type { CliSubcommandContext, ExitCode } from '../program/registry.js';
+import type { UserMcpTomlServer } from '@duya/plugin-core/src/mcp/user-config.js';
 
 // ---------------------------------------------------------------------------
-// Write ops (Plan 99 §3.3 Phase 7 + Plan 102).
+// Helpers shared by mcp subcommands (Plan 99 §3.3 Phase 7 + Plan 102).
 // ---------------------------------------------------------------------------
 
 function writeErrorAndExit(err: unknown): never {
@@ -31,6 +36,75 @@ function writeErrorAndExit(err: unknown): never {
     process.exit(err.isAppUnavailable() ? 2 : 1);
   }
   throw err;
+}
+
+// ---------------------------------------------------------------------------
+// Read op (`duya mcp list`)
+// ---------------------------------------------------------------------------
+
+function renderListText(servers: UserMcpTomlServer[]): string {
+  if (servers.length === 0) {
+    return '(no MCP servers configured; use `duya mcp add` to add one)';
+  }
+  const lines: string[] = [];
+  lines.push(`${servers.length} MCP server${servers.length !== 1 ? 's' : ''} configured`);
+  // Stable columns: NAME  STATE  TRANSPORT  COMMAND  SCOPE
+  const rows = servers.map((s) => {
+    const state = s.enabled === false ? 'off' : 'on';
+    const transport = s.transport ?? (s.url ? 'streamable-http' : 'stdio');
+    const command = s.command ?? s.url ?? '';
+    const scope =
+      s.allowedAgentIds && s.allowedAgentIds.length > 0
+        ? s.allowedAgentIds.join(',')
+        : 'all';
+    return {
+      name: s.name,
+      state,
+      transport,
+      command,
+      scope,
+    };
+  });
+  const widths = {
+    name: Math.max(4, ...rows.map((r) => r.name.length)),
+    state: Math.max(5, ...rows.map((r) => r.state.length)),
+    transport: Math.max(9, ...rows.map((r) => r.transport.length)),
+  };
+  for (const r of rows) {
+    lines.push(
+      `  ${r.name.padEnd(widths.name)}  ${r.state.padEnd(widths.state)}  ${r.transport.padEnd(widths.transport)}  ${r.command}  [${r.scope}]`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * `duya mcp list` — show every configured MCP server.
+ *
+ * Read-only. Reads from `GET /v1/mcps`, which is backed by the
+ * same ConfigStore that `add`/`remove`/`assign` write to, so the
+ * list never drifts from the write surface. Live connection status
+ * (connected / tool count) is owned by the worker's
+ * `mcp:status:snapshot` SSE event and is not surfaced here.
+ */
+export async function runMCPListCommand(format: OutputFormat): Promise<number> {
+  try {
+    const client = await CliApiClient.connect();
+    const body = await client.get<{ servers: UserMcpTomlServer[] }>('/v1/mcps');
+    const servers = Array.isArray(body?.servers) ? body.servers : [];
+    if (format === 'json') {
+      process.stdout.write(renderJson({ servers }) + '\n');
+    } else {
+      process.stdout.write(renderListText(servers) + '\n');
+    }
+    return 0;
+  } catch (err) {
+    if (err instanceof CliApiError) {
+      process.stderr.write(err.hint + '\n');
+      return err.isAppUnavailable() ? 2 : 1;
+    }
+    throw err;
+  }
 }
 
 /**

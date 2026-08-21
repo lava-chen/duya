@@ -25,11 +25,14 @@ import { useUpsertProviderMutation } from './useUpsertProviderMutation';
 import { findPresetByKey } from '@/lib/providers';
 import { QUICK_PRESETS, type QuickPreset } from '@/lib/provider-presets';
 import type { LlmProvider } from '@/lib/providers';
-import type { ModelCompat } from '@duya/ai';
+import type { ApiFormat, ModelCompat } from '@duya/ai';
 import { extractErrorMessage } from '@/lib/errors/extractErrorMessage';
 
 export interface ProviderEditFormData {
   name: string;
+  /** User-facing alias (nickname), independent of the vendor `name`.
+   *  Persisted to `config.toml` `[providers.<id>].alias`. */
+  alias?: string;
   provider_type: string;
   protocol: string;
   base_url: string;
@@ -120,6 +123,27 @@ function generateProviderId(
   return `${baseId}-${suffix}`;
 }
 
+/**
+ * Map a legacy `provider_type` string to a valid `ApiFormat`.
+ *
+ * `provider_type` carries the legacy preset protocol (e.g. the LM Studio
+ * preset resolves to `'openai-compatible'`), which is NOT a valid
+ * `ApiFormat`. Without this mapping the backend rejects the upsert with
+ * `provider.invalidApiFormat: unsupported apiFormat: openai-compatible`.
+ */
+function providerTypeToApiFormat(providerType: string): ApiFormat {
+  switch (providerType) {
+    case 'openai-compatible':
+      return 'openai-chat';
+    case 'openrouter':
+      return 'openai-chat';
+    case 'ollama':
+      return 'ollama';
+    default:
+      return providerType as ApiFormat;
+  }
+}
+
 export function useProviderEditSave(): UseProviderEditSaveResult {
   const upsert = useUpsertProviderMutation();
 
@@ -134,11 +158,14 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
       // preset isn't found, we fall back to the existing
       // provider's fields (preserved on edit) or the protocol
       // string itself.
-      const newPreset = findPresetByKey(data.provider_type);
-      const category =
-        newPreset?.category ??
-        (data.provider_type === 'openai-compatible' ? 'custom' : 'custom');
-      const apiFormat = newPreset?.apiFormat ?? (data.provider_type as never);
+      //
+      // Resolve by the stable preset key (e.g. 'lm-studio') when the
+      // picker provides it; the legacy `provider_type` ('openai-compatible')
+      // is not a preset key nor a valid ApiFormat by itself.
+      const newPreset = findPresetByKey(data.preset_id || data.provider_type);
+      const category = newPreset?.category ?? 'custom';
+      const apiFormat =
+        newPreset?.apiFormat ?? providerTypeToApiFormat(data.provider_type);
       const ui = newPreset?.ui;
 
       // Plan 209: build the LlmProvider WITHOUT stamping the
@@ -152,7 +179,18 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
       // case and re-attaches the existing on-disk apiKey before
       // validation, so the save does not get rejected with
       // `auth.missingApiKey`.
-      const llmAuth = { type: 'api-key' as const };
+      //
+      // Local / keyless presets (LM Studio's authFields expose only a
+      // base_url, no api_key) must use `auth.type='none'` — otherwise the
+      // domain validator rejects the upsert with `auth.missingApiKey`
+      // ("apiKey is required for api-key/bearer auth"). Hosted presets with
+      // an api_key field keep `type='api-key'` (applyApiKey fills the key).
+      const requiresApiKey =
+        newPreset?.authFields?.some((f) => f.key === 'api_key' && f.secret) ??
+        true;
+      const llmAuth: LlmProvider['auth'] = {
+        type: requiresApiKey ? 'api-key' : 'none',
+      };
       // Plan 209: preserve `meta`, `headers`, and `extraEnv`
       // across edits. The pre-Plan-209 implementation rebuilt
       // `meta` on every save, which silently dropped the
@@ -161,6 +199,7 @@ export function useProviderEditSave(): UseProviderEditSaveResult {
       const sharedMeta = {
         id: editingId ?? '',
         name: data.name,
+        alias: data.alias,
         category,
         apiFormat,
         auth: llmAuth,

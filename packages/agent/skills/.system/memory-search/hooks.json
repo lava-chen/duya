@@ -1,5 +1,5 @@
 {
-  "description": "DUYA retrievable memory (RAG) UserPromptSubmit hook — runs scripts/memory-rag-hook.mjs in the BACKGROUND on every user prompt (async: true, never blocks the agent loop). When retrieval finishes, asyncRewake delivers the related memories back into the session as a background notification the next turn — the model sees them without the agent having waited. EDIT the args[0] path below to match the duya install location on this machine (dev repo path or packaged resources path — see the memory-search skill for how to resolve it).",
+  "description": "DUYA retrievable memory (RAG) UserPromptSubmit hook — runs scripts/memory-search.mjs SYNCHRONOUSLY on every user prompt (plan 430). Retrieval is keyword-only or vector cos over a tiny SQLite index (bge-m3 / ollama), typically well under 500 ms, and the agent blocks the first turn for that span so the model sees the retrieved memory on the SAME turn as the user's prompt. The output `### 相关记忆` block carries the title + path + full body of each top-N hit, capped at FORMAT_PER_HIT_BODY_CHARS / FORMAT_TOTAL_CHARS — the model reads memory bodies directly instead of inferring them from a path. EDIT args[0] below to match the duya install location on this machine (dev repo path or packaged resources path — see the memory-search skill for how to resolve it).",
   "hooks": {
     "UserPromptSubmit": [
       {
@@ -8,8 +8,7 @@
             "type": "process",
             "command": "node",
             "args": ["E:/Projects/duya/packages/agent/skills/.system/memory-search/scripts/memory-search.mjs"],
-            "async": true,
-            "asyncRewake": true
+            "timeoutMs": 5000
           }
         ]
       }

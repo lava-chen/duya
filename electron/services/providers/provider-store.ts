@@ -653,6 +653,74 @@ export class ProviderStore {
     return this.capabilityStore.getOne(providerId, modelId);
   }
 
+  /**
+   * Resolve the effective capability for a model at runtime, merging
+   * every layer the app understands so the context window shown in the
+   * edit page actually reaches the session agent:
+   *   1. config.toml `options.model_context[modelId]` — the explicit
+   *      1M marker the edit page writes (highest priority).
+   *   2. DB override row (`provider_model_capabilities`) — user-set
+   *      context windows from older flows / model sync.
+   *   3. built-in `@duya/ai` baseline (`allProviderModels`) — e.g. the
+   *      1M declared for a 1M-variant model.
+   * Returns undefined only when no layer has a row for the model.
+   *
+   * This is the source `agent-communicator` (and the renderer's
+   * `provider:getModelCapability`) should use to attach
+   * `modelCapabilities` to the runtime config.
+   */
+  resolveRuntimeCapability(
+    providerId: string,
+    modelId: string,
+  ): ModelCapability | undefined {
+    this.ensureInitialized();
+    const provider = this.getLlmProvider(providerId);
+    const apiFormat = provider?.apiFormat;
+    const dbCap = this.capabilityStore.getOne(providerId, modelId);
+
+    // Built-in baseline (matched by providerId first, then apiFormat
+    // for custom providers that share a protocol with a built-in family).
+    let baselineCap: ModelCapability | undefined;
+    if (apiFormat) {
+      const builtIn =
+        allProviderModels.find(
+          (m) => m.providerId === providerId && m.id === modelId,
+        ) ??
+        allProviderModels.find((m) => m.api === apiFormat && m.id === modelId);
+      if (builtIn) {
+        baselineCap = modelToCapability(providerId, builtIn, apiFormat);
+      }
+    }
+
+    // Config marker wins for the context window.
+    const opts = provider?.options as Record<string, unknown> | undefined;
+    const ctxFromConfig = opts?.model_context as
+      | Record<string, number>
+      | undefined;
+    const configCtx =
+      ctxFromConfig && typeof ctxFromConfig[modelId] === 'number'
+        ? ctxFromConfig[modelId]
+        : undefined;
+
+    if (configCtx !== undefined && configCtx > 0) {
+      return {
+        ...(dbCap ??
+          baselineCap ?? {
+            providerId,
+            modelId,
+            source: 'user' as const,
+            updatedAt: 0,
+          }),
+        contextWindow: configCtx,
+        source: 'user',
+        updatedAt: Date.now(),
+      };
+    }
+    // DB override (may carry contextWindow or other caps).
+    if (dbCap) return dbCap;
+    return baselineCap;
+  }
+
   deleteModelCapability(providerId: string, modelId: string): boolean {
     return this.capabilityStore.delete(providerId, modelId);
   }

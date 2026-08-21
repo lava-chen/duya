@@ -27,6 +27,9 @@ export function ProviderIcon({ providerType, baseUrl, size = 20 }: ProviderIconP
   if (providerType === "ollama" || url.includes("ollama") || url.includes("11434")) {
     return <PresetIcon iconKey="ollama" size={size} />;
   }
+  if (providerType === "lm-studio" || url.includes("lm-studio") || url.includes("1234")) {
+    return <PresetIcon iconKey="lm-studio" size={size} />;
+  }
   if (providerType === "bedrock" || url.includes("bedrock") || url.includes("aws.amazon")) {
     return <PresetIcon iconKey="bedrock" size={size} />;
   }

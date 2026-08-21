@@ -82,6 +82,7 @@ export {
   findModelCompat,
   findModelById,
   getEffortOptionsForModel,
+  getEffortOptionsForCapability,
 } from './models.js';
 export {
   shouldDisableThinking,

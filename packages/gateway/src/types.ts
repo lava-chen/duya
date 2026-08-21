@@ -305,7 +305,7 @@ export type MainToGatewayMessage =
   | { type: 'gateway:pairing:generate'; id: string; platform: string; userId: string }
   | { type: 'gateway:pairing:check:response'; id: string; approved: boolean }
   | { type: 'gateway:pairing:generate:response'; id: string; code: string; error?: string }
-  | { type: 'gateway:send'; id: string; platform: string; platformChatId: string; text: string };
+  | { type: 'gateway:send'; id: string; platform: string; platformChatId: string; text: string; filePath?: string };
 
 /** QR Registration types */
 export interface QrRegistrationBegin {

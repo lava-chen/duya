@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { FileIcon } from '../icons';
@@ -109,11 +109,21 @@ function MarkdownImage({ src, alt }: { src?: string; alt?: string }) {
 // or a scheme so we can fall back to the normal link logic for real paths.
 const BARE_FILE_REFERENCE_RE = /^[^/\\:?#\s]+\.\w+(?::\d+)?$/;
 
+/**
+ * Base directory of the markdown source currently being rendered. Lets
+ * relative links inside a markdown FILE (e.g. the sidebar file preview)
+ * resolve against the file's own directory instead of the active chat
+ * thread's workspace. When absent (chat messages), MarkdownAnchor falls
+ * back to the thread working directory.
+ */
+export const MarkdownBaseDirectoryContext = createContext<string | null>(null);
+
 function MarkdownAnchor({ href, children }: { href?: string; children?: React.ReactNode }) {
   const { openLinksInExternalBrowser, openLink } = useLinkOpener();
+  const baseDirectory = useContext(MarkdownBaseDirectoryContext);
   const activeThreadId = useConversationStore((s) => s.activeThreadId);
   const threads = useConversationStore((s) => s.threads);
-  const cwd = threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
+  const cwd = baseDirectory ?? threads.find((thread) => thread.id === activeThreadId)?.workingDirectory;
 
   // If the model only wrote a bare filename (e.g. `network.py` or
   // `network.py:12`) and we know the working directory, resolve it against
@@ -139,7 +149,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         type="button"
         variant="ghost"
         size="sm"
-        className="text-blue-600 dark:text-blue-400 hover:underline underline-offset-2 transition-colors font-mono text-[13.5px] bg-blue-500/5 hover:bg-blue-500/10 px-1 py-0.5 rounded border border-blue-500/20 cursor-pointer"
+        className="text-sky-500 dark:text-sky-300 hover:underline decoration-dotted underline-offset-2 transition-colors font-mono font-semibold text-[13.5px] bg-sky-500/5 hover:bg-sky-500/10 px-1 py-0.5 rounded border border-sky-500/20 cursor-pointer"
         onClick={() => openLink(href)}
         title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
       >
@@ -155,19 +165,36 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
   if (isLocalFile && resolvedHref) {
     const displayName = fileNameFromPath(resolvedHref);
     const TypeIcon = getFileTypeIcon(fileExtensionFromName(displayName));
+    // Standalone preview is reserved for chat-message clicks where the
+    // agent referenced a file OUTSIDE the chat workspace. In that case
+    // we don't want the preview panel to mount the file's directory as
+    // its project root — it would expose arbitrary external directories
+    // via the integrated file tree.
+    //
+    // Sidebar markdown previews (`baseDirectory` set) always keep the
+    // legacy fallback to the file's own directory so navigating between
+    // relative links inside a README stays rooted in the same project.
+    //
+    // Chat-message clicks to a file INSIDE the chat workspace keep the
+    // chat cwd as the preview root so the project tree still renders
+    // (otherwise the user would lose the tree even when clicking on a
+    // file in their own project).
+    const fileOutsideChatWorkspace =
+      baseDirectory === null && !!cwd && !isPathInsideRoot(resolvedHref, cwd);
+    const standalone = fileOutsideChatWorkspace;
     return (
       <button
         type="button"
         className="markdown-file-link"
-        onClick={() => openLocalArtifactTarget(resolvedHref, cwd)}
+        onClick={() => openLocalArtifactTarget(resolvedHref, cwd, undefined, { standalone })}
         title={resolvedHref}
       >
-        <span className="markdown-file-link__name">{displayName}</span>
         {TypeIcon ? (
-          <TypeIcon size={16} aria-hidden="true" />
+          <TypeIcon size={13} aria-hidden="true" />
         ) : (
-          <FileIcon size={16} aria-hidden="true" />
+          <FileIcon size={13} aria-hidden="true" />
         )}
+        <span className="markdown-file-link__name">{displayName}</span>
       </button>
     );
   }

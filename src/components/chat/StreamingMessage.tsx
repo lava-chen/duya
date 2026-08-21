@@ -17,6 +17,7 @@ import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
 import { usePolling } from '@/hooks/usePolling';
 import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
+import { useStreamingError } from '@/hooks/useStreamingError';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import { Button } from '@/components/ui/Button';
@@ -279,7 +280,49 @@ const StreamingStatus = React.memo(function StreamingStatus({
 });
  
 // ─── Main export ──────────────────────────────────────────────────────────────
- 
+
+/**
+ * Terminal phase: the agent has finished (success / aborted / error / completed)
+ * and no further events will arrive. We keep the transient view mounted in
+ * these states so the user always sees the last partial content — whether the
+ * stream ended normally without a durable DB row (e.g. agent crashed before
+ * persisting) or was interrupted by the user.
+ */
+function isTerminalPhase(phase: ReturnType<typeof useStreamPhase>): boolean {
+  return phase === 'completed' || phase === 'aborted' || phase === 'error';
+}
+
+/**
+ * Banner shown above the partial view when the stream ended abnormally.
+ * Normal completion (persisted message takes over) does not surface this.
+ */
+function TerminalBanner({
+  phase,
+  errorMessage,
+}: {
+  phase: 'completed' | 'aborted' | 'error';
+  errorMessage?: string | null;
+}) {
+  const { t } = useTranslation();
+  if (phase === 'aborted') {
+    return (
+      <div className="terminal-banner terminal-banner-aborted" role="status">
+        <span aria-hidden="true">⏹</span>
+        <span>{t('streaming.interrupted')}</span>
+      </div>
+    );
+  }
+  if (phase === 'error') {
+    return (
+      <div className="terminal-banner terminal-banner-error" role="status">
+        <span aria-hidden="true">⚠</span>
+        <span>{errorMessage || t('streaming.errorGeneric')}</span>
+      </div>
+    );
+  }
+  return null;
+}
+
 export const StreamingMessage = React.memo(function StreamingMessage({
   sessionId,
   onForceStop,
@@ -288,7 +331,7 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const phase       = useStreamPhase(sessionId);
   const isStreaming = phase === 'starting' || phase === 'streaming'
     || phase === 'awaiting_permission' || phase === 'persisting';
- 
+
   const text               = useStreamingText(sessionId);
   const thinking           = useStreamingThinking(sessionId);
   const { uses, results }  = useStreamingTools(sessionId);
@@ -298,15 +341,31 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const retryInfo          = useStreamingRetry(sessionId);
   const startedAt          = useStreamStartedAt(sessionId);
   const agentProgressEvents = useStreamingAgentProgress(sessionId);
+  const streamingError     = useStreamingError(sessionId);
 
-  // The App owns the terminal handoff. During finalization, retain this one
-  // transient view until the durable assistant message is in the store; do
-  // not emit a completed-action summary that would look like a second reply.
-  const isVisible = isStreaming || isFinalizing;
+  // Visibility rule:
+  //   1. While the stream is active → always show (live typing).
+  //   2. While finalizing → keep the transient view mounted until the
+  //      durable assistant message arrives via loadThreadMessages.
+  //   3. In a terminal phase with content (interrupted / errored /
+  //      completed without DB persistence) → keep the partial view so
+  //      the user sees the agent's last work, just like a normal reply.
+  //      The view disappears when the user sends the next message
+  //      (active session is replaced).
+  const terminal      = isTerminalPhase(phase);
+  const hasContent    = actions.length > 0 || text.length > 0
+    || thinking.length > 0 || uses.length > 0;
+  const isVisible     = isStreaming || isFinalizing || (terminal && hasContent);
   if (!isVisible) return null;
 
+  // Pass `isStreaming` (not `isVisible`) to children so the typewriter
+  // and shimmer animations stop the moment the stream enters a terminal
+  // phase. In terminal state the trailing text row renders its full
+  // content directly through MarkdownRenderer.
+  const bodyIsLive = isStreaming;
+
   const hasWidgetActions = actions.some(a => a.kind === 'widget');
- 
+
   return (
     <div data-message-id="streaming" className="py-4 px-4">
       {/* Streaming prose / tool rows track the message-list width so they
@@ -315,9 +374,16 @@ export const StreamingMessage = React.memo(function StreamingMessage({
           (charts, tables) are often wider than prose and benefit from
           using more of the chat area. */}
       <div className={hasWidgetActions ? 'max-w-[95%]' : 'w-full'}>
+        {terminal && (
+          <TerminalBanner
+            phase={phase as 'completed' | 'aborted' | 'error'}
+            errorMessage={streamingError?.message}
+          />
+        )}
+
         <StreamingTools
           actions={actions}
-          isStreaming={isVisible}
+          isStreaming={bodyIsLive}
           streamingToolOutput={toolOutput}
           agentProgressEvents={agentProgressEvents}
           liveStartedAt={startedAt}
@@ -331,15 +397,15 @@ export const StreamingMessage = React.memo(function StreamingMessage({
             avoid duplicating the agent's prose below the tool rows. */}
 
         <StreamingVizWidgets actions={actions} sourceMessageId={sessionId} />
- 
+
         {/* Initial "thinking" shimmer — shown until first tool or text arrives */}
-        {isStreaming && !text && uses.length === 0 && !thinking && (
+        {bodyIsLive && !text && uses.length === 0 && !thinking && (
           <div className="py-2">
             <ThinkingPhaseLabel />
           </div>
         )}
- 
-        {isStreaming && (
+
+        {bodyIsLive && (
           <StreamingStatus
             statusText={statusText}
             startedAt={startedAt}

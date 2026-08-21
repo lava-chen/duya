@@ -25,13 +25,26 @@ export interface CompactionStats {
 }
 
 /**
- * Result of a compaction operation
+ * Result of a compaction operation.
+ *
+ * `summaryText` carries the raw summary text the strategy produced (when it
+ * applies — e.g. `session_memory`). The manager uses this to drive iterative
+ * updates and the memory-flush sink without having to parse the summary out
+ * of the formatted summary message — that round-trip is fragile and would
+ * break every time the prompt template changed.
  */
 export interface CompactionResult {
   messages: Message[]
   tokensRemoved: number
   tokensRetained: number
   strategy: string
+  /**
+   * The raw summary text the strategy produced (session_memory only).
+   * The manager stores it for iterative compaction and the memory flush;
+   * the visible summary message embedded in `messages` is the formatted
+   * version of this same text.
+   */
+  summaryText?: string
 }
 
 /**
@@ -40,7 +53,17 @@ export interface CompactionResult {
 export interface CompactionStrategy {
   name: string
   shouldCompact(stats: CompactionStats): boolean
-  compact(messages: Message[], stats: CompactionStats): Promise<CompactionResult>
+  /**
+   * Run a compaction pass. The optional `options.previousSummary` is a
+   * transient seed for two-pass prefire; strategies that accept it should
+   * prefer it over their persistent `config.previousSummary` without
+   * mutating the config (so a shared strategy cannot leak across sessions).
+   */
+  compact(
+    messages: Message[],
+    stats: CompactionStats,
+    options?: CompactOptions,
+  ): Promise<CompactionResult>
 }
 
 // ============================================================
@@ -131,4 +154,10 @@ export interface CompactOptions {
   strategy?: string
   maxMessagesToKeep?: number
   customInstructions?: string
+  /**
+   * Transient seed for the next compaction, supplied by the manager's
+   * prefire pipeline. Strategies prefer this over their persistent
+   * `previousSummary` so the seed is never persisted to the strategy.
+   */
+  previousSummary?: string
 }

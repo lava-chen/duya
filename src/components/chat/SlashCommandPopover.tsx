@@ -7,12 +7,18 @@ import type { PopoverItem, PopoverMode, SettingsSubmenu } from '@/types/slash-co
 import {
   CubeIcon,
   CaretLeftIcon,
+  CaretRightIcon,
   CheckIcon,
+  RepeatIcon,
 } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
 import type { ModeModifierId } from '@/types/mode-id';
 import { isModeExcludedByActive } from '@/types/mode-id';
-import { getEffortOptionsForModel } from '@duya/ai';
+import {
+  getEffortOptionsForCapability,
+  getEffortOptionsForModel,
+} from '@duya/ai';
+import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
 import { BtwChatPanel } from './BtwChatPanel';
 
 // ---------------------------------------------------------------------------
@@ -25,6 +31,26 @@ interface McpServerInfo {
   enabled?: boolean;
   writable?: boolean;
   source?: 'settings' | 'plugin' | 'bundled';
+  /** Live runtime connection status from worker `mcp:status:snapshot`. */
+  connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+  /** Tool count the worker successfully listed. Absent when unknown. */
+  toolCount?: number;
+  /** Compact tool list with annotations for the inline expansion. */
+  tools?: Array<{
+    name: string;
+    description?: string;
+    annotations?: {
+      readOnly?: boolean;
+      destructive?: boolean;
+      openWorld?: boolean;
+    };
+  }>;
+  /** Last issue surfaced by the capability aggregator. */
+  lastIssue?: {
+    phase: 'connection' | 'registration' | 'discovery';
+    humanMessage: string;
+    severity: 'critical' | 'warning' | 'info';
+  };
 }
 
 interface ResponseStyleInfo {
@@ -86,8 +112,27 @@ const LEVEL_META: Record<string, { label: string; description: string }> = {
  * `modelId` should be the raw model id (e.g. 'MiniMax-M3'), without the
  * `[provider]` prefix the ModelSelector uses internally. The caller is
  * responsible for stripping the prefix.
+ *
+ * When the caller also passes a `providerId`, we additionally consult
+ * the runtime `ModelCapabilityService` so LM Studio / Ollama runtime
+ * models (which only live in the capability table) can surface their
+ * per-model `reasoningEffortOptions` (sourced from
+ * `capabilities.reasoning.allowed_options`).
  */
-function resolveEffortOptions(modelId?: string): ThinkingEffortOption[] {
+function resolveEffortOptions(
+  modelId?: string,
+  providerId?: string,
+): ThinkingEffortOption[] {
+  if (modelId && providerId) {
+    const cap = modelCapabilityService.getModelCapability(providerId, modelId);
+    const capOptions = getEffortOptionsForCapability(cap);
+    if (capOptions) {
+      return capOptions.map(opt => {
+        const meta = LEVEL_META[opt.level] ?? { label: opt.level, description: '' };
+        return { value: opt.value || null, label: meta.label, description: meta.description };
+      });
+    }
+  }
   if (modelId) {
     const modelOptions = getEffortOptionsForModel(modelId);
     if (modelOptions) {
@@ -123,11 +168,21 @@ interface SlashCommandPopoverProps {
    * are shown.
    */
   modelId?: string;
+  /**
+   * Provider id matching `modelId`. Used by the capability-driven
+   * effort resolver so LM Studio runtime models (which only live in
+   * `ModelCapabilityService` and not the static catalog) can still
+   * surface their per-model `reasoningEffortOptions`. Optional —
+   * static-catalog callers can omit it.
+   */
+  providerId?: string;
   responseStyles: ResponseStyleInfo[];
   selectedStyle: string | null;
   onSelectStyle: (styleId: string) => void;
   mcpServers: McpServerInfo[];
   onToggleMcpServer: (name: string, enabled: boolean) => void;
+  /** Trigger a worker-side MCP reload (reconnect). No-op when absent. */
+  onReloadMcp?: () => void;
   onAddFiles: () => void;
 
   // Manual context compaction
@@ -180,6 +235,7 @@ export function SlashCommandPopover({
   onSelectStyle,
   mcpServers,
   onToggleMcpServer,
+  onReloadMcp,
   onAddFiles,
 
   onCompact,
@@ -201,6 +257,8 @@ export function SlashCommandPopover({
 }: SlashCommandPopoverProps) {
   const [subView, setSubView] = useState<SettingsSubmenu | null>(null);
   const [recapState, setRecapState] = useState<RecapViewState>({ status: 'idle' });
+  // Name of the MCP server whose inline tool list is expanded.
+  const [expandedMcp, setExpandedMcp] = useState<string | null>(null);
   // The actual scrollable container is the outer .command-menu-popover div
   // (it owns overflow-y-auto + maxHeight). listboxRef points to that element
   // so we can keep selected rows visible without scrollIntoView side effects.
@@ -215,7 +273,10 @@ export function SlashCommandPopover({
   // Resolve the thinking-effort options for the currently-selected model.
   // When the model is a known reasoning model, only the levels it supports
   // are shown; otherwise the full 5-option fallback list is used.
-  const effortOptions = useMemo(() => resolveEffortOptions(modelId), [modelId]);
+  const effortOptions = useMemo(
+    () => resolveEffortOptions(modelId, providerId),
+    [modelId, providerId],
+  );
 
   const requestRecap = useCallback(async () => {
     setRecapState({ status: 'loading' });
@@ -683,8 +744,25 @@ export function SlashCommandPopover({
         {/* MCP options */}
         {subView === 'mcp' && (
           <section>
-            <div className="px-2.5 pb-1 pt-1 text-[11px] font-medium" style={{ color: 'var(--command-menu-muted)' }}>
-              MCP servers
+            <div className="px-2.5 pb-1 pt-1 flex items-center justify-between">
+              <span className="text-[11px] font-medium" style={{ color: 'var(--command-menu-muted)' }}>
+                MCP servers
+              </span>
+              {onReloadMcp && (
+                <button
+                  type="button"
+                  title="重新连接全部 MCP 服务器"
+                  aria-label="Reconnect MCP servers"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReloadMcp();
+                  }}
+                  className="flex items-center justify-center rounded p-0.5 hover:bg-[var(--surface-hover)]"
+                  style={{ color: 'var(--command-menu-muted)' }}
+                >
+                  <RepeatIcon size={12} />
+                </button>
+              )}
             </div>
             {mcpServers.length === 0 ? (
               <div className="px-2.5 py-2 text-[12px]" style={{ color: 'var(--command-menu-muted)' }}>
@@ -694,57 +772,164 @@ export function SlashCommandPopover({
               mcpServers.map((server) => {
                 const isEnabled = server.enabled ?? false;
                 const writable = server.writable !== false;
+                const status = server.connectionStatus ?? 'unknown';
+                const isExpanded = expandedMcp === server.name;
+                const tools = server.tools ?? [];
+                const statusColor =
+                  status === 'connected'
+                    ? 'var(--success, #22c55e)'
+                    : status === 'connecting'
+                      ? 'var(--warning, #f59e0b)'
+                      : status === 'error'
+                        ? 'var(--danger, #ef4444)'
+                        : 'var(--command-menu-muted)';
+                const statusLabel =
+                  status === 'connected'
+                    ? 'connected'
+                    : status === 'connecting'
+                      ? 'connecting…'
+                      : status === 'error'
+                        ? 'failed'
+                        : status === 'disconnected'
+                          ? 'disconnected'
+                          : 'unknown';
                 return (
-                  <div
-                    key={server.name}
-                    onClick={writable ? () => onToggleMcpServer(server.name, !isEnabled) : undefined}
-                    className={'command-menu-row flex items-center gap-2 px-2.5 select-none ' + (writable ? 'cursor-pointer' : 'cursor-default opacity-70')}
-                    style={{
-                      minHeight: 28,
-                      paddingTop: 4,
-                      paddingBottom: 4,
-                      borderRadius: 6,
-                      color: 'var(--text)',
-                    }}
-                  >
-                    <div className="flex-1 min-w-0 flex items-baseline" style={{ gap: 8 }}>
-                      <span className="truncate flex-shrink-0" style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', lineHeight: '16px' }}>
-                        {server.name}
-                      </span>
-                      {server.description && (
-                        <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)', lineHeight: '14px' }}>
-                          {server.description}
-                        </span>
-                      )}
-                      {!writable && (
-                        <span style={{ fontSize: 10, color: 'var(--command-menu-muted)' }}>plugin</span>
-                      )}
-                    </div>
-                    {/* Toggle switch */}
+                  <div key={server.name}>
                     <div
+                      onClick={() => setExpandedMcp(isExpanded ? null : server.name)}
+                      title={server.lastIssue?.humanMessage ?? statusLabel}
+                      className={'command-menu-row flex items-center gap-2 px-2.5 select-none ' + (writable ? 'cursor-pointer' : 'cursor-default')}
                       style={{
-                        width: 28,
-                        height: 16,
-                        borderRadius: 8,
-                        backgroundColor: isEnabled ? 'var(--accent)' : 'var(--command-menu-border)',
-                        position: 'relative',
-                        flexShrink: 0,
-                        transition: 'background-color 0.15s',
+                        minHeight: 28,
+                        paddingTop: 4,
+                        paddingBottom: 4,
+                        borderRadius: 6,
+                        color: 'var(--text)',
+                        opacity: writable ? 1 : 0.7,
                       }}
                     >
-                      <div
+                      {/* Live connection status dot (worker mcp:status:snapshot) */}
+                      <span
+                        aria-label={`status ${statusLabel}`}
                         style={{
-                          position: 'absolute',
-                          top: 2,
-                          left: isEnabled ? 14 : 2,
-                          width: 12,
-                          height: 12,
-                          borderRadius: 6,
-                          backgroundColor: '#fff',
-                          transition: 'left 0.15s',
+                          width: 7,
+                          height: 7,
+                          borderRadius: '50%',
+                          backgroundColor: statusColor,
+                          flexShrink: 0,
+                          boxShadow: status === 'connected' ? `0 0 0 2px ${statusColor}33` : 'none',
                         }}
                       />
+                      <div className="flex-1 min-w-0 flex items-baseline" style={{ gap: 8 }}>
+                        <span className="truncate flex-shrink-0" style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', lineHeight: '16px' }}>
+                          {server.name}
+                        </span>
+                        {typeof server.toolCount === 'number' && (
+                          <span style={{ fontSize: 10, color: 'var(--command-menu-muted)', flexShrink: 0 }}>
+                            {server.toolCount} tool{server.toolCount === 1 ? '' : 's'}
+                          </span>
+                        )}
+                        {server.description && (
+                          <span className="truncate" style={{ fontSize: 11, color: 'var(--command-menu-muted)', lineHeight: '14px' }}>
+                            {server.description}
+                          </span>
+                        )}
+                        {!writable && (
+                          <span style={{ fontSize: 10, color: 'var(--command-menu-muted)' }}>plugin</span>
+                        )}
+                      </div>
+                      <CaretRightIcon
+                        size={10}
+                        style={{
+                          color: 'var(--command-menu-muted)',
+                          flexShrink: 0,
+                          transform: isExpanded ? 'rotate(90deg)' : 'none',
+                          transition: 'transform 0.15s',
+                        }}
+                      />
+                      {/* Toggle switch */}
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (writable) onToggleMcpServer(server.name, !isEnabled);
+                        }}
+                        style={{
+                          width: 28,
+                          height: 16,
+                          borderRadius: 8,
+                          backgroundColor: isEnabled ? 'var(--accent)' : 'var(--command-menu-border)',
+                          position: 'relative',
+                          flexShrink: 0,
+                          transition: 'background-color 0.15s',
+                        }}
+                      >
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 2,
+                            left: isEnabled ? 14 : 2,
+                            width: 12,
+                            height: 12,
+                            borderRadius: 6,
+                            backgroundColor: '#fff',
+                            transition: 'left 0.15s',
+                          }}
+                        />
+                      </div>
                     </div>
+                    {status === 'error' && server.lastIssue && (
+                      <div
+                        className="pl-7 pr-2.5 pb-1 text-[10.5px] truncate"
+                        style={{ color: 'var(--danger, #ef4444)', lineHeight: '14px' }}
+                        title={server.lastIssue.humanMessage}
+                      >
+                        {server.lastIssue.humanMessage}
+                      </div>
+                    )}
+                    {isExpanded && (
+                      <div className="pl-7 pr-2.5 pb-1">
+                        {tools.length === 0 ? (
+                          <div className="text-[10.5px]" style={{ color: 'var(--command-menu-muted)', lineHeight: '14px' }}>
+                            {status === 'connected' ? 'No tools listed' : `No tools available (${statusLabel})`}
+                          </div>
+                        ) : (
+                          tools.map((tool) => (
+                            <div key={tool.name} className="flex items-center gap-1.5 py-0.5">
+                              <span
+                                className="flex-1 min-w-0 truncate font-mono"
+                                style={{ fontSize: 10.5, color: 'var(--text)', lineHeight: '14px' }}
+                              >
+                                {tool.name}
+                              </span>
+                              {tool.annotations?.destructive && (
+                                <span
+                                  className="shrink-0"
+                                  style={{ fontSize: 9, color: 'var(--danger, #ef4444)' }}
+                                >
+                                  destructive
+                                </span>
+                              )}
+                              {tool.annotations?.openWorld && (
+                                <span
+                                  className="shrink-0"
+                                  style={{ fontSize: 9, color: 'var(--warning, #f59e0b)' }}
+                                >
+                                  open
+                                </span>
+                              )}
+                              {tool.annotations?.readOnly === false && (
+                                <span
+                                  className="shrink-0"
+                                  style={{ fontSize: 9, color: 'var(--command-menu-muted)' }}
+                                >
+                                  write
+                                </span>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })

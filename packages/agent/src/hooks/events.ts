@@ -21,9 +21,10 @@
 import { readHooksConfig } from './config.js';
 import {
   executeHook,
+  hookCommandLine,
   type HookExecutionResult,
 } from './executor.js';
-import type { BaseHookInput, HookCommand, HookEvent, HookMatcher, HooksSettings } from './types.js';
+import type { BaseHookInput, HookCommand, HookEvent, HookInvokedEvent, HookMatcher, HooksSettings } from './types.js';
 import { logger } from '../utils/logger.js';
 
 export interface ConfigHooksRunnerOptions {
@@ -36,6 +37,14 @@ export interface ConfigHooksRunnerOptions {
   cwd?: string;
   /** `${KEY}` expansion values for `process` hooks (command + args). */
   vars?: Record<string, string>;
+  /**
+   * Plan 437: invoked once per matched hook with the full
+   * `HookInvokedEvent` payload. The agent process entry yields this as an
+   * `agent_progress` SSE event so the renderer can render a hook row in
+   * the chat flow. Optional — when absent (e.g. unit tests, sub-agents
+   * that suppress hook telemetry) the runner is silent.
+   */
+  onHookInvoked?: (event: HookInvokedEvent) => void;
 }
 
 export interface EventHookRunResult {
@@ -77,11 +86,16 @@ export class ConfigHooksRunner {
   private readonly settings: HooksSettings | undefined;
   private readonly cwd: string;
   private readonly vars: Record<string, string>;
+  /** Per-runner monotonic seq counter for emitted `HookInvokedEvent`s. */
+  private hookSeq = 0;
+  /** Optional callback that surfaces each hook to the renderer. */
+  private readonly onHookInvoked: ((event: HookInvokedEvent) => void) | undefined;
 
   constructor(opts: ConfigHooksRunnerOptions = {}) {
     this.settings = opts.settings !== undefined ? opts.settings : readHooksConfig();
     this.cwd = opts.cwd ?? process.cwd();
     this.vars = opts.vars ?? {};
+    this.onHookInvoked = opts.onHookInvoked;
   }
 
   /**
@@ -111,11 +125,41 @@ export class ConfigHooksRunner {
       if (!matcherApplies(matcher, targets)) continue;
       for (const hook of matcher.hooks) {
         executed++;
+        // Resolve the matcher that fired (only meaningful for tool-scoped
+        // events; non-tool events usually run with matcher undefined).
+        const matcherPattern = matcher.matcher;
+        const toolName = targets?.toolName;
+        const toolUseId = typeof input.tool_use_id === 'string' ? input.tool_use_id : undefined;
+        const hookName = truncateHookName(hookCommandLine(hook));
+        // Plan 87 follow-up: `async: true` is honored here as well — the
+        // safe wrapper downgrades to sync with a WARN for decision events.
+        const isAsync =
+          (hook.type === 'command' || hook.type === 'process') && hook.async === true
+          && !DECISION_EVENTS.has(event);
+        const started = Date.now();
         try {
           const result = await executeHookSafe(hook, input, event, {
             cwd: this.cwd,
             vars: this.vars,
             backgroundTasks,
+          });
+          const durationMs = Date.now() - started;
+          this.emitHookInvoked({
+            type: 'hook_invoked',
+            hookEventName: event,
+            hookType: hook.type,
+            hookName,
+            matcher: matcherPattern,
+            additionalContext: result.additionalContext,
+            exitCode: result.exitCode,
+            async: isAsync,
+            backgroundTaskId: result.backgroundTaskId,
+            durationMs,
+            status: classifyStatus(result),
+            errorMessage: result.error,
+            seq: this.nextSeq(),
+            toolName,
+            toolUseId,
           });
           if (result.ok) {
             if (result.additionalContext) contexts.push(result.additionalContext);
@@ -133,6 +177,21 @@ export class ConfigHooksRunner {
             `[Hooks] ${event} ${hook.type} hook failed (skipped): ${result.error ?? 'unknown error'}`,
           );
         } catch (err) {
+          const durationMs = Date.now() - started;
+          this.emitHookInvoked({
+            type: 'hook_invoked',
+            hookEventName: event,
+            hookType: hook.type,
+            hookName,
+            matcher: matcherPattern,
+            async: isAsync,
+            durationMs,
+            status: 'error',
+            errorMessage: err instanceof Error ? err.message : String(err),
+            seq: this.nextSeq(),
+            toolName,
+            toolUseId,
+          });
           logger.warn(
             `[Hooks] ${event} ${hook.type} hook threw (skipped): ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -141,6 +200,47 @@ export class ConfigHooksRunner {
     }
     return { executed, contexts, backgroundTasks };
   }
+
+  /** Increment and return the next per-runner hook seq. */
+  private nextSeq(): number {
+    this.hookSeq += 1;
+    return this.hookSeq;
+  }
+
+  /** Fire the `onHookInvoked` callback if one is registered. Never throws. */
+  private emitHookInvoked(event: HookInvokedEvent): void {
+    if (!this.onHookInvoked) return;
+    try {
+      this.onHookInvoked(event);
+    } catch (err) {
+      logger.warn(
+        `[Hooks] onHookInvoked callback threw (ignored): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+}
+
+/** Cap hook-name strings so a long shell pipeline doesn't blow out the chrome. */
+function truncateHookName(name: string): string {
+  const MAX = 80;
+  return name.length > MAX ? `${name.slice(0, MAX - 1)}…` : name;
+}
+
+/**
+ * Map a `HookExecutionResult` to the renderer's coarse status. The runner
+ * can't tell infra-failure from timeout (both arrive as `{ ok: false }`
+ * without `exitCode`), so we use the error message string as a hint —
+ * "timeout" keywords classify as `timeout`, everything else as `error`.
+ * Background launches (`backgroundTaskId` set) are always `ok`.
+ */
+function classifyStatus(result: HookExecutionResult): HookInvokedEvent['status'] {
+  if (result.backgroundTaskId) return 'ok';
+  if (result.ok) return 'ok';
+  if (result.exitCode !== undefined) return 'error';
+  const msg = (result.error ?? '').toLowerCase();
+  if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
+  if (msg.includes('suppressed') || msg.includes('circuit breaker')) return 'skipped';
+  return 'error';
 }
 
 /**

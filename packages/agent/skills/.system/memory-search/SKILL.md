@@ -26,21 +26,58 @@ curation run ──▶ refreshMemoryRagIndex (full rebuild)
 user prompt ──▶ [hooks] UserPromptSubmit ──▶ memory-rag-hook.mjs / memory-search.mjs
                 ├─ filterPrompt: drop short / filler messages ("继续", "你好", "ok", …)
                 ├─ vector search (best-effort) + FTS5 keyword fallback
-                └─ stdout {"additionalContext": "### 相关记忆 …"}
+                ├─ formatContext: title + path + full body (per-hit cap 6 KB,
+                │                total cap 24 KB; lower-ranked hits are dropped
+                │                whole when the union would exceed the cap)
+                └─ stdout {"additionalContext": "### 相关记忆\n- …"}
+                            │   wrapped in <system-reminder>
+                            ▼
+                  DuyaAgent._projectModelMessages drains this.promptContexts
+                  into the first turn's provider messages (source='custom',
+                  visibility='hidden') — same shape as loop-hook nudges.
 ```
 
-The template hook is **asynchronous by design** (`async: true` +
-`asyncRewake: true`): the retrieval script runs in the background — the
-agent loop never blocks — and when it finishes, its `additionalContext` is
-delivered back into the session as a background notification (`<task-notification>`
-mailbox row, same channel as background bash tasks) that the model picks up
-at the next turn checkpoint. The task also appears under Settings → Hooks →
-"Background hook tasks" while it runs.
+The template hook is **synchronous by design** (no `async: true`, no
+`asyncRewake: true`): retrieval is keyword-only or vector-cos over a tiny
+SQLite index (typically well under 500 ms with a local embedding
+provider, slower with hosted endpoints — the `timeoutMs: 5000` in
+`hooks.json` bounds it). The agent blocks the first turn for that span
+so the model sees the retrieved memory on the SAME turn as the user's
+prompt. `DuyaAgent.streamChat` (see
+`packages/agent/src/agent/DuyaAgent.ts:~548`) drains the hook's
+`submitCtx.contexts` into the first `_projectModelMessages` projection as
+`<system-reminder>` runtime_context messages (`source: 'custom'`). The
+plan-430 sync-injection path closes the plan-87 "UserPromptSubmit
+contexts only logged, never injected" gap that this file used to
+document; the prior async + asyncRewake path was a workaround and
+imposed a 4 KB cap (`DEFAULT_MAX_RESULT_CHARS`) that clipped every
+retrieved body — see "Architecture changes" below.
 
 Every retrieval run appends an event to the memory system log
 (`~/.duya/memory-system-log/YYYY/MM/DD.jsonl`):
 `rag_hook_retrieved` / `rag_hook_no_hits` / `rag_hook_error`, with the
 mode (`vector` / `hybrid` / `keyword`) and the embedding fallback reason.
+
+### Architecture changes (plan 430 follow-up)
+
+The formatContext function used to emit a 220-char snippet + path per
+hit. That is useless to a model that can't Read the file during the same
+turn: only the path gave the agent any handle on the memory, and the
+snippet often missed the part of the doc the user was asking about.
+The hook now emits the **full body** (frontmatter-stripped), capped at
+`FORMAT_PER_HIT_BODY_CHARS` (6 KB) per hit and `FORMAT_TOTAL_CHARS`
+(24 KB) total. Lower-ranked hits are dropped whole — never half-clipped
+mid-paragraph — when the union exceeds the total budget, so the highest-
+scored memories always land intact. A truncated hit carries an HTML
+comment marker so the model still knows the path points at the full
+file: `<!-- read-full: this hit was truncated to 6000 chars; the path
+above points at the full memory file -->`.
+
+The hook path is synchronous so the model sees the body on the first
+turn instead of on the turn-after-the-async-task-completes. With sync
+execution the rendered additionalContext streams directly into the
+provider messages (no 4 KB task-notification cap); the 24 KB total
+ceiling is the only hard limit on what reaches the model.
 
 ## CLI: `duya memory search <query>`
 
@@ -51,6 +88,10 @@ Query the index directly from a terminal (or via the CLI API
 duya memory search "dam crest elevation"
 # → {ok, hits: [{title, path, snippet, score}]}
 ```
+
+The CLI keeps the snippet-only output (one 220-char window per hit plus
+path) because it's a human-readable tool, not an injected context. Use
+`--json` to get snippet + path + score as JSON.
 
 Returns 400 when `[memory.rag]` is not enabled. Use `duya memory status`
 to inspect config + index state, `duya memory rebuild` to rebuild the
@@ -97,18 +138,19 @@ Schema notes (strict — a violation WARNs and contributes nothing):
     "UserPromptSubmit": [
       { "hooks": [
         { "type": "process", "command": "node", "args": ["<abs-path-to-script>"],
-          "async": true, "asyncRewake": true }
+          "timeoutMs": 5000 }
       ] }
     ]
   }
 }
 ```
 
-- `async: true` runs the retrieval in the background (no first-turn block;
-  output streams to `%TEMP%/duya-hook-<uuid>.log`).
-- `asyncRewake: true` delivers the retrieved memories back into the session
-  as a background notification the next turn — the model sees `### 相关记忆`
-  without the agent having waited.
+- No `async` / `asyncRewake`: synchronous execution, drained into the
+  first turn's provider messages by `DuyaAgent._projectModelMessages`.
+- `timeoutMs: 5000` bounds the slowest embedding endpoint so a hung
+  provider never blocks the first turn past five seconds. Keyword-only
+  (no embedding) is sub-100 ms on real indexes; vector cos is bounded
+  by the embedding roundtrip.
 - `matcher` is optional; without it the hook fires on every prompt.
 - Hook changes hot-reload on the next run (config is read fresh per
   streamChat) — no restart needed.
@@ -132,9 +174,7 @@ event. This keeps the hook quiet for "继续" / "你好" style turns.
   when the user explicitly asks to search their memory.
 - The index is rebuilt only after curation runs — new memory files are not
   searchable until the next refresh (or `duya memory rebuild`).
-- The injected context (`### 相关记忆`) reaches the model through the
-  background-notification path (see the template's `async` +
-  `asyncRewake`). Do NOT drop back to a synchronous hook here: a sync
-  UserPromptSubmit hook's stdout is logged but never injected into the
-  model (known gap, plan 430) and it blocks the first turn for up to its
-  timeout.
+- The injected context (`### 相关记忆`) reaches the model on the first
+  turn through `DuyaAgent._projectModelMessages` (sync path; plan 430).
+  Pre-plan-430 docs called this an "async + asyncRewake" pipeline; that
+  pipeline is gone — see "Architecture changes" above for the why.

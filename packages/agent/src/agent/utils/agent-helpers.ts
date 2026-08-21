@@ -147,8 +147,7 @@ export function persistableMessages(messages: Message[]): Message[] {
         source === 'auto_continue' ||
         source === 'dead_loop_nudge' ||
         source === 'premature_stop' ||
-        source === 'tool_intent' ||
-        source === 'max_turns_wrapup'
+        source === 'tool_intent'
       ) {
         return false;
       }

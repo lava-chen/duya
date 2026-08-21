@@ -467,17 +467,26 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       const detail = (event as CustomEvent<{
         filePath?: string;
         workingDirectory?: string;
+        standalone?: boolean;
         lineStart?: number;
         lineEnd?: number;
       }>).detail;
       const filePath = typeof detail?.filePath === "string" ? detail.filePath : "";
       const workingDirectory = typeof detail?.workingDirectory === "string" ? detail.workingDirectory : "";
-      if (!filePath.trim() || !workingDirectory.trim()) return;
+      const standalone = detail?.standalone === true;
+      // Standalone mode (in-chat click to a file outside the chat
+      // workspace) deliberately ships with an empty workingDirectory —
+      // the renderer just wants the file's content without exposing
+      // its parent directory as a project tree. Project-scoped opens
+      // (sidebar markdown preview) keep the existing
+      // `workingDirectory required` invariant.
+      if (!filePath.trim() || (!standalone && !workingDirectory.trim())) return;
       const params: Record<string, unknown> = {
         filePath,
         workingDirectory,
         title: filePath.split(/[/\\]/).pop() || t('panel.preview'),
       };
+      if (standalone) params.standalone = true;
       // Forward the agent's read line range so the preview panel can
       // scroll to and highlight the exact lines on first mount. The
       // follow-up `duya:preview-focus-lines` event handles re-focus on

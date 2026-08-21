@@ -18,7 +18,9 @@ import type {
   NormalizedMessage,
   StreamEvent,
   NormalizedReply,
+  MediaReply,
 } from './types.js';
+import { extname } from 'node:path';
 import { PlatformAdapter, createAdapter, getRegisteredPlatforms } from './adapters/base.js';
 import { IpcClient } from './ipc-client.js';
 import { UserMapper } from './user-mapper.js';
@@ -484,16 +486,32 @@ export class GatewayManager {
     platform: string,
     platformChatId: string,
     text: string,
+    filePath?: string,
   ): Promise<{ ok: boolean; error?: string; platformMsgId?: string }> {
     const adapter = this.adapters.get(platform as PlatformType);
     if (!adapter) {
       return { ok: false, error: `No running adapter for platform: ${platform}` };
     }
-    if (!text.trim()) {
-      return { ok: false, error: 'Message text must not be empty' };
+    if (!text.trim() && !filePath) {
+      return { ok: false, error: 'Message text or filePath must not be empty' };
     }
     try {
-      const result = await adapter.sendReply(platformChatId, { type: 'text', text });
+      let reply: NormalizedReply;
+      if (filePath) {
+        // Reuse the same media delivery the outbound stream handler uses:
+        // build an in-memory MediaReply, and `adapter.sendReply` routes the
+        // `'media'` case to that adapter's existing `sendMedia` implementation.
+        const mediaReply: MediaReply = {
+          type: 'media',
+          mediaType: inferMediaType(filePath),
+          filePath,
+          ...(text.trim() ? { caption: text } : {}),
+        };
+        reply = mediaReply;
+      } else {
+        reply = { type: 'text', text };
+      }
+      const result = await adapter.sendReply(platformChatId, reply);
       return {
         ok: result?.ok !== false,
         ...(result?.platformMsgId ? { platformMsgId: result.platformMsgId } : {}),
@@ -1512,4 +1530,22 @@ export class GatewayManager {
       return true;
     }
   }
+}
+
+/**
+ * Infer the channel MediaReply mediaType from a file extension. Mirrors the
+ * outbound stream handler's inference (`stream-handler.ts`).
+ */
+function inferMediaType(filePath: string): MediaReply['mediaType'] {
+  const ext = extname(filePath).toLowerCase();
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
+    return 'photo';
+  }
+  if (['.mp4', '.mov', '.webm', '.mkv', '.avi'].includes(ext)) {
+    return 'video';
+  }
+  if (['.mp3', '.ogg', '.wav', '.m4a', '.flac', '.aac'].includes(ext)) {
+    return 'voice';
+  }
+  return 'document';
 }
