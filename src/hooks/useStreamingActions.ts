@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { subscribeToStreamingEvents, type StreamingEvent } from '@/lib/stream-session-manager';
 import type { ActionItem } from '@/components/chat/ToolActionsGroup';
 import { buildToolAction } from '@/components/chat/tools/normalize';
+import { useShowHookInvocations } from './useShowHookInvocations';
 
 function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   const actions: ActionItem[] = [];
@@ -20,14 +21,23 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   for (const event of events) {
     switch (event.type) {
       case 'text':
-        // Each text event's `content` is the local text accumulated since
-        // the last non-text event (see stream-session-manager — it appends
-        // deltas to the trailing text event and only creates a new one when
-        // a non-text event arrives in between). Push it through so the
-        // renderer can interleave text and tool calls in chronological
-        // order; the cumulative text rendering path is removed in
-        // StreamingMessage and TextRow applies typewriter on the last
-        // block to keep the streaming pacing smooth.
+        // stream-session-manager accumulates each text event's `content`
+        // in-place on the trailing text event; adjacent text events only
+        // appear in the array when a non-text event (tool_use / result /
+        // viz / hook / thinking) was pushed in between. We previously
+        // tried to "merge" adjacent text actions via mergeMarkdownFragments,
+        // but both sides were already-cumulative strings (the previous
+        // flush's `lastAction.content` + this flush's `event.content`),
+        // so each rAF tick re-prepended the prior content via `\n\n`,
+        // making the rendered TextRow grow as
+        //   "A\n\nB" → "A\n\nB\n\nBC" → "A\n\nB\n\nBC\n\nBCD"
+        // every flush — exactly the "打字机在不停重复流式输出" symptom.
+        //
+        // Push every text event as its own action. Cross-tool-result
+        // markdown constructs (a table whose rows straddle a tool call)
+        // will now render as two separate TextRow components, but agents
+        // rarely emit such constructs across tool boundaries and the
+        // streaming flow already shows the tool row between them.
         if (event.content) {
           actions.push({ kind: 'text', content: event.content });
         }
@@ -66,10 +76,36 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
           actions.push({ kind: 'widget', content: event.content });
         }
         break;
+      case 'hook_invocation':
+        // Plan 437: hook events arrive via `handleAgentProgressEvent` in
+        // stream-session-manager and are appended to `streamingEvents` as
+        // `hook_invocation` variants. Push them through unchanged — the
+        // group / row pipeline renders them through `HookActionRow`.
+        actions.push({ kind: 'hook', hook: event.hook });
+        break;
     }
   }
 
   return actions;
+}
+
+/**
+ * Plan 437: same as `streamingEventsToActions` but drops hook events
+ * when the user has turned them off in Settings → Hooks. Default ON,
+ * so the feature is visible by default; this only matters when the
+ * toggle is explicitly off.
+ */
+function streamingEventsToActionsFiltered(
+  events: StreamingEvent[],
+  showHookInvocations: boolean,
+): ActionItem[] {
+  if (showHookInvocations) return streamingEventsToActions(events);
+  const filtered: StreamingEvent[] = [];
+  for (const e of events) {
+    if (e.type === 'hook_invocation') continue;
+    filtered.push(e);
+  }
+  return streamingEventsToActions(filtered);
 }
 
 export function useStreamingActions(sessionId: string): ActionItem[] {
@@ -79,6 +115,9 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
   // frame: reference equality cannot tell whether an in-place event changed.
   const latestEventsRef = useRef<StreamingEvent[] | null>(null);
   const frameRef = useRef<number | null>(null);
+  // Plan 437: re-read the toggle on every render so a mid-round toggle
+  // in Settings → Hooks takes effect on the next animation frame flush.
+  const showHookInvocations = useShowHookInvocations();
 
   useEffect(() => {
     // Reset on sessionId change so a new session starts fresh.
@@ -89,7 +128,10 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
       frameRef.current = null;
       const events = latestEventsRef.current;
       if (events) {
-        setActions(streamingEventsToActions(events));
+        // Plan 437: drop hook events when the user has toggled them off
+        // in Settings → Hooks. Read the latest value at flush time so a
+        // mid-round toggle takes effect immediately.
+        setActions(streamingEventsToActionsFiltered(events, showHookInvocations));
       }
     };
 

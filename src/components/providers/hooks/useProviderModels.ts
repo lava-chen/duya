@@ -222,6 +222,68 @@ export function useProviderModels({
         const apiIds = new Set(result.models.map((m) => m.id));
         const preserved = presetModels.filter((m) => !apiIds.has(m.id));
         setFetched([...result.models, ...preserved]);
+
+        // Seed per-model context windows from the provider's reported context
+        // (e.g. LM Studio `max_context_length`). Additive only — never clobber
+        // a value the user has already picked.
+        const withCtx = result.models.filter(
+          (m): m is FetchedModel & { contextLength: number } =>
+            typeof m.contextLength === 'number' && m.contextLength > 0,
+        );
+        if (withCtx.length > 0) {
+          setContextWindows((prev) => {
+            let changed = false;
+            const next = new Map(prev);
+            for (const m of withCtx) {
+              if (!next.has(m.id)) {
+                next.set(m.id, m.contextLength);
+                changed = true;
+              }
+            }
+            return changed ? next : prev;
+          });
+        }
+
+        // Persist the rich capability flags (vision / tool-use /
+        // reasoning / format) that LM Studio exposes on `/api/v1/models`
+        // into the capability table so the chat-side selectors and
+        // future Tier-3 gating logic can consume them without a
+        // second IPC roundtrip. `source: 'models-api'` distinguishes
+        // wire-derived values from user overrides (`'user'`).
+        if (providerId) {
+          for (const m of result.models) {
+            const hasAnyCapability =
+              m.supportsVision !== undefined ||
+              m.supportsToolUse !== undefined ||
+              m.supportsReasoning !== undefined ||
+              typeof m.contextWindowMax === 'number' ||
+              (m.reasoningEffortOptions !== undefined &&
+                m.reasoningEffortOptions.length > 0) ||
+              m.isLoaded === true;
+            if (!hasAnyCapability) continue;
+            void upsertModelCapabilityIPC({
+              providerId,
+              modelId: m.id,
+              source: 'models-api',
+              updatedAt: Date.now(),
+              ...(typeof m.contextWindowMax === 'number' && m.contextWindowMax > 0
+                ? { contextWindow: m.contextWindowMax }
+                : typeof m.contextLength === 'number' && m.contextLength > 0
+                  ? { contextWindow: m.contextLength }
+                  : {}),
+              ...(m.supportsVision !== undefined ? { supportsVision: m.supportsVision } : {}),
+              ...(m.supportsToolUse !== undefined ? { supportsToolUse: m.supportsToolUse } : {}),
+              ...(m.supportsReasoning !== undefined ? { supportsReasoning: m.supportsReasoning } : {}),
+              ...(m.reasoningEffortOptions !== undefined && m.reasoningEffortOptions.length > 0
+                ? { reasoningEffortOptions: m.reasoningEffortOptions }
+                : {}),
+              ...(m.isLoaded === true ? { isLoaded: true } : {}),
+            }).catch(() => {
+              // Best-effort: capability writes are a hint, not source of
+              // truth; a transient IPC failure should not block the UI.
+            });
+          }
+        }
       } else {
         setFetchError(
           result.error?.message ?? t('provider.fetchModelsFailed'),

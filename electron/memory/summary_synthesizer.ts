@@ -160,6 +160,28 @@ details. So your digest must answer three questions the raw index cannot:
   ]
 }
 
+# Incremental editing (MANDATORY when a current summary is provided)
+
+When the input contains "current_semantic_summary", your output is an
+EDIT of that digest, not a fresh write:
+
+- PROFILE: preserve the existing profile text verbatim whenever it is
+  still accurate. Extend it only with NEW facts the source files add;
+  never rewrite the whole portrait because you "said it better". Keep
+  every sentence from the previous profile unless a source file
+  explicitly contradicts it.
+- TOP_RULES: keep every rule that still holds (copy it unchanged).
+  Update a rule only when the source changed it; add new high-value
+  rules; drop a rule only when a source file no longer supports it.
+- MEMORY_MAP: keep existing topic to keywords to files entries unchanged
+  unless the source changed. Add entries for new topics; drop stale ones.
+- GAPS: keep still-open gaps verbatim; remove gaps the new content
+  filled; add newly discovered blind spots.
+- Stability wins: if the current digest is already good and the new
+  material adds nothing, return it nearly unchanged. The cost of
+  rewriting good memory is higher than the cost of missing a marginal
+  improvement.
+
 # Hard rules
 
 - Base EVERYTHING on the provided files. Never invent facts, people,
@@ -389,11 +411,35 @@ function deterministicFallback(memoryRoot: string): string {
 }
 
 /**
- * Assemble the LLM input: every canonical file + MEMORY.md, capped.
+ * Assemble the LLM input: every canonical file + MEMORY.md + the
+ * CURRENT semantic block of summary.md (when one exists), capped.
+ *
+ * Including the previous digest turns Phase 3 into an INCREMENTAL
+ * editor instead of a from-scratch generator. Without it, a good profile
+ * / rule set written by one run is thrown away and regenerated from
+ * scratch by the next — a single low-quality run overwrites accumulated
+ * memory. With it, the model edits in place: keep what is still true,
+ * update what changed, add what is new, drop what no longer applies.
  */
 async function assembleInput(memoryRoot: string): Promise<string> {
   const chunks: Array<{ file: string; content: string }> = [];
   let total = 0;
+
+  // Current semantic digest (everything before the deterministic
+  // index's "## Essentials" marker) — the reference the model edits.
+  const prevSummaryPath = path.join(memoryRoot, 'summary.md');
+  let currentSummary: string | null = null;
+  try {
+    const body = await fs.readFile(prevSummaryPath, 'utf8');
+    const marker = '## Essentials';
+    const idx = body.indexOf(marker);
+    const semanticPart = (idx >= 0 ? body.slice(0, idx) : body).trim();
+    if (semanticPart.length > 0 && semanticPart !== '_') {
+      currentSummary = semanticPart;
+    }
+  } catch {
+    currentSummary = null; // no summary yet — first synthesis
+  }
 
   for (const dir of ENTITY_DIRS) {
     const abs = path.join(memoryRoot, dir);
@@ -428,7 +474,8 @@ async function assembleInput(memoryRoot: string): Promise<string> {
     // MEMORY.md missing — fine, canonical files are the source of truth
   }
 
-  // If we still overflow, drop the largest chunks until we fit.
+  // If we still overflow, drop the largest chunks until we fit. The
+  // previous digest is part of the payload and counts toward the budget.
   if (total > MAX_TOTAL_CHARS) {
     chunks.sort((a, b) => b.content.length - a.content.length);
     let running = 0;
@@ -441,7 +488,25 @@ async function assembleInput(memoryRoot: string): Promise<string> {
     chunks.splice(0, chunks.length, ...kept);
   }
 
-  return JSON.stringify({ files: chunks }, null, 2);
+  return JSON.stringify(
+    {
+      files: chunks,
+      ...(currentSummary !== null
+        ? {
+            current_semantic_summary: currentSummary,
+            edit_instruction:
+              'The CURRENT_SEMANTIC_SUMMARY above is the digest you (or a previous run) ' +
+              'generated. Treat it as the baseline: EDIT IN PLACE, do not regenerate from ' +
+              'scratch. Keep every entry that is still accurate, update entries the source ' +
+              'files supersede, add new material, and drop only what the source files no ' +
+              'longer support. The output must remain a complete JSON document in the same ' +
+              'shape.',
+          }
+        : {}),
+    },
+    null,
+    2,
+  );
 }
 
 /**

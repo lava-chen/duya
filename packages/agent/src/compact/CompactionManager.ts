@@ -315,14 +315,17 @@ export class CompactionManager {
       }
 
       // Pass 2: if a background prefire summary is cached and still matches
-      // the current messages, seed the strategy's previous summary so the
-      // waiting pass summarizes only recent deltas, not the whole history.
+      // the current messages, hand it to the strategy as a *transient* seed.
+      // The strategy uses it via options.previousSummary without mutating its
+      // own config — so a shared strategy cannot leak a previous session's
+      // summary into the next one (plan 422 fix).
       const prefireSummary = this.getPrefireSummary(messages)
-      if (prefireSummary && typeof (strategy as unknown as { setPreviousSummary?: (s: string) => void }).setPreviousSummary === 'function') {
-        ;(strategy as unknown as { setPreviousSummary(s: string): void }).setPreviousSummary(prefireSummary)
+      const compactOptions: CompactOptions = {
+        ...(options ?? {}),
+        ...(prefireSummary ? { previousSummary: prefireSummary } : {}),
       }
 
-      const baseResult = await strategy.compact(messages, this.getStats())
+      const baseResult = await strategy.compact(messages, this.getStats(), compactOptions)
 
       // Apply post-compact reinjection if enabled
       let finalMessages = baseResult.messages
@@ -369,21 +372,16 @@ export class CompactionManager {
         this.budget.setContextTokens(this.contextTokens)
       }
 
-      // Store summary for iterative updates (if session_memory strategy was used)
+      // Store summary for iterative updates (session_memory only). The strategy
+      // populates result.summaryText directly so we never have to regex it back
+      // out of the formatted summary message — the prompt template can change
+      // without breaking the iterative update or memory-flush loop.
       if (strategy.name === 'session_memory' && this.enableIterativeSummary) {
-        // Extract summary from the summary message
-        const summaryMessage = finalMessages.find(m => m.isCompactSummary)
-        if (summaryMessage && typeof summaryMessage.content === 'string') {
-          // Extract the summary text (remove the continuation instruction)
-          const content = summaryMessage.content
-          const summaryMatch = content.match(/The session memory below covers the earlier portion of the conversation\.\n\n([\s\S]+?)\n\nContinue the conversation/)
-          if (summaryMatch) {
-            this.lastSummary = summaryMatch[1]
-          }
+        const raw = baseResult.summaryText
+        if (typeof raw === 'string' && raw.length > 0) {
+          this.lastSummary = raw
           // Persist important context to the memory store before history drops.
-          if (this.lastSummary) {
-            this.flushMemory(this.lastSummary)
-          }
+          this.flushMemory(raw)
         }
       }
 

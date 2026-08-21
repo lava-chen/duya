@@ -78,6 +78,20 @@ describe('buildCandidateUrls — canonical (no compat suffix)', () => {
     ]);
   });
 
+  it('adds a 127.0.0.1 alias for localhost hosts (IPv6 ::1 is refused)', () => {
+    // `localhost` resolves to ::1 and 127.0.0.1; Electron's Node may try ::1
+    // first and fail with ECONNREFUSED (LM Studio binds IPv4 only), so we must
+    // also try the 127.0.0.1 variant.
+    expect(buildCandidateUrls('http://localhost:1234/v1')).toEqual([
+      'http://localhost:1234/v1/models',
+      'http://127.0.0.1:1234/v1/models',
+    ]);
+    expect(buildCandidateUrls('http://localhost:11434')).toEqual([
+      'http://localhost:11434/v1/models',
+      'http://127.0.0.1:11434/v1/models',
+    ]);
+  });
+
   it('handles v1beta / v1alpha tails the same way', () => {
     expect(buildCandidateUrls('https://api.example.com/v1beta')).toEqual([
       'https://api.example.com/v1beta/models',
@@ -342,6 +356,264 @@ describe('fetchProviderModels — end-to-end with mocked fetch', () => {
     });
     expect(result.success).toBe(true);
     expect(result.models).toEqual([{ id: 'llama3:latest', ownedBy: 'ollama' }]);
+  });
+
+  it('fetches from a localhost OpenAI-compatible server without an API key (LM Studio)', async () => {
+    // LM Studio exposes `/api/v1/models` on the host root and needs no key.
+    // Previously the `!api_key` guard returned NO_CREDENTIALS before any
+    // network call; now the local rich path returns models (with context).
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 200,
+        body: {
+          models: [
+            {
+              type: 'llm',
+              key: 'qwen3.8-27b',
+              loaded_instances: [{ id: 'qwen3.8-27b', config: { context_length: 2048 } }],
+              max_context_length: 262144,
+            },
+            {
+              type: 'llm',
+              key: 'openai/gpt-oss-20b',
+              loaded_instances: [],
+              max_context_length: 131072,
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+      auth_style: 'auth_token', // no api_key provided
+    });
+
+    expect(result.success).toBe(true);
+    // Loaded model → its ACTIVE context_length (2048); not-loaded → max.
+    // `contextWindowMax` mirrors the model's absolute cap so the
+    // renderer can show both "32K / 256K" values.
+    expect(result.models).toEqual([
+      {
+        id: 'qwen3.8-27b',
+        ownedBy: null,
+        contextLength: 2048,
+        contextWindowMax: 262144,
+      },
+      {
+        id: 'openai/gpt-oss-20b',
+        ownedBy: null,
+        contextLength: 131072,
+        contextWindowMax: 131072,
+      },
+    ]);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'http://localhost:1234/api/v1/models',
+    );
+    // No Authorization header is sent because no key exists.
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+    expect(headers['Authorization']).toBeUndefined();
+  });
+
+  it('falls back from refused localhost to the 127.0.0.1 alias', async () => {
+    // Simulate Electron's Node: `localhost` resolves to ::1 which is refused,
+    // so the localhost rich endpoint throws; we must hit the 127.0.0.1 alias.
+    fetchMock
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(
+        makeResponse({
+          status: 200,
+          body: {
+            models: [
+              { key: 'qwen3.8-27b', loaded_instances: [{ config: { context_length: 8192 } }] },
+            ],
+          },
+        }),
+      );
+
+    const result = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+    });
+
+    expect(result.success).toBe(true);
+    // `contextWindowMax` was added alongside `contextLength` to expose
+    // the model's absolute ceiling when LM Studio reports it via
+    // `max_context_length` (here the raw payload omits the max so
+    // `contextWindowMax` falls back to the loaded context length).
+    expect(result.models).toEqual([
+      { id: 'qwen3.8-27b', ownedBy: null, contextLength: 8192, contextWindowMax: 8192 },
+    ]);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'http://localhost:1234/api/v1/models',
+    );
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      'http://127.0.0.1:1234/api/v1/models',
+    );
+  });
+
+  it('still requires a key for a non-local endpoint', async () => {
+    const result = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'https://api.remote.example.com/v1',
+      auth_style: 'auth_token',
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.code).toBe('NO_CREDENTIALS');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('extractModels — LM Studio rich capabilities', () => {
+  // Regression coverage for the wasted-metadata gap: LM Studio's
+  // `/api/v1/models` payload reports capabilities (vision /
+  // trained_for_tool_use / reasoning) and a quantization format.
+  // Previously `extractModels` threw these away. These tests pin the
+  // new behavior so future changes don't regress it.
+
+  function fetchLmStudio(body: unknown) {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 200, body }));
+    return fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+      auth_style: 'auth_token',
+    });
+  }
+
+  it('extracts supportsVision / supportsToolUse from capabilities.vision / .trained_for_tool_use', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'llava-1.5-7b',
+          display_name: 'LLaVA 1.5 7B',
+          max_context_length: 4096,
+          format: 'gguf',
+          capabilities: { vision: true, trained_for_tool_use: false },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.models?.[0]).toMatchObject({
+      id: 'llava-1.5-7b',
+      supportsVision: true,
+      supportsToolUse: false,
+      format: 'gguf',
+      contextLength: 4096,
+      contextWindowMax: 4096,
+    });
+  });
+
+  it('sets supportsReasoning=true when capabilities.reasoning.allowed_options has at least one non-off entry', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'deepseek-r1-distill',
+          max_context_length: 8192,
+          capabilities: {
+            reasoning: { allowed_options: ['low', 'medium', 'high', 'off'] },
+          },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.supportsReasoning).toBe(true);
+  });
+
+  it('sets supportsReasoning=false when allowed_options contains only "off"', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen2.5-7b-instruct',
+          max_context_length: 32768,
+          capabilities: { reasoning: { allowed_options: ['off'] } },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.supportsReasoning).toBe(false);
+  });
+
+  it('falls back to capabilities.reasoning.default when allowed_options is absent', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        status: 200,
+        body: {
+          models: [
+            {
+              type: 'llm',
+              key: 'qwq-32b',
+              max_context_length: 32768,
+              capabilities: { reasoning: { default: 'low' } },
+            },
+          ],
+        },
+      }),
+    );
+    const result = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+    });
+    expect(result.models?.[0]?.supportsReasoning).toBe(true);
+  });
+
+  it('omits capability flags (undefined) when the source did not report capabilities', async () => {
+    // Plain OpenAI `/v1/models` style payload: only `id`.
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 200, body: { data: [{ id: 'gpt-4o' }] } }),
+    );
+    const result = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'https://api.openai.com/v1',
+      auth_style: 'api_key',
+      api_key: 'sk-test',
+    });
+    expect(result.models?.[0]).toEqual({
+      id: 'gpt-4o',
+      ownedBy: null,
+    });
+    expect(result.models?.[0]?.supportsVision).toBeUndefined();
+    expect(result.models?.[0]?.supportsToolUse).toBeUndefined();
+    expect(result.models?.[0]?.supportsReasoning).toBeUndefined();
+    expect(result.models?.[0]?.format).toBeUndefined();
+  });
+
+  it('prefers loaded_instances context_length over max_context_length for contextLength, but keeps max in contextWindowMax', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          loaded_instances: [
+            { id: 'qwen3.5-9b', config: { context_length: 4096 } },
+          ],
+          capabilities: { trained_for_tool_use: true },
+        },
+      ],
+    });
+    expect(result.models?.[0]).toMatchObject({
+      contextLength: 4096,
+      contextWindowMax: 32768,
+      supportsToolUse: true,
+    });
+  });
+
+  it('extracts MLX format for Apple-Silicon-hosted models', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'mlx-community/Llama-3-8B-Instruct',
+          max_context_length: 8192,
+          format: 'mlx',
+          capabilities: { vision: false, trained_for_tool_use: true },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.format).toBe('mlx');
+    expect(result.models?.[0]?.supportsVision).toBe(false);
   });
 });
 

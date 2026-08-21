@@ -16,12 +16,20 @@
  * hard_nudge_at = 12
  * hard_stop_at = 16
  *
+ * # Loop-steering policies that are skipped for this run (union with the
+ * # dedicated knobs above: todo_gate / anti_dead_loop.enabled /
+ * # tool_intent_nudge_max=0 all still work and map to the same hooks).
+ * disabled_loop_hooks = ["builtin.premature-stop"]
+ *
  * # User hooks are declared in hook.json files (the ecosystem shape shared
  * # with Claude Code settings.json / ZCode plugin hooks.json); the config
  * # only records their paths. `~` is expanded; relative paths resolve
  * # against the config root (~/.duya).
+ * # `disabled` lists individual hook ids (`file:<entry>:<event>:<matcher>:<hook>`)
+ * # to skip — the Settings → Hooks page writes these from its toggles.
  * [hooks]
  * files = ["~/duya-hooks.json", "E:/projects/x/hooks.json"]
+ * disabled = ["file:~/duya-hooks.json:PreToolUse:0:0"]
  * ```
  *
  * Env overrides: `DUYA_STEERING_TODO_GATE`, `DUYA_STEERING_ANTI_DEAD_LOOP`,
@@ -38,7 +46,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse } from '@iarna/toml';
 import { z } from 'zod';
-import type { HooksSettings } from './types.js';
+import type { HooksSettings, HookMatcher } from './types.js';
 import { parseHooksJsonContent, mergeHooksSettings } from './hooks-json.js';
 import { logger } from '../utils/logger.js';
 
@@ -62,12 +70,19 @@ export interface SteeringConfig {
   antiDeadLoop: AntiDeadLoopConfig;
   /** Per-run cap of tool-intent nudges (plan 418). */
   toolIntentNudgeMax: number;
+  /**
+   * Builtin loop-hook ids skipped for this run (e.g. "builtin.premature-stop").
+   * Union with the dedicated knobs above — a hook fires only when neither the
+   * dedicated knob nor this list disables it.
+   */
+  disabledLoopHooks: string[];
 }
 
 const DEFAULTS: SteeringConfig = {
   todoGateEnabled: true,
   antiDeadLoop: { enabled: true, nudgeAt: 8, hardNudgeAt: 12, hardStopAt: 16 },
   toolIntentNudgeMax: 2,
+  disabledLoopHooks: [],
 };
 
 /** Config root: `~/.duya` (or `~/.duya/test-namespaces/<ns>` in test mode). */
@@ -83,6 +98,7 @@ function resolveConfigRoot(): string {
 interface SteeringToml {
   todo_gate?: unknown;
   tool_intent_nudge_max?: unknown;
+  disabled_loop_hooks?: unknown;
   anti_dead_loop?: {
     enabled?: unknown;
     nudge_at?: unknown;
@@ -101,6 +117,7 @@ export function readSteeringConfig(): SteeringConfig {
     todoGateEnabled: DEFAULTS.todoGateEnabled,
     antiDeadLoop: { ...DEFAULTS.antiDeadLoop },
     toolIntentNudgeMax: DEFAULTS.toolIntentNudgeMax,
+    disabledLoopHooks: [...DEFAULTS.disabledLoopHooks],
   };
 
   try {
@@ -137,6 +154,11 @@ export function readSteeringConfig(): SteeringConfig {
           0,
           10,
         );
+        if (Array.isArray(steering.disabled_loop_hooks)) {
+          config.disabledLoopHooks = steering.disabled_loop_hooks.filter(
+            (x): x is string => typeof x === 'string',
+          );
+        }
       }
     }
   } catch {
@@ -247,9 +269,11 @@ export function _readHooksConfigFromRaw(
   // event-keyed shape) fail validation and surface as a WARN instead of
   // silently producing a hooks section that never fires.
   let files: string[];
+  let disabled: string[] = [];
   try {
     const parsed = HooksTomlSchema.strict().parse(hooks);
     files = parsed.files ?? [];
+    disabled = parsed.disabled ?? [];
   } catch (err) {
     logger.warn(
       `[HooksConfig] invalid [hooks] section ignored: ${err instanceof Error ? err.message : String(err)}`,
@@ -258,6 +282,7 @@ export function _readHooksConfigFromRaw(
   }
   if (files.length === 0) return undefined;
 
+  const disabledSet = new Set(disabled);
   const baseDir = deps.baseDir ?? resolveConfigRoot();
   const readFile = deps.readFile ?? ((p: string) => fs.readFileSync(p, 'utf-8'));
   const parts: Array<HooksSettings | undefined> = [];
@@ -272,7 +297,8 @@ export function _readHooksConfigFromRaw(
       );
       continue;
     }
-    parts.push(parseHooksJsonContent(body, filePath));
+    const parsed = parseHooksJsonContent(body, filePath);
+    parts.push(parsed ? filterDisabledHooks(parsed, disabledSet, entry) : undefined);
   }
   return mergeHooksSettings(parts);
 }
@@ -280,7 +306,52 @@ export function _readHooksConfigFromRaw(
 /** Hook-file list schema for the `[hooks]` section. */
 const HooksTomlSchema = z.object({
   files: z.array(z.string()).optional(),
+  /** Individual hook ids to skip (see {@link hookDisabledId}). */
+  disabled: z.array(z.string()).optional(),
 });
+
+/**
+ * Stable id of one configured hook within a hook.json file: the raw
+ * `[hooks] files` entry (e.g. `~/duya-hooks.json`) plus the event, matcher
+ * group index and hook index. The Settings → Hooks page toggles write these
+ * ids into `[hooks] disabled`; the electron overview handler mirrors this
+ * function so both sides address the same hooks.
+ */
+export function hookDisabledId(
+  entry: string,
+  event: string,
+  matcherIdx: number,
+  hookIdx: number,
+): string {
+  return `file:${entry}:${event}:${matcherIdx}:${hookIdx}`;
+}
+
+/**
+ * Drop matcher groups / hook entries whose {@link hookDisabledId} is in the
+ * disabled set. Returns the input when nothing is disabled; otherwise a new
+ * HooksSettings with the removed entries (matcher groups left empty are
+ * dropped entirely).
+ */
+export function filterDisabledHooks(
+  settings: HooksSettings,
+  disabled: ReadonlySet<string>,
+  entry: string,
+): HooksSettings {
+  if (disabled.size === 0) return settings;
+  const out: HooksSettings = {};
+  for (const [event, matchers] of Object.entries(settings)) {
+    const kept: HookMatcher[] = [];
+    matchers.forEach((matcher, mi) => {
+      const keptHooks = matcher.hooks.filter(
+        (_, hi) => !disabled.has(hookDisabledId(entry, event, mi, hi)),
+      );
+      if (keptHooks.length === 0) return;
+      kept.push(keptHooks.length === matcher.hooks.length ? matcher : { ...matcher, hooks: keptHooks });
+    });
+    if (kept.length > 0) out[event as keyof HooksSettings] = kept;
+  }
+  return out;
+}
 
 // ============================================================================
 // helpers

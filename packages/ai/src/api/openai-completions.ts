@@ -25,6 +25,7 @@ import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
 import { withIdleTimeout } from '../utils/idle-timeout.js';
 import { sortToolsByName } from '../utils/tool-order.js';
+import { localRuntimeApiKeyOrPlaceholder } from './local-runtime.js';
 
 // =============================================================================
 // Tool call ID synthesis
@@ -544,8 +545,14 @@ function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
  * - chat performs a non-streaming request and returns { content, usage }.
  */
 export function createOpenAICompletionsClient(options: AIClientOptions): AIClient {
+  // Local-runtime compatibility shim: LM Studio / Ollama don't require
+  // auth, but the OpenAI Node SDK constructor throws when `apiKey` is
+  // empty AND no `OPENAI_API_KEY` env var is set. Inject a stable
+  // placeholder when the runtime is local; the placeholder is
+  // forwarded as `Authorization: Bearer lm-studio-local` but LM Studio
+  // ignores it. See `local-runtime.ts` for the rationale.
   const client = new OpenAI({
-    apiKey: options.apiKey,
+    apiKey: localRuntimeApiKeyOrPlaceholder(options.apiKey),
     baseURL: options.baseURL,
     defaultHeaders: options.headers,
   });

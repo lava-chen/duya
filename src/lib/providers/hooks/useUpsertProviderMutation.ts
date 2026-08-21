@@ -95,6 +95,7 @@ export function useUpsertProviderMutation() {
       const payload: Record<string, unknown> = {
         id: finalLlm.id,
         name: finalLlm.name,
+        alias: finalLlm.alias,
         category: finalLlm.category,
         apiFormat: finalLlm.apiFormat,
         auth: finalLlm.auth,

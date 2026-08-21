@@ -30,22 +30,31 @@ export const snapshotAction: ActionHandler<z.infer<typeof snapshotSchema>> = {
     // Get current URL
     const url = ctx.cdp ? await ctx.cdp.getUrl() : '';
 
-    // Try platform extractor first if available
+    // Try platform extractor first if available — run it in parallel with the
+    // interactiveOnly backup so the common case (article + bundled refs) and
+    // the fallback (full snapshot engine) finish in one round-trip instead of
+    // two sequential CDP evaluate calls.
     if (ctx.platformHookManager && ctx.cdp && ctx.platformHookManager.hasExtractor(url)) {
-      const platformContent = await ctx.platformHookManager.extractContent(ctx.cdp, url, {
+      const extractPromise = ctx.platformHookManager.extractContent(ctx.cdp, url, {
         maxLength: data.maxLength,
         includeInteractive: true,
-      });
+      }).catch(() => null);
+
+      const backupRefsPromise = ctx.snapshotEngine
+        ? ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true }).catch(() => null)
+        : Promise.resolve(null);
+
+      const [platformContent, backupRefs] = await Promise.all([
+        extractPromise,
+        backupRefsPromise,
+      ]);
 
       if (platformContent && platformContent.success && platformContent.text) {
-        console.log(`[SnapshotAction] Using ${platformContent.type} extractor for ${url}`);
         let elements = platformContent.interactiveElements || [];
-        // Extractors generally don't collect refs — capture them separately.
-        if (elements.length === 0 && ctx.snapshotEngine) {
-          try {
-            const refs = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true });
-            elements = refs.interactiveElements.map(el => ({ ref: el.ref, tag: el.tag, text: el.text }));
-          } catch { /* best effort */ }
+        // Lift refs from the parallel snapshot pass instead of paying for a
+        // second full-DOM walk.
+        if (elements.length === 0 && backupRefs) {
+          elements = backupRefs.interactiveElements.map(el => ({ ref: el.ref, tag: el.tag, text: el.text }));
         }
         return {
           url,

@@ -268,12 +268,14 @@ async function sendChannel(
   text: string,
   platform?: string,
   chatId?: string,
+  filePath?: string,
 ): Promise<ExitCode> {
-  if (!text) {
-    process.stderr.write('usage: duya channel send <channelId> <text> [--platform <p> --chat <id>]\n');
+  if (!text && !filePath) {
+    process.stderr.write('usage: duya channel send <channelId> <text> [--file <path>] [--platform <p> --chat <id>]\n');
     return 64;
   }
   const body: Record<string, unknown> = { text };
+  if (filePath) body.filePath = filePath;
   if (platform && chatId) {
     body.platform = platform;
     body.chatId = chatId;
@@ -331,6 +333,8 @@ export const runChannelCommand = {
       typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
     const chatId =
       typeof ctx.options.chat === 'string' ? ctx.options.chat : undefined;
+    const filePath =
+      typeof ctx.options.file === 'string' ? ctx.options.file : undefined;
     // Positional form: `channel send <channelId> <text>`.
     let channelId = ctx.args[0] ?? '';
     let text = ctx.args[1] ?? '';
@@ -340,6 +344,6 @@ export const runChannelCommand = {
       channelId = '';
     }
     if (!text) text = typeof ctx.options.text === 'string' ? ctx.options.text : '';
-    return sendChannel(ctx.format, channelId, text, platform, chatId);
+    return sendChannel(ctx.format, channelId, text, platform, chatId, filePath);
   },
 };

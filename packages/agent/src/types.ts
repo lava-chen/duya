@@ -68,6 +68,19 @@ export interface Tool {
   description: string;
   input_schema: Record<string, unknown>;
   /**
+   * MCP tool annotations (https://modelcontextprotocol.io/specification).
+   * Only MCP tools carry these; builtin tools leave the field undefined.
+   * Propagated from `tools/list` to the `mcp:status:snapshot` SSE event
+   * so the settings UI can warn about destructive / open-world tools
+   * before the model invokes them.
+   */
+  annotations?: {
+    readOnly?: boolean;
+    destructive?: boolean;
+    openWorld?: boolean;
+    [key: string]: unknown;
+  };
+  /**
    * ToolRegistry internal index key. Optional. Only MCP tools set
    * this; builtin tools have `key === name` and leave the field
    * undefined. Format: `mcp__<scopedServerName>__<toolName>`.
@@ -252,6 +265,12 @@ export interface ChatOptions {
    * per streamChat call. Default: 2.
    */
   toolIntentNudgeMax?: number;
+  /**
+   * Plan 426: ids of builtin loop hooks to skip for this run (e.g.
+   * "builtin.premature-stop", "builtin.todo-gate"). Disabled hooks are not
+   * registered, so they cannot fire. Default: none.
+   */
+  disabledLoopHooks?: string[];
   /** Message history for context. If provided, uses this instead of internal messages */
   messages?: Message[];
   /**
@@ -412,6 +431,15 @@ export interface MCPServerConfig {
   toolTimeoutSec?: number;
   /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
   toolTimeouts?: Record<string, number>;
+  /**
+   * When true, spawn the stdio subprocess through a shell
+   * (`cmd.exe /c` on Windows, `sh -c` on Unix) so the command string is
+   * parsed like a shell invocation. Only honored when `transport` is
+   * `stdio`. Set this if your command uses shell features (pipes,
+   * globs, variable expansion); leave it false for plain argv-style
+   * commands.
+   */
+  useShell?: boolean;
   /**
    * Sampling rate limit config. Applied when an MCP server requests
    * `sampling/createMessage` (reverse LLM call). Defaults are conservative

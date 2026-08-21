@@ -110,14 +110,40 @@ describe('chat-file-links / resolveLocalFilePath', () => {
     expect(resolveLocalFilePath('foo.html', 'E:\\projects\\duya'))
       .toBe('E:\\projects\\duya\\foo.html');
     expect(resolveLocalFilePath('./foo.html', 'E:\\projects\\duya'))
-      .toBe('E:\\projects\\duya\\.\\foo.html');
+      .toBe('E:\\projects\\duya\\foo.html');
   });
 
   it('joins relative paths onto a Unix cwd with forward slashes', () => {
     expect(resolveLocalFilePath('foo.html', '/Users/duya/project'))
       .toBe('/Users/duya/project/foo.html');
     expect(resolveLocalFilePath('./foo.html', '/Users/duya/project'))
-      .toBe('/Users/duya/project/./foo.html');
+      .toBe('/Users/duya/project/foo.html');
+  });
+
+  it('collapses `..` segments so a link can escape the workspace', () => {
+    expect(resolveLocalFilePath('../sibling/app.ts', 'E:\\projects\\duya'))
+      .toBe('E:\\projects\\sibling\\app.ts');
+    expect(resolveLocalFilePath('docs/../../other/notes.md', 'E:\\projects\\duya'))
+      .toBe('E:\\projects\\other\\notes.md');
+    expect(resolveLocalFilePath('../sibling/app.ts', '/Users/duya/project'))
+      .toBe('/Users/duya/sibling/app.ts');
+  });
+
+  it('clamps `..` at the filesystem root instead of climbing above it', () => {
+    expect(resolveLocalFilePath('../../../x.md', '/Users/duya/project'))
+      .toBe('/x.md');
+    expect(resolveLocalFilePath('../../../x.ts', 'E:\\project'))
+      .toBe('E:\\x.ts');
+  });
+
+  it('normalizes doubled separators in the cwd', () => {
+    expect(resolveLocalFilePath('../sibling/app.ts', 'E:\\other-project\\docs'))
+      .toBe('E:\\other-project\\sibling\\app.ts');
+  });
+
+  it('strips a leading /abs/path placeholder in front of a Windows path', () => {
+    expect(resolveLocalFilePath('/abs/path/C:/Users/me/notes.md', 'E:\\project'))
+      .toBe('C:\\Users\\me\\notes.md');
   });
 
   it('preserves absolute Windows paths', () => {
@@ -209,7 +235,14 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
   // Stub the bridge so jsdom's `window.open` doesn't actually navigate
   // and so we can observe which event the helper dispatches for a given
   // input path.
-  type Detail = { url?: string; filePath?: string; workingDirectory?: string | null };
+  type Detail = {
+    url?: string;
+    filePath?: string;
+    workingDirectory?: string | null;
+    standalone?: boolean;
+    lineStart?: number;
+    lineEnd?: number;
+  };
   let dispatched: Array<{ event: string; detail: Detail }>;
 
   beforeEach(() => {
@@ -322,6 +355,17 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.workingDirectory).toBe('/Users/duya/project');
   });
 
+  it('resolves a `..` link out of the workspace to a clean absolute path', () => {
+    openLocalArtifactTarget('../sibling/data.json', 'E:\\project');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.filePath).toBe('E:\\sibling\\data.json');
+    // The file is outside cwd, so the preview root falls back to the
+    // file's own directory — files:preview accepts it instead of
+    // rejecting it as "outside the project directory".
+    expect(dispatched[0].detail.workingDirectory).toBe('E:\\sibling');
+  });
+
   it('falls back to the file directory as preview root when outside cwd', () => {
     openLocalArtifactTarget('E:\\other-project\\data.json', 'E:\\project');
     expect(dispatched).toHaveLength(1);
@@ -334,5 +378,63 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
     expect(dispatched[0].detail.workingDirectory).toBe('/Users/other-project');
+  });
+
+  // Standalone mode is opt-in via the 4th arg. The renderer only sets
+  // it for chat-message clicks (where the user explicitly clicked a
+  // link to a file outside the chat workspace). The preview panel is
+  // then asked to render the file alone — empty workingDirectory so
+  // the integrated file tree and project root don't expose the file's
+  // parent directory.
+  it('standalone mode ships an empty workingDirectory and flags the event', () => {
+    openLocalArtifactTarget(
+      '/Users/me/Downloads/notes.md',
+      '/Users/me/code/project',
+      undefined,
+      { standalone: true },
+    );
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.filePath).toBe('/Users/me/Downloads/notes.md');
+    expect(dispatched[0].detail.workingDirectory).toBe('');
+    expect(dispatched[0].detail.standalone).toBe(true);
+  });
+
+  it('standalone mode still propagates line-range params', () => {
+    openLocalArtifactTarget(
+      '/Users/me/Downloads/notes.md',
+      '/Users/me/code/project',
+      { start: 12, end: 20 },
+      { standalone: true },
+    );
+    // Two events: the open-file-preview-panel (with line range baked in)
+    // AND the follow-up preview-focus-lines so already-open tabs can
+    // re-focus. Both must keep the standalone + line-range payload.
+    expect(dispatched).toHaveLength(2);
+    const previewEvent = dispatched.find((d) => d.event === 'duya:open-file-preview-panel');
+    const focusEvent = dispatched.find((d) => d.event === 'duya:preview-focus-lines');
+    expect(previewEvent).toBeDefined();
+    expect(previewEvent?.detail.standalone).toBe(true);
+    expect(previewEvent?.detail.lineStart).toBe(12);
+    expect(previewEvent?.detail.lineEnd).toBe(20);
+    expect(focusEvent).toBeDefined();
+    expect(focusEvent?.detail.lineStart).toBe(12);
+    expect(focusEvent?.detail.lineEnd).toBe(20);
+  });
+
+  it('standalone mode falls back to file dir on Windows too', () => {
+    // standalone is renderer-decided; the path resolution itself is
+    // unchanged. Confirm Windows paths still work end-to-end.
+    openLocalArtifactTarget(
+      'C:\\Users\\me\\Downloads\\notes.md',
+      'C:\\code\\project',
+      undefined,
+      { standalone: true },
+    );
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-file-preview-panel');
+    expect(dispatched[0].detail.filePath).toBe('C:\\Users\\me\\Downloads\\notes.md');
+    expect(dispatched[0].detail.workingDirectory).toBe('');
+    expect(dispatched[0].detail.standalone).toBe(true);
   });
 });

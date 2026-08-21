@@ -28,6 +28,16 @@ interface McpServer {
   name: string;
   description?: string;
   enabled?: boolean;
+  /** Live runtime connection status from worker `mcp:status:snapshot`. */
+  connectionStatus?: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
+  /** Tool count the worker successfully listed. */
+  toolCount?: number;
+  /** Last issue surfaced by the capability aggregator. */
+  lastIssue?: {
+    phase: 'connection' | 'registration' | 'discovery';
+    humanMessage: string;
+    severity: 'critical' | 'warning' | 'info';
+  };
 }
 
 interface ResponseStyle {
@@ -479,38 +489,74 @@ export function AttachmentMenu({
                     {t('attachmentMenu.noMcpServers') || 'No MCP servers configured'}
                   </div>
                 ) : (
-                  mcpServers.map((server) => (
-                    <div
-                      key={server.name}
+                  mcpServers.map((server) => {
+                    const status = server.connectionStatus ?? 'unknown';
+                    const statusColor =
+                      status === 'connected'
+                        ? 'var(--success, #22c55e)'
+                        : status === 'connecting'
+                          ? 'var(--warning, #f59e0b)'
+                          : status === 'error'
+                            ? 'var(--danger, #ef4444)'
+                            : 'var(--muted)';
+                    return (
+                      <div
+                        key={server.name}
                 className="flex items-center justify-between px-2.5 py-1.5 rounded-md hover:bg-[var(--surface-hover)]"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[12.5px]" style={{ color: 'var(--foreground)' }}>
-                          {server.name}
-                        </div>
-                        {server.description && (
-                          <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--muted)' }}>
-                            {server.description}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => onToggleMcpServer(server.name, !server.enabled)}
-                        className={cn(
-                          'w-8 h-4 rounded-full transition-colors relative shrink-0 ml-2',
-                          server.enabled ? 'bg-accent' : 'bg-muted'
-                        )}
                       >
-                        <span
+                        <div className="flex-1 min-w-0 flex items-center gap-2">
+                          {/* Live status dot from worker mcp:status:snapshot */}
+                          <span
+                            aria-label={`mcp status ${status}`}
+                            title={server.lastIssue?.humanMessage ?? status}
+                            style={{
+                              width: 7,
+                              height: 7,
+                              borderRadius: '50%',
+                              backgroundColor: statusColor,
+                              flexShrink: 0,
+                              boxShadow: status === 'connected' ? `0 0 0 2px ${statusColor}33` : 'none',
+                            }}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[12.5px] flex items-center gap-2" style={{ color: 'var(--foreground)' }}>
+                              <span className="truncate">{server.name}</span>
+                              {typeof server.toolCount === 'number' && (
+                                <span className="text-[10.5px] shrink-0" style={{ color: 'var(--muted)' }}>
+                                  {server.toolCount} tool{server.toolCount === 1 ? '' : 's'}
+                                </span>
+                              )}
+                            </div>
+                            {server.description && (
+                              <div className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--muted)' }}>
+                                {server.description}
+                              </div>
+                            )}
+                            {status === 'error' && server.lastIssue && (
+                              <div className="text-[10.5px] mt-0.5 truncate" style={{ color: 'var(--danger, #ef4444)' }}>
+                                {server.lastIssue.humanMessage}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onToggleMcpServer(server.name, !server.enabled)}
                           className={cn(
-                            'absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform',
-                            server.enabled ? 'translate-x-4' : 'translate-x-0.5'
+                            'w-8 h-4 rounded-full transition-colors relative shrink-0 ml-2',
+                            server.enabled ? 'bg-accent' : 'bg-muted'
                           )}
-                        />
-                      </button>
-                    </div>
-                  ))
+                        >
+                          <span
+                            className={cn(
+                              'absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform',
+                              server.enabled ? 'translate-x-4' : 'translate-x-0.5'
+                            )}
+                          />
+                        </button>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>

@@ -8,6 +8,7 @@ import { Group } from './group/Group';
 import { ToolActionRow } from './rows/ToolActionRow';
 import { ThinkingRow } from './rows/ThinkingRow';
 import { TextRow } from './rows/TextRow';
+import { HookActionRow } from './rows/HookActionRow';
 import type { ActionItem, Segment, ToolAction } from './types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { TranslationKey } from '@/i18n';
@@ -41,6 +42,10 @@ function renderActionItem(
       return <TextRow key={key} content={action.content} isStreaming={isLastTextAction} />;
     case 'tool':
       return <ToolActionRow key={key} tool={action.tool} streamingToolOutput={action.streamingToolOutput} />;
+    case 'hook':
+      // Plan 437: hook events render through the dedicated row that
+      // shares ActionRowChrome with every other action.
+      return <HookActionRow key={key} hook={action.hook} />;
     case 'widget':
       return (
         <WidgetActionItem

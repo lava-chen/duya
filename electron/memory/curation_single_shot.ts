@@ -104,6 +104,16 @@ export interface RunResult {
   errors: ApplyResult['errors'];
   /** Top-level error if the LLM call / parse itself failed. */
   error?: string;
+  /**
+   * Zod schema issues from a failed `parseCurationResponse`, surfaced
+   * so the caller can log WHY the curator's structured output was
+   * rejected (bug hunt: recurring `parse failed: response failed
+   * schema validation` on 13/14/16/17/19). Populated only when the
+   * final attempt failed schema validation.
+   */
+  parseIssues?: string[];
+  /** True when a schema-validation failure was retried with feedback. */
+  parseRetried?: boolean;
   /** True when the LLM's stage1_policy edits were written to disk. */
   policyUpdated?: boolean;
   /** New stage1_policy version after a successful write (0 if untouched). */
@@ -599,6 +609,8 @@ export async function runSingleShotCuration(
   let actionsApplied = 0;
   let errors: ApplyResult['errors'] = [];
   let topLevelError: string | undefined;
+  let parseIssues: string[] | undefined;
+  let parseRetried = false;
   let policyUpdated: boolean | undefined;
   let policyVersion: number | undefined;
   let policyErrors: string[] = [];
@@ -609,35 +621,65 @@ export async function runSingleShotCuration(
       { role: 'user', content: userPrompt },
     ];
 
-    const chatResult = await chatWithTimeout(
-      opts.llmClient,
-      messages,
-      { systemPrompt },
-      timeoutMs,
-    );
-    rawResponse = chatResult.content ?? '';
+    // One LLM call + parse, with a bounded retry on schema-validation
+    // failure. The recurring `curation_run_failed: parse failed:
+    // response failed schema validation` (13/14/16/17/19) wastes the
+    // whole cycle: a single malformed field rejects the ENTIRE run and
+    // the claimed inputs stay locked until the next cycle. One retry
+    // that feeds the zod issues back to the model recovers the run the
+    // vast majority of the time — LLMs fix a pointed-out schema slip
+    // (e.g. a wrong enum value or a missing field) far more reliably
+    // than they produce valid JSON blind on the first try.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const chatResult = await chatWithTimeout(
+        opts.llmClient,
+        messages,
+        { systemPrompt },
+        timeoutMs,
+      );
+      rawResponse = chatResult.content ?? '';
 
-    if (rawResponse.trim().length === 0) {
-      // Treat empty as a `no_signal` decision rather than an error: many
-      // providers return whitespace when refusing. The caller will mark
-      // inputs as `uncertain` so we revisit them next cycle.
-      rawResponse = JSON.stringify({
-        decisions: opts.inputs.map((i) => ({
-          rollout_id: i.inputKey,
-          disposition: 'uncertain',
-          reason: 'empty LLM response',
-        })),
-        actions: [],
-      });
-    }
+      if (rawResponse.trim().length === 0) {
+        // Treat empty as a `no_signal` decision rather than an error: many
+        // providers return whitespace when refusing. The caller will mark
+        // inputs as `uncertain` so we revisit them next cycle.
+        rawResponse = JSON.stringify({
+          decisions: opts.inputs.map((i) => ({
+            rollout_id: i.inputKey,
+            disposition: 'uncertain',
+            reason: 'empty LLM response',
+          })),
+          actions: [],
+        });
+      }
 
-    try {
-      response = parseCurationResponse(rawResponse);
-    } catch (err) {
-      if (err instanceof CurationParseError) {
+      try {
+        response = parseCurationResponse(rawResponse);
+        break;
+      } catch (err) {
+        if (!(err instanceof CurationParseError)) {
+          topLevelError = err instanceof Error ? err.message : String(err);
+          break;
+        }
+        parseIssues = err.issues.length > 0 ? err.issues : undefined;
+        if (attempt === 0 && err.issues.length > 0) {
+          // Schema slip — ask the model to fix the shape, showing the
+          // exact zod issues, then re-call. The retry reuses the full
+          // conversation so the model sees its previous (invalid) output.
+          parseRetried = true;
+          const fixPrompt =
+            'Your previous response failed schema validation. ' +
+            'Fix the following issues and reply with the COMPLETE corrected JSON ' +
+            '(do not paraphrase; the full document must be re-emitted):\n' +
+            err.issues.map((issue) => `- ${issue}`).join('\n');
+          messages.push(
+            { role: 'assistant', content: rawResponse },
+            { role: 'user', content: fixPrompt },
+          );
+          continue;
+        }
         topLevelError = `parse failed: ${err.message}`;
-      } else {
-        topLevelError = err instanceof Error ? err.message : String(err);
+        break;
       }
     }
 
@@ -741,6 +783,8 @@ export async function runSingleShotCuration(
     actionsApplied,
     errors,
     ...(topLevelError !== undefined ? { error: topLevelError } : {}),
+    ...(parseIssues !== undefined ? { parseIssues } : {}),
+    ...(parseRetried ? { parseRetried } : {}),
     ...(policyUpdated !== undefined ? { policyUpdated } : {}),
     ...(policyVersion !== undefined ? { policyVersion } : {}),
     ...(policyErrors.length > 0 ? { policyErrors } : {}),

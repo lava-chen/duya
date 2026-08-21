@@ -177,7 +177,7 @@ describe('applyLoopHookEffect (single injection channel)', () => {
     ];
     applyLoopHookEffect(messages, { type: 'inject', injection: 'nudge', source: 'dead_loop_nudge' }, 1);
     applyLoopHookEffect(messages, { type: 'block_finalize', injection: 'veto', source: 'premature_stop' }, 1);
-    applyLoopHookEffect(messages, { type: 'inject', injection: 'wrap', source: 'max_turns_wrapup' }, 1);
+    applyLoopHookEffect(messages, { type: 'inject', injection: 'wrap', source: 'auto_continue' }, 1);
 
     expect(messages).toHaveLength(5);
     const persisted = persistableMessages(messages);

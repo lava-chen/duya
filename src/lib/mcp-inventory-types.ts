@@ -49,6 +49,25 @@ export interface MCPEffectiveServerDTO {
   shadowedCandidateCount: number;
   connectionStatus: 'connected' | 'disconnected' | 'connecting' | 'error' | 'unknown';
   lastIssue?: MCPInventoryIssue;
+  /**
+   * Live tool list reported by the worker's `mcp:status:snapshot` SSE
+   * event. Absent when the server never finished `listTools`
+   * (transport error, spawn failure). Each entry keeps MCP tool
+   * annotations verbatim so the settings UI can badge
+   * destructive / open-world tools.
+   */
+  tools?: MCPEffectiveServerToolDTO[];
+}
+
+export interface MCPEffectiveServerToolDTO {
+  name: string;
+  description: string;
+  annotations?: {
+    readOnly?: boolean;
+    destructive?: boolean;
+    openWorld?: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface MCPInventorySummaryDTO {

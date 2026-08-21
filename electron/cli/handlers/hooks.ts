@@ -169,15 +169,32 @@ export function validateHookFile(rawPath: string): HookFileStatus {
 // Config store helpers
 // ---------------------------------------------------------------------------
 
-/** Current `[hooks] files` from the config snapshot (or []). */
-function currentHookFiles(): string[] {
-  const hooks = getConfigStore().getByPath('hooks');
-  const files = (hooks as { files?: unknown } | null | undefined)?.files;
-  return Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : [];
+/**
+ * Current `[hooks]` section from the config snapshot — `files` plus any
+ * `disabled` id list written by the Settings → Hooks toggles.
+ */
+function currentHooksSection(): { files: string[]; disabled: string[] } {
+  const hooks = getConfigStore().getByPath('hooks') as
+    | { files?: unknown; disabled?: unknown }
+    | null
+    | undefined;
+  const files = Array.isArray(hooks?.files)
+    ? (hooks.files as unknown[]).filter((f): f is string => typeof f === 'string')
+    : [];
+  const disabled = Array.isArray(hooks?.disabled)
+    ? (hooks.disabled as unknown[]).filter((f): f is string => typeof f === 'string')
+    : [];
+  return { files, disabled };
 }
 
+function currentHookFiles(): string[] {
+  return currentHooksSection().files;
+}
+
+/** Persist `files` while preserving the `disabled` id list. */
 function persistHookFiles(files: string[]): void {
-  getConfigStore().set('hooks', { files });
+  const { disabled } = currentHooksSection();
+  getConfigStore().set('hooks', { files, disabled });
 }
 
 // ---------------------------------------------------------------------------

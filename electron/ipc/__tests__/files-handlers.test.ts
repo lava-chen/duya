@@ -265,6 +265,65 @@ describe('files-handlers', () => {
         data: 'AQID',
       });
     });
+
+    // Standalone mode (opt-in): the renderer only sets this when the
+    // user explicitly clicked an in-chat link to a file outside the
+    // chat workspace. The handler must skip the project-root
+    // existence + isInsideRoot check while still validating that the
+    // target path is a real file.
+    it('standalone mode skips project-root checks for files outside any cwd', async () => {
+      mocks.fs.statSync.mockImplementation((value: string) => ({
+        isDirectory: () => false,
+        isFile: () => String(value).endsWith('notes.md'),
+        size: 5,
+        mtimeMs: 123,
+      }));
+      mocks.fs.readSync.mockImplementation((_fd: number, buffer: Buffer) => {
+        buffer.write('hello');
+        return 5;
+      });
+
+      const result = await invokeHandler(
+        'files:preview',
+        {},
+        '/elsewhere/notes.md',
+        '', // empty rootPath is OK in standalone mode
+        { standalone: true },
+      );
+      expect(result).toMatchObject({
+        success: true,
+        kind: 'text',
+        content: 'hello',
+        truncated: false,
+        extension: 'md',
+      });
+    });
+
+    it('standalone mode still rejects when target is not a file', async () => {
+      mocks.fs.statSync.mockReturnValue({
+        isDirectory: () => true,
+        isFile: () => false,
+        size: 0,
+        mtimeMs: 0,
+      });
+
+      const result = await invokeHandler(
+        'files:preview',
+        {},
+        '/elsewhere/somedir',
+        '',
+        { standalone: true },
+      );
+      expect(result).toEqual({ success: false, error: 'Preview file does not exist' });
+    });
+
+    it('non-standalone mode still rejects when rootPath is empty', async () => {
+      // Backward compat: without the standalone flag the handler must
+      // still require a non-empty rootPath, otherwise an unrelated
+      // caller could slip a file-only request through.
+      const result = await invokeHandler('files:preview', {}, '/somewhere/notes.md', '');
+      expect(result).toEqual({ success: false, error: 'Invalid preview path' });
+    });
   });
 
   describe('files:delete', () => {

@@ -32,7 +32,7 @@ import {
   parseQuery as parseSessionsQuery,
 } from './handlers/sessions.js';
 import { handleListSkills, handleGetSkill } from './handlers/skills.js';
-import { handleAddMCP, handleRemoveMCP, handleAssignMCP } from './handlers/mcps.js';
+import { handleAddMCP, handleListMCP, handleRemoveMCP, handleAssignMCP } from './handlers/mcps.js';
 import { handleListProviders, handleGetProvider, handleGetActiveProvider } from './handlers/providers.js';
 import { handleEnableSkill, handleDisableSkill } from './handlers/skillWrite.js';
 import { handleInstallCli, handleUninstallCli } from './handlers/install.js';
@@ -848,6 +848,12 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   // DELETE /v1/config/agents/:id
   if (req.method === 'DELETE' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'config' && parts[2] === 'agents') {
     void handleDeleteConfigAgent(req, res, decodeURIComponent(parts[3]));
+    return;
+  }
+
+  // GET /v1/mcps (`mcp list`) — returns the configured MCP server list
+  if (req.method === 'GET' && parts.length === 2 && parts[0] === 'v1' && parts[1] === 'mcps') {
+    void handleListMCP(req, res);
     return;
   }
 

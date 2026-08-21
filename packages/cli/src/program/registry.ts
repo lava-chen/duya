@@ -106,6 +106,7 @@ export interface CliSubcommandOptions {
   configUser?: string;
   configStyleId?: string;
   configInclude?: string;
+  configClear?: boolean;
   configArgs?: string[];
   configEnv?: string[];
   configAgents?: string[];

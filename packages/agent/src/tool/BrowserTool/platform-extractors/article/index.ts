@@ -18,6 +18,13 @@ interface ArticleScriptResult {
   text?: string;
   title?: string;
   detail?: string;
+  interactive?: Array<{
+    ref: number;
+    tag: string;
+    type?: string;
+    text: string;
+    selector?: string;
+  }>;
 }
 
 export class ArticleExtractor extends BaseExtractor {
@@ -38,8 +45,6 @@ export class ArticleExtractor extends BaseExtractor {
     const script = [
       '(async () => {',
       `  const maxLength = ${maxLength};`,
-      '  const sleep = (ms) => new Promise(r => setTimeout(r, ms));',
-      '  await sleep(400);',
       '  const textLen = (el) => (el && (el.textContent || "").replace(/\\s+/g, " ").trim().length) || 0;',
       '  const abs = (v, b) => { if (!v) return ""; try { return new URL(v, b).href; } catch (e) { return v; } };',
       '  let content = null;',
@@ -117,14 +122,35 @@ export class ArticleExtractor extends BaseExtractor {
       "  const title = (document.title || '').replace(/\\s+/g, ' ').trim();",
       '  if (text.trim().length < 150) return { kind: "error", detail: "No readable article content found" };',
       '  if (title) text = "# " + title + "\\n\\n" + text;',
-      '  return { kind: "ok", text, title };',
+      // Collect interactive refs in the same pass so downstream callers can
+      // skip a second full-DOM snapshot. Limit to 50 to keep payloads bounded.
+      '  const interactiveSelectors = "a[href], button, input, select, textarea, [role=button], [role=link], [tabindex]";',
+      '  const interactive = [];',
+      '  let refIdx = 0;',
+      '  document.querySelectorAll(interactiveSelectors).forEach(el => {',
+      '    if (interactive.length >= 50) return;',
+      '    const r = el.getBoundingClientRect();',
+      '    if (r.width === 0 || r.height === 0) return;',
+      '    const cs = window.getComputedStyle(el);',
+      '    if (cs.display === "none" || cs.visibility === "hidden") return;',
+      '    refIdx++;',
+      '    el.setAttribute("data-duya-ref", String(refIdx));',
+      '    interactive.push({',
+      '      ref: refIdx,',
+      '      tag: el.tagName.toLowerCase(),',
+      '      type: el.getAttribute("type") || undefined,',
+      '      text: (el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 80),',
+      '      selector: el.id ? "#" + el.id : (el.getAttribute("data-testid") ? `[data-testid="${el.getAttribute("data-testid")}"]` : el.tagName.toLowerCase()),',
+      '    });',
+      '  });',
+      '  return { kind: "ok", text, title, interactive };',
       '})()',
     ].join('\n');
 
     try {
       const res = await cdp.evaluate(script) as ArticleScriptResult | null;
       if (res && res.kind === 'ok' && res.text) {
-        return this.success('article', res.text, undefined, { title: res.title });
+        return this.success('article', res.text, res.interactive, { title: res.title });
       }
       return this.error('article', res?.detail || 'No readable article content found');
     } catch (e) {

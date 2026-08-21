@@ -19,6 +19,7 @@ import { AttachmentPreviewModal } from './AttachmentPreviewModal';
 import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { parseMessageContentWithPasted, type PastedContentInfo } from '@/lib/message-content-parser';
+import { joinMarkdownFragments, mergeMarkdownFragments } from '@/lib/markdown-text-merge';
 import { decodeMessageAttachments } from '@/lib/decode-message-attachments';
 import { parseAllShowWidgets } from '@/lib/widget-parser';
 import { WidgetRenderer } from './WidgetRenderer';
@@ -26,6 +27,7 @@ import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import { CompactBoundary } from './CompactBoundary';
 import { CompactSummary } from './CompactSummary';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useShowHookInvocations } from '@/hooks/useShowHookInvocations';
 import type { FileAttachment } from '@/types/message';
 import { useTranslation } from '@/hooks/useTranslation';
 import { openLocalFileTarget } from '@/lib/chat-file-links';
@@ -190,12 +192,11 @@ function parseMessageContent(content: string | unknown[], msgType?: string): {
       }
     });
 
-    // Join text blocks with a newline separator so block-level markdown
-    // (### heading, - list, 1. numbered, etc.) in a later block is not
-    // swallowed into the previous paragraph. Without this, LLM outputs
-    // that span multiple text blocks (separated by tool_use) get
-    // concatenated into a single inline paragraph.
-    text = textParts.length > 1 ? textParts.join('\n\n') : (textParts[0] ?? '');
+    // Join text blocks through the smart fragment merge so block-level
+    // markdown (### heading, - list, 1. numbered, tables, code fences)
+    // in a later block is neither swallowed into the previous paragraph
+    // nor split mid-construct by an injected blank line.
+    text = textParts.length > 1 ? joinMarkdownFragments(textParts) : (textParts[0] ?? '');
     return { text, toolUses, thinkingContent };
   }
 
@@ -275,16 +276,14 @@ function AssistantContent({
 }
 
 function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[]; sourceMessageId?: string }) {
+  // Renders only the widget actions in order. Text actions that remain in
+  // `actions` are the intermediate fragments kept inside the action group
+  // (ToolActionsGroup renders them via TextRow); the trailing final run
+  // is lifted into `finalText` upstream. Nothing text-ish renders here.
   return (
     <>
       {actions.map((action, i) => {
         switch (action.kind) {
-          case 'text':
-            return (
-              <MarkdownRenderer key={`t-${i}`}>
-                {action.content}
-              </MarkdownRenderer>
-            );
           case 'widget':
             return (
               <WidgetErrorBoundary key={`w-${i}`} widgetCode={action.content}>
@@ -296,10 +295,6 @@ function InterleavedContent({ actions, sourceMessageId }: { actions: ActionItem[
                 />
               </WidgetErrorBoundary>
             );
-          case 'thinking':
-            return null;
-          case 'tool':
-            return null;
           default:
             return null;
         }
@@ -324,6 +319,19 @@ function messageToActionItems(
     const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
     if (content.trim()) {
       actions.push({ kind: 'thinking', content });
+    }
+    return actions;
+  }
+
+  // Plan 437: hook rows. Persisted by the agent at the turn-end boundary
+  // as `msg_type: 'hook_invocation'` system messages with the structured
+  // HookInvokedEvent serialized into `tool_input`. Rebuild the
+  // `HookAction` here so reload / cross-device sync keep the hook
+  // history visible alongside tool_use / tool_result.
+  if (msg.msgType === 'hook_invocation') {
+    const hookAction = parseHookMessage(msg);
+    if (hookAction) {
+      actions.push({ kind: 'hook', hook: hookAction });
     }
     return actions;
   }
@@ -393,6 +401,57 @@ function messageToActionItems(
   return actions;
 }
 
+/**
+ * Plan 437: rebuild a `HookAction` from a persisted `msg_type:
+ * 'hook_invocation'` row. The agent serializes the structured
+ * `HookInvokedEvent` into `msg.toolInput` (JSON). Returns null when the
+ * row is malformed (e.g. legacy hook row from before this plan) — the
+ * caller treats null as "skip this row" rather than crashing.
+ */
+function parseHookMessage(msg: Message): import('@/types/hooks').HookAction | null {
+  const hookName = msg.toolName;
+  if (!hookName) return null;
+  let parsed: Record<string, unknown> = {};
+  if (typeof msg.toolInput === 'string' && msg.toolInput.trim()) {
+    try {
+      const obj = JSON.parse(msg.toolInput);
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        parsed = obj as Record<string, unknown>;
+      }
+    } catch {
+      // Legacy / malformed row — fall through with defaults below.
+    }
+  }
+  const hookType = (typeof parsed.hookType === 'string' ? parsed.hookType : 'command') as
+    | 'command'
+    | 'process'
+    | 'prompt'
+    | 'http'
+    | 'agent';
+  const status = (typeof parsed.status === 'string' ? parsed.status : 'ok') as
+    | 'ok'
+    | 'error'
+    | 'timeout'
+    | 'skipped';
+  return {
+    id: msg.id,
+    hookEventName: hookName,
+    hookType,
+    hookName: typeof parsed.hookName === 'string' ? parsed.hookName : hookName,
+    matcher: typeof parsed.matcher === 'string' ? parsed.matcher : undefined,
+    additionalContext: typeof msg.content === 'string' ? msg.content : undefined,
+    exitCode: typeof parsed.exitCode === 'number' ? parsed.exitCode : undefined,
+    async: parsed.async === true,
+    backgroundTaskId: typeof parsed.backgroundTaskId === 'string' ? parsed.backgroundTaskId : undefined,
+    durationMs: typeof parsed.durationMs === 'number' ? parsed.durationMs : msg.durationMs ?? 0,
+    status,
+    errorMessage: typeof parsed.errorMessage === 'string' ? parsed.errorMessage : undefined,
+    seq: typeof parsed.seq === 'number' ? parsed.seq : 0,
+    toolName: typeof parsed.toolName === 'string' ? parsed.toolName : undefined,
+    toolUseId: typeof parsed.toolUseId === 'string' ? parsed.toolUseId : undefined,
+  };
+}
+
 function sortMessagesByOrder(messages: Message[]): Message[] {
   return [...messages].sort((a, b) => {
     if (a.seqIndex != null && b.seqIndex != null) {
@@ -450,6 +509,10 @@ function MessageItemComponent({ message, toolResults = [], onToolResult, mergedM
   const { t, locale } = useTranslation();
   const activeThreadId = useConversationStore(s => s.activeThreadId);
   const threads = useConversationStore(s => s.threads);
+  // Plan 437: toggle for hook rows in the chat flow. Re-read on every
+  // render so a mid-session toggle in Settings → Hooks drops hook rows
+  // from both fresh rounds and reloaded history.
+  const showHookInvocations = useShowHookInvocations();
   const workingDirectory = threads.find(thread => thread.id === activeThreadId)?.workingDirectory;
   // When viewing a sub-agent session the parent session id is set on the
   // store. In that view we drop the ToolActionsGroup collapsible toggle
@@ -511,6 +574,10 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     const allPasted: PastedContentInfo[] = [...pastedContents];
 
     for (const msg of allMessages) {
+      // Plan 437: drop hook messages when the user has turned the
+      // toggle off in Settings → Hooks. Persisted hook rows would
+      // otherwise reappear after reload, breaking the toggle contract.
+      if (msg.msgType === 'hook_invocation' && !showHookInvocations) continue;
       const msgActions = messageToActionItems(msg, toolResultMap);
       rawActions.push(...msgActions);
 
@@ -522,13 +589,15 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
     }
 
     // Merge consecutive text actions into a single text action
-    // to prevent markdown fragmentation when text is split across multiple messages
+    // to prevent markdown fragmentation when text is split across multiple messages.
+    // The smart merge keeps tables / code fences contiguous across the seam
+    // while ordinary blocks still separate with a blank line.
     const mergedActions: ActionItem[] = [];
     for (const action of rawActions) {
       if (action.kind === 'text') {
         const last = mergedActions[mergedActions.length - 1];
         if (last && last.kind === 'text') {
-          last.content += '\n' + action.content;
+          last.content = mergeMarkdownFragments(last.content, action.content);
         } else {
           mergedActions.push({ ...action });
         }
@@ -537,13 +606,18 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
       }
     }
 
-    // Separate final text from work actions. Text-only assistant rounds are
-    // normal replies, not "actions"; mixed rounds keep in-progress text inside
-    // the action log and lift only the trailing response text.
+    // Separate the agent's actual final reply from the work log.
+    // Text-only assistant rounds are normal replies, not "actions".
+    // Mixed rounds keep intermediate text (the "I'll check this now"
+    // fragments emitted between tool calls) inline in the action group
+    // in chronological order, and lift only the trailing text run —
+    // everything after the LAST tool/thinking action — into `finalText`
+    // as the real final output. Fragments inside the trailing run are
+    // smart-joined into one markdown document so constructs spanning
+    // fragments (table rows, code fences) keep parsing instead of
+    // rendering half a construct plus literal markdown symbols.
     const hasWidgetActions = mergedActions.some(a => a.kind === 'widget');
     const hasThinkingOrTool = mergedActions.some(a => a.kind === 'thinking' || a.kind === 'tool');
-    let resultText = '';
-    let resultActions = mergedActions;
 
     if (!hasThinkingOrTool && !hasWidgetActions) {
       const plainTexts = mergedActions
@@ -552,31 +626,33 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
 
       return {
         actions: [],
-        finalText: plainTexts.join('\n'),
+        finalText: joinMarkdownFragments(plainTexts),
         allPastedContents: allPasted,
       };
     }
 
-    if (hasThinkingOrTool && mergedActions.length > 0) {
-      // Collect trailing text actions into finalText
-      const trailingTexts: string[] = [];
-      while (resultActions.length > 0) {
-        const last = resultActions[resultActions.length - 1];
-        if (last.kind === 'text') {
-          trailingTexts.unshift(last.content);
-          resultActions = resultActions.slice(0, -1);
-        } else {
-          break;
-        }
+    let lastWorkIndex = -1;
+    mergedActions.forEach((action, index) => {
+      if (action.kind === 'tool' || action.kind === 'thinking') lastWorkIndex = index;
+    });
+
+    const resultActions: ActionItem[] = [];
+    const finalFragments: string[] = [];
+    for (let index = 0; index < mergedActions.length; index++) {
+      const action = mergedActions[index]!;
+      if (index > lastWorkIndex && action.kind === 'text') {
+        finalFragments.push(action.content);
+        continue;
       }
-      if (trailingTexts.length > 0) {
-        resultText = trailingTexts.join('\n');
-      }
+      // Widgets (and any work action) stay as ordered actions wherever
+      // they appear — InterleavedContent renders them at the correct
+      // point in the bubble, before the final reply.
+      resultActions.push(action);
     }
 
     return {
       actions: resultActions,
-      finalText: resultText,
+      finalText: joinMarkdownFragments(finalFragments),
       allPastedContents: allPasted,
     };
   }, [message, mergedMessages, toolResultMap, pastedContents]);
@@ -709,10 +785,6 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
 
   const isUser = message.role === 'user';
   const hasPastedContents = allPastedContents.length > 0;
-  // P2-β: surface the "Stopped" badge when App.tsx.handleInterrupt
-  // (Esc / chat:interrupt) marked this message as interrupted. The
-  // flag is local-only — never persisted to DB.
-  const isInterrupted = !isUser && message.metadata?.interrupted === true;
 
   // System-generated task-notification messages are injected as role:'user'
   // for the LLM (LLM APIs have no native system role for this), but they
@@ -956,15 +1028,14 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   const hasActions = actions.length > 0;
   const hasWidgets = actions.some(a => a.kind === 'widget');
   const hasToolActions = actions.some(a => a.kind === 'tool' || a.kind === 'thinking');
-  // When widgets are present, text and widget blocks are interleaved via
-  // InterleavedContent (which already renders `text` through MarkdownRenderer
-  // and `widget` through WidgetRenderer, skipping tool/thinking). Passing
-  // text actions into ToolActionsGroup here as well would render every text
-  // block twice — once as a TextRow, once as MarkdownRenderer. So when
-  // hasWidgets, keep only tool/thinking for the group; when no widgets,
-  // pass the full actions array (TextRow handles text inside the group).
+  // When widgets are present, InterleavedContent renders the widget
+  // blocks (and only those), so exclude widget actions from the group
+  // to avoid rendering each widget twice. Text / thinking / tool actions
+  // all stay in the group — intermediate text renders inline in order
+  // via TextRow, and the trailing run is already lifted into finalText,
+  // so nothing is double-rendered.
   const toolOnlyActions = hasWidgets
-    ? actions.filter(a => a.kind === 'tool' || a.kind === 'thinking')
+    ? actions.filter(a => a.kind !== 'widget')
     : actions;
 
   return (
@@ -1012,15 +1083,6 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
         )}
 
         <div className="flex items-center gap-2 mt-3">
-          {isInterrupted && (
-            <span
-              className="inline-flex items-center gap-1 text-[11px] text-amber-500"
-              title={t('streaming.interruptedTooltip')}
-            >
-              <span aria-hidden="true">⏹</span>
-              <span>{t('streaming.interrupted')}</span>
-            </span>
-          )}
           <span className="text-[11px] text-muted-foreground/60 tabular-nums">
             {formatMessageTime(message.timestamp, t, locale)}
           </span>

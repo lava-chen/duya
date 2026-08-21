@@ -51,11 +51,17 @@ import type { MCPCandidate } from '@duya/plugin-core';
 
 import type {
   CapabilityDTO,
+  CapabilityMcpConnectionStatus,
   CapabilityMcpFields,
   CapabilityMcpIssue,
   CapabilitySkillFields,
+  McpToolDTO,
   PluginPackageDTO,
 } from './types';
+import {
+  getLatestMcpStatusByServer,
+  type McpServerStatusEntry,
+} from './mcp-runtime-store';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
@@ -273,6 +279,11 @@ export async function buildCrossSourceMCPCapabilities(): Promise<CrossSourceMCPR
       issuesByName.set(issue.serverName, issue);
     }
   }
+
+  // Phase 3 enrichment: prefer live runtime status from the worker's
+  // `mcp:status:snapshot` SSE event over the last-apply issue list.
+  const runtimeByName = getLatestMcpStatusByServer();
+
   const out: CapabilityDTO[] = [];
 
   for (const { candidate, id } of winners) {
@@ -283,23 +294,13 @@ export async function buildCrossSourceMCPCapabilities(): Promise<CrossSourceMCPR
       : true;
     const { effectiveEnabled, blockedReason } = computeEffective(ownEnabled, providerEnabled);
 
-    // Phase 3: surface the most recent connection error from the
-    // collector. We do NOT derive blockedReason from this issue —
-    // Rev 3 修订 4 reserves blockedReason for configuration /
-    // provider failures, not runtime connectivity.
     const lastIssue = issuesByName.get(candidate.rawConfig.name);
-    const mcpFields: CapabilityMcpFields = {
-      connectionStatus: lastIssue
-        ? (lastIssue.phase === 'connection' ? 'error' : 'disconnected')
-        : 'unknown',
-    };
-    if (lastIssue) {
-      mcpFields.lastIssue = {
-        phase: lastIssue.phase,
-        humanMessage: lastIssue.humanMessage,
-        severity: lastIssue.severity,
-      };
-    }
+    const mcpFields = resolveMcpStatusFields({
+      rawName: candidate.rawConfig.name,
+      scopedServerName: candidate.scopedServerName,
+      runtimeByName,
+      lastIssue,
+    });
 
     out.push({
       displayKey: id,
@@ -316,6 +317,82 @@ export async function buildCrossSourceMCPCapabilities(): Promise<CrossSourceMCPR
   }
 
   return { capabilities: out, candidateCount: totalCount };
+}
+
+export interface ResolveMcpStatusFieldsInput {
+  /** Display name from the candidate's rawConfig.name. */
+  rawName: string;
+  /** Internal scoped name (plugin:<id>:<name> for plugins). */
+  scopedServerName: string;
+  /** Live runtime cache keyed by scopedServerName. */
+  runtimeByName: Record<string, McpServerStatusEntry>;
+  /** Last-apply issue for this server (may be undefined). */
+  lastIssue?: {
+    phase: 'connection' | 'registration' | 'discovery';
+    humanMessage: string;
+    severity: 'critical' | 'warning' | 'info';
+  };
+}
+
+/**
+ * Pure decision: build `CapabilityMcpFields` for one server from the
+ * live runtime snapshot, falling back to the last-apply issue list.
+ *
+ * Priority:
+ *   1. Live runtime entry (connected/connecting/error/disconnected) +
+ *      its tool list + toolCount.
+ *   2. Last-apply issue (connection → error, else disconnected).
+ *   3. `unknown` when neither is present.
+ *
+ * We do NOT derive blockedReason here (Rev 3 修订 4) — that stays in
+ * `computeEffective`. Annotations are passed through verbatim.
+ */
+export function resolveMcpStatusFields(
+  input: ResolveMcpStatusFieldsInput,
+): CapabilityMcpFields {
+  const { rawName, scopedServerName, runtimeByName, lastIssue } = input;
+
+  // The store is keyed by scopedServerName; fall back to raw name for
+  // servers that were never scoped (settings source).
+  const liveRuntime =
+    runtimeByName[scopedServerName] ?? runtimeByName[rawName];
+
+  let connectionStatus: CapabilityMcpConnectionStatus;
+  let tools: McpToolDTO[] | undefined;
+  if (liveRuntime) {
+    connectionStatus = liveRuntime.connectionStatus === 'connected'
+      ? 'connected'
+      : liveRuntime.connectionStatus === 'connecting'
+        ? 'connecting'
+        : liveRuntime.connectionStatus === 'error'
+          ? 'error'
+          : 'disconnected';
+    tools = liveRuntime.tools.map((t) => ({
+      name: t.name,
+      description: t.description,
+      ...(t.annotations ? { annotations: t.annotations as McpToolDTO['annotations'] } : {}),
+    }));
+  } else if (lastIssue) {
+    connectionStatus = lastIssue.phase === 'connection' ? 'error' : 'disconnected';
+  } else {
+    connectionStatus = 'unknown';
+  }
+
+  const mcpFields: CapabilityMcpFields = { connectionStatus };
+  if (typeof liveRuntime?.toolCount === 'number') {
+    mcpFields.toolCount = liveRuntime.toolCount;
+  }
+  if (tools && tools.length > 0) {
+    mcpFields.tools = tools;
+  }
+  if (lastIssue) {
+    mcpFields.lastIssue = {
+      phase: lastIssue.phase,
+      humanMessage: lastIssue.humanMessage,
+      severity: lastIssue.severity,
+    };
+  }
+  return mcpFields;
 }
 
 /**

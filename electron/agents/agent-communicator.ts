@@ -167,7 +167,7 @@ export function registerAgentHandlers(): void {
     let runtimeConfig: Record<string, unknown> | undefined;
     if (llm) {
       const resolvedModelId = session?.model || defaultModel;
-      const capability = store.getModelCapability(provider.id, resolvedModelId);
+      const capability = store.resolveRuntimeCapability(provider.id, resolvedModelId);
       const cfg = buildRuntimeConfig(llm, {
         modelId: resolvedModelId,
         capabilities: capability,
@@ -297,6 +297,7 @@ export function registerAgentHandlers(): void {
     return {
       id: provider.id,
       name: provider.name,
+      alias: provider.alias ?? '',
       providerType: provider.providerType,
       baseUrl: provider.baseUrl ?? '',
       apiKey: maskedKey,
@@ -376,7 +377,7 @@ export function registerAgentHandlers(): void {
     const llm = getDefaultOrFirstLlmProvider(store);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const capability = store.getModelCapability(llm.id, model);
+      const capability = store.resolveRuntimeCapability(llm.id, model);
       const cfg = buildRuntimeConfig(llm, {
         modelId: model,
         capabilities: capability,
@@ -433,7 +434,7 @@ export function registerAgentHandlers(): void {
     const llm = store.getLlmProvider(providerId);
     let runtimeConfig: Record<string, unknown> | null = null;
     if (llm) {
-      const capability = store.getModelCapability(providerId, resolvedModel);
+      const capability = store.resolveRuntimeCapability(providerId, resolvedModel);
       const cfg = buildRuntimeConfig(llm, {
         modelId: resolvedModel,
         capabilities: capability,

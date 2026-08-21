@@ -166,8 +166,11 @@ export async function* runAgent({
   // Determine the model to use
   const agentModel = model || agentDefinition.model || toolUseContext.options.mainLoopModel
 
-  // Determine max turns
-  const agentMaxTurns = maxTurns ?? agentDefinition.maxTurns ?? 10
+  // Determine max turns — no implicit fallback (pi-aligned). If neither
+  // the caller's `maxTurns` nor `agentDefinition.maxTurns` is set, the
+  // child agent runs uncapped and exits on natural completion, token
+  // exhaustion, abort, or a tool `terminate: true` signal.
+  const agentMaxTurns = maxTurns ?? agentDefinition.maxTurns
 
   // Build the prompt from messages
   const promptText = promptMessages

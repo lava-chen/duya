@@ -73,6 +73,8 @@ export interface MCPCandidate {
     toolTimeoutSec?: number;
     /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
     toolTimeouts?: Record<string, number>;
+    envPassthrough?: 'allowlist' | 'inherit';
+    useShell?: boolean;
   };
 }
 
@@ -114,6 +116,8 @@ export interface MCPServerInventoryEntry {
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    envPassthrough?: 'allowlist' | 'inherit';
+    useShell?: boolean;
   };
   discoveryStatus: MCPDiscoveryStatus;
   allowedAgentIds?: string[];
@@ -147,6 +151,8 @@ export interface ResolvedMCPServerConfig {
     startupTimeoutSec?: number;
     toolTimeoutSec?: number;
     toolTimeouts?: Record<string, number>;
+    envPassthrough?: 'allowlist' | 'inherit';
+    useShell?: boolean;
   };
   allowedAgentIds?: string[];
 }

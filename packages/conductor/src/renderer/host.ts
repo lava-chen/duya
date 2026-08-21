@@ -49,6 +49,32 @@ export interface ModelOption {
   id: string;
   display_name: string;
   context_length?: number;
+  /**
+   * Capability flags populated from `ModelCapabilityService` (which
+   * itself is seeded by the LM Studio `/api/v1/models` response, the
+   * OpenAI-compat `/v1/models` response, or a user override). When
+   * the field is `undefined`, the source did not report a flag and
+   * the chat-side UI renders nothing (a deliberate `unknown` rather
+   * than a guessed `false`).
+   */
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+  /** Quantization/format family, e.g. `'gguf'` / `'mlx'`. */
+  format?: string | null;
+  /**
+   * Whether the model is currently loaded in the local runtime
+   * (`loaded_instances.length > 0` with a parseable context).
+   * Displayed as a small dot in the chat dropdown.
+   */
+  isLoaded?: boolean;
+  /**
+   * Per-model reasoning-effort options (LM Studio
+   * `capabilities.reasoning.allowed_options` normalized). The chat
+   * effort dropdown uses this list when non-empty, falling back to
+   * the static catalog default.
+   */
+  reasoningEffortOptions?: string[];
   pricing?: { prompt: string; completion: string };
 }
 

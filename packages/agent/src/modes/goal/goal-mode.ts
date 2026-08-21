@@ -22,16 +22,11 @@
  * skeptic panel + frontend card.
  */
 
-import type { ModeModifier, ModeModifierContext, StreamOptionsPatch } from '../types.js';
+import type { ModeModifier, ModeModifierContext } from '../types.js';
 import { goalModeTracker } from './goal-tracker.js';
 import { getGoalTools } from './goal-tools.js';
 import type { ModeTracker } from '../engine/tracker.js';
 import { getGoalConfig } from './goal-config.js';
-
-/** Cap on goal iterations per streamChat call (aligned with the agent's
- * default `maxTurns = 100`; consumed via `beforeStream` once the loop
- * merges StreamOptionsPatch — 413d wiring). */
-const GOAL_MAX_ITERATIONS = 100;
 
 /**
  * Render the GOAL_RULES prefix block. Re-evaluated per turn by the
@@ -96,12 +91,5 @@ export const goalMode: ModeModifier = {
 
   prompt: {
     prefix: buildGoalPrefix,
-  },
-
-  hooks: {
-    beforeStream: (ctx: ModeModifierContext): StreamOptionsPatch => {
-      void ctx;
-      return { maxIterations: GOAL_MAX_ITERATIONS };
-    },
   },
 };

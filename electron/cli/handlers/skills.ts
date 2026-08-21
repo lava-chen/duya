@@ -9,6 +9,9 @@
 import * as http from 'http';
 import { join } from 'node:path';
 import { getPluginManager } from '../../plugins/PluginManager';
+import { getConfigStore } from '../../config/store-instance';
+import { getBundledSkillsDir } from '../../plugins/catalog';
+import { ensureSystemSkillsSynced } from '../../skills/system-skills-gui';
 import { getJsonSetting } from '../../db/index';
 import {
   listSkillDTOs,
@@ -36,6 +39,39 @@ function getUserSkillsDir(): string {
   return join(homedir(), '.duya', 'skills');
 }
 
+function getProjectSkillsDirs(): string[] {
+  // Same convention as the IPC skills handler: <cwd>/.agent/skills
+  // (cross-agent standard) plus <cwd>/.duya/skills.
+  const cwd = process.cwd();
+  return [join(cwd, '.agent', 'skills'), join(cwd, '.duya', 'skills')];
+}
+
+function getCustomSkillDir(): string | undefined {
+  try {
+    return getConfigStore().getByPath('agent.skill_path') as string | undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getSystemSkillsDir(): string {
+  // Read from the synced user-dir copy (same source as the GUI, plan 434).
+  const userSkillsDir = getUserSkillsDir();
+  ensureSystemSkillsSynced(userSkillsDir, getBundledSkillsDir());
+  return join(userSkillsDir, '.system');
+}
+
+function buildArgs(overrides: Record<string, boolean>) {
+  return {
+    userSkillsDir: getUserSkillsDir(),
+    projectSkillsDirs: getProjectSkillsDirs(),
+    customSkillDir: getCustomSkillDir(),
+    systemSkillsDir: getSystemSkillsDir(),
+    pluginInstallPaths: getPluginInstallPaths(),
+    overrides,
+  };
+}
+
 function getPluginInstallPaths(): Record<string, string> {
   try {
     const pm = getPluginManager();
@@ -61,11 +97,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
 
 export function handleListSkills(req: http.IncomingMessage, res: http.ServerResponse): void {
   try {
-    const skills: SkillListItem[] = listSkillDTOs({
-      userSkillsDir: getUserSkillsDir(),
-      pluginInstallPaths: getPluginInstallPaths(),
-      overrides: getOverrides(),
-    });
+    const skills: SkillListItem[] = listSkillDTOs(buildArgs(getOverrides()));
     sendJson(res, 200, { skills });
   } catch (err) {
     sendJson(res, 500, {
@@ -80,9 +112,7 @@ export function handleListSkills(req: http.IncomingMessage, res: http.ServerResp
 export function handleGetSkill(req: http.IncomingMessage, res: http.ServerResponse, id: string): void {
   try {
     const info: SkillInfoItem | null = getSkillInfoDTO({
-      userSkillsDir: getUserSkillsDir(),
-      pluginInstallPaths: getPluginInstallPaths(),
-      overrides: getOverrides(),
+      ...buildArgs(getOverrides()),
       id,
     });
     if (!info) {

@@ -15,7 +15,7 @@
  * 9. Wall-clock budget for summarization
  */
 
-import type { CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
+import type { CompactOptions, CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
 import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
 import { adjustSliceBoundary } from '../compact.js'
@@ -40,8 +40,6 @@ import {
 export interface SessionMemoryCompactConfig {
   /** Keep the most recent N messages (legacy fallback) */
   maxMessagesToKeep: number
-  /** System prompt for the summarizer */
-  summarizationPrompt: string
   /** Maximum tokens per file to restore after compact */
   maxTokensPerFile?: number
   /** Maximum files to restore */
@@ -50,7 +48,11 @@ export interface SessionMemoryCompactConfig {
   enableSkillTracking?: boolean
   /** Number of recent tokens to keep (not summarize) - if set, overrides maxMessagesToKeep */
   keepRecentTokens?: number
-  /** Previous summary from last compaction (for iterative updates) */
+  /**
+   * Previous summary from the last compaction, for iterative updates. Mutated
+   * via `setPreviousSummary`; the transient prefire seed is passed via
+   * `CompactOptions.previousSummary` instead so it never leaks across sessions.
+   */
   previousSummary?: string
   /** Accumulated file operations from previous compactions */
   accumulatedFileOps?: FileOperations
@@ -93,59 +95,6 @@ export interface SessionMemoryData {
   updatedAt: number
 }
 
-/**
- * Default session memory prompt - structured extraction
- */
-const DEFAULT_SESSION_MEMORY_PROMPT = `Your task is to create a detailed session memory document that captures all important information from this conversation.
-
-The memory should be structured with these sections:
-
-## Primary Request & Intent
-What is the user trying to accomplish? What are their explicit goals?
-
-## Key Technical Concepts
-Important technologies, frameworks, patterns, APIs mentioned or used
-
-## Tool Actions Taken
-List each tool call that was made and what it accomplished:
-- For Read: what file was read, key findings
-- For Write/Edit: what file was created/modified, what changed (briefly)
-- For Bash: what command was run, key output
-- For WebSearch/WebFetch: what was searched/fetched, key results
-- For Grep/Glob: what was searched, key matches
-
-## Files and Code Sections
-List each file that was examined, created, or modified:
-- For modified files: what changed (briefly)
-- For new files: purpose and key implementation details
-- Include relevant code snippets if critical
-
-## Errors and Problems
-Any errors encountered and how they were resolved. This helps avoid repeating mistakes.
-Pay special attention to [Result: ... (ERROR)] entries in the conversation.
-
-## Decisions Made
-Important architectural or implementation decisions with rationale
-
-## Current Work State
-What was being worked on when this summary was requested? What's the current state?
-
-## Pending Tasks
-Explicit tasks that were requested but not yet completed
-
-Format your response as a JSON object with these fields:
-{
-  "primaryRequest": "...",
-  "keyTechnicalConcepts": ["..."],
-  "toolActions": [{"tool": "...", "input": "...", "result": "..."}],
-  "filesAndCode": [{"path": "...", "operation": "read|write|edit|create", "summary": "..."}],
-  "errorsAndProblems": [{"error": "...", "resolution": "..."}],
-  "decisionsMade": [{"decision": "...", "rationale": "..."}],
-  "currentWorkState": "...",
-  "pendingTasks": ["..."]
-}
-
-IMPORTANT: Do NOT call any tools. Respond with text only (the JSON).`
 
 /**
  * Extract tool invocations from messages for tracking
@@ -372,7 +321,6 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   constructor(config: Partial<SessionMemoryCompactConfig> = {}) {
     this.config = {
       maxMessagesToKeep: config.maxMessagesToKeep ?? 15,
-      summarizationPrompt: config.summarizationPrompt ?? DEFAULT_SESSION_MEMORY_PROMPT,
       maxTokensPerFile: config.maxTokensPerFile ?? 5000,
       maxFilesToRestore: config.maxFilesToRestore ?? 5,
       enableSkillTracking: config.enableSkillTracking ?? true,
@@ -544,7 +492,7 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
   /**
    * Execute session memory compaction with token budget cut point and iterative summary updates
    */
-  async compact(messages: Message[], stats: CompactionStats): Promise<CompactionResult> {
+  async compact(messages: Message[], stats: CompactionStats, options?: CompactOptions): Promise<CompactionResult> {
     const SYSTEM_MESSAGE_PREFIXES = ['system', 'instruction', 'You are', 'You are a', 'This session is being continued']
 
     // Separate system messages from conversation
@@ -594,6 +542,12 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       }
     }
 
+    // Resolve the previous-summary seed. `options.previousSummary` (from the
+    // manager's two-pass prefire pipeline) wins over the strategy's persistent
+    // `config.previousSummary`, but neither is mutated here — so a shared
+    // strategy cannot leak a previous session's summary into the next one.
+    const effectivePreviousSummary = options?.previousSummary ?? this.config.previousSummary
+
     // Handle split turn if necessary
     let turnPrefixSummary = ''
     if (cutPoint.isSplitTurn && cutPoint.turnStartIndex >= 0) {
@@ -632,7 +586,7 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       const conversationText = serializeMessagesForSummary(cleanedMessages)
       const prompt = buildSummarizationPrompt(
         conversationText,
-        this.config.previousSummary,
+        effectivePreviousSummary,
         undefined, // customInstructions
       )
 
@@ -660,7 +614,9 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
         if (turnPrefixSummary) {
           summaryText = `${summaryText}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixSummary}`
         }
-        this.config.previousSummary = summaryText
+        // NOTE: do NOT mutate this.config.previousSummary here. The manager
+        // now owns the iterative summary (driven by result.summaryText), and
+        // mutating the strategy would leak across sessions if the strategy is shared.
       }
     } else {
       summaryText = `[${olderMessages.length} messages from earlier in the conversation]`
@@ -707,6 +663,10 @@ Continue the conversation from where it left off without asking the user any fur
       tokensRemoved,
       tokensRetained,
       strategy: this.name,
+      // Surface the formatted summary so the manager can store it for
+      // iterative compactions and feed it to the memory-flush sink without
+      // having to regex-extract it from the embedded summary message.
+      summaryText,
     }
   }
 
