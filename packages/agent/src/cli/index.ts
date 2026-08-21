@@ -995,7 +995,8 @@ program
         // Load settings from database
         const { getCliSetting } = await import('./config/db-config.js');
         const displayMode = getCliSetting('tool_display_mode') || 'verbose';
-        const maxTurns = getCliSetting('max_turns') || '90';
+        const maxTurnsRaw = getCliSetting('max_turns');
+        const maxTurns = maxTurnsRaw && maxTurnsRaw !== '0' ? maxTurnsRaw : 'unlimited';
         const agentMode = getCliSetting('agent_mode') || 'code';
 
         console.log()

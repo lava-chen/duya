@@ -38,7 +38,8 @@ export const FORK_AGENT = {
   whenToUse:
     'Implicit fork — inherits full conversation context. Not selectable via subagent_type; triggered by omitting subagent_type when the fork feature is enabled.',
   tools: ['*'],
-  maxTurns: 200,
+  // No implicit `maxTurns`: fork inherits the parent's uncapped loop. An
+  // explicit cap can still be set by the caller via `RunAgentParams.maxTurns`.
   model: 'inherit',
   source: 'built-in',
   baseDir: 'built-in',

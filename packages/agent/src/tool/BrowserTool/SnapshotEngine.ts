@@ -52,7 +52,7 @@ export interface InteractiveElement {
 // ─── Config Defaults ────────────────────────────────────────────────────────
 
 const DEFAULT_VIEWPORT_EXPAND = 800;
-const DEFAULT_MAX_DEPTH = 50;
+const DEFAULT_MAX_DEPTH = 30;
 const DEFAULT_MAX_TEXT_LENGTH = 120;
 
 // ─── Utility JS Generators ──────────────────────────────────────────────────
@@ -272,6 +272,32 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
+  // Per-walk caches: getBoundingClientRect and getComputedStyle both force
+  // layout/style recalc. Memoize so the same element isn't measured twice
+  // (parents and children both check the child's rect; visibility is checked
+  // twice on some elements — once in walk, once via ad-detection). WeakMap
+  // lets them be GC'd after the walk completes.
+  const rectCache = new WeakMap();
+  const csCache = new WeakMap();
+
+  function getRect(el) {
+    let r = rectCache.get(el);
+    if (!r) {
+      try { r = el.getBoundingClientRect(); } catch { r = null; }
+      rectCache.set(el, r);
+    }
+    return r;
+  }
+
+  function getCs(el) {
+    let cs = csCache.get(el);
+    if (!cs) {
+      try { cs = window.getComputedStyle(el); } catch { cs = null; }
+      csCache.set(el, cs);
+    }
+    return cs;
+  }
+
   function isInExpandedViewport(rect) {
     if (!rect || (rect.width === 0 && rect.height === 0)) return false;
     return rect.bottom > -VIEWPORT_EXPAND && rect.top < vh + VIEWPORT_EXPAND &&
@@ -279,18 +305,19 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
   }
 
   function isVisibleByCSS(el) {
+    // Fast path: inline style covers most static layouts and avoids the
+    // style-recalc cost of getComputedStyle.
     const style = el.style;
     if (style.display === 'none') return false;
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
     if (style.opacity === '0') return false;
-    try {
-      const cs = window.getComputedStyle(el);
-      if (cs.display === 'none') return false;
-      if (cs.visibility === 'hidden') return false;
-      if (parseFloat(cs.opacity) <= 0) return false;
-      if (cs.clip === 'rect(0px, 0px, 0px, 0px)' && cs.position === 'absolute') return false;
-      if (cs.overflow === 'hidden' && el.offsetWidth === 0 && el.offsetHeight === 0) return false;
-    } catch {}
+    const cs = getCs(el);
+    if (!cs) return true;
+    if (cs.display === 'none') return false;
+    if (cs.visibility === 'hidden') return false;
+    if (parseFloat(cs.opacity) <= 0) return false;
+    if (cs.clip === 'rect(0px, 0px, 0px, 0px)' && cs.position === 'absolute') return false;
+    if (cs.overflow === 'hidden' && el.offsetWidth === 0 && el.offsetHeight === 0) return false;
     return true;
   }
 
@@ -298,14 +325,15 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
 
   function isOccludedByOverlay(el) {
     try {
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return false;
+      const rect = getRect(el);
+      if (!rect || rect.width === 0 || rect.height === 0) return false;
       const cx = rect.left + rect.width / 2;
       const cy = rect.top + rect.height / 2;
       if (cx < 0 || cy < 0 || cx > vw || cy > vh) return false;
       const topEl = document.elementFromPoint(cx, cy);
       if (!topEl || topEl === el || el.contains(topEl) || topEl.contains(el)) return false;
-      const cs = window.getComputedStyle(topEl);
+      const cs = getCs(topEl);
+      if (!cs) return false;
       if (parseFloat(cs.opacity) < 0.5) return false;
       const bg = cs.backgroundColor;
       if (bg === 'rgba(0, 0, 0, 0)' || bg === 'transparent') return false;
@@ -362,7 +390,8 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
     if (el.hasAttribute('onclick') || el.hasAttribute('onmousedown') || el.hasAttribute('ontouchstart')) return true;
     if (el.hasAttribute('tabindex') && el.getAttribute('tabindex') !== '-1') return true;
     if (hasFrameworkListener(el)) return true;
-    try { if (window.getComputedStyle(el).cursor === 'pointer') return true; } catch {}
+    const cs = getCs(el);
+    if (cs && cs.cursor === 'pointer') return true;
     if (el.isContentEditable && el.getAttribute('contenteditable') !== 'false') return true;
     if (isSearchElement(el)) return true;
     return false;
@@ -417,8 +446,9 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
     const sw = el.scrollWidth, cw = el.clientWidth;
     const isV = sh > ch + 5, isH = sw > cw + 5;
     if (!isV && !isH) return null;
+    const cs = getCs(el);
+    if (!cs) return null;
     try {
-      const cs = window.getComputedStyle(el);
       const scrollable = ['auto', 'scroll', 'overlay'];
       const tag = el.tagName.toLowerCase();
       const isBody = tag === 'body' || tag === 'html';
@@ -651,8 +681,8 @@ export function generateSnapshotJsPrompt(opts: SnapshotOptions = {}): string {
     }
 
     // Visibility check
-    let rect;
-    try { rect = el.getBoundingClientRect(); } catch { return false; }
+    const rect = getRect(el);
+    if (!rect) return false;
     const hasArea = rect.width > 0 && rect.height > 0;
     if (hasArea && !isVisibleByCSS(el)) {
       if (!(tag === 'input' && el.type === 'file')) return false;

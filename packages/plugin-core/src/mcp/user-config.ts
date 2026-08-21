@@ -22,6 +22,22 @@ export interface UserMcpTomlServer {
   toolTimeoutSec?: number;
   /** Per-tool-call timeout overrides, keyed by tool name, in seconds. */
   toolTimeouts?: Record<string, number>;
+  /**
+   * Env passthrough mode for stdio subprocesses.
+   * - `'allowlist'` (default): only safe baseline env (PATH/HOME/USER...) plus
+   *   `env` are passed to the subprocess (see `buildSafeEnv`).
+   * - `'inherit'`: pass the full parent `process.env` plus `env`. Use for
+   *   launcher-style servers (npx/uvx/python tools) that need more of the
+   *   parent environment (paths, UV_/VIRTUAL_ENV, proxy vars, NODE_OPTIONS).
+   */
+  envPassthrough?: 'allowlist' | 'inherit';
+  /**
+   * When true and the transport is stdio on Windows, spawn the server through
+   * the shell (`cmd /c <command> <args...>`) so npm/uv `.cmd`/`.ps1` shims
+   * (npx, uvx, etc.) launch correctly. Mirrors Claude Code's
+   * `CLAUDE_CODE_SHELL_PREFIX` behavior.
+   */
+  useShell?: boolean;
 }
 
 function stringRecord(value: unknown, field: string): Record<string, string> | undefined {
@@ -131,6 +147,22 @@ export function parseUserMcpToml(text: string): UserMcpTomlServer[] {
         pickKey(entry, 'tool_timeouts', 'toolTimeouts'),
         `mcp_servers.${name}.tool_timeouts`,
       ),
+      envPassthrough: (() => {
+        const v = pickKey(entry, 'env_passthrough', 'envPassthrough');
+        if (v === undefined) return undefined;
+        if (v !== 'allowlist' && v !== 'inherit') {
+          throw new Error(`mcp_servers.${name}.env_passthrough must be 'allowlist' or 'inherit'`);
+        }
+        return v;
+      })(),
+      useShell: (() => {
+        const v = pickKey(entry, 'use_shell', 'useShell');
+        if (v === undefined) return undefined;
+        if (typeof v !== 'boolean') {
+          throw new Error(`mcp_servers.${name}.use_shell must be a boolean`);
+        }
+        return v;
+      })(),
     });
   }
   return result;
@@ -153,6 +185,8 @@ export function stringifyUserMcpToml(servers: readonly UserMcpTomlServer[]): str
       ...(server.startupTimeoutSec !== undefined ? { startup_timeout_sec: server.startupTimeoutSec } : {}),
       ...(server.toolTimeoutSec !== undefined ? { tool_timeout_sec: server.toolTimeoutSec } : {}),
       ...(server.toolTimeouts && Object.keys(server.toolTimeouts).length ? { tool_timeouts: server.toolTimeouts } : {}),
+      ...(server.envPassthrough ? { env_passthrough: server.envPassthrough } : {}),
+      ...(server.useShell === true ? { use_shell: true } : {}),
     };
   }
   return `# User-managed MCP servers for DUYA. Plugin MCPs are configured separately.\n# Changes are detected and reloaded automatically.\n\n${TOML.stringify({ version: 1, mcp_servers: mcpServers } as TOML.JsonMap)}`;

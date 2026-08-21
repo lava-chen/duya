@@ -50,6 +50,7 @@ import {
 export interface BackendProvider {
   id: string;
   name: string;
+  alias?: string;
   providerType: string;
   baseUrl: string;
   apiKey: string;
@@ -98,6 +99,7 @@ function legacyBackendToLlm(b: BackendProvider): LlmProvider {
   return {
     id: b.id,
     name: b.name,
+    alias: b.alias,
     category,
     apiFormat,
     auth: {
@@ -139,6 +141,9 @@ export interface RendererLlmProviderDTO {
   // Identity (from LlmProvider)
   id: string;
   name: string;
+  /** User-facing alias (nickname), distinct from `name`. Empty when
+   *  unset. Round-trips through config.toml → DTO → edit form. */
+  alias: string;
   category: ProviderCategory;
   apiFormat: LlmProvider['apiFormat'];
 
@@ -301,6 +306,7 @@ export function toRendererLlmProviderDTO(
   return {
     id: llm.id,
     name: llm.name,
+    alias: llm.alias ?? '',
     category: llm.category,
     apiFormat: llm.apiFormat,
     apiKey,

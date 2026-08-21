@@ -81,6 +81,10 @@ export interface ProviderMeta {
 export interface LlmProvider {
   id: string;
   name: string;
+  /** User-facing alias (nickname) for the provider, independent of
+   *  the vendor `name`. Optional — persisted to `config.toml`
+   *  (`[providers.<id>].alias`) and surfaced in the renderer DTO. */
+  alias?: string;
   category: ProviderCategory;
   apiFormat: ApiFormat;
   auth: AuthConfig;
@@ -151,6 +155,19 @@ export interface ModelCapability {
   supportsVision?: boolean;
   supportsReasoning?: boolean;
   supportsPromptCache?: boolean;
+  /**
+   * Per-model reasoning-effort options (LM Studio
+   * `capabilities.reasoning.allowed_options` normalized). The chat
+   * effort dropdown uses this list when non-empty, falling back to
+   * the static catalog default.
+   */
+  reasoningEffortOptions?: string[];
+  /**
+   * Whether the model is currently loaded in a local runtime (LM
+   * Studio `loaded_instances.length > 0` or Ollama loaded state).
+   * Surfaced as a small dot in model lists.
+   */
+  isLoaded?: boolean;
   pricing?: {
     inputPerMillion?: number;
     outputPerMillion?: number;
@@ -193,6 +210,9 @@ export interface ValidationResult {
 export interface ApiProvider {
   id: string;
   name: string;
+  /** User-facing alias (nickname), distinct from the vendor `name`.
+   *  Round-trips through `config.toml` via the config reader/writer. */
+  alias?: string;
   providerType:
     | 'anthropic'
     | 'openai'
@@ -219,6 +239,7 @@ export interface ApiProvider {
 export interface MaskedApiProvider {
   id: string;
   name: string;
+  alias?: string;
   providerType: ApiProvider['providerType'];
   baseUrl: string;
   apiKey: string;

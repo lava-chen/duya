@@ -108,10 +108,12 @@ import { MessageCompactionController } from '../message/message-compaction-contr
 import {
   adaptAttachmentContext,
   adaptBackgroundNotification,
+  adaptLoopNudgeContext,
   adaptMailboxRows,
   projectRuntimeContextToProviderMessage,
   RUNTIME_CONTEXT_METADATA_KEYS,
 } from '../message/runtime-context-adapters.js';
+import { renderSystemReminder } from './reminders.js';
 import { persistLargePastedAttachments } from '../utils/attachment-context.js';
 import {
   EMPTY_DISCOVERED,
@@ -198,6 +200,30 @@ export class duyaAgent {
    * or layout.
    */
   private widgetStyleHistory: WidgetStyleSignature[] = [];
+  /**
+   * Plan 430 — additionalContext lines from the UserPromptSubmit hook
+   * (the DUYA memory-RAG hook among them). Captured once per `streamChat`
+   * call right after the hook dispatch runs, then drained into the first
+   * `_projectModelMessages` projection so the model sees the memory block
+   * on its first turn instead of having to wait for an async + asyncRewake
+   * notification to land at the next checkpoint (which never injected it
+   * into the conversation model-side — the pre-plan-430 wire just logged
+   * the contexts and threw them away). Source-tagged `custom`, hidden
+   * visibility (model-only, no transcript card) — same shape as loop-hook
+   * steering nudges so it goes through the same provider projection.
+   *
+   * Cleared after the first injection so re-projections within one
+   * `streamChat` (post-compaction refresh) do not duplicate the block.
+   */
+  private promptContexts: string[] = [];
+  /**
+   * Plan 437: hook invocations emitted during this `streamChat` call,
+   * in arrival order. Drained by `drainPendingHookMessages()` at the
+   * turn-end boundary in `agent-process-entry` and persisted as
+   * `msg_type: 'hook_invocation'` rows so reload / cross-device sync
+   * keep the hook history visible alongside tool_use / tool_result.
+   */
+  private pendingHookMessages: Message[] = [];
   /**
    * Per-session mutable canvas state (list-freshness timestamp, created
    * element IDs, ref map). Shared across tool calls and turns via a
@@ -536,6 +562,14 @@ export class duyaAgent {
     // hot-reload on the next run. Fail-open: a throwing/failing hook never
     // breaks the run (each dispatch is individually wrapped below).
     const promptText = typeof prompt === 'string' ? prompt : '';
+    // Plan 437: build a self-referential emitter so the runner can fire
+    // `agent_progress` SSE events with `type: 'hook_invoked'`. The
+    // emitter queues events into a buffer that's flushed alongside the
+    // other yields further down (avoids interleaving issues with the
+    // generator control flow). The closure captures the agent's
+    // streaming surface; nested `yield` would require extracting each
+    // call site into its own helper, which we avoid here for diff size.
+    const pendingHookEvents: SSEEvent[] = [];
     const configHooks = new ConfigHooksRunner({
       cwd: this.workingDirectory ?? process.cwd(),
       vars: {
@@ -543,33 +577,78 @@ export class duyaAgent {
         cwd: this.workingDirectory ?? '',
         prompt: promptText,
       },
+      onHookInvoked: (hookEvent) => {
+        // Yield-equivalent: buffer the event so the surrounding code
+        // flushes them through the existing SSE pipeline.
+        pendingHookEvents.push({
+          type: 'agent_progress',
+          data: {
+            type: 'hook_invoked',
+            hookEvent,
+            sessionId: this.sessionId ?? '',
+          },
+        });
+        // Plan 437: also persist a Message row for this hook event so
+        // reload / cross-device sync see hook rows in the message flow.
+        // The renderer reads them back via MessageItem.messageToActionItems
+        // using msgType === 'hook_invocation'.
+        this.pendingHookMessages.push(buildHookMessage(hookEvent, this.sessionId ?? ''));
+      },
     });
+    const flushPendingHookEvents = (): SSEEvent[] => {
+      if (pendingHookEvents.length === 0) return [];
+      return pendingHookEvents.splice(0, pendingHookEvents.length);
+    };
+
+    // Plan 437: helper that runs one hook event and yields any
+    // `hook_invoked` agent_progress events the runner emitted during the
+    // dispatch. Async-generator-as-helper — `yield*` forwards every
+    // inner yield, and the returned value becomes the value of the
+    // `yield*` expression. Replaces the duplicated try/await/catch
+    // blocks at every call site.
+    const dispatchHooks = async function* (
+      event: import('../hooks/types.js').HookEvent,
+      input: import('../hooks/events.js').EventHookInput,
+      targets?: import('../hooks/events.js').EventHookMatcherTargets,
+    ): AsyncGenerator<SSEEvent, import('../hooks/events.js').EventHookRunResult | null, unknown> {
+      try {
+        const result = await configHooks.run(event, input, targets);
+        const pending = flushPendingHookEvents();
+        for (const ev of pending) yield ev;
+        return result;
+      } catch (err) {
+        logger.warn(
+          `[Hooks] ${event} dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        const pending = flushPendingHookEvents();
+        for (const ev of pending) yield ev;
+        return null;
+      }
+    };
 
     // UserPromptSubmit — the user's raw prompt entered the run.
-    try {
-      const submitCtx = await configHooks.run(
-        'UserPromptSubmit',
-        { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
-      );
-      if (submitCtx.contexts.length > 0) {
-        logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s)`);
-      }
-    } catch (err) {
-      logger.warn(`[Hooks] UserPromptSubmit dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    // Plan 430: the returned additionalContext lines are stashed on the
+    // agent and pumped into the first `_projectModelMessages` projection as
+    // `<system-reminder>` runtime_context messages (`source: 'custom'`).
+    // Without this, the memory-RAG hook output is logged and discarded —
+    // the model never sees the retrieved memories on its first turn.
+    const submitCtx = yield* dispatchHooks(
+      'UserPromptSubmit',
+      { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
+    );
+    if (submitCtx && submitCtx.contexts.length > 0) {
+      this.promptContexts = submitCtx.contexts.slice();
+      logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) — queued for first-turn injection`);
     }
 
     // SessionStart — fired once per run (covers orchestrator modes too,
     // since this sits ahead of the mode dispatch below).
-    try {
-      const startCtx = await configHooks.run(
-        'SessionStart',
-        { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
-      );
-      if (startCtx.contexts.length > 0) {
-        logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
-      }
-    } catch (err) {
-      logger.warn(`[Hooks] SessionStart dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
+    const startCtx = yield* dispatchHooks(
+      'SessionStart',
+      { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'SessionStart', source: 'startup' },
+    );
+    if (startCtx && startCtx.contexts.length > 0) {
+      logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
     }
 
     // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
@@ -759,10 +838,15 @@ export class duyaAgent {
     }
 
     let turnCount = 0;
-    const maxTurns = options?.maxTurns ?? 100;
-    // Grants the model one extra wrap-up turn after hitting max_turns so it
-    // can summarize progress instead of the run ending abruptly mid-task.
-    let maxTurnsWrapupDone = false;
+    // Per-run agentic-turn cap. Absent → uncapped (pi-aligned design):
+    // the loop runs until the LLM naturally produces a tool-free turn,
+    // hits a token/context limit (`stopReason: 'length'`), the caller
+    // aborts, or a tool batch returns `terminate: true`. Upper-layer
+    // harnesses (CLI, renderer config) can still set a value here as an
+    // opt-in safety net — there is no implicit fallback. Plan 426 keeps
+    // engine invariants in the loop (dead-loop guard, mailboxes) but
+    // intentionally does not enforce a default turn limit.
+    const maxTurns = options?.maxTurns;
     let runtimePromptMessageId: string | null = null;
 
     // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
@@ -795,6 +879,7 @@ export class duyaAgent {
         hardNudgeAt: deadLoopHardNudgeAt,
       },
       toolIntentNudgeMax: options?.toolIntentNudgeMax ?? 2,
+      disabled: options?.disabledLoopHooks,
     })) {
       loopHooks.register(registration);
     }
@@ -1271,26 +1356,22 @@ export class duyaAgent {
             // Plan 426 follow-up: PreToolUse — notification before the tool
             // is dispatched to its executor. Runs to completion (blocking),
             // fail-open; matchers filter on the tool name.
-            try {
-              const preCtx = await configHooks.run(
-                'PreToolUse',
-                {
-                  session_id: this.sessionId ?? '',
-                  cwd: this.workingDirectory ?? '',
-                  hook_event_name: 'PreToolUse',
-                  tool_name: event.data.name,
-                  tool_input: event.data.input ?? {},
-                  tool_use_id: event.data.id,
-                },
-                { toolName: event.data.name },
+            const preCtx = yield* dispatchHooks(
+              'PreToolUse',
+              {
+                session_id: this.sessionId ?? '',
+                cwd: this.workingDirectory ?? '',
+                hook_event_name: 'PreToolUse',
+                tool_name: event.data.name,
+                tool_input: event.data.input ?? {},
+                tool_use_id: event.data.id,
+              },
+              { toolName: event.data.name },
+            );
+            if (preCtx && preCtx.contexts.length > 0) {
+              logger.debug(
+                `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
               );
-              if (preCtx.contexts.length > 0) {
-                logger.debug(
-                  `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
-                );
-              }
-            } catch (err) {
-              logger.warn(`[Hooks] PreToolUse dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
             }
 
             // Add tool to executor for background execution
@@ -1504,24 +1585,20 @@ export class duyaAgent {
                   // tool result is an error (fail-open; matchers filter on
                   // the failed tool's name).
                   if (toolResultError) {
-                    try {
-                      const failedToolName = turnToolCallIds.get(toolResultId) ?? '';
-                      await configHooks.run(
-                        'PostToolUseFailure',
-                        {
-                          session_id: this.sessionId ?? '',
-                          cwd: this.workingDirectory ?? '',
-                          hook_event_name: 'PostToolUseFailure',
-                          tool_name: failedToolName,
-                          tool_input: {},
-                          tool_use_id: toolResultId,
-                          error: toolResultContent.slice(0, 2048),
-                        },
-                        { toolName: failedToolName || undefined },
-                      );
-                    } catch (err) {
-                      logger.warn(`[Hooks] PostToolUseFailure dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
-                    }
+                    const failedToolName = turnToolCallIds.get(toolResultId) ?? '';
+                    yield* dispatchHooks(
+                      'PostToolUseFailure',
+                      {
+                        session_id: this.sessionId ?? '',
+                        cwd: this.workingDirectory ?? '',
+                        hook_event_name: 'PostToolUseFailure',
+                        tool_name: failedToolName,
+                        tool_input: {},
+                        tool_use_id: toolResultId,
+                        error: toolResultContent.slice(0, 2048),
+                      },
+                      { toolName: failedToolName || undefined },
+                    );
                   }
 
                   // Plan 224 follow-up: if this tool_result belongs to a
@@ -1667,35 +1744,14 @@ export class duyaAgent {
 
         logger.debug(`[Agent] Turn ${turnCount}: LLM stream ended, total events=${llmEventCount}`);
 
-        // Check max turns limit — only applies while the model keeps
-        // requesting more tool rounds; a natural completion falls through to
-        // the !needsFollowUp branch below. On the first hit, inject a wrap-up
-        // steering message so the model summarizes progress instead of the
-        // run ending abruptly without a conclusion.
-        if (turnCount >= maxTurns && needsFollowUp) {
-          if (!maxTurnsWrapupDone) {
-            maxTurnsWrapupDone = true;
-            logger.warn(
-              `[Agent] Turn ${turnCount}: reached max_turns (${maxTurns}); nudging model to wrap up`,
-            );
-            // Budget invariant stays in the engine (plan 426); only the
-            // injection channel is unified on the runtime-context framework.
-            applyLoopHookEffect(
-              messages,
-              {
-                type: 'inject',
-                injection:
-                  '已达本轮最大工具调用次数上限。请立即收尾：不要再调用任何工具，' +
-                  '用 1-2 句话总结已经完成的进展和尚未完成的事项。',
-                source: 'max_turns_wrapup',
-              },
-              seqIndex,
-            );
-            continue;
-          }
-
-          // Wrap-up turn already granted but the model still requests tools.
-          // Refresh sessionInfo counters BEFORE yielding done event.
+        // Per-run turn cap (only fires when the caller passed an explicit
+        // `maxTurns`). `maxTurns === undefined` means uncapped — matches
+        // pi's design where `shouldStopAfterTurn` is the only stop hook and
+        // defaults to undefined. We mirror that: no `?? N` fallback here.
+        // A natural completion falls through to the `!needsFollowUp` branch.
+        if (maxTurns !== undefined && turnCount >= maxTurns && needsFollowUp) {
+          // No wrap-up nudge — the caller opted into a hard ceiling, so we
+          // honour it. Refresh sessionInfo counters BEFORE yielding.
           this._commitMessages();
           yield { type: 'done', reason: 'max_turns' };
           return;
@@ -1773,16 +1829,12 @@ export class duyaAgent {
 
           // Plan 426 follow-up: SessionEnd — fired on the natural run
           // completion boundary (fail-open; never blocks the final answer).
-          try {
-            await configHooks.run('SessionEnd', {
-              session_id: this.sessionId ?? '',
-              cwd: this.workingDirectory ?? '',
-              hook_event_name: 'SessionEnd',
-              reason: 'user_exit',
-            });
-          } catch (err) {
-            logger.warn(`[Hooks] SessionEnd dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
-          }
+          yield* dispatchHooks('SessionEnd', {
+            session_id: this.sessionId ?? '',
+            cwd: this.workingDirectory ?? '',
+            hook_event_name: 'SessionEnd',
+            reason: 'user_exit',
+          });
 
           yield { type: 'done', reason: 'completed' };
           return;
@@ -1915,38 +1967,48 @@ export class duyaAgent {
     // Plan 426 follow-up: Stop + SessionEnd — the run is being torn down
     // (user interrupt). Fail-open: a broken hook never blocks the done
     // event.
-    try {
-      await configHooks.run('Stop', {
-        session_id: this.sessionId ?? '',
-        cwd: this.workingDirectory ?? '',
-        hook_event_name: 'Stop',
-        reason: 'user_request',
-      });
-    } catch (err) {
-      logger.warn(`[Hooks] Stop dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      await configHooks.run('SessionEnd', {
-        session_id: this.sessionId ?? '',
-        cwd: this.workingDirectory ?? '',
-        hook_event_name: 'SessionEnd',
-        reason: 'user_exit',
-      });
-    } catch (err) {
-      logger.warn(`[Hooks] SessionEnd dispatch failed (skipped): ${err instanceof Error ? err.message : String(err)}`);
-    }
+    yield* dispatchHooks('Stop', {
+      session_id: this.sessionId ?? '',
+      cwd: this.workingDirectory ?? '',
+      hook_event_name: 'Stop',
+      reason: 'user_request',
+    });
+    yield* dispatchHooks('SessionEnd', {
+      session_id: this.sessionId ?? '',
+      cwd: this.workingDirectory ?? '',
+      hook_event_name: 'SessionEnd',
+      reason: 'user_exit',
+    });
 
     yield { type: 'done', reason: 'aborted' };
   }
 
-  // === streamChat helpers (Phase F1 of Plan 211) =========================
-  //
-  // The body of `streamChat` historically packed mode dispatch, tool
-  // resolution, prompt assembly, permission wiring, and message-history
-  // selection into a single 1000+ line method. The five helpers below pull
-  // each concern out so the main loop reads as orchestration rather than
-  // implementation. Helpers are private; they are not part of the public
-  // surface and may be reorganized freely.
+  /**
+   * Plan 437: drain hook-event messages accumulated during this
+   * `streamChat` call. The agent process entry calls this at the turn-end
+   * boundary and forwards the messages to `appendMessages` so they
+   * persist as `msg_type: 'hook_invocation'` rows. Returns a fresh array
+   * (the internal buffer is reset) so subsequent dispatches within the
+   * same round don't double-count.
+   *
+   * Marked public so the agent process entry can call it across the
+   * module boundary.
+   */
+  drainPendingHookMessages(): Message[] {
+    if (this.pendingHookMessages.length === 0) return [];
+    const drained = this.pendingHookMessages.slice();
+    this.pendingHookMessages = [];
+    return drained;
+  }
+
+// === streamChat helpers (Phase F1 of Plan 211) =========================
+//
+// The body of `streamChat` historically packed mode dispatch, tool
+// resolution, prompt assembly, permission wiring, and message-history
+// selection into a single 1000+ line method. The five helpers below pull
+// each concern out so the main loop reads as orchestration rather than
+// implementation. Helpers are private; they are not part of the public
+// surface and may be reorganized freely.
 
   /**
    * Refresh sessionInfo counters from the timeline. `this.messages` is a
@@ -3150,6 +3212,36 @@ export class duyaAgent {
 
     // Project to model boundary: { system, messages }
     const projection = projectModelMessages(context.messages, { systemSegments });
+    const messages: Message[] = [...projection.messages];
+
+    // Plan 430 — drain `this.promptContexts` (UserPromptSubmit hook
+    // additionalContext lines, e.g. the memory-RAG `### 相关记忆` block)
+    // into the first projection as runtime_context messages. Each block
+    // is wrapped in `<system-reminder>` and tagged source='custom', exactly
+    // matching the loop-hook injection shape so the model sees one uniform
+    // "steering message" rail (same provider projection; the renderer skips
+    // it because adaptLoopNudgeContext defaults to visibility='hidden').
+    //
+    // We drain on the FIRST projection of the streamChat call only — later
+    // re-projections within the same call (after proactive/context-exceeded
+    // compaction at DuyaAgent.ts:~1130 and ~1820) reuse the same drained
+    // `messages` array via `messages = reProjected.messages`, so clearing
+    // here is enough to keep a multi-turn run from re-injecting the same
+    // memory block on every compaction refresh.
+    if (this.promptContexts.length > 0) {
+      for (let i = 0; i < this.promptContexts.length; i += 1) {
+        const reminder = adaptLoopNudgeContext(
+          renderSystemReminder(this.promptContexts[i]),
+          'custom',
+          { seqIndex: messages.length + i },
+        );
+        messages.push(projectRuntimeContextToProviderMessage(reminder));
+      }
+      logger.info(
+        `[Agent] injected ${this.promptContexts.length} UserPromptSubmit context block(s) into first turn (source='custom')`,
+      );
+      this.promptContexts = [];
+    }
 
     // Merge projected system with existing system prompt
     const systemFromProjection = typeof projection.system === 'string'
@@ -3160,10 +3252,10 @@ export class duyaAgent {
       : (systemPromptContent || systemFromProjection);
 
     logger.info(
-      `[Agent] projectModelMessages: ${context.messages.length} agent messages → ${projection.messages.length} model messages, ${systemSegments.length} system segments`,
+      `[Agent] projectModelMessages: ${context.messages.length} agent messages → ${messages.length} model messages, ${systemSegments.length} system segments`,
     );
 
-    return { systemPromptContent: merged, messages: [...projection.messages] };
+    return { systemPromptContent: merged, messages };
   }
 
   /**
@@ -3205,6 +3297,59 @@ export class duyaAgent {
       removedCount: compactEntry.compactedMessageIds.length,
     };
   }
+}
+
+/**
+ * Plan 437: build a legacy `Message` row for a single hook invocation.
+ * Persisted at the turn-end boundary so reload / cross-device sync keep
+ * the hook history visible alongside tool_use / tool_result.
+ *
+ * Shape mirrors the other Message rows the renderer knows how to read
+ * back (`MessageItem.messageToActionItems`):
+ *   - `role: 'system'` — hooks aren't user/assistant/tool; `system` is
+ *     the closest neutral slot that already renders.
+ *   - `msg_type: 'hook_invocation'` — discriminator the renderer uses.
+ *   - `tool_name` carries the hook event name (PreToolUse, PostToolUse,
+ *     UserPromptSubmit, ...) so existing tool-name consumers stay
+ *     unaware and the hook-specific fields live in `tool_input`.
+ *   - `tool_input` is a JSON blob of the structured HookInvokedEvent.
+ *   - `content` carries `additionalContext` (or empty for verifier-only).
+ *   - `status: 'failed'` on non-ok status so the row is greppable.
+ */
+function buildHookMessage(
+  event: import('../hooks/types.js').HookInvokedEvent,
+  sessionId: string,
+): Message {
+  return {
+    id: `hook-${event.seq}-${event.toolUseId ?? event.hookEventName}-${Date.now()}`,
+    role: 'system',
+    content: event.additionalContext ?? '',
+    timestamp: Date.now(),
+    msg_type: 'hook_invocation',
+    tool_name: event.hookEventName,
+    tool_input: JSON.stringify({
+      hookType: event.hookType,
+      hookName: event.hookName,
+      matcher: event.matcher,
+      exitCode: event.exitCode,
+      async: event.async,
+      backgroundTaskId: event.backgroundTaskId,
+      durationMs: event.durationMs,
+      status: event.status,
+      errorMessage: event.errorMessage,
+      seq: event.seq,
+      toolName: event.toolName,
+      toolUseId: event.toolUseId,
+    }),
+    duration_ms: event.durationMs,
+    status: event.status === 'ok' || event.status === 'skipped' ? 'done' : 'failed',
+    seq_index: undefined,
+    parent_tool_call_id: event.toolUseId,
+    metadata: {
+      sessionId,
+      hookEventName: event.hookEventName,
+    },
+  };
 }
 
 /**

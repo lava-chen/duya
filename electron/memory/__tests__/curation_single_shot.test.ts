@@ -236,6 +236,64 @@ describe('runSingleShotCuration — failure modes', () => {
     expect(fs.existsSync(path.join(root, 'global/areas'))).toBe(false);
   });
 
+  it('6c. schema-validation failure is retried once with zod-issue feedback; retry success recovers the run', async () => {
+    // First reply violates the schema (missing `decisions` entries for
+    // one input); the retry (detected by the corrective user message)
+    // returns a valid document.
+    const llm = createMockLLMClient((messages) => {
+      const last = messages[messages.length - 1];
+      const fixPrompt = last.role === 'user' && last.content.includes('failed schema validation');
+      if (fixPrompt) {
+        return JSON.stringify({
+          decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+          actions: [{
+            op: 'append',
+            area_path: 'global/areas/foo.md',
+            content: '## rule\n- fixed',
+            reason: 'r',
+          }],
+        });
+      }
+      // First call: decisions missing → schema rejects.
+      return JSON.stringify({
+        decisions: [],
+        actions: [{ op: 'no_op', area_path: 'global/areas/foo.md', content: '', reason: 'empty' }],
+      });
+    });
+
+    const result = await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+
+    expect(result.success).toBe(true);
+    expect(result.response).not.toBeNull();
+    expect(result.parseRetried).toBe(true);
+    expect(result.actionsApplied).toBe(1);
+    expect(readArea(root, 'global/areas/foo.md')).toContain('- fixed');
+  });
+
+  it('6d. schema-validation failure retried twice still fails → parse_issues surfaced, no retry loop', async () => {
+    // Both calls return the same invalid shape; the run must fail with
+    // the exact zod issues in `parseIssues` and exactly 2 chat calls.
+    const invalid = JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'r' }],
+      actions: [{
+        op: 'append',
+        area_path: 'global/areas/foo.md',
+        // missing required `content` → zod rejects on every attempt
+      }],
+    });
+    const llm = createMockLLMClient(() => invalid);
+
+    const result = await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+
+    expect(result.success).toBe(false);
+    expect(result.response).toBeNull();
+    expect(result.error).toMatch(/parse failed/);
+    expect(result.parseIssues).toBeDefined();
+    expect(result.parseIssues!.length).toBeGreaterThan(0);
+    expect((llm as unknown as { __chatCalls: () => number }).__chatCalls()).toBe(2);
+    expect(result.actionsApplied).toBe(0);
+  });
+
   it('6b. LLM response with sub-area append works on disk', async () => {
     seedArea(root, 'global/areas/foo.md', '# foo existing\n');
     const llm = createMockLLMClient(JSON.stringify({

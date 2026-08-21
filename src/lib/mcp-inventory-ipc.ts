@@ -45,6 +45,7 @@ import {
 import type {
   MCPConfiguredServerDTO,
   MCPEffectiveServerDTO,
+  MCPEffectiveServerToolDTO,
   MCPInventorySnapshotDTO,
   MCPInventorySource,
   MCPPluginDeclaredServerDTO,
@@ -98,6 +99,25 @@ export function adaptMCPInventorySnapshot(cap: CapabilityManagementSnapshot | nu
     // entries (effectiveEnabled === null means "fully shadowed" and
     // is treated as not effective below).
     if (!seenEffectiveServers.has(serverKey)) {
+      const liveTools = capItem.mcp?.tools;
+      const tools: MCPEffectiveServerToolDTO[] | undefined = Array.isArray(liveTools)
+        ? liveTools
+            .map((t) => {
+              if (!t || typeof t !== 'object') return null;
+              const name = t.name;
+              if (typeof name !== 'string') return null;
+              const description = typeof t.description === 'string' ? t.description : '';
+              const rawAnn = t.annotations;
+              const annotations =
+                rawAnn && typeof rawAnn === 'object' && !Array.isArray(rawAnn)
+                  ? (rawAnn as MCPEffectiveServerToolDTO['annotations'])
+                  : undefined;
+              const out: MCPEffectiveServerToolDTO = { name, description };
+              if (annotations) out.annotations = annotations;
+              return out;
+            })
+            .filter((t): t is MCPEffectiveServerToolDTO => t !== null)
+        : undefined;
       effectiveServers.push({
         id,
         name: capItem.name,
@@ -112,6 +132,7 @@ export function adaptMCPInventorySnapshot(cap: CapabilityManagementSnapshot | nu
         shadowedCandidateCount: 0,
         connectionStatus,
         ...(lastIssue ? { lastIssue } : {}),
+        ...(tools && tools.length > 0 ? { tools } : {}),
       });
       seenEffectiveServers.add(serverKey);
     }

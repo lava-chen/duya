@@ -271,6 +271,15 @@ export function isPathSafe(requestedPath: string, basePath: string): boolean {
  *   "C:\\repo\\src\\**\\*.ts"  -> root "C:\\repo\\src", rel "**\\*.ts"
  *   "/home/user/repo/*.md"     -> root "/home/user/repo", rel "*.md"
  *   "C:\\repo\\a.md"           -> root "C:\\repo", rel "a.md"
+ *   "E:\\*"                    -> root "E:\\", rel "*" (win32)
+ *
+ * On Windows, a root that reconstructs to a bare drive letter ("E:")
+ * — which happens whenever the first glob segment immediately follows
+ * the drive separator, e.g. "E:/*" — is a *drive-relative* path, not
+ * the drive root: `path.resolve('E:')` resolves against the current
+ * directory of that drive (the agent's cwd), so a drive-root glob would
+ * silently scan the wrong directory. The separator is appended to pin
+ * the root to the drive root ("E:\\").
  */
 export function splitAbsoluteGlob(absPattern: string): { root: string; rel: string } {
   const segments = absPattern.split(/[\\/]+/);
@@ -279,8 +288,12 @@ export function splitAbsoluteGlob(absPattern: string): { root: string; rel: stri
     // No wildcard — treat the whole path as a potential exact file.
     idx = segments.length - 1;
   }
+  let root = segments.slice(0, idx).join(path.sep);
+  if (process.platform === 'win32' && /^[A-Za-z]:$/.test(root)) {
+    root += path.sep;
+  }
   return {
-    root: segments.slice(0, idx).join(path.sep),
+    root,
     rel: segments.slice(idx).join('/'),
   };
 }

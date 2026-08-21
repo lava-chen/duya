@@ -28,6 +28,8 @@ export interface MCPCollectorSettingsItem {
   startupTimeoutSec?: number;
   toolTimeoutSec?: number;
   toolTimeouts?: Record<string, number>;
+  envPassthrough?: 'allowlist' | 'inherit';
+  useShell?: boolean;
 }
 
 /** A plugin's MCP server declarations, narrowed from the manifest. */
@@ -51,6 +53,8 @@ export interface MCPCollectorPluginEntry {
         startupTimeoutSec?: number;
         toolTimeoutSec?: number;
         toolTimeouts?: Record<string, number>;
+        envPassthrough?: 'allowlist' | 'inherit';
+        useShell?: boolean;
       }>;
     };
   };
@@ -99,6 +103,8 @@ export function buildCandidatesFromPluginEntry(
         startupTimeoutSec: server.startupTimeoutSec,
         toolTimeoutSec: server.toolTimeoutSec,
         toolTimeouts: server.toolTimeouts,
+        envPassthrough: server.envPassthrough,
+        useShell: server.useShell,
       },
     });
   }
@@ -129,6 +135,8 @@ export function buildCandidatesFromSettingsEntries(
         startupTimeoutSec: item.startupTimeoutSec,
         toolTimeoutSec: item.toolTimeoutSec,
         toolTimeouts: item.toolTimeouts,
+        envPassthrough: item.envPassthrough,
+        useShell: item.useShell,
       },
     });
   }

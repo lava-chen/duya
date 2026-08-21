@@ -63,6 +63,10 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
     defaultThinkingEffort: undefined,
     // Memory system toggle
     memoryEnabled: false,
+    // Plan 437: hook row visibility in the chat flow. Default ON so the
+    // new feature is visible to existing users; toggle lives in Settings
+    // → Hooks.
+    showHookInvocations: true,
   };
 
   try {
@@ -180,6 +184,9 @@ function parseAppSettings(raw: Record<string, string>): AppSettings {
       })(),
       // Memory system toggle
       memoryEnabled: raw.memoryEnabled === "true",
+    // Plan 437: hook row visibility in chat flow. Default ON when the
+    // setting key is missing (older sessions) so the toggle is opt-out.
+    showHookInvocations: raw.showHookInvocations !== "false",
     };
   } catch {
     return defaults;
@@ -256,6 +263,8 @@ export function useSettings(): {
     defaultThinkingEffort: undefined,
     // Memory system toggle
     memoryEnabled: false,
+    // Plan 437: hook row visibility — default ON.
+    showHookInvocations: true,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

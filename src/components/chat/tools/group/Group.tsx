@@ -18,6 +18,7 @@ import { isBrowserFallbackMode } from '../registry';
 import { isBrowserTool } from '../classify';
 import { ToolActionRow } from '../rows/ToolActionRow';
 import { ThinkingRow } from '../rows/ThinkingRow';
+import { HookActionRow } from '../rows/HookActionRow';
 import type { SegmentEntry, ToolAction, ToolStatus } from '../types';
 
 // Module-level expansion-state store. Keyed by the group's stable
@@ -128,12 +129,17 @@ export function Group({
             }
             agentProgressEvents={agentProgressEvents}
           />
-        ) : (
+        ) : entry.kind === 'thinking' ? (
           <ThinkingRow
             key={`thinking-${i}`}
             content={entry.content}
             isStreaming={entry.isStreaming}
           />
+        ) : (
+          // Plan 437: hook entries route through HookActionRow, which
+          // reuses the shared ActionRowChrome so the group body stays
+          // visually uniform.
+          <HookActionRow key={entry.hook.id || `hook-${i}`} hook={entry.hook} />
         )
       )}
     </div>

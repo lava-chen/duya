@@ -27,6 +27,13 @@ export interface BuiltinLoopHookOptions {
   todoGateEnabled: boolean;
   antiDeadLoop: { enabled: boolean; nudgeAt: number; hardNudgeAt: number };
   toolIntentNudgeMax: number;
+  /**
+   * Ids of builtin loop hooks to skip for this run (e.g. "builtin.todo-gate").
+   * An id in this set is simply not registered, so it cannot fire. Union with
+   * the dedicated knobs above (todoGateEnabled / antiDeadLoop.enabled /
+   * toolIntentNudgeMax=0 still short-circuit the same hooks).
+   */
+  disabled?: ReadonlySet<string> | string[];
   /** Overridable for tests; defaults to the goal tracker state check. */
   isGoalActive?: () => boolean;
   /** Overridable for tests; defaults to the database task store. */
@@ -205,6 +212,7 @@ function deadLoopNudgeHook(): LoopHookRegistration {
 export function createBuiltinLoopHooks(options: BuiltinLoopHookOptions): LoopHookRegistration[] {
   const isGoalActive = options.isGoalActive ?? goalTrackerActive;
   const listTasks = options.listTasks ?? ((sessionId: string) => getDatabaseTaskStore(sessionId).listTasks());
+  const disabled = new Set(options.disabled ?? []);
 
   const hooks: LoopHookRegistration[] = [
     prematureStopHook({ isGoalActive }),
@@ -214,5 +222,6 @@ export function createBuiltinLoopHooks(options: BuiltinLoopHookOptions): LoopHoo
   if (options.todoGateEnabled) {
     hooks.push(todoGateHook({ listTasks }));
   }
-  return hooks;
+  // Disabled policies are never registered — an unregistered hook cannot fire.
+  return hooks.filter((h) => !disabled.has(h.id));
 }

@@ -19,7 +19,7 @@ interface SkillListItemDTO {
   id: string;
   name: string;
   description: string;
-  source: 'bundled' | 'user' | 'plugin';
+  source: 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system';
   sourceId?: string;
   enabled: boolean;
 }

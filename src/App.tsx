@@ -19,7 +19,7 @@ import { StartupLanding, type StartupLandingPhase } from "@/components/StartupLa
 import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, setToolTimeoutCallback, canSend, enqueueMessage, clearQueuedMessages, hasQueuedMessages } from "@/lib/stream-session-manager";
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
-import type { Message, SessionStreamSnapshot, StreamPhase, FileAttachment } from "@/types/message";
+import type { Message, StreamPhase, FileAttachment } from "@/types/message";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -40,99 +40,10 @@ function deriveProvisionalTitle(content: string): string | null {
   return normalized.slice(0, 48).trim();
 }
 
-function buildOptimisticMessages(snapshot: SessionStreamSnapshot): Message[] {
-  const messages: Message[] = [];
-  const now = Date.now();
-  const interruptedMetadata = snapshot.phase === 'aborted'
-    ? { interrupted: true }
-    : undefined;
-
-  if (snapshot.streamingThinkingContent) {
-    messages.push({
-      id: `optimistic-thinking-${snapshot.streamId || now}`,
-      role: 'assistant',
-      content: snapshot.streamingThinkingContent,
-      timestamp: now - 2,
-      msgType: 'thinking',
-      thinking: snapshot.streamingThinkingContent,
-      metadata: interruptedMetadata,
-    });
-  }
-
-  for (const toolUse of snapshot.toolUses) {
-    messages.push({
-      id: `optimistic-tool-${toolUse.id}`,
-      role: 'assistant',
-      content: toolUse.input ? JSON.stringify(toolUse.input) : '',
-      timestamp: now - 1,
-      msgType: 'tool_use',
-      toolName: toolUse.name,
-      toolInput: toolUse.input ? JSON.stringify(toolUse.input) : null,
-      tool_call_id: toolUse.id,
-      name: toolUse.name,
-      metadata: interruptedMetadata,
-    });
-  }
-
-  for (const result of snapshot.toolResults) {
-    messages.push({
-      id: `optimistic-result-${result.tool_use_id}`,
-      role: 'tool',
-      content: typeof result.content === 'string' ? result.content : JSON.stringify(result.content),
-      timestamp: now - 1,
-      msgType: 'tool_result',
-      parentToolCallId: result.tool_use_id,
-      tool_call_id: result.tool_use_id,
-      status: result.is_error ? 'error' : 'done',
-      metadata: interruptedMetadata,
-    });
-  }
-
-  const textContent = snapshot.finalMessageContent || snapshot.streamingContent;
-  if (textContent) {
-    messages.push({
-      id: `optimistic-text-${snapshot.streamId || now}`,
-      role: 'assistant',
-      content: textContent,
-      timestamp: now,
-      metadata: interruptedMetadata,
-    });
-  }
-
-  return messages;
-}
-
 interface PendingPersistedHandoff {
   sessionId: string;
   startedAt: number;
   sequence: number;
-}
-
-function mergeOptimisticMessagesForCompletedStream(
-  currentMessages: Message[],
-  optimisticMessages: Message[],
-  snapshot: SessionStreamSnapshot,
-): Message[] {
-  if (optimisticMessages.length === 0) return currentMessages;
-
-  const streamStartedAt = snapshot.startedAt;
-  if (!streamStartedAt) {
-    return [...currentMessages, ...optimisticMessages];
-  }
-
-  const nextUserIndex = currentMessages.findIndex(
-    (message) => message.role === 'user' && message.timestamp > streamStartedAt,
-  );
-
-  if (nextUserIndex === -1) {
-    return [...currentMessages, ...optimisticMessages];
-  }
-
-  return [
-    ...currentMessages.slice(0, nextUserIndex),
-    ...optimisticMessages,
-    ...currentMessages.slice(nextUserIndex),
-  ];
 }
 
 export function App({ onReady }: { onReady?: () => void } = {}) {
@@ -183,14 +94,12 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     addMessage,
     loadThreadMessages,
     isHydrated,
-    markMessageInterrupted,
     updateThreadTitle,
     isNewChatDrafting,
   } = useConversationStore();
   const { settings } = useSettings();
 
   const [isStreaming, setIsStreaming] = useState(false);
-  const [streamingSnapshot, setStreamingSnapshot] = useState<SessionStreamSnapshot | null>(null);
   const [pendingPersistedHandoff, setPendingPersistedHandoff] = useState<PendingPersistedHandoff | null>(null);
   const lastCancelTimeRef = useRef(0);
   const prevPhaseRef = useRef<StreamPhase>('idle');
@@ -275,7 +184,6 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     const initialSnapshot = getSnapshot(activeThreadId);
     if (initialSnapshot) {
       setIsStreaming(isActiveLike(initialSnapshot.phase));
-      setStreamingSnapshot(initialSnapshot);
       prevPhaseRef.current = initialSnapshot.phase;
     }
 
@@ -297,30 +205,19 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
               current?.sequence === sequence ? null : current
             ));
           });
-        } else {
-          // Interrupted and failed streams have no durable final row to hand
-          // off to, so keep their partial response as a local terminal record.
-          const optimistic = buildOptimisticMessages(snapshot);
-          if (optimistic.length > 0) {
-            const store = useConversationStore.getState();
-            const current = store.messages[activeThreadId] ?? [];
-            useConversationStore.setState({
-              messages: {
-                ...store.messages,
-                [activeThreadId]: mergeOptimisticMessagesForCompletedStream(
-                  current,
-                  optimistic,
-                  snapshot,
-                ),
-              },
-            });
-          }
         }
+        // For interrupted / errored streams (dbPersisted !== success),
+        // do NOT inject optimistic messages into the store. The transient
+        // StreamingMessage keeps showing the snapshot (thinking collapsed,
+        // tools in order, last text fully rendered) until the user sends
+        // the next message. This avoids the "two copies of the same reply"
+        // artefact caused by the previous optimistic write, and means
+        // interruption and error render the same way as a normal completion
+        // would have, just without a durable DB row.
       }
 
       prevPhaseRef.current = snapshot.phase;
       setIsStreaming(isActive);
-      setStreamingSnapshot(snapshot);
     });
 
     return unsubscribe;
@@ -510,21 +407,10 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
     const now = Date.now();
 
     if (isStreaming) {
-      // P2-β: flag the partial assistant message as interrupted so the
-      // chrome shows a "Stopped" badge. Find the most recent assistant
-      // message in this thread and write metadata.interrupted = true
-      // (local-only — does not persist to DB).
-      const threadMessages = messages[activeThreadId];
-      if (threadMessages && threadMessages.length > 0) {
-        for (let i = threadMessages.length - 1; i >= 0; i--) {
-          const m = threadMessages[i];
-          if (m.role === 'assistant'
-            && (!streamingSnapshot?.startedAt || m.timestamp >= streamingSnapshot.startedAt)) {
-            markMessageInterrupted(activeThreadId, m.id);
-            break;
-          }
-        }
-      }
+      // The partial assistant view lives in StreamingMessage (driven by
+      // stream-session-manager). Stopping the stream flips the session
+      // phase to 'aborted'; StreamingMessage detects the terminal phase
+      // and renders a "Stopped" banner above the partial content.
       stopStream(activeThreadId, 'Interrupted by user');
       void interruptChat(activeThreadId);
       lastCancelTimeRef.current = now;
@@ -540,7 +426,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
 
     // First press while idle: no-op
     lastCancelTimeRef.current = now;
-  }, [activeThreadId, isStreaming, messages, markMessageInterrupted, streamingSnapshot]);
+  }, [activeThreadId, isStreaming]);
 
   const threadMessages = activeThreadId ? (messages[activeThreadId] ?? []) : [];
   const isPendingHandoffForActiveThread = pendingPersistedHandoff?.sessionId === activeThreadId;

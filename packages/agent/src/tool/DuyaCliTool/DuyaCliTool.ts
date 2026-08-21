@@ -221,10 +221,10 @@ function parseArgv(argv: string[]): CliInvocation {
       continue;
     }
     // Plan 102 (config command) — provider / settings / vision / style / pairing flags
-    if (tok === '--id' && i + 1 < argv.length) { out.configId = argv[++i]; continue; }
-    if (tok.startsWith('--id=')) { out.configId = tok.slice('--id='.length); continue; }
-    if (tok === '--name' && i + 1 < argv.length) { out.configName = argv[++i]; continue; }
-    if (tok.startsWith('--name=')) { out.configName = tok.slice('--name='.length); continue; }
+    if (tok === '--id' && i + 1 < argv.length) { out.configId = argv[++i]; out.agentId = argv[i]; continue; }
+    if (tok.startsWith('--id=')) { out.configId = tok.slice('--id='.length); out.agentId = out.configId; continue; }
+    if (tok === '--name' && i + 1 < argv.length) { out.configName = argv[++i]; out.agentName = argv[i]; continue; }
+    if (tok.startsWith('--name=')) { out.configName = tok.slice('--name='.length); out.agentName = out.configName; continue; }
     if (tok === '--type' && i + 1 < argv.length) { out.configType = argv[++i]; continue; }
     if (tok.startsWith('--type=')) { out.configType = tok.slice('--type='.length); continue; }
     // Plan 102 — `mcp add` exposes `--server` / `--command` to the user
@@ -247,8 +247,8 @@ function parseArgv(argv: string[]): CliInvocation {
     if (tok.startsWith('--from-path=')) { out.fromPath = tok.slice('--from-path='.length); continue; }
     if (tok === '--scope' && i + 1 < argv.length) { out.scope = argv[++i]; continue; }
     if (tok.startsWith('--scope=')) { out.scope = tok.slice('--scope='.length); continue; }
-    if (tok === '--model' && i + 1 < argv.length) { out.configModel = argv[++i]; continue; }
-    if (tok.startsWith('--model=')) { out.configModel = tok.slice('--model='.length); continue; }
+    if (tok === '--model' && i + 1 < argv.length) { out.configModel = argv[++i]; out.agentModel = argv[i]; continue; }
+    if (tok.startsWith('--model=')) { out.configModel = tok.slice('--model='.length); out.agentModel = out.configModel; continue; }
     if (tok === '--provider' && i + 1 < argv.length) { out.configProvider = argv[++i]; continue; }
     if (tok.startsWith('--provider=')) { out.configProvider = tok.slice('--provider='.length); continue; }
     if (tok === '--max-tokens' && i + 1 < argv.length) { out.configMaxTokens = argv[++i]; continue; }
@@ -270,6 +270,23 @@ function parseArgv(argv: string[]): CliInvocation {
     if (tok.startsWith('--style-id=')) { out.configStyleId = tok.slice('--style-id='.length); continue; }
     if (tok === '--include' && i + 1 < argv.length) { out.configInclude = argv[++i]; continue; }
     if (tok.startsWith('--include=')) { out.configInclude = tok.slice('--include='.length); continue; }
+    if (tok === '--clear') { out.configClear = true; continue; }
+    // Plan 102 (agent create) — single-value flags
+    if (tok === '--workspace' && i + 1 < argv.length) { out.agentWorkspace = argv[++i]; continue; }
+    if (tok.startsWith('--workspace=')) { out.agentWorkspace = tok.slice('--workspace='.length); continue; }
+    if (tok === '--description' && i + 1 < argv.length) { out.agentDescription = argv[++i]; continue; }
+    if (tok.startsWith('--description=')) { out.agentDescription = tok.slice('--description='.length); continue; }
+    if (tok === '--tools-profile' && i + 1 < argv.length) { out.agentToolsProfile = argv[++i]; continue; }
+    if (tok.startsWith('--tools-profile=')) { out.agentToolsProfile = tok.slice('--tools-profile='.length); continue; }
+    if (tok === '--instructions-file' && i + 1 < argv.length) { out.agentInstructionsFile = argv[++i]; continue; }
+    if (tok.startsWith('--instructions-file=')) { out.agentInstructionsFile = tok.slice('--instructions-file='.length); continue; }
+    // Plan 102 (agent create) — repeatable allow/deny/plugins lists
+    if (tok === '--allow' && i + 1 < argv.length) { (out.agentAllow = out.agentAllow ?? []), (out.agentAllow as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--allow=')) { (out.agentAllow = out.agentAllow ?? []), (out.agentAllow as string[]).push(tok.slice('--allow='.length)); continue; }
+    if (tok === '--deny' && i + 1 < argv.length) { (out.agentDeny = out.agentDeny ?? []), (out.agentDeny as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--deny=')) { (out.agentDeny = out.agentDeny ?? []), (out.agentDeny as string[]).push(tok.slice('--deny='.length)); continue; }
+    if (tok === '--plugins' && i + 1 < argv.length) { (out.agentPlugins = out.agentPlugins ?? []), (out.agentPlugins as string[]).push(argv[++i]); continue; }
+    if (tok.startsWith('--plugins=')) { (out.agentPlugins = out.agentPlugins ?? []), (out.agentPlugins as string[]).push(tok.slice('--plugins='.length)); continue; }
     // Plan 102 (mcp add) — repeatable flags
     if (tok === '--arg' && i + 1 < argv.length) { (out.configArgs ??= []).push(argv[++i]); continue; }
     if (tok.startsWith('--arg=')) { (out.configArgs ??= []).push(tok.slice('--arg='.length)); continue; }

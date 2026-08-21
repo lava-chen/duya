@@ -17,13 +17,18 @@ export { SessionMemoryCompactStrategy, createSessionMemoryCompactStrategy, type 
 // Post-compact reinjection
 export { PostCompactReinjector, createPostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 
-// Micro cleanup for lightweight tool result pruning
-export { microCleanupMessages } from './microCompactCleanup.js'
-
-// Historical canvas tool-call compression (LLM-facing only)
-export { compressHistoricalCanvasToolCalls } from './canvasHistoryCompress.js'
-// Projection-layer tool compression pipeline (LLM-facing only)
-export { compressProjectedToolMessages, DEFAULT_TRANSFORMS, type ProjectionTransform } from './projectionCompress.js'
+// Projection-layer tool compression pipeline (LLM-facing only).
+// The canvas and micro transforms are owned by `projectionCompress` and its
+// `transforms/` subdirectory; standalone duplicates were removed (the env
+// switch now lives in `projectionCompress.ts`).
+export {
+  compressProjectedToolMessages,
+  buildDefaultTransforms,
+  DEFAULT_TRANSFORMS,
+  DUYA_COMPRESS_CANVAS_HISTORY_ENV,
+  type ProjectionTransform,
+  type ProjectionPipelineConfig,
+} from './projectionCompress.js'
 
 // Tool-call invariant + budget fitting
 export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudget } from './historySanitize.js'

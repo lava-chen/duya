@@ -21,6 +21,12 @@
 export interface FetchedModel {
   id: string;
   ownedBy: string | null;
+  /**
+   * Known context window (tokens) for the model, when the source API exposes
+   * it (e.g. LM Studio `/api/v0/models` reports `max_context_length`). Lets the
+   * renderer seed the per-model context window instead of assuming 200K/1M.
+   */
+  contextLength?: number;
 }
 
 export interface FetchProviderModelsBody {
@@ -57,6 +63,23 @@ function isOllama(protocol: string | undefined, baseUrl: string | undefined): bo
   if (!baseUrl) return false;
   const lower = baseUrl.toLowerCase();
   return OLLAMA_KEYWORDS.some((k) => lower.includes(k));
+}
+
+/**
+ * A local / loopback endpoint (LM Studio at `http://localhost:1234/v1`,
+ * Ollama, a LAN-hosted OpenAI-compatible server, etc.) does not require
+ * an API key. Used to relax the credential guard below so users can
+ * fetch a model list from a self-hosted runtime that has no auth.
+ */
+function isLocalEndpoint(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  const lower = baseUrl.toLowerCase();
+  return (
+    lower.includes('localhost') ||
+    lower.includes('127.0.0.1') ||
+    lower.includes('0.0.0.0') ||
+    lower.includes('::1')
+  );
 }
 
 /**
@@ -130,21 +153,28 @@ export function buildCandidateUrls(baseUrl: string): string[] {
   const trimmed = baseUrl.trim().replace(/\/+$/, '');
   if (!trimmed) return [];
 
-  const candidates: string[] = [];
+  // Local-server alias: `localhost` can resolve to `::1` (IPv6) first, which
+  // LM Studio / Ollama do not listen on → ECONNREFUSED in Electron's bundled
+  // Node (which, unlike a modern standalone Node, does not fall back to IPv4).
+  // Always also produce a `127.0.0.1` variant so local runtimes stay reachable.
+  const variants = new Set<string>();
+  variants.add(trimmed);
+  variants.add(trimmed.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1'));
 
-  // Stage 1: primary on the original baseUrl. If the user
-  // already supplied a `/v1` tail, don't double it.
-  if (/\/(v1|v1beta|v1alpha)$/i.test(trimmed)) {
-    candidates.push(`${trimmed}/models`);
-  } else {
-    candidates.push(`${trimmed}/v1/models`);
+  // Stage 1: primary candidates on each host variant. If the user already
+  // supplied a `/v1` tail, don't double it.
+  const primary: string[] = [];
+  for (const base of variants) {
+    if (/\/(v1|v1beta|v1alpha)$/i.test(base)) {
+      primary.push(`${base}/models`);
+    } else {
+      primary.push(`${base}/v1/models`);
+    }
   }
 
   // Stage 2: strip known compat suffixes and try the host root.
-  // The bare `${root}/models` candidate is what DeepSeek's
-  // official docs recommend and what the `fetchProviderModels`
-  // user reported as broken — the previous implementation only
-  // tried the suffixed path, which 404s.
+  // Only relevant for remote anthropic-compat vendors (DeepSeek, GLM, etc.).
+  const candidates: string[] = [];
   const stripped = stripCompatSuffix(trimmed);
   if (stripped) {
     const root = stripped.replace(/\/+$/, '');
@@ -154,10 +184,10 @@ export function buildCandidateUrls(baseUrl: string): string[] {
     }
   }
 
-  // Dedup, preserve first occurrence.
+  // Dedup, preserve first occurrence (original host first).
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const url of candidates) {
+  for (const url of [...primary, ...candidates]) {
     if (!seen.has(url)) {
       seen.add(url);
       out.push(url);
@@ -168,9 +198,128 @@ export function buildCandidateUrls(baseUrl: string): string[] {
 
 interface RawModelEntry {
   id?: unknown;
+  key?: unknown;
   name?: unknown;
+  type?: unknown;
   owned_by?: unknown;
   ownedBy?: unknown;
+  max_context_length?: unknown;
+  maxContextLength?: unknown;
+  context_length?: unknown;
+  contextLength?: unknown;
+  loaded_instances?: unknown;
+  format?: unknown;
+  capabilities?: unknown;
+  display_name?: unknown;
+  displayName?: unknown;
+  created?: unknown;
+}
+
+function asInt(value: unknown): number | undefined {
+  // Accept floats (LM Studio sometimes reports e.g. 32768.0) and round
+  // them. Context-length is the only caller; decimals are spurious.
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * Normalize LM Studio's `capabilities.reasoning.allowed_options` array
+ * into the canonical `reasoningEffortOptions` we store on the
+ * capability record.
+ *
+ * Rules:
+ *   - Keep only string values that look like effort levels
+ *     (lowercase / trimmed / non-empty)
+ *   - Exclude binary toggles (`'off'`, `'on'`) — those are not effort
+ *     levels, they're presence flags
+ *   - Dedupe (case-insensitive: `'Low'` and `'low'` collapse)
+ *   - Preserve insertion order so the chat dropdown renders in the
+ *     order the model author specified
+ *
+ * Returns `undefined` when the source is empty / absent so callers
+ * can distinguish "no per-model options" from "explicitly empty".
+ */
+function normalizeReasoningOptions(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (trimmed.length === 0) continue;
+    const lower = trimmed.toLowerCase();
+    if (lower === 'off' || lower === 'on') continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(trimmed);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Extract the rich capabilities payload exposed by LM Studio's
+ * `/api/v1/models`. Returns `undefined` for every field the source API
+ * doesn't report, so callers downstream can distinguish "known false"
+ * (e.g. `vision: false` for a text-only LM Studio model) from "unknown".
+ *
+ * LM Studio shape (relevant subset):
+ *   capabilities.vision                     -> supportsVision
+ *   capabilities.trained_for_tool_use        -> supportsToolUse
+ *   capabilities.reasoning.allowed_options (any non-`off` entry)
+ *                                            -> supportsReasoning=true
+ *                                            + reasoningEffortOptions
+ *   capabilities.reasoning.default          -> supportsReasoning=true when
+ *     the default is non-`off` AND no `allowed_options` were listed
+ *
+ * Anything that doesn't match the LM Studio shape (plain OpenAI
+ * `/v1/models`, Anthropic `/v1/models`) returns `undefined` for all
+ * fields — the renderer treats `undefined` as "not reported by source"
+ * and falls back to the preset's defaults where available.
+ */
+function extractCapabilities(raw: unknown): {
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+  reasoningEffortOptions?: string[];
+} {
+  if (!raw || typeof raw !== 'object') return {};
+  const caps = raw as Record<string, unknown>;
+  const out: {
+    supportsVision?: boolean;
+    supportsToolUse?: boolean;
+    supportsReasoning?: boolean;
+    reasoningEffortOptions?: string[];
+  } = {};
+  const vision = asBoolean(caps.vision);
+  if (vision !== undefined) out.supportsVision = vision;
+  const toolUse = asBoolean(caps.trained_for_tool_use);
+  if (toolUse !== undefined) out.supportsToolUse = toolUse;
+  const reasoning = caps.reasoning;
+  if (reasoning && typeof reasoning === 'object') {
+    const allowed = (reasoning as Record<string, unknown>).allowed_options;
+    const defaultV = (reasoning as Record<string, unknown>).default;
+    const normalized = normalizeReasoningOptions(allowed);
+    if (normalized && normalized.length > 0) {
+      // The model advertises at least one real effort level — it can
+      // reason, and the chat dropdown should expose exactly that set.
+      out.supportsReasoning = true;
+      out.reasoningEffortOptions = normalized;
+    } else if (typeof defaultV === 'string') {
+      // No allow-list but a non-`off` default — reasoning is possible
+      // but the user can't pick an intensity. Surface only the boolean.
+      out.supportsReasoning = defaultV.trim().toLowerCase() !== 'off';
+    } else if (Array.isArray(allowed) && allowed.length > 0) {
+      // Allow-list contained only `'off'` / `'on'` toggles. Reasoning
+      // is reported as a binary on/off, not a graded effort.
+      out.supportsReasoning = false;
+    }
+  }
+  return out;
 }
 
 function extractModels(json: unknown): FetchedModel[] | null {
@@ -187,14 +336,78 @@ function extractModels(json: unknown): FetchedModel[] | null {
     for (const raw of list) {
       if (!raw || typeof raw !== 'object') continue;
       const entry = raw as RawModelEntry;
-      const idRaw = entry.id ?? entry.name;
+      const idRaw = entry.id ?? entry.key ?? entry.name;
       if (typeof idRaw !== 'string' || idRaw.length === 0) continue;
+      // Filter out embedding models — they share `/v1/models` with
+      // chat models on LM Studio but are not valid chat endpoints.
+      // We accept `type === 'llm'` or missing `type` (legacy OpenAI
+      // vendors don't set the field). Anything else is skipped.
+      const typeRaw = entry.type;
+      if (typeof typeRaw === 'string' && typeRaw !== 'llm') continue;
       const ownedRaw = entry.owned_by ?? entry.ownedBy ?? null;
+      // LM Studio `/api/v1/models`: the *loaded* runtime context lives at
+      // loaded_instances[0].config.context_length (smaller than the model's
+      // max). Prefer it so duya seeds the real active context, with the
+      // model's max_context_length as a fallback for not-loaded models.
+      const loadedCtx = (() => {
+        if (!Array.isArray(entry.loaded_instances) || entry.loaded_instances.length === 0) {
+          return undefined;
+        }
+        const inst = entry.loaded_instances[0] as {
+          config?: { context_length?: unknown };
+        };
+        return asInt(inst?.config?.context_length);
+      })();
+      // The absolute model cap, kept distinct from `contextLength` so
+      // the renderer can show both ("32K loaded, 256K max").
+      const maxCtx = asInt(
+        entry.max_context_length ??
+          entry.maxContextLength ??
+          entry.context_length ??
+          entry.contextLength,
+      );
+      const ctxRaw = loadedCtx ?? maxCtx;
+      const capabilities = extractCapabilities(entry.capabilities);
+      const formatRaw = entry.format;
+      const format =
+        typeof formatRaw === 'string' && formatRaw.length > 0 ? formatRaw : null;
+      // `isLoaded` is true when LM Studio / Ollama has at least one
+      // loaded instance with a parseable context_length (the same
+      // validity check used for `contextLength` so malformed entries
+      // like `[null, {}]` don't produce a false "loaded" tag).
+      const isLoaded = loadedCtx !== undefined;
       out.push({
         id: idRaw,
         ownedBy: typeof ownedRaw === 'string' && ownedRaw.length > 0
           ? ownedRaw
           : null,
+        ...(ctxRaw !== undefined ? { contextLength: ctxRaw } : {}),
+        // Surface the model-cap separately from the loaded value, so the
+        // renderer can render "32K / 256K" and the user can re-load
+        // with a larger context. Falls back to `contextLength` so old
+        // callers that only read one field keep working.
+        ...(maxCtx !== undefined
+          ? { contextWindowMax: maxCtx }
+          : ctxRaw !== undefined
+            ? { contextWindowMax: ctxRaw }
+            : {}),
+        ...(capabilities.supportsVision !== undefined
+          ? { supportsVision: capabilities.supportsVision }
+          : {}),
+        ...(capabilities.supportsToolUse !== undefined
+          ? { supportsToolUse: capabilities.supportsToolUse }
+          : {}),
+        ...(capabilities.supportsReasoning !== undefined
+          ? { supportsReasoning: capabilities.supportsReasoning }
+          : {}),
+        ...(capabilities.reasoningEffortOptions !== undefined
+          ? { reasoningEffortOptions: capabilities.reasoningEffortOptions }
+          : {}),
+        // `format: null` is the LM Studio convention for "unknown / not
+        // applicable" (e.g. embedding models). We forward null so the
+        // renderer can distinguish "not reported" from "reported gguf".
+        ...(format !== null ? { format } : {}),
+        isLoaded,
       });
     }
     if (out.length > 0) return out;
@@ -256,6 +469,51 @@ function classifyError(
   };
 }
 
+/**
+ * LM Studio exposes its own richer model list at `GET /api/v1/models` on the
+ * host root. Unlike the OpenAI-compatible `/v1/models`, each entry carries
+ * `key`, `loaded_instances[].config.context_length` (the real *active* context
+ * for loaded models) and `max_context_length`. We prefer it for local
+ * endpoints so the renderer can seed a correct per-model context window
+ * instead of assuming 200K/1M. Returns `null` when the host isn't LM Studio
+ * (endpoint 404s) so the caller falls back to the standard candidates.
+ */
+async function fetchLocalRichModels(
+  baseUrl: string,
+  controllerTimeoutMs: number,
+): Promise<FetchedModel[] | null> {
+  const root = (baseUrl.trim().replace(/\/+$/, '') || '').replace(
+    /\/(v1|v1beta|v1alpha)$/i,
+    '',
+  );
+  if (!root || !root.includes('://')) return null;
+
+  const hosts = new Set<string>();
+  hosts.add(root);
+  hosts.add(root.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1'));
+
+  for (const host of hosts) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), controllerTimeoutMs);
+    try {
+      const response = await fetch(`${host}/api/v1/models`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const json = (await response.json().catch(() => null)) as unknown;
+      const models = extractModels(json);
+      if (models && models.length > 0) return models;
+    } catch {
+      clearTimeout(timeoutId);
+      // Not reachable / not LM Studio → try the next host variant.
+    }
+  }
+  return null;
+}
+
 export async function fetchProviderModels(
   body: FetchProviderModelsBody,
 ): Promise<FetchProviderModelsResult> {
@@ -286,7 +544,7 @@ export async function fetchProviderModels(
       },
     };
   }
-  if (!api_key && auth_style !== 'env_only') {
+  if (!api_key && auth_style !== 'env_only' && !isLocalEndpoint(base_url)) {
     return {
       success: false,
       error: {
@@ -295,6 +553,16 @@ export async function fetchProviderModels(
         suggestion: '请先填写 API Key',
       },
     };
+  }
+
+  // Prefer LM Studio's rich `/api/v0/models` (real context window + state)
+  // for local endpoints. Ignore failures silently — LM Studio may not be the
+  // target, and the standard OpenAI-compatible candidates below still apply.
+  if (isLocalEndpoint(base_url)) {
+    const rich = await fetchLocalRichModels(base_url, 5_000);
+    if (rich && rich.length > 0) {
+      return { success: true, models: rich };
+    }
   }
 
   // Build the auth headers based on protocol + baseUrl, mirroring

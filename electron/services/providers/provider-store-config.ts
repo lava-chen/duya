@@ -70,6 +70,7 @@ export class ConfigStoreReader implements ProviderStoreReader {
       providers[id] = {
         id: p.id,
         name: p.name,
+        alias: p.alias,
         providerType: p.providerType,
         baseUrl: p.baseUrl,
         options: p.options,
@@ -93,6 +94,7 @@ function toApiProvider(id: string, entry: ProviderEntry): ApiProvider {
   return {
     id,
     name: entry.name || id,
+    alias: raw.alias as ApiProvider['alias'],
     providerType: entry.providerType as ApiProvider['providerType'],
     baseUrl: entry.baseUrl ?? '',
     options: entry.options,

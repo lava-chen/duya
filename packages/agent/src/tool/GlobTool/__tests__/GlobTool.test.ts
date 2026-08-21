@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GlobTool, splitAbsoluteGlob } from '../GlobTool.js';
@@ -71,6 +71,42 @@ describe('GlobTool absolute pattern support', () => {
       root: join(root, 'memory'),
       rel: 'a.md',
     });
+  });
+
+  it('splitAbsoluteGlob pins a bare drive letter to the drive root (win32)', () => {
+    if (process.platform !== 'win32') {
+      return; // drive-letter roots are win32-only path semantics
+    }
+    // Regression: "E:/*" used to split to root "E:" — a drive-relative
+    // path that resolves to the cwd of drive E: (the workspace), so the
+    // glob silently searched the wrong directory.
+    expect(splitAbsoluteGlob('E:/*')).toEqual({ root: 'E:\\', rel: '*' });
+    expect(splitAbsoluteGlob('E:/**/*.ts')).toEqual({ root: 'E:\\', rel: '**/*.ts' });
+    expect(splitAbsoluteGlob('E:/foo*')).toEqual({ root: 'E:\\', rel: 'foo*' });
+    // Non-drive-root absolute patterns are unaffected.
+    expect(splitAbsoluteGlob('E:\\repo\\src\\**\\*.ts')).toEqual({
+      root: 'E:\\repo\\src',
+      rel: '**/*.ts',
+    });
+  });
+
+  it('globs a drive-root pattern against the drive root, not the cwd (win32)', async () => {
+    if (process.platform !== 'win32' || !existsSync('E:\\')) {
+      return; // requires real Windows drive-letter semantics and an E: drive
+    }
+    const driveRootEntries = readdirSync('E:\\');
+    const tool = new GlobTool();
+    // maxResults: 1 keeps the walk bounded to the drive root level (the
+    // walker would otherwise descend into every subdirectory of E:\)
+    const result = await tool.execute({ pattern: 'E:/*', maxResults: 1 }, join(root, 'memory'));
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.filenames).toHaveLength(1);
+    // The returned path is relative to the *drive root*: it must be a real
+    // top-level entry of E:\. Regression: this used to resolve the bare
+    // drive letter to the current directory of drive E: (the workspace cwd)
+    // and returned workspace entries instead.
+    expect(driveRootEntries).toContain(parsed.filenames[0]);
   });
 });
 

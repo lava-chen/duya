@@ -78,8 +78,12 @@ function getDirectoryPath(filePath: string): string {
 
 /** Check whether `target` is inside `root` using pure string comparison
  *  so the helper works in the renderer without the Node `path` module.
- *  Both Windows and Unix separators are handled. */
-function isPathInsideRoot(target: string, root: string): boolean {
+ *  Both Windows and Unix separators are handled. Exported so callers
+ *  (e.g. MarkdownAnchor) can decide whether a resolved href lives
+ *  outside the chat workspace and should therefore open as a
+ *  "single-file" preview without exposing its parent directory as
+ *  the panel's project root. */
+export function isPathInsideRoot(target: string, root: string): boolean {
   const normTarget = target.replace(/\\/g, '/').replace(/\/+$/, '');
   const normRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normTarget.startsWith(normRoot + '/') && normTarget !== normRoot) return false;
@@ -132,8 +136,58 @@ export function isLikelyLocalFileReference(value: string): boolean {
   return LOCAL_FILE_EXTENSIONS.has(extensionFromPath(clean));
 }
 
+/** Collapse `.` and `..` segments of `rel` onto `base` using pure string
+ *  ops (the renderer stays free of the Node `path` module). `rel` must
+ *  already use `separator`. Spurious empty segments from doubled
+ *  separators (`E:\\a`) are dropped, and `..` clamps at the volume / UNC /
+ *  Unix-root prefix instead of climbing above it. */
+function joinAndNormalizeSegments(base: string, rel: string, separator: string): string {
+  const isUnc = /^\\\\/.test(base);
+  const isWindows = /^[a-zA-Z]:/.test(base);
+  let prefix: string;
+  let body: string;
+  if (isUnc) {
+    // Keep `\\server\share` (or at least `\\server`) as the root.
+    const m = /^(\\\\[^\\/]+(?:\\[^\\/]+)?)/.exec(base);
+    prefix = m?.[1] ?? base;
+    body = base.slice(prefix.length);
+  } else if (isWindows) {
+    prefix = base.match(/^[a-zA-Z]:/)?.[0] ?? '';
+    body = base.slice(prefix.length);
+  } else if (base.startsWith(separator)) {
+    prefix = separator;
+    body = base.slice(separator.length);
+  } else {
+    prefix = '';
+    body = base;
+  }
+
+  const stack = body.split(separator).filter(Boolean);
+  for (const part of rel.split(separator)) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      // Clamp at the root: never pop the volume/UNC/Unix-root prefix.
+      if (stack.length > 0) stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+
+  const joinedBody = stack.join(separator);
+  if (!prefix) return joinedBody;
+  if (prefix === separator) {
+    // Unix root: `/` + body.
+    return prefix + joinedBody;
+  }
+  return `${prefix}${separator}${joinedBody}`;
+}
+
 export function resolveLocalFilePath(value: string, cwd?: string | null): string {
   let clean = stripLineSuffix(value.trim());
+
+  const isWindowsAbsolute = (p: string) => /^[a-zA-Z]:[\\/]|^\\\\/.test(p);
+  const isUnixAbsolute = (p: string) => p.startsWith('/');
+
   if (/^file:\/\//i.test(clean)) {
     try {
       clean = decodeURIComponent(new URL(clean).pathname);
@@ -145,8 +199,15 @@ export function resolveLocalFilePath(value: string, cwd?: string | null): string
     }
   }
 
-  const isWindowsAbsolute = (p: string) => /^[a-zA-Z]:[\\/]|^\\\\/.test(p);
-  const isUnixAbsolute = (p: string) => p.startsWith('/');
+  // The finalAnswer prompt teaches the LLM to prefix absolute paths with a
+  // `/abs/path` placeholder. When it precedes a Windows absolute path (e.g.
+  // `/abs/path/C:/...`), strip it so the real path wins — the placeholder
+  // would otherwise resolve to a nonexistent drive-relative path. Mirrors
+  // the media-src handling in rewriteMediaSrc.
+  if (clean.startsWith('/abs/path/')) {
+    const stripped = clean.slice('/abs/path'.length).replace(/^\/+/, '');
+    if (isWindowsAbsolute(stripped)) clean = stripped;
+  }
 
   // Windows absolute path: normalize to backslashes and return as-is.
   if (isWindowsAbsolute(clean)) {
@@ -164,7 +225,7 @@ export function resolveLocalFilePath(value: string, cwd?: string | null): string
     const separator = isWindowsAbsolute(cwdRaw) ? '\\' : '/';
     const normalizedCwd = cwdRaw.replace(/[\\/]+$/, '');
     const normalizedClean = clean.replace(/^[\\/]+/, '').replace(/\\/g, separator).replace(/\//g, separator);
-    return `${normalizedCwd}${separator}${normalizedClean}`;
+    return joinAndNormalizeSegments(normalizedCwd, normalizedClean, separator);
   }
 
   // No cwd: keep the input's dominant separator style.
@@ -221,6 +282,7 @@ export function openLocalArtifactTarget(
   filePath: string,
   cwd?: string | null,
   lineRange?: FocusLineRange,
+  options?: { standalone?: boolean },
 ): void {
   const resolved = resolveLocalFilePath(filePath, cwd);
   if (isHtmlFile(resolved)) {
@@ -234,15 +296,29 @@ export function openLocalArtifactTarget(
       !!lineRange &&
       Number.isFinite(lineRange.start) &&
       lineRange.start > 0;
+    // Standalone mode: the caller knows the file lives outside the chat
+    // workspace (e.g. the agent pointed at ~/Downloads/notes.md while the
+    // active thread cwd is a different project). In that case we don't
+    // want the preview panel to mount the file's directory as its
+    // project root — that previously caused the integrated file tree to
+    // expose arbitrary external directories. Passing an empty
+    // workingDirectory tells the panel to render the file alone (no
+    // tree, no breadcrumb root); the IPC skips isInsideRoot as well.
+    // Default behavior (options.standalone falsy) is unchanged so the
+    // sidebar file preview's relative-link case keeps its existing
+    // fallback to the file's own directory.
+    const standalone = options?.standalone === true;
     const detail: {
       filePath: string;
       workingDirectory: string;
+      standalone?: boolean;
       lineStart?: number;
       lineEnd?: number;
     } = {
       filePath: resolved,
-      workingDirectory: defaultPreviewRootForFile(resolved, cwd),
+      workingDirectory: standalone ? '' : defaultPreviewRootForFile(resolved, cwd),
     };
+    if (standalone) detail.standalone = true;
     if (hasLineRange) {
       detail.lineStart = lineRange!.start;
       if (Number.isFinite(lineRange!.end) && lineRange!.end! >= lineRange!.start) {

@@ -508,7 +508,11 @@ export interface FileTreeNode {
 
 export interface FilesAPI {
   browse: (dirPath: string, maxDepth?: number) => Promise<{ success: boolean; error?: string; tree: FileTreeNode[] }>
-  preview: (targetPath: string, rootPath: string) => Promise<{
+  preview: (
+    targetPath: string,
+    rootPath: string,
+    options?: { standalone?: boolean },
+  ) => Promise<{
     success: boolean
     error?: string
     kind?: 'text' | 'image' | 'pdf' | 'unsupported'
@@ -581,11 +585,17 @@ export interface ConfigAgentsAPI {
 }
 
 export interface HookRow {
+  /** Stable id used by the Settings → Hooks toggles (`builtin.*` / `file:*`). */
+  id?: string;
+  /** Whether the hook currently fires (false when disabled in config). */
+  enabled?: boolean;
   name: string;
   command: string;
   source: string;
   kind: 'builtin' | 'config';
   matcher?: string;
+  /** Pretty-printed JSON view of the hook config (config hooks only). */
+  json?: string;
 }
 
 export interface HookEventGroup {
@@ -598,8 +608,15 @@ export interface HookOverview {
   events: HookEventGroup[];
 }
 
+export interface HookWriteResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface HooksAPI {
   overview: () => Promise<HookOverview>;
+  /** Persist one hook's enabled state to config.toml (add/remove a disabled id). */
+  setDisabled: (id: string, enabled: boolean) => Promise<HookWriteResult>;
 }
 
 export interface BrowserExtensionStatus {
@@ -964,6 +981,7 @@ export interface ElectronAPI {
     getAutoStartStatus: () => Promise<{ enabled: boolean; canChange: boolean; supported: boolean; platform: string; error?: string }>
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
     setMcpServers: (servers: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>) => Promise<{ success: boolean; error?: string }>
+    reloadMcp: () => Promise<{ reloaded: boolean }>
   }
   // Functions to get port APIs (called dynamically, not getters)
   getConfigPort: () => ConfigPortAPI | null
@@ -1532,6 +1550,12 @@ const electronAPI: ElectronAPI = {
         };
       }
     },
+    // Phase 3 (MCP runtime status UI): force a worker reload so a
+    // failed/disconnected server is re-attempted. Best-effort — the
+    // underlying `notifyMcpConfigChanged` swallows network errors
+    // when the agent server is down. The renderer treats both
+    // outcomes as "OK, next SSE event will refresh inventory".
+    reloadMcp: () => ipcRenderer.invoke('mcp:reload'),
   },
   // Functions to get port APIs (called dynamically)
   getConfigPort: getConfigPortAPI,
@@ -1781,7 +1805,8 @@ const electronAPI: ElectronAPI = {
   },
   files: {
     browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
-    preview: (targetPath: string, rootPath: string) => ipcRenderer.invoke('files:preview', targetPath, rootPath),
+    preview: (targetPath: string, rootPath: string, options?: { standalone?: boolean }) =>
+      ipcRenderer.invoke('files:preview', targetPath, rootPath, options),
     delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
     rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
   },
@@ -1875,6 +1900,7 @@ const electronAPI: ElectronAPI = {
   },
   hooks: {
     overview: () => ipcRenderer.invoke('hooks:overview'),
+    setDisabled: (id: string, enabled: boolean) => ipcRenderer.invoke('hooks:set-disabled', id, enabled),
   },
   recap: {
     request: (sessionId: string) => ipcRenderer.invoke('recap:request', sessionId),

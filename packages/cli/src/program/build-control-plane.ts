@@ -124,6 +124,8 @@ export function buildControlPlane(program: Command): void {
             cron: typeof opts.cron === 'string' ? opts.cron : undefined,
             prompt: typeof opts.prompt === 'string' ? opts.prompt : undefined,
             platform: typeof opts.platform === 'string' ? opts.platform : undefined,
+            text: typeof opts.text === 'string' ? opts.text : undefined,
+            file: typeof opts.file === 'string' ? opts.file : undefined,
             // Plan 102 — `duya config` argv surface. Commander's
             // generic option pass-through means all the new flags
             // are already in `opts`; we just re-type them.

@@ -58,21 +58,23 @@ describe('prompt structure regressions', () => {
     expect(prompt?.match(/AGENTS\.md/g)).toHaveLength(1)
   })
 
-  it('uses one concise skill index and never advertises unavailable skills', () => {
+  it('emits a structured XML skill index without advertising unavailable skills', () => {
     const skill = {
       type: 'prompt',
       name: 'long-skill',
       description: 'A'.repeat(180),
+      skillRoot: 'E:\\skills\\long-skill',
     } as PromptSkill
 
     const catalog = formatSkillCatalog([skill])
-    expect(catalog).toContain('`long-skill`')
-    expect(catalog).toContain('...')
-    expect(catalog.length).toBeLessThan(350)
+    expect(catalog).toContain('<name>long-skill</name>')
+    expect(catalog).toContain('<description>')
+    expect(catalog).toContain('<location>E:\\skills\\long-skill\\SKILL.md</location>')
+    expect(catalog).toContain('<available_skills>')
     expect(getSkillsMetadataSection(context())).toBeNull()
   })
 
-  it('lists only skills the model can load through the exposed Skill tool', () => {
+  it('lists only skills the model can load through the exposed Skill or read tool', () => {
     const registry = getSkillRegistry()
     const base = {
       type: 'prompt' as const,
@@ -87,10 +89,10 @@ describe('prompt structure regressions', () => {
 
     const catalog = getSkillsMetadataSection(context(['Skill']))
 
-    expect(catalog).toContain('`available`')
-    expect(catalog).not.toContain('`hidden`')
-    expect(catalog).not.toContain('`manual-only`')
-    expect(catalog).not.toContain('`disabled`')
+    expect(catalog).toContain('<name>available</name>')
+    expect(catalog).not.toContain('<name>hidden</name>')
+    expect(catalog).not.toContain('<name>manual-only</name>')
+    expect(catalog).not.toContain('<name>disabled</name>')
   })
 
   it('treats pseudo-system tags in tool output as untrusted data', () => {

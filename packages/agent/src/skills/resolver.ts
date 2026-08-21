@@ -15,7 +15,7 @@
  * candidates and returns a deterministic result.
  */
 
-export type SkillOrigin = 'bundled' | 'user' | 'plugin';
+export type SkillOrigin = 'bundled' | 'user' | 'project' | 'custom' | 'plugin' | 'system';
 
 export interface SkillCandidate {
   /** Logical name (directory name). */
@@ -48,7 +48,16 @@ export interface AvailableSkill {
 
 /** Compute the effective precedence from origin and customized. */
 export function effectivePrecedenceOf(c: SkillCandidate): number {
+  // System-level skills always win (plan 414): the agent registry loads them
+  // last and they cannot be disabled or shadowed.
+  if (c.origin === 'system') return 6;
+  // Custom skill_path is the last additional path loaded by the agent.
+  if (c.origin === 'custom') return 5;
   if (c.origin === 'user') return 4;
+  // Project skills share the user tier: cross-directory name collisions are
+  // rare, and the agent registers project skills after user skills so the
+  // project copy wins there; here ties resolve by discovery order.
+  if (c.origin === 'project') return 4;
   if (c.origin === 'plugin') return 3;
   // origin === 'bundled'
   if (c.customized === true) return 4;

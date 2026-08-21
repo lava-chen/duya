@@ -176,13 +176,6 @@ export class SessionManager {
   }
 
   /**
-   * Compress message history (placeholder - compression handled at API level)
-   */
-  async compressHistory(): Promise<void> {
-    // Compression is handled by the API route when needed
-  }
-
-  /**
    * Check if context window is getting full
    */
   getContextStatus(): {

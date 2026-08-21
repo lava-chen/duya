@@ -310,6 +310,13 @@ async function loadSkillsFromDirectory(
 
   for (const entry of entries) {
     if (entry === 'DESCRIPTION.md') continue;
+    // System-level skills (.system) are loaded exclusively from the bundled
+    // directory via loadSystemSkills() (source 'system', security scan
+    // skipped, always enabled). A synced copy under a user/project skills
+    // directory must not be double-loaded here: it would be scanned as
+    // 'user'/'project' source and could trip findings that only system
+    // skills are trusted to skip.
+    if (entry === '.system') continue;
 
     const entryPath = path.join(dirPath, entry);
 
@@ -375,15 +382,20 @@ async function loadDisabledSkillNamesFromSettings(): Promise<Set<string>> {
 
 /**
  * Get the default skill directories
- * Default: ~/.duya/skills (user) and <cwd>/.duya/skills (project)
+ * Default: ~/.duya/skills (user) and, per project,
+ * <cwd>/.duya/skills plus <cwd>/.agent/skills (the cross-agent standard).
+ * Later entries win name collisions (duya's own dir is loaded last).
  */
 export function getSkillDirectories(cwd: string): {
   user: string;
-  project: string;
+  project: string[];
 } {
   return {
     user: path.join(homedir(), '.duya', 'skills'),
-    project: path.join(cwd, '.duya', 'skills'),
+    project: [
+      path.join(cwd, '.agent', 'skills'),
+      path.join(cwd, '.duya', 'skills'),
+    ],
   };
 }
 
@@ -537,9 +549,11 @@ export async function loadSkills(cwd: string, options?: SkillLoadOptions): Promi
   }
   allSkills.push(...userSkills);
 
-  // Load project-level skills
-  const projectSkills = await loadSkillsFromDirectory(project, 'project', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
-  allSkills.push(...projectSkills);
+  // Load project-level skills (both the cross-agent standard and duya's own)
+  for (const projectDir of project) {
+    const projectSkills = await loadSkillsFromDirectory(projectDir, 'project', undefined, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+    allSkills.push(...projectSkills);
+  }
 
   // Load skills from additional custom paths
   if (options?.additionalPaths) {
@@ -650,12 +664,14 @@ export async function discoverSkillDirs(
     // Directory doesn't exist
   }
 
-  // Check project dir
-  try {
-    await fs.access(project);
-    dirs.push(project);
-  } catch {
-    // Directory doesn't exist
+  // Check project dirs
+  for (const projectDir of project) {
+    try {
+      await fs.access(projectDir);
+      dirs.push(projectDir);
+    } catch {
+      // Directory doesn't exist
+    }
   }
 
   // Check additional custom paths

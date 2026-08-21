@@ -15,6 +15,8 @@ import {
   getSteeringConfig,
   readHooksConfig,
   _readHooksConfigFromRaw,
+  hookDisabledId,
+  filterDisabledHooks,
 } from '../config.js';
 
 const TEST_NS = 'hooks-config-test';
@@ -58,6 +60,7 @@ describe('readSteeringConfig', () => {
       '[steering]',
       'todo_gate = false',
       'tool_intent_nudge_max = 3',
+      'disabled_loop_hooks = ["builtin.premature-stop", "builtin.todo-gate"]',
       '',
       '[steering.anti_dead_loop]',
       'enabled = false',
@@ -70,6 +73,14 @@ describe('readSteeringConfig', () => {
     expect(cfg.todoGateEnabled).toBe(false);
     expect(cfg.antiDeadLoop).toEqual({ enabled: false, nudgeAt: 5, hardNudgeAt: 9, hardStopAt: 13 });
     expect(cfg.toolIntentNudgeMax).toBe(3);
+    expect(cfg.disabledLoopHooks).toEqual(['builtin.premature-stop', 'builtin.todo-gate']);
+  });
+
+  it('defaults disabledLoopHooks to [] and tolerates non-array values', () => {
+    stubTestNamespace();
+    expect(readSteeringConfig().disabledLoopHooks).toEqual([]);
+    writeConfigToml('[steering]\ndisabled_loop_hooks = "builtin.todo-gate"\n');
+    expect(readSteeringConfig().disabledLoopHooks).toEqual([]);
   });
 
   it('partial overrides keep the remaining defaults', () => {
@@ -246,6 +257,57 @@ describe('_readHooksConfigFromRaw', () => {
     });
     expect(settings).toBeUndefined();
   });
+
+  it('filters hooks listed in [hooks] disabled before merging', () => {
+    const raw =
+      '[hooks]\nfiles = ["a.json"]\ndisabled = ["file:a.json:PreTurn:0:0"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: () =>
+        hookFile({
+          PreTurn: [
+            {
+              hooks: [
+                { type: 'command', command: 'echo disabled' },
+                { type: 'command', command: 'echo kept' },
+              ],
+            },
+          ],
+        }),
+    });
+    expect(settings?.PreTurn).toHaveLength(1);
+    expect(settings?.PreTurn?.[0].hooks).toHaveLength(1);
+    expect(settings?.PreTurn?.[0].hooks[0]).toEqual({ type: 'command', command: 'echo kept' });
+  });
+
+  it('drops matcher groups whose hooks are all disabled', () => {
+    const raw =
+      '[hooks]\nfiles = ["a.json"]\ndisabled = ["file:a.json:PreTurn:0:0"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: () =>
+        hookFile({
+          PreTurn: [{ hooks: [{ type: 'command', command: 'only one' }] }],
+        }),
+    });
+    expect(settings?.PreTurn).toBeUndefined();
+  });
+
+  it('filters per-file so identical indexes in different files do not collide', () => {
+    const raw =
+      '[hooks]\nfiles = ["a.json", "b.json"]\ndisabled = ["file:b.json:PostToolUse:0:0"]\n';
+    const settings = _readHooksConfigFromRaw(raw, {
+      readFile: (p) =>
+        p.includes('a.json')
+          ? hookFile({ PostToolUse: [{ hooks: [{ type: 'command', command: 'from-a' }] }] })
+          : hookFile({ PostToolUse: [{ hooks: [{ type: 'command', command: 'from-b' }] }] }),
+    });
+    expect(settings?.PostToolUse?.map((m) => m.hooks[0].command)).toEqual(['from-a']);
+  });
+
+  it('hookDisabledId is stable and filterDisabledHooks is a pure no-op when empty', () => {
+    expect(hookDisabledId('~/h.json', 'PreToolUse', 2, 1)).toBe('file:~/h.json:PreToolUse:2:1');
+    const settings = { Stop: [{ hooks: [{ type: 'command', command: 'x' }] }] };
+    expect(filterDisabledHooks(settings, new Set(), 'h.json')).toBe(settings);
+  });
 });
 
 describe('readHooksConfig', () => {
@@ -277,5 +339,32 @@ describe('readHooksConfig', () => {
     expect(readHooksConfig()).toBeUndefined();
     writeConfigToml('[hooks]\nfiles = 3\n');
     expect(readHooksConfig()).toBeUndefined();
+  });
+
+  it('honors [hooks] disabled on the real filesystem', () => {
+    stubTestNamespace();
+    const root = path.join(os.homedir(), '.duya', 'test-namespaces', TEST_NS);
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'user-hooks.json'),
+      JSON.stringify({
+        hooks: {
+          PostTurn: [
+            {
+              hooks: [
+                { type: 'command', command: 'echo one' },
+                { type: 'command', command: 'echo two' },
+              ],
+            },
+          ],
+        },
+      }),
+      'utf-8',
+    );
+    writeConfigToml(
+      '[hooks]\nfiles = ["user-hooks.json"]\ndisabled = ["file:user-hooks.json:PostTurn:0:1"]\n',
+    );
+    const settings = readHooksConfig();
+    expect(settings?.PostTurn?.[0].hooks.map((h) => h.command)).toEqual(['echo one']);
   });
 });

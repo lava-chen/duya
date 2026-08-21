@@ -99,6 +99,9 @@ function getProviderIconKey(
   if (providerType === 'ollama' || url.includes('ollama') || url.includes('11434')) {
     return 'ollama';
   }
+  if (providerType === 'lm-studio' || url.includes('lm-studio') || url.includes('1234')) {
+    return 'lm-studio';
+  }
   if (providerType === 'openrouter' || url.includes('openrouter')) {
     return 'openrouter';
   }

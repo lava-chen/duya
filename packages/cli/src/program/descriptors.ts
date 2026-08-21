@@ -19,7 +19,7 @@
 
 import { runDoctorCommand } from '../commands/doctor.js';
 import { runInstallCliCommand, runUninstallCliCommand } from '../commands/install.js';
-import { runMCPAddCommand, runMCPAssignCommand, runMCPRemoveCommand } from '../commands/mcp.js';
+import { runMCPAddCommand, runMCPAssignCommand, runMCPListCommand, runMCPRemoveCommand } from '../commands/mcp.js';
 import { runPluginCommand } from '../commands/plugin.js';
 import { runProviderInfoCommand, runProviderListCommand } from '../commands/provider.js';
 import { runSessionCommand } from '../commands/session.js';
@@ -341,11 +341,20 @@ const subSkillSync: CliSubcommand = {
   run: (ctx) => runSkillSync(ctx),
 };
 
-// Plan 102 / Plan 99 §3.3 Phase 7 — mcp write ops. The `mcp add`
-// subcommand accepts repeatable `--arg`, `--env KEY=VAL`, and
+// Plan 102 / Plan 99 §3.3 Phase 7 — mcp read + write ops.
+// `mcp add` accepts repeatable `--arg`, `--env KEY=VAL`, and
 // `--agent` flags via Commander's collect() pattern. The run
 // function reads the parsed arrays from `ctx.options.configArgs` /
 // `configEnv` / `configAgents` (forwarded by build-control-plane).
+// `mcp list` is read-only and reads the same ConfigStore that
+// `add` / `remove` / `assign` write to, so the read and write
+// surfaces never drift. Live connection status remains owned by
+// the worker's `mcp:status:snapshot` SSE event.
+const subMCPList: CliSubcommand = {
+  description: 'List configured MCP servers (name / enabled / transport / command / scope). Read-only.',
+  run: (ctx) => adaptLegacy(runMCPListCommand as LegacyFn, [])(ctx),
+};
+
 const subMCPAdd: CliSubcommand = {
   description: 'Add a new MCP server. Phase 7 write op. Plan 102: replaces `duya_config mcp_server_add`.',
   write: true,
@@ -1128,8 +1137,9 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'mcp',
-    description: 'Manage MCP servers (Plan 102: add/remove/assign). Read/test subcommands removed with the old MCP inventory framework.',
+    description: 'Manage MCP servers (Plan 102: list/add/remove/assign). Single-server info and test subcommands removed with the old MCP inventory framework.',
     subcommands: {
+      list: subMCPList,
       add: subMCPAdd,
       remove: subMCPRemove,
       assign: subMCPAssign,

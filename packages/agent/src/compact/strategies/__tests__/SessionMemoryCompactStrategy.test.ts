@@ -101,8 +101,9 @@ describe('SessionMemoryCompactStrategy', () => {
       expect(mockSummarizer).toHaveBeenCalled()
     })
 
-    it('should call summarizer with iterative prompt when previousSummary exists', async () => {
-      // First compaction
+    it('uses options.previousSummary as the iterative prompt seed without mutating the strategy', async () => {
+      // First compaction: no previous summary yet, so the prompt is the
+      // plain SUMMARIZATION_PROMPT (no <previous-summary> block).
       const messages1: Message[] = []
       for (let i = 0; i < 10; i++) {
         messages1.push(
@@ -119,12 +120,13 @@ describe('SessionMemoryCompactStrategy', () => {
         sessionAge: 0,
       })
 
-      // Verify first call used initial prompt (no previous summary yet)
       expect(mockSummarizer).toHaveBeenCalledTimes(1)
-      const firstCallPrompt = mockSummarizer.mock.calls[0][1]
-      expect(firstCallPrompt).not.toContain('<previous-summary>')
+      expect(mockSummarizer.mock.calls[0][1]).not.toContain('<previous-summary>')
 
-      // Second compaction (should use update prompt)
+      // Second compaction: caller (the manager) feeds the prior summary back
+      // via options.previousSummary. The strategy does NOT persist it on
+      // itself — verify that no leak happens if options.previousSummary is
+      // omitted on a third call.
       const messages2: Message[] = []
       for (let i = 10; i < 20; i++) {
         messages2.push(
@@ -139,12 +141,50 @@ describe('SessionMemoryCompactStrategy', () => {
         messageCount: 20,
         toolCallCount: 0,
         sessionAge: 0,
+      }, { previousSummary: 'summary from first compaction' })
+
+      expect(mockSummarizer).toHaveBeenCalledTimes(2)
+      expect(mockSummarizer.mock.calls[1][1]).toContain('<previous-summary>')
+      expect(mockSummarizer.mock.calls[1][1]).toContain('summary from first compaction')
+
+      // Third compaction: previousSummary omitted → no iterative update.
+      // Regression check for the cross-session leak fix.
+      await strategy.compact(messages2, {
+        totalTokens: 3000,
+        maxTokens: 10000,
+        messageCount: 20,
+        toolCallCount: 0,
+        sessionAge: 0,
       })
 
-      // Verify second call used update prompt with previous summary
-      expect(mockSummarizer).toHaveBeenCalledTimes(2)
-      const secondCallPrompt = mockSummarizer.mock.calls[1][1]
-      expect(secondCallPrompt).toContain('<previous-summary>')
+      expect(mockSummarizer).toHaveBeenCalledTimes(3)
+      expect(mockSummarizer.mock.calls[2][1]).not.toContain('<previous-summary>')
+    })
+
+    it('surfaces summaryText on the CompactionResult so the manager can drive iterative updates', async () => {
+      const messages: Message[] = []
+      for (let i = 0; i < 10; i++) {
+        messages.push(
+          { role: 'user', content: `Message ${i}` },
+          { role: 'assistant', content: `Response ${i}` },
+        )
+      }
+
+      const result = await strategy.compact(messages, {
+        totalTokens: 2000,
+        maxTokens: 10000,
+        messageCount: 20,
+        toolCallCount: 0,
+        sessionAge: 0,
+      })
+
+      expect(result.summaryText).toBeDefined()
+      expect(result.summaryText!.length).toBeGreaterThan(0)
+      // The summary text should be the same content embedded in the visible
+      // summary message — the manager no longer has to regex-extract it.
+      const visible = result.messages.find((m) => m.isCompactSummary)
+      expect(visible).toBeDefined()
+      expect(visible!.content as string).toContain(result.summaryText!)
     })
 
     it('should track file operations across compactions', async () => {

@@ -445,7 +445,7 @@ question you're asking.
 - Skipping Playwright verification for UI changes
 - Forgetting `npm run typecheck:all` before committing
 - NOT checking active plans before starting work ⚠️
-- `postinstall` runs `electron-builder install-app-deps`, which compiles `better-sqlite3` for the Electron ABI — after any `npm install`, Vitest (Node ABI) crashes with `NODE_MODULE_VERSION` mismatch in all DB-backed tests. Run `npm run rebuild:node` before `npm run test`, and `npm run rebuild` before `electron:dev` if you switched.
+- `better-sqlite3` is a V8-ABI native module: the Electron runtime (ABI 119) and the local Node used by Vitest (ABI 137) need different builds, so a single `build/Release/better_sqlite3.node` can only serve one runtime at a time. Switching is now automatic: `scripts/ensure-sqlite-abi.mjs` runs as the `pre`-hook of the DB-touching entry points (`pretest*` → node, `preelectron:*` / e2e → electron) and swaps in the matching **prebuilt** binary (fast copy/download via `prebuild-install`, no source compile) when the current one doesn't load. If you ever see `NODE_MODULE_VERSION` mismatch, just re-run the command — it self-heals; or run `npm run rebuild:node` (node) / `npm run rebuild` (electron) manually. Don't run `npm test` and `npm run electron:dev` at the same time (they share the binary, and a running Electron locks the `.node` file on Windows).
 - Electron window blank: check DevTools console, verify `http://localhost:3000` reachable
 
 ## Docs Structure

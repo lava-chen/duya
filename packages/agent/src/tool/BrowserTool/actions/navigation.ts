@@ -11,14 +11,11 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
   operation: 'navigate',
   schema: navigateSchema,
   async execute(data, ctx) {
-    console.log('[NavigateAction] Starting, platformHookManager:', !!ctx.platformHookManager);
-
     if (ctx.mode !== 'extension' && ctx.checkDomainBlocked(data.url)) {
       throw new Error(`Navigation blocked: ${data.url} is in the domain blocklist`);
     }
 
     if (ctx.cdp) {
-      console.log('[NavigateAction] Using CDP path');
       await ctx.cdp.navigate(data.url);
 
       const url = await ctx.cdp.getUrl();
@@ -28,69 +25,60 @@ export const navigateAction: ActionHandler<z.infer<typeof navigateSchema>> = {
         await ctx.platformHookManager.applyPostNavigateHooks(ctx.cdp, url);
       }
 
+      // Run the platform extractor and (if needed) the interactiveOnly backup
+      // snapshot engine pass in parallel — both are CDP evaluate scripts so
+      // they're effectively racing against the same target. The article
+      // extractor now bundles interactive refs into the same response, so
+      // the backup is mostly a no-op for http(s) pages that hit the fallback.
+      const hasExtractor = !!ctx.platformHookManager && ctx.platformHookManager.hasExtractor(url);
+
+      const extractPromise = hasExtractor
+        ? ctx.platformHookManager!.extractContent(ctx.cdp!, url, {
+            maxLength: 50000,
+            includeInteractive: true,
+          }).catch(() => null)
+        : Promise.resolve(null);
+
+      const backupSnapshotPromise = ctx.snapshotEngine
+        ? ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: !hasExtractor }).catch(() => null)
+        : Promise.resolve(null);
+
+      const [platformContent, backupSnap] = await Promise.all([
+        extractPromise,
+        backupSnapshotPromise,
+      ]);
+
       let compactSnapshot: string | null = null;
       let interactiveElements: Array<{ ref: number; tag: string; text: string }> = [];
       let platformType: string | undefined;
 
-      // Try platform extractor first if available
-      if (ctx.platformHookManager && ctx.platformHookManager.hasExtractor(url)) {
-        console.log(`[NavigateAction] Found extractor for ${url}`);
-        const platformContent = await ctx.platformHookManager.extractContent(ctx.cdp, url, {
-          maxLength: 50000,
-          includeInteractive: true,
-        });
-
-        console.log(`[NavigateAction] Extractor result:`, JSON.stringify({
-          success: platformContent?.success,
-          textLength: platformContent?.text?.length,
-          error: platformContent?.error,
-          type: platformContent?.type
+      if (platformContent && platformContent.success && platformContent.text && platformContent.text.length > 0) {
+        compactSnapshot = platformContent.text;
+        interactiveElements = (platformContent.interactiveElements || []).map(el => ({
+          ref: el.ref,
+          tag: el.tag,
+          text: el.text,
         }));
-
-        if (platformContent && platformContent.success && platformContent.text && platformContent.text.length > 0) {
-          console.log(`[NavigateAction] Using ${platformContent.type} extractor, got ${platformContent.text.length} chars`);
-          compactSnapshot = platformContent.text;
-          interactiveElements = (platformContent.interactiveElements || []).map(el => ({
-            ref: el.ref,
-            tag: el.tag,
-            text: el.text,
-          }));
-          platformType = platformContent.type;
-        } else {
-          console.log(`[NavigateAction] Extractor failed or returned empty:`, platformContent?.error);
-        }
-
-        // Extractors (article / API-backed) generally don't collect interactive
-        // refs. Keep interaction possible by capturing the refs separately.
-        if (compactSnapshot && interactiveElements.length === 0 && ctx.snapshotEngine) {
-          try {
-            const refs = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: true });
-            interactiveElements = refs.interactiveElements.map(el => ({
-              ref: el.ref,
-              tag: el.tag,
-              text: el.text,
-            }));
-          } catch { /* best effort */ }
-        }
-
-      } else {
-        console.log(`[NavigateAction] No extractor found for ${url}`);
+        platformType = platformContent.type;
+      } else if (backupSnap) {
+        // Either no extractor, or extractor returned empty — use the snapshot.
+        compactSnapshot = backupSnap.snapshot;
+        interactiveElements = backupSnap.interactiveElements.map(el => ({
+          ref: el.ref,
+          tag: el.tag,
+          text: el.text,
+        }));
       }
 
-      // Fallback to snapshot engine if no platform extractor
-      if (!compactSnapshot && ctx.snapshotEngine) {
-        console.log(`[NavigateAction] Using snapshot engine fallback`);
-        try {
-          const snap = await ctx.snapshotEngine.capture({ maxLength: 50000, interactiveOnly: false });
-          console.log(`[NavigateAction] Snapshot engine result, snapshot length:`, snap.snapshot.length);
-          console.log(`[NavigateAction] Snapshot preview (first 500 chars):`, snap.snapshot.substring(0, 500));
-          compactSnapshot = snap.snapshot;
-          interactiveElements = snap.interactiveElements.map(el => ({
-            ref: el.ref,
-            tag: el.tag,
-            text: el.text,
-          }));
-        } catch { /* best effort */ }
+      // If the platform extractor succeeded but didn't include refs, lift the
+      // interactive refs from the parallel snapshot pass instead of paying
+      // for a second full-DOM walk.
+      if (compactSnapshot && interactiveElements.length === 0 && backupSnap) {
+        interactiveElements = backupSnap.interactiveElements.map(el => ({
+          ref: el.ref,
+          tag: el.tag,
+          text: el.text,
+        }));
       }
 
       return {

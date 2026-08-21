@@ -35,8 +35,10 @@ interface ProviderConfig {
 
 /**
  * Read the configured per-run max turn count (`agent.max_turns` in
- * config.toml). Resolves to `undefined` when the config is unavailable or
- * unset, in which case the worker falls back to its built-in default (100).
+ * config.toml). Resolves to `undefined` when the config is unavailable
+ * or unset, in which case the agent runs uncapped (pi-aligned design —
+ * the loop exits on natural completion, token exhaustion, abort, or a
+ * tool `terminate: true` signal, never on an implicit turn count).
  */
 async function readAgentMaxTurns(): Promise<number | undefined> {
   try {
@@ -366,7 +368,7 @@ type FieldListeners = {
 
 /** Sub-agent progress event */
 export interface AgentProgressEvent {
-  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error';
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | 'started' | 'done' | 'error' | 'hook_invoked';
   data?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -378,6 +380,29 @@ export interface AgentProgressEvent {
   agentName?: string;
   agentDescription?: string;
   sessionId?: string;
+  /**
+   * Plan 437: when `type === 'hook_invoked'`, the agent process nested
+   * the full hook payload under this key (see packages/ai/src/types.ts).
+   * The flat envelope still passes through; this is the only structured
+   * sub-payload because hook events are richer than text/thinking and
+   * would otherwise need 10+ top-level fields.
+   */
+  hookEvent?: {
+    hookEventName: string;
+    hookType: 'command' | 'process' | 'prompt' | 'http' | 'agent';
+    hookName: string;
+    matcher?: string;
+    additionalContext?: string;
+    exitCode?: number;
+    async: boolean;
+    backgroundTaskId?: string;
+    durationMs: number;
+    status: 'ok' | 'error' | 'timeout' | 'skipped';
+    errorMessage?: string;
+    seq: number;
+    toolName?: string;
+    toolUseId?: string;
+  };
 }
 
 /** Ordered streaming event for chronological rendering */
@@ -386,7 +411,12 @@ export type StreamingEvent =
   | { type: 'thinking'; content: string; timestamp: number }
   | { type: 'tool_use'; toolUse: ToolUseInfo; timestamp: number }
   | { type: 'tool_result'; toolResult: ToolResultInfo; timestamp: number }
-  | { type: 'viz'; content: string; isPartial: boolean; timestamp: number };
+  | { type: 'viz'; content: string; isPartial: boolean; timestamp: number }
+  | {
+      type: 'hook_invocation';
+      hook: import('@/types/hooks').HookAction;
+      timestamp: number;
+    };
 
 interface SessionState {
   sessionId: string;
@@ -1795,6 +1825,36 @@ class StreamSessionManager {
 
     s.agentProgressEvents = [...s.agentProgressEvents, event];
     this.notifyAgentProgressListeners(sessionId, event);
+
+    // Plan 437: hook events are routed through this handler. Convert
+    // the structured `hookEvent` payload into a `HookAction` and append
+    // it as a streaming event so `useStreamingActions` and
+    // `computeSegments` see it the same way they see tool_use.
+    if (event.type === 'hook_invoked' && event.hookEvent) {
+      const hookAction: import('@/types/hooks').HookAction = {
+        id: `hook-${event.hookEvent.seq}-${Date.now()}`,
+        hookEventName: event.hookEvent.hookEventName,
+        hookType: event.hookEvent.hookType,
+        hookName: event.hookEvent.hookName,
+        matcher: event.hookEvent.matcher,
+        additionalContext: event.hookEvent.additionalContext,
+        exitCode: event.hookEvent.exitCode,
+        async: event.hookEvent.async,
+        backgroundTaskId: event.hookEvent.backgroundTaskId,
+        durationMs: event.hookEvent.durationMs,
+        status: event.hookEvent.status,
+        errorMessage: event.hookEvent.errorMessage,
+        seq: event.hookEvent.seq,
+        toolName: event.hookEvent.toolName,
+        toolUseId: event.hookEvent.toolUseId,
+      };
+      s.streamingEvents = [
+        ...s.streamingEvents,
+        { type: 'hook_invocation', hook: hookAction, timestamp: Date.now() },
+      ];
+      this.notifyStreamingEventsListeners(sessionId);
+    }
+
     this.resetIdleTimeout(sessionId);
   }
 
@@ -2570,6 +2630,25 @@ class StreamSessionManager {
     const state = this.sessions.get(sessionId);
     if (!state) return;
     this.clearIdleTimeout(sessionId);
+
+    // Pause the idle timer while a tool call is still awaiting its result.
+    //
+    // Foreground tools (BashTool, ReadTool on slow paths, MCP calls, etc.)
+    // do not stream progress events while they await the underlying
+    // subprocess — `cargo test` / a large build / a slow HTTP fetch can sit
+    // silent for minutes. Without this pause, the session-level idle
+    // timeout (STREAM_IDLE_TIMEOUT_MS = 280s) would trip mid-run, abort the
+    // SSE stream, and the renderer would see the entire message list
+    // disappear even though the tool was making progress.
+    //
+    // The tool_result handler calls resetIdleTimeout once the result lands;
+    // at that point toolUses.length === toolResults.length, so a fresh
+    // 280s window starts for the LLM to consume the result and respond.
+    const hasPendingTool = state.toolUses.length > state.toolResults.length;
+    if (hasPendingTool) {
+      return;
+    }
+
     state.idleTimeout = setTimeout(() => {
       void this.stopStream(sessionId, 'Idle timeout exceeded');
     }, this.idleTimeoutMs);

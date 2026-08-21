@@ -16,6 +16,7 @@ import { useConversationStore } from '@/stores/conversation-store';
 import { getActiveProviderIPC } from '@/lib/ipc-client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useSettings } from '@/hooks/useSettings';
+import { isKeylessLocalProvider } from '@/lib/providers';
 import { MessageInput } from './MessageInput';
 import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
 import { listCustomAgents } from '@/lib/agent-profile-ipc';
@@ -116,7 +117,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
       try {
         const provider = await getActiveProviderIPC();
         if (cancelled || !provider) return;
-        const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+        const isUsable = provider.hasApiKey || isKeylessLocalProvider(provider.providerType, provider.baseUrl);
         if (!isUsable) return;
         let modelId = '';
         try {
@@ -229,7 +230,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
     try {
       const provider = await getActiveProviderIPC();
       if (!provider) return null;
-      const isUsable = provider.hasApiKey || provider.providerType === 'ollama';
+      const isUsable = provider.hasApiKey || isKeylessLocalProvider(provider.providerType, provider.baseUrl);
       if (!isUsable) return null;
       let modelId = '';
       try {

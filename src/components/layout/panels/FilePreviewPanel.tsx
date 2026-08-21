@@ -216,14 +216,19 @@ function lineCountOf(content: string): number {
 const PreviewMarkdownContent = memo(function PreviewMarkdownContent({
   content,
   truncatedHint,
+  baseDirectory,
 }: {
   content: string;
   truncatedHint: string;
+  baseDirectory?: string;
 }) {
   return (
     <div className="file-preview-text markdown">
       {truncatedHint && <div className="file-preview-truncated">{truncatedHint}</div>}
-      <MarkdownRenderer className="prose dark:prose-invert max-w-none file-preview-markdown">
+      <MarkdownRenderer
+        className="prose dark:prose-invert max-w-none file-preview-markdown"
+        baseDirectory={baseDirectory}
+      >
         {content}
       </MarkdownRenderer>
     </div>
@@ -324,6 +329,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const propWorkingDirectory = typeof tab.params?.workingDirectory === "string"
     ? tab.params.workingDirectory
     : "";
+  const propStandalone = tab.params?.standalone === true;
   // Plan 220: when an embedded FileTreePanel dispatches `duya:open-file`,
   // we override the prop with a local override so the preview can
   // switch files without re-routing through the PanelProvider.
@@ -445,18 +451,27 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   }, [focusLines, loading, preview?.content]);
 
   const loadPreview = useCallback(async () => {
-    if (!filePath || !workingDirectory) return;
+    // Standalone mode (in-chat click to a file outside the workspace)
+    // is allowed to ship without a workingDirectory — the IPC skips its
+    // project-root check. Project-scoped opens keep the existing
+    // invariant that both fields are required.
+    if (!filePath) return;
+    if (!propStandalone && !workingDirectory) return;
     setLoading(true);
     setSelection(null);
     try {
-      const result = await window.electronAPI?.files?.preview?.(filePath, workingDirectory);
+      const result = await window.electronAPI?.files?.preview?.(
+        filePath,
+        workingDirectory,
+        propStandalone ? { standalone: true } : undefined,
+      );
       setPreview(result ?? { success: false, error: "File preview is unavailable. Rebuild Electron and try again." });
     } catch (cause) {
       setPreview({ success: false, error: cause instanceof Error ? cause.message : String(cause) });
     } finally {
       setLoading(false);
     }
-  }, [filePath, workingDirectory]);
+  }, [filePath, workingDirectory, propStandalone]);
 
   useEffect(() => {
     void loadPreview();
@@ -889,7 +904,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </div>
         )}
         {!loading && preview?.success && preview.kind === "text" && isMarkdown && (
-          <PreviewMarkdownContent content={preview.content || ""} truncatedHint={truncatedHint} />
+          <PreviewMarkdownContent
+            content={preview.content || ""}
+            truncatedHint={truncatedHint}
+            baseDirectory={getDirectoryPath(filePath)}
+          />
         )}
         {selection && (
           <Button
