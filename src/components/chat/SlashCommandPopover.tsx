@@ -123,6 +123,14 @@ interface SlashCommandPopoverProps {
    * are shown.
    */
   modelId?: string;
+  /**
+   * Provider id matching `modelId`. Used by the capability-driven
+   * effort resolver so LM Studio runtime models (which only live in
+   * `ModelCapabilityService` and not the static catalog) can still
+   * surface their per-model `reasoningEffortOptions`. Optional —
+   * static-catalog callers can omit it.
+   */
+  providerId?: string;
   responseStyles: ResponseStyleInfo[];
   selectedStyle: string | null;
   onSelectStyle: (styleId: string) => void;

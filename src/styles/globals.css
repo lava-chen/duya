@@ -541,44 +541,62 @@ html[data-font="system"] .message-content li {
 }
 
 .markdown-file-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
-  margin-left: 0.2rem;
-  max-width: 100%;
+  display: inline-block;
+  /* Match the inline `<code>` font stack used by MarkdownRenderer so a
+   * filename like `network.py` renders in the same monospace face the
+   * user sees elsewhere for code identifiers. Body text remains in
+   * Styrene / system-ui — only the link itself switches. */
+  font-family: 'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 14px (vs body's 15px) keeps the link visually compact next to
+   * proportional body text without dwarfing it. */
+  font-size: 14px;
+  /* Semibold so file names stand out from the surrounding regular-weight
+   * body text without becoming visually heavy. */
+  font-weight: 600;
+  line-height: inherit;
+  margin: 0;
   padding: 0;
   border: 0;
   background: transparent;
   box-shadow: none;
-  color: #2563eb;
+  color: #0ea5e9; /* sky-500: lighter than the previous blue-600, less saturated */
   cursor: pointer;
-  font-size: 15px; /* match .message-content body text */
-  font-weight: 500;
-  line-height: 1.5;
-  text-align: left;
+  /* No underline by default; dotted underline appears on hover so a
+   * chat message reads as plain prose unless the user explicitly
+   * points at a link. */
   text-decoration: none;
   transition: color 150ms ease, text-decoration-color 150ms ease;
+  /* inline-block + vertical-align:baseline lines up the link's text
+   * baseline with the surrounding paragraph instead of being lifted
+   * by a flex-centered icon. */
   vertical-align: baseline;
 }
 
 .markdown-file-link:hover {
-  color: #1d4ed8;
+  color: #0284c7; /* sky-600 */
   text-decoration: underline;
-  text-decoration-style: dashed;
+  text-decoration-style: dotted;
+  text-decoration-color: currentColor;
   text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
+  text-underline-offset: 0.22em;
 }
 
 .markdown-file-link:focus-visible {
   border-radius: 4px;
-  outline: 2px solid rgb(37 99 235 / 0.5);
+  outline: 2px solid rgb(14 165 233 / 0.55);
   outline-offset: 2px;
 }
 
 .markdown-file-link > svg {
-  display: block;
-  flex: 0 0 1rem;
-  order: -9999;
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  vertical-align: -1px;
+  margin-right: 0.2rem;
+  margin-left: 0;
+  opacity: 0.7;
+  flex: none;
+  order: 0;
 }
 
 .markdown-file-link__name {
@@ -586,26 +604,48 @@ html[data-font="system"] .message-content li {
   white-space: nowrap;
 }
 
-/* External web links: the favicon is a plain flex item (the anchor is
- * `inline-flex` via `.markdown-file-link`), ordered before the text so it
- * sits at the front. Because it only renders when an icon resolves, no
- * placeholder space is left when the favicon is unavailable. */
+/* External web links: the favicon is an inline-block at the front of
+ * the link (matching the visual order of the file-type icon on local
+ * file pills), aligned to the text baseline.
+ *
+ * Sizing uses `em` (rather than a fixed px) so the favicon scales with
+ * the surrounding text size, and the absolute height stays at or
+ * below the text x-height (≈ 0.73em for 15px / 1.5 paragraph text).
+ * Per CSS 2.1 § 10.8, an inline replaced element whose top extends
+ * past the line box's ascent forces the whole line box to grow — that
+ * growth is what was showing up as enlarged line gaps above and below
+ * any line that contained a favicon. Keeping the icon ≤ 0.7em keeps
+ * the icon fully inside the existing line box.
+ *
+ * `vertical-align: -0.15em` drops the replaced element just below the
+ * text baseline so the icon's visual center sits on the x-height
+ * instead of looking like it floats above the line. Because the
+ * favicon only renders when an icon resolves, no placeholder space
+ * is left when it is unavailable. */
 .markdown-link-external__favicon {
-  order: -1;
-  flex-shrink: 0;
-  width: 14px;
-  height: 14px;
-  margin: 0; /* neutralize @tailwindcss/typography `.prose img` 2em vertical margins */
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  /* Drop the favicon slightly below the text baseline so its visual
+   * center sits on the x-height rather than the baseline. */
+  vertical-align: -0.15em;
+  /* The override `!important` below beats the @tailwindcss/typography
+   * `.prose :where(img)` rule that ships with `margin: 2em 0` (and
+   * `1.71em 0` for `.prose-sm`). Without it, the link anchor's inline
+   * img ends up with 30 px gaps above and below, which makes the
+   * favicon visually wrap onto its own line and inflates the line
+   * height of every paragraph that contains an external link. */
+  margin: 0 0.2rem 0 0 !important;
   object-fit: contain;
   border-radius: 2px;
 }
 
 [data-theme="dark"] .markdown-file-link {
-  color: #93c5fd;
+  color: #7dd3fc; /* sky-300 */
 }
 
 [data-theme="dark"] .markdown-file-link:hover {
-  color: #bfdbfe;
+  color: #bae6fd; /* sky-200 */
 }
 
 /* Keep dark theme inline code background as before */

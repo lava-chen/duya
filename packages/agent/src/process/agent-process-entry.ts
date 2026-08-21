@@ -1643,6 +1643,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     sendI18nStatus('streaming.preparing');
     // Use session system prompt if available, fallback to options.systemPrompt
     const effectiveSystemPrompt = sessionSystemPrompt || msg.options?.systemPrompt;
+    // Rough token estimate of the system prompt alone (AGENTS.md, skills,
+    // base instructions). Tool definitions are added by the agent once it
+    // builds the request; before that, this is the only prefix we can price.
+    // Used as a floor for the live ring's no-usage fallback.
+    const systemPromptTokensEstimate = effectiveSystemPrompt
+      ? estimateMessagesTokens([{ role: 'assistant', content: effectiveSystemPrompt }])
+      : 0;
     // Resolve permission mode from session row, with explicit override allowed.
     // 严格忽略 msg.options.permissionMode (旧字段), 防止残留发送路径覆盖 DB 决定.
     let rowProfile: string | null = null;
@@ -2140,7 +2147,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         const output = u.output_tokens ?? 0;
         const cacheHit = u.cache_hit_tokens ?? 0;
         const cacheCreation = u.cache_creation_tokens ?? 0;
-        const normalizedInput = cacheHit > rawInput ? rawInput + cacheHit : rawInput;
+        // Keep the cache-convention guard identical to the `result` handler
+        // below: a fully cache-served request can report input=0 while hits
+        // (read or write) are large, so the persisted raw fields must be
+        // normalized the same way when re-seeding the cumulative totals.
+        const normalizedInput =
+          cacheHit > rawInput || cacheCreation > rawInput
+            ? rawInput + cacheHit + cacheCreation
+            : rawInput;
         seedTotalInput += normalizedInput;
         seedTotalInputRaw += rawInput;
         seedTotalOutput += output;
@@ -2250,8 +2264,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     const computeLiveUsed = (): number => {
       if (!hasLiveBase) {
         // No authoritative result yet — duya's native estimate of the real
-        // in-memory history (same source CompactionManager uses).
-        return agent.getContextStats().totalTokens;
+        // in-memory history PLUS the system prompt / tool-definition
+        // overhead. A message-only estimate would under-report the context
+        // by the system prompt + AGENTS.md + tools (often 10-20K tokens),
+        // which is exactly what pi's estimateContextTokens adds as its
+        // `prefix` when no usage block exists.
+        const msgTokens = agent.getContextStats().totalTokens;
+        const systemTokens =
+          (typeof agent.getSystemContextTokensEstimate === 'function'
+            ? agent.getSystemContextTokensEstimate()
+            : 0) || systemPromptTokensEstimate;
+        return msgTokens + systemTokens;
       }
       // Authoritative base + estimated tokens of messages appended since the
       // request that produced that base.
@@ -2280,6 +2303,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         cacheHitTokens: liveLastCacheHit,
         cacheCreationTokens: liveLastCacheCreation,
         usedTokens: usedTokens ?? computeLiveUsed(),
+        // Estimated tokens of the system prompt + tools (excluding message
+        // history) so the renderer's no-usage local estimate can include the
+        // prefix too (pi-style estimateContextTokens).
+        systemTokens:
+          (typeof agent.getSystemContextTokensEstimate === 'function'
+            ? agent.getSystemContextTokensEstimate()
+            : 0) || systemPromptTokensEstimate,
         // Session-cumulative totals so the ring's ↑/↓/R/W/$ line moves live.
         totalInput: liveTotalInput,
         totalInputRaw: liveTotalInputRaw,

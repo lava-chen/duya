@@ -206,9 +206,11 @@ describe('fetchProviderModels — end-to-end with mocked fetch', () => {
     });
 
     expect(result.success).toBe(true);
+    // `isLoaded: false` is always emitted for OpenAI-compat vendors
+    // (the field has no source-side meaning outside LM Studio).
     expect(result.models).toEqual([
-      { id: 'deepseek-chat', ownedBy: 'deepseek' },
-      { id: 'deepseek-reasoner', ownedBy: 'deepseek' },
+      { id: 'deepseek-chat', ownedBy: 'deepseek', isLoaded: false },
+      { id: 'deepseek-reasoner', ownedBy: 'deepseek', isLoaded: false },
     ]);
     // We made exactly 3 requests: /anthropic/v1/models (404),
     // /v1/models (404), /models (200).
@@ -340,5 +342,204 @@ describe('fetchProviderModels — end-to-end with mocked fetch', () => {
     });
     expect(result.success).toBe(true);
     expect(result.models).toEqual([{ id: 'llama3:latest', ownedBy: 'ollama' }]);
+  });
+});
+
+describe('extractModels — model filtering (LM Studio / Ollama)', () => {
+  // Embedding models share `/v1/models` with chat models on local
+  // runtimes. They MUST NOT appear in the chat dropdown — the chat
+  // client would 400 them out of the inference endpoint. Tests pin
+  // the behavior so a future refactor doesn't regress.
+
+  function fetchLmStudio(body: unknown) {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 200, body }));
+    return fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+      auth_style: 'auth_token',
+    });
+  }
+
+  it('skips embedding models (LM Studio `type === "embedding"`)', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+        },
+        {
+          type: 'embedding',
+          key: 'text-embedding-nomic-embed-text-v1.5',
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.models?.map((m) => m.id)).toEqual(['qwen3.5-9b']);
+  });
+
+  it('passes through models with no `type` field (OpenAI-compat vendors)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 200, body: { data: [{ id: 'gpt-4o' }] } }),
+    );
+    const r = await fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'https://api.openai.com/v1',
+      auth_style: 'api_key',
+      api_key: 'sk-test',
+    });
+    expect(r.models?.map((m) => m.id)).toEqual(['gpt-4o']);
+  });
+
+  it('keeps models with empty-string `type` (defensive against malformed payloads)', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        { type: '', key: 'qwen2.5-7b-instruct', max_context_length: 32768 },
+      ],
+    });
+    expect(result.models?.map((m) => m.id)).toEqual(['qwen2.5-7b-instruct']);
+  });
+
+  it('exposes isLoaded=true when the model has at least one loaded instance with a valid context', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          loaded_instances: [{ config: { context_length: 8192 } }],
+        },
+      ],
+    });
+    expect(result.models?.[0]?.isLoaded).toBe(true);
+  });
+
+  it('exposes isLoaded=false when loaded_instances is empty', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          loaded_instances: [],
+        },
+      ],
+    });
+    expect(result.models?.[0]?.isLoaded).toBe(false);
+  });
+
+  it('exposes isLoaded=false when loaded_instances entries lack a valid context_length', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          loaded_instances: [null, { config: null }, {}],
+        },
+      ],
+    });
+    expect(result.models?.[0]?.isLoaded).toBe(false);
+  });
+});
+
+describe('extractModels — reasoning effort options (LM Studio allowed_options)', () => {
+  function fetchLmStudio(body: unknown) {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 200, body }));
+    return fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'http://localhost:1234/v1',
+      auth_style: 'auth_token',
+    });
+  }
+
+  it('passes through normalized allowed_options as reasoningEffortOptions', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwq-32b',
+          max_context_length: 32768,
+          capabilities: {
+            reasoning: {
+              allowed_options: ['low', 'medium', 'high', 'off'],
+            },
+          },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.reasoningEffortOptions).toEqual([
+      'low',
+      'medium',
+      'high',
+    ]);
+  });
+
+  it('drops binary toggles (`off`, `on`) from allowed_options', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen2.5-7b-instruct',
+          max_context_length: 32768,
+          capabilities: {
+            reasoning: { allowed_options: ['on', 'off'] },
+          },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.reasoningEffortOptions).toBeUndefined();
+    expect(result.models?.[0]?.supportsReasoning).toBe(false);
+  });
+
+  it('dedupes allowed_options case-insensitively', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          capabilities: {
+            reasoning: { allowed_options: ['Low', 'low', 'LOW', 'medium'] },
+          },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.reasoningEffortOptions).toEqual(['Low', 'medium']);
+  });
+
+  it('preserves the source order when normalizing allowed_options', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen3.5-9b',
+          max_context_length: 32768,
+          capabilities: {
+            reasoning: { allowed_options: ['high', 'low', 'medium'] },
+          },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.reasoningEffortOptions).toEqual([
+      'high',
+      'low',
+      'medium',
+    ]);
+  });
+
+  it('does not set reasoningEffortOptions when allowed_options is empty', async () => {
+    const result = await fetchLmStudio({
+      models: [
+        {
+          type: 'llm',
+          key: 'qwen2.5-7b-instruct',
+          max_context_length: 32768,
+          capabilities: { reasoning: { default: 'low' } },
+        },
+      ],
+    });
+    expect(result.models?.[0]?.reasoningEffortOptions).toBeUndefined();
+    expect(result.models?.[0]?.supportsReasoning).toBe(true);
   });
 });

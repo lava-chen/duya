@@ -78,8 +78,12 @@ function getDirectoryPath(filePath: string): string {
 
 /** Check whether `target` is inside `root` using pure string comparison
  *  so the helper works in the renderer without the Node `path` module.
- *  Both Windows and Unix separators are handled. */
-function isPathInsideRoot(target: string, root: string): boolean {
+ *  Both Windows and Unix separators are handled. Exported so callers
+ *  (e.g. MarkdownAnchor) can decide whether a resolved href lives
+ *  outside the chat workspace and should therefore open as a
+ *  "single-file" preview without exposing its parent directory as
+ *  the panel's project root. */
+export function isPathInsideRoot(target: string, root: string): boolean {
   const normTarget = target.replace(/\\/g, '/').replace(/\/+$/, '');
   const normRoot = root.replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normTarget.startsWith(normRoot + '/') && normTarget !== normRoot) return false;
@@ -221,6 +225,7 @@ export function openLocalArtifactTarget(
   filePath: string,
   cwd?: string | null,
   lineRange?: FocusLineRange,
+  options?: { standalone?: boolean },
 ): void {
   const resolved = resolveLocalFilePath(filePath, cwd);
   if (isHtmlFile(resolved)) {
@@ -234,15 +239,29 @@ export function openLocalArtifactTarget(
       !!lineRange &&
       Number.isFinite(lineRange.start) &&
       lineRange.start > 0;
+    // Standalone mode: the caller knows the file lives outside the chat
+    // workspace (e.g. the agent pointed at ~/Downloads/notes.md while the
+    // active thread cwd is a different project). In that case we don't
+    // want the preview panel to mount the file's directory as its
+    // project root — that previously caused the integrated file tree to
+    // expose arbitrary external directories. Passing an empty
+    // workingDirectory tells the panel to render the file alone (no
+    // tree, no breadcrumb root); the IPC skips isInsideRoot as well.
+    // Default behavior (options.standalone falsy) is unchanged so the
+    // sidebar file preview's relative-link case keeps its existing
+    // fallback to the file's own directory.
+    const standalone = options?.standalone === true;
     const detail: {
       filePath: string;
       workingDirectory: string;
+      standalone?: boolean;
       lineStart?: number;
       lineEnd?: number;
     } = {
       filePath: resolved,
-      workingDirectory: defaultPreviewRootForFile(resolved, cwd),
+      workingDirectory: standalone ? '' : defaultPreviewRootForFile(resolved, cwd),
     };
+    if (standalone) detail.standalone = true;
     if (hasLineRange) {
       detail.lineStart = lineRange!.start;
       if (Number.isFinite(lineRange!.end) && lineRange!.end! >= lineRange!.start) {

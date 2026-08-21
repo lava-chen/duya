@@ -52,6 +52,68 @@ export interface FetchProviderModelsResult {
 
 const OLLAMA_KEYWORDS = ['localhost:11434', '127.0.0.1:11434', 'ollama'];
 
+/**
+ * A local / loopback endpoint (LM Studio at `http://localhost:1234/v1`,
+ * Ollama, a LAN-hosted OpenAI-compatible server, etc.) does not require
+ * an API key. Used to relax the credential guard below so the user can
+ * fetch a model list from a self-hosted runtime that has no auth.
+ */
+function isLocalEndpoint(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return false;
+  const lower = baseUrl.toLowerCase();
+  return (
+    lower.includes('localhost') ||
+    lower.includes('127.0.0.1') ||
+    lower.includes('0.0.0.0') ||
+    lower.includes('::1')
+  );
+}
+
+/**
+ * LM Studio exposes its own richer model list at `GET /api/v1/models` on the
+ * host root. Unlike the OpenAI-compatible `/v1/models`, each entry carries
+ * `key`, `loaded_instances[].config.context_length` (the real *active* context
+ * for loaded models) and `max_context_length`. We prefer it for local
+ * endpoints so the renderer can seed a correct per-model context window
+ * instead of assuming 200K/1M. Returns `null` when the host isn't LM Studio
+ * (endpoint 404s) so the caller falls back to the standard candidates.
+ */
+async function fetchLocalRichModels(
+  baseUrl: string,
+  controllerTimeoutMs: number,
+): Promise<FetchedModel[] | null> {
+  const root = (baseUrl.trim().replace(/\/+$/, '') || '').replace(
+    /\/(v1|v1beta|v1alpha)$/i,
+    '',
+  );
+  if (!root || !root.includes('://')) return null;
+
+  const hosts = new Set<string>();
+  hosts.add(root);
+  hosts.add(root.replace(/(:\/\/)localhost(?=[:/]|$)/i, '$1127.0.0.1'));
+
+  for (const host of hosts) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), controllerTimeoutMs);
+    try {
+      const response = await fetch(`${host}/api/v1/models`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (!response.ok) continue;
+      const json = (await response.json().catch(() => null)) as unknown;
+      const models = extractModels(json);
+      if (models && models.length > 0) return models;
+    } catch {
+      clearTimeout(timeoutId);
+      // Not reachable / not LM Studio → try the next host variant.
+    }
+  }
+  return null;
+}
+
 function isOllama(protocol: string | undefined, baseUrl: string | undefined): boolean {
   if (protocol === 'ollama') return true;
   if (!baseUrl) return false;
@@ -168,9 +230,123 @@ export function buildCandidateUrls(baseUrl: string): string[] {
 
 interface RawModelEntry {
   id?: unknown;
+  key?: unknown;
   name?: unknown;
+  type?: unknown;
   owned_by?: unknown;
   ownedBy?: unknown;
+  max_context_length?: unknown;
+  maxContextLength?: unknown;
+  context_length?: unknown;
+  contextLength?: unknown;
+  loaded_instances?: unknown;
+  format?: unknown;
+  capabilities?: unknown;
+  display_name?: unknown;
+  displayName?: unknown;
+  created?: unknown;
+}
+
+function asInt(value: unknown): number | undefined {
+  // Accept floats (LM Studio sometimes reports e.g. 32768.0) and
+  // round them. Context-length is the only caller; decimals are
+  // spurious.
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/**
+ * Normalize LM Studio's `capabilities.reasoning.allowed_options` array
+ * into the canonical `reasoningEffortOptions` we store on the
+ * capability record.
+ *
+ * Rules:
+ *   - Keep only string values that look like effort levels
+ *     (lowercase / trimmed / non-empty)
+ *   - Exclude binary toggles (`'off'`, `'on'`) — those are not effort
+ *     levels, they're presence flags
+ *   - Dedupe (case-insensitive: `'Low'` and `'low'` collapse)
+ *   - Preserve insertion order so the chat dropdown renders in the
+ *     order the model author specified
+ *
+ * Returns `undefined` when the source is empty / absent so callers
+ * can distinguish "no per-model options" from "explicitly empty".
+ */
+function normalizeReasoningOptions(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (trimmed.length === 0) continue;
+    const lower = trimmed.toLowerCase();
+    if (lower === 'off' || lower === 'on') continue;
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(trimmed);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Extract the rich capabilities payload exposed by LM Studio's
+ * `/api/v1/models`. Returns `undefined` for every field the source API
+ * doesn't report, so callers downstream can distinguish "known false"
+ * (e.g. `vision: false` for a text-only LM Studio model) from "unknown".
+ *
+ * LM Studio shape (relevant subset):
+ *   capabilities.vision                     -> supportsVision
+ *   capabilities.trained_for_tool_use        -> supportsToolUse
+ *   capabilities.reasoning.allowed_options (any non-`off` entry)
+ *                                            -> supportsReasoning=true
+ *                                            + reasoningEffortOptions
+ *   capabilities.reasoning.default          -> supportsReasoning=true when
+ *     the default is non-`off` AND no `allowed_options` were listed
+ *
+ * Anything that doesn't match the LM Studio shape (plain OpenAI
+ * `/v1/models`, Anthropic `/v1/models`) returns `undefined` for all
+ * fields — the renderer treats `undefined` as "not reported by source"
+ * and falls back to the preset's defaults where available.
+ */
+function extractCapabilities(raw: unknown): {
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+  reasoningEffortOptions?: string[];
+} {
+  if (!raw || typeof raw !== 'object') return {};
+  const caps = raw as Record<string, unknown>;
+  const out: {
+    supportsVision?: boolean;
+    supportsToolUse?: boolean;
+    supportsReasoning?: boolean;
+    reasoningEffortOptions?: string[];
+  } = {};
+  const vision = asBoolean(caps.vision);
+  if (vision !== undefined) out.supportsVision = vision;
+  const toolUse = asBoolean(caps.trained_for_tool_use);
+  if (toolUse !== undefined) out.supportsToolUse = toolUse;
+  const reasoning = caps.reasoning;
+  if (reasoning && typeof reasoning === 'object') {
+    const allowed = (reasoning as Record<string, unknown>).allowed_options;
+    const defaultV = (reasoning as Record<string, unknown>).default;
+    const normalized = normalizeReasoningOptions(allowed);
+    if (normalized && normalized.length > 0) {
+      out.supportsReasoning = true;
+      out.reasoningEffortOptions = normalized;
+    } else if (typeof defaultV === 'string') {
+      out.supportsReasoning = defaultV.trim().toLowerCase() !== 'off';
+    } else if (Array.isArray(allowed) && allowed.length > 0) {
+      out.supportsReasoning = false;
+    }
+  }
+  return out;
 }
 
 function extractModels(json: unknown): FetchedModel[] | null {
@@ -187,14 +363,70 @@ function extractModels(json: unknown): FetchedModel[] | null {
     for (const raw of list) {
       if (!raw || typeof raw !== 'object') continue;
       const entry = raw as RawModelEntry;
-      const idRaw = entry.id ?? entry.name;
+      const idRaw = entry.id ?? entry.key ?? entry.name;
       if (typeof idRaw !== 'string' || idRaw.length === 0) continue;
+      // Filter out embedding models — they share `/v1/models` with
+      // chat models on LM Studio but are not valid chat endpoints.
+      // Accept `type === 'llm'` or missing/empty `type` (legacy
+      // OpenAI vendors don't set the field, and a malformed payload
+      // shouldn't drop every entry). Anything else (e.g. `'embedding'`)
+      // is skipped.
+      const typeRaw = entry.type;
+      if (
+        typeof typeRaw === 'string' &&
+        typeRaw.length > 0 &&
+        typeRaw !== 'llm'
+      ) continue;
       const ownedRaw = entry.owned_by ?? entry.ownedBy ?? null;
+      // LM Studio `/api/v1/models`: the *loaded* runtime context lives at
+      // loaded_instances[0].config.context_length (smaller than the
+      // model's max). Prefer it so duya seeds the real active context.
+      const loadedCtx = (() => {
+        if (!Array.isArray(entry.loaded_instances) || entry.loaded_instances.length === 0) {
+          return undefined;
+        }
+        const inst = entry.loaded_instances[0] as {
+          config?: { context_length?: unknown };
+        };
+        return asInt(inst?.config?.context_length);
+      })();
+      const maxCtx = asInt(
+        entry.max_context_length ??
+          entry.maxContextLength ??
+          entry.context_length ??
+          entry.contextLength,
+      );
+      const ctxRaw = loadedCtx ?? maxCtx;
+      const capabilities = extractCapabilities(entry.capabilities);
+      const formatRaw = entry.format;
+      const format =
+        typeof formatRaw === 'string' && formatRaw.length > 0 ? formatRaw : null;
+      const isLoaded = loadedCtx !== undefined;
       out.push({
         id: idRaw,
         ownedBy: typeof ownedRaw === 'string' && ownedRaw.length > 0
           ? ownedRaw
           : null,
+        ...(ctxRaw !== undefined ? { contextLength: ctxRaw } : {}),
+        ...(maxCtx !== undefined
+          ? { contextWindowMax: maxCtx }
+          : ctxRaw !== undefined
+            ? { contextWindowMax: ctxRaw }
+            : {}),
+        ...(capabilities.supportsVision !== undefined
+          ? { supportsVision: capabilities.supportsVision }
+          : {}),
+        ...(capabilities.supportsToolUse !== undefined
+          ? { supportsToolUse: capabilities.supportsToolUse }
+          : {}),
+        ...(capabilities.supportsReasoning !== undefined
+          ? { supportsReasoning: capabilities.supportsReasoning }
+          : {}),
+        ...(capabilities.reasoningEffortOptions !== undefined
+          ? { reasoningEffortOptions: capabilities.reasoningEffortOptions }
+          : {}),
+        ...(format !== null ? { format } : {}),
+        isLoaded,
       });
     }
     if (out.length > 0) return out;
@@ -286,7 +518,14 @@ export async function fetchProviderModels(
       },
     };
   }
-  if (!api_key && auth_style !== 'env_only') {
+  // Local OpenAI-compatible runtimes (Ollama at :11434, LM Studio
+  // at :1234) don't require auth, so an empty API key is fine for
+  // them. Mirrors the same exemption applied later when building
+  // the auth headers — without it the user would see "API Key is
+  // required" before the local rich probe even has a chance to
+  // run. `env_only` covers AWS Bedrock / Vertex, which are also
+  // exempt.
+  if (!api_key && auth_style !== 'env_only' && !isLocalEndpoint(base_url)) {
     return {
       success: false,
       error: {
@@ -295,6 +534,20 @@ export async function fetchProviderModels(
         suggestion: '请先填写 API Key',
       },
     };
+  }
+
+  // Prefer LM Studio's rich `/api/v1/models` (per-model
+  // `capabilities.{vision,trained_for_tool_use,reasoning}` +
+  // `loaded_instances[].config.context_length` + `max_context_length` +
+  // `format`) for local endpoints. Ignore failures silently — LM
+  // Studio may not be the target (the user might be configuring a
+  // local OpenAI-compatible proxy), and the standard OpenAI-compatible
+  // candidates below still apply.
+  if (isLocalEndpoint(base_url)) {
+    const rich = await fetchLocalRichModels(base_url, 5_000);
+    if (rich && rich.length > 0) {
+      return { success: true, models: rich };
+    }
   }
 
   // Build the auth headers based on protocol + baseUrl, mirroring
