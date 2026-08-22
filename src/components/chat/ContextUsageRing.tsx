@@ -100,44 +100,63 @@ export function ContextUsageRing({
           <div className="context-usage-ring-stats">
             {usage.hasData && (
               <>
-                <span className="context-usage-ring-stat">
-                  <span className="context-usage-ring-arrow">↑</span>
-                  {f(usage.totalInput)}
-                </span>
-                <span className="context-usage-ring-stat">
-                  <span className="context-usage-ring-arrow">↓</span>
-                  {f(usage.totalOutput)}
-                </span>
-                {usage.totalCacheRead > 0 && (
+                {/* Group 1: cumulative token traffic (↑↓R/W).
+                    Stats inside a group sit tight; groups are visually
+                    separated by a middle-dot in CSS (::before). */}
+                <span className="context-usage-ring-group">
                   <span className="context-usage-ring-stat">
-                    <span className="context-usage-ring-arrow">R</span>
-                    {f(usage.totalCacheRead)}
+                    <span className="context-usage-ring-arrow">↑</span>
+                    {f(usage.totalInput)}
                   </span>
-                )}
-                {usage.totalCacheWrite > 0 && (
                   <span className="context-usage-ring-stat">
-                    <span className="context-usage-ring-arrow">W</span>
-                    {f(usage.totalCacheWrite)}
+                    <span className="context-usage-ring-arrow">↓</span>
+                    {f(usage.totalOutput)}
                   </span>
-                )}
+                  {usage.totalCacheRead > 0 && (
+                    <span className="context-usage-ring-stat">
+                      <span className="context-usage-ring-arrow">R</span>
+                      {f(usage.totalCacheRead)}
+                    </span>
+                  )}
+                  {usage.totalCacheWrite > 0 && (
+                    <span className="context-usage-ring-stat">
+                      <span className="context-usage-ring-arrow">W</span>
+                      {f(usage.totalCacheWrite)}
+                    </span>
+                  )}
+                </span>
+
+                {/* Group 2: cache hit rate. */}
                 {hasCache && usage.cacheHitRate >= 0 && (
-                  <span className="context-usage-ring-stat">
-                    CH{(usage.cacheHitRate * 100).toFixed(1)}%
+                  <span className="context-usage-ring-group">
+                    <span className="context-usage-ring-stat">
+                      CH{(usage.cacheHitRate * 100).toFixed(1)}%
+                    </span>
                   </span>
                 )}
+
+                {/* Group 3: cost. */}
                 {usage.totalCost > 0 && (
-                  <span className="context-usage-ring-stat">
-                    ${usage.totalCost.toFixed(3)}
+                  <span className="context-usage-ring-group">
+                    <span className="context-usage-ring-stat">
+                      ${usage.totalCost.toFixed(3)}
+                    </span>
                   </span>
                 )}
-                <span className={ctxClass}>
-                  {ctxPercent}%/{f(effectiveWindow)}
+
+                {/* Group 4: current context % — the only number that's a
+                    live state indicator rather than cumulative stat. Slight
+                    emphasis via --primary so the eye lands here. */}
+                <span className="context-usage-ring-group context-usage-ring-group--primary">
+                  <span className={ctxClass}>
+                    {ctxPercent}%/{f(effectiveWindow)}
+                  </span>
+                  {isAutoWindow && (
+                    <span className="context-usage-ring-stat context-usage-ring-stat--dim">
+                      (auto)
+                    </span>
+                  )}
                 </span>
-                {isAutoWindow && (
-                  <span className="context-usage-ring-stat context-usage-ring-stat--dim">
-                    (auto)
-                  </span>
-                )}
               </>
             )}
             {onCompress && usage.state !== 'normal' && (
@@ -228,12 +247,44 @@ export function ContextUsageRing({
           white-space: nowrap;
           display: flex;
           align-items: center;
+          /* gap is the inter-group space; groups manage their own intra-gap.
+             The ::before separator lives inside each group and gets the
+             left margin via the selector below. */
           gap: 8px;
           padding-right: 4px;
           font-size: 11px;
           line-height: 1;
           font-variant-numeric: tabular-nums;
           color: var(--muted);
+        }
+
+        /* Semantic grouping: stats inside a group sit tight; groups are
+           separated by a middle-dot rendered via ::before on every group
+           except the first. */
+        .context-usage-ring-group {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .context-usage-ring-group + .context-usage-ring-group::before,
+        .context-usage-ring-compress::before {
+          content: '·';
+          margin-right: 8px;
+          opacity: 0.4;
+          font-weight: 400;
+        }
+        .context-usage-ring-compress::before {
+          margin-right: 6px;
+          margin-left: -2px;
+        }
+
+        /* Live context % is the only number that's a state indicator
+           rather than a cumulative stat — nudge the eye toward it. */
+        .context-usage-ring-group--primary {
+          padding: 1px 5px;
+          margin-left: -2px;
+          border-radius: 3px;
+          background: var(--bg-hover);
         }
 
         .context-usage-ring-arrow {
