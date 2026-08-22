@@ -23,6 +23,7 @@ import { useStreamPhase } from '@/hooks/useStreamPhase';
 import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
+import { useContextUsageStore } from '@/stores/context-usage-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
 import { useShallow } from 'zustand/react/shallow';
 import type { MailboxRow } from '@/stores/mailbox-store';
@@ -1146,6 +1147,10 @@ export function ChatView({
       onDone: (result) => {
         setIsCompacting(false);
         setCompactionStatus('done');
+        // The timeline was rewritten: the live snapshot describes the
+        // pre-compact context, so drop it and let the reloaded messages (or
+        // the next turn's token_usage) drive the ring.
+        useContextUsageStore.getState().clearLive(sessionId);
         const removedMsg = result.removedCount != null ? `${result.removedCount} messages compacted` : 'Context compressed';
         const tokenMsg = result.tokenReduction != null ? `, ~${Math.round(result.tokenReduction)} tokens saved` : '';
         setCompressionNotification(`${removedMsg}${tokenMsg}.`);

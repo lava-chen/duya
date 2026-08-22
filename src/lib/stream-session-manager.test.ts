@@ -188,6 +188,40 @@ describe('StreamSessionManager State Machine', () => {
     });
   });
 
+  describe('context usage live snapshot lifecycle', () => {
+    it('keeps the live snapshot after done so the ring does not flicker to 0%', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      const { useContextUsageStore } = await import('@/stores/context-usage-store');
+
+      // Mock fetch to return a mock SSE response
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([
+          { type: 'connected' },
+          { type: 'token_usage', data: { type: 'token_usage', data: { usedTokens: 234_567, inputTokens: 230_000, outputTokens: 4_567 } } },
+          { type: 'done' },
+        ])
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({
+        sessionId: 'live-keep',
+        content: 'Hello',
+      });
+      await new Promise((r) => setTimeout(r, 100));
+
+      // The turn is over but the live snapshot must survive it: tokenUsage
+      // reaches the persisted messages only at turn end, so dropping live on
+      // done made the renderer fall back to a scan that finds nothing yet and
+      // flicker the ring to 0% until the next turn's first token_usage event.
+      const live = useContextUsageStore.getState().liveBySession['live-keep'];
+      expect(live).toBeDefined();
+      expect(live!.usedTokens).toBe(234_567);
+
+      useContextUsageStore.getState().clearLive('live-keep');
+      vi.restoreAllMocks();
+    });
+  });
+
   describe('background task resumption', () => {
     it('starts an empty internal follow-up with the previous turn configuration', async () => {
       const { streamSessionManager } = await import('./stream-session-manager');
