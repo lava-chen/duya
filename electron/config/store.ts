@@ -74,6 +74,7 @@ const FLAT_TO_PATH: Record<string, string> = {
   conductorFeatureFlags: 'auxiliary.conductor_feature_flags',
   openLinksInExternalBrowser: 'browser.open_links_in_external_browser',
   defaultPermissionMode: 'agent.default_permission_mode',
+  busyMessageMode: 'agent.busy_message_mode',
   defaultIde: 'ide.default',
   customAgents: 'agents',
   performanceSettings: 'performance',

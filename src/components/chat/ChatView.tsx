@@ -24,6 +24,7 @@ import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
+import { useBusyMessageModeValue } from '@/stores/busy-message-mode-store';
 import { useShallow } from 'zustand/react/shallow';
 import type { MailboxRow } from '@/stores/mailbox-store';
 import type { FileAttachment } from '@/types/message';
@@ -361,6 +362,7 @@ export function ChatView({
   const setActiveThread = useConversationStore(s => s.setActiveThread);
   const deleteMessageAndAfter = useConversationStore(s => s.deleteMessageAndAfter);
   const sendMailbox = useMailboxStore(s => s.send);
+  const busyMessageMode = useBusyMessageModeValue();
   const mailboxRows = useMailboxStore(
     useShallow(state => state.getBySession(sessionId)),
   );
@@ -855,11 +857,13 @@ export function ChatView({
         const queuedRow = await sendMailbox({
           sessionId,
           content,
-          // Default in-run followups are queued: they are absorbed right
-          // before the agent finalises (before_final_answer). Pressing
-          // "Guide" in the mailbox bubble flips the row to kind=followup for
-          // immediate injection at before_model_turn.
-          kind: 'queued',
+          // Default in-run handling comes from the busyMessageMode setting
+          // (agent.busy_message_mode): 'queued' rows are absorbed right
+          // before the agent finalises (before_final_answer); 'followup'
+          // rows inject immediately at the next before_model_turn
+          // checkpoint. The mailbox bubble's "Guide" button can still flip
+          // an individual queued row to followup mid-run.
+          kind: busyMessageMode,
           submittedDuringRunId: sessionId,
           attachments: files,
         });
@@ -889,7 +893,7 @@ export function ChatView({
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled, undefined, permissionMode);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode]
   );
 
   // Toggle conductor mode for the current session. On enable, resolve the
