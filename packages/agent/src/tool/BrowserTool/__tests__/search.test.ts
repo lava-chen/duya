@@ -21,6 +21,7 @@ import {
   resolveDdgLink,
   parseDuckDuckGoHtml,
   parseBingHtml,
+  parseGitHubHtml,
   hasCJK,
   type SearchItem,
 } from '../actions/search.js';
@@ -69,7 +70,9 @@ describe('selectEngines', () => {
     const chain = selectEngines('auto', 'domestic', 'node sqlite guide');
     expect(chain[0]).toBe('bing');
     // Google stays only as the last-resort fallback (probe may misclassify).
-    expect(chain.indexOf('google')).toBe(5);
+    // GitHub is the second-to-last fallback (code-specialized).
+    expect(chain.indexOf('github')).toBe(5);
+    expect(chain.indexOf('google')).toBe(6);
   });
 
   it('domestic chain never starts with google', () => {
@@ -89,8 +92,24 @@ describe('selectEngines', () => {
   it('explicit engine always goes first, others follow as fallback', () => {
     const chain = selectEngines('baidu', 'overseas', 'node sqlite');
     expect(chain[0]).toBe('baidu');
-    expect(chain).toHaveLength(6);
-    expect(new Set(chain).size).toBe(6);
+    expect(chain).toHaveLength(7);
+    expect(new Set(chain).size).toBe(7);
+  });
+
+  it('explicit github chain never leads with another engine', () => {
+    const chain = selectEngines('github', 'domestic', 'node sqlite');
+    expect(chain[0]).toBe('github');
+    expect(chain).toContain('github');
+  });
+
+  it('auto chains include github as a code-specialized fallback', () => {
+    const overseas = selectEngines('auto', 'overseas', 'node sqlite');
+    const domestic = selectEngines('auto', 'domestic', 'node sqlite');
+    expect(overseas).toContain('github');
+    expect(domestic).toContain('github');
+    // github never leads an auto chain — it's a fallback, not a primary.
+    expect(overseas[0]).not.toBe('github');
+    expect(domestic[0]).not.toBe('github');
   });
 });
 
@@ -114,6 +133,9 @@ describe('buildSerpUrl', () => {
     );
     expect(buildSerpUrl('yahoo', q, 8)).toBe(
       `https://search.yahoo.com/search?p=${encodeURIComponent(q)}`,
+    );
+    expect(buildSerpUrl('github', q, 8)).toBe(
+      `https://github.com/search?q=${encodeURIComponent(q)}&type=repositories`,
     );
   });
 
@@ -222,6 +244,62 @@ describe('parseDuckDuckGoHtml', () => {
 
   it('returns empty for non-SERP html', () => {
     expect(parseDuckDuckGoHtml('<html><body>hello</body></html>', 8)).toEqual([]);
+  });
+});
+
+describe('parseGitHubHtml', () => {
+  const sampleHtml = `
+    <main>
+      <div data-testid="results-list">
+        <div data-testid="search-result">
+          <a data-testid="repository-link" href="/vercel/next.js">vercel / next.js</a>
+          <p class="search-match">The React Framework for the Web.</p>
+        </div>
+        <div data-testid="search-result">
+          <a data-testid="repository-link" href="/remix-run/react-router">remix-run / react-router</a>
+          <p class="search-match">Declarative routing for React.</p>
+        </div>
+      </div>
+    </main>
+  `;
+
+  it('extracts titles, absolute github.com urls, and snippets', () => {
+    const items = parseGitHubHtml(sampleHtml, 8);
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      title: 'vercel / next.js',
+      url: 'https://github.com/vercel/next.js',
+      snippet: 'The React Framework for the Web.',
+    });
+    expect(items[1]).toMatchObject({
+      title: 'remix-run / react-router',
+      url: 'https://github.com/remix-run/react-router',
+    });
+  });
+
+  it('respects maxResults', () => {
+    expect(parseGitHubHtml(sampleHtml, 1)).toHaveLength(1);
+  });
+
+  it('returns empty for non-SERP / sign-in-wall html', () => {
+    expect(parseGitHubHtml('<html><body>Please sign in</body></html>', 8)).toEqual([]);
+  });
+
+  it('skips blocks without a /owner/repo link', () => {
+    const html = `
+      <div data-testid="search-result">
+        <a href="/sponsors/cool-project">Sponsor only</a>
+        <p>no repo here</p>
+      </div>
+      <div data-testid="search-result">
+        <a data-testid="repository-link" href="/facebook/react">facebook/react</a>
+        <p>A declarative, efficient, and flexible JavaScript library.</p>
+      </div>
+      </main>
+    `;
+    const items = parseGitHubHtml(html, 8);
+    expect(items).toHaveLength(1);
+    expect(items[0].url).toBe('https://github.com/facebook/react');
   });
 });
 
@@ -347,11 +425,13 @@ describe('searchAction.execute', () => {
     );
 
     expect(result['success']).toBe(false);
-    // overseas chain google→bing→ddg→brave→yahoo→baidu via browser (6), then bing+ddg via http (2)
+    // overseas English chain google→bing→ddg→brave→yahoo→github→baidu via
+    // browser (7), then bing+ddg+github via http (3) = 10 attempts total.
     const attempts = result['attempts'] as Array<{ engine: string; path: string }>;
-    expect(attempts.length).toBe(8);
-    expect(attempts[6]).toMatchObject({ engine: 'bing', path: 'http' });
-    expect(attempts[7]).toMatchObject({ engine: 'duckduckgo', path: 'http' });
+    expect(attempts.length).toBe(10);
+    expect(attempts[7]).toMatchObject({ engine: 'bing', path: 'http' });
+    expect(attempts[8]).toMatchObject({ engine: 'duckduckgo', path: 'http' });
+    expect(attempts[9]).toMatchObject({ engine: 'github', path: 'http' });
     const nextSteps = result['nextSteps'] as string[];
     expect(nextSteps.length).toBeGreaterThan(0);
     expect(String(result['error'])).toContain('All search engines failed');
