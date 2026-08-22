@@ -18,6 +18,13 @@ describe('DuyaConfig schema', () => {
     // agent is uncapped by default (pi-aligned). mergeConfig must not
     // synthesise one from defaults.
     expect(merged.agent.max_turns).toBeUndefined();
+    // Mid-run messages queue by default; users opt into immediate followup
+    // via Settings → General (or agent.busy_message_mode in config.toml).
+    expect(merged.agent.busy_message_mode).toBe('queued');
+  });
+
+  it('DEFAULT_CONFIG keeps the queued mid-run message default', () => {
+    expect(DEFAULT_CONFIG.agent.busy_message_mode).toBe('queued');
   });
 
   it('DEFAULT_CONFIG reserves Codex-aligned blocks (skills/projects/features/apps)', () => {

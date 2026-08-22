@@ -87,6 +87,14 @@ export interface AgentConfig {
   default_timeout: number;
   /** Default permission mode for new sessions ('ask' | 'auto' | 'bypass'). */
   default_permission_mode: string;
+  /**
+   * Default handling for a chat message sent while the agent is already
+   * running. 'followup' injects it at the next model-turn boundary
+   * (steering); 'queued' holds it until just before the final answer, or
+   * promotes it to a fresh user turn when the run ends. Mirrors the
+   * mailbox row `kind` vocabulary.
+   */
+  busy_message_mode: 'followup' | 'queued';
 }
 
 /** [agents.<id>] — user-defined agent profile driven entirely by config.toml.
@@ -372,6 +380,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
     max_concurrent_tools: 3,
     default_timeout: 60000,
     default_permission_mode: 'ask',
+    busy_message_mode: 'queued',
   },
   ide: { default: '' },
   terminal: {},
