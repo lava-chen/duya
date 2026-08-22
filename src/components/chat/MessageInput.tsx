@@ -27,6 +27,7 @@ import {
   buildCliAppend,
   resolveDirectSlash,
   filterItems,
+  htmlToPlainText,
 } from '@/lib/message-input-logic';
 import { ModelProviderSelector, type ModelOption, type ProviderModelGroup } from './ModelProviderSelector';
 
@@ -1444,7 +1445,15 @@ export function MessageInput({
 
       // Fall back to text paste handling
       const prePasteValue = prePasteValueRef.current;
-      const pastedText = e.clipboardData.getData('text');
+      let pastedText = e.clipboardData.getData('text');
+      // Some clipboard sources only provide an `text/html` flavor. Extract
+      // plain text from the markup so the paste still lands as clean text.
+      if (!pastedText) {
+        const html = e.clipboardData.getData('text/html');
+        if (html) {
+          pastedText = htmlToPlainText(html);
+        }
+      }
       // Plan 220 Phase 4: legacy `usePastedContent.handlePaste` is gone.
       // Reproduce its threshold check (500 chars) inline — long pastes
       // become a `pasted-text` attachment instead of streaming into the
