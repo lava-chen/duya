@@ -146,6 +146,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [434-skill-tool-expose-and-system-gui](./active/434-skill-tool-expose-and-system-gui.md) | Skill 目录 XML 化对齐 pi（`<available_skills>` + location + read 加载）+ 系统级内置 skill（`.system`）GUI 可见但只读 | P1 | ✅ 代码完成，测试通过（2026-08-20） |
 | [435-cli-skill-listing-alignment](./active/435-cli-skill-listing-alignment.md) | CLI `duya skill list` 显示层对齐 GUI：skillService 补齐 project/custom/system 来源 + resolver 优先级扩展 + system 不可禁用 | P1 | ✅ 代码完成，测试通过（2026-08-20） |
 | [416-inline-task-row](./active/416-inline-task-row.md) | 任务胶囊从输入框外移到输入框内部顶部，弹窗样式对齐 settings 弹窗 | P1 | 🟡 Planning |
+| [438-focus-mode](./active/438-focus-mode.md) | Focus 专注模式（per-session）：slash 弹窗开关，整轮输出合并为一个大 group、只显示最终回复；内存态不持久化 | P1 | ✅ 实现完成（2026-08-22） |
 | [41-onboarding-experience-overhaul](./active/41-onboarding-experience-overhaul.md) | Onboarding experience overhaul | P0 | 待开始 |
 | [42-document-parser-service](./active/42-document-parser-service.md) | Document parser service | P1 | Phase 1 待开始 |
 | [43-startup-landing](./active/43-startup-landing.md) | First-launch branded landing page | P1 | Phase 1 ✅ |

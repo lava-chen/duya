@@ -53,6 +53,7 @@ import { isKeylessLocalProvider } from '@/lib/providers';
 import { modelCapabilityService } from '@/lib/providers/models/ModelCapabilityService';
 import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { SlashCommandPopover } from './SlashCommandPopover';
+import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 import { RichTextInput } from './RichTextInput';
 import { VoiceButton } from './VoiceButton';
 import { applyDictation } from '@/lib/voice/dictation';
@@ -623,6 +624,12 @@ export function MessageInput({
     closePopover,
     sessionId,
   });
+
+  // Per-session Focus display mode — toggled from the slash popover.
+  const focusEnabled = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
+  const handleToggleFocus = useCallback(() => {
+    if (sessionId) useFocusModeStore.getState().toggle(sessionId);
+  }, [sessionId]);
 
   // Open the `@` context popup (添加附件 + mode + MCP) — the plus button opens
   // this directly. Populates items from the static `contextItems` builder.
@@ -1823,6 +1830,10 @@ export function MessageInput({
           onAddFiles={() => fileInputRef.current?.click()}
           onCompact={onCompact}
           isCompacting={isCompacting}
+
+          focusEnabled={focusEnabled}
+          onToggleFocus={handleToggleFocus}
+
           onRequestRecap={requestRecap}
           sessionId={sessionId}
           // Mode state (unified activeModes set, plan 224 Phase 5)

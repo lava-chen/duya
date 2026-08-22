@@ -21,7 +21,16 @@
 
 import type { ActionItem, Segment, SegmentEntry } from './types';
 
-export function computeSegments(actions: ActionItem[]): Segment[] {
+export interface ComputeSegmentsOptions {
+  /** Focus mode (per-session toggle): suspend the usual group-breaking
+   *  rules so the ENTIRE action list collapses into one big run. Text /
+   *  widget actions are skipped entirely (hidden by the renderers — only
+   *  the final output shows); hooks join the run instead of flushing it.
+   *  The result is a single Group carrying every work entry of the round. */
+  focus?: boolean;
+}
+
+export function computeSegments(actions: ActionItem[], opts: ComputeSegmentsOptions = {}): Segment[] {
   const segments: Segment[] = [];
   let run: SegmentEntry[] = [];
 
@@ -46,13 +55,21 @@ export function computeSegments(actions: ActionItem[]): Segment[] {
         isStreaming: action.isStreaming,
       });
     } else if (action.kind === 'hook') {
+      if (opts.focus) {
+        // Focus mode: hooks join the single big run instead of flushing
+        // it — everything of the round stays in one group.
+        run.push({ kind: 'hook', hook: action.hook });
+        continue;
+      }
       // Plan 437: hooks are their own row. Flush the surrounding run
       // first (so tool groups stay tight), then push a single-entry
       // segment for this hook.
       flush();
       segments.push({ kind: 'single', entry: { kind: 'hook', hook: action.hook } });
-    } else {
-      // text / widget (and any future kind) flush the run.
+    } else if (!opts.focus) {
+      // text / widget (and any future kind) flush the run. In focus mode
+      // they are skipped entirely — the run stays open so all work
+      // merges across text boundaries into one big group.
       flush();
     }
   }
