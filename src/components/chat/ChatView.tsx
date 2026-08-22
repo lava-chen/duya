@@ -11,6 +11,8 @@ import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
+import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
 import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, attachToExistingStream, getSnapshot } from '@/lib/stream-session-manager';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
@@ -1201,6 +1203,19 @@ export function ChatView({
     };
   }, []);
 
+  // End-of-turn next-step suggestions: predicted follow-up prompts shown
+  // as cards at the end of the message list. Clicking one prefills (not
+  // sends) the input box.
+  const {
+    suggestions: nextStepSuggestions,
+    dismiss: dismissNextStepSuggestions,
+  } = useNextStepSuggestions({ sessionId, isStreaming });
+
+  const handleNextStepSelect = useCallback((value: string) => {
+    dispatchPrefillChatInput(value);
+    dismissNextStepSuggestions();
+  }, [dismissNextStepSuggestions]);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       ((window as unknown) as Record<string, unknown>).__widgetSendMessage = (text: string) => {
@@ -1373,6 +1388,8 @@ export function ChatView({
               sessionId={sessionId}
               onEditSend={handleEditSend}
               compactionStatus={compactionStatus}
+              nextStepSuggestions={nextStepSuggestions}
+              onNextStepSelect={handleNextStepSelect}
             />
           </div>
         )}

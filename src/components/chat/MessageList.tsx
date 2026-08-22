@@ -6,6 +6,7 @@ import React, { useEffect, useRef, useMemo, useCallback, forwardRef, useImperati
 import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
+import { NextStepSuggestions } from './NextStepSuggestions';
 import { Button } from '@/components/ui/Button';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
@@ -25,6 +26,9 @@ interface MessageListProps {
   sessionId: string;
   onEditSend?: (messageId: string, text: string) => void;
   compactionStatus?: 'idle' | 'compacting' | 'done' | 'error';
+  /** Predicted follow-up prompts shown as cards at the end of the stream. */
+  nextStepSuggestions?: string[];
+  onNextStepSelect?: (value: string) => void;
 }
 
 interface GroupedMessage {
@@ -496,6 +500,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   sessionId,
   onEditSend,
   compactionStatus = 'idle',
+  nextStepSuggestions,
+  onNextStepSelect,
 }, ref) {
   const containerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -972,6 +978,14 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             </span>
             <div className="compact-boundary-line" />
           </div>
+        )}
+
+        {/* End-of-turn next-step suggestion cards */}
+        {!isStreaming && onNextStepSelect && nextStepSuggestions && nextStepSuggestions.length > 0 && (
+          <NextStepSuggestions
+            suggestions={nextStepSuggestions}
+            onSelect={onNextStepSelect}
+          />
         )}
       </div>
     </div>
