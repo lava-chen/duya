@@ -2,6 +2,11 @@
 
 import { useSettings } from "@/hooks/useSettings";
 import { useLinkOpener } from "@/hooks/useLinkOpener";
+import {
+  setBusyMessageMode,
+  useBusyMessageModeValue,
+  type BusyMessageMode,
+} from "@/stores/busy-message-mode-store";
 import { useIPC } from "@/hooks/useIPC";
 import {
   SpinnerGapIcon,
@@ -44,6 +49,7 @@ export function GeneralSection() {
   const { t, locale, setLocale } = useTranslation();
   const { settings, loading, error, save, saving } = useSettings();
   const { openLinksInExternalBrowser, setOpenLinksInExternalBrowser } = useLinkOpener();
+  const busyMessageMode = useBusyMessageModeValue();
   const { listProviders } = useIPC();
 
   const [autoStart, setAutoStart] = useState(false);
@@ -519,6 +525,16 @@ export function GeneralSection() {
             description={t("settings.general.openLinksInExternalBrowserDesc")}
             checked={openLinksInExternalBrowser}
             onCheckedChange={setOpenLinksInExternalBrowser}
+          />
+          <SettingsSelectRow
+            label={t("settings.general.busyMessageMode")}
+            description={t("settings.general.busyMessageModeDesc")}
+            value={busyMessageMode}
+            onValueChange={(value) => setBusyMessageMode(value as BusyMessageMode)}
+            options={[
+              { value: "followup", label: t("settings.general.busyMessageModeFollowup") },
+              { value: "queued", label: t("settings.general.busyMessageModeQueued") },
+            ]}
           />
           </SettingsCard>
       </SettingsSection>
