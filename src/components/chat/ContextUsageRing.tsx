@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '@/types/message';
 import { useContextUsage, type ContextUsage } from '@/hooks/useContextUsage';
-import { formatTokensPi } from '@/lib/context-usage-utils';
+import { formatTokensPi, type ModelPricing } from '@/lib/context-usage-utils';
 import { Button } from '@/components/ui/Button';
 
 interface ContextUsageRingProps {
@@ -11,6 +11,9 @@ interface ContextUsageRingProps {
   sessionId?: string;
   modelName?: string;
   contextWindow?: number;
+  /** Real per-model pricing (provider_model_capabilities). When absent the
+   *  hover line hides the $ figure instead of pricing at hardcoded rates. */
+  pricing?: ModelPricing;
   onCompress?: () => void;
   isCompacting?: boolean;
 }
@@ -26,10 +29,11 @@ export function ContextUsageRing({
   sessionId,
   modelName,
   contextWindow,
+  pricing,
   onCompress,
   isCompacting = false,
 }: ContextUsageRingProps) {
-  const usage = useContextUsage(messages, modelName, contextWindow, sessionId);
+  const usage = useContextUsage(messages, modelName, contextWindow, sessionId, pricing);
   const [hovered, setHovered] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
