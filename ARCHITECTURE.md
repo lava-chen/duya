@@ -1140,6 +1140,15 @@ duya/
   `claimBatch`，把内容作为临时 runtime user guidance 注入当前 run；该临时包装
   不会持久化到普通消息历史。
 
+发送时写入的默认 kind 由 `agent.busy_message_mode`
+（`'followup' | 'queued'`，默认 `'queued'`）决定；设置入口在
+Settings → General（"Messages sent while the agent is busy"），气泡上的
+Guide 按钮仍可对单条行事后翻转。
+
+关键文件：`src/components/chat/ChatView.tsx`、
+`src/lib/stream-session-manager.ts`、`electron/db/core/mailbox.ts`、
+`packages/agent/src/agent/DuyaAgent.ts`。
+
 关键文件：`src/components/chat/ChatView.tsx`、
 `src/lib/stream-session-manager.ts`、`electron/db/core/mailbox.ts`、
 `packages/agent/src/agent/DuyaAgent.ts`。
