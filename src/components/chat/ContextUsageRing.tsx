@@ -159,6 +159,15 @@ export function ContextUsageRing({
                 </span>
               </>
             )}
+            {/* No usage data yet (brand-new session / history without
+                tokenUsage): show a dim dash instead of a fake 0%. */}
+            {!usage.hasData && (
+              <span className="context-usage-ring-group">
+                <span className="context-usage-ring-stat context-usage-ring-stat--dim">
+                  —
+                </span>
+              </span>
+            )}
             {onCompress && usage.state !== 'normal' && (
               <Button
                 type="button"
