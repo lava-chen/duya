@@ -1,11 +1,12 @@
 // src/components/layout/PanelHeader.tsx
 "use client";
 
-import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
+import { forwardRef, useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type ReactNode } from "react";
 import { PlusIcon, XIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePanel } from "@/hooks/usePanel";
-import { getPageDescriptor, PAGE_REGISTRY, type PageDescriptor, type PageId } from "./panels/registry";
+import { getPageDescriptor, PAGE_REGISTRY, type PageDescriptor, type PageId, type PageTab } from "./panels/registry";
+import { fileExtensionFromName, getFileTypeIcon } from "@/components/file-tree/file-type-icon";
 import { useConversationStore } from "@/stores/conversation-store";
 
 interface DragState {
@@ -180,7 +181,7 @@ export function PanelHeader() {
                   onError={(event) => { event.currentTarget.style.display = "none"; }}
                 />
               ) : (
-                <Icon size={14} stroke={1.5} />
+                <TabFileTypeIcon tab={tab} fallback={<Icon size={14} stroke={1.5} />} />
               )}
               <span className="panel-header-tab-title">{tab.title}</span>
               <CloseTabButton tabId={tab.id} onClose={() => closePanel(tab.id)} />
@@ -316,4 +317,21 @@ function CloseTabButton({ tabId, onClose }: { tabId: string; onClose: () => void
       <XIcon size={11} stroke={2} />
     </span>
   );
+}
+
+/**
+ * Per-extension icon for file-backed tabs (preview / office), resolved
+ * through the same mapping the project file tree uses — a markdown tab
+ * shows the md mark, a TS tab the ts mark. Falls back to the page
+ * descriptor's static icon when the tab has no file path or the
+ * extension is unknown.
+ */
+function TabFileTypeIcon({ tab, fallback }: { tab: PageTab; fallback: ReactNode }) {
+  const filePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
+  if (filePath) {
+    const fileName = filePath.split(/[/\\]/).pop() ?? "";
+    const Icon = getFileTypeIcon(fileExtensionFromName(fileName));
+    if (Icon) return <Icon size={14} stroke={1.5} />;
+  }
+  return <>{fallback}</>;
 }
