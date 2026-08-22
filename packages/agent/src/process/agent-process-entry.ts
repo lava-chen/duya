@@ -2275,7 +2275,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           (typeof agent.getSystemContextTokensEstimate === 'function'
             ? agent.getSystemContextTokensEstimate()
             : 0) || systemPromptTokensEstimate;
-        return msgTokens + systemTokens;
+        // Cap at the model's budget so a long session whose messages lost
+        // `tokenUsage` (e.g. legacy format / re-import) doesn't show 600%+
+        // context — the local estimate inflates ContentBlock content by
+        // ~30-50% from JSON serialization overhead, and any pre-compaction
+        // session > 300 messages will exceed the 1M window in raw chars
+        // even though the LLM never saw that much. Use 95% of max so the
+        // ring still shows "critical" warning rather than faking 0.
+        const budgetMax = agent.getContextStats().maxTokens || 0;
+        const estimated = msgTokens + systemTokens;
+        return budgetMax > 0 ? Math.min(estimated, budgetMax * 0.95) : estimated;
       }
       // Authoritative base + estimated tokens of messages appended since the
       // request that produced that base.
