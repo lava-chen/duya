@@ -374,6 +374,126 @@ export function buildSnippet(content, terms, opts = {}) {
 }
 
 /**
+ * Line-windowed snippet for the additionalContext block (hook output).
+ *
+ * Returns the matched line plus `before` lines above and `after` lines
+ * below — the user's literal complaint with the previous two designs:
+ *   - the 220-char single-line snippet (plan 437 fallback) was too
+ *     narrow and often clipped the paragraph that actually answered;
+ *   - the "top hit ships full body" branch (plan 430 contract) was too
+ *     wide and dumped the entire memory file into chat context.
+ *
+ * Bounded:
+ *   - at most `before` / `after` lines on each side of the anchor line;
+ *   - when the anchor line itself is longer than `lineMaxLen` (a
+ *     one-line blob fixture), character-window around the term so the
+ *     output stays bounded without losing the matched phrase;
+ *   - hard-capped to `maxLen` total chars so a doc full of long
+ *     paragraphs still produces a small breadcrumb;
+ *   - prefixed/suffixed with "…" whenever the window does not span the
+ *     full body so a clipped preview is never mistaken for the doc.
+ *
+ * Vector-only hits (no literal term) fall back to the body head,
+ * identical to {@link buildSnippet}.
+ */
+export function buildLineSnippet(content, terms, opts = {}) {
+  const before = typeof opts.before === 'number' ? opts.before : 6;
+  const after = typeof opts.after === 'number' ? opts.after : 6;
+  const maxLen = typeof opts.maxLen === 'number' ? opts.maxLen : 4_000;
+  const lineMaxLen = typeof opts.lineMaxLen === 'number' ? opts.lineMaxLen : 800;
+
+  const body = stripFrontmatter(content);
+  if (!body.trim()) return '';
+
+  const lines = body.split('\n');
+  const usable = [...new Set((terms ?? [])
+    .map((t) => String(t).trim().toLowerCase())
+    .filter((t) => t.length >= 2))];
+
+  // Find the first line containing any usable term; remember the in-line
+  // offset so we can character-window within the anchor line if it is a
+  // one-line blob (anchorLineTooLong branch below).
+  let anchor = -1;
+  let anchorTermIdx = -1;
+  if (usable.length > 0) {
+    for (let i = 0; i < lines.length; i += 1) {
+      const lower = lines[i].toLowerCase();
+      for (const t of usable) {
+        const at = lower.indexOf(t);
+        if (at >= 0) {
+          anchor = i;
+          anchorTermIdx = at;
+          break;
+        }
+      }
+      if (anchor !== -1) break;
+    }
+  }
+  if (anchor === -1) anchor = 0;
+
+  const windowStart = Math.max(0, anchor - before);
+  const windowEnd = Math.min(lines.length, anchor + after + 1);
+  const above = lines.slice(windowStart, anchor);
+  const below = lines.slice(anchor + 1, windowEnd);
+  let anchorLine = lines[anchor];
+
+  // If the anchor line is itself longer than lineMaxLen (single-line
+  // blob), character-window around the term so the matched phrase
+  // survives without returning 10 KB of unrelated text.
+  const anchorLineTooLong = anchorLine.length > lineMaxLen;
+  if (anchorLineTooLong && anchorTermIdx >= 0) {
+    const lower = anchorLine.toLowerCase();
+    let idx = -1;
+    for (const t of usable) {
+      const at = lower.indexOf(t);
+      if (at >= 0 && (idx === -1 || at < idx)) idx = at;
+    }
+    if (idx >= 0) {
+      const beforeChars = Math.floor(lineMaxLen * 0.4);
+      let start = Math.max(0, idx - beforeChars);
+      let end = Math.min(anchorLine.length, start + lineMaxLen);
+      if (start > 0) {
+        const ws = anchorLine.indexOf(' ', start);
+        if (ws !== -1 && ws < end && ws + 1 <= idx) start = ws + 1;
+      }
+      if (end < anchorLine.length) {
+        const lastWs = anchorLine.lastIndexOf(' ', end);
+        if (lastWs > idx && end - lastWs < 24) end = lastWs;
+      }
+      anchorLine =
+        (start > 0 ? '…' : '') +
+        anchorLine.slice(start, end).trim() +
+        (end < anchorLine.length ? '…' : '');
+    } else {
+      anchorLine =
+        anchorLine.slice(0, lineMaxLen) +
+        (anchorLine.length > lineMaxLen ? '…' : '');
+    }
+  }
+
+  // Reassemble: a leading "…" on its own line if there were dropped
+  // lines above, a trailing "…" on its own line if there were dropped
+  // lines below. Anchoring on line boundaries (not character offsets)
+  // is the user's whole point — they want the matched line plus the
+  // surrounding lines, not a normalized character window.
+  const parts = [];
+  if (above.length > 0) parts.push('…\n' + above.join('\n'));
+  parts.push(anchorLine);
+  if (below.length > 0) parts.push(below.join('\n') + '\n…');
+  let text = parts.join('\n');
+
+  // Hard-cap total length, trim back to the last newline so we never
+  // cut mid-line; single trailing "…" marker.
+  if (text.length > maxLen) {
+    text = text.slice(0, maxLen);
+    const lastNl = text.lastIndexOf('\n');
+    if (lastNl > maxLen - 200 && lastNl > 0) text = text.slice(0, lastNl);
+    text = text.trimEnd() + '…';
+  }
+  return text;
+}
+
+/**
  * FTS5 trigram match over prompt terms (OR semantics, CJK friendly) plus
  * a LIKE fallback for 2-char CJK terms (调度/钩子 — trigram cannot form a
  * 2-gram token). Rows are ranked by bm25 (not arbitrary rowid order) and
@@ -521,91 +641,66 @@ export async function retrieve(dbPath, prompt, provider, settings) {
 // ============================================================================
 
 /**
- * Per-hit body cap (chars of the frontmatter-stripped body) used by
- * {@link formatContext} for the **top hit only**. The top hit is the
- * memory the user is most likely asking about — plan 430 ships its
- * full body so the model doesn't have to spend a tool call to read it.
- * Lower-ranked hits fall back to {@link SNIPPET_MAX_LEN}-windowed
- * snippets around the matched terms, since per plan 430 the previous
- * snippet-only design was useless for the top hit but is acceptable as
- * a breadcrumb for the rest (the path stays visible so the model can
- * `read` any of them on demand).
- */
-export const FORMAT_TOP_HIT_BODY_CHARS = 4_000;
-
-/**
- * Window length used by {@link formatContext} for non-top hits —
- * identical to {@link SNIPPET_MAX_LEN} so the breadcrumb preview keeps
- * the same readability characteristics as a free-standing snippet.
- */
-export const FORMAT_OTHER_HIT_SNIPPET_CHARS = SNIPPET_MAX_LEN;
-
-/**
- * Total additionalContext budget. The hook executor caps JSON stdout at
- * 64 KB and the model context is the bigger ceiling; we use 8 KB so the
- * rendered block stays small enough to read at a glance, and a low-
- * ranked hit can be dropped instead of the block being arbitrarily
- * clipped mid-paragraph. Plan 430 used 24 KB (top-5 full bodies) which
- * the user reported as too noisy in the chat-flow hook row (plan 437);
- * this keeps the top hit intact and snippets everything else.
+ * Total additionalContext budget (chars). The hook executor caps JSON
+ * stdout at 64 KB and the model context is the bigger ceiling; 8 KB
+ * keeps the block readable at a glance, and a low-ranked hit can be
+ * dropped whole instead of the block being arbitrarily clipped mid-
+ * paragraph. Previous plans: 24 KB (plan 430, top-5 full bodies — too
+ * noisy) → 8 KB (plan 437, top full body + snippets) → 8 KB (current,
+ * all hits line-windowed — top hit no longer bloats the block).
  */
 export const FORMAT_TOTAL_CHARS = 8_000;
 
 /**
+ * Per-hit line-window sizes used by {@link formatContext}. The top hit
+ * gets a wider window because it is the doc the user is most likely
+ * asking about; lower-ranked hits are breadcrumbs the model can `read`
+ * on demand, so a tighter window suffices.
+ */
+export const FORMAT_TOP_HIT_LINES = { before: 8, after: 8 };
+export const FORMAT_OTHER_HIT_LINES = { before: 3, after: 3 };
+
+/**
  * Render retrieved rows as the injected `### 相关记忆` context block.
  *
- * Hybrid (plan 437): the top hit ships its full body so the model has
- * the answer in-context (plan 430 contract — the previous snippet-only
- * output was useless because the path is rarely readable mid-session
- * and snippets miss the part of the doc the user is asking about).
- * Lower-ranked hits ship a {@link buildSnippet}-windowed preview around
- * the matched terms + path, so the model can decide which one to read
- * in full via the `read` tool. Bodies are hard-capped per-hit
- * ({@link FORMAT_TOP_HIT_BODY_CHARS} / {@link SNIPPET_MAX_LEN}) and the
- * union is hard-capped to {@link FORMAT_TOTAL_CHARS}; lower-ranked hits
- * are dropped (not clipped mid-doc) when the union would exceed the
- * total budget, so the highest-scored memories always land intact.
+ * Line-windowed snippet per hit — the matched line plus a few lines on
+ * either side (see {@link buildLineSnippet}). This supersedes both
+ * earlier contracts:
+ *   - plan 430 shipped the top hit's full body (with a 4 KB cap and a
+ *     `read-full` marker), which the user flagged as too noisy: a
+ *     matched term deep in a doc pulled the entire doc into context;
+ *   - plan 437 used a 220-char single-line snippet for non-top hits,
+ *     which clipped the paragraph that actually answered.
+ *
+ * The union is hard-capped to {@link FORMAT_TOTAL_CHARS}; lower-ranked
+ * hits are dropped (not clipped mid-doc) when the union would exceed
+ * the budget so the highest-scored memories always land intact.
  *
  * @param hits  ordered rows from `retrieve()` (already relevance-ranked).
- * @param opts  perHitBody override (testing); total override (testing).
+ * @param opts  perHitWindow override (testing); total override (testing).
  */
 export function formatContext(hits, opts = {}) {
   if (!Array.isArray(hits) || hits.length === 0) return '';
-  const topBody = typeof opts.perHitBody === 'number' ? opts.perHitBody : FORMAT_TOP_HIT_BODY_CHARS;
   const total = typeof opts.total === 'number' ? opts.total : FORMAT_TOTAL_CHARS;
+  const win = (i) => {
+    if (typeof opts.perHitWindow === 'function') return opts.perHitWindow(i) ?? (i === 0 ? FORMAT_TOP_HIT_LINES : FORMAT_OTHER_HIT_LINES);
+    if (opts.perHitWindow && typeof opts.perHitWindow === 'object') return opts.perHitWindow;
+    return i === 0 ? FORMAT_TOP_HIT_LINES : FORMAT_OTHER_HIT_LINES;
+  };
 
   const blocks = [];
   let used = '### 相关记忆'.length;
   for (let i = 0; i < hits.length; i += 1) {
     const h = hits[i];
-    const body = stripFrontmatter(String(h.content ?? '')).trim();
-    let bodySlice;
-    let truncated = false;
-    if (i === 0) {
-      // Top hit: full body (plan 430 contract), hard-capped.
-      bodySlice = body;
-      if (bodySlice.length > topBody) {
-        bodySlice = bodySlice.slice(0, topBody);
-        truncated = true;
-      }
-    } else {
-      // Non-top hit: snippet windowed around the matched terms (or the
-      // body head when no term matches — vector-only rows). Snippet
-      // anchors on the prompt's terms so the breadcrumb actually shows
-      // the part the user asked about.
-      bodySlice = buildSnippet(body, h.matched_terms ?? [], {
-        maxLen: FORMAT_OTHER_HIT_SNIPPET_CHARS,
-      });
-      if (!bodySlice) {
-        // Empty body or zero-length snippet — drop this hit whole rather
-        // than emit a useless empty bullet.
-        continue;
-      }
-    }
+    const body = stripFrontmatter(String(h.content ?? ''));
+    const window = win(i);
+    const bodySlice = buildLineSnippet(body, h.matched_terms ?? [], {
+      before: window.before,
+      after: window.after,
+    });
+    if (!bodySlice) continue;
     const header = `- ${h.title}\n  path: ${path.join(h.root, h.rel_path)}`;
-    const block = truncated
-      ? `${header}\n\n${bodySlice}\n\n<!-- read-full: this hit was truncated to ${topBody} chars; the path above points at the full memory file -->`
-      : `${header}\n\n${bodySlice}`;
+    const block = `${header}\n\n${bodySlice}`;
     const blockLen = block.length + 2; // trailing "\n\n" between hits
     if (used + blockLen > total) {
       // Lower-ranked hits are dropped whole — never half-clipped.
