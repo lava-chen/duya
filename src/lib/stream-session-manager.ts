@@ -1966,12 +1966,12 @@ class StreamSessionManager {
     console.log(`[stream-session-manager] handleDoneEvent: ${sessionId.slice(0, 8)}, streamId=${streamId.slice(0, 8)}, reason=${data?.reason ?? 'completed'}`);
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
-    // The stream is over: drop the in-flight live snapshot so the context
-    // ring falls back to the authoritative persisted-message scan instead of
-    // pinning the last streaming value forever (it would go stale after
-    // rewind / compaction / DB edits). The next turn's first `token_usage`
-    // event re-populates it.
-    useContextUsageStore.getState().clearLive(sessionId);
+    // Turn over: keep the live context-usage snapshot. The worker's tracker
+    // is authoritative across turns (its base survives re-init), so clearing
+    // here only opens a window where the renderer falls back to the persisted
+    // scan — which lags behind (tokenUsage lands in the DB at turn end) and
+    // made the ring flicker to 0% between turns. Rewind / compaction /
+    // errors invalidate explicitly at their own completion points instead.
     const reason = data?.reason;
 
     // Early-stop reasons (max_turns / repeated_tool_calls) mean the run ended

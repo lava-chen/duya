@@ -19,6 +19,7 @@ import {
   type Message as IpcMessage,
 } from '@/lib/ipc-client';
 import { getAgentServerClient } from '@/lib/agent-http-client';
+import { useContextUsageStore } from '@/stores/context-usage-store';
 import { registerLoadedMessages } from '@/lib/stream-session-manager';
 
 // Thread interface - uses camelCase for frontend consistency
@@ -653,6 +654,10 @@ export const useConversationStore = create<ConversationState>()(
       rewindToMessage: async (threadId, messageId) => {
         const result = await truncateMessagesAfterIPC(threadId, messageId);
         if (result.deletedCount === 0) return;
+        // History shrank: the live snapshot describes the pre-rewind
+        // context, so drop it and let the reloaded messages (or the next
+        // turn's token_usage) drive the ring.
+        useContextUsageStore.getState().clearLive(threadId);
         set((state) => ({
           messages: { ...state.messages, [threadId]: [] },
         }));
@@ -662,6 +667,8 @@ export const useConversationStore = create<ConversationState>()(
       deleteMessageAndAfter: async (threadId, messageId) => {
         const result = await truncateMessagesFromInclusiveIPC(threadId, messageId);
         if (result.deletedCount === 0) return;
+        // History shrank — same invalidation as rewindToMessage.
+        useContextUsageStore.getState().clearLive(threadId);
         set((state) => ({
           messages: { ...state.messages, [threadId]: [] },
         }));
