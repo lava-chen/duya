@@ -22,7 +22,7 @@ import type { NetworkEnvironment } from '../types.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type SearchEngineId = 'google' | 'bing' | 'baidu' | 'duckduckgo' | 'brave' | 'yahoo';
+export type SearchEngineId = 'google' | 'bing' | 'baidu' | 'duckduckgo' | 'brave' | 'yahoo' | 'github';
 export type SearchEngineChoice = SearchEngineId | 'auto';
 
 /**
@@ -54,7 +54,7 @@ export function hasCJK(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
-const ALL_ENGINES: SearchEngineId[] = ['google', 'bing', 'baidu', 'duckduckgo', 'brave', 'yahoo'];
+const ALL_ENGINES: SearchEngineId[] = ['google', 'bing', 'baidu', 'duckduckgo', 'brave', 'yahoo', 'github'];
 
 /**
  * Deterministically order the engine chain.
@@ -63,6 +63,8 @@ const ALL_ENGINES: SearchEngineId[] = ['google', 'bing', 'baidu', 'duckduckgo', 
  *   ordered by query language (baidu is stronger for CJK, bing for English)
  * - overseas: google leads
  * - unknown: bing leads (generally reachable from both sides)
+ * - github is appended as a code/repo-specialized fallback (never leads)
+ *   so general queries still prefer general engines.
  */
 export function selectEngines(
   engine: SearchEngineChoice,
@@ -79,13 +81,17 @@ export function selectEngines(
 
   switch (networkEnv) {
     case 'domestic':
-      chain = cjk ? ['baidu', 'bing', 'duckduckgo', 'brave', 'yahoo', 'google'] : ['bing', 'baidu', 'duckduckgo', 'brave', 'yahoo', 'google'];
+      chain = cjk
+        ? ['baidu', 'bing', 'duckduckgo', 'brave', 'yahoo', 'github', 'google']
+        : ['bing', 'baidu', 'duckduckgo', 'brave', 'yahoo', 'github', 'google'];
       break;
     case 'overseas':
-      chain = cjk ? ['google', 'baidu', 'bing', 'duckduckgo', 'brave', 'yahoo'] : ['google', 'bing', 'duckduckgo', 'brave', 'yahoo', 'baidu'];
+      chain = cjk
+        ? ['google', 'baidu', 'bing', 'duckduckgo', 'brave', 'yahoo', 'github']
+        : ['google', 'bing', 'duckduckgo', 'brave', 'yahoo', 'github', 'baidu'];
       break;
     default:
-      chain = ['bing', 'duckduckgo', 'brave', 'baidu', 'yahoo', 'google'];
+      chain = ['bing', 'duckduckgo', 'brave', 'baidu', 'yahoo', 'github', 'google'];
   }
   return chain;
 }
@@ -105,6 +111,11 @@ export function buildSerpUrl(engine: SearchEngineId, query: string, maxResults: 
       return `https://search.brave.com/search?q=${q}`;
     case 'yahoo':
       return `https://search.yahoo.com/search?p=${q}`;
+    case 'github':
+      // GitHub search defaults to "repositories" type — covers code/issues/wiki
+      // when the model wants source code / repo discovery. `type` is fixed
+      // here; the model can navigate deeper via the BrowserTool navigate op.
+      return `https://github.com/search?q=${q}&type=repositories`;
   }
 }
 
@@ -199,6 +210,52 @@ export function parseDuckDuckGoHtml(html: string, maxResults: number): SearchIte
       title: links[i].title.slice(0, 200),
       url: links[i].url,
       snippet: (snippets[i] ?? '').slice(0, 300),
+    });
+  }
+  return items;
+}
+
+/**
+ * Parse GitHub repository search SERP HTML fetched over plain HTTP.
+ *
+ * GitHub's SSR markup wraps each result in a div with `data-testid="search-result"`
+ * (React Testing Library convention, stable across redesigns). Each block has:
+ *   - an <a href="/<owner>/<repo>"> with the title
+ *   - a <p class*="search-match"> describing the repository
+ * Older layouts also used `Box-row`; the regex tolerates either.
+ *
+ * Returns `[]` when the page is a sign-in wall or CAPTCHA anomaly rather
+ * than a SERP — keeps the HTTP fallback chain honest.
+ */
+export function parseGitHubHtml(html: string, maxResults: number): SearchItem[] {
+  const items: SearchItem[] = [];
+  // Lazily split: keep delimiters so we can include them in the per-block
+  // capture without losing the closing of the previous block.
+  const blockRegex =
+    /<div[^>]*data-testid="search-result"[^>]*>([\s\S]*?)(?=<div[^>]*data-testid="search-result"|<\/main>)/g;
+  let m: RegExpExecArray | null;
+  while ((m = blockRegex.exec(html)) !== null && items.length < maxResults) {
+    const block = m[1];
+    // Title link: matches <a href="/owner/repo" ...>title</a>. Some blocks use
+    // <a data-testid="repository-link">; the href pattern is the invariant.
+    const linkM = block.match(/<a[^>]+href="(\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!linkM) continue;
+    const href = linkM[1];
+    // Exclude known non-repo GitHub paths (sponsor pages, settings, marketplace,
+    // topics, explore, etc.) that also match the two-segment pattern.
+    if (/^\/(sponsors|settings|marketplace|topics|explore|orgs|users|login|signup|new|notifications|pulls|issues|search)(\/|$)/.test(href)) continue;
+    const title = stripTags(linkM[2]);
+    if (!title) continue;
+    // Description: GitHub wraps matches in <mark class*="search-match">; the
+    // outer <p> is the natural snippet container. Fallback to first <p>.
+    const descM =
+      block.match(/<p[^>]*class="[^"]*search-match[^"]*"[^>]*>([\s\S]*?)<\/p>/) ||
+      block.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    items.push({
+      rank: 0,
+      title: title.slice(0, 200),
+      url: `https://github.com${href}`,
+      snippet: (descM ? stripTags(descM[1]) : '').slice(0, 300),
     });
   }
   return items;
@@ -370,6 +427,28 @@ const collect = () => {
   }
   return results;
 };`,
+    github: `
+const collect = () => {
+  const results = [];
+  const blocks = document.querySelectorAll('[data-testid="search-result"]');
+  for (let i = 0; i < Math.min(blocks.length, 30); i++) {
+    const el = blocks[i];
+    // Pick the first /owner/repo link — GitHub uses absolute /-rooted paths
+    // for repo links in the SERP. Skip avatar/user links by shape.
+    const a = el.querySelector('a[href^="/"][data-hovercard-type="repository"]')
+           || el.querySelector('a[data-testid="repository-link"]')
+           || el.querySelector('a[href^="/"][href*="/"]');
+    if (!a) continue;
+    const href = (a.getAttribute('href') || '').split('?')[0].split('#')[0];
+    if (!/^\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/?$/.test(href)) continue;
+    const title = (a.textContent || '').trim();
+    if (!title) continue;
+    const descEl = el.querySelector('p[class*="search-match"]') || el.querySelector('p');
+    const snippet = descEl ? (descEl.textContent || '').trim() : '';
+    push(results, title, 'https://github.com' + href.replace(/\\/$/, ''), snippet);
+  }
+  return results;
+};`,
   };
 
   return [
@@ -400,7 +479,7 @@ const searchSchema = z.object({
   query: z.string().min(1).describe('Search query text'),
   engine: z.preprocess(
     (val) => (typeof val === 'string' ? val.toLowerCase().trim() : val),
-    z.enum(['auto', 'google', 'bing', 'baidu', 'duckduckgo', 'brave', 'yahoo']).optional().default('auto'),
+    z.enum(['auto', 'google', 'bing', 'baidu', 'duckduckgo', 'brave', 'yahoo', 'github']).optional().default('auto'),
   ).describe("Search engine. 'auto' picks deterministically from the probed network environment (recommended)."),
   maxResults: z.preprocess(
     (val) => {
@@ -472,7 +551,8 @@ export const searchAction: ActionHandler<z.infer<typeof searchSchema>> = {
 
     // Path 2: JS-free HTTP fallback chain. Bing serves parseable SERP HTML to
     // plain HTTP clients (works in both domestic and overseas networks);
-    // DuckDuckGo's html endpoint is the secondary attempt.
+    // DuckDuckGo's html endpoint is the secondary attempt; GitHub's
+    // server-rendered search page also works without JS for the repo SERP.
     const httpChain: Array<{ engine: SearchEngineId; url: string; parse: (html: string) => SearchItem[] }> = [
       {
         engine: 'bing',
@@ -486,6 +566,11 @@ export const searchAction: ActionHandler<z.infer<typeof searchSchema>> = {
         engine: 'duckduckgo',
         url: buildSerpUrl('duckduckgo', data.query, data.maxResults),
         parse: html => parseDuckDuckGoHtml(html, data.maxResults),
+      },
+      {
+        engine: 'github',
+        url: buildSerpUrl('github', data.query, data.maxResults),
+        parse: html => parseGitHubHtml(html, data.maxResults),
       },
     ];
 
