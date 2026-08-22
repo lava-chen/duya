@@ -2289,6 +2289,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Authoritative base + estimated tokens of messages appended since the
       // request that produced that base.
       const msgs = agent.getMessages();
+      // Append-only invariant: between two requests the timeline can only
+      // grow. A shorter one means rewind / compaction / external truncation
+      // rebased the history and the base no longer describes it — drop the
+      // base (cumulative spend totals stay) and let the native estimate
+      // carry the ring until the next `result` re-establishes it.
+      if (msgs.length < liveBaseMessageCount) {
+        hasLiveBase = false;
+        liveBoundaryPending = false;
+        return computeLiveUsed();
+      }
       let boundary = liveBaseMessageCount;
       if (liveBoundaryPending) {
         // Exactly one assistant message is pushed right after the last
@@ -3081,23 +3091,30 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             sendToMain({ type: 'ready', sessionId: initMsg.sessionId, status: 'deferred', reason: 'chat_in_progress' });
             break;
           }
+          const previousSessionId = sessionId;
           sessionId = initMsg.sessionId;
           existingMessageCount = 0;
-          // Fresh session: clear any live context-usage base carried over
-          // from a previous session this worker process served.
-          liveBaseContext = 0;
-          liveBaseMessageCount = 0;
-          hasLiveBase = false;
-          liveLastInput = 0;
-          liveLastOutput = 0;
-          liveLastCacheHit = undefined;
-          liveLastCacheCreation = undefined;
-          liveBoundaryPending = false;
-          liveTotalInput = 0;
-          liveTotalInputRaw = 0;
-          liveTotalOutput = 0;
-          liveTotalCacheHit = 0;
-          liveTotalCacheCreation = 0;
+          // Fresh session served by this worker process: clear the live
+          // context-usage tracker carried over from the previous session.
+          // A re-init for the SAME session (main re-sends init between
+          // turns) must keep it — wiping here dropped the authoritative base
+          // every turn, so the ring fell back to the capped local estimate
+          // until the first `result` of the next turn rebased it.
+          if (previousSessionId !== sessionId) {
+            liveBaseContext = 0;
+            liveBaseMessageCount = 0;
+            hasLiveBase = false;
+            liveLastInput = 0;
+            liveLastOutput = 0;
+            liveLastCacheHit = undefined;
+            liveLastCacheCreation = undefined;
+            liveBoundaryPending = false;
+            liveTotalInput = 0;
+            liveTotalInputRaw = 0;
+            liveTotalOutput = 0;
+            liveTotalCacheHit = 0;
+            liveTotalCacheCreation = 0;
+          }
           if (agent) {
             log('[Agent-Process] Re-init: destroying existing agent and creating new one');
             try {
