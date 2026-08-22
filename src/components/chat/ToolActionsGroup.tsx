@@ -60,6 +60,11 @@ interface ToolActionsGroupProps {
    *  shows inline (matching the main interface's expanded appearance)
    *  instead of hiding behind a "N tools · Worked for Xs" caret. */
   forceExpanded?: boolean;
+  /** Per-session Focus mode: collapse the whole round into ONE big group
+   *  (text no longer breaks the run) and hide intermediate text outputs —
+   *  only the final output stays visible. Takes precedence over the
+   *  research-stage layout. */
+  focusMode?: boolean;
 }
 
 function ToolActionsGroupImpl({
@@ -73,6 +78,7 @@ function ToolActionsGroupImpl({
   totalDurationMs: totalDurationMsProp,
   liveStartedAt,
   forceExpanded = false,
+  focusMode = false,
 }: ToolActionsGroupProps) {
   const { t, locale } = useTranslation();
   // Build actions array from either new `actions` prop or legacy `tools` + `thinkingContent`
@@ -106,7 +112,7 @@ function ToolActionsGroupImpl({
   if (actions.length === 0) return null;
 
   const lastRunningTool = getLastRunningToolAction(actions);
-  const segments = React.useMemo(() => computeSegments(actions), [actions]);
+  const segments = React.useMemo(() => computeSegments(actions, { focus: focusMode }), [actions, focusMode]);
   const segmentActionKeys = React.useMemo(() => computeSegmentActionKeys(segments), [segments]);
   const hasResearchStage = React.useMemo(
     () => actions.some((a) => a.kind === 'tool' && !!a.tool.stage),
@@ -129,7 +135,9 @@ function ToolActionsGroupImpl({
   );
 
   if (flat) {
-    if (hasResearchStage) {
+    // Focus mode wins over the research-stage layout: the user explicitly
+    // asked for one big quiet group.
+    if (!focusMode && hasResearchStage) {
       return renderResearchBody();
     }
     return (
@@ -137,7 +145,7 @@ function ToolActionsGroupImpl({
         <div className="border-l-2 border-border/50">
           {/* For flat mode, interleave non-tool actions with the grouped
               tool segments so the visual order is preserved. */}
-          {renderFlatActions(actions, segments, segmentActionKeys, isStreaming, streamingToolOutput, agentProgressEvents)}
+          {renderFlatActions(actions, segments, segmentActionKeys, isStreaming, streamingToolOutput, agentProgressEvents, focusMode)}
         </div>
       </div>
     );
@@ -163,7 +171,7 @@ function ToolActionsGroupImpl({
   // tool rows stream out as plain prose. Group headers still wrap
   // runs of ≥2 tool calls but render collapsed by default.
   if (isStreaming) {
-    if (hasResearchStage) {
+    if (!focusMode && hasResearchStage) {
       return renderResearchBody();
     }
     return (
@@ -175,6 +183,7 @@ function ToolActionsGroupImpl({
           streamingToolOutput={streamingToolOutput}
           agentProgressEvents={agentProgressEvents}
           isStreaming={isStreaming}
+          focusMode={focusMode}
         />
       </div>
     );
@@ -185,13 +194,13 @@ function ToolActionsGroupImpl({
   // appearance of the main interface. Every tool call shows directly
   // instead of hiding behind a "N tools · Worked for Xs" caret.
   if (forceExpanded) {
-    if (hasResearchStage) {
+    if (!focusMode && hasResearchStage) {
       return renderResearchBody();
     }
     return (
       <div className="w-full">
         <div className="mt-0.5 border-l-2 border-border/50">
-          {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
+          {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)}
         </div>
       </div>
     );
@@ -243,7 +252,9 @@ function ToolActionsGroupImpl({
               transition={{ duration: 0.12, ease: 'easeOut' }}
             >
               <div className="mt-0.5 border-l-2 border-border/50">
-                {hasResearchStage ? renderResearchBody() : renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
+                {focusMode || !hasResearchStage
+                  ? renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)
+                  : renderResearchBody()}
               </div>
             </motion.div>
           </motion.div>
@@ -276,6 +287,7 @@ function areToolActionsGroupPropsEqual(
     && prev.totalDurationMs === next.totalDurationMs
     && prev.liveStartedAt === next.liveStartedAt
     && prev.forceExpanded === next.forceExpanded
+    && prev.focusMode === next.focusMode
   );
 }
 
@@ -296,6 +308,7 @@ function StreamingActionsBody({
   streamingToolOutput,
   agentProgressEvents,
   isStreaming,
+  focusMode,
 }: {
   actions: ActionItem[];
   segments: ReturnType<typeof computeSegments>;
@@ -303,10 +316,11 @@ function StreamingActionsBody({
   streamingToolOutput?: string;
   agentProgressEvents?: AgentProgressEventWithMeta[];
   isStreaming: boolean;
+  focusMode?: boolean;
 }) {
   return (
     <div className="flex flex-col">
-      {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming)}
+      {renderOrderedBody(actions, segments, lastRunningTool, streamingToolOutput, agentProgressEvents, isStreaming, focusMode)}
     </div>
   );
 }

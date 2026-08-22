@@ -20,7 +20,9 @@ import {
   TargetArrowIcon,
   ChatCircleIcon,
   PaperclipIcon,
+  EyeIcon,
 } from '@/components/icons';
+import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
 // Commands removed from the popover (handled elsewhere or deleted).
 const HIDDEN_COMMANDS = new Set(['/help', '/status', '/cost', '/new', '/clear', '/model']);
@@ -134,6 +136,10 @@ export function useSlashCommands(opts: {
 
   const { t, locale } = useTranslation();
 
+  // Per-session Focus display mode — the popover row reflects the live
+  // toggle state so the check mark updates without closing the menu.
+  const focusEnabled = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
+
   // Static "add context" items — MCP server toggles + the MCP submenu entry.
   // MCP lives under `@添加上上下文` (mode + plugin usage), not under settings.
   const mcpItem = useMemo<PopoverItem>(() => {
@@ -196,8 +202,19 @@ export function useSlashCommands(opts: {
         group: 'settings' as const,
         category,
       },
+      {
+        label: isZh ? '专注模式' : 'Focus mode',
+        value: '__focus',
+        description: focusEnabled
+          ? (isZh ? '已开启：只显示最终输出' : 'On — final output only')
+          : (isZh ? '所有过程合并为一组，只看最终输出' : 'Merge all work into one group, show final output only'),
+        icon: EyeIcon,
+        kind: 'settings_action' as const,
+        group: 'settings' as const,
+        category,
+      },
     ];
-  }, [locale]);
+  }, [locale, focusEnabled]);
 
   // Mode items (mutually exclusive single-select). Category: @添加上下文.
   const modeItems = useMemo<PopoverItem[]>(() => {
