@@ -7,6 +7,7 @@ import type { Message } from '@/types';
 import { MessageItem } from './MessageItem';
 import { StreamingMessage } from './StreamingMessage';
 import { Button } from '@/components/ui/Button';
+import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
 export interface MessageListRef {
   scrollToBottom: () => void;
@@ -126,6 +127,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   onHeightChange,
   isEditable,
   onEditSend,
+  focusMode,
 }: {
   group: GroupedMessage;
   scrollRoot: React.RefObject<HTMLDivElement | null>;
@@ -135,6 +137,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   onHeightChange: (messageId: string, height: number) => void;
   isEditable?: boolean;
   onEditSend?: (messageId: string, text: string) => void;
+  focusMode?: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(isAlwaysRendered);
@@ -206,6 +209,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
           mergedMessages={group.mergedMessages}
           isEditable={isEditable}
           onEditSend={onEditSend}
+          focusMode={focusMode}
         />
       ) : null}
     </div>
@@ -219,6 +223,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && prev.cachedHeight === next.cachedHeight
   && prev.isEditable === next.isEditable
   && prev.onEditSend === next.onEditSend
+  && prev.focusMode === next.focusMode
 ));
 
 interface MessageNavigatorItem {
@@ -503,6 +508,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const lastActiveNavUpdateRef = useRef(0);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
+  // Per-session Focus display mode (slash popover toggle).
+  const focusMode = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
 
   // Single scroll state: true = user is at bottom and wants auto-scroll
   const autoScrollRef = useRef(true);
@@ -910,6 +917,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             onHeightChange={handleRowHeightChange}
             isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
             onEditSend={onEditSend}
+            focusMode={focusMode}
           />
         ))}
 

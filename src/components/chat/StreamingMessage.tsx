@@ -18,6 +18,7 @@ import { useStreamStartedAt } from '@/hooks/useStreamStartedAt';
 import { usePolling } from '@/hooks/usePolling';
 import { useStreamingAgentProgress } from '@/hooks/useStreamingAgentProgress';
 import { useStreamingError } from '@/hooks/useStreamingError';
+import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 import { WidgetRenderer } from './WidgetRenderer';
 import { WidgetErrorBoundary } from './WidgetErrorBoundary';
 import { Button } from '@/components/ui/Button';
@@ -176,6 +177,7 @@ const StreamingTools = React.memo(function StreamingTools({
   agentProgressEvents,
   totalDurationMs,
   liveStartedAt,
+  focusMode,
 }: {
   actions: import('./ToolActionsGroup').ActionItem[];
   isStreaming: boolean;
@@ -185,6 +187,7 @@ const StreamingTools = React.memo(function StreamingTools({
    *  response time ticking up instead of summed tool durations. */
   totalDurationMs?: number | null;
   liveStartedAt?: number | null;
+  focusMode?: boolean;
 }) {
   if (actions.length === 0) return null;
   return (
@@ -195,6 +198,7 @@ const StreamingTools = React.memo(function StreamingTools({
       agentProgressEvents={agentProgressEvents}
       totalDurationMs={totalDurationMs}
       liveStartedAt={liveStartedAt}
+      focusMode={focusMode}
     />
   );
 });
@@ -342,6 +346,8 @@ export const StreamingMessage = React.memo(function StreamingMessage({
   const startedAt          = useStreamStartedAt(sessionId);
   const agentProgressEvents = useStreamingAgentProgress(sessionId);
   const streamingError     = useStreamingError(sessionId);
+  // Per-session Focus display mode (slash popover toggle).
+  const focusMode          = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
 
   // Visibility rule:
   //   1. While the stream is active → always show (live typing).
@@ -387,6 +393,7 @@ export const StreamingMessage = React.memo(function StreamingMessage({
           streamingToolOutput={toolOutput}
           agentProgressEvents={agentProgressEvents}
           liveStartedAt={startedAt}
+          focusMode={focusMode}
         />
 
         {/* Text is now part of the actions list above (each text event

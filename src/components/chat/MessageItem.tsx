@@ -135,6 +135,9 @@ interface MessageItemProps {
   // Called when the user edits and sends. The parent deletes the message
   // (and everything after it) then re-sends the edited text.
   onEditSend?: (messageId: string, text: string) => void;
+  /** Per-session Focus mode: collapse the round into one big action group
+   *  and hide intermediate text outputs — only the final reply shows. */
+  focusMode?: boolean;
 }
 
 function parseMessageContent(content: string | unknown[], msgType?: string): {
@@ -495,10 +498,11 @@ function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): 
     && messagesEqual(prev.mergedMessages, next.mergedMessages)
     && prev.onToolResult === next.onToolResult
     && prev.isEditable === next.isEditable
-    && prev.onEditSend === next.onEditSend;
+    && prev.onEditSend === next.onEditSend
+    && prev.focusMode === next.focusMode;
 }
 
-function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend }: MessageItemProps) {
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend, focusMode = false }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1037,6 +1041,12 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
   const toolOnlyActions = hasWidgets
     ? actions.filter(a => a.kind !== 'widget')
     : actions;
+  // Focus mode: every text left in `actions` is intermediate narration
+  // (the trailing run was already lifted into `finalText` upstream), so
+  // drop them all — the round renders as one big group + the final reply.
+  const groupActions = focusMode
+    ? toolOnlyActions.filter(a => a.kind !== 'text')
+    : toolOnlyActions;
 
   return (
     <div data-message-id={message.id} className="py-3 px-4">
@@ -1045,9 +1055,10 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           <>
             {hasToolActions && (
               <ToolActionsGroup
-                actions={toolOnlyActions}
+                actions={groupActions}
                 totalDurationMs={totalRoundDurationMs}
                 forceExpanded={isSubAgentSession}
+                focusMode={focusMode}
               />
             )}
             <InterleavedContent actions={actions} sourceMessageId={message.id} />
@@ -1065,9 +1076,10 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           <>
             {hasActions && (
               <ToolActionsGroup
-                actions={actions}
+                actions={groupActions}
                 totalDurationMs={totalRoundDurationMs}
                 forceExpanded={isSubAgentSession}
+                focusMode={focusMode}
               />
             )}
             {researchReport ? (

@@ -189,6 +189,11 @@ interface SlashCommandPopoverProps {
   onCompact?: () => void;
   isCompacting?: boolean;
 
+  // Per-session Focus display mode. Toggled in place (popover stays open)
+  // so the check indicator updates like the mode items do.
+  focusEnabled?: boolean;
+  onToggleFocus?: () => void;
+
   // Session action sub-views
   onRequestRecap: () => Promise<RecapRequestResult>;
 
@@ -241,6 +246,9 @@ export function SlashCommandPopover({
 
   onCompact,
   isCompacting,
+
+  focusEnabled,
+  onToggleFocus,
 
   onRequestRecap,
 
@@ -311,6 +319,10 @@ export function SlashCommandPopover({
         } else if (item.value === '__compact') {
           onCompact?.();
           onClosePopover();
+        } else if (item.value === '__focus') {
+          // Toggle in place — the row's check indicator reflects the new
+          // state, so the popover stays open (same interaction as modes).
+          onToggleFocus?.();
         } else {
           onClosePopover();
         }
@@ -347,7 +359,7 @@ export function SlashCommandPopover({
         onInsertItem(item);
         return;
     }
-  }, [onAddFiles, onClosePopover, onInsertItem, onToggleMode, activeModes, requestRecap]);
+  }, [onAddFiles, onClosePopover, onInsertItem, onToggleFocus, onToggleMode, activeModes, requestRecap]);
 
   // -----------------------------------------------------------------------
   // Keyboard handler (for main view only)
@@ -551,6 +563,10 @@ export function SlashCommandPopover({
         </div>
         {/* Right side indicators */}
         {isModeActive && !isConductorMode && (
+          <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        )}
+        {/* Focus mode toggle — check mirrors the live per-session state. */}
+        {item.value === '__focus' && focusEnabled && (
           <CheckIcon size={12} style={{ color: 'var(--accent)', flexShrink: 0 }} />
         )}
         {isConductorMode && (
