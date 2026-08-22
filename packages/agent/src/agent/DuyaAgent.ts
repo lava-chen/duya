@@ -2894,6 +2894,13 @@ export class duyaAgent {
     if (compaction) {
       this.timeline.appendCompaction(compaction);
     }
+    // Plan 422 follow-up: `this.timeline = new MessageTimeline()` above
+    // replaces the timeline reference. The compaction controller captured the
+    // *original* reference at construction, so without this re-pointing it
+    // would keep reading from the empty pre-rebuild instance. `compactProactive`
+    // would then call `CompactionManager.compact([])` and trip the
+    // `conversation is empty` preflight on every load-from-DB path.
+    this.compactionController.setTimeline(this.timeline);
     // `this.messages` is a timeline-derived getter, so it reflects the
     // rebuilt timeline automatically.
     this.sessionInfo.messageCount = this.messages.length;
@@ -2906,6 +2913,9 @@ export class duyaAgent {
   clearMessages(): void {
     this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
+    // Keep the compaction controller's timeline reference in sync with the
+    // new (empty) instance — see `setMessages` for the rationale.
+    this.compactionController.setTimeline(this.timeline);
     this.sessionInfo.updatedAt = Date.now();
   }
 

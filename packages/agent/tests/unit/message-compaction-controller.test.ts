@@ -603,4 +603,43 @@ describe('MessageCompactionController', () => {
     })
   })
 
+  describe('plan 422 follow-up — setTimeline keeps compactProactive in sync after agent rebuilds the timeline', () => {
+    it('projectInputMessages returns the new timeline after setTimeline (regression: chat:start cold-resume path)', () => {
+      // Reproduces the production bug where DuyaAgent.setMessages reassigns
+      // `this.timeline = new MessageTimeline(...)`, leaving the controller's
+      // captured reference pointing at the empty pre-rebuild instance.
+      // compactProactive then forwarded an empty inputMessages array to
+      // CompactionManager, which tripped the `conversation is empty` preflight
+      // for sessions that loaded from DB without a prior chat:start.
+
+      const initialTimeline = new MessageTimeline();
+      const manager = createFakeManager((input) => ({
+        messages: [...input],
+        tokensRemoved: 0,
+        tokensRetained: 50,
+        strategy: 'micro',
+      }));
+      const controller = createController(initialTimeline, manager);
+
+      // Initial state: empty timeline → projection is empty.
+      expect(controller.projectInputMessages()).toEqual([]);
+
+      // DuyaAgent.setMessages pattern: replace the timeline field, then
+      // repopulate. The controller must be told about the swap.
+      const nextTimeline = new MessageTimeline();
+      nextTimeline.appendMessage(messageEntry('e-u1', user('u1', 'hello')));
+      nextTimeline.appendMessage(messageEntry('e-a1', assistant('a1', 'hi there')));
+
+      // Without setTimeline, the controller still reads from initialTimeline.
+      // This is the regression: re-binding to nextTimeline is required.
+      controller.setTimeline(nextTimeline);
+
+      const projected = controller.projectInputMessages();
+      expect(projected).toHaveLength(2);
+      expect(projected.map((m) => m.role)).toEqual(['user', 'assistant']);
+      // Real message ids survive the projection (no uuid regeneration here).
+      expect(projected.map((m) => m.id)).toEqual(['u1', 'a1']);
+    })
+  })
+
 });

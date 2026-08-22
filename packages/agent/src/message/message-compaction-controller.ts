@@ -126,7 +126,7 @@ function extractSummaryText(message: Message): string {
  * traceability across repeated compactions.
  */
 export class MessageCompactionController {
-  private readonly timeline: MessageTimeline;
+  private timeline: MessageTimeline;
   private readonly compactionManager: CompactionManagerLike;
   private readonly idGenerator: () => string;
   private readonly clock: () => number;
@@ -138,6 +138,24 @@ export class MessageCompactionController {
     this.idGenerator = options.idGenerator ?? defaultIdGenerator;
     this.clock = options.clock ?? defaultClock;
     this.onCompacted = options.onCompacted;
+  }
+
+  /**
+   * Replace the bridged timeline reference.
+   *
+   * `DuyaAgent.setMessages` rebuilds the timeline in place by assigning a
+   * fresh `MessageTimeline` to its private field. The controller captured the
+   * *original* reference at construction, so without this hookup it would
+   * keep reading from the empty pre-rebuild instance — `compactProactive`
+   * would then call `CompactionManager.compact([])` and trip the
+   * `conversation is empty` preflight on every load-from-DB path (chat:start
+   * cold resume, the new `case 'compact'` lazy-load, etc.).
+   *
+   * Plan 422 follow-up: synchronize the controller with the agent's current
+   * timeline reference after every `setMessages` / `clearMessages` call.
+   */
+  setTimeline(timeline: MessageTimeline): void {
+    this.timeline = timeline;
   }
 
   /** Readonly handle to the timeline being bridged. */
