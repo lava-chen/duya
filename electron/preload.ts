@@ -711,6 +711,10 @@ export interface RecapAPI {
   onRecapResult: (callback: (data: { sessionId: string; recap: string; timestamp: number }) => void) => () => void
 }
 
+export interface NextStepAPI {
+  request: (sessionId: string) => Promise<{ success: boolean; suggestions: string[]; error?: string }>
+}
+
 export interface PluginCatalogEntry {
   id: string
   name: string
@@ -1051,6 +1055,7 @@ export interface ElectronAPI {
   onTerminalOutput: (callback: (event: { id: string; data: string }) => void) => () => void
   onTerminalExit: (callback: (event: { id: string; code: number | null }) => void) => () => void
   recap: RecapAPI
+  nextSteps: NextStepAPI
   mailbox: MailboxAPI
   // Agent Server API
   agentServer: {
@@ -1929,6 +1934,9 @@ const electronAPI: ElectronAPI = {
         ipcRenderer.removeListener('recap:result', handler);
       };
     },
+  },
+  nextSteps: {
+    request: (sessionId: string) => ipcRenderer.invoke('nextSteps:request', sessionId),
   },
   // Mailbox API (Plan 202 — PR1)
   mailbox: {

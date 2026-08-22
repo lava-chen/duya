@@ -25,6 +25,7 @@ import { initLowPower, isLowPowerEnabled } from './services/low-power';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
 import { registerRecapHandlers } from './ipc/recap-handlers';
+import { registerNextStepHandlers } from './ipc/next-step-handlers';
 import { initAgentProcessPool, getAgentProcessPool, AgentProcessPool } from './agents/process-pool/agent-process-pool';
 import { startBrowserDaemon, stopBrowserDaemon, getBrowserExtensionStatus, setAllowedExtensionIds, setBrowserMaxTabs, DEFAULT_MAX_WEBVIEW_SESSIONS } from './services/browser/daemon';
 import { attachBrowserDownloadHandler } from './services/browser/cookie-writer';
@@ -284,6 +285,9 @@ if (gotTheLock) {
     // Recap service for session context recovery
     const recapService = new RecapService(getDatabase, getSessionManager);
     registerRecapHandlers(recapService);
+
+    // Next-step suggestions (end-of-turn follow-up option cards)
+    registerNextStepHandlers();
 
     registerAgentHandlers();
     registerProviderIpcHandlers();
