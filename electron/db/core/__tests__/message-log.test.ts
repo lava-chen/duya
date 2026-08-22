@@ -337,7 +337,7 @@ describe('MessageLog', () => {
     expect(payload1.message.content).toEqual([{ type: 'text', text: 'second message' }]);
   });
 
-  it('listBySession tolerates a missing rollout file and clears stale index', () => {
+  it('listBySession tolerates a missing rollout file without dropping the index', () => {
     const sessionId = 'sess-1';
     const t = Date.now();
     insertSessionFixture(db, sessionId, t);
@@ -345,13 +345,73 @@ describe('MessageLog', () => {
     expect(log.getCount(sessionId)).toBe(1);
 
     // Simulate the file being gone externally (orphaned/legacy path), while the
-    // session's rollout_path + index rows still exist.
+    // session's rollout_path + index rows still exist. Before this fix the
+    // index rows were DELETEd on the spot — that was destructive and the
+    // /compact hot path tripped "conversation is empty" immediately after.
     const rel = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
     fs.rmSync(path.join(rootDir, rel.rollout_path));
 
-    // Must NOT throw ENOENT — returns empty and drops the stale index rows.
+    // Must NOT throw ENOENT — returns empty without dropping the index. The
+    // index rows are preserved so a future scan()/recovery can repopulate
+    // from a restored file instead of the user losing the session outright.
     expect(log.listBySession(sessionId)).toEqual([]);
-    expect(log.getCount(sessionId)).toBe(0);
+    expect(log.getCount(sessionId)).toBe(1);
+  });
+
+  it('listBySession auto-recovers a drifted rollout_path by sessionId pattern', () => {
+    const sessionId = 'sess-recover';
+    const t1 = Date.now();
+    const t2 = t1 + 24 * 60 * 60 * 1000; // +1 day
+    insertSessionFixture(db, sessionId, t1);
+
+    // Initial append at t1 stamps the rollout at the original date bucket.
+    log.appendBatch([
+      makeEvent(sessionId, makeUserMessage('m-1', 'hello day 1', t1)),
+    ]);
+    const original = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    expect(original.rollout_path).toBeTruthy();
+
+    // Simulate the user's bug: moveRollout renamed the file to a new date
+    // bucket but the DB UPDATE silently failed, so the DB still points at
+    // the old bucket while the physical file lives under a later stamp.
+    // We simulate by directly writing a new file with the same sessionId
+    // under a different date directory.
+    const newStamp = new Date(t2).toISOString().replace(/[:.]/g, '-');
+    const yyyy = String(new Date(t2).getUTCFullYear()).padStart(4, '0');
+    const mm = String(new Date(t2).getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(new Date(t2).getUTCDate()).padStart(2, '0');
+    const newRel = `sessions/${yyyy}/${mm}/${dd}/rollout-${newStamp}-${sessionId}.jsonl`;
+    const newAbs = path.join(rootDir, newRel);
+    fs.mkdirSync(path.dirname(newAbs), { recursive: true });
+    const driftEntry: MessageEntry = {
+      type: 'message',
+      id: 'm-drift',
+      parentId: null,
+      createdAt: t2,
+      message: {
+        role: 'user',
+        id: 'm-drift',
+        content: 'after move',
+        timestamp: t2,
+        visibility: 'visible',
+      },
+    };
+    fs.writeFileSync(newAbs, JSON.stringify(driftEntry) + '\n', 'utf8');
+
+    // At this point the original file still exists too — both candidate
+    // files match the sessionId pattern. The newer stamp must win.
+    // (delete the original to make the test deterministic about which file
+    // listBySession will read).
+    fs.rmSync(path.join(rootDir, original.rollout_path));
+
+    const events = log.listBySession(sessionId);
+    expect(events).toHaveLength(1);
+    expect(events[0].id).toBe('m-drift');
+    expect(events[0].seq).toBe(1);
+
+    // sessions.rollout_path must now point at the recovered file.
+    const updated = db.prepare('SELECT rollout_path FROM sessions WHERE id = ?').get(sessionId) as { rollout_path: string };
+    expect(updated.rollout_path).toBe(newRel);
   });
 
   // ─── searchText ───
@@ -458,5 +518,39 @@ describe('MessageLog', () => {
     const events = log.listBySession(sessionId);
     expect(events.map((e) => e.id)).toEqual(['m-1', 'm-2']);
     expect(log.project(sessionId).map((r) => r.entry.id)).toEqual(['m-1', 'm-2']);
+  });
+
+  // ─── S3: UPDATE failure path ───
+  // moveRollout and getOrCreateRolloutPath both catch UPDATE failures and
+  // log them at WARN (instead of silently swallowing as before). We do not
+  // exhaustively assert the log line here — that would require mocking the
+  // logger singleton — but we verify the function completes without
+  // throwing when the UPDATE raises, which was the user-visible failure
+  // mode in production.
+
+  it('first-append writeback survives a sessions-table UPDATE failure (logs warn, does not throw)', () => {
+    const sessionId = 'sess-no-sessions-table';
+    const t = Date.now();
+
+    // Drop the sessions table so the first-time UPDATE inside
+    // getOrCreateRolloutPath throws "no such table: sessions" — exactly the
+    // pre-fix behaviour that hid the production drift. We keep
+    // `message_index` intact so getIndexedIds / appendLines still work.
+    db.exec('DROP TABLE sessions');
+
+    // Pre-fix this would throw "SqliteError: no such table: sessions" out
+    // of appendBatch via the empty catch in getOrCreateRolloutPath. After
+    // the fix, the catch logs WARN and the function returns; the file is
+    // still created and the message_index row is still inserted.
+    expect(() => log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'hello', t))]))
+      .not.toThrow();
+
+    expect(log.getCount(sessionId)).toBe(1);
+    const stamp = new Date(t).toISOString().replace(/[:.]/g, '-');
+    const yyyy = String(new Date(t).getUTCFullYear()).padStart(4, '0');
+    const mm = String(new Date(t).getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(new Date(t).getUTCDate()).padStart(2, '0');
+    const expectedPath = `sessions/${yyyy}/${mm}/${dd}/rollout-${stamp}-${sessionId}.jsonl`;
+    expect(fs.existsSync(path.join(rootDir, expectedPath))).toBe(true);
   });
 });

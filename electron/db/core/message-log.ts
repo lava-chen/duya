@@ -21,8 +21,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { getLogger, LogComponent } from '../../logging/logger';
 import type { AgentMessage, MessageEntry, CompactionEntry } from '@duya/agent/message';
 import type { Migration, SqliteDatabase } from './database';
+
+const logger = getLogger();
 
 // ─── Inline types (no separate types.ts — flat 7-file discipline) ───
 
@@ -180,18 +183,49 @@ export class MessageLog {
 
   /** List all events for a session, ordered by seq. Payload is raw JSON. */
   listBySession(sessionId: string): StoredEvent[] {
-    const relativePath = this.getRolloutPath(sessionId);
+    let relativePath = this.getRolloutPath(sessionId);
     if (!relativePath) return [];
-    const absolutePath = this.resolvePathOnDisk(relativePath);
+    let absolutePath = this.resolvePathOnDisk(relativePath);
 
-    // A session may reference a rollout file that is missing on disk (e.g. a
-    // legacy/orphaned path, or a file cleaned up externally). The index rows
-    // are then stale garbage — drop them and report the session as empty
-    // rather than throwing ENOENT and crashing the whole read path.
+    // The DB-recorded rollout file may be missing on disk for two reasons we
+    // must not conflate:
+    //   (a) moveRollout renamed the file to a new date bucket but the UPDATE
+    //       to `sessions.rollout_path` failed (silent catch before this
+    //       fix) so the DB still points at the old date dir — the actual
+    //       file lives under a later stamp;
+    //   (b) the file was lost/cleaned up externally (operator action, disk
+    //       failure, legacy orphaned path).
+    //
+    // The historical fix was to DELETE the session's index rows and return
+    // []. That was destructive: index rows carry file_offset/byte_len into
+    // the *previous* file and are recoverable via scan(), but dropping them
+    // silently corrupts the session — the very next /compact immediately
+    // throws "Compaction failed: conversation is empty". Recovery now: look
+    // for the actual current rollout file by sessionId pattern, adopt it,
+    // rebuild the index. Only when no candidate exists do we fall back to
+    // empty (still never DELETE — the user can run scan() against a
+    // restored file to recover).
     if (!fs.existsSync(absolutePath)) {
-      this.db.prepare('DELETE FROM message_index WHERE session_id = ?').run(sessionId);
-      this.pathCache.delete(sessionId);
-      return [];
+      const recordedPath = relativePath;
+      const recovered = this.findRolloutFileBySessionId(sessionId);
+      if (recovered) {
+        this.adoptRolloutPath(sessionId, recovered);
+        this.rebuildIndexFromRollout(sessionId, this.resolvePathOnDisk(recovered));
+        relativePath = recovered;
+        absolutePath = this.resolvePathOnDisk(recovered);
+        logger.info(
+          'Recovered session from drifted rollout_path',
+          { sessionId, from: recordedPath, to: recovered },
+          LogComponent.DB,
+        );
+      } else {
+        logger.warn(
+          'Rollout file missing; returning empty without dropping index',
+          { sessionId, recordedPath },
+          LogComponent.DB,
+        );
+        return [];
+      }
     }
 
     const rows = this.db
@@ -610,8 +644,18 @@ export class MessageLog {
       this.db
         .prepare('UPDATE sessions SET rollout_path = ? WHERE id = ? AND rollout_path IS NULL')
         .run(desired, sessionId);
-    } catch {
-      // sessions table might not exist in isolated tests — file still works.
+    } catch (err) {
+      // Don't swallow silently in production — see S3 in the compaction bug
+      // investigation. The catch was hiding real UPDATE failures (disk
+      // full, FK violation, DB lock) that left sessions.rollout_path out
+      // of sync with the on-disk file. Test fixtures without a `sessions`
+      // table still hit this branch; we log at WARN so production sees it
+      // but it's not a crash.
+      logger.warn(
+        'Failed to write back sessions.rollout_path on first append',
+        { sessionId, desired, error: err instanceof Error ? err.message : String(err) },
+        LogComponent.DB,
+      );
     }
 
     this.pathCache.set(sessionId, desired);
@@ -628,10 +672,145 @@ export class MessageLog {
     }
     try {
       this.db.prepare('UPDATE sessions SET rollout_path = ? WHERE id = ?').run(toRel, sessionId);
-    } catch {
-      // sessions table might not exist in isolated tests — file still works.
+    } catch (err) {
+      // This is the canonical S3 swallow: rename succeeded (file moved to
+      // `dst`) but the DB still points at `fromRel`. Subsequent reads will
+      // fail with "file missing" until listBySession's recovery path picks
+      // up the drift — but only if the read goes through that path. Log
+      // loudly so operators can spot drift before users hit /compact.
+      logger.warn(
+        'moveRollout: rename succeeded but sessions.rollout_path UPDATE failed',
+        { sessionId, from: fromRel, to: toRel, error: err instanceof Error ? err.message : String(err) },
+        LogComponent.DB,
+      );
     }
     this.pathCache.set(sessionId, toRel);
+  }
+
+  /**
+   * Adopt a recovered rollout path: persist to `sessions.rollout_path` and
+   * refresh the in-process path cache. Used by `listBySession`'s recovery
+   * path when the DB-recorded file is missing but a later-date candidate
+   * exists under `<rootDir>/sessions/**`.
+   */
+  private adoptRolloutPath(sessionId: string, relativePath: string): void {
+    this.pathCache.set(sessionId, relativePath);
+    try {
+      this.db.prepare('UPDATE sessions SET rollout_path = ? WHERE id = ?').run(relativePath, sessionId);
+    } catch (err) {
+      logger.warn(
+        'Failed to adopt recovered rollout_path',
+        { sessionId, relativePath, error: err instanceof Error ? err.message : String(err) },
+        LogComponent.DB,
+      );
+    }
+  }
+
+  /**
+   * Search `<rootDir>/sessions/**` for the current rollout file matching
+   * `sessionId`. Filename pattern is `rollout-<isoStamp>-<sanitizedSessionId>.jsonl`.
+   * Multiple candidates can exist after repeated cross-midnight moves; the
+   * newest ISO-8601 stamp (lex-comparable chronologically) wins.
+   Returns `null` when no candidate is found.
+   */
+  private findRolloutFileBySessionId(sessionId: string): string | null {
+    const sessionsRoot = path.join(this.rootDir, 'sessions');
+    if (!fs.existsSync(sessionsRoot)) return null;
+
+    const safeSegment = sanitizeFilenameSegment(sessionId);
+    const targetSuffix = `-${safeSegment}.jsonl`;
+    const candidates: Array<{ rel: string; stamp: string }> = [];
+
+    // sessions/<YYYY>/<MM>/<DD>/<file> is 4 levels below rootDir; cap at 6
+    // to be tolerant of legacy layouts without walking the whole disk.
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 6) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full, depth + 1);
+        } else if (
+          entry.isFile() &&
+          entry.name.startsWith('rollout-') &&
+          entry.name.endsWith(targetSuffix)
+        ) {
+          // entry.name = `rollout-<stamp>-<sanitizedId>.jsonl`. Slice off
+          // the fixed prefix/suffix to recover the stamp for sorting; ISO
+          // timestamps are lex-comparable chronologically so a string sort
+          // matches the chronological order we want.
+          const stamp = entry.name.slice(
+            'rollout-'.length,
+            -targetSuffix.length,
+          );
+          if (!stamp) continue;
+          const rel = path.relative(this.rootDir, full).split(path.sep).join('/');
+          candidates.push({ rel, stamp });
+        }
+      }
+    };
+
+    walk(sessionsRoot, 0);
+    if (candidates.length === 0) return null;
+
+    candidates.sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0));
+    return candidates[0].rel;
+  }
+
+  /**
+   * Rebuild the session's index from the rollout file. Used after
+   * `findRolloutFileBySessionId` recovers a drifted path: the existing
+   * index rows reference file_offset/byte_len against the OLD physical
+   * file, so we DELETE all rows and re-INSERT in a single transaction
+   * with fresh offsets/seqs from the recovered file.
+   *
+   * Idempotent on file contents (a second call produces the same state).
+   * Seq is assigned as the 1-based line number — matches `project()` and
+   * avoids racing with appendBatch's `COALESCE(MAX(seq),0)+1` allocator
+   * (we hold an exclusive delete-then-insert transaction).
+   */
+  private rebuildIndexFromRollout(sessionId: string, absolutePath: string): void {
+    const lines = this.readAll(absolutePath);
+    const deleteStmt = this.db.prepare('DELETE FROM message_index WHERE session_id = ?');
+    const insertStmt = this.db.prepare(`
+      INSERT INTO message_index
+        (id, session_id, seq, turn_id, kind, created_at, file_offset, byte_len)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const txn = this.db.transaction(() => {
+      deleteStmt.run(sessionId);
+      let offset = 0;
+      let seq = 0;
+      for (const line of lines) {
+        const lineBytes = Buffer.byteLength(line + '\n', 'utf8');
+        const contentLen = Buffer.byteLength(line, 'utf8');
+        try {
+          const entry = JSON.parse(line) as MessageEntry | CompactionEntry;
+          seq += 1;
+          insertStmt.run(
+            entry.id,
+            sessionId,
+            seq,
+            null,
+            deriveKind(entry),
+            entry.createdAt,
+            offset,
+            contentLen,
+          );
+        } catch {
+          // Skip unparseable lines (crash-damaged tail).
+        }
+        offset += lineBytes;
+      }
+    });
+    txn();
   }
 }
 
