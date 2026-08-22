@@ -66,7 +66,11 @@ coverage/
 *.spec.tsx
 !src/lib/message-input-logic.spec.ts
 !src/lib/chat-file-links.test.ts
+!src/lib/html-to-plain-text.test.ts
 !src/components/chat/RichTextInput.test.tsx
+!src/components/chat/__tests__/MessageInputPaste.test.tsx
+!src/components/chat/NextStepSuggestions.test.tsx
+!src/hooks/__tests__/useNextStepSuggestions.test.tsx
 !src/hooks/__tests__/useStreamingActions.test.ts
 !src/hooks/useSubAgentProgress.test.ts
 !src/hooks/__tests__/usePanel.test.ts

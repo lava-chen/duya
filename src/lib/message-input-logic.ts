@@ -303,7 +303,35 @@ export function parseSlashCommand(input: string): { slashCommand: string; remain
   };
 }
 
+/**
+ * Convert an HTML clipboard payload to plain text.
+ *
+ * Some clipboard sources only put an `text/html` flavor on the clipboard
+ * (no `text/plain`). Parsing the markup in a detached document lets us
+ * extract clean text — block-level boundaries become newlines so
+ * paragraphs and list items survive, while all inline styling (color,
+ * bold, fonts) is dropped by construction because only text nodes remain.
+ */
+export function htmlToPlainText(html: string): string {
+  if (typeof html !== 'string' || !html) return '';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  // <br> becomes a newline before text extraction.
+  for (const br of Array.from(doc.querySelectorAll('br'))) {
+    br.replaceWith(doc.createTextNode('\n'));
+  }
+  // Block boundaries become newlines; nested blocks may double up but the
+  // trailing collapse normalizes runs of blank lines.
+  const blockSelector = 'p, div, li, tr, h1, h2, h3, h4, h5, h6, blockquote, pre';
+  for (const el of Array.from(doc.querySelectorAll(blockSelector))) {
+    el.append('\n');
+  }
+  const text = doc.body.textContent ?? '';
+  return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 const SKILL_TOKEN_RE = /^\/(\S+)$/;
+
+
 
 /**
  * Parse a single slash-command token at the start of the input.
