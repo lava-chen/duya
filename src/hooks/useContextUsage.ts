@@ -317,52 +317,12 @@ export function useContextUsage(
       };
     }
 
-    // No assistant message with tokenUsage yet — fall back to a local
-    // estimate so the ring isn't stuck at 0 for new sessions or turns
-    // that only have user attachments. Include the system prompt + tool
-    // overhead when the worker broadcast an estimate (pi's
-    // estimateContextTokens adds the systemPrompt + tools prefix when no
-    // usage block exists) — without it a brand-new session would show only
-    // the user's few hundred chars while the real request costs 10K+.
-    const systemTokens = live?.systemTokens ?? 0;
-    const estimatedUsed =
-      systemTokens +
-      messages.reduce((sum, msg) => {
-        if (msg.role === 'user') {
-          const text = typeof msg.content === 'string'
-            ? msg.content
-            : msg.content.map((b) => (typeof b === 'string' ? b : (b as { text?: string }).text || '')).join('');
-          let tokens = estimateTokens(text);
-          for (const att of msg.attachments || []) {
-            const isImage = (att.type ?? '').startsWith('image/');
-            tokens += isImage
-              ? Math.max(700, estimateTokens(att.text ?? ''))
-              : estimateTokens(att.text ?? '');
-          }
-          return sum + tokens;
-        }
-        return sum;
-      }, 0);
-
-    if (estimatedUsed > 0) {
-      const ratio = resolvedContextWindow ? estimatedUsed / resolvedContextWindow : 0;
-      const estimatedNextTurn = estimatedUsed;
-      const estimatedNextRatio = ratio;
-      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
-      let state: ContextState = 'normal';
-      if (effectiveRatio >= 0.95) state = 'critical';
-      else if (effectiveRatio >= 0.8) state = 'warning';
-      return {
-        ...noData,
-        used: estimatedUsed,
-        ratio,
-        estimatedNextTurn,
-        estimatedNextRatio,
-        hasData: true,
-        state,
-      };
-    }
-
+    // No live snapshot and no persisted tokenUsage — a brand-new session
+    // before the first result lands, or a history that lost its usage blocks.
+    // Return noData instead of a local estimate: a renderer-side guess omits
+    // the system prompt / tool overhead and swings against the worker's
+    // authoritative numbers, which reads as the ring jumping. The worker
+    // broadcasts a snapshot at turn start, so this state is transient.
     return noData;
   }, [messages, modelName, contextWindow, live]);
 }
