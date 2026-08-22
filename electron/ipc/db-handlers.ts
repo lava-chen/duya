@@ -55,7 +55,12 @@ import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document
 import { getCoreStores } from '../db/core-connection';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import { CapabilityDao } from '../services/providers/capability-dao';
-import { aggregateUsage, type UsageSessionInput } from './usage-aggregator';
+import {
+  aggregateUsageFromFacts,
+  extractSessionFacts,
+  UsageFactsCache,
+  type SessionFactsInput,
+} from './usage-aggregator';
 import {
   ipcSessionToCoreCreate,
   ipcSessionToUpdate,
@@ -75,6 +80,10 @@ import {
   coreMailboxToIpcRow,
 } from './core-db-adapters';
 import type { NewEvent, MailboxKind, MailboxStatus } from '../db/core';
+
+/** Per-session usage facts cache behind rollout-file mtime/size stamps —
+ *  module scope so it survives across db:usage:summary invocations. */
+const usageFactsCache = new UsageFactsCache();
 
 // Re-export lifecycle functions for backward compatibility
 export {
@@ -441,23 +450,49 @@ export function registerDbHandlers(): void {
   // core-db rollout files — the renderer's in-memory conversation store only
   // holds transcripts of sessions opened during the current app run, so
   // renderer-side aggregation was wildly incomplete (plan: usage-stats fix).
+  //
+  // Per-session facts are cached behind a rollout-file mtime/size stamp:
+  // unchanged sessions skip the file read + row conversion entirely, which
+  // is what dominates this handler once histories grow.
   ipcMain.handle('db:usage:summary', () => {
     const { sessions: sessionStore, messageLog } = getCoreStores();
     const capabilityDao = new CapabilityDao(getDb());
 
-    const inputs: UsageSessionInput[] = sessionStore.list({}).map((session) => ({
-      id: session.id,
-      title: session.title,
-      model: session.model,
-      providerId: session.providerId,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      rows: session.rolloutPath
-        ? storedEventsToIpcMessages(messageLog.listBySession(session.id))
-        : [],
-    }));
+    const listed = sessionStore.list({});
+    const inputs: SessionFactsInput[] = listed.map((session) => {
+      // 'none' = no rollout path; 'missing' = stat failed (listBySession's
+      // self-heal still gets a chance to rescan on the read path below).
+      let stamp = 'none';
+      if (session.rolloutPath) {
+        try {
+          const st = fs.statSync(session.rolloutPath);
+          stamp = `${st.mtimeMs}:${st.size}`;
+        } catch {
+          stamp = 'missing';
+        }
+      }
+      let facts = usageFactsCache.get(session.id, stamp);
+      if (!facts) {
+        const rows =
+          stamp === 'none'
+            ? []
+            : storedEventsToIpcMessages(messageLog.listBySession(session.id));
+        facts = extractSessionFacts(rows);
+        usageFactsCache.set(session.id, stamp, facts);
+      }
+      return {
+        id: session.id,
+        title: session.title,
+        model: session.model,
+        providerId: session.providerId,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        facts,
+      };
+    });
+    usageFactsCache.prune(new Set(listed.map((s) => s.id)));
 
-    return aggregateUsage(inputs, (providerId, model) => {
+    return aggregateUsageFromFacts(inputs, (providerId, model) => {
       if (!model) return undefined;
       const pricing = capabilityDao.getOne(providerId, model)?.pricing;
       if (!pricing) return undefined;
