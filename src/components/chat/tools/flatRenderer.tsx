@@ -24,6 +24,17 @@ function findLastTextIndex(actions: ActionItem[]): number {
   return -1;
 }
 
+// Index of the last work action (tool / thinking / hook). In focus mode a
+// text action only stays visible when it trails ALL work — anything at or
+// before this index is intermediate narration and gets hidden.
+function findLastWorkIndex(actions: ActionItem[]): number {
+  for (let i = actions.length - 1; i >= 0; i--) {
+    const kind = actions[i].kind;
+    if (kind === 'tool' || kind === 'thinking' || kind === 'hook') return i;
+  }
+  return -1;
+}
+
 function renderActionItem(
   action: ActionItem,
   index: number,
@@ -140,9 +151,11 @@ export function renderFlatActions(
   isStreaming: boolean | undefined,
   streamingToolOutput: string | undefined,
   agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
+  focus?: boolean,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const lastTextIdx = findLastTextIndex(actions);
+  const lastWorkIdx = focus ? findLastWorkIndex(actions) : -1;
   const groupStartMap = buildGroupStartMap(actions, segments);
 
   let toolIdx = 0;
@@ -165,6 +178,9 @@ export function renderFlatActions(
       i += size - 1;
     } else {
       const action = actions[i];
+      // Focus mode: intermediate text (anything not trailing all work)
+      // is hidden — only the final output stays visible.
+      if (focus && action.kind === 'text' && i <= lastWorkIdx) continue;
       if (action.kind === 'tool') {
         const isRunning = !action.tool.result;
         out.push(
@@ -194,9 +210,11 @@ export function renderOrderedBody(
   streamingToolOutput: string | undefined,
   agentProgressEvents: AgentProgressEventWithMeta[] | undefined,
   isStreaming: boolean | undefined,
+  focus?: boolean,
 ): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const lastTextIdx = findLastTextIndex(actions);
+  const lastWorkIdx = focus ? findLastWorkIndex(actions) : -1;
   const groupStartMap = buildGroupStartMap(actions, segments);
 
   let toolIdx = 0;
@@ -217,6 +235,9 @@ export function renderOrderedBody(
       i += size - 1;
     } else {
       const action = actions[i];
+      // Focus mode: intermediate text (anything not trailing all work)
+      // is hidden — only the final output stays visible.
+      if (focus && action.kind === 'text' && i <= lastWorkIdx) continue;
       if (action.kind === 'tool') {
         // Only the last running tool receives the live streaming
         // output — every other finished tool renders its persisted

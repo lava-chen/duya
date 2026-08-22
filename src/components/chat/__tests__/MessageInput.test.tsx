@@ -61,6 +61,9 @@ vi.mock('@/components/icons', () => ({
   // Session mode chips (plan 413e) render ChatCircleIcon while a
   // session-level mode chip is visible.
   ChatCircleIcon: () => null,
+  // Focus-mode popover item (useSlashCommands settingsItems) references
+  // EyeIcon during render.
+  EyeIcon: () => null,
   // Permission-mode composer selector (Ask / Auto / Bypass) renders these
   // icons at module scope in MessageInput.
   HandIcon: () => null,
