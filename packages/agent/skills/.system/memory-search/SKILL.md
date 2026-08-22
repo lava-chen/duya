@@ -26,9 +26,11 @@ curation run ──▶ refreshMemoryRagIndex (full rebuild)
 user prompt ──▶ [hooks] UserPromptSubmit ──▶ memory-rag-hook.mjs / memory-search.mjs
                 ├─ filterPrompt: drop short / filler messages ("继续", "你好", "ok", …)
                 ├─ vector search (best-effort) + FTS5 keyword fallback
-                ├─ formatContext: title + path + full body (per-hit cap 6 KB,
-                │                total cap 24 KB; lower-ranked hits are dropped
-                │                whole when the union would exceed the cap)
+                ├─ formatContext: title + path + line-windowed snippet
+                │                (matched line + 8 above/below for top hit,
+                │                + 3 above/below for non-top, total cap 8 KB;
+                │                lower-ranked hits are dropped whole when the
+                │                union would exceed the cap)
                 └─ stdout {"additionalContext": "### 相关记忆\n- …"}
                             │   wrapped in <system-reminder>
                             ▼
@@ -58,26 +60,42 @@ Every retrieval run appends an event to the memory system log
 `rag_hook_retrieved` / `rag_hook_no_hits` / `rag_hook_error`, with the
 mode (`vector` / `hybrid` / `keyword`) and the embedding fallback reason.
 
-### Architecture changes (plan 430 follow-up)
+### Architecture changes (line-windowed snippet)
 
-The formatContext function used to emit a 220-char snippet + path per
-hit. That is useless to a model that can't Read the file during the same
-turn: only the path gave the agent any handle on the memory, and the
-snippet often missed the part of the doc the user was asking about.
-The hook now emits the **full body** (frontmatter-stripped), capped at
-`FORMAT_PER_HIT_BODY_CHARS` (6 KB) per hit and `FORMAT_TOTAL_CHARS`
-(24 KB) total. Lower-ranked hits are dropped whole — never half-clipped
-mid-paragraph — when the union exceeds the total budget, so the highest-
-scored memories always land intact. A truncated hit carries an HTML
-comment marker so the model still knows the path points at the full
-file: `<!-- read-full: this hit was truncated to 6000 chars; the path
-above points at the full memory file -->`.
+`formatContext` ships a **line-windowed snippet per hit** — the matched
+line plus a few lines above and below — instead of either of the two
+earlier contracts:
 
-The hook path is synchronous so the model sees the body on the first
-turn instead of on the turn-after-the-async-task-completes. With sync
-execution the rendered additionalContext streams directly into the
-provider messages (no 4 KB task-notification cap); the 24 KB total
-ceiling is the only hard limit on what reaches the model.
+- plan 430 sent the **full body** (frontmatter-stripped), capped at
+  `FORMAT_PER_HIT_BODY_CHARS` per hit and `FORMAT_TOTAL_CHARS` total.
+  That bloated the chat-flow hook row: a matched term deep in a doc
+  pulled the entire doc into context, drowning the user's question
+  paragraph (the user's literal complaint: "目前 memory-search 这个
+  脚本返回的内容是一个完整的文件，应该是返回 rag 找到的那一行的上下
+  几行就够了").
+- plan 437 used a 220-char single-line snippet. The width was right
+  but the window ignored line boundaries, so the matched phrase often
+  landed at the very edge of the window and the paragraph that
+  actually answered was clipped.
+
+The new helper (`buildLineSnippet` in `scripts/memory-rag-lib.mjs`)
+finds the first line containing any query term, returns that line plus
+`FORMAT_TOP_HIT_LINES` (8 above, 8 below) for the top hit and
+`FORMAT_OTHER_HIT_LINES` (3 above, 3 below) for non-top hits. When the
+anchor line is itself longer than `lineMaxLen` (one-line blob
+fixtures), it character-windows around the term so the snippet stays
+bounded without losing the matched phrase. The union is hard-capped at
+`FORMAT_TOTAL_CHARS` (8 KB) and lower-ranked hits are dropped whole —
+never half-clipped mid-paragraph — when the union would exceed the
+budget. No truncation marker is added; the breadcrumb is already
+bounded, and the path stays visible so the model can `read` the full
+file on demand.
+
+The hook path is synchronous so the model sees the snippet on the
+first turn instead of on the turn-after-the-async-task-completes.
+With sync execution the rendered additionalContext streams directly
+into the provider messages (no 4 KB task-notification cap); the 8 KB
+total ceiling is the only hard limit on what reaches the model.
 
 ## CLI: `duya memory search <query>`
 
