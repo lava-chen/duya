@@ -15,6 +15,8 @@ import {
   fileNameFromPath,
   extensionFromPath,
   openLocalArtifactTarget,
+  openConductorCanvas,
+  parseInternalCanvasLink,
 } from '@/lib/chat-file-links';
 
 describe('chat-file-links / isHtmlFile', () => {
@@ -436,5 +438,61 @@ describe('chat-file-links / openLocalArtifactTarget', () => {
     expect(dispatched[0].detail.filePath).toBe('C:\\Users\\me\\Downloads\\notes.md');
     expect(dispatched[0].detail.workingDirectory).toBe('');
     expect(dispatched[0].detail.standalone).toBe(true);
+  });
+});
+
+describe('chat-file-links / parseInternalCanvasLink', () => {
+  it('parses the canonical /duya/canvas/<id> path form', () => {
+    expect(parseInternalCanvasLink('/duya/canvas/e821e70e-3f65-4fd2-bd11-72fe1b078728'))
+      .toBe('e821e70e-3f65-4fd2-bd11-72fe1b078728');
+    expect(parseInternalCanvasLink('/duya/canvas/abc123')).toBe('abc123');
+  });
+
+  it('accepts the duya://canvas/<id> scheme alias and a trailing slash', () => {
+    expect(parseInternalCanvasLink('duya://canvas/e821e70e-3f65-4fd2-bd11-72fe1b078728'))
+      .toBe('e821e70e-3f65-4fd2-bd11-72fe1b078728');
+    expect(parseInternalCanvasLink('DUYA://Canvas/abc123')).toBe('abc123');
+    expect(parseInternalCanvasLink('/duya/canvas/abc123/')).toBe('abc123');
+  });
+
+  it('rejects other app routes, empty ids, and web URLs', () => {
+    expect(parseInternalCanvasLink('/duya/sessions/abc123')).toBeNull();
+    expect(parseInternalCanvasLink('/duya/canvas/')).toBeNull();
+    expect(parseInternalCanvasLink('/canvas/abc123')).toBeNull();
+    expect(parseInternalCanvasLink('/duya/canvas/abc/extra')).toBeNull();
+    expect(parseInternalCanvasLink('https://example.com/duya/canvas/abc')).toBeNull();
+    expect(parseInternalCanvasLink('E:\\projects\\board.png')).toBeNull();
+    expect(parseInternalCanvasLink('')).toBeNull();
+  });
+});
+
+describe('chat-file-links / openConductorCanvas', () => {
+  type Detail = { canvasId?: string };
+  let dispatched: Array<{ event: string; detail: Detail }>;
+
+  beforeEach(() => {
+    dispatched = [];
+    window.dispatchEvent = vi.fn((event: Event) => {
+      const ce = event as CustomEvent<Detail>;
+      dispatched.push({ event: ce.type, detail: ce.detail ?? {} });
+      return true;
+    }) as typeof window.dispatchEvent;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('dispatches duya:open-conductor-panel with the canvasId', () => {
+    openConductorCanvas('e821e70e-3f65-4fd2-bd11-72fe1b078728');
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0].event).toBe('duya:open-conductor-panel');
+    expect(dispatched[0].detail.canvasId).toBe('e821e70e-3f65-4fd2-bd11-72fe1b078728');
+  });
+
+  it('ignores empty ids', () => {
+    openConductorCanvas('');
+    openConductorCanvas('   ');
+    expect(dispatched).toHaveLength(0);
   });
 });
