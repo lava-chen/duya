@@ -4,6 +4,26 @@ import os from 'os';
 import path from 'path';
 import { ConfigStore, diffConfigPaths, type ConfigStoreOptions } from '../store';
 
+// `electron/config/store.ts` imports write-file-atomic as a default export.
+// We replace it with a controllable mock so the EPERM-on-rename fallback
+// path can be exercised deterministically across platforms (the real
+// Windows EPERM only fires when another process holds the file open).
+// Default behaviour: delegate to the real implementation so the existing
+// persistence tests still round-trip through actual tmp + rename.
+const writeFileAtomicMock = vi.hoisted(() => {
+  // require() inside hoisted fn runs at mock-factory time, before any
+  // vi.mock hoisting. Pull the real impl so the default delegate below
+  // calls genuine write-file-atomic code.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const real = require('write-file-atomic');
+  const syncMock = vi.fn((target: string, content: string, opts: unknown) => real.sync(target, content, opts));
+  return { sync: syncMock, __realSync: real.sync };
+});
+vi.mock('write-file-atomic', () => ({
+  default: { sync: writeFileAtomicMock.sync },
+  sync: writeFileAtomicMock.sync,
+}));
+
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'duya-config-store-'));
 }
@@ -128,6 +148,52 @@ describe('ConfigStore', () => {
     // A later set() must NOT destroy the only copy of the original bytes.
     store.set('timezone', 'UTC');
     expect(fs.readFileSync(path.join(dir, backups[0]!), 'utf-8')).toContain('deepseek-v4-flash');
+    store.close();
+  });
+
+  it('falls back to fs.copyFileSync when atomic rename throws EPERM (Windows file-holder regression)', () => {
+    // Regression: `ProviderStore.upsertLlmProvider` on Windows often hit
+    // `EPERM: rename ...` because Windows Defender / OneDrive / a second
+    // DUYA instance holds config.toml without FILE_SHARE_DELETE. The old
+    // 3-retry loop gave up after ~450 ms and the user's edit silently
+    // failed. The fix adds a copy-based fallback after the retries exhaust.
+    const eperm = Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+    writeFileAtomicMock.sync.mockImplementation(() => {
+      throw eperm;
+    });
+    try {
+      const store = new ConfigStore(opts);
+      const ok = store.set('timezone', 'Asia/Tokyo');
+      expect(ok).toBe(true);
+      // The on-disk content must reflect the new value, proving the
+      // copy fallback wrote through despite the failed rename.
+      const onDisk = fs.readFileSync(opts.configPath, 'utf-8');
+      expect(onDisk).toContain('Asia/Tokyo');
+      // The fallback uses a `.${basename}.<pid>.<ts>.tmp` prefix, so the
+      // copy-fallback tmp must NOT leak into the config directory.
+      const leftovers = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'));
+      expect(leftovers).toEqual([]);
+      store.close();
+    } finally {
+      writeFileAtomicMock.sync.mockImplementation(writeFileAtomicMock.__realSync);
+    }
+  });
+
+  it('sweeps leftover write-file-atomic tmp files on construct', () => {
+    // Simulate a previous crash that left `config.toml.<digits>` and
+    // `secrets.json.<digits>` tmps (write-file-atomic's tmp naming
+    // pattern). ConfigStore should sweep them on boot so the user's
+    // config directory does not accumulate junk over time.
+    fs.writeFileSync(path.join(dir, 'config.toml.658401708'), 'leftover', 'utf-8');
+    fs.writeFileSync(path.join(dir, 'secrets.json.999999999'), 'leftover', 'utf-8');
+    // Our copy-fallback tmp uses a `.tmp` suffix; it must NOT be matched.
+    fs.writeFileSync(path.join(dir, '.config.toml.12345.1700000000000.tmp'), 'in-flight', 'utf-8');
+    const store = new ConfigStore(opts);
+    const remaining = fs.readdirSync(dir);
+    // Digit-suffix tmps are gone.
+    expect(remaining.filter((f) => /^(config\.toml|secrets\.json)\.\d{6,}$/.test(f))).toEqual([]);
+    // .tmp files are preserved.
+    expect(remaining.some((f) => f.endsWith('.tmp'))).toBe(true);
     store.close();
   });
 });
