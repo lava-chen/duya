@@ -316,6 +316,12 @@ const zh: Record<TranslationKey, string> = {
   'streaming.toolAction.hook.timeout': '钩子执行超时',
   'streaming.toolAction.hook.errorPrefix': '钩子执行失败',
 
+  // Context-compaction record row: collapsed verb plus a compacted-count
+  // tail; the expanded card shows the summary text verbatim.
+  'streaming.toolAction.compact.collapsed': '已对上下文进行压缩',
+  'streaming.toolAction.compact.messagesCompacted.one': '{count} 条消息',
+  'streaming.toolAction.compact.messagesCompacted.other': '{count} 条消息',
+
   'permission.allow': '允许',
   'permission.deny': '拒绝',
   'permission.allowOnce': '允许一次',
