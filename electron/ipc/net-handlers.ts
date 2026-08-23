@@ -37,7 +37,7 @@ export function registerNetHandlers(): void {
 
   ipcMain.handle('net:provider:usage', async (_event, body: ProviderUsageBody) => {
     try {
-      return await getProviderUsage(body);
+      return await getProviderUsage(resolveProviderUsageBody(body));
     } catch (error) {
       getLogger().error('Provider usage error', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.NetHandlers);
       return {
@@ -180,6 +180,51 @@ export async function resolveFetchProviderModelsBody(
       api_key: stored.auth.apiKey,
       base_url: body.base_url || stored.endpoints?.baseUrl || undefined,
       protocol: body.protocol || (stored as { protocol?: string }).protocol || undefined,
+    };
+  } catch {
+    // Store not available (e.g. in unit tests). Fall through.
+    return body;
+  }
+}
+
+/**
+ * Resolve the `api_key` for a quota request by falling back to the on-disk
+ * provider when the renderer passes only `provider_id` — the renderer never
+ * receives the real key, so it cannot supply one itself.
+ *
+ * Resolution order (first match wins):
+ *   1. `body.api_key` is a non-empty, non-masked value → use it.
+ *   2. `body.provider_id` is set and the on-disk provider has a real
+ *      (non-masked) `auth.apiKey` → use it, filling in `base_url` /
+ *      `provider_type` from the same provider when missing.
+ *   3. Otherwise return the body unchanged; the usage fetch short-circuits
+ *      with `NO_CREDENTIALS`.
+ *
+ * Exported so unit tests can exercise the resolution without a full
+ * ipcMain harness.
+ */
+export function resolveProviderUsageBody(
+  body: ProviderUsageBody,
+): ProviderUsageBody {
+  if (body.api_key && !isMaskedKey(body.api_key)) {
+    return body;
+  }
+  if (!body.provider_id) {
+    return body;
+  }
+  try {
+    const stored = getProviderStore().getLlmProvider(body.provider_id);
+    if (!stored?.auth?.apiKey || isMaskedKey(stored.auth.apiKey)) {
+      return body;
+    }
+    return {
+      ...body,
+      api_key: stored.auth.apiKey,
+      base_url: body.base_url || stored.endpoints?.baseUrl || undefined,
+      provider_type:
+        body.provider_type ||
+        (stored as { protocol?: string }).protocol ||
+        undefined,
     };
   } catch {
     // Store not available (e.g. in unit tests). Fall through.

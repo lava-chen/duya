@@ -503,6 +503,9 @@ export interface ProviderUsageBody {
   provider_type?: string;
   base_url?: string;
   api_key?: string;
+  /** When set (and api_key is absent/masked), the IPC handler resolves the
+   *  real key from the on-disk provider so the renderer never handles it. */
+  provider_id?: string;
 }
 
 export async function getProviderUsage(body: ProviderUsageBody): Promise<ProviderUsageResult> {

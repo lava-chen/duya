@@ -377,6 +377,9 @@ export interface NetAPI {
     provider_type?: string
     base_url?: string
     api_key?: string
+    /** Preferred form: the main process resolves the real key from the
+     *  on-disk provider, so the renderer never handles it. */
+    provider_id?: string
   }) => Promise<{
     success: boolean
     plan?: string

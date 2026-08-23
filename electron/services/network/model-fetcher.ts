@@ -27,6 +27,8 @@ export interface FetchedModel {
    * renderer seed the per-model context window instead of assuming 200K/1M.
    */
   contextLength?: number;
+  /** Local-runtime models only (LM Studio / Ollama): currently loaded. */
+  isLoaded?: boolean;
 }
 
 export interface FetchProviderModelsBody {
@@ -34,6 +36,10 @@ export interface FetchProviderModelsBody {
   base_url?: string;
   api_key?: string;
   auth_style?: 'api_key' | 'auth_token' | 'env_only' | 'custom_header';
+  /** Read by resolveFetchProviderModelsBody: when the renderer supplies only
+   *  a provider id (masked key), the handler resolves the real key from the
+   *  on-disk provider. */
+  provider_id?: string;
 }
 
 export interface FetchProviderModelsResult {

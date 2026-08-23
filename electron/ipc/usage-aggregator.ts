@@ -11,11 +11,20 @@
  *    `input >= cacheRead + cacheWrite` we net the cache out so the
  *    input/output/cacheRead/cacheWrite buckets are exclusive — stacked
  *    charts add up and cost does not double-bill cache.
- *  - `total_tokens` is taken verbatim when the provider reports it;
- *    otherwise input + output (both already cover cache).
+ *  - Token VOLUMES (totals/daily/session/model "tokens") are cache-inclusive
+ *    processed volume: exclusive input + cacheRead + cacheWrite + output.
+ *    The old `total_tokens ?? input+output` semantics silently dropped the
+ *    cached portion, which under a 95%-cache-hit workload reported ~5% of
+ *    the volume the model actually processed.
  *  - Cost uses provider_model_capabilities pricing per (providerId, model).
  *    Sessions whose model has no pricing record contribute zero cost and
  *    set `costEstimated: true`.
+ *
+ * Structure: `extractSessionFacts` reduces a session's rows into a
+ * cost-independent `SessionUsageFacts` snapshot; `aggregateUsageFromFacts`
+ * combines facts + live pricing into the summary. The IPC handler caches
+ * facts per session keyed by the rollout file's mtime/size stamp
+ * (`UsageFactsCache`), so unchanged sessions skip the rollout read entirely.
  */
 
 import type { MessageRow } from './core-db-adapters';
@@ -53,7 +62,6 @@ interface ParsedUsage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
-  total: number;
 }
 
 function parseUsage(raw: string | null): ParsedUsage | null {
@@ -62,7 +70,6 @@ function parseUsage(raw: string | null): ParsedUsage | null {
     const u = JSON.parse(raw) as {
       input_tokens?: number;
       output_tokens?: number;
-      total_tokens?: number;
       cache_hit_tokens?: number;
       cache_read_input_tokens?: number;
       cache_creation_tokens?: number;
@@ -73,13 +80,7 @@ function parseUsage(raw: string | null): ParsedUsage | null {
     const cacheRead = u.cache_hit_tokens ?? u.cache_read_input_tokens ?? 0;
     const cacheWrite = u.cache_creation_tokens ?? u.cache_creation_input_tokens ?? 0;
     if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return null;
-    return {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      total: u.total_tokens ?? input + output,
-    };
+    return { input, output, cacheRead, cacheWrite };
   } catch {
     return null;
   }
@@ -112,8 +113,106 @@ function computeCost(
   };
 }
 
-export function aggregateUsage(
-  sessions: UsageSessionInput[],
+// ============================================================================
+// Per-session facts extraction (cacheable, pricing-independent)
+// ============================================================================
+
+/** Everything `aggregateUsageFromFacts` needs from one session's rows —
+ *  derived purely from message content, so it can be cached until the
+ *  session's rollout file changes. */
+export interface SessionUsageFacts {
+  messageTotal: number;
+  userCount: number;
+  assistantCount: number;
+  toolCallCount: number;
+  toolResultCount: number;
+  errorCount: number;
+  durationSumMs: number;
+  toolCounts: Record<string, number>;
+  /** Distinct local-day keys with any message activity. */
+  activeDates: string[];
+  /** Message count per local-day key (drives daily.messageCount). */
+  messagesPerDate: Record<string, number>;
+  /** One entry per usage-bearing message, buckets already exclusive. */
+  usageRows: Array<{
+    date: string;
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    /** Cache-inclusive processed volume: exclusive input + cache + output. */
+    volume: number;
+  }>;
+}
+
+export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
+  const facts: SessionUsageFacts = {
+    messageTotal: 0,
+    userCount: 0,
+    assistantCount: 0,
+    toolCallCount: 0,
+    toolResultCount: 0,
+    errorCount: 0,
+    durationSumMs: 0,
+    toolCounts: {},
+    activeDates: [],
+    messagesPerDate: {},
+    usageRows: [],
+  };
+  const dates = new Set<string>();
+
+  for (const row of rows) {
+    facts.messageTotal++;
+    if (row.role === 'user') facts.userCount++;
+    if (row.role === 'assistant') facts.assistantCount++;
+    if (row.msg_type === 'tool_use') {
+      facts.toolCallCount++;
+      if (row.tool_name) {
+        facts.toolCounts[row.tool_name] = (facts.toolCounts[row.tool_name] ?? 0) + 1;
+      }
+    }
+    if (row.msg_type === 'tool_result') facts.toolResultCount++;
+    if (row.status === 'error') facts.errorCount++;
+    if (row.duration_ms) facts.durationSumMs += row.duration_ms;
+
+    const date = dayKey(row.created_at);
+    dates.add(date);
+    facts.messagesPerDate[date] = (facts.messagesPerDate[date] ?? 0) + 1;
+
+    const usage = parseUsage(row.token_usage);
+    if (usage) {
+      const buckets = toExclusiveBuckets(usage);
+      facts.usageRows.push({
+        date,
+        input: buckets.input,
+        output: usage.output,
+        cacheRead: buckets.cacheRead,
+        cacheWrite: buckets.cacheWrite,
+        volume: buckets.input + usage.output + buckets.cacheRead + buckets.cacheWrite,
+      });
+    }
+  }
+
+  facts.activeDates = Array.from(dates);
+  return facts;
+}
+
+export interface SessionFactsInput {
+  id: string;
+  title: string;
+  model: string;
+  providerId: string;
+  createdAt: number;
+  updatedAt: number;
+  facts: SessionUsageFacts;
+}
+
+// ============================================================================
+// Aggregation (facts + live pricing → UsageSummary)
+// ============================================================================
+
+export function aggregateUsageFromFacts(
+  sessions: SessionFactsInput[],
   pricingLookup: UsagePricingLookup,
   now = Date.now(),
 ): UsageSummary {
@@ -150,8 +249,34 @@ export function aggregateUsage(
   const modelCostMap = new Map<string, number>();
   const sessionSummaries: UsageSessionSummary[] = [];
 
+  const dailyFor = (date: string): DailyUsageEntry & { sessionIds: Set<string> } => {
+    let daily = dailyMap.get(date);
+    if (!daily) {
+      daily = {
+        date,
+        tokens: 0,
+        cost: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        messageCount: 0,
+        sessionCount: 0,
+        sessionIds: new Set(),
+        models: {},
+      };
+      dailyMap.set(date, daily);
+    }
+    return daily;
+  };
+
   for (const session of sessions) {
-    if (session.rows.length === 0) continue;
+    const { facts } = session;
+    if (facts.messageTotal === 0) continue;
     const pricing = pricingLookup(session.providerId, session.model);
     if (!pricing) totals.costEstimated = true;
 
@@ -161,109 +286,69 @@ export function aggregateUsage(
     let sessionOutput = 0;
     let sessionCacheRead = 0;
     let sessionCacheWrite = 0;
-    let sessionToolCalls = 0;
-    let sessionErrors = 0;
-    let sessionDuration = 0;
     const sessionDaily = new Map<string, { tokens: number; cost: number }>();
 
-    for (const row of session.rows) {
-      aggregates.messages.total++;
-      if (row.role === 'user') aggregates.messages.user++;
-      if (row.role === 'assistant') aggregates.messages.assistant++;
-      if (row.msg_type === 'tool_use') {
-        aggregates.messages.toolCalls++;
-        sessionToolCalls++;
-        if (row.tool_name) {
-          toolCounts.set(row.tool_name, (toolCounts.get(row.tool_name) ?? 0) + 1);
-        }
-      }
-      if (row.msg_type === 'tool_result') aggregates.messages.toolResults++;
-      if (row.status === 'error') {
-        aggregates.messages.errors++;
-        sessionErrors++;
-      }
-      if (row.duration_ms) {
-        aggregates.durationSumMs += row.duration_ms;
-        sessionDuration += row.duration_ms;
-      }
+    aggregates.messages.total += facts.messageTotal;
+    aggregates.messages.user += facts.userCount;
+    aggregates.messages.assistant += facts.assistantCount;
+    aggregates.messages.toolCalls += facts.toolCallCount;
+    aggregates.messages.toolResults += facts.toolResultCount;
+    aggregates.messages.errors += facts.errorCount;
+    aggregates.durationSumMs += facts.durationSumMs;
+    for (const [name, count] of Object.entries(facts.toolCounts)) {
+      toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
+    }
+    for (const date of facts.activeDates) activeDaysSet.add(date);
+    for (const [date, count] of Object.entries(facts.messagesPerDate)) {
+      dailyFor(date).messageCount += count;
+    }
 
-      const ts = row.created_at;
-      const date = dayKey(ts);
-      activeDaysSet.add(date);
+    for (const usage of facts.usageRows) {
+      const cost = computeCost(usage, pricing);
+      const costTotal = cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
 
-      let daily = dailyMap.get(date);
-      if (!daily) {
-        daily = {
-          date,
-          tokens: 0,
-          cost: 0,
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          inputCost: 0,
-          outputCost: 0,
-          cacheReadCost: 0,
-          cacheWriteCost: 0,
-          messageCount: 0,
-          sessionCount: 0,
-          sessionIds: new Set(),
-          models: {},
-        };
-        dailyMap.set(date, daily);
-      }
-      daily.messageCount++;
+      totals.input += usage.input;
+      totals.output += usage.output;
+      totals.cacheRead += usage.cacheRead;
+      totals.cacheWrite += usage.cacheWrite;
+      totals.totalTokens += usage.volume;
+      totals.inputCost += cost.inputCost;
+      totals.outputCost += cost.outputCost;
+      totals.cacheReadCost += cost.cacheReadCost;
+      totals.cacheWriteCost += cost.cacheWriteCost;
+      totals.totalCost += costTotal;
+
+      sessionTokens += usage.volume;
+      sessionCost += costTotal;
+      sessionInput += usage.input;
+      sessionOutput += usage.output;
+      sessionCacheRead += usage.cacheRead;
+      sessionCacheWrite += usage.cacheWrite;
+
+      const daily = dailyFor(usage.date);
       daily.sessionIds.add(session.id);
+      daily.tokens += usage.volume;
+      daily.input += usage.input;
+      daily.output += usage.output;
+      daily.cacheRead += usage.cacheRead;
+      daily.cacheWrite += usage.cacheWrite;
+      daily.inputCost += cost.inputCost;
+      daily.outputCost += cost.outputCost;
+      daily.cacheReadCost += cost.cacheReadCost;
+      daily.cacheWriteCost += cost.cacheWriteCost;
+      daily.cost += costTotal;
 
-      const usage = parseUsage(row.token_usage);
-      if (usage) {
-        const buckets = toExclusiveBuckets(usage);
-        const cost = computeCost({ ...buckets, output: usage.output }, pricing);
+      const modelKey = session.model || 'unknown';
+      daily.models[modelKey] = (daily.models[modelKey] ?? 0) + usage.volume;
+      modelTokensMap.set(modelKey, (modelTokensMap.get(modelKey) ?? 0) + usage.volume);
+      modelCostMap.set(modelKey, (modelCostMap.get(modelKey) ?? 0) + costTotal);
 
-        totals.input += buckets.input;
-        totals.output += usage.output;
-        totals.cacheRead += buckets.cacheRead;
-        totals.cacheWrite += buckets.cacheWrite;
-        totals.totalTokens += usage.total;
-        totals.inputCost += cost.inputCost;
-        totals.outputCost += cost.outputCost;
-        totals.cacheReadCost += cost.cacheReadCost;
-        totals.cacheWriteCost += cost.cacheWriteCost;
-        totals.totalCost += cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
-
-        sessionTokens += usage.total;
-        sessionCost += cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
-        sessionInput += buckets.input;
-        sessionOutput += usage.output;
-        sessionCacheRead += buckets.cacheRead;
-        sessionCacheWrite += buckets.cacheWrite;
-
-        daily.tokens += usage.total;
-        daily.input += buckets.input;
-        daily.output += usage.output;
-        daily.cacheRead += buckets.cacheRead;
-        daily.cacheWrite += buckets.cacheWrite;
-        daily.inputCost += cost.inputCost;
-        daily.outputCost += cost.outputCost;
-        daily.cacheReadCost += cost.cacheReadCost;
-        daily.cacheWriteCost += cost.cacheWriteCost;
-        daily.cost += cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
-
-        const modelKey = session.model || 'unknown';
-        daily.models[modelKey] = (daily.models[modelKey] ?? 0) + usage.total;
-        modelTokensMap.set(modelKey, (modelTokensMap.get(modelKey) ?? 0) + usage.total);
-        modelCostMap.set(modelKey, (modelCostMap.get(modelKey) ?? 0) + cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost);
-
-        const dayTokens = sessionDaily.get(date);
-        if (dayTokens) {
-          dayTokens.tokens += usage.total;
-          dayTokens.cost += cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost;
-        } else {
-          sessionDaily.set(date, {
-            tokens: usage.total,
-            cost: cost.inputCost + cost.outputCost + cost.cacheReadCost + cost.cacheWriteCost,
-          });
-        }
+      const dayTokens = sessionDaily.get(usage.date);
+      if (dayTokens) {
+        dayTokens.tokens += usage.volume;
+        dayTokens.cost += costTotal;
+      } else {
+        sessionDaily.set(usage.date, { tokens: usage.volume, cost: costTotal });
       }
     }
 
@@ -280,10 +365,10 @@ export function aggregateUsage(
       outputTokens: sessionOutput,
       cacheReadTokens: sessionCacheRead,
       cacheWriteTokens: sessionCacheWrite,
-      messageCount: session.rows.length,
-      toolCallCount: sessionToolCalls,
-      errorCount: sessionErrors,
-      durationMs: sessionDuration,
+      messageCount: facts.messageTotal,
+      toolCallCount: facts.toolCallCount,
+      errorCount: facts.errorCount,
+      durationMs: facts.durationSumMs,
       dailyBreakdown: Array.from(sessionDaily.entries())
         .map(([date, data]) => ({ date, tokens: data.tokens, cost: data.cost }))
         .sort((a, b) => a.date.localeCompare(b.date)),
@@ -357,4 +442,57 @@ export function aggregateUsage(
     sessions: sessionList,
     generatedAt: now,
   };
+}
+
+/** Compose helper: extract facts from raw rows, then aggregate. Kept for
+ *  callers/tests that work with raw rows; the IPC handler uses the split
+ *  form so it can cache per-session facts. */
+export function aggregateUsage(
+  sessions: UsageSessionInput[],
+  pricingLookup: UsagePricingLookup,
+  now = Date.now(),
+): UsageSummary {
+  return aggregateUsageFromFacts(
+    sessions.map((session) => ({
+      id: session.id,
+      title: session.title,
+      model: session.model,
+      providerId: session.providerId,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      facts: extractSessionFacts(session.rows),
+    })),
+    pricingLookup,
+    now,
+  );
+}
+
+// ============================================================================
+// Facts cache (mtime/size-gated, used by the db:usage:summary handler)
+// ============================================================================
+
+/** Caches per-session facts keyed by a rollout-file stamp so unchanged
+ *  sessions skip the rollout read on every dashboard refresh. */
+export class UsageFactsCache {
+  private entries = new Map<string, { stamp: string; facts: SessionUsageFacts }>();
+
+  get(sessionId: string, stamp: string): SessionUsageFacts | undefined {
+    const entry = this.entries.get(sessionId);
+    return entry && entry.stamp === stamp ? entry.facts : undefined;
+  }
+
+  set(sessionId: string, stamp: string, facts: SessionUsageFacts): void {
+    this.entries.set(sessionId, { stamp, facts });
+  }
+
+  /** Drop entries for sessions that no longer exist. */
+  prune(aliveIds: Set<string>): void {
+    for (const id of this.entries.keys()) {
+      if (!aliveIds.has(id)) this.entries.delete(id);
+    }
+  }
+
+  get size(): number {
+    return this.entries.size;
+  }
 }
