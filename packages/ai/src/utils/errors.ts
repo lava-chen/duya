@@ -105,6 +105,38 @@ const CONNECTION_ERROR_CODES = new Set([
 ]);
 
 /**
+ * Transport-level stream-death message fragments. Aggregator routes
+ * (OpenRouter et al.) drop mid-stream connections far more often than
+ * direct endpoints, and those deaths surface as plain errors with no HTTP
+ * status and no error `code`: undici throws bare `TypeError: terminated`
+ * when a response body closes early, `fetch failed` on socket-level
+ * aborts, and OpenRouter wraps upstream failures in text like
+ * "Provider returned error". Without these patterns such errors classify
+ * as UNKNOWN → non-retryable, so one upstream hiccup kills the whole turn.
+ *
+ * Matched only AFTER the HTTP-status switch, so status-bearing responses
+ * keep their own semantics (a 400 whose message happens to contain one of
+ * these fragments still classifies as CLIENT_ERROR).
+ */
+const TRANSPORT_STREAM_ERROR_PATTERNS = [
+  'terminated',                                            // undici premature body close
+  'fetch failed',
+  'premature close',
+  'prematurely closed',
+  'other side closed',
+  'socket hang up',
+  'connection lost',
+  'connection closed',
+  'connection reset',
+  'connection error',
+  'network error',
+  'provider returned error',                               // OpenRouter upstream-failure wrapper
+  'exceeded request buffer limit while retrying upstream', // OpenRouter buffer overflow
+  'stream ended without finish_reason',                    // openai-completions premature-end guard
+  'ended before message_stop',                             // anthropic-protocol premature end
+];
+
+/**
  * Extract error code from error object
  */
 function extractErrorCode(error: unknown): string | undefined {
@@ -293,6 +325,12 @@ export function classifyError(error: unknown): APIErrorType {
     const msg = error.message.toLowerCase();
     if (msg.includes('overloaded') || msg.includes('"type":"overloaded_error"')) {
       return APIErrorType.SERVER_OVERLOAD;
+    }
+
+    // Status-less transport-level stream death (mid-stream connection drop
+    // from the provider/aggregator). See TRANSPORT_STREAM_ERROR_PATTERNS.
+    if (TRANSPORT_STREAM_ERROR_PATTERNS.some((pattern) => msg.includes(pattern))) {
+      return APIErrorType.CONNECTION_ERROR;
     }
   }
 
