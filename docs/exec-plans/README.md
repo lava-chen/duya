@@ -90,6 +90,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [227-canvas-knowledge-workspace](./active/227-canvas-knowledge-workspace.md) | Canvas knowledge workspace | P1 | Planning |
 | [314-global-connector-registry-design-suite](./active/314-global-connector-registry-design-suite.md) | Global connector registry design suite | P1 | Planning |
 | [314-tool-catalog-snapshot](./active/314-tool-catalog-snapshot.md) | Tool catalog snapshot design | P1 | Planning |
+| [439-canvas-capture-region-canvas-coords](./active/439-canvas-capture-region-canvas-coords.md) | `canvas_capture` region 用画布 grid 坐标 + 渲染端自动取景（临时平移缩放后还原），视口外区域可截 | P0 | 代码+单测完成；Electron 手动验证待办 |
 
 ### Plugin / MCP / App Connection
 
