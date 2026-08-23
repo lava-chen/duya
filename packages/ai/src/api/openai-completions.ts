@@ -727,6 +727,17 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
             }
           }
 
+          // 9b'. refusal → text_delta (plan 440 P0). A refusing model
+          //     streams its reply through delta.refusal with delta.content
+          //     null — without this branch the assistant message would be
+          //     silently empty.
+          const refusalText = (delta as unknown as Record<string, unknown>).refusal;
+          if (typeof refusalText === 'string' && refusalText.length > 0) {
+            const internalEvent = appendText(assistantMsg, refusalText);
+            const sse = emitSSE(internalEvent);
+            if (sse) yield sse;
+          }
+
           // 9c. tool_calls → toolcall_start/delta.
           if (delta.tool_calls) {
             for (const toolCallDelta of delta.tool_calls) {
@@ -805,7 +816,11 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       });
       const providerName = (response as unknown as OpenRouterProviderMeta).provider?.name;
       return {
-        content: response.choices[0]?.message?.content ?? '',
+        // Plan 440 P0: a refusing model returns its reply in message.refusal
+        // with content null — surface it instead of an empty string.
+        content: response.choices[0]?.message?.refusal
+          || response.choices[0]?.message?.content
+          || '',
         usage: response.usage ? {
           ...mapOpenAIUsage(
             response.usage.prompt_tokens,
