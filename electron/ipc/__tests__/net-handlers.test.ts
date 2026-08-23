@@ -105,7 +105,7 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { resolveFetchProviderModelsBody, registerNetHandlers } from '../net-handlers';
+import { resolveFetchProviderModelsBody, resolveProviderUsageBody, registerNetHandlers } from '../net-handlers';
 
 describe('resolveFetchProviderModelsBody', () => {
   beforeEach(() => {
@@ -268,6 +268,68 @@ describe('resolveFetchProviderModelsBody', () => {
       });
       expect(result.api_key).toBe('sk-a***cdef');
     });
+  });
+});
+
+describe('resolveProviderUsageBody', () => {
+  beforeEach(() => {
+    mocks.stored.current = null;
+    mocks.providerStore.getLlmProvider.mockClear();
+    mocks.isMaskedKey.mockClear();
+  });
+
+  it('passes through when a real api_key is supplied', () => {
+    const body = { provider_id: 'p1', provider_type: 'glm', base_url: 'https://x', api_key: 'sk-real' };
+    const result = resolveProviderUsageBody(body);
+    expect(result).toEqual(body);
+    expect(mocks.providerStore.getLlmProvider).not.toHaveBeenCalled();
+  });
+
+  it('resolves the real key from the on-disk provider via provider_id', () => {
+    mocks.stored.current = {
+      id: 'p1',
+      auth: { apiKey: 'sk-stored-real-key' },
+      endpoints: { baseUrl: 'https://stored.example.com' },
+      protocol: 'glm',
+    };
+    const result = resolveProviderUsageBody({ provider_id: 'p1' });
+    expect(result.api_key).toBe('sk-stored-real-key');
+    expect(result.base_url).toBe('https://stored.example.com');
+    expect(result.provider_type).toBe('glm');
+  });
+
+  it('keeps caller-supplied base_url and provider_type over stored ones', () => {
+    mocks.stored.current = {
+      id: 'p1',
+      auth: { apiKey: 'sk-stored-real-key' },
+      endpoints: { baseUrl: 'https://stored.example.com' },
+      protocol: 'glm',
+    };
+    const result = resolveProviderUsageBody({
+      provider_id: 'p1',
+      provider_type: 'minimax',
+      base_url: 'https://caller.example.com',
+    });
+    expect(result.base_url).toBe('https://caller.example.com');
+    expect(result.provider_type).toBe('minimax');
+  });
+
+  it('leaves the body untouched when the store key is missing or masked', () => {
+    mocks.stored.current = { id: 'p1', auth: { apiKey: 'sk-b***xxxx' } };
+    const masked = resolveProviderUsageBody({ provider_id: 'p1' });
+    expect(masked.api_key).toBeUndefined();
+
+    mocks.stored.current = null;
+    const missing = resolveProviderUsageBody({ provider_id: 'unknown' });
+    expect(missing.api_key).toBeUndefined();
+  });
+
+  it('returns body unchanged when the store throws', () => {
+    mocks.providerStore.getLlmProvider.mockImplementationOnce(() => {
+      throw new Error('store unavailable');
+    });
+    const body = { provider_id: 'p1' };
+    expect(resolveProviderUsageBody(body)).toEqual(body);
   });
 });
 

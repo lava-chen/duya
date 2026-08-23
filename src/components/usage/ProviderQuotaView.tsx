@@ -13,35 +13,6 @@ interface ProviderQuotaViewProps {
   onBack: () => void;
 }
 
-interface UnmaskedConfig {
-  apiKey: string;
-  baseUrl?: string;
-  model: string;
-  provider: string;
-  authStyle: string;
-}
-
-/**
- * Fetch the unmasked API key for a given provider via the dedicated IPC channel.
- * The list-providers endpoint returns masked keys; only this channel returns the
- * real one. Provider model is not used by the quota API — pass empty string.
- */
-async function fetchUnmaskedApiKey(providerId: string): Promise<string | null> {
-  try {
-    const electronApi = window.electronAPI as unknown as Record<string, unknown> | undefined;
-    const providerApi = electronApi?.provider as
-      | { getConfig: (id: string, model: string) => Promise<UnmaskedConfig | null> }
-      | undefined;
-    if (!providerApi?.getConfig) {
-      return null;
-    }
-    const config = await providerApi.getConfig(providerId, "");
-    return config?.apiKey ?? null;
-  } catch {
-    return null;
-  }
-}
-
 export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) => {
   const { t } = useTranslation();
   const [providers, setProviders] = useState<IpccProvider[]>([]);
@@ -85,10 +56,15 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
     }));
 
     try {
-      // Resolve the unmasked API key for this specific provider.
-      // The list endpoint returns masked keys (***), which the quota API rejects.
-      const apiKey = await fetchUnmaskedApiKey(provider.id);
-      if (!apiKey) {
+      // Pass only the provider id: the main process resolves the real API
+      // key from the on-disk provider, so the renderer never handles it.
+      const result = await window.electronAPI.net.getProviderUsage({
+        provider_id: provider.id,
+        provider_type: provider.providerType,
+        base_url: provider.baseUrl,
+      });
+
+      if (!result.success && result.error?.code === "NO_CREDENTIALS") {
         setQuotaStates((prev) => ({
           ...prev,
           [provider.id]: {
@@ -103,12 +79,6 @@ export const ProviderQuotaView: React.FC<ProviderQuotaViewProps> = ({ onBack }) 
         }));
         return;
       }
-
-      const result = await window.electronAPI.net.getProviderUsage({
-        provider_type: provider.providerType,
-        base_url: provider.baseUrl,
-        api_key: apiKey,
-      });
 
       if (result.success) {
         setQuotaStates((prev) => ({

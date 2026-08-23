@@ -19,6 +19,7 @@ import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import { ChatHeader } from './ChatHeader';
 import { DB_DEFAULT_MODEL } from '@/lib/constants';
 import { getThreadIPC, updateThreadIPC, getProviderIPC, getModelCapabilityIPC } from '@/lib/ipc-client';
+import type { ModelPricing } from '@/lib/context-usage-utils';
 import { useSettings } from '@/hooks/useSettings';
 import { usePolling } from '@/hooks/usePolling';
 import { useStreamPhase } from '@/hooks/useStreamPhase';
@@ -159,6 +160,7 @@ export function ChatView({
   // ContextUsageRing falls back to a hardcoded 200K for any minimax-*
   // model id, which silently hides 1M sessions.
   const [capabilityContextWindow, setCapabilityContextWindow] = useState<number | undefined>(undefined);
+  const [capabilityPricing, setCapabilityPricing] = useState<ModelPricing | undefined>(undefined);
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
   const [effort, setEffortState] = useState<string | undefined>(settings.defaultThinkingEffort ?? undefined);
   // Permission mode restored as a composer selector (Ask / Auto / Bypass).
@@ -641,11 +643,13 @@ export function ChatView({
   useEffect(() => {
     if (!sessionProviderId || !sessionModel) {
       setCapabilityContextWindow(undefined);
+      setCapabilityPricing(undefined);
       return;
     }
     const { modelName: pureModel } = parseModelName(sessionModel);
     if (!pureModel) {
       setCapabilityContextWindow(undefined);
+      setCapabilityPricing(undefined);
       return;
     }
     let cancelled = false;
@@ -660,10 +664,14 @@ export function ChatView({
             ? cap.contextWindow
             : undefined,
         );
+        // Same capability row carries the real pricing the ring's $ figure
+        // uses (hidden when absent — no hardcoded fallback rates).
+        setCapabilityPricing(cap?.pricing ?? undefined);
       })
       .catch(() => {
         if (cancelled) return;
         setCapabilityContextWindow(undefined);
+        setCapabilityPricing(undefined);
       });
     return () => {
       cancelled = true;
@@ -1489,6 +1497,7 @@ export function ChatView({
                   sessionId={sessionId}
                   modelName={sessionModel}
                   contextWindow={capabilityContextWindow}
+                  pricing={capabilityPricing}
                   onCompress={handleCompact}
                   isCompacting={isCompacting}
                 />

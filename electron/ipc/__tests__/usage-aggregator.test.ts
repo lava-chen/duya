@@ -8,7 +8,14 @@
  * aggregates.
  */
 import { describe, expect, it } from 'vitest';
-import { aggregateUsage, type UsageSessionInput, type UsagePricingLookup } from '../usage-aggregator';
+import {
+  aggregateUsage,
+  aggregateUsageFromFacts,
+  extractSessionFacts,
+  UsageFactsCache,
+  type UsageSessionInput,
+  type UsagePricingLookup,
+} from '../usage-aggregator';
 import type { MessageRow } from '../core-db-adapters';
 
 function msgRow(overrides: Partial<MessageRow> & { id: string }): MessageRow {
@@ -112,8 +119,10 @@ describe('aggregateUsage', () => {
     expect(result.aggregates.tools.tools[0]).toEqual({ name: 'Bash', count: 1 });
     expect(result.aggregates.durationSumMs).toBe(1500);
 
-    // total_tokens verbatim when reported, input+output otherwise.
-    expect(result.totals.totalTokens).toBe((1000 + 200) + 1300 + (500 + 100));
+    // Volume is computed from the exclusive buckets + output so charts stay
+    // additive; a provider-reported total_tokens that disagrees with its own
+    // buckets (a2 reports 1300 vs 1200+50) is ignored.
+    expect(result.totals.totalTokens).toBe((1000 + 200) + (1200 + 50) + (500 + 100));
     expect(result.totals.input).toBe(1000 + 1200 + 500);
     expect(result.totals.output).toBe(200 + 50 + 100);
   });
@@ -139,6 +148,10 @@ describe('aggregateUsage', () => {
     expect(result.totals.input).toBe(300);
     expect(result.totals.cacheRead).toBe(600);
     expect(result.totals.cacheWrite).toBe(100);
+
+    // Volume is cache-inclusive: 300 fresh + 100 output + 600 read + 100
+    // written — the full prompt volume the model actually processed.
+    expect(result.totals.totalTokens).toBe(1100);
 
     // Cost bills each bucket exactly once.
     expect(result.totals.inputCost).toBeCloseTo((300 * 3) / 1_000_000, 9);
@@ -167,6 +180,10 @@ describe('aggregateUsage', () => {
 
     expect(result.totals.input).toBe(200);
     expect(result.totals.cacheRead).toBe(600);
+
+    // Cache-inclusive volume adds the cached portion back (the old
+    // input+output semantics reported only 250 of 850 processed tokens).
+    expect(result.totals.totalTokens).toBe(850);
   });
 
   it('marks costEstimated and zeroes cost when pricing is missing', () => {
@@ -338,5 +355,64 @@ describe('aggregateUsage', () => {
     );
 
     expect(result.aggregates.currentStreak).toBe(0);
+  });
+});
+
+describe('facts split + cache', () => {
+  const cacheUsageRows = [
+    msgRow({
+      id: 'a1',
+      token_usage: JSON.stringify({
+        input_tokens: 1000,
+        output_tokens: 100,
+        cache_hit_tokens: 600,
+        cache_creation_tokens: 100,
+      }),
+    }),
+    msgRow({ id: 'u1', role: 'user', msg_type: 'text' }),
+  ];
+
+  it('aggregateUsageFromFacts matches the row-based compose exactly', () => {
+    const s = session('s1', cacheUsageRows);
+    const now = new Date(2026, 7, 15, 12, 0).getTime();
+    const viaRows = aggregateUsage([s], pricedLookup, now);
+    const viaFacts = aggregateUsageFromFacts(
+      [{ ...s, facts: extractSessionFacts(s.rows) }],
+      pricedLookup,
+      now,
+    );
+    expect(viaFacts).toEqual(viaRows);
+  });
+
+  it('extractSessionFacts buckets usage exclusively and tracks per-date counts', () => {
+    const facts = extractSessionFacts(cacheUsageRows);
+    expect(facts.messageTotal).toBe(2);
+    expect(facts.userCount).toBe(1);
+    expect(facts.assistantCount).toBe(1);
+    expect(facts.messagesPerDate).toHaveProperty('2026-08-15', 2);
+    expect(facts.usageRows).toHaveLength(1);
+    expect(facts.usageRows[0]).toEqual({
+      date: '2026-08-15',
+      input: 300,
+      output: 100,
+      cacheRead: 600,
+      cacheWrite: 100,
+      volume: 1100,
+    });
+  });
+
+  it('UsageFactsCache reuses facts while the stamp is unchanged and prunes dead sessions', () => {
+    const cache = new UsageFactsCache();
+    const facts = extractSessionFacts(cacheUsageRows);
+
+    cache.set('s1', '100:200', facts);
+    expect(cache.get('s1', '100:200')).toBe(facts);
+    // A different stamp (file changed) misses.
+    expect(cache.get('s1', '101:200')).toBeUndefined();
+
+    cache.set('s2', '1:1', facts);
+    cache.prune(new Set(['s1']));
+    expect(cache.get('s2', '1:1')).toBeUndefined();
+    expect(cache.get('s1', '100:200')).toBe(facts);
   });
 });
