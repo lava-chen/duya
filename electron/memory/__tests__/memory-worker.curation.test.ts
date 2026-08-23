@@ -170,4 +170,58 @@ describe('memory-worker curation path (Plan 406)', () => {
     expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
     expect(result.curated).toBeNull();
   });
+
+  it('curation sweeper timer evaluates the Hybrid quorum without any tick activity', async () => {
+    // Regression: the sweeper interval was removed entirely, so Phase 2 only
+    // ever ran after a tick produced new Stage 1 outputs — an extraction
+    // outage silently disabled curation while inputs piled up.
+    mocks.queryEligibleInputs.mockReturnValue([
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's2', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's3', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r4', contentHash: 'h4', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's4', generatedAt: Date.now() - 10_000, bytes: 100 },
+    ]);
+    mocks.runCurationCycle.mockResolvedValue({ skipped: false, success: true, runId: 'run-timer', durationMs: 5 });
+
+    vi.useFakeTimers();
+    try {
+      startMemoryWorker(toDeps(f), {
+        extractEveryMs: 60_000,
+        sweepOutboxEveryMs: 60_000,
+        consolidatorIntervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(mocks.runCurationCycle).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(700);
+      expect(mocks.queryEligibleInputs).toHaveBeenCalled();
+      expect(mocks.runCurationCycle).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('paused worker does not fire the curation sweeper', async () => {
+    mocks.queryEligibleInputs.mockReturnValue([
+      { inputKind: 'rollout', inputKey: 'r1', contentHash: 'h1', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's1', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r2', contentHash: 'h2', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's2', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r3', contentHash: 'h3', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's3', generatedAt: Date.now() - 10_000, bytes: 100 },
+      { inputKind: 'rollout', inputKey: 'r4', contentHash: 'h4', outputUpdatedAt: Date.now() - 10_000, rolloutSlug: 's4', generatedAt: Date.now() - 10_000, bytes: 100 },
+    ]);
+
+    vi.useFakeTimers();
+    try {
+      const h = startMemoryWorker(toDeps(f), {
+        extractEveryMs: 60_000,
+        sweepOutboxEveryMs: 60_000,
+        consolidatorIntervalMs: 1_000,
+      });
+      h.pause();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.runCurationCycle).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
