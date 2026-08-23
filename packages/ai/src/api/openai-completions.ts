@@ -20,6 +20,7 @@ import type {
   TextContent, ThinkingContent, ToolUseContent,
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
+import { summarizeProviderBlock } from './degrade.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
@@ -281,7 +282,8 @@ export function repairToolPairing(messages: Message[]): Message[] {
  * for them, and transformMessages has already downgraded cross-model thinking
  * to plain text.
  */
-function toOpenAIMessages(
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function toOpenAIMessages(
   messages: Message[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // Repair orphaned tool_use/tool_result pairs before conversion so the
@@ -349,6 +351,11 @@ function toOpenAIMessages(
                 arguments: JSON.stringify(block.input),
               },
             });
+          } else if (block.type === 'provider_block') {
+            // Plan 440 phase 1: Chat Completions has no inbound carrier for
+            // provider blocks — degrade to the bounded summary line so the
+            // step stays visible without breaking the wire format.
+            textParts.push(summarizeProviderBlock(block));
           }
         }
         const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
@@ -749,6 +756,28 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
             }
           }
 
+          // 9b'. refusal → text_delta (plan 440 P0). A refusing model
+          //     streams its reply through delta.refusal with delta.content
+          //     null — without this branch the assistant message would be
+          //     silently empty.
+          const refusalText = (delta as unknown as Record<string, unknown>).refusal;
+          if (typeof refusalText === 'string' && refusalText.length > 0) {
+            const internalEvent = appendText(assistantMsg, refusalText);
+            const sse = emitSSE(internalEvent);
+            if (sse) yield sse;
+          }
+
+          // 9b''. Annotations (search-preview citations etc.) attach to the
+          //     text block they annotate — capture-only, rendering is a
+          //     frontend concern (plan 440 phase 2).
+          const deltaAnnotations = (delta as unknown as Record<string, unknown>).annotations;
+          if (Array.isArray(deltaAnnotations) && deltaAnnotations.length > 0) {
+            const lastBlock = assistantMsg.content[assistantMsg.content.length - 1];
+            if (lastBlock && lastBlock.type === 'text') {
+              lastBlock.annotations = [...(lastBlock.annotations ?? []), ...deltaAnnotations];
+            }
+          }
+
           // 9c. tool_calls → toolcall_start/delta.
           if (delta.tool_calls) {
             for (const toolCallDelta of delta.tool_calls) {
@@ -771,6 +800,16 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
             input_tokens: chunk.usage.prompt_tokens || 0,
             output_tokens: chunk.usage.completion_tokens || 0,
           };
+        }
+
+        // 9d'. Observability metadata — captured verbatim when present,
+        //      never required (plan 440 phase 2).
+        const serviceTier = (chunk as unknown as Record<string, unknown>).service_tier;
+        if (typeof serviceTier === 'string' && serviceTier.length > 0) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
+        }
+        if (choice.logprobs) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, logprobs: choice.logprobs };
         }
 
         // 9e. Map finish reason.
@@ -833,7 +872,11 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       });
       const providerName = (response as unknown as OpenRouterProviderMeta).provider?.name;
       return {
-        content: response.choices[0]?.message?.content ?? '',
+        // Plan 440 P0: a refusing model returns its reply in message.refusal
+        // with content null — surface it instead of an empty string.
+        content: response.choices[0]?.message?.refusal
+          || response.choices[0]?.message?.content
+          || '',
         usage: response.usage ? {
           ...mapOpenAIUsage(
             response.usage.prompt_tokens,
