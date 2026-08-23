@@ -11,6 +11,7 @@ import {
   estimateTokens,
   normalizeInputTokens,
   estimateCost,
+  type ModelPricing,
 } from '@/lib/context-usage-utils';
 import { useContextUsageStore } from '@/stores/context-usage-store';
 
@@ -92,6 +93,7 @@ export function useContextUsage(
   modelName?: string,
   contextWindow?: number,
   sessionId?: string,
+  pricing?: ModelPricing,
 ): ContextUsage {
   // Live context-usage snapshot pushed by the worker during streaming. When
   // present it reflects the real prompt size (plus trailing tool-result
@@ -122,7 +124,7 @@ export function useContextUsage(
       totalOutput += output;
       totalCacheRead += cacheRead;
       totalCacheWrite += cacheWrite;
-      totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite);
+      totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite, pricing);
     }
 
     const noData: ContextUsage = {
@@ -188,6 +190,7 @@ export function useContextUsage(
               live.totalOutput,
               live.totalCacheHit,
               live.totalCacheCreation,
+              pricing,
             )
           : totalCost;
       return {
@@ -263,7 +266,9 @@ export function useContextUsage(
 
     // Trailing estimate of messages appended after the last usage-bearing
     // assistant (e.g. the last turn's tool results that have not yet been
-    // answered by the model).
+    // answered by the model). Attachments ride along with their user message:
+    // images cost at least their vision-encoded size (~700 tokens), text
+    // attachments are estimated from their extracted text.
     if (latestUsed !== undefined) {
       let trailing = 0;
       for (let j = lastUsageIndex + 1; j < messages.length; j++) {
@@ -276,7 +281,16 @@ export function useContextUsage(
                   typeof b === 'string' ? b : (b as { text?: string }).text || '',
                 )
                 .join(' ');
-        trailing += estimateTokens(text);
+        let msgTokens = estimateTokens(text);
+        if (msg.role === 'user') {
+          for (const att of msg.attachments || []) {
+            const isImage = (att.type ?? '').startsWith('image/');
+            msgTokens += isImage
+              ? Math.max(700, estimateTokens(att.text ?? ''))
+              : estimateTokens(att.text ?? '');
+          }
+        }
+        trailing += msgTokens;
       }
       latestUsed += trailing;
     }
@@ -324,5 +338,5 @@ export function useContextUsage(
     // authoritative numbers, which reads as the ring jumping. The worker
     // broadcasts a snapshot at turn start, so this state is transient.
     return noData;
-  }, [messages, modelName, contextWindow, live]);
+  }, [messages, modelName, contextWindow, live, pricing]);
 }

@@ -117,11 +117,21 @@ const CATEGORY_LABELS: Record<ContextCategory, string> = {
   system: 'System',
 };
 
-/** Rough character → token conversion. 4 chars ≈ 1 token for English /
- *  code, which is what we mostly deal with. */
+/** CJK characters consume ~1-2 tokens per character in BPE tokenizers while
+ *  ASCII/English averages ~4 characters per token. Same ratios as the
+ *  worker-side estimator (packages/agent/src/compact/tokenBudget.ts) so the
+ *  renderer's trailing estimate does not under-count Chinese content. */
+const CJK_REGEX = /[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g;
+const CJK_CHARS_PER_TOKEN = 2.5;
+const ASCII_CHARS_PER_TOKEN = 4;
+
+/** Language-aware character → token conversion (CJK ≈ 2.5 chars/token,
+ *  ASCII/code ≈ 4 chars/token). */
 export function estimateTokens(text: string): number {
   if (!text) return 0;
-  return Math.max(1, Math.round(text.length / 4));
+  const cjkCount = (text.match(CJK_REGEX) || []).length;
+  const otherCount = text.length - cjkCount;
+  return Math.ceil(cjkCount / CJK_CHARS_PER_TOKEN) + Math.ceil(otherCount / ASCII_CHARS_PER_TOKEN);
 }
 
 /**
@@ -151,26 +161,34 @@ export function normalizeInputTokens(
     : input;
 }
 
+/** Per-model pricing (USD per million tokens), resolved from the
+ *  provider_model_capabilities table — the same source the usage dashboard
+ *  aggregates with. Shape mirrors ModelCapabilityDTO['pricing']. */
+export interface ModelPricing {
+  inputPerMillion?: number;
+  outputPerMillion?: number;
+  cacheReadPerMillion?: number;
+  cacheWritePerMillion?: number;
+}
+
 /**
- * Claude-style cost estimation (USD) for a token usage block. Same rates the
- * usage dashboard uses; kept here as a pure function so the context ring can
- * show pi-style `$cost` without importing the hook.
+ * Cost estimation (USD) for a token usage block using the model's real
+ * pricing. Without pricing it returns 0 — callers hide the cost figure
+ * instead of showing a number priced at the wrong model's rates.
  */
 export function estimateCost(
   inputTokens: number,
   outputTokens: number,
   cacheReadTokens: number,
   cacheWriteTokens: number,
+  pricing?: ModelPricing,
 ): number {
-  const inputRate = 2.5 / 1_000_000;
-  const outputRate = 10.0 / 1_000_000;
-  const cacheReadRate = 0.625 / 1_000_000;
-  const cacheWriteRate = 1.25 / 1_000_000;
+  if (!pricing) return 0;
   return (
-    inputTokens * inputRate +
-    outputTokens * outputRate +
-    cacheReadTokens * cacheReadRate +
-    cacheWriteTokens * cacheWriteRate
+    (inputTokens * (pricing.inputPerMillion ?? 0)) / 1_000_000 +
+    (outputTokens * (pricing.outputPerMillion ?? 0)) / 1_000_000 +
+    (cacheReadTokens * (pricing.cacheReadPerMillion ?? 0)) / 1_000_000 +
+    (cacheWriteTokens * (pricing.cacheWritePerMillion ?? 0)) / 1_000_000
   );
 }
 
