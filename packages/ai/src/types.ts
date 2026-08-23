@@ -364,6 +364,14 @@ export interface ModelCompat {
    * for third-party endpoints; only explicitly declared models opt in.
    */
   supportsToolReferences?: boolean;
+  /**
+   * Whether the endpoint terminates each streamed choice with an explicit
+   * `finish_reason`. Defaults to true. A clean stream end without one is
+   * treated as a premature close (Plan 439) so truncated output is retried
+   * instead of silently executed. Set to false only for servers that
+   * legitimately never send a finish_reason.
+   */
+  supportsFinishReason?: boolean;
 }
 
 // ─── Model pricing (per million tokens, USD) ───

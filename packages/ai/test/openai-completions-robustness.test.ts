@@ -1,10 +1,46 @@
 import { describe, it, expect } from 'vitest';
 import {
+  assertFinishReasonReceived,
   repairToolPairing,
   synthesizeRuntimeToolId,
 } from '../src/api/openai-completions.js';
 import type { Message } from '../src/types.js';
 import { withIdleTimeout } from '../src/utils/idle-timeout.js';
+
+describe('assertFinishReasonReceived (Plan 439)', () => {
+  it('passes when a finish_reason was received', () => {
+    expect(() =>
+      assertFinishReasonReceived({ hasFinishReason: true, compat: undefined }),
+    ).not.toThrow();
+  });
+
+  it('throws on a clean stream end without finish_reason', () => {
+    // The message must keep matching classifyError's transport pattern so
+    // the premature end flows into the retry/replay path.
+    try {
+      assertFinishReasonReceived({ hasFinishReason: false, compat: null });
+      expect.unreachable('guard should have thrown');
+    } catch (err) {
+      expect((err as Error).message).toContain('ended without finish_reason');
+    }
+  });
+
+  it('skips the guard when the model declares supportsFinishReason=false', () => {
+    expect(() =>
+      assertFinishReasonReceived({
+        hasFinishReason: false,
+        compat: { supportsFinishReason: false },
+      }),
+    ).not.toThrow();
+  });
+
+  it('still guards when compat exists but leaves supportsFinishReason unset', () => {
+    expect(() =>
+      assertFinishReasonReceived({ hasFinishReason: false, compat: {} }),
+      'unset flag defaults to guarded',
+    ).toThrow();
+  });
+});
 
 describe('synthesizeRuntimeToolId', () => {
   it('returns the id unchanged when it is already valid', () => {
