@@ -13,7 +13,16 @@ import {
   XIcon,
 } from '@/components/icons';
 import type { SubAgentRowInfo } from '@/hooks/useSubAgentProgress';
+import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/i18n';
 import { DrawerSection } from './DrawerSection';
+
+const STATUS_KEY: Record<SubAgentRowInfo['status'], TranslationKey> = {
+  waiting: 'subAgent.status.waiting',
+  running: 'subAgent.status.running',
+  completed: 'subAgent.status.completed',
+  error: 'subAgent.status.error',
+};
 
 export interface AgentListSectionProps {
   agents: SubAgentRowInfo[];
@@ -40,6 +49,7 @@ export function AgentListSection({ agents, onOpen }: AgentListSectionProps) {
 
 function AgentRow({ agent, onOpen }: { agent: SubAgentRowInfo; onOpen: () => void }) {
   const canOpen = Boolean(agent.sessionId);
+  const { t } = useTranslation();
   const statusIcon =
     agent.status === "running" || agent.status === "waiting" ? (
       <SpinnerIcon size={12} className="text-accent animate-spin" />
@@ -61,7 +71,7 @@ function AgentRow({ agent, onOpen }: { agent: SubAgentRowInfo; onOpen: () => voi
         <RobotIcon size={13} />
       </span>
       <span className="task-card-row-title">{agent.name}</span>
-      <span className="task-card-agent-status">{agent.description}</span>
+      <span className="task-card-agent-status">{t(STATUS_KEY[agent.status])}</span>
       <span className="task-card-agent-state">{statusIcon}</span>
     </button>
   );

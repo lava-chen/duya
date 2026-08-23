@@ -7,30 +7,11 @@ import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
 import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
+import { colorForAgent } from "@/lib/agent-color";
 import type { TranslationKey } from "@/i18n";
 import { Button } from "@/components/ui/Button";
 
 type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => string;
-
-const AGENT_COLORS: Record<string, string> = {
-  blue: "var(--accent)",
-  orange: "#f97316",
-  green: "#22c55e",
-  red: "#ef4444",
-  purple: "#a855f7",
-  cyan: "#06b6d4",
-  yellow: "#eab308",
-};
-
-function getAgentColor(agentName: string): string {
-  let hash = 0;
-  for (let i = 0; i < agentName.length; i++) {
-    hash = ((hash << 5) - hash) + agentName.charCodeAt(i);
-    hash |= 0;
-  }
-  const colorKeys = Object.keys(AGENT_COLORS);
-  return AGENT_COLORS[colorKeys[Math.abs(hash) % colorKeys.length]] || "var(--accent)";
-}
 
 interface ThreadListItemProps {
   thread: Thread;
@@ -256,7 +237,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         ) : (
           <>
             {thread.agentType === 'sub-agent' && thread.agentName && (
-              <span className="sub-agent-dot" style={{ color: getAgentColor(thread.agentName) }}>●</span>
+              <span className="sub-agent-dot" style={{ color: colorForAgent(thread.agentName) }}>●</span>
             )}
             {thread.agentType === "sub-agent" && (
               <span className="thread-item-agent-label">{t('thread.agentLabel')}</span>

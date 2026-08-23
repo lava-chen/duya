@@ -1024,6 +1024,11 @@ const zh: Record<TranslationKey, string> = {
   'thread.running': 'Agent 运行中...',
   'thread.options': '对话选项',
 
+  'subAgent.status.running': '正在运行...',
+  'subAgent.status.completed': '已完成',
+  'subAgent.status.error': '出错',
+  'subAgent.status.waiting': '等待中',
+
   'panel.files': '文件',
   'panel.preview': '预览',
   'panel.review': '代码审阅',
