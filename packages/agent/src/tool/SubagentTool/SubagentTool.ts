@@ -33,6 +33,33 @@ import {
   BACKGROUND_SUBAGENT_IDLE_NOTICE,
   shouldContinueParentWork,
 } from './continueParentWork.js';
+import {
+  cleanupIfUnchanged,
+  createAgentWorktree,
+  type AgentWorktreeHandle,
+} from '../../worktree/worktree-manager.js';
+
+/** Wire shape of the optional worktree summary attached to tool results (plan 439). */
+interface WorktreeSummary {
+  path: string;
+  branch: string;
+  /** True when the tree still exists after the agent finished (dirty). */
+  kept: boolean;
+  /** True when the zero-change tree was removed automatically. */
+  cleaned: boolean;
+}
+
+function toWorktreeSummary(
+  handle: AgentWorktreeHandle,
+  outcome: { removed: boolean; reason?: string },
+): WorktreeSummary {
+  return {
+    path: handle.path,
+    branch: handle.branch,
+    kept: !outcome.removed,
+    cleaned: outcome.removed,
+  };
+}
 
 export { formatAgentLine }
 export { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME, VERIFICATION_AGENT_TYPE, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
@@ -91,6 +118,7 @@ interface BackgroundSpawnRecord {
     outputFilePath?: string;
     background: true;
     status: 'running';
+    worktree?: { path: string; branch: string };
   };
 }
 
@@ -229,7 +257,8 @@ export class SubagentTool extends BaseTool {
       isolation: {
         type: 'string',
         enum: ['worktree'],
-        description: 'Run the agent in an isolated git worktree',
+        description:
+          "Run the agent in an isolated git worktree (fresh base commit + dedicated branch) so concurrent agents can mutate files without conflicting. Costs setup time and disk per agent — pass it ONLY when multiple agents would otherwise write to the same files in parallel. A zero-change tree is removed automatically; a dirty tree is kept and its path is returned in the result.",
       },
       model: {
         type: 'string',
@@ -260,6 +289,7 @@ export class SubagentTool extends BaseTool {
       model?: string;
       maxTurns?: number;
       run_in_background?: boolean;
+      isolation?: 'worktree';
     };
 
     if (!context) {
@@ -339,6 +369,49 @@ export class SubagentTool extends BaseTool {
         }
       }
 
+      // plan 439: isolation:'worktree' — give this sub-agent a private git
+      // worktree so it can mutate files without racing siblings or the
+      // parent's working copy. Creation failure is surfaced as an explicit
+      // error, never silently degraded: the caller asked for parallel-write
+      // isolation, and dropping it would reintroduce exactly that conflict.
+      let worktree: AgentWorktreeHandle | undefined;
+      if (agentInput.isolation === 'worktree') {
+        const repoDir = context.options.workingDirectory ?? process.cwd();
+        try {
+          worktree = await createAgentWorktree({
+            repoDir,
+            name: agentInput.name || agentDefinition.agentType,
+          });
+          logger.info('[SubAgent] worktree isolation enabled', {
+            taskId: context.toolUseId,
+            parentSessionId: context.options.sessionId,
+            worktreePath: worktree.path,
+            branch: worktree.branch,
+          }, 'SubAgent')
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          logger.error('[SubAgent] worktree creation failed', err as Error, {
+            parentSessionId: context.options.sessionId,
+            repoDir,
+          }, 'SubAgent')
+          return {
+            id: crypto.randomUUID(),
+            name: this.name,
+            result: JSON.stringify({
+              error: `isolation 'worktree' requested but failed to create one: ${message}`,
+            }),
+            error: true,
+          };
+        }
+      }
+      // Everything downstream (DB session record, runAgent tool cwd) points at
+      // the worktree when isolation is active — see runAgent's use of
+      // options.workingDirectory for every file/bash tool.
+      const effectiveWorkingDirectory = worktree?.path ?? context.options.workingDirectory;
+      const isolatedContext: ToolUseContext = worktree
+        ? { ...context, options: { ...context.options, workingDirectory: effectiveWorkingDirectory } }
+        : context;
+
       const promptMessages = [
         {
           role: 'user' as const,
@@ -352,7 +425,7 @@ export class SubagentTool extends BaseTool {
         await sessionDb.create({
           id: subAgentSessionId,
           title: `Sub: ${subAgentName}`,
-          working_directory: context.options.workingDirectory ?? '',
+          working_directory: effectiveWorkingDirectory ?? '',
           project_name: '',
           mode: 'code',
           provider_id: context.options.provider || 'env',
@@ -447,12 +520,15 @@ export class SubagentTool extends BaseTool {
           agentInput.description || agentInput.name || subAgentName,
           agentInput.prompt,
         );
-        const spawnNotice = formatSubagentStartedBackground(
+        let spawnNotice = formatSubagentStartedBackground(
           taskId,
           agentDefinition.agentType,
           agentInput.description || agentInput.name || subAgentName,
           continueParentWork,
         );
+        if (worktree) {
+          spawnNotice += `\n\nworktree: ${worktree.path}\nbranch: ${worktree.branch}\nThis agent runs inside an isolated git worktree; its file changes do not touch the parent working copy.`;
+        }
         const backgroundResult: BackgroundSpawnRecord['result'] = {
           agentType: requestedAgentType,
           resolvedAgentType: agentDefinition.agentType,
@@ -464,6 +540,7 @@ export class SubagentTool extends BaseTool {
           outputFilePath: record.outputFilePath,
           background: true,
           status: 'running',
+          ...(worktree ? { worktree: { path: worktree.path, branch: worktree.branch } } : {}),
         };
         if (parentSessionId) {
           const spawnRecord: BackgroundSpawnRecord = {
@@ -492,7 +569,7 @@ export class SubagentTool extends BaseTool {
         const agentGenerator = runAgent({
           agentDefinition,
           promptMessages,
-          toolUseContext: context,
+          toolUseContext: isolatedContext,
           isAsync: true,
           model: agentInput.model,
           maxTurns: agentInput.maxTurns,
@@ -534,6 +611,21 @@ export class SubagentTool extends BaseTool {
             // persistence and would otherwise accumulate for the process life.
             backgroundAgentLifecycle.markDrained([taskId])
             removeBackgroundSpawn(taskId)
+            if (worktree) {
+              // plan 439 auto-cleanup: drop a zero-change tree; keep and log
+              // a dirty one so real work is never silently discarded.
+              const outcome = await cleanupIfUnchanged(worktree).catch((err) => ({
+                removed: false,
+                reason: err instanceof Error ? err.message : String(err),
+              }));
+              logger.info('[SubAgent] background worktree cleanup', {
+                taskId,
+                subAgentSessionId,
+                path: worktree.path,
+                branch: worktree.branch,
+                ...outcome,
+              }, 'SubAgent')
+            }
           }
         })
 
@@ -548,7 +640,7 @@ export class SubagentTool extends BaseTool {
       const result = await runAgentSync({
         agentDefinition,
         promptMessages,
-        toolUseContext: context,
+        toolUseContext: isolatedContext,
         isAsync: false,
         model: agentInput.model,
         maxTurns: agentInput.maxTurns,
@@ -558,6 +650,24 @@ export class SubagentTool extends BaseTool {
         onProgress,
         sessionId: subAgentSessionId,
       });
+
+      // The agent is done touching files — apply the plan 439 auto-cleanup
+      // contract before reporting: zero-change trees vanish, dirty trees are
+      // kept and their location reported back to the model.
+      let worktreeSummary: WorktreeSummary | undefined;
+      if (worktree) {
+        const outcome = await cleanupIfUnchanged(worktree).catch((err) => ({
+          removed: false,
+          reason: err instanceof Error ? err.message : String(err),
+        }));
+        worktreeSummary = toWorktreeSummary(worktree, outcome);
+        logger.info('[SubAgent] foreground worktree cleanup', {
+          subAgentSessionId,
+          path: worktree.path,
+          branch: worktree.branch,
+          ...outcome,
+        }, 'SubAgent')
+      }
 
       try {
         let hasError = false;
@@ -627,6 +737,7 @@ export class SubagentTool extends BaseTool {
           description: agentInput.description || agentInput.name,
           content: resultText,
           sessionId: subAgentSessionId,
+          ...(worktreeSummary ? { worktree: worktreeSummary } : {}),
         }),
       };
     } catch (error) {
