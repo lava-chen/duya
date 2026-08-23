@@ -1155,16 +1155,22 @@ export function ChatView({
 
   const handleCompact = useCallback(() => {
     if (!sessionId) return;
+    const compactStartedAt = Date.now();
     setIsCompacting(true);
     setCompactionStatus('compacting');
     compactContext(sessionId, {
       onDone: (result) => {
         setIsCompacting(false);
         setCompactionStatus('done');
-        // The timeline was rewritten: the live snapshot describes the
-        // pre-compact context, so drop it and let the reloaded messages (or
-        // the next turn's token_usage) drive the ring.
-        useContextUsageStore.getState().clearLive(sessionId);
+        // The worker broadcasts a fresh post-compaction token_usage before
+        // compact:done, so a snapshot stamped during this compaction is the
+        // authoritative new context size — keep it. Only fall back to
+        // dropping the live entry when none arrived (e.g. an older worker
+        // bundle), letting the reloaded messages drive the ring.
+        const live = useContextUsageStore.getState().liveBySession[sessionId];
+        if (!live || live.updatedAt < compactStartedAt) {
+          useContextUsageStore.getState().clearLive(sessionId);
+        }
         const removedMsg = result.removedCount != null ? `${result.removedCount} messages compacted` : 'Context compressed';
         const tokenMsg = result.tokenReduction != null ? `, ~${Math.round(result.tokenReduction)} tokens saved` : '';
         setCompressionNotification(`${removedMsg}${tokenMsg}.`);

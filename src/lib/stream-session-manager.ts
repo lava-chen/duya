@@ -1430,7 +1430,11 @@ class StreamSessionManager {
 
         case 'error':
         case 'chat:error':
-          useContextUsageStore.getState().clearLive(sessionId);
+          // Keep the live context snapshot: a failed turn does not shrink the
+          // conversation, and clearing here opened a no-data window (empty
+          // ring reading as 0%) until the next turn's token_usage. History-
+          // changing operations (rewind, edit-resend, compaction) invalidate
+          // the snapshot explicitly at their own completion points instead.
           this.handleErrorEvent(sessionId, streamId, event.data as StreamErrorEventData | undefined);
           break;
 
