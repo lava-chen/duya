@@ -3,7 +3,7 @@ import { CodeBlock } from './CodeBlock';
 import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
-import { FileIcon, SquaresFourIcon } from '../icons';
+import { FileIcon, ChalkboardIcon } from '../icons';
 import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 import { useLinkOpener } from '@/hooks/useLinkOpener';
@@ -174,7 +174,7 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
         onClick={() => openConductorCanvas(canvasLinkId)}
         title="Open canvas in sidebar"
       >
-        <SquaresFourIcon size={13} aria-hidden="true" />
+        <ChalkboardIcon size={13} aria-hidden="true" />
         <span className="markdown-file-link__name">{children ?? 'Canvas'}</span>
       </button>
     );
