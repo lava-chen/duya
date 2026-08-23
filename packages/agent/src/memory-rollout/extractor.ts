@@ -29,7 +29,7 @@ import {
   HEARTBEAT_DIVISOR,
   DEFAULT_LEASE_TTL_MS,
 } from '../memory-state/lease.js';
-import { compactMessages, type MessageEvent } from './compactMessages.js';
+import { compactMessages, DEFAULT_BUDGET_TOKENS, type MessageEvent } from './compactMessages.js';
 import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
@@ -56,7 +56,10 @@ import {
 // ---------------------------------------------------------------------------
 
 const LLM_TIMEOUT_MS = 120_000;
-const LLM_MAX_TOKENS = 4_096;
+// 16k output budget (raised from 4k): on large rollouts a reasoning model's
+// thinking + full JSON envelope routinely exceeded 4k and the response was
+// truncated mid-JSON (`invalid-json`) or came back empty (`llm-refused`).
+const LLM_MAX_TOKENS = 16_384;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -730,7 +733,7 @@ export class Stage1Extractor {
     const elapsed = (): number => Date.now() - startTime;
     const { source_updated_at, source_content_hash } = leaseRow;
 
-    // 4. Read + compact messages.
+    // 4. Read messages once — retries below only re-compact + re-call.
     let messages: MessageEvent[];
     try {
       messages = await this.readMessages(rolloutId);
@@ -743,15 +746,10 @@ export class Stage1Extractor {
       fail(this.memoryDb, { rolloutId, token, error: `read-messages:${errorMsg.slice(0, 200)}` });
       return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: errorMsg.slice(0, 200) };
     }
-    const compacted = compactMessages(messages, {
-      sourceUpdatedAt: source_updated_at,
-      sourceContentHash: source_content_hash,
-    });
 
-    // 4b. Resolve existing canonical_keys for cross-session dedup.
-    // When existingKeysInput is undefined, query the memory DB; when null,
-    // omit the keys section entirely. This lets the worker pre-compute
-    // keys once per batch and pass them to all parallel extracts.
+    // 4b. Resolve existing canonical_keys for cross-session dedup (once —
+    // identical across attempts). When existingKeysInput is undefined,
+    // query the memory DB; when null, omit the keys section entirely.
     let existingKeysSection = '';
     if (existingKeysInput !== null) {
       const keys = existingKeysInput ?? this.queryExistingKeys();
@@ -759,19 +757,6 @@ export class Stage1Extractor {
         existingKeysSection = `Existing canonical keys (reuse if semantically equivalent):\n${keys.map((k) => `- ${k}`).join('\n')}\n\n`;
       }
     }
-
-    // 5. LLM call (streaming — avoids Anthropic's 10-min non-streaming limit).
-    const userContent = STAGE1_USER_PROMPT_TEMPLATE.replace(
-      '{{existing_keys}}',
-      existingKeysSection,
-    ).replace(
-      '{{compacted}}',
-      compacted.lines.join('\n'),
-    );
-    const userMessage: Message = { role: 'user', content: userContent };
-
-    const abortController = new AbortController();
-    const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
 
     const policy = await this.resolvePolicy();
     // The hard contract carries the full envelope + item schema (see
@@ -784,60 +769,117 @@ export class Stage1Extractor {
         ? assembleStage1Prompt(policy.content)
         : STAGE1_SYSTEM_PROMPT;
 
-    let llmResponse: string;
-    try {
-      const generator = this.streamChat([userMessage], {
-        systemPrompt: systemPrompt,
-        maxTokens: LLM_MAX_TOKENS,
-        signal: abortController.signal,
-        // No effort override: reasoning-disabled models (e.g. MiniMax M3)
-        // with effort='off' return ONLY the raw_memory object and drop the
-        // outer envelope (job_status/content_outcome/rollout_summary/
-        // rollout_slug), which degrades every extraction to the tolerant
-        // fallback. Let the model use its default effort so the full JSON
-        // envelope is produced.
+    // 4c-6. Compact → LLM → parse, with ONE budget-degrading retry.
+    //
+    // On very large rollouts the model can produce output that fails the
+    // envelope contract (truncated JSON, dropped envelope, empty text).
+    // Those are output-shape failures: shrinking the compaction budget
+    // halves the transcript the model must summarize, which shortens the
+    // required output and frequently turns a parse failure into a commit.
+    // Transport-class failures (timeout / provider refusal / raw provider
+    // errors) do NOT benefit from less input and go straight to lease
+    // backoff as before. Only one degraded retry is attempted — persistent
+    // shape failures belong to the backoff/retire machinery, not to
+    // burning extra calls inline.
+    const attemptBudgets = [
+      DEFAULT_BUDGET_TOKENS,
+      Math.floor(DEFAULT_BUDGET_TOKENS / 2),
+    ];
+    let compacted: ReturnType<typeof compactMessages> | null = null;
+    let data: ParsedExtractionV2 | null = null;
+    for (let i = 0; i < attemptBudgets.length && data === null; i++) {
+      const isLastAttempt = i === attemptBudgets.length - 1;
+      compacted = compactMessages(messages, {
+        sourceUpdatedAt: source_updated_at,
+        sourceContentHash: source_content_hash,
+        budgetTokens: attemptBudgets[i],
       });
-      const chunks: string[] = [];
-      for await (const event of generator) {
-        if (event.type === 'text' || event.type === 'text_delta') {
-          chunks.push(event.data);
-        } else if (event.type === 'error') {
-          throw new Error(event.data);
-        }
-        // 'done' event marks completion; loop exits naturally.
-      }
-      llmResponse = chunks.join('');
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      const failReason = abortController.signal.aborted || /abort|timeout/i.test(errorMsg)
-        ? 'llm-timeout'
-        : /refus|content.?policy|safety/i.test(errorMsg)
-          ? 'llm-refused'
-          : errorMsg.slice(0, 200);
-      fail(this.memoryDb, { rolloutId, token, error: failReason });
-      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: failReason };
-    } finally {
-      clearTimeout(timeoutId);
-    }
 
-    if (!llmResponse || llmResponse.trim().length === 0) {
-      fail(this.memoryDb, { rolloutId, token, error: 'llm-refused' });
-      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'llm-refused' };
-    }
-
-    // 6. Parse + validate.
-    const parsed = parseAndValidate(llmResponse);
-    if (!parsed.valid) {
-      // Keep the error code machine-readable in last_error/errorMessage, but
-      // log a truncated raw-response snippet so the cause is diagnosable.
-      console.warn(
-        `[Stage1Extractor] ${rolloutId} validation failed (${parsed.error}): ${llmResponse.slice(0, 500)}`,
+      // 5. LLM call (streaming — avoids Anthropic's 10-min non-streaming limit).
+      const userContent = STAGE1_USER_PROMPT_TEMPLATE.replace(
+        '{{existing_keys}}',
+        existingKeysSection,
+      ).replace(
+        '{{compacted}}',
+        compacted.lines.join('\n'),
       );
-      fail(this.memoryDb, { rolloutId, token, error: parsed.error });
-      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: parsed.error };
+      const userMessage: Message = { role: 'user', content: userContent };
+
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => abortController.abort(), LLM_TIMEOUT_MS);
+
+      let llmResponse: string;
+      try {
+        const generator = this.streamChat([userMessage], {
+          systemPrompt: systemPrompt,
+          maxTokens: LLM_MAX_TOKENS,
+          signal: abortController.signal,
+          // No effort override: reasoning-disabled models (e.g. MiniMax M3)
+          // with effort='off' return ONLY the raw_memory object and drop the
+          // outer envelope (job_status/content_outcome/rollout_summary/
+          // rollout_slug), which degrades every extraction to the tolerant
+          // fallback. Let the model use its default effort so the full JSON
+          // envelope is produced.
+        });
+        const chunks: string[] = [];
+        for await (const event of generator) {
+          if (event.type === 'text' || event.type === 'text_delta') {
+            chunks.push(event.data);
+          } else if (event.type === 'error') {
+            throw new Error(event.data);
+          }
+          // 'done' event marks completion; loop exits naturally.
+        }
+        llmResponse = chunks.join('');
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        const failReason = abortController.signal.aborted || /abort|timeout/i.test(errorMsg)
+          ? 'llm-timeout'
+          : /refus|content.?policy|safety/i.test(errorMsg)
+            ? 'llm-refused'
+            : errorMsg.slice(0, 200);
+        fail(this.memoryDb, { rolloutId, token, error: failReason });
+        return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: failReason };
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!llmResponse || llmResponse.trim().length === 0) {
+        // Empty text behaves like an output-shape failure — retry once on
+        // the smaller budget before giving up.
+        if (isLastAttempt) {
+          fail(this.memoryDb, { rolloutId, token, error: 'llm-refused' });
+          return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'llm-refused' };
+        }
+        console.warn(`[Stage1Extractor] ${rolloutId} empty response at full budget; retrying with halved compaction budget`);
+        continue;
+      }
+
+      // 6. Parse + validate.
+      const parsed = parseAndValidate(llmResponse);
+      if (!parsed.valid) {
+        // Keep the error code machine-readable in last_error/errorMessage,
+        // but log a truncated raw-response snippet so the cause stays
+        // diagnosable.
+        console.warn(
+          `[Stage1Extractor] ${rolloutId} validation failed (${parsed.error}): ${llmResponse.slice(0, 500)}`,
+        );
+        if (isLastAttempt) {
+          fail(this.memoryDb, { rolloutId, token, error: parsed.error });
+          return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: parsed.error };
+        }
+        continue;
+      }
+
+      data = parsed.result;
     }
 
-    const data = parsed.result;
+    // The loop only exits with `data === null` via early returns, so this
+    // narrowing guard is unreachable in practice — kept for type safety.
+    if (data === null || compacted === null) {
+      fail(this.memoryDb, { rolloutId, token, error: 'invalid-json' });
+      return { status: 'failed', contentOutcome: null, projectionPath: null, stage1RowId: rolloutId, durationMs: elapsed(), errorMessage: 'invalid-json' };
+    }
 
     // 7. succeeded_no_output path.
     if (data.job_status === 'succeeded_no_output') {
