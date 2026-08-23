@@ -12115,7 +12115,8 @@ html[data-message-font-size="large"] .prose h3 {
   padding: 8px 12px;
 }
 
-.canvas-document__preview > span {
+.canvas-document__preview > span,
+.canvas-document-focus__body > span {
   color: var(--text-muted, var(--muted));
 }
 
@@ -12279,6 +12280,15 @@ html[data-message-font-size="large"] .prose h3 {
   background: var(--surface-solid, var(--panel-bg));
   color: var(--text);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+}
+
+/* Reading mode: rendered markdown fills the dialog below the header and
+   scrolls; typography comes from MarkdownRenderer's prose stack. */
+.canvas-document-focus__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 22px 20px;
 }
 
 /* Fill the dialog: the textarea has no intrinsic height of its own, so it
