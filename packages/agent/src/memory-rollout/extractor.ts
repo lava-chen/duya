@@ -595,11 +595,21 @@ export class Stage1Extractor {
    * resolved from the catalog when available so the UI can name the rollout.
    */
   private logExtractResult(rolloutId: string, result: ExtractResult): void {
+    // Resolve the slug best-effort and INSIDE its own guard: a lookup
+    // failure (missing table, schema drift) must never suppress the event
+    // itself. `rollout_slug` lives on stage1_outputs, not rollout_catalog
+    // (the catalog never had that column — querying it used to throw on
+    // every outcome and silently drop ALL extract_* events).
+    let slug: string | null = null;
     try {
       const slugRow = this.memoryDb
-        .prepare('SELECT rollout_slug FROM rollout_catalog WHERE rollout_id = ?')
+        .prepare('SELECT rollout_slug FROM stage1_outputs WHERE rollout_id = ?')
         .get(rolloutId) as { rollout_slug: string | null } | undefined;
-      const slug = slugRow?.rollout_slug ?? null;
+      slug = slugRow?.rollout_slug ?? null;
+    } catch {
+      slug = null;
+    }
+    try {
       const detail = { rollout_slug: slug, content_outcome: result.contentOutcome, duration_ms: result.durationMs };
       switch (result.status) {
         case 'committed':
