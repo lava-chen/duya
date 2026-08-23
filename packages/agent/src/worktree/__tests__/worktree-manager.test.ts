@@ -1,5 +1,5 @@
 /**
- * Integration tests for WorktreeManager (plan 439).
+ * Integration tests for WorktreeManager (plan 440).
  *
  * These run against real throwaway git repositories created in the OS temp
  * directory — the git surface (`worktree add`, porcelain status, branch

@@ -1,5 +1,5 @@
 /**
- * WorktreeManager — git worktree isolation for sub-agents (plan 439).
+ * WorktreeManager — git worktree isolation for sub-agents (plan 440).
  *
  * Creates short-lived git worktrees under `<repoRoot>/.duya/worktrees/<name>`
  * so a sub-agent can mutate files without racing its siblings or the parent
@@ -164,7 +164,7 @@ async function ensureExcluded(repoRoot: string, run: GitRunner): Promise<void> {
   }
   const lines = current.split(/\r?\n/);
   if (lines.includes(entry)) return;
-  const next = `${current}${current && !current.endsWith('\n') ? '\n' : ''}# duya agent worktrees (plan 439)\n${entry}\n`;
+  const next = `${current}${current && !current.endsWith('\n') ? '\n' : ''}# duya agent worktrees (plan 440)\n${entry}\n`;
   await fs.mkdir(path.dirname(excludePath), { recursive: true });
   await fs.writeFile(excludePath, next, 'utf8');
 }

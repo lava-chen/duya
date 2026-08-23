@@ -1,4 +1,4 @@
-# 439 — Agent Worktree Isolation（子代理 worktree 隔离）
+# 440 — Agent Worktree Isolation（子代理 worktree 隔离）
 
 > 状态：实现中（Phase 1-2 本次落地）
 > 优先级：P1

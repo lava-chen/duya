@@ -39,7 +39,7 @@ import {
   type AgentWorktreeHandle,
 } from '../../worktree/worktree-manager.js';
 
-/** Wire shape of the optional worktree summary attached to tool results (plan 439). */
+/** Wire shape of the optional worktree summary attached to tool results (plan 440). */
 interface WorktreeSummary {
   path: string;
   branch: string;
@@ -369,7 +369,7 @@ export class SubagentTool extends BaseTool {
         }
       }
 
-      // plan 439: isolation:'worktree' — give this sub-agent a private git
+      // plan 440: isolation:'worktree' — give this sub-agent a private git
       // worktree so it can mutate files without racing siblings or the
       // parent's working copy. Creation failure is surfaced as an explicit
       // error, never silently degraded: the caller asked for parallel-write
@@ -612,7 +612,7 @@ export class SubagentTool extends BaseTool {
             backgroundAgentLifecycle.markDrained([taskId])
             removeBackgroundSpawn(taskId)
             if (worktree) {
-              // plan 439 auto-cleanup: drop a zero-change tree; keep and log
+              // plan 440 auto-cleanup: drop a zero-change tree; keep and log
               // a dirty one so real work is never silently discarded.
               const outcome = await cleanupIfUnchanged(worktree).catch((err) => ({
                 removed: false,
@@ -651,7 +651,7 @@ export class SubagentTool extends BaseTool {
         sessionId: subAgentSessionId,
       });
 
-      // The agent is done touching files — apply the plan 439 auto-cleanup
+      // The agent is done touching files — apply the plan 440 auto-cleanup
       // contract before reporting: zero-change trees vanish, dirty trees are
       // kept and their location reported back to the model.
       let worktreeSummary: WorktreeSummary | undefined;
