@@ -81,11 +81,13 @@ function computeStats(events: AgentProgressEventWithMeta[]): ToolStats {
 }
 
 function getPrefixColor(prefix: string): string | undefined {
+  // Match whole words only so names like "QRCode scanner" don't pick up
+  // the code color; hyphenated agent types ("code-reviewer") still match.
   const lower = prefix.toLowerCase();
-  if (lower.includes('explore')) return '#3b82f6';
-  if (lower.includes('code') || lower.includes('coding')) return 'var(--foreground)';
-  if (lower.includes('plan')) return '#eab308';
-  if (lower.includes('research')) return '#a855f7';
+  if (/\bexplore\b/.test(lower)) return '#3b82f6';
+  if (/\bcod(e|ing)\b/.test(lower)) return 'var(--foreground)';
+  if (/\bplan(ning)?\b/.test(lower)) return '#eab308';
+  if (/\bresearch\b/.test(lower)) return '#a855f7';
   return undefined;
 }
 
