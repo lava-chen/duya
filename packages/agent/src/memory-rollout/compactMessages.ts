@@ -65,7 +65,7 @@ export interface CompactOpts {
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_BUDGET_TOKENS = 50_000;
+export const DEFAULT_BUDGET_TOKENS = 50_000;
 const CHARS_PER_TOKEN = 3;
 const INPUT_SIGNATURE_CHARS = 200;
 const TOOL_OUTPUT_EXCERPT_CHARS = 1024;
