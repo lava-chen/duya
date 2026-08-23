@@ -8,6 +8,18 @@
  * scaled by devicePixelRatio for retina fidelity.
  */
 
+import { canvasTransformState } from "../domain/canvas/transform-state";
+import {
+  canvasRectToScreen,
+  clipRectToViewport,
+  computeFitTransform,
+  isRectFullyVisible,
+  regionToCanvasPx,
+  screenPointToCanvas,
+  type CaptureRect,
+  type CanvasTransform,
+} from "./region-fit";
+
 export interface CapturedScreenshot {
   pngBase64: string;
   width: number;
@@ -123,7 +135,8 @@ export async function captureWidgetEl(
  * Scope of canvas capture.
  * - `viewport`: capture what the user currently sees (visible canvas area)
  * - `element`: capture a single element by its DOM selector
- * - `region`: capture a rectangular region of the canvas (canvas coords)
+ * - `region`: capture a rectangle given in CANVAS coordinates — grid units
+ *   by default, the same coordinate space agents use when placing elements
  */
 export type CaptureScope = "viewport" | "element" | "region";
 
@@ -131,8 +144,14 @@ export interface CanvasCaptureOptions {
   scope: CaptureScope;
   /** When scope is 'element', the element ID to capture. */
   elementId?: string;
-  /** When scope is 'region', the region in screen pixels relative to the viewport. */
-  region?: { x: number; y: number; w: number; h: number };
+  /**
+   * When scope is 'region', the rectangle in canvas coordinates — grid
+   * units by default (`unit: 'grid'`, identical to the position values of
+   * canvas_create_element) or raw canvas pixels (`unit: 'px'`). The view
+   * does NOT need to show this area: the renderer temporarily pans/zooms
+   * to frame it, captures, then restores the previous view.
+   */
+  region?: { x: number; y: number; w: number; h: number; unit?: "grid" | "px" };
 }
 
 export interface CanvasCaptureResult extends CapturedScreenshot {
@@ -143,23 +162,39 @@ export interface CanvasCaptureResult extends CapturedScreenshot {
   dataUrl: string;
 }
 
+/** A framed, viewport-clipped crop ready to hand to html2canvas. */
+interface CropPlan {
+  /** Viewport-relative crop rect (already clipped to the viewport). */
+  screen: CaptureRect;
+  /**
+   * Restores the live view transform after the render, when the plan had
+   * to move it. No-op for crops that did not reframe anything.
+   */
+  restore: () => Promise<void>;
+}
+
 /**
- * Capture a screenshot of the canvas at three granularities.
- *
- * - `viewport`: captures the visible canvas viewport element. The caller
- *   passes the viewport container (the scrollable div that wraps the
- *   canvas inner content).
- * - `element`: captures a single element by its DOM ID. The caller
- *   passes the canvas inner container; we query `[data-element-id]`
- *   within it.
- * - `region`: captures a sub-rectangle of the viewport. Coordinates are
- *   in screen pixels relative to the viewport's top-left corner.
- *
- * The returned `dataUrl` is a `data:image/png;base64,...` string that
- * can be used directly in an `<img>` tag or sent to a multimodal LLM
- * as an image content block.
+ * Captures are serialized: each one may temporarily move the live view
+ * transform, so overlapping requests would photograph each other's
+ * intermediate framing.
  */
-export async function captureCanvasView(
+let captureQueue: Promise<unknown> = Promise.resolve();
+
+export function captureCanvasView(
+  viewportEl: HTMLElement,
+  canvasInnerEl: HTMLElement | null,
+  options: CanvasCaptureOptions,
+): Promise<CanvasCaptureResult> {
+  const run = captureQueue.then(() =>
+    captureCanvasViewInner(viewportEl, canvasInnerEl, options),
+  );
+  // Keep the queue alive on failure so later requests still run — and
+  // still see a fully restored view.
+  captureQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function captureCanvasViewInner(
   viewportEl: HTMLElement,
   canvasInnerEl: HTMLElement | null,
   options: CanvasCaptureOptions,
@@ -169,11 +204,11 @@ export async function captureCanvasView(
   const scale = Math.min(pixelRatio, 1.5);
   const html2canvas = (await import("html2canvas")).default;
 
-  let targetEl: HTMLElement;
-  let captureX = 0;
-  let captureY = 0;
-  let captureW = 0;
-  let captureH = 0;
+  const viewportRect = viewportEl.getBoundingClientRect();
+  const viewportW = Math.max(0, Math.floor(viewportRect.width));
+  const viewportH = Math.max(0, Math.floor(viewportRect.height));
+
+  let plan: CropPlan;
 
   if (options.scope === "element") {
     if (!canvasInnerEl || !options.elementId) {
@@ -191,22 +226,28 @@ export async function captureCanvasView(
     if (!el) {
       throw new Error(`Element not found: ${options.elementId}`);
     }
-    targetEl = el;
+    // Map the element's current on-screen rect back into canvas space so
+    // off-screen elements go through the same frame-and-capture path as
+    // explicit regions.
+    const t = readTransform();
     const rect = el.getBoundingClientRect();
-    captureW = rect.width;
-    captureH = rect.height;
+    const topLeft = screenPointToCanvas(
+      rect.left - viewportRect.left,
+      rect.top - viewportRect.top,
+      t,
+    );
+    const canvasRect: CaptureRect = {
+      x: topLeft.x,
+      y: topLeft.y,
+      w: rect.width / t.zoom,
+      h: rect.height / t.zoom,
+    };
+    plan = await frameOnScreen(canvasRect, canvasInnerEl, viewportW, viewportH);
   } else if (options.scope === "region") {
-    if (!options.region) {
+    const requested = options.region;
+    if (!requested) {
       throw new Error("region scope requires region option");
     }
-    targetEl = viewportEl;
-    const viewportRect = viewportEl.getBoundingClientRect();
-    const viewportW = Math.max(0, Math.floor(viewportRect.width));
-    const viewportH = Math.max(0, Math.floor(viewportRect.height));
-
-    const requested = options.region;
-    // Reject obviously-bad inputs up front. The contract is viewport
-    // screen pixels with non-negative origin and positive dimensions.
     if (
       !Number.isFinite(requested.x) ||
       !Number.isFinite(requested.y) ||
@@ -222,78 +263,142 @@ export async function captureCanvasView(
         `region scope requires positive w/h, got ${requested.w}x${requested.h}`,
       );
     }
-    if (requested.x >= viewportW || requested.y >= viewportH) {
-      throw new Error(
-        `region scope starts outside the visible viewport: ` +
-          `requested (x=${requested.x}, y=${requested.y}) vs viewport ` +
-          `${viewportW}x${viewportH}. Pan/zoom the canvas so the area is ` +
-          `in view before calling canvas_capture with scope='region'.`,
-      );
-    }
-
-    // Clip the rectangle to the visible viewport so html2canvas never
-    // receives an off-screen crop (it silently returns a blank image in
-    // that case). Caller learns the actual capture dimensions via the
-    // returned `width` / `height` fields.
-    const clippedX = Math.max(0, Math.floor(requested.x));
-    const clippedY = Math.max(0, Math.floor(requested.y));
-    const clippedW = Math.min(viewportW - clippedX, Math.floor(requested.w));
-    const clippedH = Math.min(viewportH - clippedY, Math.floor(requested.h));
-    if (clippedW <= 0 || clippedH <= 0) {
-      throw new Error(
-        `region scope clipped to zero area: requested ` +
-          `${requested.w}x${requested.h} starting at (${requested.x},${requested.y}) ` +
-          `but viewport is ${viewportW}x${viewportH}.`,
-      );
-    }
-    captureX = clippedX;
-    captureY = clippedY;
-    captureW = clippedW;
-    captureH = clippedH;
+    const unit = requested.unit ?? "grid";
+    const canvasRect = regionToCanvasPx(requested, unit);
+    plan = await frameOnScreen(canvasRect, canvasInnerEl, viewportW, viewportH);
   } else {
-    // viewport
-    targetEl = viewportEl;
-    const rect = viewportEl.getBoundingClientRect();
-    captureW = rect.width;
-    captureH = rect.height;
+    // viewport — no reframing needed; capture the visible area as-is.
+    plan = {
+      screen: { x: 0, y: 0, w: viewportW, h: viewportH },
+      restore: async () => {},
+    };
   }
 
-  // Downsample very large captures so html2canvas stays fast and the
-  // resulting PNG stays small enough to save and send to vision models.
-  // html2canvas output size is (width * scale), so cap that product.
-  const MAX_CAPTURE_WIDTH = 1920;
-  const renderScale =
-    captureW * scale > MAX_CAPTURE_WIDTH ? MAX_CAPTURE_WIDTH / captureW : scale;
+  try {
+    // Downsample very large captures so html2canvas stays fast and the
+    // resulting PNG stays small enough to save and send to vision models.
+    // html2canvas output size is (width * scale), so cap that product.
+    const MAX_CAPTURE_WIDTH = 1920;
+    const renderScale =
+      plan.screen.w * scale > MAX_CAPTURE_WIDTH
+        ? MAX_CAPTURE_WIDTH / plan.screen.w
+        : scale;
 
-  const canvas = await html2canvas(targetEl, {
-    backgroundColor: null,
-    scale: renderScale,
-    useCORS: true,
-    logging: false,
-    width: captureW,
-    height: captureH,
-    x: captureX,
-    y: captureY,
-    windowWidth: captureW,
-    windowHeight: captureH,
-    // Ignore UI overlays (zoom pill, style panels, toolbars) that are
-    // rendered inside the viewport but should not appear in agent screenshots.
-    // These elements are marked with `data-capture-ignore` in CanvasArea.
-    ignoreElements: (el: Element) =>
-      el instanceof HTMLElement && el.dataset.captureIgnore === "",
-    onclone: normalizeHtml2CanvasClone,
-  });
+    const canvas = await html2canvas(viewportEl, {
+      backgroundColor: null,
+      scale: renderScale,
+      useCORS: true,
+      logging: false,
+      width: Math.max(1, Math.floor(plan.screen.w)),
+      height: Math.max(1, Math.floor(plan.screen.h)),
+      // html2canvas crops in ABSOLUTE client coordinates (its renderer
+      // translates by (-x, -y); defaults come from getBoundingClientRect).
+      // Passing viewport-relative offsets here was an offset bug whenever
+      // .canvas-area sat away from the client origin.
+      x: viewportRect.left + plan.screen.x,
+      y: viewportRect.top + plan.screen.y,
+      // Keep the clone's layout identical to the real window; sizing it to
+      // the crop used to reflow percentage-based layouts before painting.
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+      // Ignore UI overlays (zoom pill, style panels, toolbars) that are
+      // rendered inside the viewport but should not appear in agent screenshots.
+      // These elements are marked with `data-capture-ignore` in CanvasArea.
+      ignoreElements: (el: Element) =>
+        el instanceof HTMLElement && el.dataset.captureIgnore === "",
+      onclone: normalizeHtml2CanvasClone,
+    });
 
-  const dataUrl = canvas.toDataURL("image/png");
-  const pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+    const dataUrl = canvas.toDataURL("image/png");
+    const pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, "");
 
+    return {
+      pngBase64,
+      width: canvas.width,
+      height: canvas.height,
+      pixelRatio,
+      scope: options.scope,
+      capturedAt: new Date().toISOString(),
+      dataUrl,
+    };
+  } finally {
+    await plan.restore();
+  }
+}
+
+/**
+ * Turn a canvas-space rectangle into a concrete crop plan:
+ *
+ * 1. If the rect is not fully visible under the current view transform,
+ *    temporarily apply a fit transform to `.canvas-inner` (pan/zoom only
+ *    shrinks; never magnifies past the user's current zoom) and wait for
+ *    paint. `plan.restore()` puts the previous transform back.
+ * 2. Clip the on-screen projection to the viewport bounds. A rect too
+ *    large for the zoom floor yields the largest visible intersection —
+ *    callers report actual size via the returned width/height.
+ */
+async function frameOnScreen(
+  canvasRect: CaptureRect,
+  canvasInnerEl: HTMLElement | null,
+  viewportW: number,
+  viewportH: number,
+): Promise<CropPlan> {
+  const t = readTransform();
+  let screen = canvasRectToScreen(canvasRect, t);
+
+  if (!isRectFullyVisible(screen, viewportW, viewportH)) {
+    if (!canvasInnerEl) {
+      throw new Error(
+        "Canvas content layer (.canvas-inner) is not mounted; cannot frame the requested canvas area.",
+      );
+    }
+    const fit = computeFitTransform(canvasRect, viewportW, viewportH, t);
+    const previousTransform = canvasInnerEl.style.transform;
+    canvasInnerEl.style.transform =
+      `translate(${fit.transform.panX}px, ${fit.transform.panY}px) ` +
+      `scale(${fit.transform.zoom})`;
+    await waitForPaint(2);
+    screen = fit.screenRect;
+    return {
+      screen,
+      restore: async () => {
+        canvasInnerEl.style.transform = previousTransform;
+        await waitForPaint(1);
+      },
+    };
+  }
+
+  const clipped = clipRectToViewport(screen, viewportW, viewportH);
+  if (!clipped) {
+    throw new Error(
+      `Requested canvas rect (${canvasRect.x}, ${canvasRect.y}, ` +
+        `${canvasRect.w}, ${canvasRect.h}) has no on-screen intersection.`,
+    );
+  }
+  return { screen: clipped, restore: async () => {} };
+}
+
+function readTransform(): CanvasTransform {
   return {
-    pngBase64,
-    width: canvas.width,
-    height: canvas.height,
-    pixelRatio,
-    scope: options.scope,
-    capturedAt: new Date().toISOString(),
-    dataUrl,
+    panX: canvasTransformState.panX,
+    panY: canvasTransformState.panY,
+    zoom: canvasTransformState.zoom,
   };
+}
+
+/**
+ * Yield to the browser for `frames` animation frames so React commit and
+ * paint actually finish before html2canvas walks the transformed DOM.
+ * Falls back to timeouts in environments without rAF (jsdom tests).
+ */
+async function waitForPaint(frames: number): Promise<void> {
+  for (let i = 0; i < frames; i++) {
+    await new Promise<void>((resolve) => {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 16);
+      }
+    });
+  }
 }
