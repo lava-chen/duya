@@ -109,7 +109,11 @@ If a widget/dynamic is justified, keep it small (normally no larger than 6 x 5 g
 
 ### Before You Report
 
-After creating or revising a widget/dynamic, or after touching three or more native elements, run canvas_capture and visual verification when available. Fix overlap, overflow, misalignment, or unreadable text before reporting.${buildWidgetHistory(widgetStyleHistory)}`;
+After creating or revising a widget/dynamic, or after touching three or more native elements, run canvas_capture and visual verification when available. Fix overlap, overflow, misalignment, or unreadable text before reporting.
+
+### Linking Canvases From Chat
+
+When your reply should point the user at a canvas (the current one or another), emit an app link the UI can open: [label](/duya/canvas/<canvasId>) — for example [canvas](/duya/canvas/<canvasId>) — using the real canvasId from canvas_manage (action=get_current or list). Clicking it opens that canvas in the Conductor side panel. Never reference a canvas as a file path or an http(s) URL.${buildWidgetHistory(widgetStyleHistory)}`;
 }
 
 /**

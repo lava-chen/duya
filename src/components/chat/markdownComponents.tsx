@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
-import { FileIcon } from '../icons';
+import { FileIcon, SquaresFourIcon } from '../icons';
 import { Button } from '@/components/ui/Button';
 import { fileExtensionFromName, getFileTypeIcon } from '../file-tree/file-type-icon';
 import { useLinkOpener } from '@/hooks/useLinkOpener';
@@ -138,6 +138,12 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     isBareFileName = true;
   }
 
+  // Internal canvas routes (`/duya/canvas/<id>`, taught to the agent by the
+  // conductor prompt) must be classified BEFORE the local-file check: any
+  // `/...` href otherwise matches isLikelyLocalFileReference and renders as
+  // a dead filesystem pill.
+  const canvasLinkId = typeof href === 'string' ? parseInternalCanvasLink(href) : null;
+
   const isLocalFile = typeof resolvedHref === 'string' && isLikelyLocalFileReference(resolvedHref);
   // Localhost URLs (e.g. `http://localhost:8000/`) follow the same routing
   // as other web links based on the `open_links_in_external_browser` config.
@@ -155,6 +161,22 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
       >
         {children}
       </Button>
+    );
+  }
+
+  // Canvas links render as a pill that opens the canvas in the sidebar
+  // Conductor panel (same window-event channel as the other panels).
+  if (canvasLinkId) {
+    return (
+      <button
+        type="button"
+        className="markdown-file-link"
+        onClick={() => openConductorCanvas(canvasLinkId)}
+        title="Open canvas in sidebar"
+      >
+        <SquaresFourIcon size={13} aria-hidden="true" />
+        <span className="markdown-file-link__name">{children ?? 'Canvas'}</span>
+      </button>
     );
   }
 
