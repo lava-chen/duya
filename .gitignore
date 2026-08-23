@@ -85,6 +85,7 @@ coverage/
 !packages/agent/src/memory-rollout/wakeup.test.ts
 !src/components/chat/SubAgentPanel.test.tsx
 !src/components/chat/__tests__/FileEditToolRow.test.tsx
+!src/components/chat/__tests__/ContextUsageRing.test.tsx
 # Tier-1 LM Studio capability plumbing tests (Plan 437-style helpers).
 !src/components/providers/__tests__/ModelCapabilityBadges.test.tsx
 !src/components/providers/__tests__/ProviderEditView.test.tsx
