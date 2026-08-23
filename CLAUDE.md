@@ -120,7 +120,41 @@ node packages/agent/dist/cli/index.js [options]
   - `refactor(electron): extract ipc handlers to separate modules`
   - `docs: update AGENTS.md commit message format`
 - Atomic: one logical change per commit. Do not mix unrelated fixes.
-- No merge commits on `main`: rebase on latest `origin/main` before push.
+- Landing changes: use the [Worktree → PR workflow](#worktree--pr-workflow).
+  Merge via `gh pr merge --merge` so the merge node stays visible in the
+  graph. Never squash, never fast-forward-only.
+
+### Worktree → PR workflow
+
+Standard loop for agent / parallel work — verified end to end
+(implement → commit → PR #14 → merge). The shared checkout is never
+touched until the merge lands on `origin/master`.
+
+1. **Isolate**: work in a git worktree under `.claude/worktrees/<name>`
+   on its own branch, based on `origin/master`. An isolated session must
+   not edit the shared checkout or cd back into it.
+2. **Worktree setup**: before running tsc/vitest, junction `node_modules`
+   from the primary checkout — the repo root plus every workspace package
+   that has its own (`packages/agent`, `conductor`, `gateway`,
+   `plugin-core`, `voice`). Missing junctions produce fake TS2307 errors.
+3. **Verify in place**: targeted `npx vitest run <files>` +
+   `npm run typecheck:web`, plus any other package gates the diff
+   touches. Known footgun: `typecheck:cli` OOM-crashes tsc under the
+   default heap — retry with
+   `NODE_OPTIONS=--max-old-space-size=6144 npx tsc -p packages/cli --noEmit`.
+4. **Commit** in the worktree: Conventional Commits, atomic per plan,
+   debug residue stripped. Committing on your own branch needs no
+   confirmation.
+5. **Push**: `git push -u origin <branch>`.
+6. **PR**: `gh pr create --base master --head <branch>` — conventional
+   title; body covers what / why / verification and ends with the
+   Claude Code footer.
+7. **Merge**: `gh pr merge <n> --merge` (merge commit, keeps history
+   explicit; no squash, no fast-forward-only).
+8. **Verify**: `gh pr view <n> --json state` or
+   `git fetch origin master && git log --oneline -3 origin/master`.
+9. **Sync back**: local `master` often carries unpushed commits — pull /
+   rebase it after the merge lands; delete the merged worktree branch.
 
 ### Release Tag
 
