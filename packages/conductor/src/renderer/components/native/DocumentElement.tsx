@@ -2,8 +2,6 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   ArrowsOutIcon,
   CheckIcon,
@@ -15,6 +13,7 @@ import {
   TextItalicIcon,
   XIcon,
 } from "@/components/icons";
+import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import type { CanvasElement } from "../..//types/conductor";
 import { useConductorStore } from "../..//stores/conductor-store";
 import { useElementEditSession } from "./editing/useElementEditSession";
@@ -58,6 +57,14 @@ function formatBlock(kind: BlockKind, source: string): string {
 function documentFileName(title: string): string {
   const normalized = title.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-");
   return `${normalized || "document"}.md`;
+}
+
+/** Directory of a workspace file path, so relative markdown links resolve
+ *  against the document's own folder (undefined when unlinked or bare). */
+function documentDirectory(filePath: string): string | undefined {
+  if (!filePath) return undefined;
+  const index = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+  return index > 0 ? filePath.slice(0, index) : undefined;
 }
 
 function markdownToDraft(source: string): string {
@@ -414,8 +421,17 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
         </div>
       </header>
       {isEditing ? <EditorSurface {...surfaceProps} /> : (
-        <div className="canvas-document__preview">
-          {markdown.trim() ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown> : <span>Double-click to start a shared draft.</span>}
+        <div className="canvas-document__preview tool-card border-0">
+          {markdown.trim() ? (
+            <MarkdownRenderer
+              className="prose prose-sm dark:prose-invert max-w-none tool-card-text"
+              baseDirectory={documentDirectory(filePath)}
+            >
+              {markdown}
+            </MarkdownRenderer>
+          ) : (
+            <span>Double-click to start a shared draft.</span>
+          )}
         </div>
       )}
       {filePath && <footer className="canvas-document__path">{filePath}</footer>}
