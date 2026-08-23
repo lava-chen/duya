@@ -233,11 +233,17 @@ export function useContextUsage(
       const msg = messages[i];
       if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
       try {
-        const usage = msg.tokenUsage;
-        const rawInput = usage.input_tokens || 0;
-        const cacheRead = usage.cache_hit_tokens || 0;
-        const cacheCreation = usage.cache_creation_tokens || 0;
-        const outputTokens = usage.output_tokens || 0;
+        // The persisted block is TURN-CUMULATIVE: the worker sums every LLM
+        // call of a turn onto the last assistant's tokenUsage. The ring's
+        // context base is one request's prompt size, so prefer the
+        // `last_call` sub-block when present. Rows persisted before that
+        // field existed fall back to the cumulative block (the pre-fix
+        // behavior — inflated ~N× on tool-heavy turns).
+        const src = msg.tokenUsage.last_call ?? msg.tokenUsage;
+        const rawInput = src.input_tokens || 0;
+        const cacheRead = src.cache_hit_tokens || 0;
+        const cacheCreation = src.cache_creation_tokens || 0;
+        const outputTokens = src.output_tokens || 0;
         // Cache-convention guard: some OpenAI-compatible gateways report
         // input_tokens excluding cached tokens (both cache read and cache
         // creation). Normalize so used reflects the full prompt volume

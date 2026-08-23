@@ -75,6 +75,17 @@ export interface TokenUsage {
   /** Upstream provider name when using an aggregator like OpenRouter.
    *  Undefined for direct API calls. Surfaced from the `result` SSE event. */
   upstreamProvider?: string;
+  /** Single-request usage of the final LLM call in the turn that persisted
+   *  this block. The block itself is turn-cumulative (every call summed), so
+   *  context-size readers (context ring base) must prefer this sub-block;
+   *  cumulative totals (↑/↓/R/W) keep summing the whole block. Absent on
+   *  rows persisted before this field existed. */
+  last_call?: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_hit_tokens?: number;
+    cache_creation_tokens?: number;
+  };
 }
 
 export type StreamPhase =
