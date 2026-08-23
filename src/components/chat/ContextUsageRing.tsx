@@ -19,7 +19,9 @@ interface ContextUsageRingProps {
  * Small ring trigger next to the input. On hover the ring slides a pi-style
  * stats line out to the left (cumulative ↑input / ↓output / R cache / $ cost,
  * then the current context %), updating live from the worker during
- * streaming. No click popup — the hover line is the only detail view.
+ * streaming. Clicking the ring once pins the stats line open — it survives
+ * mouse-leave and keeps live-updating; only another click on the ring
+ * (or Enter/Space on it) unpins.
  */
 export function ContextUsageRing({
   messages,
@@ -31,6 +33,7 @@ export function ContextUsageRing({
 }: ContextUsageRingProps) {
   const usage = useContextUsage(messages, modelName, contextWindow, sessionId);
   const [hovered, setHovered] = useState(false);
+  const [pinned, setPinned] = useState(false);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const cancelHide = () => {
@@ -47,6 +50,14 @@ export function ContextUsageRing({
   useEffect(() => {
     return () => cancelHide();
   }, []);
+
+  // Click-to-pin: a single click holds the stats line open regardless of
+  // hover; only another click on the ring (or Enter/Space on it) unpins —
+  // outside clicks and Escape deliberately leave it alone.
+  const togglePin = () => {
+    cancelHide();
+    setPinned((p) => !p);
+  };
 
   const size = 18;
   const strokeWidth = 2.5;
@@ -82,11 +93,13 @@ export function ContextUsageRing({
     ? (usage.ratio * 100).toFixed(1)
     : '?';
 
+  const expanded = hovered || pinned;
+
   return (
     <>
       <div
         className="context-usage-ring-wrap"
-        data-hovered={hovered}
+        data-expanded={expanded}
         onMouseEnter={() => {
           cancelHide();
           setHovered(true);
@@ -95,7 +108,7 @@ export function ContextUsageRing({
       >
         <div
           className="context-usage-ring-stats-shell"
-          aria-hidden={!hovered}
+          aria-hidden={!expanded}
         >
           <div className="context-usage-ring-stats">
             {usage.hasData && (
@@ -186,8 +199,22 @@ export function ContextUsageRing({
 
         <span
           className="context-usage-ring-trigger"
-          role="img"
+          role="button"
+          tabIndex={0}
+          aria-pressed={pinned}
           aria-label="Context usage"
+          data-pinned={pinned}
+          onClick={(e) => {
+            e.stopPropagation();
+            togglePin();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              togglePin();
+            }
+          }}
         >
           <svg
             width={size}
@@ -243,8 +270,9 @@ export function ContextUsageRing({
             opacity 0.22s ease,
             max-width 0.28s cubic-bezier(0.22, 1, 0.36, 1);
         }
-        .context-usage-ring-wrap[data-hovered='true'] .context-usage-ring-stats-shell,
-        .context-usage-ring-wrap:hover .context-usage-ring-stats-shell {
+        /* Expansion is state-driven (hover OR pinned) via data-expanded,
+           so a pinned line stays open even when the cursor is elsewhere. */
+        .context-usage-ring-wrap[data-expanded='true'] .context-usage-ring-stats-shell {
           grid-template-columns: 1fr;
           opacity: 1;
           max-width: 480px;
@@ -320,7 +348,7 @@ export function ContextUsageRing({
           padding: 4px;
           background: transparent;
           border: none;
-          cursor: default;
+          cursor: pointer;
           border-radius: 4px;
           transition: background-color 0.15s ease;
           position: relative;
@@ -329,6 +357,16 @@ export function ContextUsageRing({
         }
         .context-usage-ring-trigger:hover {
           background-color: var(--bg-hover);
+        }
+        /* Pinned: keep the hover tint while the mouse is elsewhere, plus a
+           hairline inset so "this is held open" reads at a glance. */
+        .context-usage-ring-trigger[data-pinned='true'] {
+          background-color: var(--bg-hover);
+          box-shadow: inset 0 0 0 1px var(--border);
+        }
+        .context-usage-ring-trigger:focus-visible {
+          outline: 1px solid var(--accent);
+          outline-offset: 1px;
         }
 
         .context-usage-ring-svg {
