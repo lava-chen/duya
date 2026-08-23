@@ -7,7 +7,7 @@ import {
   FileTextIcon,
   GitDiffIcon,
   GlobeIcon,
-  SquaresFourIcon,
+  ChalkboardIcon,
   TerminalIcon,
   type IconProps,
 } from "@/components/icons";
@@ -111,7 +111,7 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
   conductor: {
     id: "conductor",
     labelKey: "panel.conductor",
-    icon: SquaresFourIcon,
+    icon: ChalkboardIcon,
     multiInstance: true,
     available: true,
     minWidth: 420,
