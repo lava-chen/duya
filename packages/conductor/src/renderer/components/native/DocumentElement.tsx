@@ -193,6 +193,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   const [toolbarTop, setToolbarTop] = useState(8);
   const [blockMenuOpen, setBlockMenuOpen] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  const [focusEditing, setFocusEditing] = useState(false);
   const articleRef = useRef<HTMLElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const focusEditorRef = useRef<HTMLTextAreaElement>(null);
@@ -201,7 +202,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
 
   const commitDraft = useCallback((nextDraft: string) => {
     focusModeRef.current = false;
-    setFocusMode(false);
+    setFocusEditing(false);
     setBlockMenuOpen(false);
     if (nextDraft !== markdown) {
       persist({ config: { markdown: nextDraft } }, "Save Markdown document failed");
@@ -211,6 +212,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   const cancelDraft = useCallback(() => {
     focusModeRef.current = false;
     setFocusMode(false);
+    setFocusEditing(false);
     setBlockMenuOpen(false);
   }, []);
 
@@ -238,8 +240,8 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
 
   useEffect(() => {
     if (!isEditing) {
-      setFocusMode(false);
       focusModeRef.current = false;
+      setFocusEditing(false);
       setBlockMenuOpen(false);
     }
   }, [isEditing]);
@@ -351,14 +353,30 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   }, [draft, title]);
 
   const openFocus = useCallback(() => {
-    focusModeRef.current = true;
+    focusModeRef.current = false;
+    setFocusEditing(false);
     setFocusMode(true);
+  }, []);
+
+  const openFocusEdit = useCallback(() => {
+    focusModeRef.current = true;
+    setFocusEditing(true);
     setEditingElementId(element.id);
     requestAnimationFrame(() => {
       activeEditorRef.current = focusEditorRef.current;
       focusEditorRef.current?.focus();
     });
   }, [element.id, setEditingElementId]);
+
+  const closeFocusEdit = useCallback(() => {
+    save();
+    focusModeRef.current = false;
+    setFocusEditing(false);
+  }, [save]);
+
+  const dismissFocus = useCallback(() => {
+    if (focusEditing) closeFocusEdit(); else setFocusMode(false);
+  }, [closeFocusEdit, focusEditing]);
 
   const showToolbar = isEditing && selection.start !== selection.end;
   const surfaceProps: EditorSurfaceProps = {
@@ -385,18 +403,44 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   };
 
   const focusDialog = focusMode && typeof document !== "undefined" ? createPortal(
-    <div className="canvas-document-focus" role="dialog" aria-modal="true" aria-label={`Focused editor for ${title}`}>
-      <div className="canvas-document-focus__scrim" onMouseDown={save} />
+    <div className="canvas-document-focus" role="dialog" aria-modal="true" aria-label={`Markdown document ${title}`}>
+      <div className="canvas-document-focus__scrim" onMouseDown={dismissFocus} />
       <section className="canvas-document-focus__panel">
         <header className="canvas-document-focus__header">
           <div><strong>{title}</strong></div>
           <div className="canvas-document__header-actions">
-            <button type="button" className="canvas-document__action--icon" onClick={() => void copyDocument()} aria-label="Copy Markdown" title="Copy Markdown"><CopyIcon size={18} /></button>
-            <button type="button" className="canvas-document__action--icon" onClick={downloadDocument} aria-label="Export Markdown" title="Export Markdown"><DownloadSimpleIcon size={18} /></button>
-            <button type="button" className="canvas-document__action--icon" onClick={save} aria-label="Close focused editor" title="Save and close"><XIcon size={18} /></button>
+            <button type="button" onClick={() => void copyDocument()} title="Copy Markdown">
+              {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+              <span>{copied ? "Copied" : "Copy"}</span>
+            </button>
+            <button type="button" onClick={downloadDocument} title="Export as markdown">
+              <DownloadSimpleIcon size={12} />
+              <span>Export</span>
+            </button>
+            {focusEditing ? (
+              <button type="button" onClick={closeFocusEdit} title="Save and return to preview"><span>Done</span></button>
+            ) : (
+              <button type="button" onClick={openFocusEdit} title="Edit Markdown"><span>Edit</span></button>
+            )}
+            <button type="button" className="canvas-document__action--icon" onClick={dismissFocus} aria-label="Close" title="Close"><XIcon size={14} /></button>
           </div>
         </header>
-        <EditorSurface {...surfaceProps} editorRef={focusEditorRef} focused />
+        {focusEditing ? (
+          <EditorSurface {...surfaceProps} editorRef={focusEditorRef} focused />
+        ) : (
+          <div className="canvas-document-focus__body">
+            {markdown.trim() ? (
+              <MarkdownRenderer
+                className="prose prose-sm dark:prose-invert max-w-none tool-card-text"
+                baseDirectory={documentDirectory(filePath)}
+              >
+                {markdown}
+              </MarkdownRenderer>
+            ) : (
+              <span>Double-click the card to start writing.</span>
+            )}
+          </div>
+        )}
       </section>
     </div>,
     document.body,
@@ -417,7 +461,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
             <DownloadSimpleIcon size={12} />
             <span>Export</span>
           </button>
-          <button type="button" className="canvas-document__action--icon" onClick={openFocus} aria-label="Focus Markdown editor" title="Focus Markdown editor"><ArrowsOutIcon size={14} /></button>
+          <button type="button" className="canvas-document__action--icon" onClick={openFocus} aria-label="Expand Markdown document" title="Expand Markdown document"><ArrowsOutIcon size={14} /></button>
         </div>
       </header>
       {isEditing ? <EditorSurface {...surfaceProps} /> : (
