@@ -324,6 +324,12 @@ const en = {
   'streaming.toolAction.hook.timeout': 'Hook timed out',
   'streaming.toolAction.hook.errorPrefix': 'Hook failed',
 
+  // Context-compaction record row: collapsed verb plus a compacted-count
+  // tail; the expanded card shows the summary text verbatim.
+  'streaming.toolAction.compact.collapsed': 'Context compacted',
+  'streaming.toolAction.compact.messagesCompacted.one': '{count} message',
+  'streaming.toolAction.compact.messagesCompacted.other': '{count} messages',
+
   'permission.allow': 'Allow',
   'permission.deny': 'Deny',
   'permission.allowOnce': 'Allow Once',
