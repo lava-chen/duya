@@ -2,37 +2,16 @@
 
 import { useMemo } from 'react';
 import { useStreamingAgentProgress, type AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
+import { colorForAgent } from '@/lib/agent-color';
 
 export interface SubAgentRowInfo {
   id: string;
   name: string;
   color: string;
   status: 'waiting' | 'running' | 'completed' | 'error';
-  description?: string;
   eventCount?: number;
   sessionId?: string;
   outputFilePath?: string;
-}
-
-const AGENT_NAME_COLORS = [
-  { name: 'Archimedes', color: '#3b82f6' },
-  { name: 'Avicenna', color: '#f97316' },
-  { name: 'Galileo', color: '#22c55e' },
-  { name: 'Maxwell', color: '#ef4444' },
-  { name: 'Newton', color: '#a855f7' },
-  { name: 'Euler', color: '#06b6d4' },
-  { name: 'Turing', color: '#ec4899' },
-  { name: 'Curie', color: '#14b8a6' },
-  { name: 'Darwin', color: '#f59e0b' },
-  { name: 'Einstein', color: '#6366f1' },
-];
-
-function getAgentColor(index: number): string {
-  return AGENT_NAME_COLORS[index % AGENT_NAME_COLORS.length].color;
-}
-
-function getAgentName(index: number): string {
-  return AGENT_NAME_COLORS[index % AGENT_NAME_COLORS.length].name;
 }
 
 function groupEventsByAgent(events: AgentProgressEventWithMeta[]): Map<string, AgentProgressEventWithMeta[]> {
@@ -84,7 +63,6 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
   return useMemo(() => {
     const groups = groupEventsByAgent(events);
     const agents: SubAgentRowInfo[] = [];
-    let index = 0;
 
     for (const [agentId, agentEvents] of groups) {
       const customName = getAgentDisplayNameFromEvents(agentEvents);
@@ -97,21 +75,17 @@ export function useSubAgentProgress(sessionId: string): SubAgentRowInfo[] {
 
       agents.push({
         id: agentId,
-        name: customName || getAgentName(index),
-        color: getAgentColor(index),
+        name: customName || 'SubAgent',
+        // Hash by agentId so a sub-agent keeps its color across remounts,
+        // reconnects, and concurrent spawns regardless of event order.
+        color: colorForAgent(agentId),
         status,
-        description: isTerminal
-          ? status === 'completed'
-            ? '已完成'
-            : '出错'
-          : '正在运行...',
         eventCount: agentEvents.length,
         sessionId: dbSessionId,
         // outputFilePath will be available from subagent_info blocks in the
         // canonical architecture; during migration this is empty.
         outputFilePath: undefined,
       });
-      index++;
     }
 
     return agents;

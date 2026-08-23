@@ -1035,6 +1035,11 @@ const en = {
   'thread.running': 'Agent is running...',
   'thread.options': 'Thread options',
 
+  'subAgent.status.running': 'Running...',
+  'subAgent.status.completed': 'Completed',
+  'subAgent.status.error': 'Error',
+  'subAgent.status.waiting': 'Waiting',
+
   'panel.files': 'Files',
   'panel.preview': 'Preview',
   'panel.review': 'Code Review',
