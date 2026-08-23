@@ -403,7 +403,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
   ) : null;
 
   return (
-    <article ref={articleRef} className="canvas-document" onMouseDown={(event) => { if (isEditing) event.stopPropagation(); }}>
+    <article ref={articleRef} className="canvas-document tool-card" onMouseDown={(event) => { if (isEditing) event.stopPropagation(); }}>
       <header className="canvas-document__header">
         <button type="button" className="canvas-document__title" onClick={() => setEditingElementId(element.id)} title="Edit Markdown document">
           <strong>{title}</strong>
@@ -421,7 +421,7 @@ export const DocumentElement: React.FC<{ element: CanvasElement }> = ({ element 
         </div>
       </header>
       {isEditing ? <EditorSurface {...surfaceProps} /> : (
-        <div className="canvas-document__preview tool-card border-0">
+        <div className="canvas-document__preview">
           {markdown.trim() ? (
             <MarkdownRenderer
               className="prose prose-sm dark:prose-invert max-w-none tool-card-text"
