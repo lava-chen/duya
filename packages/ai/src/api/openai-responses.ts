@@ -21,10 +21,11 @@
 import OpenAI from 'openai';
 import type {
   AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
-  Message, Model, SSEEvent,
+  Message, Model, ProviderBlockContent, SSEEvent,
   TextContent, ThinkingContent, ToolUseContent,
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
+import { summarizeProviderBlock } from './degrade.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { getTemperature } from '../utils/simple-options.js';
@@ -129,7 +130,8 @@ function cachedTokensFromResponse(usage: unknown): number | undefined {
  * Thinking blocks are dropped — the Responses API manages reasoning
  * server-side via previous_response_id.
  */
-function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
   const result: OpenAI.Responses.ResponseInputItem[] = [];
 
   for (const msg of messages) {
@@ -225,6 +227,13 @@ function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputIt
             name: block.name,
             arguments: JSON.stringify(block.input),
           });
+        } else if (block.type === 'provider_block') {
+          // Plan 440 phase 1: degrade to the bounded summary. Even
+          // same-origin carriers are degraded here — the Responses API can
+          // accept some item types in input, but re-emitting verbatim
+          // payloads is deliberately deferred until verified live; a text
+          // summary is always wire-valid.
+          textParts.push(summarizeProviderBlock(block));
         }
         // Skip thinking blocks — Responses API handles reasoning server-side.
       }
@@ -350,6 +359,247 @@ function mapStatus(
  * new messages need to be sent. This is a per-client-instance simplification
  * — in production, this would need to be per-conversation.
  */
+// =============================================================================
+// Event parser (plan 440 phase 2 extraction — mirrors parseAnthropicEvent)
+// =============================================================================
+
+/** Accumulated state shared by parseResponsesEvent across stream events. */
+export interface ResponsesParseState {
+  assistantMsg: AssistantMessage;
+  itemToContentIdx: Map<string, number>;
+  thinkParser?: ThinkTagParser | null;
+  responseId?: string;
+}
+
+/**
+ * Map a Responses API stream event onto the internal AssistantMessage,
+ * mutating state in place. Returns the internal event(s) to surface as SSE
+ * (empty/null → nothing to emit). Fatal lifecycle events (response.failed /
+ * error) are handled by the caller.
+ */
+export function parseResponsesEvent(
+  event: OpenAI.Responses.ResponseStreamEvent,
+  state: ResponsesParseState,
+): AssistantMessageEvent | AssistantMessageEvent[] | null {
+  const { assistantMsg, itemToContentIdx } = state;
+
+  switch (event.type) {
+    // ── Response lifecycle ──────────────────────────────────────
+    case 'response.created': {
+      state.responseId = event.response.id;
+      return null;
+    }
+
+    case 'response.completed': {
+      const resp = event.response;
+      state.responseId = resp.id;
+      if (resp.usage) {
+        assistantMsg.usage = {
+          input_tokens: resp.usage.input_tokens || 0,
+          output_tokens: resp.usage.output_tokens || 0,
+          total_tokens: resp.usage.total_tokens,
+        };
+      }
+      // Plan 440 phase 2: observability metadata, captured verbatim.
+      const serviceTier = (resp as unknown as Record<string, unknown>).service_tier;
+      if (typeof serviceTier === 'string' && serviceTier.length > 0) {
+        assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
+      }
+      assistantMsg.stopReason = mapStatus(
+        resp.status,
+        assistantMsg.content.some(b => b.type === 'tool_use'),
+      );
+      return null;
+    }
+
+    case 'response.incomplete': {
+      const resp = event.response;
+      state.responseId = resp.id;
+      if (resp.usage) {
+        assistantMsg.usage = {
+          input_tokens: resp.usage.input_tokens || 0,
+          output_tokens: resp.usage.output_tokens || 0,
+          total_tokens: resp.usage.total_tokens,
+        };
+      }
+      const serviceTier = (resp as unknown as Record<string, unknown>).service_tier;
+      if (typeof serviceTier === 'string' && serviceTier.length > 0) {
+        assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
+      }
+      assistantMsg.stopReason = 'max_turns';
+      return null;
+    }
+
+    // ── Output item lifecycle ───────────────────────────────────
+    case 'response.output_item.added': {
+      const item = event.item;
+      if (item.type === 'reasoning') {
+        const block: ThinkingContent = {
+          type: 'thinking',
+          thinking: '',
+          thinkingSignature: 'reasoning-text',
+        };
+        // Plan 440 phase 2: keep encrypted reasoning so store:false
+        // sessions can replay it (plaintext deltas are not always
+        // re-derivable server-side).
+        const encryptedContent = (item as unknown as Record<string, unknown>).encrypted_content;
+        if (typeof encryptedContent === 'string' && encryptedContent.length > 0) {
+          block.encrypted = encryptedContent;
+        }
+        assistantMsg.content.push(block);
+        itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
+      } else if (item.type === 'message') {
+        const block: TextContent = { type: 'text', text: '' };
+        assistantMsg.content.push(block);
+        itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
+      } else if (item.type === 'function_call') {
+        const fc = item as OpenAI.Responses.ResponseFunctionToolCall;
+        const block: ToolUseContent = {
+          type: 'tool_use',
+          id: fc.call_id || fc.id || '',
+          name: fc.name || '',
+          input: {},
+        };
+        (block as ToolUseWithRaw)._rawInput = '';
+        assistantMsg.content.push(block);
+        const idx = assistantMsg.content.length - 1;
+        itemToContentIdx.set(item.id || fc.call_id, idx);
+        return { type: 'toolcall_start', contentIndex: idx, partial: assistantMsg };
+      } else {
+        // Plan 440 phase 1: server-side output items (web_search_call,
+        // file_search_call, code_interpreter_call, image_generation_call,
+        // mcp_call, ...) are carried verbatim instead of dropped — a
+        // bounded one-line summary lands in the text stream when the
+        // item completes.
+        const carrier: ProviderBlockContent = {
+          type: 'provider_block',
+          origin: 'openai-responses',
+          kind: String(item.type),
+          payload: item,
+        };
+        assistantMsg.content.push(carrier);
+        // Some carried item variants have no id — without one, the
+        // completion event can't find this block and only the verbatim
+        // payload survives (still replay-valid).
+        if (item.id) {
+          itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
+        }
+      }
+      return null;
+    }
+
+    case 'response.output_item.done': {
+      const item = event.item;
+      const itemId = item.id;
+      if (!itemId) return null;
+      const idx = itemToContentIdx.get(itemId);
+      if (idx === undefined) return null;
+      const block = assistantMsg.content[idx];
+
+      if (block && block.type === 'tool_use') {
+        // Parse accumulated JSON arguments.
+        const raw = (block as ToolUseWithRaw)._rawInput;
+        if (raw !== undefined) {
+          try {
+            block.input = JSON.parse(raw) as Record<string, unknown>;
+          } catch {
+            block.input = {};
+          }
+          delete (block as ToolUseWithRaw)._rawInput;
+        }
+        return { type: 'toolcall_end', contentIndex: idx, toolCall: block, partial: assistantMsg };
+      }
+      if (block && block.type === 'text') {
+        return { type: 'text_end', contentIndex: idx, content: block.text, partial: assistantMsg };
+      }
+      if (block && block.type === 'thinking') {
+        return { type: 'thinking_end', contentIndex: idx, content: block.thinking, partial: assistantMsg };
+      }
+      if (block && block.type === 'provider_block') {
+        // Plan 440 phase 1: degrade visibly — a bounded one-line
+        // summary lands in the text stream when the item completes.
+        // appendText's contentIndex is required here: point it at an
+        // existing trailing text block, or past-the-end so it appends.
+        let textIdx = -1;
+        for (let i = assistantMsg.content.length - 1; i >= 0; i--) {
+          if (assistantMsg.content[i].type === 'text') {
+            textIdx = i;
+            break;
+          }
+        }
+        const targetIdx = textIdx >= 0 ? textIdx : assistantMsg.content.length;
+        return appendText(assistantMsg, summarizeProviderBlock(block), targetIdx);
+      }
+      return null;
+    }
+
+    // ── Reasoning deltas ────────────────────────────────────────
+    case 'response.reasoning_text.delta': {
+      const idx = itemToContentIdx.get(event.item_id);
+      if (idx === undefined) return null;
+      return appendThinking(assistantMsg, event.delta, idx);
+    }
+
+    case 'response.reasoning_summary_text.delta': {
+      // Some models only produce summary text, not full reasoning text.
+      // Treat it as thinking content.
+      const idx = itemToContentIdx.get(event.item_id);
+      if (idx === undefined) return null;
+      return appendThinking(assistantMsg, event.delta, idx);
+    }
+
+    // ── Text deltas ─────────────────────────────────────────────
+    case 'response.output_text.delta': {
+      const idx = itemToContentIdx.get(event.item_id);
+      if (idx === undefined) return null;
+      if (state.thinkParser) {
+        const { thinking, text } = state.thinkParser.feed(event.delta);
+        const events: AssistantMessageEvent[] = [];
+        if (thinking) {
+          events.push(appendThinking(assistantMsg, thinking, idx));
+        }
+        if (text) {
+          events.push(appendText(assistantMsg, text, idx));
+        }
+        return events;
+      }
+      return appendText(assistantMsg, event.delta, idx);
+    }
+
+    // Plan 440 phase 2: capture search/compute citations on the owning
+    // text block; rendering is a frontend concern tracked separately.
+    case 'response.output_text.annotation.added': {
+      const ev = event as unknown as { item_id?: string; annotation?: unknown };
+      if (!ev.item_id || ev.annotation === undefined) return null;
+      const idx = itemToContentIdx.get(ev.item_id);
+      if (idx === undefined) return null;
+      const block = assistantMsg.content[idx];
+      if (block && block.type === 'text') {
+        block.annotations = [...(block.annotations ?? []), ev.annotation];
+      }
+      return null;
+    }
+
+    // ── Function call argument deltas ───────────────────────────
+    case 'response.function_call_arguments.delta': {
+      const idx = itemToContentIdx.get(event.item_id);
+      if (idx === undefined) return null;
+      const block = assistantMsg.content[idx];
+      if (!block || block.type !== 'tool_use') return null;
+      const raw = (block as ToolUseWithRaw)._rawInput || '';
+      (block as ToolUseWithRaw)._rawInput = raw + event.delta;
+      return { type: 'toolcall_delta', contentIndex: idx, delta: event.delta, partial: assistantMsg };
+    }
+
+    default:
+      // Plan 440 phase 1: item-level unknowns are carried verbatim at
+      // output_item.added. Remaining event types (in-progress deltas
+      // of carried items, audio transcripts, ...) have no duya
+      // surface and stay ignored by design.
+      return null;
+  }
+}
+
 export function createOpenAIResponsesClient(options: AIClientOptions): AIClient {
   // Local-runtime compatibility shim: same rationale as
   // `openai-completions.ts#createOpenAICompletionsClient`. LM Studio
@@ -454,228 +704,39 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
         chatOptions?.signal ? { signal: chatOptions.signal } : undefined,
       );
 
-      // 9. Drain events.
+      // 9. Drain events. Fatal lifecycle errors stay inline — they surface
+      //    as raw error SSE. Every other event maps through
+      //    parseResponsesEvent (exported so tests can drive the protocol
+      //    mapping directly, mirroring parseAnthropicEvent).
+      const responsesState: ResponsesParseState = {
+        assistantMsg,
+        itemToContentIdx,
+        thinkParser,
+      };
       for await (const event of stream) {
-        switch (event.type) {
-          // ── Response lifecycle ──────────────────────────────────────
-          case 'response.created': {
-            responseId = event.response.id;
-            break;
-          }
-
-          case 'response.completed': {
-            const resp = event.response;
-            responseId = resp.id;
-            if (resp.usage) {
-              assistantMsg.usage = {
-                input_tokens: resp.usage.input_tokens || 0,
-                output_tokens: resp.usage.output_tokens || 0,
-                total_tokens: resp.usage.total_tokens,
-              };
-            }
-            assistantMsg.stopReason = mapStatus(
-              resp.status,
-              assistantMsg.content.some(b => b.type === 'tool_use'),
-            );
-            break;
-          }
-
-          case 'response.incomplete': {
-            const resp = event.response;
-            responseId = resp.id;
-            if (resp.usage) {
-              assistantMsg.usage = {
-                input_tokens: resp.usage.input_tokens || 0,
-                output_tokens: resp.usage.output_tokens || 0,
-                total_tokens: resp.usage.total_tokens,
-              };
-            }
-            assistantMsg.stopReason = 'max_turns';
-            break;
-          }
-
-          case 'response.failed': {
-            const errMsg = event.response.error?.message || 'Response failed';
-            yield { type: 'error', data: errMsg, code: 'response_failed' };
-            assistantMsg.stopReason = 'error';
-            break;
-          }
-
-          case 'error': {
-            yield {
-              type: 'error',
-              data: event.message || 'Unknown error',
-              code: event.code || undefined,
-            };
-            break;
-          }
-
-          // ── Output item lifecycle ───────────────────────────────────
-          case 'response.output_item.added': {
-            const item = event.item;
-            if (item.type === 'reasoning') {
-              const block: ThinkingContent = {
-                type: 'thinking',
-                thinking: '',
-                thinkingSignature: 'reasoning-text',
-              };
-              assistantMsg.content.push(block);
-              itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
-            } else if (item.type === 'message') {
-              const block: TextContent = { type: 'text', text: '' };
-              assistantMsg.content.push(block);
-              itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
-            } else if (item.type === 'function_call') {
-              const fc = item as OpenAI.Responses.ResponseFunctionToolCall;
-              const block: ToolUseContent = {
-                type: 'tool_use',
-                id: fc.call_id || fc.id || '',
-                name: fc.name || '',
-                input: {},
-              };
-              (block as ToolUseWithRaw)._rawInput = '';
-              assistantMsg.content.push(block);
-              const idx = assistantMsg.content.length - 1;
-              itemToContentIdx.set(item.id || fc.call_id, idx);
-              // Emit toolcall_start → SSE tool_use_started
-              const internalEvent: AssistantMessageEvent = {
-                type: 'toolcall_start',
-                contentIndex: idx,
-                partial: assistantMsg,
-              };
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            }
-            break;
-          }
-
-          case 'response.output_item.done': {
-            const item = event.item;
-            const itemId = item.id;
-            if (!itemId) break;
-            const idx = itemToContentIdx.get(itemId);
-            if (idx === undefined) break;
-            const block = assistantMsg.content[idx];
-
-            if (block && block.type === 'tool_use') {
-              // Parse accumulated JSON arguments.
-              const raw = (block as ToolUseWithRaw)._rawInput;
-              if (raw !== undefined) {
-                try {
-                  block.input = JSON.parse(raw) as Record<string, unknown>;
-                } catch {
-                  block.input = {};
-                }
-                delete (block as ToolUseWithRaw)._rawInput;
-              }
-              // Emit toolcall_end → SSE tool_use
-              const internalEvent: AssistantMessageEvent = {
-                type: 'toolcall_end',
-                contentIndex: idx,
-                toolCall: block,
-                partial: assistantMsg,
-              };
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            } else if (block && block.type === 'text') {
-              // Emit text_end → SSE text
-              const internalEvent: AssistantMessageEvent = {
-                type: 'text_end',
-                contentIndex: idx,
-                content: block.text,
-                partial: assistantMsg,
-              };
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            } else if (block && block.type === 'thinking') {
-              // Emit thinking_end → SSE thinking
-              const internalEvent: AssistantMessageEvent = {
-                type: 'thinking_end',
-                contentIndex: idx,
-                content: block.thinking,
-                partial: assistantMsg,
-              };
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            }
-            break;
-          }
-
-          // ── Reasoning deltas ────────────────────────────────────────
-          case 'response.reasoning_text.delta': {
-            const idx = itemToContentIdx.get(event.item_id);
-            if (idx !== undefined) {
-              const internalEvent = appendThinking(assistantMsg, event.delta, idx);
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            }
-            break;
-          }
-
-          case 'response.reasoning_summary_text.delta': {
-            // Some models only produce summary text, not full reasoning text.
-            // Treat it as thinking content.
-            const idx = itemToContentIdx.get(event.item_id);
-            if (idx !== undefined) {
-              const internalEvent = appendThinking(assistantMsg, event.delta, idx);
-              const sse = emitSSE(internalEvent);
-              if (sse) yield sse;
-            }
-            break;
-          }
-
-          // ── Text deltas ─────────────────────────────────────────────
-          case 'response.output_text.delta': {
-            const idx = itemToContentIdx.get(event.item_id);
-            if (idx !== undefined) {
-              if (thinkParser) {
-                const { thinking, text } = thinkParser.feed(event.delta);
-                if (thinking) {
-                  const internalEvent = appendThinking(assistantMsg, thinking, idx);
-                  const sse = emitSSE(internalEvent);
-                  if (sse) yield sse;
-                }
-                if (text) {
-                  const internalEvent = appendText(assistantMsg, text, idx);
-                  const sse = emitSSE(internalEvent);
-                  if (sse) yield sse;
-                }
-              } else {
-                const internalEvent = appendText(assistantMsg, event.delta, idx);
-                const sse = emitSSE(internalEvent);
-                if (sse) yield sse;
-              }
-            }
-            break;
-          }
-
-          // ── Function call argument deltas ───────────────────────────
-          case 'response.function_call_arguments.delta': {
-            const idx = itemToContentIdx.get(event.item_id);
-            if (idx !== undefined) {
-              const block = assistantMsg.content[idx];
-              if (block && block.type === 'tool_use') {
-                const raw = (block as ToolUseWithRaw)._rawInput || '';
-                (block as ToolUseWithRaw)._rawInput = raw + event.delta;
-                const internalEvent: AssistantMessageEvent = {
-                  type: 'toolcall_delta',
-                  contentIndex: idx,
-                  delta: event.delta,
-                  partial: assistantMsg,
-                };
-                const sse = emitSSE(internalEvent);
-                if (sse) yield sse;
-              }
-            }
-            break;
-          }
-
-          default:
-            // Unhandled event types are ignored — audio, web search,
-            // code interpreter, MCP, etc. are not relevant to duya.
-            break;
+        if (event.type === 'response.failed') {
+          const errMsg = event.response.error?.message || 'Response failed';
+          yield { type: 'error', data: errMsg, code: 'response_failed' };
+          assistantMsg.stopReason = 'error';
+          continue;
+        }
+        if (event.type === 'error') {
+          yield {
+            type: 'error',
+            data: event.message || 'Unknown error',
+            code: event.code || undefined,
+          };
+          continue;
+        }
+        const parsed = parseResponsesEvent(event, responsesState);
+        if (!parsed) continue;
+        const internalEvents = Array.isArray(parsed) ? parsed : [parsed];
+        for (const internalEvent of internalEvents) {
+          const sse = emitSSE(internalEvent);
+          if (sse) yield sse;
         }
       }
+      responseId = responsesState.responseId;
 
       // 10. Finalize any tool calls that weren't finalized by output_item.done.
       finalizeToolCalls(assistantMsg);

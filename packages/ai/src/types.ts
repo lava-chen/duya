@@ -38,6 +38,12 @@ export interface TextContent {
   text: string;
   /** Provider signature for text content (Anthropic text signature). */
   textSignature?: string;
+  /**
+   * Provider annotations captured verbatim (plan 440 phase 2): OpenAI
+   * url_citation / file_citation / container_file_citation entries attached
+   * to streamed output text. Capture-only; rendering is a frontend concern.
+   */
+  annotations?: unknown[];
 }
 
 export interface ImageContent {
@@ -72,6 +78,32 @@ export interface ThinkingContent {
   thinkingSignature?: string;
   /** True if the thinking block was redacted by the provider. */
   redacted?: boolean;
+  /**
+   * Encrypted reasoning payload (plan 440 phase 2): OpenAI Responses
+   * `reasoning.encrypted_content`, kept so store:false sessions can replay
+   * reasoning server-side.
+   */
+  encrypted?: string;
+}
+
+/**
+ * Opaque carrier for provider-native content that duya's block model does
+ * not natively represent (plan 440): Anthropic server-side tool blocks
+ * (`server_tool_use`, `web_search_tool_result`, `code_execution_*`,
+ * `text_editor_*`), OpenAI Responses output items (`web_search_call`,
+ * `code_interpreter_call`, `mcp_call`, `image_generation_call`, ...).
+ * Parsers degrade unknown blocks into this carrier instead of dropping
+ * them, so history replay stays valid. See api/degrade.ts for the
+ * forward-or-downgrade outbound rule.
+ */
+export interface ProviderBlockContent {
+  type: 'provider_block';
+  /** API format whose stream produced this block. */
+  origin: ApiFormat;
+  /** Verbatim provider type tag, e.g. 'server_tool_use', 'web_search_call'. */
+  kind: string;
+  /** Verbatim provider payload (block / item object as received). */
+  payload: unknown;
 }
 
 export type MessageContent =
@@ -79,7 +111,8 @@ export type MessageContent =
   | ImageContent
   | ToolUseContent
   | ToolResultContent
-  | ThinkingContent;
+  | ThinkingContent
+  | ProviderBlockContent;
 
 // ─── Tool types ───
 
@@ -304,6 +337,15 @@ export interface Message {
 
 // ─── AssistantMessage (superset of packages/agent definition) ───
 
+/** Observability metadata captured verbatim from provider responses
+ *  (plan 440 phase 2). Never required; consumers must treat as optional. */
+export interface ProviderResponseMeta {
+  /** OpenAI service tier that served the request ('default', 'flex', ...). */
+  serviceTier?: string;
+  /** Chat Completions logprobs payload when requested by the caller. */
+  logprobs?: unknown;
+}
+
 export interface AssistantMessage {
   role: 'assistant';
   content: MessageContent[];
@@ -315,6 +357,8 @@ export interface AssistantMessage {
   model?: string;
   responseId?: string;
   usage?: TokenUsage;
+  /** Provider observability metadata (plan 440 phase 2), when available. */
+  providerMeta?: ProviderResponseMeta;
   stopReason?: StopReason;
 }
 
