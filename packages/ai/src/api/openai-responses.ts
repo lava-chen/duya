@@ -21,10 +21,11 @@
 import OpenAI from 'openai';
 import type {
   AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
-  Message, Model, SSEEvent,
+  Message, Model, ProviderBlockContent, SSEEvent,
   TextContent, ThinkingContent, ToolUseContent,
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
+import { summarizeProviderBlock } from './degrade.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { getTemperature } from '../utils/simple-options.js';
@@ -129,7 +130,8 @@ function cachedTokensFromResponse(usage: unknown): number | undefined {
  * Thinking blocks are dropped — the Responses API manages reasoning
  * server-side via previous_response_id.
  */
-function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputItem[] {
   const result: OpenAI.Responses.ResponseInputItem[] = [];
 
   for (const msg of messages) {
@@ -225,6 +227,13 @@ function toResponsesInput(messages: Message[]): OpenAI.Responses.ResponseInputIt
             name: block.name,
             arguments: JSON.stringify(block.input),
           });
+        } else if (block.type === 'provider_block') {
+          // Plan 440 phase 1: degrade to the bounded summary. Even
+          // same-origin carriers are degraded here — the Responses API can
+          // accept some item types in input, but re-emitting verbatim
+          // payloads is deliberately deferred until verified live; a text
+          // summary is always wire-valid.
+          textParts.push(summarizeProviderBlock(block));
         }
         // Skip thinking blocks — Responses API handles reasoning server-side.
       }
@@ -545,6 +554,20 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
               };
               const sse = emitSSE(internalEvent);
               if (sse) yield sse;
+            } else {
+              // Plan 440 phase 1: server-side output items (web_search_call,
+              // file_search_call, code_interpreter_call, image_generation_call,
+              // mcp_call, ...) are carried verbatim instead of dropped — a
+              // bounded one-line summary lands in the text stream when the
+              // item completes.
+              const carrier: ProviderBlockContent = {
+                type: 'provider_block',
+                origin: 'openai-responses',
+                kind: String(item.type),
+                payload: item,
+              };
+              assistantMsg.content.push(carrier);
+              itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
             }
             break;
           }
@@ -595,6 +618,15 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
                 content: block.thinking,
                 partial: assistantMsg,
               };
+              const sse = emitSSE(internalEvent);
+              if (sse) yield sse;
+            } else if (block && block.type === 'provider_block') {
+              // Plan 440 phase 1: degrade visibly — a bounded one-line
+              // summary lands in the text stream when the item completes.
+              const internalEvent = appendText(
+                assistantMsg,
+                summarizeProviderBlock(block),
+              );
               const sse = emitSSE(internalEvent);
               if (sse) yield sse;
             }
@@ -671,8 +703,10 @@ export function createOpenAIResponsesClient(options: AIClientOptions): AIClient 
           }
 
           default:
-            // Unhandled event types are ignored — audio, web search,
-            // code interpreter, MCP, etc. are not relevant to duya.
+            // Plan 440 phase 1: item-level unknowns are carried verbatim at
+            // output_item.added. Remaining event types (in-progress deltas
+            // of carried items, audio transcripts, ...) have no duya
+            // surface and stay ignored by design.
             break;
         }
       }

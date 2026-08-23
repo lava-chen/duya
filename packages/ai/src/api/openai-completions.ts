@@ -20,6 +20,7 @@ import type {
   TextContent, ThinkingContent, ToolUseContent,
 } from '../types.js';
 import { transformMessages } from './transform-messages.js';
+import { summarizeProviderBlock } from './degrade.js';
 import { emitSSE } from './emit-sse.js';
 import { ThinkTagParser } from '../utils/think-tag-parser.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
@@ -281,7 +282,8 @@ export function repairToolPairing(messages: Message[]): Message[] {
  * for them, and transformMessages has already downgraded cross-model thinking
  * to plain text.
  */
-function toOpenAIMessages(
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function toOpenAIMessages(
   messages: Message[],
 ): OpenAI.Chat.ChatCompletionMessageParam[] {
   // Repair orphaned tool_use/tool_result pairs before conversion so the
@@ -349,6 +351,11 @@ function toOpenAIMessages(
                 arguments: JSON.stringify(block.input),
               },
             });
+          } else if (block.type === 'provider_block') {
+            // Plan 440 phase 1: Chat Completions has no inbound carrier for
+            // provider blocks — degrade to the bounded summary line so the
+            // step stays visible without breaking the wire format.
+            textParts.push(summarizeProviderBlock(block));
           }
         }
         const assistantMsg: OpenAI.Chat.ChatCompletionAssistantMessageParam = {
