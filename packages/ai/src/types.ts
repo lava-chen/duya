@@ -38,6 +38,12 @@ export interface TextContent {
   text: string;
   /** Provider signature for text content (Anthropic text signature). */
   textSignature?: string;
+  /**
+   * Provider annotations captured verbatim (plan 440 phase 2): OpenAI
+   * url_citation / file_citation / container_file_citation entries attached
+   * to streamed output text. Capture-only; rendering is a frontend concern.
+   */
+  annotations?: unknown[];
 }
 
 export interface ImageContent {
@@ -72,6 +78,12 @@ export interface ThinkingContent {
   thinkingSignature?: string;
   /** True if the thinking block was redacted by the provider. */
   redacted?: boolean;
+  /**
+   * Encrypted reasoning payload (plan 440 phase 2): OpenAI Responses
+   * `reasoning.encrypted_content`, kept so store:false sessions can replay
+   * reasoning server-side.
+   */
+  encrypted?: string;
 }
 
 /**
@@ -325,6 +337,15 @@ export interface Message {
 
 // ─── AssistantMessage (superset of packages/agent definition) ───
 
+/** Observability metadata captured verbatim from provider responses
+ *  (plan 440 phase 2). Never required; consumers must treat as optional. */
+export interface ProviderResponseMeta {
+  /** OpenAI service tier that served the request ('default', 'flex', ...). */
+  serviceTier?: string;
+  /** Chat Completions logprobs payload when requested by the caller. */
+  logprobs?: unknown;
+}
+
 export interface AssistantMessage {
   role: 'assistant';
   content: MessageContent[];
@@ -336,6 +357,8 @@ export interface AssistantMessage {
   model?: string;
   responseId?: string;
   usage?: TokenUsage;
+  /** Provider observability metadata (plan 440 phase 2), when available. */
+  providerMeta?: ProviderResponseMeta;
   stopReason?: StopReason;
 }
 

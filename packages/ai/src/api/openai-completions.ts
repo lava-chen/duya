@@ -745,6 +745,17 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
             if (sse) yield sse;
           }
 
+          // 9b''. Annotations (search-preview citations etc.) attach to the
+          //     text block they annotate — capture-only, rendering is a
+          //     frontend concern (plan 440 phase 2).
+          const deltaAnnotations = (delta as unknown as Record<string, unknown>).annotations;
+          if (Array.isArray(deltaAnnotations) && deltaAnnotations.length > 0) {
+            const lastBlock = assistantMsg.content[assistantMsg.content.length - 1];
+            if (lastBlock && lastBlock.type === 'text') {
+              lastBlock.annotations = [...(lastBlock.annotations ?? []), ...deltaAnnotations];
+            }
+          }
+
           // 9c. tool_calls → toolcall_start/delta.
           if (delta.tool_calls) {
             for (const toolCallDelta of delta.tool_calls) {
@@ -767,6 +778,16 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
             input_tokens: chunk.usage.prompt_tokens || 0,
             output_tokens: chunk.usage.completion_tokens || 0,
           };
+        }
+
+        // 9d'. Observability metadata — captured verbatim when present,
+        //      never required (plan 440 phase 2).
+        const serviceTier = (chunk as unknown as Record<string, unknown>).service_tier;
+        if (typeof serviceTier === 'string' && serviceTier.length > 0) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
+        }
+        if (choice.logprobs) {
+          assistantMsg.providerMeta = { ...assistantMsg.providerMeta, logprobs: choice.logprobs };
         }
 
         // 9e. Map finish reason.
