@@ -478,7 +478,12 @@ export function parseResponsesEvent(
           payload: item,
         };
         assistantMsg.content.push(carrier);
-        itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
+        // Some carried item variants have no id — without one, the
+        // completion event can't find this block and only the verbatim
+        // payload survives (still replay-valid).
+        if (item.id) {
+          itemToContentIdx.set(item.id, assistantMsg.content.length - 1);
+        }
       }
       return null;
     }
@@ -513,7 +518,17 @@ export function parseResponsesEvent(
       if (block && block.type === 'provider_block') {
         // Plan 440 phase 1: degrade visibly — a bounded one-line
         // summary lands in the text stream when the item completes.
-        return appendText(assistantMsg, summarizeProviderBlock(block));
+        // appendText's contentIndex is required here: point it at an
+        // existing trailing text block, or past-the-end so it appends.
+        let textIdx = -1;
+        for (let i = assistantMsg.content.length - 1; i >= 0; i--) {
+          if (assistantMsg.content[i].type === 'text') {
+            textIdx = i;
+            break;
+          }
+        }
+        const targetIdx = textIdx >= 0 ? textIdx : assistantMsg.content.length;
+        return appendText(assistantMsg, summarizeProviderBlock(block), targetIdx);
       }
       return null;
     }
