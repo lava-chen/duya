@@ -120,17 +120,25 @@ only makes streams safe when they appear anyway).
 
 ## Status
 
-- [ ] **Phase 0 (P0)** — refusal: completions stream (+non-stream if
-      present) → appendText; `refusal.test.ts`
-- [ ] **Phase 1 (P1)** — degradation policy: `degrade.ts` carrier +
+- [x] **Phase 0 (P0)** — refusal: completions stream (+non-stream if
+      present) → appendText; `refusal.test.ts` ✅ 2026-08-23 (f8e820d1)
+- [x] **Phase 1 (P1)** — degradation policy: `degrade.ts` carrier +
       outbound rule; anthropic server-side block pairs; responses remaining
       item types; round-trip replay test; kill the silent-ignore comment
-- [ ] **Phase 2 (P2)** — `encrypted_content` replay; annotations capture;
+      ✅ 2026-08-23 (0658daf6)
+- [x] **Phase 2 (P2)** — `encrypted_content` replay; annotations capture;
       logprobs/service_tier metadata; `openai-responses.test.ts` baseline
+      ✅ 2026-08-23 (2a2ef7ba, tsc fixes 74020a7d). Deviation: the Responses
+      event switch was extracted into an exported `parseResponsesEvent`
+      (mirrors `parseAnthropicEvent`) to give the new baseline tests a
+      protocol-level seam.
 - [ ] **Phase 3 (P3)** — bedrock/vertex diff-verification then auth
       adapters over `anthropic-messages`; gemini-native parser (split to
       440a if large)
-- [ ] Each merged phase: `npm run typecheck:all` + root-level vitest green
+- [x] Each merged phase: `npm run typecheck:all` + root-level vitest green
+      — ai suite 289/289 (30 files); typecheck verified per-surface
+      (web/agent in-chain, cli/conductor/voice standalone after an
+      environment-only npm crash at the cli step); `build:ai` clean
 
 ## Decision log
 
