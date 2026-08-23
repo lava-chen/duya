@@ -12085,7 +12085,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 0 13px 0 16px;
+  padding: 6px 13px 6px 16px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
   background: transparent;
 }
@@ -12307,7 +12307,9 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .canvas-document-focus { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: min(5vh, 48px) min(6vw, 80px); }
-.canvas-document-focus__scrim { position: absolute; inset: 0; background: rgba(12, 14, 19, 0.68); backdrop-filter: blur(4px); }
+.canvas-document-focus__scrim { position: absolute; inset: 0; background: rgba(12, 14, 19, 0.55); backdrop-filter: blur(4px); }
+/* Same paper + border tokens as the card itself so both themes read as the
+   document zoomed up, not a foreign command palette. */
 .canvas-document-focus__panel {
   position: relative;
   display: flex;
@@ -12316,13 +12318,28 @@ html[data-message-font-size="large"] .prose h3 {
   min-height: 360px;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--command-menu-border);
-  border-radius: 22px;
-  background: var(--command-menu-bg);
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.44);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-radius: 16px;
+  background: var(--surface-solid, var(--panel-bg));
+  color: var(--text);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
 }
 
-.canvas-document__editor--focused .canvas-document__textarea { padding: 22px 26px; font-size: 15px; line-height: 1.68; }
+/* Fill the dialog: the textarea has no intrinsic height of its own, so it
+   must stretch to the editor row or it collapses to a single line. */
+.canvas-document__editor--focused {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+.canvas-document__editor--focused .canvas-document__textarea {
+  flex: 1 1 auto;
+  height: 100%;
+  resize: none;
+  padding: 18px 22px;
+  font-size: 15px;
+  line-height: 1.68;
+}
 .canvas-document__editor--focused .canvas-document__selection-toolbar { top: 15px; left: 18px; height: 35px; border-radius: 10px; }
 .canvas-document__editor--focused .canvas-document__selection-toolbar button,
 .canvas-document__editor--focused .canvas-document__block-picker { height: 27px; }
