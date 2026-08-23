@@ -12,7 +12,12 @@
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { createAgentWorktree } from '../../worktree/worktree-manager.js';
-import { getSessionWorktree, setSessionWorktree } from '../../worktree/worktree-session.js';
+import {
+  beginEnter,
+  endEnter,
+  getSessionWorktree,
+  setSessionWorktree,
+} from '../../worktree/worktree-session.js';
 import { persistSessionWorkingDirectory } from './persistSessionDirectory.js';
 import { logger } from '../../utils/logger.js';
 
@@ -68,12 +73,19 @@ export class EnterWorktreeTool implements Tool, ToolExecutor {
       );
     }
 
-    const existing = getSessionWorktree(sessionId);
-    if (existing) {
+    // Synchronous reservation (plan 441 audit): creation awaits git several
+    // times; without this two concurrent calls both pass the check and one
+    // tree escapes the registry.
+    if (!beginEnter(sessionId)) {
+      const existing = getSessionWorktree(sessionId);
       return toResult(this.name, {
         outcome: 'already_in_worktree',
-        worktree: { path: existing.handle.path, branch: existing.handle.branch },
-        message: `Already inside worktree ${existing.handle.path}. Use exit_worktree first (action "keep" or "remove").`,
+        worktree: existing
+          ? { path: existing.handle.path, branch: existing.handle.branch }
+          : undefined,
+        message: existing
+          ? `Already inside worktree ${existing.handle.path}. Use exit_worktree first (action "keep" or "remove").`
+          : 'Another enter_worktree call is still in flight for this session; wait for its result.',
       }, true);
     }
 
@@ -86,6 +98,7 @@ export class EnterWorktreeTool implements Tool, ToolExecutor {
     try {
       const handle = await createAgentWorktree({ repoDir, name, baseRef });
       setSessionWorktree(sessionId, { handle, previousWorkingDirectory: repoDir });
+      endEnter(sessionId);
       context.setWorkingDirectory(handle.path);
       await persistSessionWorkingDirectory(sessionId, handle.path);
       logger.info('[Worktree] session entered worktree', {
@@ -102,6 +115,7 @@ export class EnterWorktreeTool implements Tool, ToolExecutor {
           'Session now runs inside this isolated worktree: file changes land on the dedicated branch and never touch the previous directory. When done, call exit_worktree with action "keep" (retain tree + branch) or "remove" (delete both; refuses when dirty unless force).',
       });
     } catch (err) {
+      endEnter(sessionId);
       const message = err instanceof Error ? err.message : String(err);
       logger.error('[Worktree] enter_worktree failed', err as Error, { sessionId, repoDir }, 'Worktree');
       return toResult(this.name, {

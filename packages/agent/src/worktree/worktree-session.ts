@@ -29,3 +29,23 @@ export function setSessionWorktree(sessionId: string, entry: SessionWorktreeEntr
 export function clearSessionWorktree(sessionId: string): boolean {
   return sessionWorktrees.delete(sessionId);
 }
+
+/**
+ * In-flight enter markers: creation awaits git several times between the
+ * "already inside?" check and registration, so concurrent calls must be
+ * serialized synchronously or they all slip past the check and one tree
+ * leaks outside the registry.
+ */
+const pendingEnters = new Set<string>();
+
+/** Reserve the enter slot; false when already inside or an enter is in flight. */
+export function beginEnter(sessionId: string): boolean {
+  if (sessionWorktrees.has(sessionId) || pendingEnters.has(sessionId)) return false;
+  pendingEnters.add(sessionId);
+  return true;
+}
+
+/** Release the reservation (after registration or on failure). */
+export function endEnter(sessionId: string): void {
+  pendingEnters.delete(sessionId);
+}

@@ -29,6 +29,7 @@ import {
   exitWorktreeTool,
 } from '../index.js';
 import { getSessionWorktree } from '../../../worktree/worktree-session.js';
+import { beginEnter, endEnter } from '../../../worktree/worktree-session.js';
 
 const createdRepos: string[] = [];
 
@@ -247,5 +248,27 @@ describe(EXIT_WORKTREE_TOOL_NAME, () => {
     expect(out.outcome).toBe('kept');
     expect(existsSync(wt.path)).toBe(true);
     expect(h.state.dir).toBe(repoDir);
+  });
+});
+
+describe('enter reservation (concurrency guard)', () => {
+  it('serializes overlapping enters on the synchronous slot', () => {
+    const sessionId = randomUUID();
+    expect(beginEnter(sessionId)).toBe(true);
+    expect(beginEnter(sessionId)).toBe(false);
+    endEnter(sessionId);
+    expect(beginEnter(sessionId)).toBe(true);
+    endEnter(sessionId);
+  });
+
+  it('refuses while a session is registered, allows again after exit', async () => {
+    const repoDir = makeRepo();
+    const h = makeContext(repoDir);
+    await run(enterWorktreeTool, {}, h);
+    expect(beginEnter(h.sessionId)).toBe(false);
+
+    await run(exitWorktreeTool, { action: 'keep' }, h);
+    expect(beginEnter(h.sessionId)).toBe(true);
+    endEnter(h.sessionId);
   });
 });

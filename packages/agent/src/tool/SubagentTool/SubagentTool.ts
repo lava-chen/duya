@@ -637,23 +637,34 @@ export class SubagentTool extends BaseTool {
         };
       }
 
-      const result = await runAgentSync({
-        agentDefinition,
-        promptMessages,
-        toolUseContext: isolatedContext,
-        isAsync: false,
-        model: agentInput.model,
-        maxTurns: agentInput.maxTurns,
-        availableTools: context.options.tools,
-        description: agentInput.description || agentInput.name,
-        agentId: taskId,
-        onProgress,
-        sessionId: subAgentSessionId,
-      });
+      // The agent may crash or be aborted mid-run — the worktree must be
+      // cleaned up on that path too, not only on success. Capture the
+      // failure and rethrow after the unconditional cleanup below so the
+      // outer handler still produces the error result.
+      let syncFailure: unknown;
+      let result: Awaited<ReturnType<typeof runAgentSync>>;
+      try {
+        result = await runAgentSync({
+          agentDefinition,
+          promptMessages,
+          toolUseContext: isolatedContext,
+          isAsync: false,
+          model: agentInput.model,
+          maxTurns: agentInput.maxTurns,
+          availableTools: context.options.tools,
+          description: agentInput.description || agentInput.name,
+          agentId: taskId,
+          onProgress,
+          sessionId: subAgentSessionId,
+        });
+      } catch (err) {
+        syncFailure = err;
+      }
 
       // The agent is done touching files — apply the plan 440 auto-cleanup
       // contract before reporting: zero-change trees vanish, dirty trees are
-      // kept and their location reported back to the model.
+      // kept and their location reported back to the model. Runs on the
+      // failure path as well so a crashed run never leaks its tree.
       let worktreeSummary: WorktreeSummary | undefined;
       if (worktree) {
         const outcome = await cleanupIfUnchanged(worktree).catch((err) => ({
@@ -667,6 +678,10 @@ export class SubagentTool extends BaseTool {
           branch: worktree.branch,
           ...outcome,
         }, 'SubAgent')
+      }
+
+      if (syncFailure !== undefined) {
+        throw syncFailure;
       }
 
       try {

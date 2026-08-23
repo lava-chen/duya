@@ -1981,6 +1981,34 @@ of truth for Agent target selection.
 - Live sub-agent rows are consolidated in the TaskDrawer; the chat composer
   does not render a separate expanding sub-agent panel.
 
+## Worktree isolation (Plan 440/441)
+
+Three tiers share one capability layer, `packages/agent/src/worktree/`
+(`WorktreeManager` + session registry):
+
+- **Subagent tier**: `SubagentTool` input `isolation: 'worktree'` hosts the
+  child run in `<mainRepoRoot>/.duya/worktrees/<name>` on a dedicated
+  `duya-worktree/<name>` branch. Trees are always hosted under the MAIN
+  checkout (`--git-common-dir` anchor) even when created from inside another
+  worktree, and `.duya/worktrees/` is registered in `.git/info/exclude`
+  (local ignore only). Cleanup contract: a zero-change tree is removed
+  automatically on both success and crash paths; a dirty tree is kept and its
+  path returned in the tool result. Creation failure is an explicit error —
+  never a silent degrade.
+- **Main-session tier**: `enter_worktree` / `exit_worktree` tools move the
+  live session itself. `ToolUseContext.options.workingDirectory` is wired as
+  a live getter in `DuyaAgent` so a mid-turn switch affects later tool
+  executions in the same turn; the `setWorkingDirectory` context callback
+  propagates across turns. `exit_worktree` defaults to `keep`; `remove`
+  refuses dirty trees unless forced. Single-writer is enforced MVP-style via
+  the synchronous registry reservation.
+- **Orchestration tier** (planned, Plan 415): workflow nodes declare
+  `isolation: 'worktree'` and reuse the same manager.
+
+Deferred: allowedRoots read-only gating of previously visited trees,
+`WorktreeCreate` / `CwdChanged` / `WorktreeRemove` hook triggering, frontend
+directory badge, background-task forced isolation.
+
 ## Tool-history integrity
 
 `messages.seq_index` is the durable ordering key for a session; message reads

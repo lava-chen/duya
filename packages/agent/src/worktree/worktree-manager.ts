@@ -145,28 +145,62 @@ async function revParseQuiet(
   }
 }
 
-async function ensureExcluded(repoRoot: string, run: GitRunner): Promise<void> {
+async function ensureExcluded(excludeFile: string, probeCwd: string, run: GitRunner): Promise<void> {
   const entry = `${WORKTREE_DIR_NAME}/`;
   // Use check-ignore on a probe path inside the dir — covers both tracked
   // .gitignore rules and an existing info/exclude entry in one query.
   try {
-    await run(['check-ignore', '-q', `${WORKTREE_DIR_NAME}/probe`], repoRoot);
+    await run(['check-ignore', '-q', `${WORKTREE_DIR_NAME}/probe`], probeCwd);
     return; // exit code 0 → already ignored
   } catch {
-    // exit code 1 → not ignored; append to .git/info/exclude (local only).
+    // exit code 1 → not ignored; append to the shared info/exclude.
   }
-  const excludePath = path.join(repoRoot, '.git', 'info', 'exclude');
   let current = '';
   try {
-    current = await fs.readFile(excludePath, 'utf8');
+    current = await fs.readFile(excludeFile, 'utf8');
   } catch {
     // Missing file is fine — create it below.
   }
   const lines = current.split(/\r?\n/);
   if (lines.includes(entry)) return;
   const next = `${current}${current && !current.endsWith('\n') ? '\n' : ''}# duya agent worktrees (plan 440)\n${entry}\n`;
-  await fs.mkdir(path.dirname(excludePath), { recursive: true });
-  await fs.writeFile(excludePath, next, 'utf8');
+  await fs.mkdir(path.dirname(excludeFile), { recursive: true });
+  await fs.writeFile(excludeFile, next, 'utf8');
+}
+
+/**
+ * Resolve the anchors for hosting and exclusion. When invoked from inside a
+ * linked worktree, `--show-toplevel` answers with that tree — whose `.git`
+ * is a pointer FILE, not a directory — so new trees must be hosted under the
+ * MAIN checkout and excluded via the SHARED .git/info/exclude, never under
+ * the linked tree itself.
+ */
+async function resolveAnchors(
+  repoDir: string,
+  run: GitRunner,
+): Promise<{ repoRoot: string; hostRoot: string; excludeFile: string }> {
+  const repoRoot = await resolveRepoRoot(repoDir, run);
+  let commonGitDir = '';
+  try {
+    commonGitDir = (
+      await run(['rev-parse', '--path-format=absolute', '--git-common-dir'], repoDir)
+    ).trim();
+  } catch {
+    // Older git without --path-format — fall through to the standard-layout
+    // assumption below.
+  }
+  if (commonGitDir && path.basename(commonGitDir) === '.git') {
+    return {
+      repoRoot,
+      hostRoot: path.dirname(commonGitDir),
+      excludeFile: path.join(commonGitDir, 'info', 'exclude'),
+    };
+  }
+  return {
+    repoRoot,
+    hostRoot: repoRoot,
+    excludeFile: path.join(repoRoot, '.git', 'info', 'exclude'),
+  };
 }
 
 async function pickUniquePath(rootDir: string, baseName: string): Promise<{ filePath: string; name: string }> {
@@ -205,8 +239,8 @@ export async function createAgentWorktree(
   const { repoDir, baseRef = 'fresh' } = options;
   const run = runner;
 
-  const repoRoot = await resolveRepoRoot(repoDir, run);
-  const rootDir = options.rootDir ?? path.join(repoRoot, ...WORKTREE_DIR_NAME.split('/'));
+  const { repoRoot, hostRoot, excludeFile } = await resolveAnchors(repoDir, run);
+  const rootDir = options.rootDir ?? path.join(hostRoot, ...WORKTREE_DIR_NAME.split('/'));
   const baseName = sanitizeWorktreeName(options.name);
   const { filePath, name } = await pickUniquePath(rootDir, baseName);
 
@@ -218,7 +252,7 @@ export async function createAgentWorktree(
   const branch = await pickUniqueBranch(repoRoot, branchNameFor(name), run);
 
   await fs.mkdir(rootDir, { recursive: true });
-  await ensureExcluded(repoRoot, run);
+  await ensureExcluded(excludeFile, repoRoot, run);
 
   // -b creates the branch at <base>; two separate args keep Windows paths intact.
   await run(['worktree', 'add', '-b', branch, filePath, baseCommit], repoRoot);
