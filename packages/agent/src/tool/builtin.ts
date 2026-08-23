@@ -20,6 +20,7 @@ import { MemoryWriteTool } from './MemoryWriteTool/MemoryWriteTool.js';
 import { WriteStage1PolicyTool } from './WriteStage1PolicyTool/WriteStage1PolicyTool.js';
 import { SendArtifactTool } from './SendArtifactTool/SendArtifactTool.js';
 import { subagentTool } from './SubagentTool/index.js';
+import { enterWorktreeTool, exitWorktreeTool } from './WorktreeTool/index.js';
 
 // Phase 5 tools imports
 import { todoTool } from './TodoTool/TodoTool.js';
@@ -123,6 +124,10 @@ export function createBuiltinRegistry(
 
   // SubagentTool - for spawning sub-agents
   registry.register(subagentTool.toTool(), subagentTool, { exposeMode: 'always' });
+
+  // WorktreeTool - main-session worktree isolation (plan 441)
+  registry.register(enterWorktreeTool.toTool(), enterWorktreeTool, { exposeMode: 'always', riskTier: 'write' });
+  registry.register(exitWorktreeTool.toTool(), exitWorktreeTool, { exposeMode: 'always', riskTier: 'write' });
 
   // Memory curation tools — validated writes, registered discoverable so the
   // curator profile can select them via allowedTools.

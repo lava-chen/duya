@@ -67,6 +67,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) | 自定义 Agent 创建：对话式（内置 skill）+ CLI（`duya agent create/list/delete`）+ 设置页表单三端统一写 `~/.duya/config.toml` `[agents.<id>]` | P1 | ✅ 实现完成（Phase A 读侧 + Phase B 创建层，24 单测通过） |
 | [429-harness-gap-closure](./active/429-harness-gap-closure.md) | 现代 Agent Harness 差距整改：编辑验证闭环 / PreToolUse 阻断 / 文件级 checkpoint-rewind / Windows 沙箱 / 模型故障转移 / 子代理并行 UI（证据核验完成，分项方案已定） | P0（首项）/P1 | Planning |
 | [440-agent-worktree-isolation](./active/440-agent-worktree-isolation.md) | Agent Worktree Isolation — SubagentTool `isolation:'worktree'` 落地：WorktreeManager（.duya/worktrees + fresh/head base + unchanged 自动回收）+ SubagentTool 双路径接线（对齐 Claude Code；plan 415 workflow 节点复用） | P1 | ✅ Phase 1-2 完成 |
+| [441-main-agent-worktree-tools](./active/441-main-agent-worktree-tools.md) | 主会话级 worktree — enter_worktree/exit_worktree 两工具（live getter 轮内传播 + setWorkingDirectory 回调跨轮 + 会话注册表单写者 MVP；keep/remove 退出语义，复用 440 能力层） | P1 | ✅ Phase 1 完成 |
 
 ### Conductor / Canvas
 

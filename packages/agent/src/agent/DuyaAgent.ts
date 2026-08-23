@@ -1108,11 +1108,13 @@ export class duyaAgent {
       // previous no-op implementations (`() => ({})` / `() => {}`) made
       // "approve then retry" semantics silently dead on the main path.
       let turnAppState: AppState = {};
+      const agentRef = this;
       const toolUseContext: ToolUseContext = {
         toolUseId: crypto.randomUUID(),
         abortController: this.abortController,
         getAppState: () => turnAppState,
         setAppState: (updater) => { turnAppState = updater(turnAppState); },
+        setWorkingDirectory: (directory) => { agentRef.setWorkingDirectory(directory); },
         widgetStyleHistory: this.widgetStyleHistory,
         canvasFreshness: this.canvasFreshness,
         options: {
@@ -1126,7 +1128,13 @@ export class duyaAgent {
           authStyle: this.authStyle,
           provider: this.provider,
           sessionId: this.sessionId, // Pass sessionId for task persistence
-          workingDirectory: this.workingDirectory, // Pass working directory for tool execution
+          // Live getter (plan 441): tools that switch the session working
+          // directory mid-turn (enter_worktree/exit_worktree) take effect
+          // for every later tool execution in this same turn, not just the
+          // next streamChat.
+          get workingDirectory() {
+            return agentRef.workingDirectory;
+          },
           language: this.language, // Propagate language preference to sub-agents
           agentDefinitions: {
             activeAgents: agentDefinitions,

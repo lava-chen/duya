@@ -525,6 +525,12 @@ export interface ToolUseContext {
    */
   reportAgentProgress?: (event: AgentProgressEvent) => void;
   /**
+   * Move the live session working directory (plan 441, enter/exit_worktree).
+   * Affects subsequent tool executions in the same turn — options.workingDirectory
+   * is wired as a live getter — and every following turn via DuyaAgent's setter.
+   */
+  setWorkingDirectory?: (directory: string) => void;
+  /**
    * @deprecated 向主进程发起单向消息。新代码应使用 ipcRequest 获得响应。
    */
   sendToMain?: (msg: Record<string, unknown>) => void;
