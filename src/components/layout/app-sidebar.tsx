@@ -18,7 +18,7 @@ import {
   ShieldCheckIcon,
   ChartBarIcon as BarChartIcon,
   CpuIcon as CubeIcon,
-  SquaresFourIcon,
+  ChalkboardIcon,
   RobotIcon,
   QuestionIcon,
   ChannelIcon,
@@ -84,7 +84,7 @@ function isOrphanSubAgentThread(thread: Thread): boolean {
 }
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-  { view: 'conductor', labelKey: 'nav.conductor', icon: SquaresFourIcon },
+  { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
 ];
