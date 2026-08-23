@@ -199,6 +199,7 @@ export class SubagentTool extends BaseTool {
       name: {
         type: 'string',
         description: 'A short name (3-5 words) for the agent task',
+        maxLength: 40,
       },
       description: {
         type: 'string',
@@ -312,14 +313,19 @@ export class SubagentTool extends BaseTool {
         };
       }
 
-      const subAgentName = agentInput.name || agentDefinition.agentType;
+      // Clamp defensively: the schema hints maxLength but the model may not
+      // honor it, and this string flows into session titles and events.
+      const subAgentName = (agentInput.name || agentDefinition.agentType).trim().slice(0, 80);
       if (effectiveRunInBackground && parentSessionId) {
         const now = Date.now();
         pruneRecentBackgroundSpawns(now);
         const promptHash = hashString(agentInput.prompt.trim());
+        // Semantic key intentionally excludes the model-invented `name`:
+        // re-issuing the same task with a different whimsical name should
+        // still be recognized as a duplicate spawn.
         const spawnKeys = [
           `${parentSessionId}:tool:${context.toolUseId}`,
-          `${parentSessionId}:semantic:${agentDefinition.agentType}:${subAgentName}:${promptHash}`,
+          `${parentSessionId}:semantic:${agentDefinition.agentType}:${promptHash}`,
         ];
         const existingSpawn = spawnKeys
           .map((key) => recentBackgroundSpawns.get(key))
@@ -473,7 +479,7 @@ export class SubagentTool extends BaseTool {
           const promptHash = hashString(agentInput.prompt.trim());
           recentBackgroundSpawns.set(`${parentSessionId}:tool:${context.toolUseId}`, spawnRecord);
           recentBackgroundSpawns.set(
-            `${parentSessionId}:semantic:${agentDefinition.agentType}:${subAgentName}:${promptHash}`,
+            `${parentSessionId}:semantic:${agentDefinition.agentType}:${promptHash}`,
             spawnRecord
           );
         }
