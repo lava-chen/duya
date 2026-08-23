@@ -90,7 +90,9 @@ function sanitizePan(v: number): number {
   return Number.isFinite(v) ? v : 0;
 }
 
-export const canvasTransformState = { panX: 0, panY: 0, zoom: 1 };
+import { canvasTransformState } from "../domain/canvas/transform-state";
+
+export { canvasTransformState };
 (window as any).canvasTransformState = canvasTransformState;
 
 function parseCreateTool(activeTool: string | null): { type: string; extra: Record<string, unknown> } | null {

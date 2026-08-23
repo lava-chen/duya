@@ -17,7 +17,7 @@ export const TOOL_NAME = 'canvas_capture';
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Capture a screenshot of the current canvas and save it to a file.\n\n' +
+    'Capture a screenshot of a canvas area and save it to a file.\n\n' +
     'Returns: { filePath, width, height, scope, capturedAt }\n\n' +
     'To analyze the screenshot visually, pass the `filePath` to the `vision_analyze` tool:\n' +
     '  vision_analyze({ image_path: "<filePath>", question: "check layout/overlap/alignment" })\n\n' +
@@ -26,20 +26,23 @@ export const definition: Tool = {
     '  - When the user asks "how does it look"\n' +
     '  - After major rearrangement\n\n' +
     'Do NOT use to read text content (use canvas_list_elements instead).\n' +
-    'Token cost is significant — limit to once per 5 turns. Tip: pair with ' +
-    'canvas_auto_layout to put the area you want to inspect into the ' +
-    'viewport before calling this tool with scope="region".\n\n' +
+    'Token cost is significant — limit to once per 5 turns.\n\n' +
+    'The `region` parameter (scope="region") uses the SAME canvas ' +
+    'coordinates you use when creating elements: grid units by default ' +
+    '(1 unit = 80px; the canvas is 40 x 30 grid units), matching the ' +
+    '`position.x/y/w/h` of canvas_create_element. If you know where you ' +
+    'placed an element, capture exactly that place — e.g. an element at ' +
+    'position {x: 26, y: 22, w: 6, h: 4} can be captured with region ' +
+    '{x: 26, y: 22, w: 6, h: 4}.\n\n' +
+    'You do NOT need the area to be currently visible on screen: the ' +
+    'renderer temporarily pans/zooms the view to frame the requested ' +
+    'rectangle, captures it, then restores the previous view. Regions ' +
+    'larger than what fits on screen are captured down to their visible ' +
+    'intersection — check the returned width/height to know what you got.\n\n' +
     'If the canvas is still loading (the StartupLanding boot overlay is ' +
     'still visible, or the renderer has not yet mounted `.canvas-area`), ' +
     'the tool returns an error rather than a file. Retry after the canvas ' +
-    'is visibly rendered.\n\n' +
-    'The `region` parameter (only used when scope="region") is expressed in ' +
-    '**viewport screen pixels relative to the visible .canvas-area top-left ' +
-    'corner** — i.e. exactly the coordinates that html2canvas expects. The ' +
-    'rectangle is clipped to the visible viewport; if x or y falls outside ' +
-    'the viewport, the renderer will reject the request with a clear error. ' +
-    'Always ensure the area you want to capture is currently panned/zoomed ' +
-    'into view before calling this tool.',
+    'is visibly rendered.',
   input_schema: {
     type: 'object',
     properties: {
@@ -47,8 +50,9 @@ export const definition: Tool = {
         type: 'string',
         enum: ['viewport', 'element', 'region'],
         description:
-          'Capture scope: viewport (visible area), element (single element), ' +
-          'or region (rectangle). Default: viewport.',
+          'Capture scope: viewport (what is visible now), element (single ' +
+          'element by ID), or region (rectangle in canvas coordinates). ' +
+          'Default: viewport.',
         default: 'viewport',
       },
       elementId: {
@@ -62,14 +66,24 @@ export const definition: Tool = {
           y: { type: 'number' },
           w: { type: 'number' },
           h: { type: 'number' },
+          unit: {
+            type: 'string',
+            enum: ['grid', 'px'],
+            description:
+              "Coordinate unit for x/y/w/h. Default 'grid': the same " +
+              'canvas grid units canvas_create_element uses for position ' +
+              "(1 unit = 80px). Use 'px' only when you have raw canvas " +
+              'pixel coordinates.',
+            default: 'grid',
+          },
         },
+        required: ['x', 'y', 'w', 'h'],
         description:
-          'When scope is "region", the rectangle in viewport screen pixels ' +
-          'relative to the visible .canvas-area top-left corner. ' +
-          'x and y must be >= 0, w and h must be >= 1. The rectangle is ' +
-          'clipped to the visible viewport — make sure the area you want to ' +
-          'capture is currently panned/zoomed into view (call ' +
-          'canvas_auto_layout first if unsure).',
+          'When scope is "region", the rectangle in CANVAS coordinates ' +
+          '(grid units unless unit="px") — the same coordinate space as ' +
+          'element positions. The rectangle does not need to be inside ' +
+          'the currently visible viewport; the view is reframed ' +
+          'automatically. w/h must be positive.',
       },
     },
     required: [],
@@ -96,7 +110,7 @@ export const executor: ToolExecutor = {
     const scope = (input.scope as string) || 'viewport';
     const elementId = input.elementId as string | undefined;
     const region = input.region as
-      | { x: number; y: number; w: number; h: number }
+      | { x: number; y: number; w: number; h: number; unit?: 'grid' | 'px' }
       | undefined;
 
     // html2canvas can be slow on large canvases — extend the timeout.
