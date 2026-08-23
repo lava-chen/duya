@@ -872,6 +872,17 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
         return;
       }
 
+      // Connectors are endpoint-bound: their geometry follows their source
+      // and target nodes, so pressing the body selects but never starts a
+      // position drag. Selection is owned by this mousedown handler;
+      // ConnectorItem's click handler only stops propagation so the
+      // selection survives mouseup instead of being toggled back off.
+      if (el.elementKind === "native/connector") {
+        setSelectedElementId(elementId);
+        setHostCursor("default");
+        return;
+      }
+
       if (el.metadata.locked === true) {
         setSelectedElementId(elementId);
         setHostCursor("default");
