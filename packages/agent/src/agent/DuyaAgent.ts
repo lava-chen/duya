@@ -470,9 +470,17 @@ export class duyaAgent {
       if (!session) return
       const sessionsRoot = this.sessionsRootPath()
       if (!sessionsRoot) return
-      fs.mkdirSync(sessionsRoot, { recursive: true })
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-      const file = path.join(sessionsRoot, `${session}-${stamp}-compaction.md`)
+      // Bucket by UTC day so the file sits in `sessions/<YYYY>/<MM>/<DD>/`
+      // next to that day's rollout files — matches MessageLog.resolvePath's
+      // UTC date-bucketing convention.
+      const now = new Date()
+      const yyyy = String(now.getUTCFullYear()).padStart(4, '0')
+      const mm = String(now.getUTCMonth() + 1).padStart(2, '0')
+      const dd = String(now.getUTCDate()).padStart(2, '0')
+      const stamp = now.toISOString().replace(/[:.]/g, '-')
+      const dayDir = path.join(sessionsRoot, yyyy, mm, dd)
+      fs.mkdirSync(dayDir, { recursive: true })
+      const file = path.join(dayDir, `${session}-${stamp}-compaction.md`)
       fs.writeFileSync(
         file,
         `# Compaction summary\n\n${summary}\n`,
