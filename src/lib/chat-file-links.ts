@@ -257,6 +257,38 @@ export function openLocalFileTarget(filePath: string, cwd?: string | null): void
   window.open(`file:///${encodeURI(resolved.replace(/\\/g, '/'))}`, '_blank');
 }
 
+/**
+ * Internal canvas links emitted by the agent in chat markdown, e.g.
+ * `[canvas](/duya/canvas/<canvasId>)`. These are app routes, not
+ * filesystem paths — without this parser they would fall into the
+ * local-file pill branch (any `/...` path classifies as local) and
+ * clicking would try `shell.openPath` on a nonexistent file.
+ * The `duya://canvas/<id>` scheme form is accepted as a tolerant alias.
+ */
+const CANVAS_PATH_LINK_RE = /^\/duya\/canvas\/([A-Za-z0-9][A-Za-z0-9-]*)\/?$/;
+const CANVAS_SCHEME_LINK_RE = /^duya:\/\/canvas\/([A-Za-z0-9][A-Za-z0-9-]*)\/?$/i;
+
+/** Return the canvasId when `href` is an internal canvas route, else null. */
+export function parseInternalCanvasLink(href: string): string | null {
+  const clean = href.trim();
+  const match = CANVAS_PATH_LINK_RE.exec(clean) ?? CANVAS_SCHEME_LINK_RE.exec(clean);
+  return match ? match[1] : null;
+}
+
+/**
+ * Open a canvas in the sidebar Conductor panel. Routed through the same
+ * window-event channel as the browser/file-preview/office panels so any
+ * renderer surface (markdown links, tool rows) can trigger it without a
+ * direct provider dependency. `dedupKey` folds on `canvasId`, so repeated
+ * clicks activate the existing tab instead of stacking duplicates.
+ */
+export function openConductorCanvas(canvasId: string): void {
+  if (!canvasId.trim()) return;
+  window.dispatchEvent(new CustomEvent('duya:open-conductor-panel', {
+    detail: { canvasId },
+  }));
+}
+
 /** Optional line range carried from a chat tool row (e.g. ReadTool) to
  *  the file preview panel, so the panel can scroll to and highlight the
  *  exact lines the agent read. `end` is optional and 1-indexed; when
