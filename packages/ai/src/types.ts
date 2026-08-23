@@ -74,12 +74,33 @@ export interface ThinkingContent {
   redacted?: boolean;
 }
 
+/**
+ * Opaque carrier for provider-native content that duya's block model does
+ * not natively represent (plan 440): Anthropic server-side tool blocks
+ * (`server_tool_use`, `web_search_tool_result`, `code_execution_*`,
+ * `text_editor_*`), OpenAI Responses output items (`web_search_call`,
+ * `code_interpreter_call`, `mcp_call`, `image_generation_call`, ...).
+ * Parsers degrade unknown blocks into this carrier instead of dropping
+ * them, so history replay stays valid. See api/degrade.ts for the
+ * forward-or-downgrade outbound rule.
+ */
+export interface ProviderBlockContent {
+  type: 'provider_block';
+  /** API format whose stream produced this block. */
+  origin: ApiFormat;
+  /** Verbatim provider type tag, e.g. 'server_tool_use', 'web_search_call'. */
+  kind: string;
+  /** Verbatim provider payload (block / item object as received). */
+  payload: unknown;
+}
+
 export type MessageContent =
   | TextContent
   | ImageContent
   | ToolUseContent
   | ToolResultContent
-  | ThinkingContent;
+  | ThinkingContent
+  | ProviderBlockContent;
 
 // ─── Tool types ───
 

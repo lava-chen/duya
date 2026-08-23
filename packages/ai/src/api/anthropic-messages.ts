@@ -30,10 +30,11 @@ import { _iterSSEMessages } from '@anthropic-ai/sdk/core/streaming.js';
 import type { MessageParam, ContentBlockParam } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import type {
   AIClient, AIClientOptions, AssistantMessage, AssistantMessageEvent,
-  Message, MessageContent, Model, ModelCompat, SSEEvent,
-  TextContent, ThinkingContent, ToolResultTransport, ToolUseContent,
+  Message, MessageContent, Model, ModelCompat, ProviderBlockContent,
+  SSEEvent, TextContent, ThinkingContent, ToolResultTransport, ToolUseContent,
 } from '../types.js';
 import { transformMessages, textifyToolResults } from './transform-messages.js';
+import { resolveProviderBlockOutbound, summarizeProviderBlock } from './degrade.js';
 import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tools.js';
 import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
@@ -1119,6 +1120,19 @@ export function parseAnthropicEvent(
         assistantMsg.content.push(toolBlock);
         return { type: 'toolcall_start', contentIndex: state.currentBlockIdx, partial: assistantMsg };
       }
+      // Plan 440 phase 1: server-side tool blocks (server_tool_use,
+      // web_search_tool_result, code_execution_*, text_editor_*, mcp_*,
+      // ...) have no native duya block. Carry them verbatim instead of
+      // dropping them — dropping breaks same-origin history replay because
+      // paired server_tool_use/result blocks must round-trip. A bounded
+      // one-line summary becomes visible when the block stops.
+      const carrier: ProviderBlockContent = {
+        type: 'provider_block',
+        origin: 'anthropic',
+        kind: String(block.type),
+        payload: block,
+      };
+      assistantMsg.content.push(carrier);
       return { type: 'start', partial: assistantMsg };
     }
 
@@ -1180,6 +1194,18 @@ export function parseAnthropicEvent(
             ((block as ToolUseContent & { _rawInput?: string })._rawInput || '') + partial;
           return { type: 'toolcall_delta', contentIndex: state.currentBlockIdx, delta: partial, partial: assistantMsg };
         }
+        // Plan 440: server_tool_use streams arguments through
+        // input_json_delta exactly like local tool_use — accumulate into
+        // the carrier and fold into the payload at content_block_stop.
+        if (block && block.type === 'provider_block') {
+          const carrier = block as ProviderBlockContent & { _rawCarrierInput?: string };
+          const chunkText = typeof delta.partial_json === 'string'
+            ? delta.partial_json
+            : String(delta.partial_json);
+          carrier._rawCarrierInput = (carrier._rawCarrierInput || '') + chunkText;
+          // No SSE surface for carrier accumulation — silent by design;
+          // the stop handler emits the visible summary.
+        }
       }
       return { type: 'start', partial: assistantMsg };
     }
@@ -1219,6 +1245,36 @@ export function parseAnthropicEvent(
       }
       if (block && block.type === 'thinking') {
         return { type: 'thinking_end', contentIndex: state.currentBlockIdx, content: block.thinking, partial: assistantMsg };
+      }
+      if (block && block.type === 'provider_block') {
+        // Plan 440 phase 1: fold streamed arguments into the carried
+        // payload (server_tool_use uses input_json_delta), then degrade
+        // visibly — a bounded one-line summary lands in the text stream.
+        const carrier = block as ProviderBlockContent & { _rawCarrierInput?: string };
+        const raw = carrier._rawCarrierInput;
+        if (typeof raw === 'string' && raw.length > 0) {
+          const target = (
+            typeof carrier.payload === 'object' && carrier.payload !== null
+              ? carrier.payload
+              : {}
+          ) as Record<string, unknown>;
+          try {
+            target.input = JSON.parse(raw);
+          } catch {
+            const partialInput = parsePartialJsonSafe(raw);
+            target.input = partialInput !== undefined ? partialInput : {};
+          }
+          delete carrier._rawCarrierInput;
+        }
+        const summary = summarizeProviderBlock(carrier);
+        const textBlock = ensureTextBlock();
+        textBlock.text += summary;
+        return {
+          type: 'text_delta',
+          contentIndex: assistantMsg.content.indexOf(textBlock),
+          delta: summary,
+          partial: assistantMsg,
+        };
       }
       return { type: 'start', partial: assistantMsg };
     }
@@ -1595,6 +1651,17 @@ function convertContentBlock(
     }
     // Unsigned thinking for direct Anthropic cannot be validated, so drop it.
     return null;
+  }
+  if (block.type === 'provider_block') {
+    // Plan 440 phase 1 outbound rule: forward verbatim only when replaying
+    // over the same Anthropic protocol (paired server-side blocks must
+    // round-trip or the Messages API rejects the history); foreign targets
+    // get a bounded text placeholder.
+    const resolved = resolveProviderBlockOutbound(block, 'anthropic');
+    if (resolved.type === 'provider_block') {
+      return resolved.payload as ContentBlockParam;
+    }
+    return resolved as ContentBlockParam;
   }
   return null;
 }
