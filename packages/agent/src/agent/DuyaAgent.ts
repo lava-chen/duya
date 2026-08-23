@@ -37,6 +37,12 @@ import { compressProjectedToolMessages } from '../compact/projectionCompress.js'
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
+import { sleep, createRetryEvent } from '@duya/ai';
+import {
+  shouldReplayStreamAfterError,
+  streamReplayDelayMs,
+  STREAM_REPLAY_MAX_ATTEMPTS,
+} from './stream-retry.js';
 import { stripPastedContentMarkers } from '../utils/pasted-content.js';
 import { StreamingToolExecutor } from '../tool/StreamingToolExecutor.js';
 import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
@@ -1346,15 +1352,75 @@ export class duyaAgent {
           this.compactionController.prefire().catch(() => {});
         }
 
-        const streamGenerator = this.llmClient.streamChat(llmMessages, {
-          systemPrompt: systemPromptContent,
-          tools,
-          maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-          temperature: options?.temperature ?? 1,
-          signal: requestSignal,
-          effort: options?.effort,
-          maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
-        });
+        // Plan 439: wrap the raw LLM stream with turn-level replay. A
+        // transport death (undici `terminated`, OpenRouter upstream drop,
+        // idle timeout) BEFORE the stream's `done` event leaves no durable
+        // state — deltas live only in the local accumulators below — so the
+        // partial attempt is discarded and retried from scratch instead of
+        // failing the whole turn. The retryable-error classification and
+        // attempt budget live in ./stream-retry.ts. Post-`done` failures
+        // propagate unchanged via the turnCommitted guard.
+        const openLLMStream = () =>
+          this.llmClient.streamChat(llmMessages, {
+            systemPrompt: systemPromptContent,
+            tools,
+            maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+            temperature: options?.temperature ?? 1,
+            signal: requestSignal,
+            effort: options?.effort,
+            maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
+          });
+        let streamReplayAttempt = 0;
+        const streamGenerator = (async function* () {
+          while (true) {
+            try {
+              yield* openLLMStream();
+              return;
+            } catch (streamError) {
+              if (
+                !shouldReplayStreamAfterError(streamError, {
+                  aborted: requestSignal.aborted,
+                  turnCommitted: doneEventHandled,
+                  attemptsUsed: streamReplayAttempt,
+                })
+              ) {
+                throw streamError;
+              }
+              streamReplayAttempt++;
+              const replayDelayMs = streamReplayDelayMs(streamReplayAttempt);
+              const detail =
+                streamError instanceof Error ? streamError.message : String(streamError);
+              logger.warn(
+                `[Agent] Turn ${turnCount}: LLM stream died mid-flight (${detail}); replaying ` +
+                  `${streamReplayAttempt}/${STREAM_REPLAY_MAX_ATTEMPTS} in ${replayDelayMs}ms`,
+              );
+              // Discard the partial attempt: tool_use events arrive before
+              // `done` so the executor may already hold buffered calls, and
+              // every per-attempt accumulator must start empty for the replay.
+              executor.discard();
+              assistantContent.length = 0;
+              thinkingContent = '';
+              hasThinkingContent = false;
+              thinkingSignature = undefined;
+              needsFollowUp = false;
+              turnToolCalls.length = 0;
+              turnToolCallIds.clear();
+              modeSwitchToolIds.clear();
+              consecutiveToolCalls = 0;
+              lastToolCallSignature = null;
+              consecutiveToolName = null;
+              // Surface the replay through the same channel as the
+              // transport-layer retry (`system` + metadata.retryAttempt →
+              // worker boundary emits a chat:retry chip).
+              yield createRetryEvent(
+                streamReplayAttempt,
+                STREAM_REPLAY_MAX_ATTEMPTS,
+                replayDelayMs,
+              );
+              await sleep(replayDelayMs, requestSignal);
+            }
+          }
+        })();
         logger.info(`[Agent] Turn ${turnCount}: Stream generator created, starting iteration...`);
         for await (const event of streamGenerator) {
           llmEventCount++;
@@ -1710,6 +1776,14 @@ export class duyaAgent {
             // at the end of each turn. Forwarding it would cause the client to
             // prematurely think the stream is complete. Only the final 'done'
             // event (yielded after the while-loop) should reach the client.
+
+          } else if (event.type === 'system') {
+            // Plan 439: forward retry/diagnostic notices. Transport-layer
+            // retries (withRetry) and turn-level stream replays both emit
+            // `{ type:'system', metadata:{ retryAttempt, ... } }`; the worker
+            // boundary converts those into chat:retry chips. Previously this
+            // event type was silently dropped here.
+            yield event;
 
           } else if (event.type === 'error') {
             // Propagate error events

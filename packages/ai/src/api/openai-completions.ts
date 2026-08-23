@@ -523,6 +523,25 @@ function finalizeToolCalls(msg: AssistantMessage): void {
 // Finish reason mapping
 // =============================================================================
 
+/**
+ * Premature-stream-end guard (Plan 439). A clean iterator end without any
+ * `finish_reason` means the connection died before the provider sent its
+ * terminal frame — the accumulated output is truncated, and a half-streamed
+ * tool call would otherwise be finalized with garbage/empty arguments and
+ * executed. Throwing here routes the failure into the retry/replay path
+ * (classifyError matches "stream ended without finish_reason" as
+ * CONNECTION_ERROR). Servers that legitimately never send a finish_reason
+ * opt out via `compat.supportsFinishReason === false`.
+ */
+export function assertFinishReasonReceived(args: {
+  hasFinishReason: boolean;
+  compat?: { supportsFinishReason?: boolean } | null;
+}): void {
+  if (args.hasFinishReason) return;
+  if (args.compat?.supportsFinishReason === false) return;
+  throw new Error('OpenAI-compatible stream ended without finish_reason');
+}
+
 function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
   switch (reason) {
     case 'stop': return 'end_turn';
@@ -668,6 +687,9 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
       // chunks; captured across the whole stream and folded into usage below.
       let upstreamProvider: string | undefined;
 
+      // Plan 439: set once any choice carries a terminal `finish_reason`.
+      let hasFinishReason = false;
+
       // 9. Drain chunks. withIdleTimeout guards against stalled streams
       //    from OpenAI-compatible endpoints hanging the agent forever;
       //    the TimeoutError propagates to DuyaAgent's retry logic.
@@ -753,9 +775,15 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
 
         // 9e. Map finish reason.
         if (choice.finish_reason) {
+          hasFinishReason = true;
           assistantMsg.stopReason = mapFinishReason(choice.finish_reason);
         }
       }
+
+      // 9f. Premature-end guard: a clean iterator end with no finish_reason
+      //     means the provider connection died mid-generation. Throw so the
+      //     truncated output is retried/replayed instead of executed.
+      assertFinishReasonReceived({ hasFinishReason, compat: options.modelCapabilities });
 
       // 10. Finalize tool calls — parse accumulated JSON strings.
       finalizeToolCalls(assistantMsg);
