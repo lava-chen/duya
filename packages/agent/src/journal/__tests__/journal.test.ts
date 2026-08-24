@@ -79,7 +79,9 @@ describe('Journal', () => {
     // Same source id + kind → same deterministic id → INSERT OR IGNORE on
     // duplicate paths will silently dedupe (important for retry safety).
     expect(id1).toBe(id2);
-    expect(id1).toMatch(/^journal:u-1:user_msg_added:/);
+    // No timestamp nonce: the id is a pure function of source id + kind, so
+    // INSERT OR IGNORE actually dedups retries (a nonce would fork rows).
+    expect(id1).toBe('journal:u-1:user_msg_added');
   });
 
   it('different kinds produce different ids even for the same source', () => {
@@ -126,7 +128,7 @@ describe('Journal', () => {
     expect(evt.type).toBe('hook_invoked');
     expect(evt.turnId).toBe('turn-1');
     expect(evt.payload).toEqual({ name: 'PreToolUse', toolInput: { x: 1 } });
-    expect(evt.id).toMatch(/^journal:hook-evt-7:hook_invoked:/);
+    expect(evt.id).toBe('journal:hook-evt-7:hook_invoked');
   });
 
   it('appendRebase converts Message[] to MessageEntry[] before sending', () => {
@@ -156,17 +158,19 @@ describe('Journal', () => {
     expect(first.message.role).toBe('user');
   });
 
-  it('appendCompactionRebase uses local seq counter as supersededUpToSeq', () => {
+  it('appendRebase with null bound supersedes all prior messages', () => {
     const journal = new Journal({ sessionId: 'sess-1' });
-    // First a few normal emits bump the local seq counter.
-    journal.userMsgAdded(userMsg({ id: 'a' }));
-    journal.userMsgAdded(userMsg({ id: 'b' }));
-    journal.assistantMsgFinalized(assistantMsg({ id: 'c' }));
-    // Then a compaction rebase — counter at this point is 3.
-    journal.appendCompactionRebase('turn-1', [userMsg({ id: 'c-1', timestamp: 999 })]);
+    const compacted = [
+      userMsg({ id: 'c-1', timestamp: 100 }),
+      assistantMsg({ id: 'c-2', timestamp: 200 }),
+    ];
+    journal.appendRebase('turn-1', null, compacted, 999);
 
-    const rebase = recordedAppends[recordedAppends.length - 1].messages[0] as { supersededUpToSeq: number };
-    expect(rebase.supersededUpToSeq).toBe(3);
+    const rebase = recordedAppends[recordedAppends.length - 1].messages[0] as { supersededUpToSeq: number | null };
+    // null = supersede ALL prior raw messages; survivors are kept by id
+    // matching in newMessages. A subprocess-local numeric bound cannot be
+    // correct for resumed sessions (DB seqs predate the process).
+    expect(rebase.supersededUpToSeq).toBeNull();
   });
 
   it('passes turnId through to the IPC payload', () => {

@@ -89,6 +89,12 @@ export interface SystemContextEvent {
  * how compaction and edit-resend become append-only: the rollout file is
  * never mutated, only the projection changes.
  *
+ * `supersededUpToSeq` may be `null`/omitted, which means "supersede ALL raw
+ * messages that appear before this rebase in the trace". Compaction always
+ * wants this form: the agent subprocess has no reliable view of the DB-assigned
+ * per-session seq, so any locally-computed numeric bound is wrong for resumed
+ * sessions. Kept messages survive via id matching in `newMessages`.
+ *
  * `newMessages` are themselves MessageEntry objects with `seq = NaN`-free
  * (rebase-time seq is irrelevant because the projection re-derives effective
  * seq from scratch after applying all rebases in order).
@@ -97,8 +103,8 @@ export interface RebaseEvent {
   type: 'rebase';
   id: string;
   turnId: string;
-  /** Highest seq whose line should be replaced by newMessages. */
-  supersededUpToSeq: number;
+  /** Highest seq whose line should be replaced by newMessages; null = all prior rows. */
+  supersededUpToSeq?: number | null;
   newMessages: MessageEntry[];
   createdAt: number;
 }

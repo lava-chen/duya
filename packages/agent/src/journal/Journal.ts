@@ -43,22 +43,6 @@ export interface JournalOptions {
 export class Journal {
   private readonly sessionId: string;
   private readonly onError: (kind: string, err: unknown) => void;
-  /**
-   * Plan 441: monotonic counter of events emitted by this Journal instance.
-   * The subprocess is the single writer for the session's rollout, so this
-   * tracks the file seq for events the Journal itself produced (rebase +
-   * message boundaries). Compaction rebase uses this counter as
-   * `supersededUpToSeq` so the projection drops every prior raw message
-   * up to the compaction point without needing an extra IPC to query the
-   * main-process `message_index` row count.
-   *
-   * Reset to 0 on construction; the agent constructs a new Journal per
-   * subprocess lifetime so the counter always starts at the session's
-   * pre-existing-event count would have to be reconciled by the main
-   // process at load time anyway (the rebase's projection is seq-based
-   // on the FILE, not on this counter — see applyRebases comment).
-   */
-  private localSeqCounter = 0;
 
   constructor(opts: JournalOptions) {
     this.sessionId = opts.sessionId;
@@ -110,12 +94,18 @@ export class Journal {
    * the SOLE persistence path for these operations going forward — the old
    * `rewriteSession` mutation path will be removed in Phase 4.
    *
-   * `newMessages` are MessageEntry objects that will replace every
-   * MessageEntry with `seq <= supersededUpToSeq` in the projection.
+   * Pass `supersededUpToSeq = null` (the compaction form) to supersede ALL
+   * raw messages preceding the rebase in the trace; survivors are matched
+   * by id against `newMessages`. The subprocess has no reliable view of the
+   * DB-assigned per-session seq, so numeric bounds are only correct for
+   * callers that derive them from the main process (e.g. db-handlers).
+   *
+   * `newMessages` are Message objects that will replace every superseded
+   * MessageEntry in the projection.
    */
   appendRebase(
     turnId: string,
-    supersededUpToSeq: number,
+    supersededUpToSeq: number | null,
     newMessages: Message[],
     createdAt: number = Date.now(),
   ): void {
@@ -123,38 +113,15 @@ export class Journal {
     // The db-bridge's journal:emit handler forwards the payload verbatim,
     // so the wire shape must match what MessageLog expects.
     const newEntries = this.toMessageEntries(newMessages);
-    // The RolloutEvent union uses `Message[]` here for ergonomics, but the
-    // wire format requires `MessageEntry[]`. Cast through `unknown` so the
-    // caller-facing API stays agent-core-shaped while the IPC payload is
-    // storage-shaped.
     const event = {
       type: 'rebase' as const,
-      id: deterministicEventId(`${turnId}:${supersededUpToSeq}:${createdAt}`, 'rebase'),
+      id: deterministicEventId(`${turnId}:${supersededUpToSeq ?? 'all'}`, 'rebase'),
       turnId,
       supersededUpToSeq,
       newMessages: newEntries,
       createdAt,
     };
     this.fireEventRaw('rebase', event, turnId);
-  }
-
-  /**
-   * Plan 441: compaction convenience. Uses the journal's own seq counter as
-   * the `supersededUpToSeq` bound so the projection drops every prior raw
-   * message without requiring an IPC to query the main-process message
-   * index. The counter is local to this subprocess — see the comment on
-   * `localSeqCounter` for the rebase-vs-projection semantics.
-   *
-   * The user message id is used as the rebase id seed so the compaction is
-   * deterministically named per-turn across retries (INSERT OR IGNORE on
-   * duplicate compaction events).
-   */
-  appendCompactionRebase(
-    turnId: string,
-    newMessages: Message[],
-    createdAt: number = Date.now(),
-  ): void {
-    this.appendRebase(turnId, this.localSeqCounter, newMessages, createdAt);
   }
 
   /**
@@ -182,7 +149,6 @@ export class Journal {
    * DTO whose `kind` field carries the event type — see db-bridge.ts.
    */
   private fire(kind: string, msg: Message, turnId: string | null | undefined): void {
-    this.localSeqCounter += 1;
     const dto = {
       id: deterministicEventId(msg.id, kind),
       session_id: this.sessionId,
@@ -226,7 +192,6 @@ export class Journal {
    * field is unchanged. Pass-through IPC.
    */
   private fireEventRaw(kind: string, event: unknown, turnId: string | null | undefined): void {
-    this.localSeqCounter += 1;
     messageDb
       .append(this.sessionId, [event], turnId ?? null)
       .then((result) => {
@@ -247,14 +212,13 @@ export class Journal {
 }
 
 /**
- * Deterministic event id: `${sourceId}:${eventKind}:${nonce}`. The source
- * message id is stable (MessageEntry.id is set on first push and never
- * changes) and the event kind disambiguates multiple emits from the same
- * boundary (e.g. the same assistant text re- and re-finalize paths). INSERT
- * OR IGNORE on the `message_index.id` primary key makes re-emits silent
- * no-ops; the nonce is appended to keep uniqueness when sourceId is
- * undefined (e.g. a hook invocation without a stable source id).
+ * Deterministic event id: `${sourceId}:${eventKind}`. The source message id
+ * is stable across retries of the same boundary (unlike a timestamp nonce),
+ * which is what makes INSERT OR IGNORE dedup real: a boundary re-emitted
+ * after a crash/retry collapses into the original row instead of forking a
+ * duplicate. Different boundaries of the same source differ by kind; hook
+ * invocations pass their unique hookEventId as sourceId.
  */
 function deterministicEventId(sourceId: string | undefined, kind: string): string {
-  return `journal:${sourceId ?? 'anon'}:${kind}:${Date.now()}`;
+  return `journal:${sourceId ?? 'anon'}:${kind}`;
 }
