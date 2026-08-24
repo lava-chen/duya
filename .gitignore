@@ -203,3 +203,7 @@ output/
 .duya-backup-*
 .duya-stage/
 .serena/
+
+# Local ABI prebuilt artifacts + stash patch archives (machine-specific)
+prebuilds/
+.stash-archive/
