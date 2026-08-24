@@ -222,7 +222,6 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
   async execute(input: Record<string, unknown>, _workingDirectory?: string, context?: ToolUseContext): Promise<ToolResult> {
     const operation = input['operation'] as string;
-    console.log('[BrowserTool.execute] operation:', operation);
 
     if (!operation) {
       return { id: crypto.randomUUID(), name: this.name, result: JSON.stringify({ error: 'Missing operation' }), error: true };
@@ -231,7 +230,6 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     try {
       const sessionId = context?.options?.sessionId;
       await this.ensureConnection(sessionId);
-      console.log('[BrowserTool.execute] built context, about to execute:', operation);
 
       // Rebuild a fresh ActionContext on every attempt so a self-heal rebuild
       // (which swaps `this.cdp`) is reflected in the retry.

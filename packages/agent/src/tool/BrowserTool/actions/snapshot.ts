@@ -12,15 +12,15 @@ const snapshotSchema = z.object({
       }
       return val;
     },
-    z.number().optional().default(100000)
+    z.number().optional().default(50000)
   ).describe('Maximum snapshot length'),
   interactiveOnly: z.preprocess(
     (val) => {
       if (typeof val === 'string') return val.toLowerCase() === 'true';
       return val;
     },
-    z.boolean().optional().default(false)
-  ).describe('Only show interactive elements'),
+    z.boolean().optional().default(true)
+  ).describe('Only show interactive elements (default true — pass false only for a full DOM view)'),
 });
 
 export const snapshotAction: ActionHandler<z.infer<typeof snapshotSchema>> = {
@@ -61,7 +61,7 @@ export const snapshotAction: ActionHandler<z.infer<typeof snapshotSchema>> = {
           title: platformContent.metadata?.title as string || '',
           snapshot: platformContent.text,
           interactiveElements: elements,
-          truncated: platformContent.text.length > (data.maxLength ?? 100000),
+          truncated: platformContent.text.length > data.maxLength,
           mode: ctx.mode,
           platformType: platformContent.type,
           guide: getCapabilityGuide(platformContent.type as PlatformContentType),

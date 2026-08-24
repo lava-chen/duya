@@ -170,6 +170,23 @@ The browser tool allows you to navigate and interact with web pages using a real
 
 ${strategySection}
 
+### Latency Rules (every round trip costs the user real time)
+
+1. **navigate already returns page content** — its result carries
+   \`compactSnapshot\` (page text) + \`interactiveElements\` (refs). Read it before doing
+   anything else. Do NOT call \`snapshot\` right after \`navigate\` for the same unchanged
+   page — only snapshot again after your own actions (click/type/scroll) changed the page,
+   or when navigate reported no snapshot.
+2. **snapshot defaults to interactive-only with a 50k char cap** — it lists every
+   clickable/typable element with refs, which is all you need to act. Pass
+   \`{"interactiveOnly": false}\` only when you specifically need the full DOM text of
+   static content.
+3. **One broad call beats several narrow ones**: \`search\` instead of manual SERP
+   navigation; \`parallel_fetch\` instead of sequential navigations; an \`evaluate\` that
+   maps a list down to just the fields you need instead of returning it raw.
+4. **Keep evaluate output small** — evaluate results are capped at ~50k chars and
+   truncated beyond that. Slice arrays and pick fields inside the script.
+
 ${interactionGuide}
 
 ### Operations
@@ -194,6 +211,8 @@ ${interactionGuide}
   {"operation": "snapshot"}
   \`\`\`
   Returns a text representation of the page with [1], [2], etc. marking interactive elements.
+  Defaults: \`interactiveOnly: true\`, \`maxLength: 50000\`. navigate usually already returns
+  content + refs — only call snapshot for a fresh view after the page changed.
 
 - **click** - Click an element by ref or selector
   \`\`\`json
@@ -427,7 +446,7 @@ ${isHumanLike
 
 ### Tips
 
-1. After navigating, the tool returns a compact snapshot automatically — use \`browser_snapshot\` for full view
+1. After navigating, read the returned \`compactSnapshot\` + refs first — only call \`browser_snapshot\` when your own actions changed the page
 2. Use refs (e.g., @3) from the snapshot for clicking and typing
 3. Wait for page loads between actions (the tool handles this automatically)
 4. For SPAs, use snapshot to verify state changes after clicks
