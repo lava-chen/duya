@@ -1,30 +1,52 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-// Adaptive typewriter — paces displayed text to roughly match the SSE
-// arrival rate so the user sees a smooth stream instead of SSE chunk
-// jumps. Extracted from StreamingMessage so the per-block TextRow in
-// ToolActionsGroup can reuse the same pacing logic.
+// Adaptive typewriter — paces displayed text to follow the SSE arrival
+// rate so the user sees a smooth stream instead of SSE chunk jumps.
+// Used by TextRow (growing prose block) and ThinkingRow (expanded body).
+//
+// ── Pacing model ────────────────────────────────────────────────────
+// Backlog-driven drain, recomputed every frame:
+//
+//   step = clamp(max(floorRate·dt, backlog / CATCHUP_FRAMES), 1, MAX)
+//
+//   • floorRate keeps a gentle trickle when caught up (typewriter feel).
+//   • backlog / CATCHUP_FRAMES drains any burst smoothly over ~16 frames,
+//     self-adjusting to the arrival rate with no measurement windows. The
+//     previous 500 ms measurement-window design whipsawed between its MAX
+//     and MIN chars-per-frame on bursty SSE traffic, which read as
+//     stop-start pulsing rather than a steady stream.
+//   • The cursor is strictly monotonic — it never rewinds. Rewinding was
+//     the core of the "疯狂闪烁" flicker: every open inline-code span or
+//     fence pulled the cut point back, hiding already-rendered characters
+//     until the delimiter closed.
+//
+// ── Well-formed slices ──────────────────────────────────────────────
+// Instead of rewinding to dodge unterminated markdown delimiters, the
+// displayed slice is *balanced* by appending synthetic closers: an open
+// inline span gets a trailing backtick, an open fence gets a trailing
+// fence line. Every frame is therefore valid markdown on its own:
+// code boxes appear as soon as their opening fence arrives and grow
+// smoothly, instead of flipping between paragraph text and a collapsed
+// code block (a large layout jump per fence).
 
-const MEASURE_INTERVAL_MS = 500; // How often we recalculate typing speed
-const MIN_CHARS_PER_FRAME = 1;   // Floor: at least one char per frame
-const MAX_CHARS_PER_FRAME = 80;  // Cap: avoid giant single-frame jumps
-const HEADROOM_FACTOR = 1.2;     // Stay 20% faster than arrival rate
+const FLOOR_CHARS_PER_SECOND = 60; // trickle rate when caught up with the stream
+const CATCHUP_FRAMES = 16;        // frames (~270ms at 60fps) to drain the backlog over
+const MAX_CHARS_PER_FRAME = 400;  // hard cap for pathological dumps
 
-// Build a `{ parity, lastBalanced }` snapshot of `text` up to `to`,
-// skipping backticks inside fenced code blocks (``` ... ``` / ~~~ ...).
-// A single linear pass is O(to); callers that need multiple snapshots
-// across adjacent positions should reuse this directly instead of
-// calling it from scratch each time.
-interface BacktickSnapshot {
-  parity: number;            // 0 = balanced, 1 = half-open at `to`
-  lastBalanced: number;      // rightmost balanced prefix length, or -1
+// Scan `text` up to `to` for markdown delimiter state, skipping
+// backticks inside fenced code blocks (``` ... ``` / ~~~ ... ).
+export interface MarkdownScanState {
+  /** 0 = balanced, 1 = slice ends inside an inline-code span. */
+  inlineBacktickParity: number;
+  /** Non-null when the scan ends inside a fenced code block. */
+  fenceChar: '`' | '~' | null;
+  /** Length of the opening fence marker (3..∞); the closer must match it. */
+  fenceLen: number;
 }
-function buildBacktickSnapshot(text: string, to: number): BacktickSnapshot {
-  if (to <= 0) return { parity: 0, lastBalanced: -1 };
-  let parity = 0;
-  let lastBalanced = -1;
-  let fenceChar: string | null = null;
-  let fenceLen = 0;
+
+function scanMarkdownDelimiters(text: string, to: number): MarkdownScanState {
+  const state: MarkdownScanState = { inlineBacktickParity: 0, fenceChar: null, fenceLen: 0 };
+  if (to <= 0) return state;
   let cursor = 0;
   while (cursor < to) {
     let lineEnd = text.indexOf('\n', cursor);
@@ -33,53 +55,50 @@ function buildBacktickSnapshot(text: string, to: number): BacktickSnapshot {
     const fenceMatch = line.match(/^[ ]{0,3}([`]{3,}|~{3,})/);
     if (fenceMatch) {
       const marker = fenceMatch[1]!;
-      if (fenceChar === null) {
-        fenceChar = marker[0]!;
-        fenceLen = marker.length;
-      } else if (marker[0] === fenceChar && marker.length >= fenceLen) {
-        fenceChar = null;
-        fenceLen = 0;
+      if (state.fenceChar === null) {
+        state.fenceChar = marker[0] as '`' | '~';
+        state.fenceLen = marker.length;
+      } else if (marker[0] === state.fenceChar && marker.length >= state.fenceLen) {
+        state.fenceChar = null;
+        state.fenceLen = 0;
       }
-    } else if (fenceChar === null) {
+    } else if (state.fenceChar === null) {
       for (let i = 0; i < line.length; i++) {
         if (line[i] !== '`') continue;
-        parity ^= 1;
-        if (parity === 0) lastBalanced = cursor + i + 1;
+        state.inlineBacktickParity ^= 1;
       }
     }
     if (lineEnd === to) break;
     cursor = lineEnd + 1;
   }
-  return { parity, lastBalanced };
+  return state;
 }
 
-// Pull a candidate cut position back to the nearest point where the
-// visible prefix of `text` contains an even number of backticks, so the
-// rendered slice never contains an unterminated inline-code span. When
-// the candidate already sits on a balanced boundary it is returned
-// as-is. When it does not, the function rewinds to the most recent
-// balanced boundary the snapshot can locate before `candidate`. The
-// snapshot is built in a single O(to) pass, so the search itself is
-// O(1) — no walk back one character at a time.
-export function snapToBalancedBacktickBoundary(text: string, candidate: number): number {
-  if (candidate <= 0) return candidate;
-  // Clamp out-of-range candidates to the buffer length so callers don't
-  // need a separate guard. Reaching the end of the buffer is a no-op for
-  // the typewriter — the flush path bypasses this helper entirely.
-  if (candidate >= text.length) return text.length;
-  const snap = buildBacktickSnapshot(text, candidate);
-  if (snap.parity === 0) return candidate;
-  // Parity is odd at `candidate` — rewind to the most recent balanced
-  // prefix we already located. If there is no prior boundary inside the
-  // scanned prefix (lastBalanced === -1), fall back to 0 so the next
-  // frame can finish rendering without a half-open code span.
-  return snap.lastBalanced >= 0 ? snap.lastBalanced : 0;
+/**
+ * Return `slice` extended, if needed, so it is self-consistent markdown:
+ * an unterminated fenced block gets a synthetic closing fence line and an
+ * unterminated inline-code span gets a synthetic closing backtick. Purely
+ * additive — never removes characters, so rendering never flickers by
+ * hiding previously shown text.
+ */
+export function balanceMarkdownSlice(slice: string): string {
+  if (!slice) return slice;
+  const state = scanMarkdownDelimiters(slice, slice.length);
+  if (state.fenceChar !== null) {
+    return slice + '\n' + state.fenceChar.repeat(state.fenceLen);
+  }
+  if (state.inlineBacktickParity === 1) {
+    return slice + '`';
+  }
+  return slice;
 }
 
-// Snap a candidate index back to the start of the UTF-16 code unit it
-// falls on, so we never slice a surrogate pair in half. The first high
-// surrogate at position p is always followed by a low surrogate at p+1;
-// if candidate lands on that low surrogate, step back one unit.
+/**
+ * Snap a candidate index back onto the start of the UTF-16 code unit it
+ * falls on, so we never slice a surrogate pair in half. The first high
+ * surrogate at position p is always followed by a low surrogate at p+1;
+ * if candidate lands on that low surrogate, step back one unit.
+ */
 export function snapToCharBoundary(text: string, candidate: number): number {
   if (candidate <= 0 || candidate >= text.length) return candidate;
   const code = text.charCodeAt(candidate);
@@ -88,118 +107,113 @@ export function snapToCharBoundary(text: string, candidate: number): number {
   return candidate;
 }
 
+/**
+ * Pure pacing step computation, extracted for testability.
+ *
+ * @param backlog    chars received but not yet displayed (> 0)
+ * @param dtMs       milliseconds since the previous frame (clamped by caller)
+ * @returns integer chars to advance this frame, at least 1
+ */
+export function computeTypewriterStep(backlog: number, dtMs: number): number {
+  const floorStep = Math.max(1, (FLOOR_CHARS_PER_SECOND * Math.max(dtMs, 0)) / 1000);
+  const catchupStep = Math.max(backlog, 0) / CATCHUP_FRAMES;
+  const raw = Math.max(floorStep, catchupStep);
+  return Math.max(1, Math.min(MAX_CHARS_PER_FRAME, Math.floor(raw)));
+}
+
+const FRAME_MS = 16.67;
+const MAX_DT_MS = 250; // clamp tab-throttle gaps so one wake-up can't dump MAX chars
+
 export function useAdaptiveTypewriter(fullText: string, isStreaming: boolean): string {
-  // Displayed slice length (number of chars shown so far)
-  const displayedRef = useRef(0);
+  // Number of chars of `fullText` shown so far. Monotonic while streaming;
+  // reset only when the buffer itself resets. Storing the count (not the
+  // sliced string) keeps the balanced view derivable at render time.
+  const [shownLen, setShownLen] = useState(() => (isStreaming ? 0 : fullText.length));
+  const shownLenRef = useRef(shownLen);
   // Mutable target (avoids stale closures in rAF)
   const targetRef = useRef(fullText);
   const isStreamingRef = useRef(isStreaming);
-  // Speed measurement state
-  const lastMeasureRef = useRef<number>(performance.now());
-  const charsAtMeasureRef = useRef(0); // target length at last measure point
-  const charsPerFrameRef = useRef(MIN_CHARS_PER_FRAME);
-  // rAF handle
+  const lastFrameRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
-  // React state — only updated when the visible slice actually changes
-  const [displayed, setDisplayed] = useState('');
 
   // Keep refs in sync with latest props on every render (no re-subscriptions)
   targetRef.current = fullText;
   isStreamingRef.current = isStreaming;
 
-  // Main rAF loop — started once and kept alive while streaming
-  const tick = useCallback(() => {
-    const fullText = targetRef.current; // latest SSE text
-    const targetLen = fullText.length;
-    let cur = displayedRef.current;
+  const advance = useCallback((len: number) => {
+    shownLenRef.current = len;
+    setShownLen(len);
+  }, []);
 
-    // Speed recalculation
-    const elapsed = performance.now() - lastMeasureRef.current;
-    if (elapsed >= MEASURE_INTERVAL_MS) {
-      const newChars = targetLen - charsAtMeasureRef.current; // chars that arrived
-      const frames = elapsed / 16.67; // ~60 fps
-      const rawCPF = (newChars / frames) * HEADROOM_FACTOR;
-      charsPerFrameRef.current = Math.min(
-        MAX_CHARS_PER_FRAME,
-        Math.max(MIN_CHARS_PER_FRAME, Math.ceil(rawCPF)),
-      );
-      lastMeasureRef.current = performance.now();
-      charsAtMeasureRef.current = targetLen;
-    }
+  // One frame of the typing loop. Returns whether another frame should be
+  // scheduled (true while streaming).
+  const tick = useCallback((): boolean => {
+    const now = performance.now();
+    const text = targetRef.current;
+    const targetLen = text.length;
+    const cur = shownLenRef.current;
 
-    // Flush immediately when streaming has ended
+    // Streaming ended — flush the remainder and stop. The effect below also
+    // flushes synchronously on the isStreaming transition; this covers the
+    // loop's own final frame.
     if (!isStreamingRef.current) {
-      if (cur < targetLen) {
-        displayedRef.current = targetLen;
-        setDisplayed(targetRef.current);
-      }
-      rafRef.current = null;
-      return; // stop the loop
+      lastFrameRef.current = null;
+      if (cur < targetLen) advance(targetLen);
+      return false;
     }
 
-    // Advance cursor
     if (cur < targetLen) {
-      let next = Math.min(targetLen, cur + charsPerFrameRef.current);
-      // Never slice in the middle of a markdown inline-code span: an odd
-      // number of backticks inside the visible slice turns into a half-
-      // open span that react-markdown will pair against the *next* matching
-      // backtick (potentially across a list item or paragraph), producing
-      // a string of orphaned code pills mid-stream. Snap the cut to the
-      // nearest character where the prefix has an even backtick count, so
-      // every visible frame is a well-formed slice of the cumulative text.
-      next = snapToBalancedBacktickBoundary(fullText, next);
-      // And never slice a UTF-16 surrogate pair in half.
-      next = snapToCharBoundary(fullText, next);
-      displayedRef.current = next;
-      setDisplayed(fullText.slice(0, next));
+      const dtMs = lastFrameRef.current === null ? FRAME_MS : Math.min(now - lastFrameRef.current, MAX_DT_MS);
+      let next = cur + computeTypewriterStep(targetLen - cur, dtMs);
+      if (next >= targetLen) next = targetLen;
+      next = snapToCharBoundary(text, next);
+      // Surrogate snap-back could land on `cur` (cursor sits on a high
+      // surrogate); skip the whole pair so progress never stalls.
+      if (next <= cur) next = Math.min(targetLen, cur + 2);
+      advance(next);
     }
+    // Caught-up frames stay idle but keep the loop alive so pacing resumes
+    // seamlessly when the next delta lands.
 
-    rafRef.current = requestAnimationFrame(tick);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    lastFrameRef.current = now;
+    return true;
+  }, [advance]);
 
-  // Start / stop the loop based on streaming state
   useEffect(() => {
-    if (isStreaming) {
-      if (rafRef.current === null) {
-        // Reset measurement baseline when a new stream begins
-        lastMeasureRef.current = performance.now();
-        charsAtMeasureRef.current = displayedRef.current;
-        rafRef.current = requestAnimationFrame(tick);
-      }
-    } else {
-      // Streaming just ended — cancel the scheduled frame
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      // Flush synchronously so there's zero tail-lag.
-      if (displayedRef.current < targetRef.current.length) {
-        displayedRef.current = targetRef.current.length;
-        setDisplayed(targetRef.current);
-      }
+    if (!isStreaming) {
+      // Flush synchronously so there's zero tail-lag when the stream ends.
+      if (shownLenRef.current < targetRef.current.length) advance(targetRef.current.length);
+      return;
     }
-  }, [isStreaming, tick]);
-
-  // When new text arrives while we have no active loop (e.g. first chars),
-  // kick off the loop again.
-  useEffect(() => {
-    if (isStreaming && fullText.length > displayedRef.current && rafRef.current === null) {
-      lastMeasureRef.current = performance.now();
-      charsAtMeasureRef.current = displayedRef.current;
-      rafRef.current = requestAnimationFrame(tick);
-    }
-  }, [fullText, isStreaming, tick]);
+    lastFrameRef.current = null;
+    let active = true;
+    const loop = () => {
+      if (!active) return;
+      rafRef.current = null;
+      if (tick()) rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      active = false;
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      lastFrameRef.current = null;
+    };
+  }, [isStreaming, tick, advance]);
 
   // On session reset (text shrinks back to ''), reset all state
   useEffect(() => {
-    if (fullText === '') {
-      displayedRef.current = 0;
-      charsPerFrameRef.current = MIN_CHARS_PER_FRAME;
-      lastMeasureRef.current = performance.now();
-      charsAtMeasureRef.current = 0;
-      setDisplayed('');
+    if (fullText === '' && shownLenRef.current !== 0) {
+      shownLenRef.current = 0;
+      setShownLen(0);
     }
   }, [fullText]);
 
-  return displayed;
+  // Derive the visible text at render time: cut at the shown length, then
+  // balance the slice so every frame is well-formed markdown (synthetic
+  // closers for an open fence / inline span — see file header). A complete,
+  // settled text passes through unchanged.
+  const len = Math.min(shownLen, fullText.length);
+  const shown = shownLen >= fullText.length ? fullText : fullText.slice(0, len);
+  return balanceMarkdownSlice(shown);
 }
