@@ -11,6 +11,8 @@
  * - Event dispatching matching existing callback signatures
  */
 
+import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
+
 const SSE_LINE_REGEX = /^(event|id|data):\s*(.*)$/;
 
 export interface AgentSSEClientOptions {
@@ -727,6 +729,18 @@ export async function compactContext(
         // Empty line = SSE event boundary, dispatch accumulated fields
         if (line === '') {
           if (eventType && eventData) {
+            if (eventType === 'token_usage') {
+              // Post-compaction snapshot pushed by the worker right before
+              // compact:done — the only usage events this stream carries.
+              // Feed the live store so the ring drops to the compacted size
+              // immediately instead of holding the pre-compaction value.
+              try {
+                const parsed = JSON.parse(eventData) as { data?: Record<string, unknown> };
+                applyWorkerUsageSnapshot(sessionId, parsed.data as WorkerUsageSnapshot | undefined);
+              } catch {
+                // Malformed frame: ignore and let compact:done handling proceed.
+              }
+            }
             if (eventType === 'compact:done') {
               const parsed = JSON.parse(eventData) as {
                 result?: { strategy?: string; tokensRemoved?: number; tokensRetained?: number; removedCount?: number };
