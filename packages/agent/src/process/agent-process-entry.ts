@@ -268,8 +268,9 @@ const emitLiveUsage = (
   const anchored = estimate.anchored && !compactedPending;
   // Diagnostic trace for ring anomalies: shows exactly which anchor each
   // broadcast used (index/value/trailing) so a bad frame can be traced in
-  // app.log without a debugger.
-  log(
+  // app.log without a debugger. Logged at WARN purely so it survives the
+  // default WARN file filter — remove once ring behavior is verified.
+  warn(
     `[Agent-Process] emitLiveUsage: msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
   );
   // Last-request per-call fields for the stats line: read off the anchor
@@ -2406,7 +2407,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             cache_hit_tokens: cacheHitTokens,
             cache_creation_tokens: cacheCreationTokens,
           };
-          log(`[Agent-Process] Received result event, turn tokenUsage accumulated: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}, cacheHit=${tokenUsage.cache_hit_tokens ?? 0} (call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput})`);
+          warn(`[Agent-Process] Received result event, turn tokenUsage accumulated: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}, cacheHit=${tokenUsage.cache_hit_tokens ?? 0} (call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput})`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
           // pure estimator anchors on it directly. Clear the post-compaction
