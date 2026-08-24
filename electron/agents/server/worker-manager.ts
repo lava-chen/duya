@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { SessionManager } from './session-store';
 import { SessionState } from './types';
 import { workerLogger } from './logger';
+import { safeUserDataPath } from '../../logging/logger';
 import { getWorkerMaxMemoryMB, getWorkerIdleTtlMs, isLowPowerEnv, selectIdleSessionIds } from './worker-limits';
 
 export function createWorkerEnvironment(
@@ -21,6 +22,9 @@ export function createWorkerEnvironment(
     // Agent Server workers to static fallback mode.
     DUYA_DAEMON_PORT: process.env.DUYA_DAEMON_PORT ?? '19825',
     DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || betterSqlite3Path,
+    // Dedicated directory for worker-side diagnostic files (pi-style
+    // component debug logs that bypass stderr level routing entirely).
+    DUYA_WORKER_LOG_DIR: process.env.DUYA_WORKER_LOG_DIR ?? path.join(safeUserDataPath(), 'logs'),
     DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH,
     NODE_OPTIONS: `--max-old-space-size=${maxMemoryMB}`,
   };
