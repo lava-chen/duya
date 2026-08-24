@@ -660,6 +660,8 @@ export async function askSideQuestion(
 
 export interface CompactResult {
   success: boolean;
+  /** Compaction strategy that ran; 'none' when compaction was a no-op. */
+  strategy?: string;
   removedCount?: number;
   remainingCount?: number;
   tokenReduction?: number;
@@ -727,10 +729,13 @@ export async function compactContext(
           if (eventType && eventData) {
             if (eventType === 'compact:done') {
               const parsed = JSON.parse(eventData) as {
-                result?: { tokensRemoved?: number; tokensRetained?: number; removedCount?: number };
+                result?: { strategy?: string; tokensRemoved?: number; tokensRetained?: number; removedCount?: number };
               };
               callbacks?.onDone?.({
                 success: true,
+                // Strategy distinguishes a genuine no-op ('none') from a run
+                // that removed nothing — the toast copy depends on it.
+                strategy: parsed.result?.strategy,
                 removedCount: parsed.result?.removedCount,
                 tokenReduction: parsed.result?.tokensRemoved,
               });
