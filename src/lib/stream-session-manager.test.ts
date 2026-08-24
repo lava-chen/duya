@@ -197,7 +197,7 @@ describe('StreamSessionManager State Machine', () => {
       const mockFetch = vi.fn().mockResolvedValue(
         createMockSSEResponse([
           { type: 'connected' },
-          { type: 'token_usage', data: { type: 'token_usage', data: { usedTokens: 234_567, inputTokens: 230_000, outputTokens: 4_567 } } },
+          { type: 'token_usage', data: { type: 'token_usage', data: { usedTokens: 234_567, inputTokens: 230_000, outputTokens: 4_567, anchored: true } } },
           { type: 'done' },
         ])
       );
@@ -216,6 +216,36 @@ describe('StreamSessionManager State Machine', () => {
       const live = useContextUsageStore.getState().liveBySession['live-keep'];
       expect(live).toBeDefined();
       expect(live!.usedTokens).toBe(234_567);
+      // Plan 443: the anchored flag passes through — the ring only trusts
+      // frames backed by a real API usage anchor.
+      expect(live!.anchored).toBe(true);
+
+      useContextUsageStore.getState().clearLive('live-keep');
+      vi.restoreAllMocks();
+    });
+
+    it('defaults anchored to false for legacy frames without the flag', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+      const { useContextUsageStore } = await import('@/stores/context-usage-store');
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([
+          { type: 'connected' },
+          { type: 'token_usage', data: { type: 'token_usage', data: { usedTokens: 5_000, inputTokens: 4_000, outputTokens: 1_000 } } },
+          { type: 'done' },
+        ])
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({
+        sessionId: 'live-legacy-anchor',
+        content: 'Hello',
+      });
+      await new Promise((r) => setTimeout(r, 100));
+
+      const live = useContextUsageStore.getState().liveBySession['live-legacy-anchor'];
+      expect(live).toBeDefined();
+      expect(live!.anchored).toBe(false);
 
       useContextUsageStore.getState().clearLive('live-keep');
       vi.restoreAllMocks();

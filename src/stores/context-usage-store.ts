@@ -13,6 +13,9 @@ import { create } from 'zustand';
  */
 export interface LiveContextUsage {
   usedTokens: number;
+  /** False → the number is a rough local estimate (or post-compaction
+   *  unknown); the ring shows "?" instead of trusting it. */
+  anchored: boolean;
   inputTokens: number;
   outputTokens: number;
   cacheHitTokens?: number;
@@ -59,6 +62,7 @@ export const useContextUsageStore = create<ContextUsageState>((set) => ({
  */
 export interface WorkerUsageSnapshot {
   usedTokens?: number;
+  anchored?: boolean;
   inputTokens?: number;
   outputTokens?: number;
   cacheHitTokens?: number;
@@ -84,6 +88,7 @@ export function applyWorkerUsageSnapshot(
   if (!snapshot || typeof snapshot !== 'object') return;
   useContextUsageStore.getState().setLive(sessionId, {
     usedTokens: snapshot.usedTokens ?? 0,
+    anchored: snapshot.anchored ?? false,
     inputTokens: snapshot.inputTokens ?? 0,
     outputTokens: snapshot.outputTokens ?? 0,
     cacheHitTokens: snapshot.cacheHitTokens,

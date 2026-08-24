@@ -176,12 +176,13 @@ export function ContextUsageRing({
                 </span>
               </>
             )}
-            {/* No usage data yet (brand-new session / history without
-                tokenUsage): show a dim dash instead of a fake 0%. */}
+            {/* No anchor yet (brand-new session / post-compaction /
+                history without usage blocks): show "?" instead of a fake
+                number — matches pi's footer unknown state. */}
             {!usage.hasData && (
               <span className="context-usage-ring-group">
                 <span className="context-usage-ring-stat context-usage-ring-stat--dim">
-                  —
+                  ?
                 </span>
               </span>
             )}
