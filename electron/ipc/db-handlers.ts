@@ -53,6 +53,7 @@ import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUpl
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
+import { restoreFilesForEvents } from '../services/file-snapshot-restore';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import { CapabilityDao } from '../services/providers/capability-dao';
 import {
@@ -407,12 +408,19 @@ export function registerDbHandlers(): void {
   // Decision 3: truncate* maps to rewriteSession (the only append-only
   // exception). The adapter computes the kept events via project() and
   // rewrites the whole rollout file + index.
-  ipcMain.handle('db:message:truncateAfter', (_event, sessionId: string, messageId: string) => {
+  //
+  // Plan 429 #3 rewind linkage: before the timeline shrinks, pre-image
+  // snapshots referenced by the removed tool calls are written back to disk
+  // so files roll back with the conversation. Best-effort — a failed restore
+  // never blocks the rewind itself.
+  ipcMain.handle('db:message:truncateAfter', async (_event, sessionId: string, messageId: string) => {
     const { messageLog } = getCoreStores();
     const events = messageLog.listBySession(sessionId);
     const cutIdx = events.findIndex((e) => e.id === messageId);
-    if (cutIdx < 0) return { deletedCount: 0 };
+    if (cutIdx < 0) return { deletedCount: 0, restoredFiles: [] as string[] };
     // Keep [0, cutIdx] (inclusive of the target — truncateAfter keeps target).
+    const removedEvents = events.slice(cutIdx + 1);
+    const restored = await restoreFilesForEvents(removedEvents);
     const keptEvents: NewEvent[] = events.slice(0, cutIdx + 1).map((e) => ({
       id: e.id,
       sessionId: e.sessionId,
@@ -422,17 +430,19 @@ export function registerDbHandlers(): void {
     }));
     const deletedCount = events.length - keptEvents.length;
     messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
-    return { deletedCount };
+    return { deletedCount, restoredFiles: restored.restoredFiles };
   });
 
   // Edit-and-resend: supersede the target message and everything after it
   // (inclusive), so the edited version can be appended as a fresh message.
-  ipcMain.handle('db:message:truncateFromInclusive', (_event, sessionId: string, messageId: string) => {
+  ipcMain.handle('db:message:truncateFromInclusive', async (_event, sessionId: string, messageId: string) => {
     const { messageLog } = getCoreStores();
     const events = messageLog.listBySession(sessionId);
     const cutIdx = events.findIndex((e) => e.id === messageId);
-    if (cutIdx < 0) return { deletedCount: 0 };
+    if (cutIdx < 0) return { deletedCount: 0, restoredFiles: [] as string[] };
     // Keep [0, cutIdx) (exclusive of the target — truncateFromInclusive removes target).
+    const removedEvents = events.slice(cutIdx);
+    const restored = await restoreFilesForEvents(removedEvents);
     const keptEvents: NewEvent[] = events.slice(0, cutIdx).map((e) => ({
       id: e.id,
       sessionId: e.sessionId,
@@ -442,7 +452,19 @@ export function registerDbHandlers(): void {
     }));
     const deletedCount = events.length - keptEvents.length;
     messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
-    return { deletedCount };
+    return { deletedCount, restoredFiles: restored.restoredFiles };
+  });
+
+  // Plan 429 #3: standalone file-restore endpoint ({sessionId, cutMessageId}).
+  // Restores pre-images referenced by all events AFTER cutMessageId WITHOUT
+  // truncating the timeline — usable for manual recovery when the renderer
+  // wants to roll files back independently of message deletion.
+  ipcMain.handle('db:files:restore', async (_event, sessionId: string, cutMessageId: string) => {
+    const { messageLog } = getCoreStores();
+    const events = messageLog.listBySession(sessionId);
+    const cutIdx = events.findIndex((e) => e.id === cutMessageId);
+    if (cutIdx < 0) return { restoredFiles: [] as string[], failedCount: 0 };
+    return restoreFilesForEvents(events.slice(cutIdx + 1));
   });
 
   // ==================== Usage Summary (settings dashboard) ====================

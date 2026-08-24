@@ -261,7 +261,20 @@ interface IpcMessageDTO {
   attachments?: unknown[];
   created_at?: number;
   timestamp?: number;
+  /**
+   * Tool-result metadata worth persisting. Only small, rewind-relevant keys
+   * survive (whitelist below) — heavy renderer-only payloads such as browser
+   * screenshots must not bloat rollout files.
+   */
+  metadata?: Record<string, unknown>;
 }
+
+/**
+ * Metadata keys persisted into the rollout payload (plan 429 #3 rewind
+ * linkage). `preImageSha`/`filePath` come from Edit/Write; `fileSnapshots`
+ * from ApplyPatch's multi-file semantics.
+ */
+const PERSISTED_METADATA_KEYS = ['preImageSha', 'filePath', 'fileSnapshots'] as const;
 
 /**
  * Construct a NewEvent from an IPC message DTO.
@@ -288,6 +301,20 @@ export function ipcMessageToNewEvent(
     role === 'tool' ? (data.tool_call_id ?? null) : (data.parent_tool_call_id ?? null);
   const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, role);
 
+  // Persist token_usage plus whitelisted snapshot metadata for round-trip
+  // (preImageSha/fileSnapshots drive file restore on session rewind).
+  const persistedMetadata: Record<string, unknown> = {
+    ...(data.metadata
+      ? Object.fromEntries(
+          PERSISTED_METADATA_KEYS.filter((key) => data.metadata?.[key] !== undefined).map((key) => [
+            key,
+            data.metadata![key],
+          ]),
+        )
+      : {}),
+    ...(data.token_usage ? { token_usage: data.token_usage } : {}),
+  };
+
   // Construct the @duya/ai Message with all flat fields.
   const message: Message = {
     role,
@@ -308,8 +335,7 @@ export function ipcMessageToNewEvent(
     sub_agent_id: data.sub_agent_id,
     attachments: data.attachments,
     displayContent: displayContent ?? undefined,
-    // token_usage stored in metadata for round-trip
-    metadata: data.token_usage ? { token_usage: data.token_usage } : undefined,
+    metadata: Object.keys(persistedMetadata).length > 0 ? persistedMetadata : undefined,
   };
 
   const agentMessage = ingestMessage(message, { index: 0 });
