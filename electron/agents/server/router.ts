@@ -1436,6 +1436,18 @@ async function handlePostCompact(
         const event = JSON.parse(line);
         const eventType = event.type as string;
 
+        if (eventType === 'chat:token_usage' || eventType === 'chat:context_usage') {
+          // The worker pushes a fresh post-compaction context snapshot right
+          // before compact:done. Forward it on this stream — no chat SSE is
+          // attached while the session is idle, so dropping it here left the
+          // renderer's ring on the pre-compaction value until the next turn.
+          const sseEvent = normalizeWorkerEvent(event);
+          if (sseEvent) {
+            res.write(`event: ${sseEvent.type}\ndata: ${JSON.stringify(sseEvent)}\n\n`);
+          }
+          continue;
+        }
+
         if (eventType === 'compact:done') {
           httpLogger.info('Compaction done', { sessionId });
           res.write(`event: compact:done\ndata: ${JSON.stringify(event)}\n\n`);
