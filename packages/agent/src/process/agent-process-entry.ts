@@ -48,7 +48,7 @@ import {
 import type { QueuedCommand } from '../queue/index.js';
 import { generateSessionTitle, shouldRegenerateTitle } from '../session/title-generator.js';
 import { getSteeringConfig } from '../hooks/config.js';
-import { classifyError, APIErrorType } from '@duya/ai';
+import { classifyError, APIErrorType, computeContextEstimate, normalizePromptTokens } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
@@ -214,34 +214,17 @@ const DOUBLE_INTERRUPT_WINDOW_MS = 3000;
 let sessionSystemPrompt: string | undefined = undefined;
 let existingMessageCount = 0;
 
-// Live context-usage tracker (module scope so the authoritative base survives
-// across turns of this worker's session). Keeping the base from the previous
-// round means the ring never dips to a message-only estimate at the start of a
-// new round — that estimate would omit the system prompt / AGENTS.md / tool
-// definitions and look like a reset. Reset on `init` for a fresh session.
-let liveBaseContext = 0;            // authoritative input + output from last `result`
-let liveBaseMessageCount = 0;       // agent message count when that `result` landed
-let hasLiveBase = false;            // whether liveBaseContext came from a real `result`
+// Live context-usage emission (plan 443, pi parity). The context size is
+// computed STATELESSLY on every emit via computeContextEstimate(@duya/ai):
+// latest valid assistant usage anchor + estimated trailing messages. No
+// incremental base / boundary bookkeeping — the previous tracker state
+// machine (liveBaseContext / liveBaseMessageCount / hasLiveBase /
+// liveBoundaryPending) was the source of ring sawtooth and is gone.
 // Set when compaction (manual `/compact` or proactive mid-turn) shrank the
-// timeline. The retained per-message usage blocks still describe the
-// PRE-compaction prompt, so re-seeding the base from them at the next turn
-// start would spring the ring back to the pre-compaction size until that
-// turn's first `result`. While set, the seed skips only the base restore
-// (session-cumulative totals still seed) and the native estimate carries the
-// ring; cleared when the next `result` rebases the base authoritatively.
-let liveBaseCompacted = false;
-let liveLastInput = 0;              // raw input_tokens of the last `result`
-let liveLastOutput = 0;             // raw output_tokens of the last `result`
-let liveLastCacheHit: number | undefined;      // cache hit (read) tokens of the last `result`
-let liveLastCacheCreation: number | undefined; // cache creation (write) tokens of the last `result`
-// Set true after a `result` lands, until the first `tool_result` of that
-// round finalizes the trailing boundary. It marks that the assistant message
-// produced by that `result` is now at the tail of the timeline but its tokens
-// are ALREADY counted in `liveBaseContext` (via output_tokens) — so the
-// trailing estimate must exclude it, or the ring double-counts the output and
-// sawtooths between results (dropping back to input+output when the next
-// `result` rebases).
-let liveBoundaryPending = false;
+// timeline: retained usage anchors describe the PRE-compaction prompt, so
+// emissions stay "unanchored" (ring shows ?) until this turn's first `result`
+// provides a post-compaction anchor. Reset on `init`.
+let compactedPending = false;
 // Session-cumulative usage across every `result` this worker has seen for
 // this session (reset on `init`). The ring's ↑/↓/R/W/$ footer is cumulative
 // (pi-style), so the worker accumulates rather than broadcasting only the
@@ -264,91 +247,49 @@ interface LastCallUsageBlock {
   cache_creation_tokens?: number;
 }
 
-// Live context-usage tracker (mirrors pi's `usage + trailing` model):
-//   used = last authoritative LLM context + estimated tokens of messages
-//          appended since that LLM call.
-// The authoritative base is the last `result` event's normalized
-// `input + output`, which reflects the real prompt size at that request.
-// Before any `result`, fall back to duya's CompactionManager estimate so the
-// ring is live from the first event.
-const computeLiveUsedFromTracker = (systemFallbackTokens?: number): number => {
-  if (!hasLiveBase) {
-    // No authoritative result yet — duya's native estimate of the real
-    // in-memory history PLUS the system prompt / tool-definition overhead.
-    // A message-only estimate would under-report by the system prompt /
-    // AGENTS.md / tools (often 10-20K tokens), which is exactly what pi's
-    // estimateContextTokens adds as its `prefix` when no usage block exists.
-    const msgTokens = agent.getContextStats().totalTokens;
-    const systemTokens =
-      (typeof agent.getSystemContextTokensEstimate === 'function'
-        ? agent.getSystemContextTokensEstimate()
-        : 0) || systemFallbackTokens || 0;
-    // Cap at the model's budget so a long session whose messages lost
-    // `tokenUsage` (e.g. legacy format / re-import) doesn't show 600%+
-    // context — the local estimate inflates ContentBlock content by
-    // ~30-50% from JSON serialization overhead, and any pre-compaction
-    // session > 300 messages will exceed the 1M window in raw chars even
-    // though the LLM never saw that much. Use 95% of max so the ring still
-    // shows "critical" warning rather than faking 0.
-    const budgetMax = agent.getContextStats().maxTokens || 0;
-    const estimated = msgTokens + systemTokens;
-    return budgetMax > 0 ? Math.min(estimated, budgetMax * 0.95) : estimated;
-  }
-  // Authoritative base + estimated tokens of messages appended since the
-  // request that produced that base.
-  const msgs = agent.getMessages();
-  // Append-only invariant: between two requests the timeline can only grow.
-  // A shorter one means rewind / compaction / external truncation rebased the
-  // history and the base no longer describes it — drop the base (cumulative
-  // spend totals stay) and let the native estimate carry the ring until the
-  // next `result` re-establishes it.
-  if (msgs.length < liveBaseMessageCount) {
-    hasLiveBase = false;
-    liveBoundaryPending = false;
-    return computeLiveUsedFromTracker(systemFallbackTokens);
-  }
-  let boundary = liveBaseMessageCount;
-  if (liveBoundaryPending) {
-    // Exactly one assistant message is pushed right after the last `result`,
-    // and its tokens are already counted in `liveBaseContext` via
-    // output_tokens. Skip it so the trailing estimate only covers the tool
-    // results that follow — otherwise the output is counted twice and the
-    // ring sawtooths (drops back to input+output) when the next `result`
-    // rebases. The slice clamps when the assistant has not been pushed yet
-    // (boundary > length → empty).
-    boundary = liveBaseMessageCount + 1;
-  }
-  const trailing = estimateMessagesTokens(msgs.slice(boundary));
-  return liveBaseContext + trailing;
-};
-
 // Broadcast the live context-usage snapshot for a session over the worker
 // channel. Module scope so the compaction paths (manual `compact` command,
 // proactive mid-turn compaction) can push a fresh snapshot too, not just the
-// streamChat event loop.
+// streamChat event loop. Stateless: recomputed from the current message
+// timeline on every call.
 const emitLiveUsage = (
   targetSessionId: string | null,
-  usedTokens?: number,
   systemFallbackTokens?: number,
 ): void => {
   if (!targetSessionId) return;
+  const msgs: Message[] = agent?.getMessages?.() ?? [];
+  // Estimated tokens of the system prompt + tools (excluding message history)
+  // — added ONLY on the unanchored fallback path inside computeContextEstimate.
+  const systemPrefix =
+    (typeof agent?.getSystemContextTokensEstimate === 'function'
+      ? agent.getSystemContextTokensEstimate()
+      : 0) || systemFallbackTokens || 0;
+  const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
+  const anchored = estimate.anchored && !compactedPending;
+  // Last-request per-call fields for the stats line: read off the anchor
+  // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
+  const anchorMsg =
+    estimate.anchorIndex !== null
+      ? (msgs[estimate.anchorIndex] as
+          | { usage?: LastCallUsageBlock; tokenUsage?: LastCallUsageBlock }
+          | undefined)
+      : undefined;
+  const anchorUsage = anchorMsg?.usage ?? anchorMsg?.tokenUsage;
+  const { prompt: lastInput, output: lastOutput } = normalizePromptTokens(anchorUsage);
   sendToMain({
     type: 'chat:token_usage',
     sessionId: targetSessionId,
-    inputTokens: liveLastInput,
-    outputTokens: liveLastOutput,
-    cacheHitTokens: liveLastCacheHit,
-    cacheCreationTokens: liveLastCacheCreation,
-    usedTokens: usedTokens ?? computeLiveUsedFromTracker(systemFallbackTokens),
-    // Estimated tokens of the system prompt + tools (excluding message
-    // history) so the renderer's no-usage local estimate can include the
-    // prefix too (pi-style estimateContextTokens). The fallback covers the
-    // very first emit of a session, before the first request populated the
-    // agent's own estimate.
-    systemTokens:
-      (typeof agent?.getSystemContextTokensEstimate === 'function'
-        ? agent.getSystemContextTokensEstimate()
-        : 0) || systemFallbackTokens || 0,
+    // False → renderer shows "?" instead of a number (no data yet, or
+    // post-compaction without a fresh response).
+    anchored,
+    usedTokens: estimate.usedTokens ?? 0,
+    inputTokens: lastInput,
+    outputTokens: lastOutput,
+    cacheHitTokens: anchorUsage?.cache_hit_tokens,
+    cacheCreationTokens: anchorUsage?.cache_creation_tokens,
+    // Estimated tokens of the system prompt + tools (pi-style prefix), kept
+    // in the frame for diagnostics.
+    systemTokens: systemPrefix,
     // Session-cumulative totals so the ring's ↑/↓/R/W/$ line moves live.
     totalInput: liveTotalInput,
     totalInputRaw: liveTotalInputRaw,
@@ -1344,12 +1285,11 @@ async function initAgent(
       currentMessages,
     );
     log(`[Agent-Process] Compaction rebase emitted, newMessages=${currentMessages.length}`);
-    // Proactive mid-turn compaction rewrote the timeline: push the new
-    // (smaller) estimate right away instead of leaving the ring on the
-    // pre-compaction base until the next `result` rebases it. The stale base
-    // is dropped by the append-only guard inside computeLiveUsedFromTracker.
-    liveBaseCompacted = true;
-    emitLiveUsage(sessionId, computeLiveUsedFromTracker());
+    // Proactive mid-turn compaction rewrote the timeline: retained anchors
+    // describe the pre-compaction prompt, so mark pending and broadcast an
+    // unanchored frame (ring shows "?") until the next `result` lands.
+    compactedPending = true;
+    emitLiveUsage(sessionId);
   };
 
   if (setSandboxEnabled) {
@@ -2266,12 +2206,6 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       let seedTotalOutput = 0;
       let seedTotalCacheHit = 0;
       let seedTotalCacheCreation = 0;
-      let lastUsage: {
-        input_tokens?: number;
-        output_tokens?: number;
-        cache_hit_tokens?: number;
-        cache_creation_tokens?: number;
-      } | undefined;
       for (const m of agent.getMessages()) {
         // `tokenUsage` (camel) is set when messages were reloaded from the DB;
         // `token_usage` (snake) is attached in-process at turn end. Read both
@@ -2299,47 +2233,16 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         seedTotalOutput += output;
         seedTotalCacheHit += cacheHit;
         seedTotalCacheCreation += cacheCreation;
-        // The context BASE restores from the single-call sub-block when
-        // present: the block itself is turn-cumulative, and seeding the base
-        // from its input inflated the ring ~N× (one per LLM call of that
-        // turn) until the next turn's first `result` corrected it. Totals
-        // above intentionally keep summing the full blocks.
-        const baseSrc = u.last_call ?? u;
-        lastUsage = {
-          input_tokens: baseSrc.input_tokens ?? 0,
-          output_tokens: baseSrc.output_tokens ?? 0,
-          cache_hit_tokens: baseSrc.cache_hit_tokens ?? 0,
-          cache_creation_tokens: baseSrc.cache_creation_tokens ?? 0,
-        };
       }
       liveTotalInput = seedTotalInput;
       liveTotalInputRaw = seedTotalInputRaw;
       liveTotalOutput = seedTotalOutput;
       liveTotalCacheHit = seedTotalCacheHit;
       liveTotalCacheCreation = seedTotalCacheCreation;
-      // Restore the authoritative context base from the last persisted result
-      // so the ring's used/% is correct from the very start of this turn
-      // (instead of a coarse estimate until the first `result` lands).
-      // After a compaction the retained usage blocks describe the
-      // pre-compaction prompt; skipping this restore keeps the ring on the
-      // post-compaction estimate until the next real `result` rebases it.
-      if (lastUsage && !liveBaseCompacted) {
-        const rawInput = lastUsage.input_tokens ?? 0;
-        const cacheHit = lastUsage.cache_hit_tokens ?? 0;
-        const cacheCreation = lastUsage.cache_creation_tokens ?? 0;
-        const normalizedInput =
-          cacheHit > rawInput || cacheCreation > rawInput
-            ? rawInput + cacheHit + cacheCreation
-            : rawInput;
-        liveBaseContext = normalizedInput + (lastUsage.output_tokens ?? 0);
-        liveBaseMessageCount = agent.getMessages().length;
-        hasLiveBase = true;
-        liveLastInput = normalizedInput;
-        liveLastOutput = lastUsage.output_tokens ?? 0;
-        liveLastCacheHit = lastUsage.cache_hit_tokens;
-        liveLastCacheCreation = lastUsage.cache_creation_tokens;
-        liveBoundaryPending = false;
-      }
+      // Plan 443: no context-base restore here. The pure estimator anchors on
+      // the persisted usage blocks directly (preferring `last_call`) — same
+      // numbers, zero bookkeeping. Post-compaction staleness is handled by
+      // `compactedPending` + boundary markers instead of skipping the seed.
     }
 
     // Plan 426 Phase 4: steering config from [steering] in ~/.duya/config.toml.
@@ -2403,19 +2306,14 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // without an incremental counter.
     const turnStartMessageCount = agent.getMessages().length;
 
-    // Live context-usage tracker — the logic lives at module scope
-    // (computeLiveUsedFromTracker / emitLiveUsage) so the compaction paths
-    // can push fresh snapshots too. Local wrappers bind the session id and
-    // this turn's system-prompt fallback estimate; existing call sites stay
-    // unchanged.
-    const computeLiveUsed = (): number =>
-      computeLiveUsedFromTracker(systemPromptTokensEstimate);
-    const emitTokenUsage = (usedTokens?: number): void =>
-      emitLiveUsage(msg.sessionId, usedTokens, systemPromptTokensEstimate);
+    // Live context-usage emission — stateless pure function at module scope
+    // (computeContextEstimate / emitLiveUsage, plan 443). Local wrapper binds
+    // the session id and this turn's system-prompt fallback estimate.
+    const emitTokenUsage = (): void =>
+      emitLiveUsage(msg.sessionId, systemPromptTokensEstimate);
 
-    // Kick off the ring before the first LLM `result` lands, so the renderer
-    // has a live value immediately.
-    emitTokenUsage(computeLiveUsed());
+    // Kick off the ring before the first LLM `result` lands.
+    emitTokenUsage();
 
     for await (const event of eventGen) {
       eventCount++;
@@ -2503,46 +2401,25 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             cache_creation_tokens: cacheCreationTokens,
           };
           log(`[Agent-Process] Received result event, turn tokenUsage accumulated: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}, cacheHit=${tokenUsage.cache_hit_tokens ?? 0} (call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput})`);
-          // Live context: the `result` usage is the authoritative prompt
-          // size at that request, so rebase the trailing estimate and
-          // broadcast the current context.
-          liveBaseContext = normalizedInput + outputTokens;
-          liveBaseMessageCount = agent.getMessages().length;
-          hasLiveBase = true;
-          // A real request just rebased the context — resolve any pending
-          // compaction invalidation of the persisted-seed base.
-          liveBaseCompacted = false;
-          liveLastInput = normalizedInput;
-          liveLastOutput = outputTokens;
-          liveLastCacheHit = cacheHitTokens;
-          liveLastCacheCreation = cacheCreationTokens;
+          // A real request just landed — its usage rides on the assistant
+          // message DuyaAgent pushes right after `done` (plan 443), so the
+          // pure estimator anchors on it directly. Clear the post-compaction
+          // pending flag here too.
+          compactedPending = false;
           // Accumulate session-cumulative totals for the ring's stats line.
           liveTotalInput += normalizedInput;
           liveTotalInputRaw += rawInput;
           liveTotalOutput += outputTokens;
           liveTotalCacheHit += cacheHitTokens;
           liveTotalCacheCreation += cacheCreationTokens;
-          // The `result` fires BEFORE this round's assistant message is pushed
-          // to the timeline. Mark the boundary pending so the next trailing
-          // estimate skips that assistant (its tokens are already in
-          // liveBaseContext via output_tokens) instead of double-counting it.
-          liveBoundaryPending = true;
           emitTokenUsage();
         } else {
           warn('[Agent-Process] Received all-zero usage, ignoring to avoid empty context ring');
         }
       } else if (event.type === 'tool_result' && event.data) {
-        // Tool results are appended to the in-memory history (with the
-        // assistant tool_use blocks) and will be sent to the model on the
-        // next request. Recompute the trailing estimate from duya's real
-        // message list and broadcast so the ring stays live between
-        // `result` events. The first tool result after a `result` finalizes
-        // the boundary just past the assistant message (which is already
-        // counted via output_tokens).
-        if (liveBoundaryPending) {
-          liveBaseMessageCount = Math.max(0, agent.getMessages().length - 1);
-          liveBoundaryPending = false;
-        }
+        // Tool results are appended to the in-memory history and will be sent
+        // to the model on the next request. Recompute statelessly from the
+        // full timeline so trailing tool-result volume is included.
         emitTokenUsage();
       }
 
@@ -3132,15 +3009,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // every turn, so the ring fell back to the capped local estimate
           // until the first `result` of the next turn rebased it.
           if (previousSessionId !== sessionId) {
-            liveBaseContext = 0;
-            liveBaseMessageCount = 0;
-            hasLiveBase = false;
-            liveLastInput = 0;
-            liveLastOutput = 0;
-            liveLastCacheHit = undefined;
-            liveLastCacheCreation = undefined;
-            liveBoundaryPending = false;
-            liveBaseCompacted = false;
+            compactedPending = false;
             liveTotalInput = 0;
             liveTotalInputRaw = 0;
             liveTotalOutput = 0;
@@ -3513,17 +3382,12 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             await appendMessages(sessionId!, currentMessages);
             existingMessageCount = currentMessages.length;
             log(`[Agent-Process] Compaction: appended messages, new count=${existingMessageCount}`);
-            // Broadcast the post-compact context BEFORE compact:done so the
-            // renderer's ring drops to the new size immediately instead of
-            // holding the pre-compact value (or a no-data window) until the
-            // next turn's first `result`. computeLiveUsedFromTracker drops
-            // the stale base via its append-only guard because the timeline
-            // just shrank.
-            // The timeline just shrank: suppress the persisted last_call base
-            // seed at the next turn start (it describes the pre-compaction
-            // prompt) until a real `result` rebases the base.
-            liveBaseCompacted = true;
-            emitLiveUsage(sessionId, computeLiveUsedFromTracker());
+            // Broadcast BEFORE compact:done: retained anchors describe the
+            // pre-compact prompt, so mark pending and emit an unanchored
+            // frame — the ring shows "?" until the next turn's first `result`
+            // provides a post-compaction anchor (plan 443, pi parity).
+            compactedPending = true;
+            emitLiveUsage(sessionId);
             sendToMain({ type: 'compact:done', sessionId, result });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
