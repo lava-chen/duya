@@ -83,6 +83,21 @@ export interface ICDPClient {
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
 }
 
+/**
+ * Clear the browser's HTTP cache (and other storage) over raw CDP.
+ * Backends that do not speak raw CDP (e.g. the extension action protocol)
+ * fail silently — cache clearing is best-effort by design.
+ */
+export async function clearBrowserCache(client: ICDPClient): Promise<boolean> {
+  try {
+    await client.send('Network.enable');
+    await client.send('Network.clearBrowserCache');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ========================================================================
 // Extension Mode: HTTP Bridge to Chrome Extension via Daemon
 // ========================================================================

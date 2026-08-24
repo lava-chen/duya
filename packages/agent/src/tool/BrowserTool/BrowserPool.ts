@@ -274,16 +274,16 @@ export class BrowserPool {
    * Acquire or create a browser session.
    */
   private async acquireSession(sessionId: string): Promise<BrowserSession> {
-    // Clear idle timer if this session was idle
-    const existingTimer = this.idleTimers.get(sessionId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      this.idleTimers.delete(sessionId);
-    }
-
-    // Reuse existing idle session
+    // Reuse an existing idle session. Cancel its idle-close timer first —
+    // timers are keyed by the SESSION's id, not the per-task request id, so
+    // a reused session must clear its own timer or it can be closed mid-use.
     for (const [id, session] of this.sessions) {
       if (!session.busy) {
+        const timer = this.idleTimers.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          this.idleTimers.delete(id);
+        }
         session.busy = true;
         return session;
       }
