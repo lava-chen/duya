@@ -7,6 +7,7 @@
  */
 import { useMemo } from 'react';
 import type { Message } from '@/types/message';
+import { findModelById } from '@duya/ai';
 import {
   estimateTokens,
   normalizeInputTokens,
@@ -50,16 +51,18 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
  * Order of preference:
  * 1. Caller-supplied `contextWindow` (sourced from the
  *    `provider_model_capabilities` SQLite table — what the user toggled via
- *    the 200K/1M buttons in the provider edit view). This is the only signal
- *    that reflects per-model user intent; the rest are coarse fallbacks.
- * 2. Hardcoded substring matches for well-known model families that
- *    historically shipped with a fixed window.
+ *    the 200K/1M buttons in the provider edit view, or populated by model
+ *    sync when the gateway reports it). This is the only signal that
+ *    reflects per-model user intent / live gateway data.
+ * 2. The @duya/ai built-in catalog (`findModelById`) — hand-curated,
+ *    models.dev-backed per-model metadata shipped with the package.
  * 3. The 200K default (matches Claude 3.x / Sonnet 4.x base context).
  *
- * NOTE: do not add new branches for `claude-sonnet-4-6[1M]`-style ids.
- * The 1M variant is a *capability override*, not a model identifier — it is
- * already expressed by the caller's `contextWindow` argument when the user
- * has opted in.
+ * NOTE: do not add substring-matching fallbacks here. Unknown ids (custom
+ * gateways, aliases, `[1M]` capability suffixes) intentionally fall through
+ * to the default — pinning the window in the provider editor is the escape
+ * hatch, and guessing from substrings has historically produced wrong
+ * values (e.g. gpt-4.1 → 8k).
  */
 export function getContextWindowForModel(
   modelName?: string,
@@ -69,17 +72,7 @@ export function getContextWindowForModel(
     return contextWindow;
   }
   if (!modelName) return DEFAULT_CONTEXT_WINDOW;
-  const lower = modelName.toLowerCase();
-  if (lower.includes('claude-3-opus')) return 200_000;
-  if (lower.includes('claude-3-sonnet')) return 200_000;
-  if (lower.includes('claude-3-haiku')) return 200_000;
-  if (lower.includes('claude-3-5-sonnet')) return 200_000;
-  if (lower.includes('gpt-4-turbo')) return 128_000;
-  if (lower.includes('gpt-4o')) return 128_000;
-  if (lower.includes('gpt-4')) return 8192;
-  if (lower.includes('gpt-3.5')) return 16385;
-  if (lower.includes('minimax')) return 200_000;
-  return DEFAULT_CONTEXT_WINDOW;
+  return findModelById(modelName)?.contextWindow || DEFAULT_CONTEXT_WINDOW;
 }
 
 export function formatTokens(n: number): string {
