@@ -102,7 +102,32 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     await this.send('Page.navigate', { url });
     this.lastUrl = url;
     this.tabState.set(this.activeTabId, { url, title: '' });
-    await this._waitForPageLoad();
+    await this.waitForPageLoadAfterNavigate();
+  }
+
+  /**
+   * Wait for page load via the daemon's in-process wait endpoint — one HTTP
+   * call that resolves on Page.loadEventFired inside the daemon instead of
+   * polling document.readyState over HTTP every 200ms. Falls back to the
+   * legacy polling loop when the endpoint fails (older daemon, transient
+   * network error).
+   */
+  private async waitForPageLoadAfterNavigate(timeoutMs = 10000): Promise<void> {
+    try {
+      const res = await this.requestDaemon('/webview-wait-load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: this.webviewSessionId(), timeoutMs }),
+        timeout: timeoutMs + 5000,
+      });
+      if (res.ok) {
+        const json = (await res.json()) as { ok?: boolean };
+        if (json.ok === true) return;
+      }
+    } catch {
+      // Fall through to the polling fallback.
+    }
+    await this._waitForPageLoad(timeoutMs);
   }
 
   private async _waitForPageLoad(timeoutMs = 10000): Promise<void> {
@@ -552,7 +577,10 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
 
   /**
    * Send a CDP command to the daemon's /webview-command endpoint.
-   * Retries on 404 (webview not yet registered) up to 10 seconds.
+   * Asks the daemon to hold the request until the webview registers (first
+   * call of a fresh session); if the hold window expires it returns a 404
+   * with `held: true` and we fail fast — retrying would not help. Plain 404s
+   * (no hold) still retry on our side, up to 10 seconds.
    * Throws DebuggerConflict immediately if the renderer reports DevTools is open.
    */
   private async sendCommand(command: { method: string; params: Record<string, unknown> }, tabId = this.activeTabId): Promise<CDPResponse> {
@@ -560,6 +588,7 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
     const body = {
       id,
       sessionId: this.webviewSessionId(tabId),
+      waitRegistration: true,
       ...(this.options.background ? { background: true } : {}),
       ...command,
     };
@@ -576,6 +605,15 @@ export class WebviewCDPClient extends EventEmitter implements ICDPClient {
       });
 
       if (res.status === 404) {
+        // The daemon already held this request for its full window — waiting
+        // longer will not register the webview.
+        let held = false;
+        try {
+          held = ((await res.json()) as { held?: boolean }).held === true;
+        } catch {
+          // Body unreadable — treat as a plain retryable 404.
+        }
+        if (held) break;
         // Webview not ready yet — wait and retry
         await new Promise(resolve => setTimeout(resolve, retryDelayMs));
         continue;
