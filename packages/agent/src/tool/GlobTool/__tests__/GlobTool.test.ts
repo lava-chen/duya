@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GlobTool, splitAbsoluteGlob } from '../GlobTool.js';
+import { windowsPathToPosixPath } from '../../../utils/windowsPaths.js';
 
 let root: string;
 let outside: string;
@@ -24,6 +25,27 @@ describe('GlobTool basic', () => {
   it('finds files matching a pattern inside the working directory', async () => {
     const tool = new GlobTool();
     const result = await tool.execute({ pattern: '*.md' }, join(root, 'memory'));
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.numFiles).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe.skipIf(process.platform !== 'win32')('GlobTool POSIX-shell paths (win32)', () => {
+  it('resolves a Git Bash style search path (/e/...) instead of falling back to cwd', async () => {
+    const msys = windowsPathToPosixPath(join(root, 'memory'));
+    expect(msys).toMatch(/^\/[a-z]\//);
+    const tool = new GlobTool();
+    const result = await tool.execute({ pattern: '*.md', path: msys });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.numFiles).toBeGreaterThanOrEqual(1);
+  });
+
+  it('roots an absolute pattern given in POSIX drive form (/e/.../**/*.md)', async () => {
+    const msys = windowsPathToPosixPath(join(root, 'memory'));
+    const tool = new GlobTool();
+    const result = await tool.execute({ pattern: msys + '/**/*.md' });
     expect(result.error).toBeFalsy();
     const parsed = JSON.parse(result.result);
     expect(parsed.numFiles).toBeGreaterThanOrEqual(1);

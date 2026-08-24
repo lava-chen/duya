@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { GrepTool, parseRipgrepLine } from '../GrepTool.js';
+import { windowsPathToPosixPath } from '../../../utils/windowsPaths.js';
 
 let root: string;
 let outside: string;
@@ -138,6 +139,97 @@ describe('GrepTool relative paths', () => {
     const file = parsed.matches[0].file as string;
     expect(file).toBe('a.md');
     expect(file).not.toMatch(/^[A-Za-z]:/);
+  });
+});
+
+describe('GrepTool missing search path', () => {
+  it('fails loudly instead of reporting a clean "No matches found"', async () => {
+    const tool = new GrepTool({ workingDirectory: root });
+    const result = await tool.execute({ pattern: 'needle', path: join(root, 'does-not-exist') });
+    expect(result.error).toBe(true);
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error).toContain('does not exist');
+    expect(parsed.error).toContain('does-not-exist');
+  });
+});
+
+describe.skipIf(process.platform !== 'win32')('GrepTool POSIX-shell paths (win32)', () => {
+  it('accepts a Git Bash style path (/e/...) and finds matches', async () => {
+    const msys = windowsPathToPosixPath(join(root, 'memory'));
+    expect(msys).toMatch(/^\/[a-z]\//);
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: msys });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.total).toBeGreaterThan(0);
+  });
+
+  it('accepts a WSL style path (/mnt/e/...) and finds matches', async () => {
+    const wsl = '/mnt' + windowsPathToPosixPath(join(root, 'memory'));
+    const tool = new GrepTool({ workingDirectory: join(root, 'memory') });
+    const result = await tool.execute({ pattern: 'needle', path: wsl });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.total).toBeGreaterThan(0);
+  });
+});
+
+describe('GrepTool Node fallback time budget', () => {
+  // Eagerly force the Node engine so the budget path is exercised
+  // deterministically regardless of whether ripgrep is installed.
+  const engineProbe = GrepTool as unknown as {
+    ripgrepProbe: Promise<boolean> | null;
+  };
+  let originalProbe: Promise<boolean> | null;
+
+  beforeEach(() => {
+    originalProbe = engineProbe.ripgrepProbe;
+    engineProbe.ripgrepProbe = Promise.resolve(false);
+  });
+
+  afterEach(() => {
+    engineProbe.ripgrepProbe = originalProbe;
+  });
+
+  it('marks results incomplete with a warning when the budget is exhausted', async () => {
+    const tool = new GrepTool({
+      workingDirectory: join(root, 'memory'),
+      nodeFallbackTimeBudgetMs: 1,
+    });
+    const result = await tool.execute({ pattern: 'needle' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.warning).toContain('time budget');
+  });
+
+  it('reports a warned empty search as incomplete, not as "No matches found"', async () => {
+    const tool = new GrepTool({
+      workingDirectory: join(root, 'memory'),
+      nodeFallbackTimeBudgetMs: 1,
+    });
+    const result = await tool.execute({ pattern: 'needle-never-matches-any-fixture-line' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.matches).toEqual([]);
+    expect(parsed.warning).toContain('time budget');
+    expect(parsed.message).not.toBe('No matches found');
+  });
+
+  it('returns a clean empty result when the budget is not exhausted', async () => {
+    const tool = new GrepTool({
+      workingDirectory: join(root, 'memory'),
+      nodeFallbackTimeBudgetMs: 30_000,
+    });
+    const result = await tool.execute({ pattern: 'needle-never-matches-any-fixture-line' });
+    expect(result.error).toBeFalsy();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.matches).toEqual([]);
+    expect(parsed.warning).toBeUndefined();
+    expect(parsed.message).toBe('No matches found');
   });
 });
 

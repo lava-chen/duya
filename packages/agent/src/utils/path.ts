@@ -12,12 +12,21 @@ import { isAbsolute, join, normalize, resolve } from 'path';
 
 /**
  * Convert a POSIX path to Windows path.
- * Handles formats like /c/Users/... (MSYS2/Git Bash) and /cygdrive/c/...
+ * Handles formats like /c/Users/... (MSYS2/Git Bash), /mnt/c/... (WSL)
+ * and /cygdrive/c/... (Cygwin).
  */
 export function posixPathToWindowsPath(posixPath: string): string {
   // Handle UNC paths: //server/share -> \\server\share
   if (posixPath.startsWith('//')) {
     return posixPath.replace(/\//g, '\\');
+  }
+
+  // Handle /mnt/c/... format (WSL)
+  const wslMatch = posixPath.match(/^\/mnt\/([A-Za-z])(\/|$)/);
+  if (wslMatch) {
+    const driveLetter = wslMatch[1]!.toUpperCase();
+    const rest = posixPath.slice(('/mnt/' + wslMatch[1]).length);
+    return driveLetter + ':' + (rest || '\\').replace(/\//g, '\\');
   }
 
   // Handle /cygdrive/c/... format
@@ -38,6 +47,22 @@ export function posixPathToWindowsPath(posixPath: string): string {
 
   // Already Windows or relative — just flip slashes
   return posixPath.replace(/\//g, '\\');
+}
+
+/**
+ * Matches absolute paths that carry a drive letter in a POSIX shell
+ * dialect: `/c`, `/c/`, `/mnt/c/...` (WSL), `/cygdrive/c/...` (Cygwin).
+ * Genuine POSIX paths (`/usr/bin`) and UNC paths (`//server/share`)
+ * do not match and must be left untouched.
+ */
+const POSIX_DRIVE_PATH_RE = /^\/(?:mnt\/|cygdrive\/)?[a-z](?:\/|$)/i;
+
+/**
+ * Whether a path looks like a POSIX-shell drive path that
+ * {@link posixPathToWindowsPath} should translate on Windows.
+ */
+export function looksLikePosixDrivePath(p: string): boolean {
+  return !p.startsWith('//') && !p.includes('\\') && POSIX_DRIVE_PATH_RE.test(p);
 }
 
 /**
@@ -75,9 +100,11 @@ export function expandPath(filePath: string, baseDir?: string): string {
     return join(homedir(), trimmedPath.slice(2));
   }
 
-  // On Windows, convert POSIX-style paths (e.g., /c/Users/...) to Windows format
+  // On Windows, convert POSIX-shell drive paths (e.g., /c/Users/...,
+  // /mnt/c/..., /cygdrive/c/...) to Windows format. The shape check keeps
+  // genuine POSIX paths (/usr/bin) and UNC paths untouched.
   let processedPath = trimmedPath;
-  if (process.platform === 'win32' && trimmedPath.match(/^\/[a-z]\//i)) {
+  if (process.platform === 'win32' && looksLikePosixDrivePath(trimmedPath)) {
     try {
       processedPath = posixPathToWindowsPath(trimmedPath);
     } catch {
