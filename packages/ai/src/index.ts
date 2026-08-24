@@ -5,6 +5,17 @@
  * createAIClient factory with lazy loading for protocol modules.
  */
 export { createAnthropicClient } from './api/anthropic-messages.js';
+export {
+  computeContextEstimate,
+  estimateMessageTokens as estimateContextMessageTokens,
+  estimateTextTokens as estimateContextTextTokens,
+  normalizePromptTokens,
+  IMAGE_TOKEN_FLOOR,
+  type ContextUsageBlock,
+  type ContextEstimateMessage,
+  type ContextEstimateOptions,
+  type ContextEstimate,
+} from './utils/context-estimate.js';
 export { createOpenAICompletionsClient } from './api/openai-completions.js';
 export { transformMessages, isSameModel } from './api/transform-messages.js';
 export { ThinkTagParser } from './utils/think-tag-parser.js';
