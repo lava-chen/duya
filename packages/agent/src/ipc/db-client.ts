@@ -195,6 +195,15 @@ export const messageDb = {
   append: (sessionId: string, messages: unknown[], turnId?: string | null) =>
     sendDbRequest('message:append', { sessionId, messages, turnId }),
 
+  /**
+   * Plan 441: emit a typed RolloutEvent (rebase, hook_invoked, etc.) into the
+   * session's rollout JSONL. Routes to `journal:emit` on the db-bridge; the
+   * adapter preserves the event's `type` discriminator so MessageLog stores it
+   * as a RolloutEvent row rather than a MessageEntry.
+   */
+  emit: (sessionId: string, event: unknown, turnId?: string | null) =>
+    sendDbRequest('journal:emit', { sessionId, event, turnId }),
+
   loadMessages: (sessionId: string) =>
     sendDbRequest('session:loadMessages', { sessionId }),
 };

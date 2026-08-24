@@ -453,6 +453,42 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       }
     }
 
+    // Plan 441: journal:emit accepts a typed RolloutEvent payload (rebase,
+    // hook_invoked) and appends it as a NewEvent with the event's own `type`
+    // discriminator preserved in the payload. The MessageLog.appendBatch
+    // path widens NewEvent.payload to include RolloutEvent — see
+    // electron/db/core/rollout-events.ts.
+    case 'journal:emit': {
+      const { messageLog } = getCoreStores();
+      const sessionId = p.sessionId as string;
+      const event = p.event as Record<string, unknown>;
+      const turnId = p.turnId as string | null | undefined;
+
+      if (!event || typeof event !== 'object') {
+        return { success: false, reason: 'invalid_event' };
+      }
+      const eventId = typeof event.id === 'string' ? event.id : null;
+      if (!eventId) {
+        return { success: false, reason: 'event_missing_id' };
+      }
+      try {
+        const newEvent: NewEvent = {
+          id: eventId,
+          sessionId,
+          turnId: turnId ?? null,
+          payload: event as unknown as NewEvent['payload'],
+          createdAt: typeof event.createdAt === 'number' ? (event.createdAt as number) : Date.now(),
+        };
+        const before = messageLog.getCount(sessionId);
+        messageLog.appendBatch([newEvent]);
+        const after = messageLog.getCount(sessionId);
+        return { success: true, count: after - before };
+      } catch (err) {
+        getLogger().error('journal:emit failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
+        return { success: false, count: 0, reason: 'transaction_failed' };
+      }
+    }
+
     // Decision 3: message:replace maps to MessageLog.appendBatch (INSERT OR IGNORE
     // idempotency). Generation optimistic lock is deprecated (append-only store).
     case 'message:replace': {

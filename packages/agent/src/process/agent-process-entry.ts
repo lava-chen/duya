@@ -54,6 +54,7 @@ import type { PromptProfile } from '../prompts/modes/types.js';
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
 import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
 import { duyaAgent } from '../agent/DuyaAgent.js';
+import { Journal } from '../journal/Journal.js';
 import { loadSkills, getSkillRegistry } from '../skills/index.js';
 import { browserTool } from '../tool/builtin.js';
 import { getBashTaskRegistry } from '../session/bash-task-registry.js';
@@ -1308,22 +1309,41 @@ async function initAgent(
     runtimeConfig: config.runtimeConfig,
   });
 
+  // Plan 441: wire the per-event journal. Built after the agent so we have
+  // sessionId and can attach it via the new `agent.journal` field. Subagent
+  // instances also pass through `duyaAgent` constructor and inherit the
+  // journal wiring when their own handleChatStart setup runs — the journal
+  // is set in this same function for every DuyaAgent constructed in this
+  // file (subagent construction in runAgent.ts reuses the same pattern).
+  agent.journal = new Journal({
+    sessionId: sessionId!,
+    onError: (kind, err) => {
+      log(`[Agent-Process] journal ${kind} persist failed:`, err instanceof Error ? err.message : String(err));
+    },
+  });
+
   // Wire the compaction callback so proactive compaction inside
-  // streamChat persists the compacted message list to DB. Persisting
-  // the full list is safe: appendMessages uses INSERT OR IGNORE, so
-  // rows already in the DB are deduped and only new/changed rows land.
+  // streamChat emits a `rebase` event rather than re-appending the full
+  // compacted message list. The old turn-end batch semantics were
+  // appendMessages-of-all-messages which only worked because INSERT OR
+  // IGNORE deduped — under the journal model we use appendRebase so
+  // the rollout file is strictly append-only (Phase 4 replaces the
+  // remaining rewriteSession callers with the same pattern).
   agent.onMessagesCompacted = (newMessageCount: number): void => {
     log(`[Agent-Process] Messages compacted, new count=${newMessageCount}`);
+    if (!agent.journal) return;
     const currentMessages = agent.getMessages();
-    appendMessages(sessionId!, currentMessages)
-      .then((result) => {
-        if (result.success) {
-          log(`[Agent-Process] Compaction persisted, persisted=${result.count}`);
-        }
-      })
-      .catch((err) => {
-        log('[Agent-Process] Compaction persist failed:', err instanceof Error ? err.message : String(err));
-      });
+    // Plan 441: append-only rebase. A null supersededUpToSeq supersedes ALL
+    // raw messages preceding the rebase in the trace — survivors are kept
+    // by id matching against the compacted message list. The subprocess has
+    // no reliable view of DB-assigned seqs, so a numeric bound would be
+    // wrong for resumed sessions.
+    agent.journal.appendRebase(
+      `compact:${Date.now()}:${currentMessages.length}`,
+      null,
+      currentMessages,
+    );
+    log(`[Agent-Process] Compaction rebase emitted, newMessages=${currentMessages.length}`);
     // Proactive mid-turn compaction rewrote the timeline: push the new
     // (smaller) estimate right away instead of leaving the ring on the
     // pre-compaction base until the next `result` rebases it. The stale base
@@ -2334,6 +2354,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       mode: msg.options?.mode,
       attachments: files,
       displayContent: msg.options?.displayContent,
+      // Plan 441: thread the chat:start message id through as the turn id
+      // so every journal emit and rebase event for this turn carries the
+      // same id. The renderer uses it for turn-scoped queries via the
+      // `message_index.turn_id` column.
+      turnId: msg.id,
       effort: msg.options?.effort,
       maxTurns: msg.options?.maxTurns,
       allowedTools: msg.options?.allowedTools,
@@ -2523,17 +2548,11 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
-        if (agentMsg.type === 'chat:done') {
-          // Defer chat:done until after persistence completes
-          // to avoid race condition where SSE closes before messages are saved.
-          // Capture the terminal reason (completed / max_turns /
-          // repeated_tool_calls / aborted) so the deferred chat:done below
-          // can surface it to the renderer.
-          if (typeof agentMsg.reason === 'string' && agentMsg.reason) {
-            turnEndReason = agentMsg.reason;
-          }
-          continue;
-        }
+        // Plan 441: chat:done flows through directly. Each persisted event
+        // is emitted at its semantic completion boundary (user_msg_added,
+        // assistant_message_finalized, tool_result_added) via the Journal
+        // wired into _pushDurable, so there is no longer a turn-end batch
+        // to gate SSE close on. chat:done is the natural turn-end signal.
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
           || agentMsg.type === 'chat:tool_result'
@@ -2558,32 +2577,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
     let agentMessages = agent.getMessages();
 
-    // Do not create a new poisoned history row at turn completion. In
-    // particular, a failed canvas tool followed by the model's corrected tool
-    // call can arrive as consecutive assistant messages before either result
-    // is written. Canonicalize the whole in-memory history before appending so
-    // the database is valid on its first write. This is a crash-recovery / DB
-    // integrity guard (unmatched tool_use/tool_result would be rejected by
-    // strict Anthropic-compatible providers), not an incremental-state fix.
-    const canonicalMessages = validateMessageHistory(agentMessages);
-    if (canonicalMessages !== agentMessages) {
-      agent.setMessages(canonicalMessages);
-      agentMessages = canonicalMessages;
-    }
-
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
       if (tokenUsage) {
         const lastAssistant = [...agentMessages].reverse().find(m => m.role === 'assistant');
         if (lastAssistant) {
-          // Persist the turn-cumulative block PLUS a `last_call` sub-block
-          // holding the final request's single-call usage. Readers that
-          // restore the context base (worker seed below, renderer persisted
-          // scan) must use one real prompt size — restoring from the
-          // cumulative input reads ~N× the actual context on tool-heavy turns
-          // and made the ring spike at every turn start until the first
-          // `result` of that turn corrected it. The extra key rides the same
-          // JSON column; legacy readers ignore unknown fields.
+          // Attach the turn-cumulative token_usage + last_call sub-block
+          // directly on the in-memory assistant message. The journal already
+          // emitted this assistant message via assistant_message_finalized
+          // at the done-event boundary (see _pushDurable wrap), so the
+          // token_usage lands on the next replay through setMessages in
+          // load-on-start (it serializes via metadata.token_usage in the
+          // IPC DTO). Persisting it here would be a re-emit the storage
+          // layer dedupes via INSERT OR IGNORE.
           (lastAssistant as Record<string, unknown>).token_usage =
             lastCallUsage ? { ...tokenUsage, last_call: lastCallUsage } : tokenUsage;
           log(`[Agent-Process] Attached token_usage to last assistant message: id=${lastAssistant.id}, lastCallInput=${lastCallUsage?.input_tokens ?? 'n/a'}`);
@@ -2593,117 +2599,75 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       } else {
         warn('[Agent-Process] No tokenUsage received during stream');
       }
+
+      // Plan 441: post-stream bookkeeping that is NOT message persistence:
+      //   - token-budget delta (goal mirror)
+      //   - parsed document attachments (per-message)
+      //   - turn-review baseline flush
+      //   - update existingMessageCount for the next turn's defensive resync
+      //
+      // These used to be wrapped inside the same try/catch as the turn-end
+      // `appendMessages` call. Now that the journal handles persistence
+      // synchronously per boundary, only the bookkeeping remains — and it
+      // is best-effort (errors are logged, not propagated to chat:done).
+
+      // Plan 331 Phase 2.3: persist token-budget delta after each turn.
       try {
-        // Stable boundary: persist exactly this turn's new messages in one
-        // append, sliced from the count captured before the stream started.
-        const newMessages = agentMessages.slice(turnStartMessageCount);
-        applyRequestDisplayContent(newMessages, msg.options?.displayContent);
-        // Plan 437: also persist any hook messages emitted during this
-        // turn. The agent core accumulates them via the
-        // ConfigHooksRunner.onHookInvoked callback and we drain the
-        // buffer at the same stable boundary so hook history survives
-        // reload alongside tool_use / tool_result.
-        const hookMessages = agent.drainPendingHookMessages();
-        if (hookMessages.length > 0) {
-          newMessages.push(...hookMessages);
-          log(`[Agent-Process] Persisting ${hookMessages.length} hook message(s) for session ${msg.sessionId}`);
-        }
-        const lastNewAssistant = [...newMessages].reverse().find(m => m.role === 'assistant');
-        log(`[Agent-Process] Appending ${newMessages.length} new messages to DB for session ${msg.sessionId} (${agentMessages.length} total), lastNewAssistant token_usage present=${!!(lastNewAssistant && (lastNewAssistant as Record<string, unknown>).token_usage)}`);
-        const result = await appendMessages(msg.sessionId, newMessages);
-        log(`[Agent-Process] DB persist result: success=${result.success}, count=${result.count}`);
-
-        // Plan 331 Phase 2.3: persist token-budget delta after each turn.
-        // The LLM-returned tokenUsage is the authoritative token cost for
-        // this turn; we write it as an increment to session_goals.tokens_used.
-        // Phase 2.5: if the in-memory budget is exhausted (context window
-        // full), transition the goal status to 'usage_limited' so the state
-        // survives a restart. On any non-exhausted turn, restore to 'active'
-        // (covers the case where compaction freed space after a previous
-        // usage_limited state).
-        try {
-          if (tokenUsage) {
-            const turnTokens = tokenUsage.total_tokens ?? (tokenUsage.input_tokens + tokenUsage.output_tokens);
-            if (turnTokens > 0) {
-              await goalDb.updateBudget(msg.sessionId, { tokensUsedDelta: turnTokens });
-              log(`[Agent-Process] Persisted token budget delta: +${turnTokens} for session ${msg.sessionId}`);
-            }
+        if (tokenUsage) {
+          const turnTokens = tokenUsage.total_tokens ?? (tokenUsage.input_tokens + tokenUsage.output_tokens);
+          if (turnTokens > 0) {
+            await goalDb.updateBudget(msg.sessionId, { tokensUsedDelta: turnTokens });
+            log(`[Agent-Process] Persisted token budget delta: +${turnTokens} for session ${msg.sessionId}`);
           }
-          const stats = agent.getContextStats();
-          if (stats.totalTokens >= stats.maxTokens) {
-            await goalDb.setStatus(msg.sessionId, 'usage_limited');
-            log(`[Agent-Process] Session ${msg.sessionId} marked usage_limited (context exhausted: ${stats.totalTokens}/${stats.maxTokens})`);
-          } else {
-            await goalDb.setStatus(msg.sessionId, 'active');
-          }
-        } catch (err) {
-          warn('[Agent-Process] Failed to persist token budget delta:', err);
-          // Non-fatal — the in-memory budget still works for this session;
-          // only the cross-restart mirror is stale.
         }
+        const stats = agent.getContextStats();
+        if (stats.totalTokens >= stats.maxTokens) {
+          await goalDb.setStatus(msg.sessionId, 'usage_limited');
+          log(`[Agent-Process] Session ${msg.sessionId} marked usage_limited (context exhausted: ${stats.totalTokens}/${stats.maxTokens})`);
+        } else {
+          await goalDb.setStatus(msg.sessionId, 'active');
+        }
+      } catch (err) {
+        warn('[Agent-Process] Failed to persist token budget delta:', err);
+      }
 
-        // Store parsed document content to DB for rehydration on restart.
-        // Each user message with attachments gets its document text stored separately.
-        for (const msgItem of newMessages) {
-          if (msgItem.role === 'user' && msgItem.attachments && msgItem.attachments.length > 0) {
-            // Guard: skip if message has no id (shouldn't happen but be safe)
-            if (!msgItem.id) {
-              warn('[Agent-Process] storeParsedDocumentAttachment: user message has no id, skipping');
-              continue;
-            }
-            const userMsgId = msgItem.id;
-            for (const att of msgItem.attachments as FileAttachment[]) {
-              if (att.text && (att.path || att.url)) {
-                try {
-                  storeParsedDocumentAttachment(userMsgId, msg.sessionId, {
-                    filename: att.name,
-                    filePath: att.path || att.url || '',
-                    charCount: att.text.length,
-                    text: att.text,
-                    extractMethod: att.extractMethod,
-                    imageChunks: att.imageChunks,
-                  });
-                } catch (storeErr) {
-                  warn('[Agent-Process] Failed to store parsed document:', storeErr);
-                }
+      // Store parsed document content to DB for rehydration on restart.
+      // The journal already persisted the user message itself; this side
+      // channel stores the attachment text separately so the user-message
+      // payload stays small.
+      for (const msgItem of agentMessages) {
+        if (msgItem.role === 'user' && msgItem.attachments && msgItem.attachments.length > 0) {
+          if (!msgItem.id) {
+            warn('[Agent-Process] storeParsedDocumentAttachment: user message has no id, skipping');
+            continue;
+          }
+          const userMsgId = msgItem.id;
+          for (const att of msgItem.attachments as FileAttachment[]) {
+            if (att.text && (att.path || att.url)) {
+              try {
+                storeParsedDocumentAttachment(userMsgId, msg.sessionId, {
+                  filename: att.name,
+                  filePath: att.path || att.url || '',
+                  charCount: att.text.length,
+                  text: att.text,
+                  extractMethod: att.extractMethod,
+                  imageChunks: att.imageChunks,
+                });
+              } catch (storeErr) {
+                warn('[Agent-Process] Failed to store parsed document:', storeErr);
               }
             }
           }
         }
-
-        sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: result.success, messageCount: agentMessages.length });
-
-        // Record the persisted count as the baseline for the defensive
-        // resync at the top of the next turn (compare DB count vs our view).
-        existingMessageCount = agentMessages.length;
-        log(`[Agent-Process] Updated existingMessageCount to ${existingMessageCount}`);
-
-        await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
-
-        // Send chat:done AFTER persistence completes to ensure messages are saved
-        // before the SSE stream closes (router.ts starts 2s timeout on done event)
-        sendToMain({
-          type: 'chat:done',
-          sessionId: msg.sessionId,
-          turnId: msg.id,
-          reason: turnEndReason,
-          finalContent: extractFinalAssistantText(agentMessages),
-          conversationText: summarizeConversation(agentMessages),
-        });
-      } catch (err) {
-        log('[Agent-Process] appendMessages error:', err);
-        await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
-        sendToMain({
-          type: 'chat:done',
-          sessionId: msg.sessionId,
-          turnId: msg.id,
-          reason: turnEndReason,
-          finalContent: extractFinalAssistantText(agentMessages),
-          conversationText: summarizeConversation(agentMessages),
-          error: err instanceof Error ? err.message : String(err),
-        });
-        sendToMain({ type: 'chat:db_persisted', sessionId: msg.sessionId, success: false, reason: err instanceof Error ? err.message : String(err) });
       }
+
+      await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
+
+      // Update existingMessageCount baseline for the next turn's defensive
+      // resync. The journal already wrote each message; this is just our
+      // local view of "where we left off".
+      existingMessageCount = agentMessages.length;
+      log(`[Agent-Process] Updated existingMessageCount to ${existingMessageCount}`);
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
       await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
