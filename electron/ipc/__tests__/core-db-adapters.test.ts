@@ -224,6 +224,31 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       expect(row.msg_type).toBe('tool_result');
     });
 
+    it('tool message persists whitelisted snapshot metadata (plan 429 #3)', () => {
+      const t = Date.now();
+      const dto = {
+        ...makeToolDTO('m-meta', 'tc-meta', t),
+        metadata: {
+          filePath: 'C:\\work\\a.ts',
+          preImageSha: 'a'.repeat(64),
+          // Renderer-only heavy payloads must NOT be persisted.
+          browserResults: { screenshot: 'huge-base64-blob' },
+        },
+      };
+      const event = ipcMessageToNewEvent('sess-1', dto as never);
+      messageLog.appendBatch([event]);
+
+      const stored = messageLog.listBySession('sess-1');
+      expect(stored).toHaveLength(1);
+      const entry = JSON.parse(stored[0].payload) as {
+        message?: { metadata?: Record<string, unknown> };
+      };
+      const md = entry.message?.metadata ?? {};
+      expect(md.preImageSha).toBe('a'.repeat(64));
+      expect(md.filePath).toBe('C:\\work\\a.ts');
+      expect(md.browserResults).toBeUndefined();
+    });
+
     it('multiple messages preserve seq ordering via storedEventsToIpcMessages', () => {
       const t = Date.now();
       const events: NewEvent[] = [

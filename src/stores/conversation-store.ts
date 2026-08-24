@@ -168,13 +168,13 @@ interface ConversationState {
   goToParentSession: () => void;
   addMessage: (threadId: string, message: Message, options?: { persist?: boolean }) => void;
   clearMessages: (threadId: string) => void;
-  rewindToMessage: (threadId: string, messageId: string) => Promise<void>;
+  rewindToMessage: (threadId: string, messageId: string) => Promise<{ restoredFiles?: string[] }>;
   /**
    * Edit-and-resend: delete the target user message AND everything after it
    * (inclusive), then reload. The caller is responsible for sending the new
    * (edited) message after this resolves.
    */
-  deleteMessageAndAfter: (threadId: string, messageId: string) => Promise<void>;
+  deleteMessageAndAfter: (threadId: string, messageId: string) => Promise<{ restoredFiles?: string[] }>;
   updateThreadTitle: (id: string, title: string) => void;
   setThreadWorkingDirectory: (id: string, workingDirectory: string, projectName: string) => void;
   setThreadModel: (id: string, model: string, providerId?: string) => void;
@@ -653,7 +653,7 @@ export const useConversationStore = create<ConversationState>()(
 
       rewindToMessage: async (threadId, messageId) => {
         const result = await truncateMessagesAfterIPC(threadId, messageId);
-        if (result.deletedCount === 0) return;
+        if (result.deletedCount === 0) return {};
         // History shrank: the live snapshot describes the pre-rewind
         // context, so drop it and let the reloaded messages (or the next
         // turn's token_usage) drive the ring.
@@ -662,17 +662,21 @@ export const useConversationStore = create<ConversationState>()(
           messages: { ...state.messages, [threadId]: [] },
         }));
         await get().loadThreadMessages(threadId);
+        // Plan 429 #3: surface how many files were rolled back to their
+        // pre-image so the UI can tell the user what happened on disk.
+        return { restoredFiles: result.restoredFiles };
       },
 
       deleteMessageAndAfter: async (threadId, messageId) => {
         const result = await truncateMessagesFromInclusiveIPC(threadId, messageId);
-        if (result.deletedCount === 0) return;
+        if (result.deletedCount === 0) return {};
         // History shrank — same invalidation as rewindToMessage.
         useContextUsageStore.getState().clearLive(threadId);
         set((state) => ({
           messages: { ...state.messages, [threadId]: [] },
         }));
         await get().loadThreadMessages(threadId);
+        return { restoredFiles: result.restoredFiles };
       },
 
       updateThreadTitle: (id, title) => {

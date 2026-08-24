@@ -494,18 +494,20 @@ export async function getMessagesBySessionIPC(sessionId: string): Promise<Messag
 export async function truncateMessagesAfterIPC(
   sessionId: string,
   messageId: string
-): Promise<{ deletedCount: number }> {
+): Promise<{ deletedCount: number; restoredFiles?: string[] }> {
   return window.electronAPI!.message!.truncateAfter(sessionId, messageId) as Promise<{
     deletedCount: number
+    restoredFiles?: string[]
   }>
 }
 
 export async function truncateMessagesFromInclusiveIPC(
   sessionId: string,
   messageId: string
-): Promise<{ deletedCount: number }> {
+): Promise<{ deletedCount: number; restoredFiles?: string[] }> {
   return window.electronAPI!.message!.truncateFromInclusive(sessionId, messageId) as Promise<{
     deletedCount: number
+    restoredFiles?: string[]
   }>
 }
 

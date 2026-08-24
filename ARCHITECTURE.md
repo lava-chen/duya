@@ -216,6 +216,35 @@ stable-boundary batch writes.
   worker persists through the IPC `messageDb` client. The local open-DB branch
   is only for the CLI / tests.
 
+### File-level Checkpoint / Rewind (Plan 429 #3)
+
+Edit/Write/ApplyPatch capture a **pre-image snapshot** before every mutation so
+a session rewind can roll files back together with the conversation timeline.
+
+- **Store**: content-addressed `~/.duya/snapshots/<sha256>.blob`
+  (`packages/agent/src/tool/file-snapshot-store.ts`). Same pre-image content is
+  stored exactly once regardless of how many edits reference it. Snapshotting
+  is best-effort — a failed snapshot never fails the tool.
+- **Reference flow**: the tool result records `metadata.preImageSha` +
+  `metadata.filePath` (Edit/Write) or `metadata.fileSnapshots: [{path,
+  preImageSha}]` (ApplyPatch). The persistence adapter
+  (`electron/ipc/core-db-adapters.ts`) whitelists exactly these keys into the
+  persisted rollout payload; heavy renderer-only metadata (browser results,
+  screenshots) is deliberately dropped.
+- **Restore**: `db:message:truncateAfter` / `truncateFromInclusive` restore all
+  pre-images referenced by the removed events BEFORE shrinking the timeline
+  (`electron/services/file-snapshot-restore.ts`), and return `restoredFiles`
+  for a UI toast ("Restored N files"). For any path edited multiple times
+  inside the rewound span, the OLDEST edit's pre-image wins. A standalone
+  `db:files:restore` IPC restores without truncating (manual recovery).
+  Blobs are hash-verified before write-back; only absolute paths are honored;
+  "created-new" files are never deleted.
+- **GC**: `electron/services/snapshot-gc.ts` sweeps blobs at startup (delayed,
+  fire-and-forget): a blob older than 24h that no rollout file references
+  anymore (its turn was rewound away or its session deleted) is deleted.
+  Known gap: shell-command file mutations (Bash/PowerShell) have no snapshots
+  and cannot be restored.
+
 ### IPC 消息协议
 
 **Main ↔ Agent Process (child_process IPC)**:

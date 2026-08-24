@@ -110,8 +110,9 @@ export interface MessageAPI {
   add: (data: Record<string, unknown>) => Promise<unknown>
   getBySession: (sessionId: string) => Promise<unknown[]>
   replace: (sessionId: string, messages: unknown[], generation: number) => Promise<unknown>
-  truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
-  truncateFromInclusive: (sessionId: string, messageId: string) => Promise<{ deletedCount: number }>
+  truncateAfter: (sessionId: string, messageId: string) => Promise<{ deletedCount: number; restoredFiles?: string[] }>
+  truncateFromInclusive: (sessionId: string, messageId: string) => Promise<{ deletedCount: number; restoredFiles?: string[] }>
+  restoreFiles: (sessionId: string, cutMessageId: string) => Promise<{ restoredFiles: string[]; failedCount: number }>
 }
 
 export interface UsageAPI {
@@ -1681,6 +1682,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('db:message:truncateAfter', sessionId, messageId),
     truncateFromInclusive: (sessionId: string, messageId: string) =>
       ipcRenderer.invoke('db:message:truncateFromInclusive', sessionId, messageId),
+    restoreFiles: (sessionId: string, cutMessageId: string) =>
+      ipcRenderer.invoke('db:files:restore', sessionId, cutMessageId),
   },
   usage: {
     summary: () => ipcRenderer.invoke('db:usage:summary'),

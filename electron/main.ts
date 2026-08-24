@@ -21,6 +21,8 @@ import { defaultCronFilePath } from './automation/cron-file';
 import { initChannelManager, getChannelManager } from './messaging/index';
 import { subscribeMcpConfigHotReload } from './services/mcp-config';
 import { initPerformanceMonitor } from './services/performance-monitor';
+import { sweepUnreferencedSnapshots } from './services/snapshot-gc';
+import { resolveRolloutRoot } from './config/boot-config';
 import { initLowPower, isLowPowerEnabled } from './services/low-power';
 import { initSessionManager, getSessionManager } from './agents/session-manager';
 import { RecapService } from './services/recap/recap-service';
@@ -254,6 +256,23 @@ if (gotTheLock) {
 
     registerDbHandlers();
     registerConductorHandlers();
+
+    // Plan 429 #3 cleanup strategy: sweep pre-image snapshot blobs whose
+    // referencing turns no longer exist in any rollout. Delayed + detached so
+    // startup latency is unaffected; a missed run simply waits for the next.
+    setTimeout(() => {
+      const rolloutsRoot = resolveRolloutRoot();
+      void sweepUnreferencedSnapshots({
+        snapshotRoot: path.join(rolloutsRoot, 'snapshots'),
+        rolloutsRoot: path.join(rolloutsRoot, 'sessions'),
+      }).catch((err) => {
+        logger.warn(
+          'Snapshot GC sweep failed',
+          { error: err instanceof Error ? err.message : String(err) },
+          'Main',
+        );
+      });
+    }, 30_000).unref();
 
     // ============================================================
     // Step 3: ConfigStore (in-memory snapshot + TOML persistence)

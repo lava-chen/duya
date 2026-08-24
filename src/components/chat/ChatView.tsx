@@ -1143,11 +1143,19 @@ export function ChatView({
   // user message is editable (enforced by MessageList via isEditable).
   const handleEditSend = useCallback(async (messageId: string, text: string) => {
     if (isStreaming || !text.trim() || !sessionId) return;
+    let restoredFiles: string[] | undefined;
     try {
-      await deleteMessageAndAfter(sessionId, messageId);
+      const result = await deleteMessageAndAfter(sessionId, messageId);
+      restoredFiles = result.restoredFiles;
     } catch (err) {
       console.error('[ChatView] edit-and-resend: deleteMessageAndAfter failed', err);
       return;
+    }
+    // Plan 429 #3: tell the user when rewound tool calls rolled files on
+    // disk back to their pre-edit snapshots.
+    if (restoredFiles && restoredFiles.length > 0) {
+      setCompressionNotification(`Restored ${restoredFiles.length} file${restoredFiles.length === 1 ? '' : 's'} to their pre-edit state.`);
+      setTimeout(() => setCompressionNotification(null), 5000);
     }
     const { modelName: actualModel } = parseModelName(sessionModel || '');
     onSendMessage(text, actualModel, undefined, agentProfileId, lastOutputStyleRef.current, undefined, effort, text, conductorEnabled, undefined, permissionMode);
