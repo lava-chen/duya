@@ -566,6 +566,28 @@ export async function handleRunCron(
   }
 }
 
+export async function handleDedupeCrons(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId: string | undefined,
+): Promise<void> {
+  try {
+    const scheduler = getScheduler();
+    const result = scheduler.dedupeCrons();
+    await appendAuditEvent(
+      getUserDataDir(),
+      makeAuditEvent(req, 'cron.dedupe', '', correlationId),
+    );
+    sendJson(res, 200, {
+      removedIds: result.removedIds,
+      removedCount: result.removedIds.length,
+      kept: result.kept,
+    });
+  } catch (err) {
+    sendError(res, 500, 'internal_error', err instanceof Error ? err.message : String(err));
+  }
+}
+
 /** Generate a correlation id when the client didn't supply one. */
 export function ensureCorrelationId(header: string | string[] | undefined): string {
   if (typeof header === 'string' && header.trim().length > 0) return header;
