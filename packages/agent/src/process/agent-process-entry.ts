@@ -18,7 +18,7 @@
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'node:fs/promises';
-import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { appendMessages, storeParsedDocumentAttachment } from '../session/db.js';
@@ -247,6 +247,25 @@ interface LastCallUsageBlock {
   cache_creation_tokens?: number;
 }
 
+// Ring diagnostic trace — pi-style dedicated debug file written directly
+// with appendFileSync (see tui-main-screen logRedraw). Deliberately bypasses
+// the stderr -> prefix-classification -> level-filter pipeline, which drops
+// INFO lines at the main process's default WARN level. Remove once ring
+// behavior is verified.
+const RING_TRACE_FILE = process.env.DUYA_WORKER_LOG_DIR
+  ? path.join(process.env.DUYA_WORKER_LOG_DIR, 'context-ring.log')
+  : null;
+const ringTrace = (line: string): void => {
+  if (!RING_TRACE_FILE) return;
+  try {
+    mkdirSync(path.dirname(RING_TRACE_FILE), { recursive: true });
+    appendFileSync(RING_TRACE_FILE, `${new Date().toISOString()} ${line}
+`);
+  } catch {
+    // Diagnostics must never break streaming.
+  }
+};
+
 // Broadcast the live context-usage snapshot for a session over the worker
 // channel. Module scope so the compaction paths (manual `compact` command,
 // proactive mid-turn compaction) can push a fresh snapshot too, not just the
@@ -266,12 +285,8 @@ const emitLiveUsage = (
       : 0) || systemFallbackTokens || 0;
   const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
   const anchored = estimate.anchored && !compactedPending;
-  // Diagnostic trace for ring anomalies: shows exactly which anchor each
-  // broadcast used (index/value/trailing) so a bad frame can be traced in
-  // app.log without a debugger. Logged at WARN purely so it survives the
-  // default WARN file filter — remove once ring behavior is verified.
-  warn(
-    `[WARN] [Agent-Process] emitLiveUsage: msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
+  ringTrace(
+    `emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
   );
   // Last-request per-call fields for the stats line: read off the anchor
   // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
@@ -2407,7 +2422,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             cache_hit_tokens: cacheHitTokens,
             cache_creation_tokens: cacheCreationTokens,
           };
-          warn(`[WARN] [Agent-Process] Received result event, turn tokenUsage accumulated: input=${tokenUsage.input_tokens}, output=${tokenUsage.output_tokens}, cacheHit=${tokenUsage.cache_hit_tokens ?? 0} (call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, normalizedInput=${normalizedInput})`);
+          ringTrace(`result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
           // pure estimator anchors on it directly. Clear the post-compaction

@@ -18,7 +18,9 @@ function safeIsPackaged(): boolean {
   }
 }
 
-function safeUserDataPath(): string {
+// Exported for child-process diagnostics (worker-manager passes the dir to
+// workers so component traces can write dedicated files, pi-style).
+export function safeUserDataPath(): string {
   try {
     if (app && typeof app.getPath === 'function') {
       return app.getPath('userData')
