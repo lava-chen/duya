@@ -18,6 +18,7 @@ import type {
   ChatOptions,
   FileAttachment,
   Message,
+  AssistantMessage,
   MessageContent,
   ToolUseContent,
   Tool,
@@ -1213,6 +1214,13 @@ export class duyaAgent {
       // stream (a protocol-layer bug duplicated every assistant message).
       // One LLM stream produces exactly one assistant message push.
       let doneEventHandled = false;
+      // Per-call usage from this round's `result` event (always yielded
+      // immediately before `done`). Attached to the pushed assistant message
+      // (pi parity) so context estimation can anchor on real API numbers —
+      // see computeContextEstimate in @duya/ai.
+      let roundResultUsage:
+        | { input_tokens?: number; output_tokens?: number; total_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number }
+        | undefined = undefined;
       // Plan 224 follow-up: track mode-switch tool_use ids so we can emit
       // a `mode_changed` SSE event right after their tool_result lands.
       // Keyed by tool_use_id, value is the tool name.
@@ -1565,7 +1573,17 @@ export class duyaAgent {
             finalAssistantContent.push(...assistantContent);
 
             if (finalAssistantContent.length > 0 || needsFollowUp) {
-              this._pushDurable(messages, { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex });
+              const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex };
+              if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
+                (pushed as AssistantMessage).usage = {
+                  input_tokens: roundResultUsage.input_tokens ?? 0,
+                  output_tokens: roundResultUsage.output_tokens ?? 0,
+                  ...(roundResultUsage.total_tokens !== undefined ? { total_tokens: roundResultUsage.total_tokens } : {}),
+                  ...(roundResultUsage.cache_hit_tokens !== undefined ? { cache_hit_tokens: roundResultUsage.cache_hit_tokens } : {}),
+                  ...(roundResultUsage.cache_creation_tokens !== undefined ? { cache_creation_tokens: roundResultUsage.cache_creation_tokens } : {}),
+                };
+              }
+              this._pushDurable(messages, pushed);
             }
 
             // Plan 418 L2 (pi parity): a max_tokens/length stop means every
@@ -1840,6 +1858,7 @@ export class duyaAgent {
             if (used > 0 && this.modeCoordinator) {
               void this.modeCoordinator.reportGoalTokenUsage(used);
             }
+            roundResultUsage = usage;
             yield event;
           }
         }
