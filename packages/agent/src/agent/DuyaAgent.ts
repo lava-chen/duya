@@ -575,7 +575,12 @@ export class duyaAgent {
     options?: ChatOptions
   ): AsyncGenerator<SSEEvent, void, unknown> {
     this.abortController = new AbortController();
-    logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}`);
+    // Plan 441: per-turn journal propagation. _pushDurable reads this so
+    // journal emits carry the turn id without each call site threading it
+    // through. Reset on every streamChat so a follow-up turn gets a fresh
+    // value rather than the previous turn's leftover.
+    this.currentTurnId = options?.turnId ?? null;
+    logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
     // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / …).
@@ -2206,14 +2211,53 @@ export class duyaAgent {
   }
 
   /**
+   * Plan 441: per-event persistence journal. Wired up by the caller
+   * (agent-process-entry) after construction so the agent loop can
+   * `journal.*` every completed timeline boundary without holding a
+   * construction-time dependency on the persistence module.
+   *
+   * If unset, `_pushDurable` silently skips journal emits — the in-memory
+   * timeline still updates, so unit tests that don't exercise persistence
+   * stay green.
+   */
+  journal?: import('../journal/Journal.js').Journal;
+  /**
+   * Plan 441: turn id for the in-progress streamChat. Set at the top of
+   * every streamChat call from `ChatOptions.turnId`. Read by `_pushDurable`
+   * to thread the id into journal emits.
+   */
+  private currentTurnId: string | null = null;
+
+  /**
    * Push a durable message to both the working array and the timeline.
    * Transient messages (mailbox, background notifications) should use
    * `messages.push()` directly — they are filtered out by persistableMessages
    * and never reach the timeline.
+   *
+   * Plan 441: when a `journal` is wired, also fire the appropriate event
+   * boundary so the message is durable at the moment it enters the
+   * timeline (not at turn end). User messages, assistant messages, and tool
+   * results each get their own deterministic id via `Journal`.
    */
   private _pushDurable(messages: Message[], message: Message): void {
     messages.push(message);
     this._appendMessageToTimeline(message);
+    if (this.journal && message.id) {
+      switch (message.role) {
+        case 'user':
+          this.journal.userMsgAdded(message, this.currentTurnId);
+          break;
+        case 'assistant':
+          this.journal.assistantMsgFinalized(message, this.currentTurnId);
+          break;
+        case 'tool':
+          this.journal.toolResultAdded(message, this.currentTurnId);
+          break;
+        // 'system' messages (hook invocations, runtime context) are
+        // emitted separately via Journal.hookInvoked so the wire format
+        // stays a typed event rather than a free-form 'system' row.
+      }
+    }
   }
 
   private async _claimMailboxAtCheckpoint(

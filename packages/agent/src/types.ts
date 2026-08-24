@@ -235,6 +235,15 @@ export interface ChatOptions {
   /** Maximum number of agent turns (LLM calls) before stopping. Default: 100 */
   maxTurns?: number;
   /**
+   * Plan 441: turn id for the per-event journal. Propagated to every
+   * `_pushDurable` boundary so the rollout events that the journal emits
+   * (`user_msg_added`, `assistant_message_finalized`, `tool_result_added`)
+   * carry the same turn id as the messages themselves. Optional — when
+   * omitted, journal events are emitted with `turnId: null` and the storage
+   * layer's `message_index.turn_id` column is left null for that row.
+   */
+  turnId?: string | null;
+  /**
    * Anti-dead-loop guard. Tracks consecutive identical tool calls across
    * turns (signature = tool name + serialized input). At `nudgeAt` a steering
    * message is injected to steer the model; at `hardStopAt` the loop stops

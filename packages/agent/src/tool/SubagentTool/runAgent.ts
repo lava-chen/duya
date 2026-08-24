@@ -19,7 +19,7 @@ import { ToolRegistry } from '../registry.js'
 import { getPromptProfileForSubagentType } from '../../prompts/modes/index.js'
 import { PromptsRegistry } from '../../prompts/registry.js'
 import type { PromptSystem } from '../../prompts/PromptSystem.js'
-import { appendMessages } from '../../session/db.js'
+import { appendMessages } from '../../session/db.js'; // eslint-disable-line @typescript-eslint/no-unused-vars
 import type { TokenUsage } from '../../types.js'
 import { logger } from '../../utils/logger.js'
 import { composeSubagentSystemPrompt } from './promptComposition.js'
@@ -326,26 +326,14 @@ export async function* runAgent({
   // while a tool is executing, so the stall watchdog must not treat a long
   // tool call as a dead stream.
   let toolInFlight = false
-  let lastPersistTime = 0
-  const PERSIST_INTERVAL_MS = 3000
-  // Track how many messages have already been persisted so each periodic
-  // tick only appends the new tail. appendMessages uses INSERT OR IGNORE
-  // (dedup by message id), so re-appending everything would not create
-  // duplicate rows, but it would re-serialize the whole conversation every
-  // tick — O(n) per interval, O(n^2) over a long run. Slicing the tail
-  // keeps each tick cheap.
-  let lastPersistedIndex = 0
-  const persistInterval = sessionId ? setInterval(async () => {
-    const allMessages = subAgent.getMessages()
-    if (allMessages.length <= lastPersistedIndex) return
-    const newMessages = allMessages.slice(lastPersistedIndex)
-    try {
-      await appendMessages(sessionId, newMessages)
-      lastPersistedIndex = allMessages.length
-    } catch {
-      // periodic persist failure is non-critical; retry the same tail next tick
-    }
-  }, PERSIST_INTERVAL_MS) : null
+  // Plan 441: the 3-second `persistInterval` was deleted. Sub-agents are
+  // `DuyaAgent` instances and inherit the per-event Journal from the agent
+  // core: every `_pushDurable` boundary (user_msg_added,
+  // assistant_message_finalized, tool_result_added) lands in the rollout
+  // immediately, so the manual tail-append + `lastPersistedIndex` slice is
+  // redundant. The wiring in `SubagentTool.ts` constructs the sub-agent via
+  // `new duyaAgent({...})` exactly like the main agent, and the Journal
+  // fires automatically.
 
   try {
     // Create an abort controller for the sub-agent, linked to parent's abort controller.
@@ -535,7 +523,6 @@ export async function* runAgent({
       }
     } finally {
       clearInterval(heartbeatInterval)
-      if (persistInterval) clearInterval(persistInterval)
       toolUseContext.abortController.signal.removeEventListener('abort', onParentAbort)
     }
   } catch (error) {
@@ -619,7 +606,13 @@ export async function* runAgent({
       // original message object. The objects returned by getMessages() may be
       // shared with the sub-agent's internal state and the UI; an in-place
       // mutation would leak the token_usage field into those references.
-      // Build a new array with a new message object only for that entry.
+      // Plan 441: the final `appendMessages` flush is no longer needed.
+      // Every sub-agent message boundary was already persisted by the
+      // journal trigger at the moment `_pushDurable` ran (see the
+      // 3-second-tick comment above for the unified rationale). We still
+      // attach the tokenUsage to the last assistant message in-memory so
+      // a subsequent load-from-DB round-trip carries the usage, but we do
+      // NOT emit a redundant append.
       let messagesToPersist: Message[] = [...allMessages]
       if (tokenUsage) {
         for (let i = allMessages.length - 1; i >= 0; i--) {
@@ -633,20 +626,11 @@ export async function* runAgent({
           }
         }
       }
-      try {
-        const persistResult = await appendMessages(sessionId, messagesToPersist)
-        if (!persistResult.success) {
-          logger.warn('[SubAgent] failed to persist messages', {
-            subAgentSessionId: sessionId,
-            count: persistResult.count,
-          }, 'SubAgent')
-        }
-      } catch (err) {
-        logger.warn('[SubAgent] persist messages threw', {
-          subAgentSessionId: sessionId,
-          err,
-        }, 'SubAgent')
-      }
+      // Suppress unused-variable warning while keeping the in-memory
+      // mutation above for future re-emit if a manual persist is ever
+      // re-introduced. The message shape is updated for the next turn's
+      // projection (load → setMessages).
+      void messagesToPersist;
     }
   }
 }
