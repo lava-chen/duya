@@ -396,7 +396,9 @@ DUYA 的所有本地数据以 `userData` 目录下的若干物理文件承载，
 
 核心存储是**两层结构**：`duya-core.db` 仅存状态列与轻量索引（无消息 payload），消息的完整内容落在 `sessions/` 的 rollout JSONL 文件里，`message_index.file_offset`/`byte_len` 指向文件内精确行。首启会将旧库六大核心表只读搬入（`legacy-import.ts`，幂等可重试），此后运行时读写全部走 core store，旧表物理保留作为回滚保险（物理删除留给未来版本）。
 
-写入纪律：单一写者（Main Process DB 层）、稳定边界、消息 append-only（唯一例外是 truncate/edit 依赖 `rewriteSession` 的 rewind 重写）。崩溃恢复靠 `MessageLog.scan()` 对账文件行数与索引行数。搜索无 FTS：会话走参数化 LIKE，正文走 `searchText` 扫 rollout 文件。
+写入纪律：单一写者（Main Process DB 层）、稳定边界、消息 append-only（Plan 441：所有写路径已统一到 `appendBatch` + `appendRebase`；`rewriteSession` 保留为兼容接口但生产路径不再调用）。崩溃恢复靠 `MessageLog.scan()` 对账文件行数与索引行数。搜索无 FTS：会话走参数化 LIKE，正文走 `searchText` 扫 rollout 文件。
+
+**Plan 441 事件级 journal**：每个语义事件（`user_msg_added`、`assistant_message_finalized`、`tool_result_added`、`rebase`、`hook_invoked`）由 `packages/agent/src/journal/Journal.ts` 在 `_pushDurable` 边界立即写盘（IPC `message:append` / `journal:emit`），不再依赖 turn 末尾批量。崩溃粒度从一个 turn 缩到最后一个工具调用；任意日志前缀合法（`repairInterruptedToolCalls` 在读侧合成中断的 tool_result）。组提交 fsync 政策见 `electron/db/core/fsync-policy.ts`（200ms 组窗口 + `user_msg` / `turn_end` 屏障立即 fsync）。
 
 #### 主进程生命周期时序
 

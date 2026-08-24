@@ -91,26 +91,28 @@ describe('createCronSessionRow', () => {
     prompt: 'Summarize yesterday\'s commits',
   };
 
-  it('creates the session row and pre-inserts the prompt as a user message', () => {
+  it('creates the session row without an eager prompt write (plan 441)', () => {
     createCronSessionRow(params);
 
     expect(sessions.get(params.sessionId)).not.toBeNull();
-    const events = messageLog.listBySession(params.sessionId);
-    expect(events).toHaveLength(1);
-    const payload = JSON.parse(events[0]!.payload) as { type: string; message: { role: string; content: string; msgType?: string } };
-    expect(payload.type).toBe('message');
-    expect(payload.message.role).toBe('user');
-    expect(payload.message.content).toBe(params.prompt);
+    // Plan 441 removed the eager `messageLog.appendBatch` of the cron
+    // prompt. The prompt lands in the rollout via the Journal's
+    // `user_msg_added` event when the chat:start-driven DuyaAgent pushes
+    // the user message, using the same `cron-prompt:<sessionId>` id.
+    expect(messageLog.listBySession(params.sessionId)).toHaveLength(0);
   });
 
-  it('is idempotent across the eager runCronNow create and runCronInSession reuse', () => {
+  it('is idempotent across the runCronNow create and runCronInSession reuse', () => {
     createCronSessionRow(params);
     createCronSessionRow(params);
 
-    expect(messageLog.listBySession(params.sessionId)).toHaveLength(1);
+    expect(sessions.get(params.sessionId)).not.toBeNull();
+    // No eager writes here means no duplicate prompt messages can pile up
+    // across the create + reuse paths.
+    expect(messageLog.listBySession(params.sessionId)).toHaveLength(0);
   });
 
-  it('skips the prompt message when the cron prompt is empty', () => {
+  it('writes nothing to the message log regardless of prompt content', () => {
     createCronSessionRow({ ...params, prompt: '   ' });
 
     expect(sessions.get(params.sessionId)).not.toBeNull();
