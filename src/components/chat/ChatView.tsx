@@ -1171,8 +1171,23 @@ export function ChatView({
         if (!live || live.updatedAt < compactStartedAt) {
           useContextUsageStore.getState().clearLive(sessionId);
         }
-        const removedMsg = result.removedCount != null ? `${result.removedCount} messages compacted` : 'Context compressed';
-        const tokenMsg = result.tokenReduction != null ? `, ~${Math.round(result.tokenReduction)} tokens saved` : '';
+        // Distinguish three outcomes so the toast stops lying when nothing happened:
+        //   1. strategy === 'none'  → compaction was a no-op (session too short
+        //      or nothing left to compact); tell the user instead of saying '0'.
+        //   2. strategy ran but removedCount === 0  → ran with an empty cut;
+        //      same as no-op from the user's perspective.
+        //   3. removedCount > 0  → real compaction; show counts.
+        let removedMsg: string;
+        if (result.strategy === 'none') {
+          removedMsg = 'No compaction needed (conversation too short)';
+        } else if (result.removedCount == null || result.removedCount === 0) {
+          removedMsg = 'Compaction ran, nothing removed';
+        } else {
+          removedMsg = `${result.removedCount} messages compacted`;
+        }
+        const tokenMsg = result.tokenReduction != null && result.tokenReduction > 0
+          ? `, ~${Math.round(result.tokenReduction)} tokens saved`
+          : '';
         setCompressionNotification(`${removedMsg}${tokenMsg}.`);
         loadThreadMessages(sessionId);
         // Clear the "done" divider after a short delay so it doesn't linger
