@@ -221,6 +221,14 @@ let existingMessageCount = 0;
 let liveBaseContext = 0;            // authoritative input + output from last `result`
 let liveBaseMessageCount = 0;       // agent message count when that `result` landed
 let hasLiveBase = false;            // whether liveBaseContext came from a real `result`
+// Set when compaction (manual `/compact` or proactive mid-turn) shrank the
+// timeline. The retained per-message usage blocks still describe the
+// PRE-compaction prompt, so re-seeding the base from them at the next turn
+// start would spring the ring back to the pre-compaction size until that
+// turn's first `result`. While set, the seed skips only the base restore
+// (session-cumulative totals still seed) and the native estimate carries the
+// ring; cleared when the next `result` rebases the base authoritatively.
+let liveBaseCompacted = false;
 let liveLastInput = 0;              // raw input_tokens of the last `result`
 let liveLastOutput = 0;             // raw output_tokens of the last `result`
 let liveLastCacheHit: number | undefined;      // cache hit (read) tokens of the last `result`
@@ -1320,6 +1328,7 @@ async function initAgent(
     // (smaller) estimate right away instead of leaving the ring on the
     // pre-compaction base until the next `result` rebases it. The stale base
     // is dropped by the append-only guard inside computeLiveUsedFromTracker.
+    liveBaseCompacted = true;
     emitLiveUsage(sessionId, computeLiveUsedFromTracker());
   };
 
@@ -2291,7 +2300,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Restore the authoritative context base from the last persisted result
       // so the ring's used/% is correct from the very start of this turn
       // (instead of a coarse estimate until the first `result` lands).
-      if (lastUsage) {
+      // After a compaction the retained usage blocks describe the
+      // pre-compaction prompt; skipping this restore keeps the ring on the
+      // post-compaction estimate until the next real `result` rebases it.
+      if (lastUsage && !liveBaseCompacted) {
         const rawInput = lastUsage.input_tokens ?? 0;
         const cacheHit = lastUsage.cache_hit_tokens ?? 0;
         const cacheCreation = lastUsage.cache_creation_tokens ?? 0;
@@ -2472,6 +2484,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           liveBaseContext = normalizedInput + outputTokens;
           liveBaseMessageCount = agent.getMessages().length;
           hasLiveBase = true;
+          // A real request just rebased the context — resolve any pending
+          // compaction invalidation of the persisted-seed base.
+          liveBaseCompacted = false;
           liveLastInput = normalizedInput;
           liveLastOutput = outputTokens;
           liveLastCacheHit = cacheHitTokens;
@@ -3161,6 +3176,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             liveLastCacheHit = undefined;
             liveLastCacheCreation = undefined;
             liveBoundaryPending = false;
+            liveBaseCompacted = false;
             liveTotalInput = 0;
             liveTotalInputRaw = 0;
             liveTotalOutput = 0;
@@ -3539,6 +3555,10 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             // next turn's first `result`. computeLiveUsedFromTracker drops
             // the stale base via its append-only guard because the timeline
             // just shrank.
+            // The timeline just shrank: suppress the persisted last_call base
+            // seed at the next turn start (it describes the pre-compaction
+            // prompt) until a real `result` rebases the base.
+            liveBaseCompacted = true;
             emitLiveUsage(sessionId, computeLiveUsedFromTracker());
             sendToMain({ type: 'compact:done', sessionId, result });
           } catch (error) {
