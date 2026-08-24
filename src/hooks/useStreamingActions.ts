@@ -42,11 +42,19 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
           actions.push({ kind: 'text', content: event.content });
         }
         break;
-      case 'thinking':
+      case 'thinking': {
         if (event.content.trim()) {
-          actions.push({ kind: 'thinking', content: event.content, isStreaming: true });
+          // Live only while this thinking block is still the trailing
+          // event. It used to be pinned to `true` forever, which kept the
+          // row's shimmer placeholder and typewriter rAF loop running long
+          // after newer events (or the stream end) had closed the block.
+          // This mapping re-runs on every rAF flush, so the flag flips off
+          // as soon as any newer event lands behind it.
+          const isTrailing = events[events.length - 1] === event;
+          actions.push({ kind: 'thinking', content: event.content, isStreaming: isTrailing });
         }
         break;
+      }
       case 'tool_use': {
         const toolUseId = event.toolUse.id;
         const resultInfo = toolResultById.get(toolUseId);

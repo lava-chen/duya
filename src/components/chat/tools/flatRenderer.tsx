@@ -42,15 +42,26 @@ function renderActionItem(
   isLastTextAction?: boolean,
 ): React.ReactNode {
   const key = `${action.kind}-${index}`;
+  // Global gate: no block is "live" once the round's stream has ended,
+  // even if the action itself still carries a live flag (the transient
+  // view persists into terminal phases). Without this gate the rows'
+  // typewriter rAF loops and shimmers kept running after completion.
+  const streamActive = !!isStreaming;
   switch (action.kind) {
     case 'thinking':
-      return <ThinkingRow key={key} content={action.content} isStreaming={action.isStreaming ?? isStreaming} />;
+      return (
+        <ThinkingRow
+          key={key}
+          content={action.content}
+          isStreaming={streamActive && !!action.isStreaming}
+        />
+      );
     case 'text':
       // Only the last (still-growing) text block needs the typewriter
       // pacing. Older blocks have stable content; the typewriter's rAF
       // loop would be a no-op for them but we'd rather not even mount
       // the extra state.
-      return <TextRow key={key} content={action.content} isStreaming={isLastTextAction} />;
+      return <TextRow key={key} content={action.content} isStreaming={streamActive && !!isLastTextAction} />;
     case 'tool':
       return <ToolActionRow key={key} tool={action.tool} streamingToolOutput={action.streamingToolOutput} />;
     case 'hook':
@@ -168,6 +179,7 @@ export function renderFlatActions(
           key={`group-${toolIdx}`}
           entries={seg.entries}
           flat
+          streamLive={!!isStreaming}
           streamingToolOutput={streamingToolOutput}
           agentProgressEvents={agentProgressEvents}
         />,
@@ -226,6 +238,7 @@ export function renderOrderedBody(
         <Group
           key={`group-${toolIdx}`}
           entries={seg.entries}
+          streamLive={!!isStreaming}
           streamingToolOutput={streamingToolOutput}
           agentProgressEvents={agentProgressEvents}
         />,
