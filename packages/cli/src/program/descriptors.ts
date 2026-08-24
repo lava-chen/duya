@@ -508,6 +508,14 @@ const subCronRuns: CliSubcommand = {
   run: (ctx) => runCronCommand.runs(ctx),
 };
 
+const subCronDedupe: CliSubcommand = {
+  description:
+    'Collapse duplicate jobs in ~/.duya/cronjob.toml (same name + schedule + working directory). Keeps the oldest row; --yes required in non-TTY.',
+  write: true,
+  options: [{ flags: '--yes', description: 'Skip confirmation prompt' }],
+  run: (ctx) => runCronCommand.dedupe(ctx),
+};
+
 const subCronEnable: CliSubcommand = {
   description: 'Enable a cron job. Plan 200 P4.4 write op; --yes required in non-TTY.',
   write: true,
@@ -1165,7 +1173,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
   },
   {
     name: 'cron',
-    description: 'Manage scheduled jobs (list / info / create / update / delete / run / enable / disable / runs / logs)',
+    description: 'Manage scheduled jobs (list / info / create / update / delete / run / enable / disable / runs / dedupe / logs)',
     subcommands: {
       list: subCronList,
       info: subCronInfo,
@@ -1176,6 +1184,7 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       enable: subCronEnable,
       disable: subCronDisable,
       runs: subCronRuns,
+      dedupe: subCronDedupe,
       logs: subCronLogs,
     },
   },
