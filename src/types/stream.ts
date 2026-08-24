@@ -23,7 +23,6 @@ export type SSEEventType =
   | 'tool_progress'
   | 'status'
   | 'result'
-  | 'context_usage'
   | 'permission_request'
   | 'permission_requested'
   | 'permission_resolved'
