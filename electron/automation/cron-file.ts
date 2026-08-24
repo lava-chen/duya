@@ -9,6 +9,11 @@
  * On-disk shape is snake_case (plain, hand-editable TOML); the public API is the
  * camelCase `AutomationCron` type. Persistence mirrors `ConfigStore`:
  * `@iarna/toml` stringify + `write-file-atomic` (mode 0o600).
+ *
+ * Dedupe contract: `createCron` is idempotent on `(name, schedule fingerprint,
+ * normalized workingDirectory)` — re-submitting the same job returns the existing
+ * row instead of appending a duplicate. `dedupeCrons` collapses legacy duplicates
+ * that pre-date this guarantee, keeping the oldest row by `created_at`.
  */
 
 import * as fs from 'node:fs';
@@ -24,10 +29,38 @@ import type {
   CronSchedule,
   UpdateAutomationCronInput,
 } from './types.js';
-import { assertValidSchedule, computeNextRunAt } from './schedule.js';
+import {
+  assertValidSchedule,
+  computeNextRunAt,
+  formatEveryDuration,
+  parseEveryDuration,
+} from './schedule.js';
 import { resolveAutomationWorkspace } from './workspace.js';
 
 const DEFAULT_MAX_RETRIES = 3;
+
+/**
+ * Stable string key for a `CronSchedule`. Normalizes wire-side variants
+ * (everyMs vs every, cronExpr vs expr, ms vs "5m") so logically identical
+ * schedules collide even when written through different code paths. Used by
+ * `createCron` and `dedupeCrons` as the schedule half of the dedupe key.
+ */
+export function scheduleFingerprint(schedule: CronSchedule): string {
+  assertValidSchedule(schedule);
+  if (schedule.kind === 'once') {
+    const ms = Date.parse(schedule.at);
+    return `once:${Number.isFinite(ms) ? new Date(ms).toISOString() : schedule.at}`;
+  }
+  if (schedule.kind === 'every') {
+    try {
+      return `every:${formatEveryDuration(parseEveryDuration(schedule.every))}`;
+    } catch {
+      return `every:${schedule.every}`;
+    }
+  }
+  // cron
+  return `cron:${(schedule.expr ?? '').trim()}|${(schedule.tz ?? '').trim()}`;
+}
 
 /** On-disk TOML shape (snake_case); the public API is camelCase `AutomationCron`. */
 export interface CronJobFile {
@@ -144,14 +177,38 @@ export class CronFileStore {
         `prompt is required (the natural-language instruction the scheduled run will execute); got: ${JSON.stringify(input.prompt)}`,
       );
     }
+    const name = input.name.trim();
+    const prompt = input.prompt.trim();
+    const workingDirectory = resolveAutomationWorkspace(input.workingDirectory);
+    const fingerprint = scheduleFingerprint(input.schedule);
+
+    // Idempotency: a create request that matches an existing job on
+    // (name, schedule, workingDirectory) returns the existing row. This
+    // makes repeated "create in chat" / agent-tool calls collapse into a
+    // single job instead of stacking duplicates in cronjob.toml.
+    const existing = this.doc.jobs.find(
+      (j) =>
+        j.name === name &&
+        resolveAutomationWorkspace(j.working_directory) === workingDirectory &&
+        scheduleFingerprint(j.schedule) === fingerprint,
+    );
+    if (existing) {
+      // Bump `updated_at` so a repeated "create" still surfaces as the
+      // freshest row in `listCrons` — mirrors the UX of an actual insert
+      // and keeps call sites that read `listCrons()[0]` consistent.
+      existing.updated_at = Date.now();
+      this.save();
+      return this.jobToCron(existing);
+    }
+
     const now = Date.now();
     const job: CronJobFile = {
       id: randomUUID(),
-      name: input.name.trim(),
-      prompt: input.prompt.trim(),
+      name,
+      prompt,
       enabled: input.enabled !== false,
       schedule: input.schedule,
-      working_directory: resolveAutomationWorkspace(input.workingDirectory),
+      working_directory: workingDirectory,
       model: input.model?.trim() || undefined,
       concurrency: input.concurrencyPolicy ?? 'skip',
       max_retries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
@@ -164,6 +221,46 @@ export class CronFileStore {
     this.doc.jobs.push(job);
     this.save();
     return this.jobToCron(job);
+  }
+
+  /**
+   * Collapse legacy duplicates: group jobs by (name, schedule fingerprint,
+   * normalized workingDirectory), keep the oldest job in each group, drop
+   * the rest. Returns the ids that were removed so callers can audit-log
+   * the cleanup. Runtime state (last_run_at / last_error / retry_count)
+   * stays on the kept row; drops only discard the redundant row entries.
+   */
+  dedupeCrons(): { removedIds: string[]; kept: number } {
+    const groups = new Map<string, CronJobFile[]>();
+    for (const job of this.doc.jobs) {
+      const key =
+        job.name +
+        '\u0001' +
+        scheduleFingerprint(job.schedule) +
+        '\u0001' +
+        resolveAutomationWorkspace(job.working_directory);
+      const list = groups.get(key);
+      if (list) list.push(job);
+      else groups.set(key, [job]);
+    }
+    const removedIds: string[] = [];
+    let kept = 0;
+    const next: CronJobFile[] = [];
+    for (const list of groups.values()) {
+      list.sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+      const [keeper, ...dupes] = list;
+      next.push(keeper);
+      kept += 1;
+      for (const d of dupes) {
+        if (d.id) removedIds.push(d.id);
+      }
+    }
+    if (removedIds.length === 0) {
+      return { removedIds, kept };
+    }
+    this.doc.jobs = next;
+    this.save();
+    return { removedIds, kept };
   }
 
   updateCron(id: string, patch: UpdateAutomationCronInput): AutomationCron {
