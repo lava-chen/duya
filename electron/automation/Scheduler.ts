@@ -95,6 +95,25 @@ export class AutomationScheduler {
   }
 
   /**
+   * Collapse duplicate jobs in `cronjob.toml` (legacy rows that pre-date
+   * the create-side dedupe in `CronFileStore.createCron`). Also clears any
+   * in-memory running/retry bookkeeping for the removed ids so the next
+   * tick does not try to fire a job that no longer exists.
+   */
+  dedupeCrons(): { removedIds: string[]; kept: number } {
+    const result = this.store.dedupeCrons();
+    for (const id of result.removedIds) {
+      this.running.delete(id);
+      const t = this.retryTimers.get(id);
+      if (t) {
+        clearTimeout(t);
+        this.retryTimers.delete(id);
+      }
+    }
+    return result;
+  }
+
+  /**
    * Trigger a cron immediately. Creates the session row eagerly (so the caller
    * can open the run view with a session_id right away) and executes in the
    * background — awaiting completion would block the IPC handler up to the run

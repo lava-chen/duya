@@ -490,6 +490,38 @@ async function listRuns(ctx: CliSubcommandContext): Promise<ExitCode> {
   }
 }
 
+async function dedupeCrons(ctx: CliSubcommandContext): Promise<ExitCode> {
+  const guard = await guardWriteOp(
+    'dedupe cron jobs',
+    '~/.duya/cronjob.toml',
+    ctx.options.yes === true,
+  );
+  if (guard !== null) return guard;
+
+  const correlationId = randomUUID();
+  try {
+    const client = await CliApiClient.connect();
+    const res = await client.post<{
+      removedIds: string[];
+      removedCount: number;
+      kept: number;
+    }>('/v1/crons/dedupe', {}, { correlationId });
+    if (ctx.format === 'json') {
+      process.stdout.write(renderJson({ ...res, correlationId }) + '\n');
+    } else {
+      process.stdout.write(
+        `deduped crons: removed=${res.removedCount}, kept=${res.kept} (correlationId=${correlationId})\n` +
+          (res.removedIds.length > 0
+            ? `removed ids: ${res.removedIds.join(', ')}\n`
+            : ''),
+      );
+    }
+    return 0;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public surface (consumed by descriptors.ts)
 // ---------------------------------------------------------------------------
@@ -503,4 +535,5 @@ export const runCronCommand = {
   delete: deleteJob,
   run: runJob,
   runs: listRuns,
+  dedupe: dedupeCrons,
 };

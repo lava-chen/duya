@@ -74,6 +74,7 @@ import {
   handleUpdateCron,
   handleDeleteCron,
   handleRunCron,
+  handleDedupeCrons,
 } from './handlers/crons.js';
 import {
   handleListMessages,
@@ -401,6 +402,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'GET' && parts.length === 4 && parts[0] === 'v1' && parts[1] === 'crons' && parts[3] === 'runs') {
     const query = parseSessionsQuery(req.url); // reuse generic {limit, offset} parser
     handleListCronRuns(req, res, decodeURIComponent(parts[2]), query);
+    return;
+  }
+
+  // POST /v1/crons/dedupe
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'crons' && parts[2] === 'dedupe') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleDedupeCrons(req, res, correlationId);
     return;
   }
 
