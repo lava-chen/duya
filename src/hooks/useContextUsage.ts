@@ -1,15 +1,23 @@
 /**
  * useContextUsage.ts
  *
- * Aggregate context-usage hook used by the ring trigger. Returns the same
- * shape the legacy inline useContextUsage produced, so existing call sites
- * keep working.
+ * Context-usage for the ring (plan 443, pi parity). The heavy lifting lives
+ * in the shared pure estimator `computeContextEstimate` (@duya/ai) — the same
+ * function the worker uses to emit `token_usage` frames, so bootstrap scans
+ * and live frames can never disagree.
+ *
+ * Priority:
+ *   1. Live worker frame (anchored → authoritative numbers).
+ *   2. Persisted scan via computeContextEstimate(messages) — bootstrap before
+ *      the first frame arrives / history-only views.
+ *   3. No anchor anywhere → hasData=false; the ring shows "?" instead of a
+ *      renderer-side guess that would fight the worker's numbers.
  */
 import { useMemo } from 'react';
 import type { Message } from '@/types/message';
 import { findModelById } from '@duya/ai';
+import { computeContextEstimate } from '@duya/ai';
 import {
-  estimateTokens,
   normalizeInputTokens,
   estimateCost,
   type ModelPricing,
@@ -19,6 +27,7 @@ import { useContextUsageStore } from '@/stores/context-usage-store';
 export type ContextState = 'normal' | 'warning' | 'critical';
 
 export interface ContextUsage {
+  /** True when driven by a real API usage anchor (worker frame or persisted). */
   hasData: boolean;
   modelName: string;
   contextWindow: number;
@@ -44,6 +53,11 @@ export interface ContextUsage {
 }
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
+/** Prediction margin so "one more message" trips warning/critical early. */
+const NEXT_TURN_MARGIN = 200;
+/** Thresholds for the ring color states (effective ratio = with margin). */
+const WARNING_RATIO = 0.8;
+const CRITICAL_RATIO = 0.95;
 
 /**
  * Resolve the context window for a given model id.
@@ -52,17 +66,13 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
  * 1. Caller-supplied `contextWindow` (sourced from the
  *    `provider_model_capabilities` SQLite table — what the user toggled via
  *    the 200K/1M buttons in the provider edit view, or populated by model
- *    sync when the gateway reports it). This is the only signal that
- *    reflects per-model user intent / live gateway data.
- * 2. The @duya/ai built-in catalog (`findModelById`) — hand-curated,
- *    models.dev-backed per-model metadata shipped with the package.
+ *    sync when the gateway reports it).
+ * 2. The @duya/ai built-in catalog (`findModelById`).
  * 3. The 200K default (matches Claude 3.x / Sonnet 4.x base context).
  *
- * NOTE: do not add substring-matching fallbacks here. Unknown ids (custom
- * gateways, aliases, `[1M]` capability suffixes) intentionally fall through
- * to the default — pinning the window in the provider editor is the escape
- * hatch, and guessing from substrings has historically produced wrong
- * values (e.g. gpt-4.1 → 8k).
+ * NOTE: do not add substring-matching fallbacks here. Unknown ids
+ * intentionally fall through to the default — pinning the window in the
+ * provider editor is the escape hatch.
  */
 export function getContextWindowForModel(
   modelName?: string,
@@ -81,6 +91,87 @@ export function formatTokens(n: number): string {
   return String(n);
 }
 
+function stateFor(ratio: number): ContextState {
+  if (ratio >= CRITICAL_RATIO) return 'critical';
+  if (ratio >= WARNING_RATIO) return 'warning';
+  return 'normal';
+}
+
+/** Session-cumulative totals + cost from every persisted usage block. */
+function scanTotals(
+  messages: Message[],
+  pricing?: ModelPricing,
+): {
+  totalInput: number;
+  totalOutput: number;
+  totalCacheRead: number;
+  totalCacheWrite: number;
+  totalCost: number;
+} {
+  let totalInput = 0;
+  let totalOutput = 0;
+  let totalCacheRead = 0;
+  let totalCacheWrite = 0;
+  let totalCost = 0;
+  for (const msg of messages) {
+    if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
+    const rawInput = msg.tokenUsage.input_tokens || 0;
+    const output = msg.tokenUsage.output_tokens || 0;
+    const cacheRead = msg.tokenUsage.cache_hit_tokens || 0;
+    const cacheWrite = msg.tokenUsage.cache_creation_tokens || 0;
+    totalInput += normalizeInputTokens(rawInput, cacheRead, cacheWrite);
+    totalOutput += output;
+    totalCacheRead += cacheRead;
+    totalCacheWrite += cacheWrite;
+    totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite, pricing);
+  }
+  return { totalInput, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
+}
+
+/** Assemble the final ContextUsage from used/window/totals — the ONLY place
+ *  ratio / next-turn prediction / thresholds are computed. */
+function finalize(params: {
+  hasData: boolean;
+  modelName: string | undefined;
+  contextWindow: number;
+  used: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totals: {
+    totalInput: number;
+    totalOutput: number;
+    totalCacheRead: number;
+    totalCacheWrite: number;
+    totalCost: number;
+  };
+}): ContextUsage {
+  const ratio = params.contextWindow > 0 ? params.used / params.contextWindow : 0;
+  // Predicted size after one more user message — drives early warnings.
+  const estimatedNextTurn = params.used > 0 ? params.used + NEXT_TURN_MARGIN : 0;
+  const estimatedNextRatio =
+    params.contextWindow > 0 ? estimatedNextTurn / params.contextWindow : 0;
+  const effectiveRatio = Math.max(ratio, estimatedNextRatio);
+  const { totals } = params;
+  return {
+    hasData: params.hasData,
+    modelName: params.modelName || 'unknown',
+    contextWindow: params.contextWindow,
+    used: params.used,
+    ratio,
+    estimatedNextTurn,
+    estimatedNextRatio,
+    cacheReadTokens: params.cacheReadTokens,
+    cacheCreationTokens: params.cacheCreationTokens,
+    outputTokens: params.outputTokens,
+    inputTokens: params.inputTokens,
+    ...totals,
+    cacheHitRate: totals.totalInput > 0 ? totals.totalCacheRead / totals.totalInput : 0,
+    state: stateFor(effectiveRatio),
+  };
+}
+
 export function useContextUsage(
   messages: Message[],
   modelName?: string,
@@ -88,91 +179,20 @@ export function useContextUsage(
   sessionId?: string,
   pricing?: ModelPricing,
 ): ContextUsage {
-  // Live context-usage snapshot pushed by the worker during streaming. When
-  // present it reflects the real prompt size (plus trailing tool-result
-  // estimates) as of the last `result` event, so the ring is live mid-turn.
-  const live = useContextUsageStore((s) => (sessionId ? s.liveBySession[sessionId] : undefined));
+  // Live snapshot pushed by the worker during streaming (SSE `token_usage`).
+  const live = useContextUsageStore((s) =>
+    sessionId ? s.liveBySession[sessionId] : undefined,
+  );
 
   return useMemo(() => {
     const resolvedContextWindow = getContextWindowForModel(modelName, contextWindow);
+    const scanTotalsResult = scanTotals(messages, pricing);
 
-    // Session-cumulative usage across every persisted assistant usage block —
-    // pi's footer shows cumulative ↑input / ↓output / R cache / $ cost, so the
-    // ring's stats line mirrors that. Cost is estimated on the raw (uncached)
-    // input + separate cache rates; the displayed input total is normalized
-    // for the cache convention.
-    let totalInput = 0;
-    let totalOutput = 0;
-    let totalCacheRead = 0;
-    let totalCacheWrite = 0;
-    let totalCost = 0;
-    for (const msg of messages) {
-      if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
-      const usage = msg.tokenUsage;
-      const rawInput = usage.input_tokens || 0;
-      const output = usage.output_tokens || 0;
-      const cacheRead = usage.cache_hit_tokens || 0;
-      const cacheWrite = usage.cache_creation_tokens || 0;
-      totalInput += normalizeInputTokens(rawInput, cacheRead);
-      totalOutput += output;
-      totalCacheRead += cacheRead;
-      totalCacheWrite += cacheWrite;
-      totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite, pricing);
-    }
-
-    const noData: ContextUsage = {
-      modelName: modelName || 'unknown',
-      contextWindow: resolvedContextWindow,
-      used: 0,
-      ratio: 0,
-      estimatedNextTurn: 0,
-      estimatedNextRatio: 0,
-      cacheReadTokens: 0,
-      cacheCreationTokens: 0,
-      outputTokens: 0,
-      inputTokens: 0,
-      totalInput,
-      totalOutput,
-      totalCacheRead,
-      totalCacheWrite,
-      totalCost,
-      cacheHitRate: 0,
-      hasData: false,
-      state: 'normal',
-    };
-
-    // When the worker has broadcast live usage, prefer it over the persisted
-    // message scan so the ring reflects the in-flight context. The ring's
-    // ↑/↓/R/W/$ stats line is session-cumulative, so the live totals (pushed
-    // by the worker) win over the persisted scan here — otherwise the stats
-    // would freeze mid-turn and only jump after the DB persist.
-    if (live && live.usedTokens > 0) {
-      const used = live.usedTokens;
-      const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
-      const estimatedNextTurn = used + 200;
-      const estimatedNextRatio = resolvedContextWindow
-        ? estimatedNextTurn / resolvedContextWindow
-        : 0;
-      const inputTokens = live.inputTokens || 0;
-      const cacheRead = live.cacheHitTokens || 0;
-      const cacheCreation = live.cacheCreationTokens || 0;
-      const outputTokens = live.outputTokens || 0;
-      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
-      let state: ContextState = 'normal';
-      if (effectiveRatio >= 0.95) state = 'critical';
-      else if (effectiveRatio >= 0.8) state = 'warning';
-      // Cumulative totals: prefer live worker totals, fall back to the
-      // persisted scan for sessions where the worker did not send them yet.
-      const liveTotalInput = live.totalInput ?? totalInput;
-      const liveTotalOutput = live.totalOutput ?? totalOutput;
-      const liveTotalCacheRead = live.totalCacheHit ?? totalCacheRead;
-      const liveTotalCacheWrite = live.totalCacheCreation ?? totalCacheWrite;
-      // Cumulative cache hit rate from the session totals, not the last
-      // result's delta — the ring's CH% next to the cumulative ↑/↓/R/W/$ line
-      // should reflect the whole session, not just the most recent request
-      // (which is often ~100% cached for the system prompt + history portion).
-      const cacheHitRate =
-        liveTotalInput > 0 ? liveTotalCacheRead / liveTotalInput : 0;
+    // ── Branch A: live worker frame ──────────────────────────────────────
+    // Trust it only when anchored (real API usage); unanchored frames are
+    // rough estimates or post-compaction unknowns → fall through so the
+    // ring shows "?" instead of swinging against later authoritative data.
+    if (live && live.usedTokens > 0 && live.anchored) {
       const liveTotalCost =
         live.totalInputRaw !== undefined &&
         live.totalOutput !== undefined &&
@@ -185,157 +205,72 @@ export function useContextUsage(
               live.totalCacheCreation,
               pricing,
             )
-          : totalCost;
-      return {
-        modelName: modelName || 'unknown',
-        contextWindow: resolvedContextWindow,
-        used,
-        ratio,
-        estimatedNextTurn,
-        estimatedNextRatio,
-        cacheReadTokens: cacheRead,
-        cacheCreationTokens: cacheCreation,
-        outputTokens,
-        inputTokens,
-        totalInput: liveTotalInput,
-        totalOutput: liveTotalOutput,
-        totalCacheRead: liveTotalCacheRead,
-        totalCacheWrite: liveTotalCacheWrite,
-        totalCost: liveTotalCost,
-        cacheHitRate,
+          : scanTotalsResult.totalCost;
+      return finalize({
         hasData: true,
-        state,
-      };
-    }
-
-    // Latest usable usage block (scanned newest-first) drives the context
-    // ring, mirroring pi's `usage + trailing` model: the last authoritative
-    // `input + output` (total prompt at that request; `input_tokens` already
-    // covers cache read + write, so no double counting) plus the estimated
-    // tokens of every message appended after it (tool results, assistant
-    // tool_use blocks).
-    let latestUsed: number | undefined;
-    let latestInput = 0;
-    let latestOutput = 0;
-    let latestCacheRead = 0;
-    let latestCacheCreation = 0;
-    let latestHitRate = 0;
-    let lastUsageIndex = -1;
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== 'assistant' || !msg.tokenUsage) continue;
-      try {
-        // The persisted block is TURN-CUMULATIVE: the worker sums every LLM
-        // call of a turn onto the last assistant's tokenUsage. The ring's
-        // context base is one request's prompt size, so prefer the
-        // `last_call` sub-block when present. Rows persisted before that
-        // field existed fall back to the cumulative block (the pre-fix
-        // behavior — inflated ~N× on tool-heavy turns).
-        const src = msg.tokenUsage.last_call ?? msg.tokenUsage;
-        const rawInput = src.input_tokens || 0;
-        const cacheRead = src.cache_hit_tokens || 0;
-        const cacheCreation = src.cache_creation_tokens || 0;
-        const outputTokens = src.output_tokens || 0;
-        // Cache-convention guard: some OpenAI-compatible gateways report
-        // input_tokens excluding cached tokens (both cache read and cache
-        // creation). Normalize so used reflects the full prompt volume
-        // regardless of the provider's convention.
-        const inputTokens = normalizeInputTokens(rawInput, cacheRead, cacheCreation);
-
-        if (latestUsed === undefined) {
-          // Prefer normalized input + output over total_tokens: the worker
-          // synthesizes total_tokens as raw input + output (or trusts the
-          // provider), either of which typically EXCLUDES cache read/write,
-          // while the live path prices the full prompt (input + cache).
-          // Using the normalized sum keeps the ring consistent between the
-          // live snapshot and the persisted scan.
-          latestUsed = inputTokens + outputTokens;
-          latestInput = inputTokens;
-          latestOutput = outputTokens;
-          latestCacheRead = cacheRead;
-          latestCacheCreation = cacheCreation;
-          latestHitRate = inputTokens > 0 ? cacheRead / inputTokens : 0;
-          lastUsageIndex = i;
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    // Trailing estimate of messages appended after the last usage-bearing
-    // assistant (e.g. the last turn's tool results that have not yet been
-    // answered by the model). Attachments ride along with their user message:
-    // images cost at least their vision-encoded size (~700 tokens), text
-    // attachments are estimated from their extracted text.
-    if (latestUsed !== undefined) {
-      let trailing = 0;
-      for (let j = lastUsageIndex + 1; j < messages.length; j++) {
-        const msg = messages[j];
-        const text =
-          typeof msg.content === 'string'
-            ? msg.content
-            : msg.content
-                .map((b) =>
-                  typeof b === 'string' ? b : (b as { text?: string }).text || '',
-                )
-                .join(' ');
-        let msgTokens = estimateTokens(text);
-        if (msg.role === 'user') {
-          for (const att of msg.attachments || []) {
-            const isImage = (att.type ?? '').startsWith('image/');
-            msgTokens += isImage
-              ? Math.max(700, estimateTokens(att.text ?? ''))
-              : estimateTokens(att.text ?? '');
-          }
-        }
-        trailing += msgTokens;
-      }
-      latestUsed += trailing;
-    }
-
-    if (latestUsed !== undefined) {
-      const used = latestUsed;
-      const ratio = resolvedContextWindow ? used / resolvedContextWindow : 0;
-
-      const estimatedNextTurn = used + 200;
-      const estimatedNextRatio = resolvedContextWindow
-        ? estimatedNextTurn / resolvedContextWindow
-        : 0;
-
-      const effectiveRatio = Math.max(ratio, estimatedNextRatio);
-      let state: ContextState = 'normal';
-      if (effectiveRatio >= 0.95) state = 'critical';
-      else if (effectiveRatio >= 0.8) state = 'warning';
-
-      return {
-        modelName: modelName || 'unknown',
+        modelName,
         contextWindow: resolvedContextWindow,
-        used,
-        ratio,
-        estimatedNextTurn,
-        estimatedNextRatio,
-        cacheReadTokens: latestCacheRead,
-        cacheCreationTokens: latestCacheCreation,
-        outputTokens: latestOutput,
-        inputTokens: latestInput,
-        totalInput,
-        totalOutput,
-        totalCacheRead,
-        totalCacheWrite,
-        totalCost,
-        cacheHitRate: latestHitRate,
-        hasData: latestUsed > 0,
-        state,
-      };
+        used: live.usedTokens,
+        inputTokens: live.inputTokens || 0,
+        outputTokens: live.outputTokens || 0,
+        cacheReadTokens: live.cacheHitTokens || 0,
+        cacheCreationTokens: live.cacheCreationTokens || 0,
+        totals: {
+          totalInput: live.totalInput ?? scanTotalsResult.totalInput,
+          totalOutput: live.totalOutput ?? scanTotalsResult.totalOutput,
+          totalCacheRead: live.totalCacheHit ?? scanTotalsResult.totalCacheRead,
+          totalCacheWrite: live.totalCacheCreation ?? scanTotalsResult.totalCacheWrite,
+          totalCost: liveTotalCost,
+        },
+      });
     }
 
-    // No live snapshot and no persisted tokenUsage — a brand-new session
-    // before the first result lands, or a history that lost its usage blocks.
-    // Return noData instead of a local estimate: a renderer-side guess omits
-    // the system prompt / tool overhead and swings against the worker's
-    // authoritative numbers, which reads as the ring jumping. The worker
-    // broadcasts a snapshot at turn start, so this state is transient.
-    return noData;
+    // ── Branch B: persisted scan via the SHARED pure estimator ───────────
+    // Same function the worker runs — identical anchor choice (`usage` then
+    // `tokenUsage.last_call`), same trailing estimation, same compaction
+    // guard. No renderer-side reimplementation to drift out of sync.
+    const estimate = computeContextEstimate(
+      messages.map((m) => ({
+        role: m.role,
+        content: m.content as string | unknown[],
+        tokenUsage: m.tokenUsage ?? undefined,
+      })),
+    );
+    if (estimate.anchored && (estimate.usedTokens ?? 0) > 0) {
+      // Per-request stats line values come from the anchor block itself.
+      const anchorMsg =
+        estimate.anchorIndex !== null ? messages[estimate.anchorIndex] : undefined;
+      const src = anchorMsg?.tokenUsage?.last_call ?? anchorMsg?.tokenUsage;
+      const anchorInput = src?.input_tokens || 0;
+      const anchorCacheRead = src?.cache_hit_tokens || 0;
+      const anchorCacheWrite = src?.cache_creation_tokens || 0;
+      return finalize({
+        hasData: true,
+        modelName,
+        contextWindow: resolvedContextWindow,
+        used: estimate.usedTokens ?? 0,
+        inputTokens: normalizeInputTokens(anchorInput, anchorCacheRead, anchorCacheWrite),
+        outputTokens: src?.output_tokens || 0,
+        cacheReadTokens: anchorCacheRead,
+        cacheCreationTokens: anchorCacheWrite,
+        totals: scanTotalsResult,
+      });
+    }
+
+    // ── Branch C: no anchor anywhere → unknown ───────────────────────────
+    // A renderer-side guess omits system prompt / tool overhead and swings
+    // against the worker's authoritative numbers. Keep cumulative totals
+    // for the stats line but mark hasData=false ("?" display).
+    return finalize({
+      hasData: false,
+      modelName,
+      contextWindow: resolvedContextWindow,
+      used: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totals: scanTotalsResult,
+    });
   }, [messages, modelName, contextWindow, live, pricing]);
 }
