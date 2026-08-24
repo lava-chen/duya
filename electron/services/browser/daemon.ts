@@ -28,6 +28,7 @@ import {
   handleWebviewCommand,
   handleWebviewNetworkCommand,
   handleWebviewTabControl,
+  handleWebviewWaitLoad,
   registerWebviewSession,
   unregisterWebviewSession,
   setMaxWebviewSessions,
@@ -360,6 +361,9 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   // Must run after the X-DUYA header check so only the Agent process
   // (which sends X-DUYA) can invoke it.
   if (await handleWebviewCommand(req, res, mainWindowRef)) {
+    return;
+  }
+  if (await handleWebviewWaitLoad(req, res)) {
     return;
   }
   if (await handleWebviewNetworkCommand(req, res)) {
