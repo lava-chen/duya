@@ -45,7 +45,10 @@ export const ConnectorItem: React.FC<ConnectorItemProps> = ({ connector, element
           isHovered={isHovered}
           layer="visual"
           onHover={(id) => setIsHovered(id !== null)}
-          onClick={(id) => setSelectedElementId(id === selectedElementId ? null : id)}
+          // Select-only: deselection belongs to empty-canvas clicks and
+          // Escape. A toggle here raced the canvas-level mousedown select
+          // and flipped the selection back off on release.
+          onClick={(id) => setSelectedElementId(id)}
         />
       </svg>
     </div>
