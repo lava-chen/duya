@@ -55,6 +55,10 @@ function setGroupExpansion(key: string, value: boolean): void {
 interface GroupProps {
   entries: SegmentEntry[];
   flat?: boolean;
+  /** Whether the owning round's stream is still live. Gates the thinking
+   *  rows' live shimmer/typewriter so they stop when the stream ends even
+   *  if the entry's own flag was set while it was the trailing event. */
+  streamLive?: boolean;
   streamingToolOutput?: string;
   agentProgressEvents?: AgentProgressEventWithMeta[];
 }
@@ -62,6 +66,7 @@ interface GroupProps {
 export function Group({
   entries,
   flat,
+  streamLive,
   streamingToolOutput,
   agentProgressEvents,
 }: GroupProps) {
@@ -133,7 +138,7 @@ export function Group({
           <ThinkingRow
             key={`thinking-${i}`}
             content={entry.content}
-            isStreaming={entry.isStreaming}
+            isStreaming={!!streamLive && !!entry.isStreaming}
           />
         ) : (
           // Plan 437: hook entries route through HookActionRow, which
