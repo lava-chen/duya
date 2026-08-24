@@ -143,9 +143,9 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'permission',
       data: event.request,
     };
-  } else if (msgType === 'chat:context_usage' || msgType === 'chat:token_usage') {
+  } else if (msgType === 'chat:token_usage') {
     sseEvent = {
-      type: msgType.replace('chat:', ''), // 'context_usage' or 'token_usage'
+      type: 'token_usage',
       data: event,
     };
   } else if (msgType === 'chat:status') {
@@ -1436,7 +1436,7 @@ async function handlePostCompact(
         const event = JSON.parse(line);
         const eventType = event.type as string;
 
-        if (eventType === 'chat:token_usage' || eventType === 'chat:context_usage') {
+        if (eventType === 'chat:token_usage') {
           // The worker pushes a fresh post-compaction context snapshot right
           // before compact:done. Forward it on this stream — no chat SSE is
           // attached while the session is idle, so dropping it here left the

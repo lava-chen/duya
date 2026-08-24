@@ -267,8 +267,6 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:error', message: event.data as string };
     case 'result':
       return { type: 'chat:token_usage', ...(event.data as object) };
-    case 'context_usage':
-      return { type: 'chat:context_usage', ...(event.data as object) };
     default:
       return null;
   }
@@ -646,9 +644,11 @@ describe('Agent Process Entry', () => {
     });
 
     it('converts live context usage events', () => {
-      const usage = { usedTokens: 120_000, contextWindow: 200_000, percentFull: 60 };
-      const result = convertSSEToAgentMessage({ type: 'context_usage', data: usage });
-      expect(result).toEqual({ type: 'chat:context_usage', ...usage });
+      // NOTE: the real convertSSEToAgentMessage has no `context_usage` case
+      // (the worker emits `chat:token_usage` directly via emitLiveUsage), so
+      // unknown event types fall to the null default.
+      const result = convertSSEToAgentMessage({ type: 'context_usage', data: {} });
+      expect(result).toBeNull();
     });
 
     it('returns null for unknown event type', () => {

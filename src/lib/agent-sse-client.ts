@@ -36,7 +36,6 @@ export interface AgentSSEClientOptions {
     agentSessionId?: string;
   }) => void;
   onPermission?: (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number }) => void;
-  onContextUsage?: (data: { usedTokens: number; contextWindow: number; percentFull: number }) => void;
   onTokenUsage?: (data: { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number }) => void;
   onDone?: () => void;
   onError?: (message: string, retryable?: boolean) => void;
@@ -186,7 +185,7 @@ export class AgentSSEClient {
    *
    * Supported event types:
    * - text, thinking, tool_use, tool_result, tool_progress, tool_output
-   * - agent_progress, permission, context_usage, status
+   * - agent_progress, permission, status
    * - done, error, retry, checkpoint, ready
    */
   onEvent(eventType: string, handler: EventHandler): () => void {
@@ -379,13 +378,6 @@ export class AgentSSEClient {
           expiresAt: eventObj.expiresAt as number | undefined,
         });
         break;
-      case 'context_usage':
-        this.dispatch('context_usage', {
-          usedTokens: eventObj.usedTokens as number,
-          contextWindow: eventObj.contextWindow as number,
-          percentFull: eventObj.percentFull as number,
-        });
-        break;
       case 'token_usage':
         this.dispatch('token_usage', {
           inputTokens: eventObj.inputTokens as number,
@@ -480,13 +472,6 @@ export class AgentSSEClient {
           toolInput: obj.toolInput as Record<string, unknown>,
           mode: obj.mode as string | undefined,
           expiresAt: obj.expiresAt as number | undefined,
-        });
-        break;
-      case 'context_usage':
-        this.options.onContextUsage?.({
-          usedTokens: obj.usedTokens as number,
-          contextWindow: obj.contextWindow as number,
-          percentFull: obj.percentFull as number,
         });
         break;
       case 'token_usage':
