@@ -140,20 +140,30 @@ console.error(`[abi] better-sqlite3 does not load under ${target} (${check.error
 let healed = false;
 if (target === 'electron') {
   // Offline-first: the Electron prebuilt ships in <pkg>/bin/<platform>-<arch>-119/.
+  // Fallback: repo-level prebuilds/ — survives `npm ci`, which wipes <pkg>/bin.
+  // The artifact there was produced once via `npx electron-rebuild -o better-sqlite3`
+  // (upstream publishes no electron-v119 prebuilt for better-sqlite3 v12+).
+  // Fixed filename: this repo pins Electron 28, so the electron ABI is
+  // constant; deriving it from process.versions.modules would wrongly use
+  // the running Node's ABI.
+  const candidates = [];
   const binDir = path.join(dir, 'bin');
   if (fs.existsSync(binDir)) {
     for (const sub of fs.readdirSync(binDir)) {
-      const prebuilt = path.join(binDir, sub, 'better-sqlite3.node');
-      if (!fs.existsSync(prebuilt)) continue;
-      try {
-        fs.mkdirSync(path.dirname(binPath), { recursive: true });
-        fs.copyFileSync(prebuilt, binPath);
-        console.error(`[abi] copied the Electron prebuilt (${sub}) into build/Release.`);
-        healed = true;
-        break;
-      } catch (err) {
-        console.error(`[abi] copy failed: ${err.message}`);
-      }
+      candidates.push(path.join(binDir, sub, 'better-sqlite3.node'));
+    }
+  }
+  candidates.push(path.join(root, 'prebuilds', 'better-sqlite3-electron-win32-x64.node'));
+  for (const prebuilt of candidates) {
+    if (!fs.existsSync(prebuilt)) continue;
+    try {
+      fs.mkdirSync(path.dirname(binPath), { recursive: true });
+      fs.copyFileSync(prebuilt, binPath);
+      console.error(`[abi] copied the Electron prebuilt (${path.relative(root, prebuilt)}) into build/Release.`);
+      healed = true;
+      break;
+    } catch (err) {
+      console.error(`[abi] copy failed: ${err.message}`);
     }
   }
 }
