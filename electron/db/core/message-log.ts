@@ -39,6 +39,7 @@ import {
   type RolloutEvent,
   type RolloutProcessEvent,
 } from './rollout-events';
+import { repairInterruptedToolCalls } from './message-repair';
 
 const logger = getLogger();
 
@@ -264,15 +265,52 @@ export class MessageLog {
         byte_len: number;
       }>;
 
-    return rows.map((row) => ({
-      id: row.id,
-      sessionId: row.session_id,
-      seq: row.seq,
-      turnId: row.turn_id,
-      kind: row.kind as EventKind,
-      payload: this.readRange(absolutePath, row.file_offset, row.byte_len),
-      createdAt: row.created_at,
-    }));
+    // Plan 441: production read path applies the rebase projection and the
+    // crash repair so EVERY consumer (renderer history, agent resume via
+    // session:loadMessages, CLI) sees the same folded timeline:
+    //   - superseded raw messages are dropped, rebase newMessages inserted,
+    //   - interrupted tool_uses get a synthesized tool_result, orphan
+    //     tool_results are dropped.
+    // Before this wiring the rebase/repair layers existed but were dead
+    // code: compaction silently regressed on reload and crashed turns fed
+    // providers dangling tool_use blocks.
+    const timelineRows: TimelineEntryRow[] = [];
+    /** Index metadata by entry id, for turnId/createdAt fallbacks below. */
+    const metaById = new Map<string, { turnId: string | null; createdAt: number }>();
+    for (const row of rows) {
+      let entry: RolloutLine;
+      try {
+        entry = JSON.parse(this.readRange(absolutePath, row.file_offset, row.byte_len)) as RolloutLine;
+      } catch {
+        // Corrupt line: scan() reconciles partial tails at startup; here we
+        // surface the row as an opaque compaction-kind payload would break
+        // consumers, so skip it. The file byte range stays intact for audit.
+        logger.warn(
+          'Unparseable rollout line skipped in projection',
+          { sessionId, seq: row.seq },
+          LogComponent.DB,
+        );
+        continue;
+      }
+      metaById.set(entry.id ?? '', { turnId: row.turn_id, createdAt: row.created_at });
+      timelineRows.push({ entry, seq: row.seq });
+    }
+
+    const projected = repairInterruptedToolCalls(applyRebases(timelineRows));
+
+    return projected.map((projectedRow) => {
+      const entry = projectedRow.entry;
+      const meta = metaById.get(entry.id ?? '');
+      return {
+        id: entry.id ?? `seq:${projectedRow.seq}`,
+        sessionId,
+        seq: projectedRow.seq,
+        turnId: meta?.turnId ?? null,
+        kind: deriveKind(entry),
+        payload: JSON.stringify(entry),
+        createdAt: rolloutLineTimestamp(entry) || meta?.createdAt || 0,
+      };
+    });
   }
 
   /**
@@ -495,7 +533,10 @@ export class MessageLog {
    * projection layer changes via `applyRebases` at read time.
    *
    * `supersededUpToSeq` is the highest raw seq whose line should be
-   * replaced by `newMessages` in the projection. `newMessages` may be
+   * replaced by `newMessages` in the projection; pass `null` to supersede
+   * ALL prior messages (the compaction form — callers without a reliable
+   * view of DB-assigned seqs should always use null and rely on id
+   * matching in newMessages to keep survivors). `newMessages` may be
    * empty (true truncation) or contain the kept raw messages (replay).
    *
    * `turnId` ties the rebase to a specific turn for turn-scoped queries.
@@ -509,14 +550,14 @@ export class MessageLog {
   appendRebase(
     sessionId: string,
     turnId: string | null,
-    supersededUpToSeq: number,
+    supersededUpToSeq: number | null,
     newMessages: NewEvent[],
     createdAt: number = Date.now(),
   ): void {
-    if (newMessages.length === 0 && supersededUpToSeq <= 0) return;
+    if (newMessages.length === 0 && (supersededUpToSeq == null || supersededUpToSeq <= 0)) return;
     const event: RebaseEvent = {
       type: 'rebase',
-      id: `rebase:${sessionId}:${supersededUpToSeq}:${createdAt}`,
+      id: `rebase:${sessionId}:${supersededUpToSeq ?? 'all'}:${createdAt}`,
       turnId: turnId ?? null,
       supersededUpToSeq,
       newMessages: newMessages.map((e) => e.payload as MessageEntry),
@@ -997,11 +1038,12 @@ function makeSnippet(text: string, matchIndex: number, queryLen: number): string
 
 /**
  * Apply `rebase` events to a raw timeline trace (`project()` output). Each
- * rebase supersedes every MessageEntry with `seq <= supersededUpToSeq` that
- * appears strictly before the rebase in seq order, replacing them with the
- * rebase's `newMessages`. Rebases themselves, compaction entries, and
- * rollout-process events are preserved verbatim — they are audit artifacts
- * and do not get superseded.
+ * rebase supersedes every MessageEntry with `seq <= supersededUpToSeq` (or
+ * ALL prior messages when the bound is null/undefined) that appears strictly
+ * before the rebase in seq order, replacing them with the rebase's
+ * `newMessages`. Kept messages survive via id matching against newMessages.
+ * Rebases themselves, compaction entries, and rollout-process events are
+ * preserved verbatim — they are audit artifacts and do not get superseded.
  *
  * Why forward-pass semantics: a rebase refers to `seq` values from the raw
  * file, not from any intermediate projected state. Walking the raw trace
@@ -1037,7 +1079,10 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
   const supersededByLaterRebase = (msgSeq: number, msgId: string): boolean => {
     for (let i = rebases.length - 1; i >= 0; i--) {
       const rb = rebases[i];
-      if (rb.seq > msgSeq && rb.entry.supersededUpToSeq >= msgSeq) {
+      const bound = rb.entry.supersededUpToSeq;
+      // null/undefined bound = "supersede ALL prior messages" (compaction form).
+      const inScope = bound == null || bound < 0 || msgSeq <= bound;
+      if (rb.seq > msgSeq && inScope) {
         const keptByRebase = rb.entry.newMessages.some((m) => m.id === msgId);
         if (!keptByRebase) return true;
       }

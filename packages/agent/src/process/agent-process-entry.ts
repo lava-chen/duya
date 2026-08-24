@@ -1325,12 +1325,14 @@ async function initAgent(
     log(`[Agent-Process] Messages compacted, new count=${newMessageCount}`);
     if (!agent.journal) return;
     const currentMessages = agent.getMessages();
-    // Plan 441: append-only rebase. The journal uses its local seq counter
-    // as supersededUpToSeq so every prior raw message is dropped from the
-    // projection without an IPC roundtrip to the main process. See
-    // `Journal.localSeqCounter` doc for the seq semantics.
-    agent.journal.appendCompactionRebase(
+    // Plan 441: append-only rebase. A null supersededUpToSeq supersedes ALL
+    // raw messages preceding the rebase in the trace — survivors are kept
+    // by id matching against the compacted message list. The subprocess has
+    // no reliable view of DB-assigned seqs, so a numeric bound would be
+    // wrong for resumed sessions.
+    agent.journal.appendRebase(
       `compact:${Date.now()}:${currentMessages.length}`,
+      null,
       currentMessages,
     );
     log(`[Agent-Process] Compaction rebase emitted, newMessages=${currentMessages.length}`);
