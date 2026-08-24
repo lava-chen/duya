@@ -11,12 +11,13 @@
  *   -> HTTP response
  *
  * When sessionId is not registered, sends 'browser:open-agent-tab' IPC to the
- * renderer so it can auto-open a panel tab, then returns 404 to let
- * WebviewCDPClient retry.
+ * renderer so it can auto-open a panel tab. Commands that ask for
+ * `waitRegistration` are held until the webview registers (bounded window);
+ * others get an immediate 404 and WebviewCDPClient polls on its own.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { webContents, type BrowserWindow } from 'electron';
+import { webContents, type BrowserWindow, type WebContents } from 'electron';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 const logger = getLogger();
@@ -31,6 +32,62 @@ const networkCaptures = new Map<string, { pattern: string; requests: unknown[] }
 /** Briefly suppress late CDP retries after the user explicitly closes a tab. */
 const userClosedSessions = new Map<string, number>();
 const USER_CLOSE_COOLDOWN_MS = 15_000;
+
+/**
+ * Commands arriving before the renderer registered the session's webview can
+ * be held server-side until registration lands, instead of bouncing 404s
+ * between WebviewCDPClient and the daemon. Keyed by sessionId; each entry is
+ * the list of resolver callbacks waiting for that session to register.
+ */
+const registrationWaiters = new Map<string, Array<() => void>>();
+export const REGISTRATION_HOLD_TIMEOUT_MS = 10_000;
+let registrationHoldTimeoutMs = REGISTRATION_HOLD_TIMEOUT_MS;
+
+/** Test-only override for the registration hold window. */
+export function setRegistrationHoldTimeoutForTest(ms: number): void {
+  registrationHoldTimeoutMs = ms;
+}
+
+/** Resolve every held command waiting for this session to register. */
+function resolveRegistrationWaiters(sessionId: string): void {
+  const waiters = registrationWaiters.get(sessionId);
+  if (!waiters) return;
+  registrationWaiters.delete(sessionId);
+  for (const waiter of waiters) waiter();
+}
+
+/**
+ * Wait until `registerWebviewSession(sessionId)` is called, or timeout.
+ * Resolves true when registration landed, false on timeout.
+ */
+function waitForRegistration(sessionId: string, timeoutMs: number): Promise<boolean> {
+  return new Promise(resolve => {
+    let settled = false;
+    let waiter: (() => void) | undefined;
+
+    const finish = (registered: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (waiter) {
+        const list = registrationWaiters.get(sessionId);
+        if (list) {
+          const index = list.indexOf(waiter);
+          if (index >= 0) list.splice(index, 1);
+          if (list.length === 0) registrationWaiters.delete(sessionId);
+        }
+      }
+      resolve(registered);
+    };
+
+    waiter = () => finish(true);
+    const list = registrationWaiters.get(sessionId) ?? [];
+    list.push(waiter);
+    registrationWaiters.set(sessionId, list);
+
+    const timer = setTimeout(() => finish(false), timeoutMs);
+  });
+}
 
 /**
  * Upper bound on how many agent browser sessions (pages) may be open at once
@@ -67,7 +124,9 @@ function isUserClosedSession(sessionId: string): boolean {
 
 export function registerWebviewSession(sessionId: string, webContentsId: number): void {
   if (isUserClosedSession(sessionId)) return;
+  const isNewRegistration = !webviewSessionMap.has(sessionId);
   webviewSessionMap.set(sessionId, webContentsId);
+  if (isNewRegistration) resolveRegistrationWaiters(sessionId);
   logger.info(
     `Webview registered: sessionId=${sessionId}, webContentsId=${webContentsId}`,
     undefined,
@@ -231,6 +290,147 @@ export async function handleWebviewNetworkCommand(
   }
 }
 
+// ─── Page-load wait ──────────────────────────────────────────────────
+
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Wait for one webview's page to finish loading entirely inside the daemon.
+ * Subscribes to `Page.loadEventFired` on the attached debugger, with a
+ * readyState poll as a safety net for events that raced or were missed, so
+ * the agent pays a single HTTP call instead of polling document.readyState
+ * over HTTP every 200ms.
+ */
+async function waitForLoadInProcess(
+  wc: WebContents,
+  timeoutMs: number,
+): Promise<{ timedOut: boolean; readyState: string }> {
+  const readReadyState = async (): Promise<string> => {
+    try {
+      const result = (await wc.debugger.sendCommand('Runtime.evaluate', {
+        expression: 'document.readyState',
+        returnByValue: true,
+      })) as { result?: { value?: unknown } } | undefined;
+      return typeof result?.result?.value === 'string' ? result.result.value : '';
+    } catch {
+      return '';
+    }
+  };
+
+  // Fast path: the page already finished loading before we subscribed. The
+  // double-check guards against catching a transient complete state.
+  if ((await readReadyState()) === 'complete') {
+    await delay(100);
+    if ((await readReadyState()) === 'complete') {
+      return { timedOut: false, readyState: 'complete' };
+    }
+  }
+
+  return new Promise(resolve => {
+    let settled = false;
+    let settling = false;
+
+    const cleanup = (): void => {
+      clearTimeout(timeoutTimer);
+      clearInterval(pollTimer);
+      wc.removeListener('destroyed', onDestroyed);
+      try {
+        wc.debugger.removeListener('message', onMessage);
+      } catch {
+        // webContents destroyed mid-wait — nothing left to remove
+      }
+    };
+    const finish = (timedOut: boolean): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      void readReadyState()
+        .then(readyState => resolve({ timedOut, readyState }))
+        .catch(() => resolve({ timedOut, readyState: '' }));
+    };
+    const maybeLoaded = async (): Promise<void> => {
+      if (settled || settling) return;
+      settling = true;
+      await delay(100);
+      settling = false;
+      if (settled) return;
+      if ((await readReadyState()) === 'complete') finish(false);
+    };
+    const onMessage = (_event: unknown, method: string): void => {
+      if (method === 'Page.loadEventFired') void maybeLoaded();
+    };
+    const onDestroyed = (): void => finish(true);
+
+    wc.debugger.on('message', onMessage);
+    wc.once('destroyed', onDestroyed);
+    const pollTimer = setInterval(() => void maybeLoaded(), 250);
+    const timeoutTimer = setTimeout(() => finish(true), timeoutMs);
+  });
+}
+
+/**
+ * HTTP handler for POST /webview-wait-load.
+ *
+ * Body: `{ sessionId, timeoutMs? }`. Waits for the session's page to finish
+ * loading inside the daemon process and reports `{ ok, timedOut, readyState }`.
+ *
+ * Returns true if the request was handled (route matched), false otherwise.
+ */
+export async function handleWebviewWaitLoad(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<boolean> {
+  const url = new URL(req.url ?? '', 'http://localhost');
+  if (req.method !== 'POST' || url.pathname !== '/webview-wait-load') return false;
+
+  try {
+    const body = JSON.parse(await readBody(req)) as {
+      sessionId?: unknown;
+      timeoutMs?: unknown;
+    };
+    if (typeof body.sessionId !== 'string' || !body.sessionId) {
+      jsonResponse(res, 400, { ok: false, error: 'Missing webview session id' });
+      return true;
+    }
+    const webContentsId = webviewSessionMap.get(body.sessionId);
+    if (webContentsId === undefined) {
+      jsonResponse(res, 404, { ok: false, error: 'WEBVIEW_SESSION_NOT_REGISTERED' });
+      return true;
+    }
+    const attachResult = ensureDebuggerAttached(webContentsId);
+    if (attachResult !== true) {
+      jsonResponse(res, 200, { ok: false, error: attachResult });
+      return true;
+    }
+    const wc = webContents.fromId(webContentsId);
+    if (!wc || wc.isDestroyed()) {
+      jsonResponse(res, 404, { ok: false, error: 'WebContents not found' });
+      return true;
+    }
+
+    const requestedTimeout = typeof body.timeoutMs === 'number' ? body.timeoutMs : 10_000;
+    const timeoutMs = Math.min(30_000, Math.max(0, requestedTimeout));
+    try {
+      // Idempotent; required for Page.loadEventFired below.
+      await wc.debugger.sendCommand('Page.enable');
+    } catch {
+      // Already enabled or racing enable — the readyState fallback still works.
+    }
+    const outcome = await waitForLoadInProcess(wc, timeoutMs);
+    jsonResponse(res, 200, {
+      ok: true,
+      timedOut: outcome.timedOut,
+      readyState: outcome.readyState,
+    });
+  } catch (err) {
+    jsonResponse(res, 200, {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Webview wait-load failed',
+    });
+  }
+  return true;
+}
+
 export async function handleWebviewTabControl(
   req: IncomingMessage,
   res: ServerResponse,
@@ -282,7 +482,7 @@ export async function handleWebviewCommand(
 
     const sessionId = body.sessionId as string;
     const focus = body.background !== true;
-    const webContentsId = webviewSessionMap.get(sessionId);
+    let webContentsId = webviewSessionMap.get(sessionId);
 
     if (webContentsId === undefined) {
       if (isUserClosedSession(sessionId)) {
@@ -312,7 +512,6 @@ export async function handleWebviewCommand(
         return true;
       }
       // Trigger renderer to open an agent tab for this session.
-      // WebviewCDPClient will retry via HTTP polling on 404.
       if (mainWindow && !mainWindow.isDestroyed()) {
         logger.info(
           `Requesting agent browser tab for session ${sessionId}`,
@@ -328,13 +527,39 @@ export async function handleWebviewCommand(
           undefined,
           LogComponent.BrowserDaemon,
         );
+        jsonResponse(res, 404, {
+          id: body.id,
+          ok: false,
+          error: 'WEBVIEW_SESSION_NOT_REGISTERED',
+        });
+        return true;
       }
-      jsonResponse(res, 404, {
-        id: body.id,
-        ok: false,
-        error: 'WEBVIEW_SESSION_NOT_REGISTERED',
-      });
-      return true;
+
+      // Hold the request until the renderer registers the new tab's webview
+      // (or the hold window expires) so the first command executes as soon as
+      // the webview is ready instead of bouncing 404 retries between client
+      // and daemon. Clients that don't ask for this still get the plain 404
+      // and poll on their own.
+      if (body.waitRegistration !== true) {
+        jsonResponse(res, 404, {
+          id: body.id,
+          ok: false,
+          error: 'WEBVIEW_SESSION_NOT_REGISTERED',
+        });
+        return true;
+      }
+      const registeredInTime = await waitForRegistration(sessionId, registrationHoldTimeoutMs);
+      const heldWebContentsId = webviewSessionMap.get(sessionId);
+      if (!registeredInTime || heldWebContentsId === undefined) {
+        jsonResponse(res, 404, {
+          id: body.id,
+          ok: false,
+          error: 'WEBVIEW_SESSION_NOT_REGISTERED',
+          held: true,
+        });
+        return true;
+      }
+      webContentsId = heldWebContentsId;
     }
 
     // Focus the exact side-panel tab the agent is operating. Inactive browser
