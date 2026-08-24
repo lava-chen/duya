@@ -266,6 +266,12 @@ const emitLiveUsage = (
       : 0) || systemFallbackTokens || 0;
   const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
   const anchored = estimate.anchored && !compactedPending;
+  // Diagnostic trace for ring anomalies: shows exactly which anchor each
+  // broadcast used (index/value/trailing) so a bad frame can be traced in
+  // app.log without a debugger.
+  log(
+    `[Agent-Process] emitLiveUsage: msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
+  );
   // Last-request per-call fields for the stats line: read off the anchor
   // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
   const anchorMsg =
@@ -2421,6 +2427,13 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
         // to the model on the next request. Recompute statelessly from the
         // full timeline so trailing tool-result volume is included.
         emitTokenUsage();
+      } else if (event.type === 'done') {
+        // The assistant message carrying this round's usage is pushed BEFORE
+        // `done` yields downstream, so emitting here re-anchors the frame on
+        // the fresh per-call usage immediately. Without this, a thinking /
+        // text-only round emits nothing after its `result` (which fires pre-
+        // push) and the ring freezes until the next tool_result or turn end.
+        emitTokenUsage();
       }
 
       const agentMsg = convertSSEToAgentMessage(event);
@@ -2453,6 +2466,22 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     }
 
     let agentMessages = agent.getMessages();
+
+    // Plan 437: persist hook invocation rows. The ConfigHooksRunner buffers
+    // one `msg_type: 'hook_invocation'` Message per dispatch in
+    // agent.pendingHookMessages; without this drain the rows never reach
+    // the DB and hook cards vanish after reload. Best-effort: a failed
+    // append must not break the turn (rows are lost, chat:done still flows).
+    try {
+      const hookMessages = agent.drainPendingHookMessages();
+      if (hookMessages.length > 0) {
+        const hookRes = await appendMessages(msg.sessionId, hookMessages);
+        existingMessageCount += hookRes.count;
+        log(`[Agent-Process] Persisted ${hookRes.count}/${hookMessages.length} hook invocation message(s)`);
+      }
+    } catch (hookErr) {
+      warn('[Agent-Process] Failed to persist hook messages:', hookErr instanceof Error ? hookErr : new Error(String(hookErr)));
+    }
 
     log(`[Agent-Process] Stream ended, tokenUsage present=${!!tokenUsage}, agentMessages=${agentMessages.length}, existingMessageCount=${existingMessageCount}`);
     if (agentMessages.length > 0) {
@@ -2693,6 +2722,17 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       message: errMsg,
       code,
     });
+    // Persist any buffered hook rows even on a failed/aborted turn so the
+    // cards survive reload — hooks that ran before the failure still count.
+    try {
+      const hookMessages = agent.drainPendingHookMessages();
+      if (hookMessages.length > 0) {
+        await appendMessages(msg.sessionId, hookMessages);
+        log(`[Agent-Process] Persisted ${hookMessages.length} hook message(s) on error path`);
+      }
+    } catch (hookErr) {
+      warn('[Agent-Process] Failed to persist hook messages on error path:', hookErr instanceof Error ? hookErr : new Error(String(hookErr)));
+    }
     // Ensure the SSE stream closes even on error
     await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
     sendToMain({ type: 'chat:done', sessionId: msg.sessionId });
