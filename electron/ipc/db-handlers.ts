@@ -421,7 +421,7 @@ export function registerDbHandlers(): void {
       createdAt: e.createdAt,
     }));
     const deletedCount = events.length - keptEvents.length;
-    messageLog.rewriteSession(sessionId, keptEvents);
+    messageLog.appendRebase(sessionId, null, keptEvents.length, keptEvents);
     return { deletedCount };
   });
 
@@ -441,7 +441,7 @@ export function registerDbHandlers(): void {
       createdAt: e.createdAt,
     }));
     const deletedCount = events.length - keptEvents.length;
-    messageLog.rewriteSession(sessionId, keptEvents);
+    messageLog.appendRebase(sessionId, null, keptEvents.length, keptEvents);
     return { deletedCount };
   });
 

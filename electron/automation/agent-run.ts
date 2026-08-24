@@ -18,7 +18,11 @@ import * as http from 'node:http';
 import { BrowserWindow } from 'electron';
 import { getAgentServerPort } from '../agents/agent-server-lifecycle';
 import { getCoreStores } from '../db/core-connection';
-import { ipcMessageToNewEvent } from '../ipc/core-db-adapters';
+// ipcMessageToNewEvent was used by the eager cron-prompt write that plan
+// 441 deleted. The import is no longer needed at runtime; kept commented
+// here so the historical reference survives in case future plan work
+// reintroduces an eager-write path.
+// import { ipcMessageToNewEvent } from '../ipc/core-db-adapters';
 import { getLogger, LogComponent } from '../logging/logger';
 import { toLLMProvider } from '../config/provider-types.js';
 import { resolveCronProvider } from './provider';
@@ -99,21 +103,15 @@ export function createCronSessionRow(params: {
       },
     });
   }
-  if (params.prompt.trim().length > 0) {
-    messageLog.appendBatch([
-      ipcMessageToNewEvent(
-        params.sessionId,
-        {
-          id: `cron-prompt:${params.sessionId}`,
-          role: 'user',
-          content: params.prompt,
-          msg_type: 'text',
-          timestamp: Date.now(),
-        },
-        null,
-      ),
-    ]);
-  }
+  // Plan 441: the eager `messageLog.appendBatch` of the cron prompt was
+  // deleted. The cron run is followed by a `chat:start` to the agent
+  // server, which constructs a DuyaAgent that fires `user_msg_added`
+  // through the Journal at the moment the user message is pushed to the
+  // timeline. The cron prompt lands in the rollout at that point with
+  // the same id the renderer would assign (`cron-prompt:<sessionId>`),
+  // so opening the run view shows the task immediately without a
+  // duplicate eager write here. See `electron/automation/Scheduler.ts`
+  // for the chat:start dispatch path.
   // A cron run is created by the main process, outside any renderer action,
   // so the normal `sync:threads-changed` path (renderer → main → other
   // windows) never fires for it. Broadcast to every window so the session
