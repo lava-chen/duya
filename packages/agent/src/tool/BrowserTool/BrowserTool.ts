@@ -9,7 +9,7 @@ import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
 import { BaseTool } from '../BaseTool.js';
 import { BROWSER_TOOL_NAME, BROWSER_TOOL_DESCRIPTION, BROWSER_TOOL_DESCRIPTION_HUMAN_LIKE } from './constants.js';
-import { ExtensionCDPClient, type ICDPClient } from './CDPClient.js';
+import { ExtensionCDPClient, clearBrowserCache, type ICDPClient } from './CDPClient.js';
 import { WebviewCDPClient } from './WebviewCDPClient.js';
 import { HumanLikeCDPClient } from './HumanLikeCDPClient.js';
 import { resolveBackend, DEFAULT_BROWSER_CONFIG, type BrowserToolConfig } from './backend-resolver.js';
@@ -26,6 +26,9 @@ import { formatResult } from './ResultFormatter.js';
 import { isRecoverableSessionInvalidation, retryOnceAfterSessionInvalidation } from './selfHealing.js';
 import type { BrowserMode, NetworkEnvironment } from './types.js';
 import { logger } from '../../utils/logger.js';
+
+/** Close idle agent pages (and clear cache) this long after the last browser operation. */
+const BROWSER_IDLE_CLOSE_TIMEOUT_MS = 2 * 60 * 1000;
 
 export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   readonly name = BROWSER_TOOL_NAME;
@@ -53,6 +56,15 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   private networkEnvironment: NetworkEnvironment | undefined;
   private config: BrowserToolConfig | null = null;
   private currentSessionId: string | null = null;
+
+  /** In-flight connection attempt — collapses concurrent ensureConnection calls into one. */
+  private connectionPromise: Promise<void> | null = null;
+  /** Number of currently executing browser operations (concurrency detector). */
+  private inflightOps = 0;
+  /** Monotonic counter for ephemeral per-operation session ids. */
+  private ephemeralSeq = 0;
+  /** Timer that auto-closes idle pages after the last operation finishes. */
+  private idleCloseTimer: NodeJS.Timeout | null = null;
 
   constructor(domainBlockerConfig?: DomainBlockerConfig) {
     super();
@@ -96,6 +108,7 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
    * ensureConnection() re-evaluates the backend mode.
    */
   resetConnection(): void {
+    this.cancelIdleCloseTimer();
     if (this.cdp) {
       this.cdp.close?.().catch(() => {});
       this.cdp = null;
@@ -107,7 +120,96 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
     this.currentSessionId = null;
   }
 
-  private ensureConnection = async (sessionId?: string): Promise<void> => {
+  /**
+   * Create a short-lived dedicated client for a contending operation so it
+   * drives its own page instead of interleaving CDP traffic with a
+   * concurrently running operation on the shared primary client. Returns
+   * null when isolation cannot be established (caller then shares the page).
+   */
+  private async acquireIsolatedClient(): Promise<{ client: ICDPClient; snapshotEngine: SnapshotEngine } | null> {
+    if (!this.currentSessionId) return null;
+    const opSessionId = `${this.currentSessionId}::op${++this.ephemeralSeq}`;
+    try {
+      let client: ICDPClient;
+      if (this.extensionAvailable) {
+        // Extension backend creates one automation tab per sessionId.
+        client = new ExtensionCDPClient(opSessionId);
+      } else {
+        // Built-in webview (incl. human-like wrapping): background tabs keep
+        // parallel investigation pages from stealing the sidebar focus.
+        client = new WebviewCDPClient(opSessionId, { background: true });
+      }
+      await client.connect();
+      logger.info(
+        `[BrowserTool] Concurrent operation isolated on dedicated page (${opSessionId})`,
+        undefined,
+        'BrowserTool'
+      );
+      return { client, snapshotEngine: new SnapshotEngine(client) };
+    } catch (error) {
+      logger.warn(
+        `[BrowserTool] Could not open an isolated page for a concurrent operation; sharing the primary page (${error instanceof Error ? error.message : error})`,
+        undefined,
+        'BrowserTool'
+      );
+      return null;
+    }
+  }
+
+  /** Close an ephemeral per-operation page right after its action finished. */
+  private async releaseIsolatedClient(handle: { client: ICDPClient } | null): Promise<void> {
+    if (!handle) return;
+    try {
+      await handle.client.close();
+    } catch {
+      // Best effort — daemon/renderer may already have torn the tab down.
+    }
+  }
+
+  /** Auto-close idle agent pages + clear cache after the last operation ends. */
+  private scheduleIdleClose(): void {
+    this.cancelIdleCloseTimer();
+    if (this.inflightOps > 0 || (!this.cdp && !this.browserPool)) return;
+    this.idleCloseTimer = setTimeout(() => {
+      void this.closeIdlePages();
+    }, BROWSER_IDLE_CLOSE_TIMEOUT_MS);
+    // Never hold the agent process open just for the idle close.
+    this.idleCloseTimer.unref?.();
+  }
+
+  private cancelIdleCloseTimer(): void {
+    if (this.idleCloseTimer) {
+      clearTimeout(this.idleCloseTimer);
+      this.idleCloseTimer = null;
+    }
+  }
+
+  private async closeIdlePages(): Promise<void> {
+    this.idleCloseTimer = null;
+    if (this.inflightOps > 0) return;
+    logger.info(
+      '[BrowserTool] Browser idle — clearing cache and closing agent pages',
+      undefined,
+      'BrowserTool'
+    );
+    await this.cleanup();
+  }
+
+  /**
+   * Single-flight wrapper around connectLocked: concurrent first calls share
+   * one connection attempt instead of each creating their own primary client
+   * (which would leak a duplicate webview/extension tab).
+   */
+  private ensureConnection = (sessionId?: string): Promise<void> => {
+    if (!this.connectionPromise) {
+      this.connectionPromise = this.connectLocked(sessionId).finally(() => {
+        this.connectionPromise = null;
+      });
+    }
+    return this.connectionPromise;
+  };
+
+  private connectLocked = async (sessionId?: string): Promise<void> => {
     const resolvedSessionId = sessionId || `session_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
     // If the session has changed, tear down the existing connection so the
@@ -229,53 +331,79 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
 
     try {
       const sessionId = context?.options?.sessionId;
+      // A new operation cancels any pending idle auto-close.
+      this.cancelIdleCloseTimer();
       await this.ensureConnection(sessionId);
 
-      // Rebuild a fresh ActionContext on every attempt so a self-heal rebuild
-      // (which swaps `this.cdp`) is reflected in the retry.
-      const runOnce = () => {
-        const ctx = this.buildContext(sessionId);
-        return this.actionRegistry.execute(operation, input, ctx);
-      };
+      // Concurrency detector: when another browser operation is still in
+      // flight, run this one on an ephemeral dedicated client (its own page)
+      // so parallel actions never interleave navigations/evaluations on the
+      // shared primary page. Decision + increment must stay synchronous.
+      const needIsolation = this.inflightOps > 0 && this.cdp !== null && this.mode !== 'fallback';
+      this.inflightOps++;
+      let isolated = needIsolation ? await this.acquireIsolatedClient() : null;
 
-      const result = await retryOnceAfterSessionInvalidation(runOnce, {
-        isRecoverable: isRecoverableSessionInvalidation,
-        rebuild: async () => {
-          logger.warn(
-            `[BrowserTool] Session handle invalidated for operation "${operation}"; rebuilding browser session and retrying once.`,
-            undefined,
-            'BrowserTool'
-          );
-          this.resetConnection();
-          await this.ensureConnection(sessionId);
-        },
-        alwaysSurfaceFailureMessage: true,
-      });
-      const resultPayload = { operation, mode: this.mode, ...result };
+      try {
+        // Rebuild a fresh ActionContext on every attempt so a self-heal rebuild
+        // (which swaps `this.cdp`) is reflected in the retry.
+        const runOnce = () => {
+          const baseCtx = this.buildContext(sessionId);
+          const ctx: ActionContext = isolated
+            ? { ...baseCtx, cdp: isolated.client, snapshotEngine: isolated.snapshotEngine }
+            : baseCtx;
+          return this.actionRegistry.execute(operation, input, ctx);
+        };
 
-      // For parallel_fetch and search, preserve a structured result list so
-      // the UI can render a search-result card without parsing markdown.
-      const metadata: ToolResult['metadata'] | undefined =
-        (operation === 'parallel_fetch' || operation === 'search') && Array.isArray(result.results)
-          ? {
-              browserResults: result.results.map((item: Record<string, unknown>) => ({
-                url: String(item.url ?? ''),
-                title: typeof item.title === 'string' && item.title ? item.title : undefined,
-                // parallel_fetch items carry an explicit success flag; search
-                // items have none (any returned item is a live result), so
-                // treat anything that is not explicitly `false` as success.
-                success: item.success !== false,
-                error: typeof item.error === 'string' ? item.error : undefined,
-              })),
+        const result = await retryOnceAfterSessionInvalidation(runOnce, {
+          isRecoverable: isRecoverableSessionInvalidation,
+          rebuild: async () => {
+            logger.warn(
+              `[BrowserTool] Session handle invalidated for operation "${operation}"; rebuilding browser session and retrying once.`,
+              undefined,
+              'BrowserTool'
+            );
+            if (isolated) {
+              await this.releaseIsolatedClient(isolated);
+              isolated = null;
             }
-          : undefined;
+            this.resetConnection();
+            await this.ensureConnection(sessionId);
+          },
+          alwaysSurfaceFailureMessage: true,
+        });
 
-      return {
-        id: crypto.randomUUID(),
-        name: this.name,
-        result: formatResult(operation, resultPayload),
-        metadata,
-      };
+        const resultPayload = { operation, mode: this.mode, ...result };
+
+        // For parallel_fetch and search, preserve a structured result list so
+        // the UI can render a search-result card without parsing markdown.
+        const metadata: ToolResult['metadata'] | undefined =
+          (operation === 'parallel_fetch' || operation === 'search') && Array.isArray(result.results)
+            ? {
+                browserResults: result.results.map((item: Record<string, unknown>) => ({
+                  url: String(item.url ?? ''),
+                  title: typeof item.title === 'string' && item.title ? item.title : undefined,
+                  // parallel_fetch items carry an explicit success flag; search
+                  // items have none (any returned item is a live result), so
+                  // treat anything that is not explicitly `false` as success.
+                  success: item.success !== false,
+                  error: typeof item.error === 'string' ? item.error : undefined,
+                })),
+              }
+            : undefined;
+
+        return {
+          id: crypto.randomUUID(),
+          name: this.name,
+          result: formatResult(operation, resultPayload),
+          metadata,
+        };
+      } finally {
+        this.inflightOps--;
+        if (isolated) {
+          await this.releaseIsolatedClient(isolated);
+        }
+        this.scheduleIdleClose();
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       return {
@@ -288,8 +416,16 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
   }
 
   async cleanup(): Promise<void> {
+    this.cancelIdleCloseTimer();
     if (this.cdp) {
-      await this.cdp.close();
+      // Clear the HTTP cache before tearing the page down so credentials /
+      // tracked resources from automated browsing do not linger.
+      await clearBrowserCache(this.cdp);
+      try {
+        await this.cdp.close();
+      } catch {
+        // Best effort — client may already be gone.
+      }
       this.cdp = null;
       this.snapshotEngine = null;
     }
@@ -298,6 +434,8 @@ export class BrowserTool extends BaseTool implements Tool, ToolExecutor {
       this.browserPool = null;
     }
     this.fallbackBrowser = null;
+    this.currentSessionId = null;
+    this.extensionAvailable = false;
   }
 
   toTool(): Tool {
