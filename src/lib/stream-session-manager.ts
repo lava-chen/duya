@@ -22,7 +22,7 @@ import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent
 import { interruptChat } from './agent-sse-client';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
-import { useContextUsageStore } from '@/stores/context-usage-store';
+import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
 
 // Provider config interface
 interface ProviderConfig {
@@ -1406,22 +1406,7 @@ class StreamSessionManager {
 
         case 'token_usage':
           // Live context-usage snapshot pushed by the worker during streaming.
-          if (event.data && typeof event.data === 'object') {
-            const d = event.data as { usedTokens?: number; inputTokens?: number; outputTokens?: number; cacheHitTokens?: number; cacheCreationTokens?: number; systemTokens?: number; totalInput?: number; totalInputRaw?: number; totalOutput?: number; totalCacheHit?: number; totalCacheCreation?: number };
-            useContextUsageStore.getState().setLive(sessionId, {
-              usedTokens: d.usedTokens ?? 0,
-              inputTokens: d.inputTokens ?? 0,
-              outputTokens: d.outputTokens ?? 0,
-              cacheHitTokens: d.cacheHitTokens,
-              cacheCreationTokens: d.cacheCreationTokens,
-              systemTokens: d.systemTokens,
-              totalInput: d.totalInput,
-              totalInputRaw: d.totalInputRaw,
-              totalOutput: d.totalOutput,
-              totalCacheHit: d.totalCacheHit,
-              totalCacheCreation: d.totalCacheCreation,
-            });
-          }
+          applyWorkerUsageSnapshot(sessionId, event.data as WorkerUsageSnapshot);
           break;
 
         case 'done':

@@ -53,3 +53,46 @@ export const useContextUsageStore = create<ContextUsageState>((set) => ({
       return { liveBySession: next };
     }),
 }));
+
+/** Raw shape of the worker's `token_usage` frame — the inner `data` payload
+ *  after the main process normalizes it into `{ type: 'token_usage', data }`.
+ */
+export interface WorkerUsageSnapshot {
+  usedTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheHitTokens?: number;
+  cacheCreationTokens?: number;
+  systemTokens?: number;
+  totalInput?: number;
+  totalInputRaw?: number;
+  totalOutput?: number;
+  totalCacheHit?: number;
+  totalCacheCreation?: number;
+}
+
+/**
+ * Single mapping from a worker `token_usage` frame into the live store.
+ * Shared by the chat-stream handler (stream-session-manager) and the compact
+ * SSE handler (agent-sse-client.compactContext) so both paths feed the ring
+ * identically.
+ */
+export function applyWorkerUsageSnapshot(
+  sessionId: string,
+  snapshot: WorkerUsageSnapshot | null | undefined,
+): void {
+  if (!snapshot || typeof snapshot !== 'object') return;
+  useContextUsageStore.getState().setLive(sessionId, {
+    usedTokens: snapshot.usedTokens ?? 0,
+    inputTokens: snapshot.inputTokens ?? 0,
+    outputTokens: snapshot.outputTokens ?? 0,
+    cacheHitTokens: snapshot.cacheHitTokens,
+    cacheCreationTokens: snapshot.cacheCreationTokens,
+    systemTokens: snapshot.systemTokens,
+    totalInput: snapshot.totalInput,
+    totalInputRaw: snapshot.totalInputRaw,
+    totalOutput: snapshot.totalOutput,
+    totalCacheHit: snapshot.totalCacheHit,
+    totalCacheCreation: snapshot.totalCacheCreation,
+  });
+}
