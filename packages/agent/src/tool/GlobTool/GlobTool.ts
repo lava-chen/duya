@@ -14,7 +14,7 @@ import type {
   RenderedToolMessage,
   ToolInterruptBehavior,
 } from '../types.js';
-import { expandPath } from '../../utils/path.js';
+import { expandPath, looksLikePosixDrivePath, posixPathToWindowsPath } from '../../utils/path.js';
 import { sanitizeWorkingDirectory } from '../GrepTool/sanitize.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 
@@ -34,7 +34,8 @@ export class GlobTool extends BaseTool {
       },
       path: {
         type: 'string',
-        description: 'Optional directory to search in. Defaults to current working directory.',
+        description:
+          'Optional directory to search in. Defaults to current working directory. On Windows, both native (E:\\repo) and POSIX-shell (/e/repo, /mnt/e/repo) forms are accepted.',
       },
       maxResults: {
         type: 'number',
@@ -71,10 +72,18 @@ export class GlobTool extends BaseTool {
     }
 
     const { pattern, path: searchPath, maxResults } = validation.data;
+    // Model-supplied paths go through expandPath (same entry as Read/Edit/
+    // Write): tilde expansion and — on Windows — Git Bash/WSL/Cygwin drive
+    // paths (/e/repo) converted to native form. Without this, a path learned
+    // from the Bash tool's `pwd` fails sanitizeWorkingDirectory's stat and
+    // silently falls back to the workspace cwd.
+    const normalizedSearchPath = searchPath
+      ? expandPath(searchPath, workingDirectory)
+      : undefined;
     // Prefer the live context cwd, fall back to whatever was captured at
     // construct time. Both must be asar-safe — process.cwd() in the packaged
     // Electron main process resolves to the install dir.
-    let safeCwd = sanitizeWorkingDirectory(searchPath)
+    let safeCwd = sanitizeWorkingDirectory(normalizedSearchPath)
       ?? sanitizeWorkingDirectory(workingDirectory)
       ?? sanitizeWorkingDirectory(process.cwd());
 
@@ -94,9 +103,10 @@ export class GlobTool extends BaseTool {
     // the pattern's directory and validate the allowedRoots boundary against
     // that root (the original cwd may be a different project when the caller
     // globs an absolute path outside it).
-    let effectivePattern = pattern;
-    if (path.isAbsolute(pattern)) {
-      const { root, rel } = splitAbsoluteGlob(pattern);
+    const nativePattern = toNativeGlobPattern(pattern);
+    let effectivePattern = nativePattern;
+    if (path.isAbsolute(nativePattern)) {
+      const { root, rel } = splitAbsoluteGlob(nativePattern);
       const rootCwd = sanitizeWorkingDirectory(root);
       if (rootCwd) {
         safeCwd = rootCwd;
@@ -331,6 +341,19 @@ export function isPatternSafe(pattern: string): { safe: boolean; reason?: string
 // Glob Execution
 // ============================================================
 
+/**
+ * Convert a POSIX-shell drive-form glob ("/e/repo" plus a "**" suffix and
+ * matcher) to its native Windows form so isAbsolute/splitAbsoluteGlob see a
+ * real root. No-op for relative globs, native Windows globs, and — off
+ * Windows — everything.
+ */
+function toNativeGlobPattern(pattern: string): string {
+  if (process.platform === 'win32' && looksLikePosixDrivePath(pattern)) {
+    return posixPathToWindowsPath(pattern);
+  }
+  return pattern;
+}
+
 type GlobMatcher = (str: string) => boolean;
 
 interface GitignoreRules {
@@ -376,10 +399,11 @@ export async function executeGlob(
   // the pattern's directory so callers can pass "C:\\repo\\src\\**\\*.ts"
   // directly without a separate `path` argument. The pattern is validated
   // after re-rooting (the trailing relative portion is what is matched).
-  let effectivePattern = pattern;
+  const nativePattern = toNativeGlobPattern(pattern);
+  let effectivePattern = nativePattern;
   let effectiveCwd = cwd;
-  if (path.isAbsolute(pattern)) {
-    const { root, rel } = splitAbsoluteGlob(pattern);
+  if (path.isAbsolute(nativePattern)) {
+    const { root, rel } = splitAbsoluteGlob(nativePattern);
     if (rel) {
       effectivePattern = rel;
       effectiveCwd = root;
