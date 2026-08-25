@@ -4,7 +4,7 @@
  * Adds input validation and security checks
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, isAbsolute, relative, basename } from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -16,6 +16,7 @@ import type {
 } from '../types.js';
 import { sanitizeWorkingDirectory } from './sanitize.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
+import { expandPath } from '../../utils/path.js';
 
 const execAsync = promisify(exec);
 
@@ -24,6 +25,13 @@ const execAsync = promisify(exec);
 // (cache-friendly). Mirrors the compactness goal of grok-build's grep tool.
 const MAX_LINE_LENGTH = 500;
 const LONG_LINE_SUFFIX = ' ...(line truncated)';
+
+// Wall-clock budget for the pure-Node fallback search (used when ripgrep is
+// unavailable). The fallback reads every file it walks, which on a large
+// repo can stall a turn for minutes; past the budget the search returns
+// what it found with `truncated: true` plus a `warning` so the model knows
+// the result is incomplete instead of misreading it as "no matches".
+const DEFAULT_NODE_FALLBACK_BUDGET_MS = 30_000;
 
 // ============================================================
 // Types
@@ -61,6 +69,11 @@ export interface GrepMatch {
 export interface GrepToolOptions {
   workingDirectory?: string;
   allowedRoots?: string[];
+  /**
+   * Wall-clock budget in ms for the Node fallback search (ripgrep
+   * unavailable). Defaults to {@link DEFAULT_NODE_FALLBACK_BUDGET_MS}.
+   */
+  nodeFallbackTimeBudgetMs?: number;
 }
 
 export interface GrepSearchResult {
@@ -69,6 +82,13 @@ export interface GrepSearchResult {
   total: number;
   /** True when more matches exist than were returned (total > matches.length). */
   truncated: boolean;
+  /**
+   * Present when the search is known to be incomplete for a reason other
+   * than the result cap — currently the Node fallback hitting its wall-clock
+   * budget (ripgrep unavailable). The model must treat a warned result as
+   * partial, never as an authoritative "no matches".
+   */
+  warning?: string;
 }
 
 // ============================================================
@@ -212,7 +232,8 @@ export class GrepTool extends BaseTool {
       },
       path: {
         type: 'string',
-        description: 'Directory path to search in, defaults to current working directory',
+        description:
+          'Directory path to search in, defaults to current working directory. On Windows, both native (E:\\repo) and POSIX-shell (/e/repo, /mnt/e/repo) forms are accepted.',
       },
       case_sensitive: {
         type: 'boolean',
@@ -240,6 +261,7 @@ export class GrepTool extends BaseTool {
 
   private workingDirectory: string;
   private readonly allowedRoots?: readonly string[];
+  private readonly nodeFallbackTimeBudgetMs: number;
   private defaultMaxResults = 100;
 
   // Cached ripgrep availability probe. Reuses the result across calls within a
@@ -259,6 +281,10 @@ export class GrepTool extends BaseTool {
     // undefined.
     this.workingDirectory = sanitizeWorkingDirectory(options.workingDirectory) ?? '';
     this.allowedRoots = options.allowedRoots;
+    this.nodeFallbackTimeBudgetMs =
+      options.nodeFallbackTimeBudgetMs && options.nodeFallbackTimeBudgetMs > 0
+        ? options.nodeFallbackTimeBudgetMs
+        : DEFAULT_NODE_FALLBACK_BUDGET_MS;
   }
 
   get interruptBehavior(): ToolInterruptBehavior {
@@ -508,9 +534,20 @@ export class GrepTool extends BaseTool {
     const matches: GrepMatch[] = [];
     let total = 0;
 
+    // Wall-clock budget. The fallback reads every file it walks, so on a
+    // large repo it can stall a turn for minutes; past the deadline the walk
+    // aborts and the caller reports the result as an incomplete search.
+    const deadline = Date.now() + this.nodeFallbackTimeBudgetMs;
+    const outOfTime = (): boolean => Date.now() >= deadline;
+    let timedOut = false;
+
     try {
       await this.walkDirectory(searchPath, async (filePath) => {
         if (maxResults && matches.length >= maxResults) return;
+        if (outOfTime()) {
+          timedOut = true;
+          return;
+        }
 
         try {
           const content = await readFile(filePath, 'utf-8');
@@ -562,10 +599,15 @@ export class GrepTool extends BaseTool {
         }
       });
     } catch {
-      // Directory not found, etc.
+      // Directory not found, etc. The top-level search path is
+      // existence-checked in execute() before we get here, so this only
+      // swallows unreadable nested directories.
     }
 
-    return { matches, total, truncated: total > matches.length };
+    const warning = timedOut
+      ? `Node fallback search hit its ${this.nodeFallbackTimeBudgetMs}ms time budget (ripgrep unavailable) — results are incomplete, not an authoritative "no matches". Install ripgrep or make it available on PATH for full searches.`
+      : undefined;
+    return { matches, total, truncated: total > matches.length || timedOut, warning };
   }
 
   /**
@@ -573,8 +615,13 @@ export class GrepTool extends BaseTool {
    */
   private async walkDirectory(
     dir: string,
-    callback: (filePath: string) => Promise<void>
+    callback: (filePath: string) => Promise<void>,
+    shouldStop?: () => boolean
   ): Promise<void> {
+    if (shouldStop?.()) {
+      return;
+    }
+
     let entries;
 
     try {
@@ -591,11 +638,14 @@ export class GrepTool extends BaseTool {
     ]);
 
     for (const entry of entries) {
+      if (shouldStop?.()) {
+        return;
+      }
       const fullPath = join(dir, entry.name);
 
       if (entry.isDirectory()) {
         if (!skipDirs.has(entry.name) && !entry.name.startsWith('.')) {
-          await this.walkDirectory(fullPath, callback);
+          await this.walkDirectory(fullPath, callback, shouldStop);
         }
       } else if (entry.isFile()) {
         await callback(fullPath);
@@ -646,11 +696,26 @@ export class GrepTool extends BaseTool {
     // up running ripgrep inside the install bundle.
     const baseDir = sanitizeWorkingDirectory(workingDirectory) ?? this.workingDirectory;
 
-    const searchPath = path
-      ? isAbsolute(path)
-        ? path
-        : join(baseDir, path)
-      : baseDir;
+    // Model-supplied paths go through expandPath (same entry as Read/Edit/
+    // Write): tilde expansion, null-byte rejection, relative resolution
+    // against baseDir, and — on Windows — Git Bash/WSL/Cygwin drive paths
+    // (/e/repo, /mnt/e/repo) converted to native form. Without this, a path
+    // learned from the Bash tool's `pwd` (Git Bash prints /e/...) silently
+    // resolves to <cwd-drive>:\e\... and every search misses.
+    let searchPath: string;
+    try {
+      searchPath = path ? expandPath(path, baseDir || undefined) : baseDir;
+    } catch (error) {
+      return {
+        id,
+        name: this.name,
+        result: JSON.stringify({
+          success: false,
+          error: `Invalid search path: ${error instanceof Error ? error.message : 'unknown error'}`,
+        }),
+        error: true,
+      };
+    }
 
     if (!searchPath) {
       return {
@@ -659,6 +724,22 @@ export class GrepTool extends BaseTool {
         result: JSON.stringify({
           success: false,
           error: 'No working directory available. Pass `path` explicitly or run from a project context.',
+        }),
+        error: true,
+      };
+    }
+
+    // Fail loudly on a nonexistent search path instead of reporting a clean
+    // (and misleading) "No matches found". Both engines scan real paths only.
+    try {
+      await stat(searchPath);
+    } catch {
+      return {
+        id,
+        name: this.name,
+        result: JSON.stringify({
+          success: false,
+          error: `Search path does not exist: ${searchPath}`,
         }),
         error: true,
       };
@@ -684,7 +765,7 @@ export class GrepTool extends BaseTool {
         ? await this.searchWithRipgrep(pattern, searchPath, case_sensitive, file_pattern, effectiveMaxResults, literal, context)
         : await this.searchWithNode(pattern, searchPath, case_sensitive, effectiveMaxResults, literal, context);
 
-      const { matches: results, total, truncated } = searchResult;
+      const { matches: results, total, truncated, warning } = searchResult;
 
       if (results.length === 0) {
         return {
@@ -695,9 +776,16 @@ export class GrepTool extends BaseTool {
             matches: [],
             total,
             truncated,
-            message: 'No matches found',
+            ...(warning ? { warning } : {}),
+            message: warning ? 'Search incomplete — see warning' : 'No matches found',
           }),
-          metadata: { matchCount: 0, total, truncated, engine: hasRipgrep ? 'ripgrep' : 'node' },
+          metadata: {
+            matchCount: 0,
+            total,
+            truncated,
+            engine: hasRipgrep ? 'ripgrep' : 'node',
+            ...(warning ? { warning } : {}),
+          },
         };
       }
 
@@ -717,10 +805,17 @@ export class GrepTool extends BaseTool {
           matches: formattedResults,
           total,
           truncated,
+          ...(warning ? { warning } : {}),
           searchPath,
           engine: hasRipgrep ? 'ripgrep' : 'node',
         }),
-        metadata: { matchCount: results.length, total, truncated, engine: hasRipgrep ? 'ripgrep' : 'node' },
+        metadata: {
+          matchCount: results.length,
+          total,
+          truncated,
+          engine: hasRipgrep ? 'ripgrep' : 'node',
+          ...(warning ? { warning } : {}),
+        },
       };
     } catch (error) {
       return {
@@ -757,16 +852,17 @@ export class GrepTool extends BaseTool {
       const matchCount = parsed.total as number;
       const truncated = parsed.truncated as boolean;
       const engine = parsed.engine as string;
+      const warning = parsed.warning as string | undefined;
 
       if (matchCount === 0) {
         return {
           type: 'text',
-          content: 'No matches found',
+          content: warning ? `Search incomplete: ${warning}` : 'No matches found',
           metadata: result.metadata,
         };
       }
 
-      const summary = `${matchCount} match${matchCount !== 1 ? 'es' : ''} found${truncated ? ' (truncated)' : ''} using ${engine}`;
+      const summary = `${matchCount} match${matchCount !== 1 ? 'es' : ''} found${truncated ? ' (truncated)' : ''} using ${engine}${warning ? ' — incomplete (see warning)' : ''}`;
       return {
         type: 'table',
         content: summary,
