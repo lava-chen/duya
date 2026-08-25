@@ -252,9 +252,15 @@ interface LastCallUsageBlock {
 // the stderr -> prefix-classification -> level-filter pipeline, which drops
 // INFO lines at the main process's default WARN level. Remove once ring
 // behavior is verified.
-const RING_TRACE_FILE = process.env.DUYA_WORKER_LOG_DIR
-  ? path.join(process.env.DUYA_WORKER_LOG_DIR, 'context-ring.log')
-  : null;
+const RING_TRACE_FILE = (() => {
+  const dir = process.env.DUYA_WORKER_LOG_DIR
+    ?? process.env.DUYA_CLI_USER_DATA_DIR
+    ?? process.env.TMPDIR
+    ?? process.env.TEMP
+    ?? process.env.TMP
+    ?? '/tmp';
+  return path.join(dir, 'context-ring.log');
+})();
 const ringTrace = (line: string): void => {
   if (!RING_TRACE_FILE) return;
   try {
