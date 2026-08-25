@@ -337,7 +337,11 @@ function mapStatus(
   hasToolCalls: boolean,
 ): AssistantMessage['stopReason'] {
   if (status === 'failed') return 'error';
-  if (status === 'incomplete') return 'max_turns';
+  // Incomplete = output budget exhausted ('max_output_tokens' is the only
+  // documented incomplete_details.reason). Must surface as 'max_tokens' so
+  // DuyaAgent's truncation guard fires; 'max_turns' means agent-loop
+  // exhaustion, a different condition.
+  if (status === 'incomplete') return 'max_tokens';
   if (status === 'cancelled') return 'aborted';
   if (hasToolCalls) return 'tool_use';
   return 'end_turn';
@@ -426,7 +430,7 @@ export function parseResponsesEvent(
       if (typeof serviceTier === 'string' && serviceTier.length > 0) {
         assistantMsg.providerMeta = { ...assistantMsg.providerMeta, serviceTier };
       }
-      assistantMsg.stopReason = 'max_turns';
+      assistantMsg.stopReason = 'max_tokens';
       return null;
     }
 

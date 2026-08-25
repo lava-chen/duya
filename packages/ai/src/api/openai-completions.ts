@@ -549,11 +549,20 @@ export function assertFinishReasonReceived(args: {
   throw new Error('OpenAI-compatible stream ended without finish_reason');
 }
 
-function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
+/**
+ * Map an OpenAI Chat Completions `finish_reason` to duya's `StopReason`.
+ *
+ * 'length' maps to 'max_tokens' (NOT the run-level 'max_turns'): it means the
+ * per-request output budget was exhausted, which is exactly the condition the
+ * DuyaAgent truncation guard (plan 418 L2) keys on to fail partially-streamed
+ * tool calls instead of executing truncated arguments.
+ */
+// Exported for tests (same seam rationale as parseAnthropicEvent).
+export function mapFinishReason(reason: string): AssistantMessage['stopReason'] {
   switch (reason) {
     case 'stop': return 'end_turn';
     case 'tool_calls': return 'tool_use';
-    case 'length': return 'max_turns';
+    case 'length': return 'max_tokens';
     case 'content_filter': return 'error';
     default: return 'completed';
   }
@@ -826,6 +835,35 @@ export function createOpenAICompletionsClient(options: AIClientOptions): AIClien
 
       // 10. Finalize tool calls — parse accumulated JSON strings.
       finalizeToolCalls(assistantMsg);
+
+      // 10.5 Emit `toolcall_end` for every tool_use block.
+      //
+      // Chat Completions has no per-tool-call terminal frame — the
+      // choice-level `finish_reason` is the only terminal signal, and it
+      // arrives on the choice, not on a tool call. emitSSE maps
+      // `toolcall_end` to the `tool_use` SSE event, which is the ONLY event
+      // DuyaAgent's loop consumes to run tools (executor.addTool +
+      // needsFollowUp). Without this, tool use on every openai-chat endpoint
+      // silently no-ops: the UI flashes `tool_use_started`, but no tool ever
+      // executes and the run finalizes as 'completed' right after the first
+      // turn. The anthropic-messages and openai-responses clients both emit
+      // toolcall_end; this client was the only one missing it.
+      //
+      // Truncated blocks (finish_reason 'length') are emitted too, so the
+      // plan-418 max_tokens truncation guard in DuyaAgent sees them in
+      // assistantContent and fails them instead of executing garbage.
+      for (let i = 0; i < assistantMsg.content.length; i++) {
+        const block = assistantMsg.content[i];
+        if (block.type === 'tool_use') {
+          const sse = emitSSE({
+            type: 'toolcall_end',
+            contentIndex: i,
+            toolCall: block,
+            partial: assistantMsg,
+          });
+          if (sse) yield sse;
+        }
+      }
 
       // 11. Flush think-tag parser if active (emit any remaining buffer).
       if (thinkParser) {
