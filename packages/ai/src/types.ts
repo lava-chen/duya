@@ -193,9 +193,15 @@ export type StopReason =
   | 'completed'
   | 'aborted'
   | 'max_turns'
+  /** Output budget exhausted (OpenAI `finish_reason: 'length'`, Anthropic
+   *  `stop_reason: 'max_tokens'`). Distinct from the run-level 'max_turns'
+   *  cap: the DuyaAgent truncation guard keys on this value to fail
+   *  partially-streamed tool calls (plan 418 L2). */
+  | 'max_tokens'
   | 'error'
   | 'tool_use'
   | 'end_turn'
+  | 'stop_sequence'
   | 'repeated_tool_calls';
 
 // ─── SSE Event types (migrated from packages/agent) ───
