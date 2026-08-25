@@ -114,12 +114,16 @@ export class SkillRegistry {
    * List skills the model can load through the Skill tool.
    *
    * Hidden skills, disabled integrations, and skills which opt out of model
-   * invocation must not be advertised in the model's prompt.
+   * invocation must not be advertised in the model's prompt. Pending
+   * conditional skills (paths-gated, not yet activated by a file match) are
+   * also withheld — they enter the catalog only after
+   * `activateConditionalSkills` clears their `isConditional` flag.
    */
   listModelInvocable(): PromptSkill[] {
     return this.list().filter((skill) =>
       !skill.isHidden
       && !skill.disableModelInvocation
+      && !skill.isConditional
       && (skill.isEnabled?.() ?? true),
     );
   }

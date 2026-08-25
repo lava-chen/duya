@@ -9,6 +9,7 @@
 
 import type { PromptSkill } from './types.js';
 import { getSkillRegistry } from './registry.js';
+import { basename, isAbsolute, relative, sep } from 'node:path';
 
 // State for conditional skills
 const conditionalSkills = new Map<string, PromptSkill>();
@@ -68,21 +69,41 @@ function matchGlob(filePath: string, pattern: string): boolean {
 }
 
 /**
- * Check if a file path matches any of the skill's path patterns
+ * Check if a file path matches any of the skill's path patterns.
+ *
+ * Skill `paths` patterns are conventionally written relative (e.g.
+ * `Dockerfile*`, `src/any-depth/x.tsx` globs), while tool inputs carry
+ * absolute paths. Each candidate is therefore tested as: the raw string,
+ * its basename, and (when a working directory is given and the file lives
+ * under it) its cwd-relative form. The first matching form wins.
  */
-function matchesSkillPaths(filePath: string, skill: PromptSkill): boolean {
+function matchesSkillPaths(filePath: string, skill: PromptSkill, workingDirectory?: string): boolean {
   if (!skill.paths || skill.paths.length === 0) return false;
 
-  return skill.paths.some(pattern => matchGlob(filePath, pattern));
+  const candidates = [filePath, basename(filePath)];
+  if (
+    workingDirectory &&
+    isAbsolute(filePath)
+  ) {
+    const rel = relative(workingDirectory, filePath);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      candidates.push(rel.split(sep).join('/'));
+    }
+  }
+
+  return candidates.some((candidate) =>
+    skill.paths!.some(pattern => matchGlob(candidate, pattern)),
+  );
 }
 
 /**
  * Activate conditional skills that match the given file paths
  *
  * @param filePaths Array of file paths being operated on
+ * @param workingDirectory Optional cwd used to derive relative-path candidates
  * @returns Array of newly activated skill names
  */
-export function activateConditionalSkills(filePaths: string[]): string[] {
+export function activateConditionalSkills(filePaths: string[], workingDirectory?: string): string[] {
   if (conditionalSkills.size === 0) return [];
 
   const activated: string[] = [];
@@ -90,7 +111,7 @@ export function activateConditionalSkills(filePaths: string[]): string[] {
   for (const [name, skill] of conditionalSkills) {
     // Check if any file path matches this skill's patterns
     const shouldActivate = filePaths.some(filePath =>
-      matchesSkillPaths(filePath, skill)
+      matchesSkillPaths(filePath, skill, workingDirectory),
     );
 
     if (shouldActivate) {

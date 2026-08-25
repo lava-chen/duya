@@ -99,6 +99,20 @@ export class SkillTool implements Tool, ToolExecutor {
       };
     }
 
+    // Pending conditional skills are paths-gated and not yet advertised in
+    // the catalog; they become invocable only after activation.
+    if (skill.isConditional) {
+      return {
+        id: crypto.randomUUID(),
+        name: this.name,
+        result: JSON.stringify({
+          error: `Skill ${normalizedName} is conditionally available and not yet activated (no matching file was operated on)`,
+          availableSkills: registry.listModelInvocable().map((available) => available.name),
+        }),
+        error: true,
+      };
+    }
+
     // Determine execution mode
     const isFork = skill.context === 'fork';
 
