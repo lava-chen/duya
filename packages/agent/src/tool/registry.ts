@@ -1,10 +1,38 @@
 /**
+ * Input keys whose string values are file/directory paths operated on by the
+ * tool. Used to drive conditional-skill activation (paths-gated skills).
+ */
+const PATH_BEARING_INPUT_KEYS = ['file_path', 'notebook_path', 'path'] as const;
+
+/**
+ * Extract file paths touched by a tool call so path-gated skills can react.
+ * Relative paths are resolved against the tool's working directory.
+ */
+function extractTouchedFilePaths(
+  input: Record<string, unknown>,
+  workingDirectory?: string,
+): string[] {
+  const paths = new Set<string>();
+  for (const key of PATH_BEARING_INPUT_KEYS) {
+    const value = input[key];
+    if (typeof value !== 'string' || value.trim() === '') continue;
+    const resolved = workingDirectory && !path.isAbsolute(value)
+      ? path.resolve(workingDirectory, value)
+      : value;
+    paths.add(resolved);
+  }
+  return Array.from(paths);
+}
+
+/**
  * ToolRegistry - 工具注册与管理
  * 管理工具的注册、查找、执行
  */
 
 import type { Tool, ToolResult, ToolUseContext } from '../types.js';
 import { PermissionRequiredError } from './BaseTool.js';
+import { activateConditionalSkills, getPendingConditionalSkillCount } from '../skills/conditionalSkills.js';
+import path from 'node:path';
 import type { ToolSnapshot } from './snapshot.js';
 
 /**
@@ -468,7 +496,8 @@ export class ToolRegistry {
     }
 
     try {
-      return await tool.executor.execute(input, workingDirectory, context);
+      const result = await tool.executor.execute(input, workingDirectory, context);
+      return this.maybeActivateConditionalSkills(result, input, workingDirectory);
     } catch (error) {
       if (error instanceof PermissionRequiredError) {
         throw error;
@@ -480,6 +509,45 @@ export class ToolRegistry {
         error: true,
       };
     }
+  }
+
+  /**
+   * After a successful tool execution, feed touched file paths to the
+   * conditional-skill activation loop. When skills activate, surface a
+   * transient `pendingContext` note (next provider turn) so the model learns
+   * they are now in the catalog. Never overwrites a tool's own pendingContext.
+   */
+  private maybeActivateConditionalSkills(
+    result: ToolResult,
+    input: Record<string, unknown>,
+    workingDirectory?: string,
+  ): ToolResult {
+    if (result?.error || getPendingConditionalSkillCount() === 0) {
+      return result;
+    }
+
+    const filePaths = extractTouchedFilePaths(input, workingDirectory);
+    if (filePaths.length === 0) {
+      return result;
+    }
+
+    let activated: string[] = [];
+    try {
+      activated = activateConditionalSkills(filePaths, workingDirectory);
+    } catch {
+      // Activation is best-effort; never fail the tool result over it.
+      return result;
+    }
+
+    if (activated.length > 0 && !result.pendingContext) {
+      const names = activated.join(', ');
+      result.pendingContext = Promise.resolve(
+        `Conditionally-available skill(s) just activated because a matching file was operated on: ${names}. ` +
+        'They now appear in the Skills catalog; load one via its <location> with the read tool or the Skill tool when relevant to the task.',
+      );
+    }
+
+    return result;
   }
 
   /**
