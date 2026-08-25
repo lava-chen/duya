@@ -9,6 +9,10 @@ release/
 build/
 *.tsbuildinfo
 
+# Downloaded ripgrep binary (scripts/fetch-ripgrep.mjs) — fetched at build
+# time, never committed.
+resources/ripgrep/
+
 # Generated assembled prompt docs (read-only local reference, not source)
 /doya-general-prompt-assembled.md
 
