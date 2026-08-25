@@ -16,33 +16,18 @@ import { scanSkillFile, shouldAllowInstall, type SkillFinding } from '../securit
 import { registerConditionalSkill, separateConditionalSkills } from './conditionalSkills.js';
 import { normalizeRequiredEnvVars } from './envVarCollector.js';
 import { parseSkillFrontmatter } from './frontmatter.js';
+import { getRootSnapshotCache } from './rootSnapshotCache.js';
+import { shouldSkipScanDir } from './scanFilter.js';
 import { settingDb } from '../ipc/db-client.js';
 
 const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
 
 /**
- * Directory names never scanned for skills. Dot-directories are skipped
- * wholesale (`.git`, `.svn`, caches); the explicit list covers common
- * dependency/build noise that can appear inside project skill trees.
- * System skills (`<bundled>/​.system`) are unaffected: `loadSystemSkills`
- * enumerates the *contents* of `.system`, not `.system` itself.
+ * Directory names never scanned for skills — shared with fingerprintDir via
+ * `scanFilter.ts` so discovery and snapshotting always agree on noise.
  */
-const SKIP_SCAN_DIR_NAMES = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  '__pycache__',
-  '.venv',
-  'venv',
-]);
-
-function shouldSkipScanDir(entryName: string): boolean {
-  return entryName.startsWith('.') || SKIP_SCAN_DIR_NAMES.has(entryName);
-}
+// (rules live in ./scanFilter.js)
 
 /**
  * Agent Skills spec limits (aligned with pi's discovery rules):
@@ -324,11 +309,77 @@ async function readCategoryDescription(dirPath: string): Promise<string | undefi
 }
 
 /**
- * Load skills from a specific directory
- * If the directory has a DESCRIPTION.md, it's a category directory
- * and skills are loaded from subdirectories with category inherited from parent
+ * Shared cache-key inputs for a skill directory. Everything that changes
+ * how a directory is interpreted belongs here: source stamps skill.source,
+ * the scan toggles gate the security pass, and the bundled-name set
+ * decides effectiveSource for synced copies. Disabled-name overrides are
+ * applied AFTER loading (in loadSkills), so they need no key here.
+ */
+function buildSnapshotConfigKey(
+  source: SkillSource,
+  skipSecurityScan?: boolean,
+  securityBypassSkills?: string[],
+  bundledSkillNames?: Set<string>,
+): string {
+  return JSON.stringify([
+    source,
+    skipSecurityScan ?? false,
+    [...(securityBypassSkills ?? [])].sort(),
+    [...(bundledSkillNames ?? [])].sort(),
+  ]);
+}
+
+/**
+ * Resolve one child directory through the per-skill snapshot cache
+ * (plan 445). Unchanged subtrees reuse the same PromptSkill object
+ * references across loads; a changed skill rebuilds alone while its
+ * siblings stay cached.
+ */
+async function resolveSkillDirCached(
+  entryPath: string,
+  entryName: string,
+  source: SkillSource,
+  inheritedCategory?: SkillCategory,
+  securityBypassSkills?: string[],
+  bundledSkillNames?: Set<string>,
+  skipSecurityScan?: boolean,
+): Promise<PromptSkill[]> {
+  const configKey = buildSnapshotConfigKey(source, skipSecurityScan, securityBypassSkills, bundledSkillNames);
+  return getRootSnapshotCache().get(entryPath, configKey, async () => {
+    const skill = await createSkillFromDirectory(
+      entryPath,
+      entryName,
+      source,
+      inheritedCategory,
+      securityBypassSkills,
+      skipSecurityScan,
+    );
+    if (skill) return [skill];
+    // Not a SKILL.md leaf — recurse as a (possibly nested-category) tree.
+    // Propagate the entry-name-derived category (e.g. 'development') so
+    // <root>/development/<skill> inherits it even though the nested walk
+    // re-derives isCategoryDir from its own DESCRIPTION.md.
+    const nestedParent = CATEGORY_MAP[entryName.toLowerCase()] ?? inheritedCategory;
+    return loadSkillsFromDirectory(
+      entryPath,
+      source,
+      nestedParent,
+      securityBypassSkills,
+      bundledSkillNames,
+      skipSecurityScan,
+    );
+  });
+}
+
+/**
+ * Load skills from a specific directory.
  *
- * Exported for tests and tooling; production entry point is `loadSkills`.
+ * If the directory has a DESCRIPTION.md, it's a category directory and
+ * skills are loaded from subdirectories with category inherited from parent.
+ * Each child directory is resolved through the per-skill snapshot cache
+ * (plan 445): unchanged subtrees reuse the same PromptSkill object
+ * references; the walk itself always runs so per-load cost stays O(entries)
+ * plus O(changed skills).
  */
 export async function loadSkillsFromDirectory(
   dirPath: string,
@@ -388,19 +439,18 @@ export async function loadSkillsFromDirectory(
     const effectiveSource: SkillSource =
       (source === 'user' && bundledSkillNames?.has(entry)) ? 'bundled' : source;
 
-    const skill = await createSkillFromDirectory(entryPath, entry, effectiveSource, inheritedCategory, securityBypassSkills, skipSecurityScan);
-    if (skill) {
-      skills.push(skill);
-    } else {
-      // If not a skill directory, recursively try to load as category directory
-      // This handles nested category structures like skills/apple/apple-notes/
-      // Propagate the entry-name-derived category (e.g. 'development') so
-      // <root>/development/<skill> inherits it even though the nested call
-      // re-derives isCategoryDir from its own DESCRIPTION.md.
-      const nestedParent = CATEGORY_MAP[entry.toLowerCase()] ?? inheritedCategory;
-      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, nestedParent, securityBypassSkills, bundledSkillNames, skipSecurityScan);
-      skills.push(...nestedSkills);
-    }
+    // Per-child snapshot resolution (plan 445): a SKILL.md leaf resolves to
+    // [skill] or []; anything else recurses as a nested-category tree.
+    const childSkills = await resolveSkillDirCached(
+      entryPath,
+      entry,
+      effectiveSource,
+      inheritedCategory,
+      securityBypassSkills,
+      bundledSkillNames,
+      skipSecurityScan,
+    );
+    skills.push(...childSkills);
   }
 
   return skills;

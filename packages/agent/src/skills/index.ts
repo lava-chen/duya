@@ -9,6 +9,13 @@ export * from './loader.js';
 export * from './frontmatter.js';
 export * from './mcp.js';
 export * from './skillsSync.js';
+export { fingerprintDir } from './fingerprint.js';
+export { shouldSkipScanDir } from './scanFilter.js';
+export {
+  RootSnapshotCache,
+  getRootSnapshotCache,
+  resetRootSnapshotCache,
+} from './rootSnapshotCache.js';
 export {
   activateConditionalSkills,
   getPendingConditionalSkills,

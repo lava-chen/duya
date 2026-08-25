@@ -4,6 +4,7 @@
  */
 
 import type { PromptSkill, SkillCategory, SkillCategoryInfo, SkillMetadata, SkillSource, CategoryDescription } from './types.js';
+import { resetRootSnapshotCache } from './rootSnapshotCache.js';
 
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
   'cognition': 'Cognition',
@@ -272,11 +273,16 @@ export function getSkillRegistry(): SkillRegistry {
 }
 
 /**
- * Reset the global skill registry
+ * Reset the global skill registry.
+ *
+ * Also clears the root snapshot cache: cached category-description side
+ * effects and PromptSkill objects belong to the registry generation they
+ * were built for.
  */
 export function resetSkillRegistry(): void {
   if (globalRegistry) {
     globalRegistry.clear();
     globalRegistry = null;
   }
+  resetRootSnapshotCache();
 }
