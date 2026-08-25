@@ -56,6 +56,11 @@ export interface SystemSkillGuiInfo {
  * - Extra files present in the user copy but gone from bundled are kept
  *   (never delete user files).
  */
+/**
+ * Per-entry copy-if-missing (plan 434): existing files are user territory
+ * and are never overwritten — including SKILL.md edits. New files/dirs from
+ * a later app update are still picked up incrementally.
+ */
 function syncSystemSkillDir(src: string, dst: string): void {
   if (!fs.existsSync(dst)) {
     fs.cpSync(src, dst, { recursive: true });
@@ -69,28 +74,17 @@ function syncSystemSkillDir(src: string, dst: string): void {
       syncSystemSkillDir(srcPath, dstPath);
       continue;
     }
-    // hooks.json is user-edited by design (SKILL.md: fix args[0] in place).
-    if (entry.name === 'hooks.json' && fs.existsSync(dstPath)) continue;
     if (!fs.existsSync(dstPath)) {
       fs.copyFileSync(srcPath, dstPath);
-      continue;
-    }
-    try {
-      const a = fs.readFileSync(srcPath);
-      const b = fs.readFileSync(dstPath);
-      if (!a.equals(b)) fs.copyFileSync(srcPath, dstPath);
-    } catch {
-      // Unreadable file — leave the existing copy alone.
     }
   }
 }
 
 /**
  * Idempotently copy the bundled `.system` skills into the user skills
- * directory (`<userSkillsDir>/.system/`). Per-entry copy-if-missing for
- * fresh installs; changed bundled files are re-mirrored on existing
- * installs (see `syncSystemSkillDir`), while a user-edited copy is never
- * overwritten wholesale.
+ * directory (`<userSkillsDir>/.system/`). Strict copy-if-missing per entry
+ * (plan 434): user-edited files are never overwritten; skills/files added
+ * by a later app update are synced on the next pass.
  */
 export function ensureSystemSkillsSynced(userSkillsDir: string, bundledSkillsDir: string): void {
   const srcDir = path.join(bundledSkillsDir, '.system');
