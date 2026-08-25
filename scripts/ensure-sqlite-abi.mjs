@@ -68,8 +68,55 @@ function electronBinary() {
   const pathTxt = path.join(dir, 'path.txt');
   if (!fs.existsSync(pathTxt)) return null;
   const bin = path.join(dir, 'dist', fs.readFileSync(pathTxt, 'utf8').trim());
-  return fs.existsSync(bin) ? bin : null;
+  if (fs.existsSync(bin)) return bin;
+  // On Windows, electron ships as `electron.exe` but path.txt records the
+  // bare name "electron". fs.existsSync does not apply PATHEXT, so check
+  // the .exe variant explicitly. spawnSync on win32 also needs the .exe
+  // suffix; passing the un-suffixed path yields ENOENT.
+  if (process.platform === 'win32') {
+    const exeBin = `${bin}.exe`;
+    if (fs.existsSync(exeBin)) return exeBin;
+  }
+  return null;
 }
+
+/**
+ * Normalize `node_modules/electron/path.txt` for the current platform.
+ *
+ * The upstream `electron` install.js writes the correct per-platform value
+ * (`electron.exe` on win32, `electron` on linux, `Electron.app/.../Electron`
+ * on darwin) — without a trailing newline. But node_modules is often copied
+ * across platforms (CI cache, devcontainer, manual rsync) and a file written
+ * on linux surfaces on Windows as `electron\n`. The downstream `cli.js`
+ * (and our own spawn) does not trim(), so `electron .` then fails with
+ * `ENOENT ... \electron\n`. Detect the cross-platform artifact and rewrite
+ * the file in place — idempotent and self-healing.
+ */
+function normalizeElectronPathTxt() {
+  const dir = pkgDir('electron');
+  if (!dir) return;
+  const pathTxt = path.join(dir, 'path.txt');
+  if (!fs.existsSync(pathTxt)) return;
+  const expected =
+    process.platform === 'win32'
+      ? 'electron.exe'
+      : process.platform === 'darwin'
+        ? 'Electron.app/Contents/MacOS/Electron'
+        : 'electron';
+  const current = fs.readFileSync(pathTxt, 'utf8');
+  const normalized = current.replace(/\r?\n/g, '');
+  if (normalized === expected && !current.includes('\n')) return;
+  try {
+    fs.writeFileSync(pathTxt, expected);
+    console.error(
+      `[abi] rewrote electron/path.txt (${JSON.stringify(current)} -> ${JSON.stringify(expected)}) for ${process.platform}.`,
+    );
+  } catch (err) {
+    console.error(`[abi] failed to rewrite electron/path.txt: ${err.message}`);
+  }
+}
+
+normalizeElectronPathTxt();
 
 /**
  * Probe that the native binding REALLY loads under the target runtime.
