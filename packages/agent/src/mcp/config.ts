@@ -76,6 +76,51 @@ export function getUserMcpTomlPath(): string | null {
 }
 
 /**
+ * Merge secrets back into user MCP server configs.
+ *
+ * The main-process ConfigStore splits secret values (`.env.` keys under
+ * `[mcp_servers.*]`, plan 334) into `~/.duya/secrets.json` keyed by their
+ * dotted config path (e.g. `mcp_servers.minimax.env.MINIMAX_API_KEY`). The
+ * worker reads `config.toml` directly, so without this merge every stdio
+ * server whose credentials were split out spawns with an empty `env` and
+ * typically crashes at startup (e.g. minimax-mcp requires MINIMAX_API_KEY).
+ * Mirrors the main process: user-configured env always wins over nothing;
+ * here secrets fill in keys absent from (or empty in) the TOML `env` table.
+ */
+export async function mergeMcpSecrets(
+  servers: UserMcpTomlServer[],
+): Promise<UserMcpTomlServer[]> {
+  const secretsPath = join(resolveConfigRoot(), 'secrets.json');
+  let raw: string;
+  try {
+    raw = await readFile(secretsPath, 'utf8');
+  } catch {
+    return servers;
+  }
+  let secrets: unknown;
+  try {
+    secrets = JSON.parse(raw);
+  } catch {
+    return servers;
+  }
+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
+    return servers;
+  }
+
+  const prefix = 'mcp_servers.';
+  for (const [key, value] of Object.entries(secrets)) {
+    if (!key.startsWith(prefix) || typeof value !== 'string') continue;
+    // Secret key shape: mcp_servers.<server>.env.<VAR_NAME>
+    const parts = key.slice(prefix.length).split('.');
+    if (parts.length !== 3 || parts[1] !== 'env' || !parts[2]) continue;
+    const server = servers.find((s) => s.name === parts[0]);
+    if (!server) continue;
+    server.env = { ...(server.env ?? {}), [parts[2]]: value };
+  }
+  return servers;
+}
+
+/**
  * Read user-managed MCP servers from the unified config store
  * (`config.toml` → `[mcp_servers.*]`). Plan 334 moved user MCPs out of
  * the legacy `mcp.toml`; the worker MUST read the same source the main
@@ -85,7 +130,8 @@ export function getUserMcpTomlPath(): string | null {
 export async function readUserMcpToml(): Promise<UserMcpTomlServer[]> {
   const filePath = join(resolveConfigRoot(), 'config.toml');
   try {
-    return parseUserMcpToml(await readFile(filePath, 'utf8'));
+    const servers = parseUserMcpToml(await readFile(filePath, 'utf8'));
+    return await mergeMcpSecrets(servers);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;

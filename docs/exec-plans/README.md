@@ -68,6 +68,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [429-harness-gap-closure](./active/429-harness-gap-closure.md) | 现代 Agent Harness 差距整改：编辑验证闭环 / PreToolUse 阻断 / 文件级 checkpoint-rewind / Windows 沙箱 / 模型故障转移 / 子代理并行 UI（证据核验完成，分项方案已定） | P0（首项）/P1 | Planning |
 | [440-provider-stream-coverage](./active/440-provider-stream-coverage.md) | Provider 流解析覆盖度：refusal 静默空回复修复（P0）+ unknown block 降级不丢弃策略（Anthropic server tools / Responses items，P1）+ encrypted reasoning 回放与 annotations/logprobs 捕获（P2）+ bedrock/vertex/gemini 接入（P3）；audio 明确 won't-fix | P0 | Phase 0-2 ✅（2026-08-23）；P3 待立项 |
 | [441-event-granularity-journal](./active/441-event-granularity-journal.md) | 持久化事件级 journal 重构：放弃 turn 末尾批量 + subagent 每 3 秒增量 + cron 立即写入的三套并存策略，统一为 agent-core `_pushDurable` 边界触发的 per-event journal；引入 rebase 事件让 `rewriteSession` 退役；读侧合成中断 tool_result；200ms 组 fsync + 屏障同步 | P0 | Phase 1–6 ✅（rollout 事件类型、agent-core journal、读侧修复、rebase 替换、路径统一、fsync-policy 27/27 单测过）；Phase 7 文档+手动 e2e 待跑 |
+| [445-skills-reload-snapshot-cache](./active/445-skills-reload-snapshot-cache.md) | Skills reload 快照缓存：codex 式 per-root snapshot + hermes 式 mtime/size manifest 指纹，目录未变的 root 复用 PromptSkill 对象，消除 GUI 开关触发的全量重扫（harness-comparison 审计 P3 遗留项） | P2 | Planning |
 
 ### Conductor / Canvas
 
