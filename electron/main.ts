@@ -160,6 +160,17 @@ if (gotTheLock) {
   app.whenReady().then(async () => {
     app.name = 'DUYA';
 
+    // Publish the bundled ripgrep path (resources/ripgrep/) as
+    // DUYA_RIPGREP_PATH before any agent child process can spawn, so every
+    // process.env-spreading spawn site inherits it (see electron/agents/ripgrep-path.ts).
+    try {
+      const { publishRipgrepEnv } = await import('./agents/ripgrep-path');
+      publishRipgrepEnv();
+    } catch {
+      // Ripgrep stays optional — the agent's grep tool falls back to its
+      // Node engine when neither the bundled binary nor PATH provides rg.
+    }
+
     // Dev-mode renderer disk cache can serve stale module transforms
     // whose `?v=<optimize hash>` imports 404 after Vite re-optimizes
     // deps with a different hash (Vite's module ETag is derived from

@@ -60,6 +60,14 @@ extraResources:
   - from: packages/agent/bundle/
     to: agent-bundle/
     filter: ["**/*"]
+  # Prebuilt ripgrep binary fetched by scripts/fetch-ripgrep.mjs (pinned
+  # release, cached, non-fatal when offline). resolveBundledRipgrepPath()
+  # publishes it as DUYA_RIPGREP_PATH for the agent's grep tool. The fetch
+  # script always creates the directory (even on failure) so this glob never
+  # hits a missing source.
+  - from: resources/ripgrep/
+    to: ripgrep/
+    filter: ["**/*"]
   - from: packages/cli/bundle/
     to: cli-bundle/
     filter: ["**/*"]
