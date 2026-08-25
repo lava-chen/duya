@@ -104,8 +104,10 @@ export function HookActionRow({ hook }: HookActionRowProps) {
   const isVerifier = hook.exitCode !== undefined && hook.exitCode !== 0;
   const showBody = hasContext || hasError || hook.status === 'skipped' || hook.status === 'timeout';
 
+  // Fixed-height card: content scrolls inside instead of growing the row.
   const expandedBody = (
     <div className="mx-1 my-1 rounded-lg tool-card p-3 relative">
+      <div className="h-32 overflow-y-auto pr-1">
       {hasContext ? (
         <pre className="text-xs text-foreground/85 whitespace-pre-wrap break-words font-mono leading-relaxed">
           {isVerifier ? (
@@ -146,6 +148,7 @@ export function HookActionRow({ hook }: HookActionRowProps) {
           </div>
         </div>
       ) : null}
+      </div>
 
       {/* Mirror the tool rows' corner badge so hook rows visually
           share the same chrome. */}
