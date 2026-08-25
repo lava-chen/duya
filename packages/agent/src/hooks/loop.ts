@@ -27,6 +27,7 @@ import { renderSystemReminder } from '../agent/reminders.js';
 import { adaptLoopNudgeContext } from '../message/runtime-context-adapters.js';
 import { projectRuntimeContextToProviderMessage } from '../message/message-projectors.js';
 import { logger } from '../utils/logger.js';
+import { applyHookInjection, type InjectableMessage } from './injection.js';
 
 // ============================================================================
 // Events & context
@@ -85,6 +86,14 @@ export interface LoopHookInjectEffect {
   /** Inner text of the system-reminder block (no wrapper). */
   injection: string;
   source: RuntimeContextSource;
+  /**
+   * Context-injection governance key (hooks/config-loop only). When set,
+   * {@link applyLoopHookEffect} routes the push through the dedup /
+   * replace-last chokepoint instead of blind append: identical content
+   * already in the run is skipped; a newer block with the same key replaces
+   * the previous one in place (verifier "latest state" semantics).
+   */
+  dedupKey?: string;
 }
 
 /** `block_finalize`: veto the finalize, inject, continue the loop. PreFinalize only. */
@@ -186,11 +195,28 @@ export function applyLoopHookEffect(
   effect: LoopHookEffect,
   seqIndex: number,
 ): void {
-  messages.push(
-    projectRuntimeContextToProviderMessage(
-      adaptLoopNudgeContext(renderSystemReminder(effect.injection), effect.source, {
-        seqIndex,
-      }),
-    ),
+  const projected = projectRuntimeContextToProviderMessage(
+    adaptLoopNudgeContext(renderSystemReminder(effect.injection), effect.source, {
+      seqIndex,
+    }),
   );
+
+  // Governed path (hook-context injections): dedup / replace-last by key.
+  if (effect.type === 'inject' && effect.dedupKey) {
+    const content = projected.content;
+    if (typeof content !== 'string') {
+      logger.warn('[LoopHook] inject effect projected to non-string content; skipping');
+      return;
+    }
+    applyHookInjection(
+      messages as unknown as InjectableMessage[],
+      effect.dedupKey,
+      content,
+      effect.source,
+      { id: projected.id, now: Date.now() },
+    );
+    return;
+  }
+
+  messages.push(projected);
 }

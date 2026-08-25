@@ -86,7 +86,7 @@ const DEFAULTS: SteeringConfig = {
 };
 
 /** Config root: `~/.duya` (or `~/.duya/test-namespaces/<ns>` in test mode). */
-function resolveConfigRoot(): string {
+export function resolveConfigRoot(): string {
   const base = path.join(os.homedir(), '.duya');
   if (process.env.DUYA_TEST === '1') {
     const ns = process.env.DUYA_TEST_NAMESPACE;

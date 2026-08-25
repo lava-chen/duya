@@ -533,6 +533,15 @@ export const BashCommandHookSchema = z.object({
   once: z.boolean().optional().describe('If true, runs once and is removed'),
   async: z.boolean().optional().describe('If true, runs in background without blocking'),
   asyncRewake: z.boolean().optional().describe('If true, wakes model on exit code 2'),
+  additionalContextLimit: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'Approximate token threshold for spilling this hook\'s additionalContext to disk. ' +
+        'Unset uses the default (2500 tokens); 0 disables spilling (hard truncate only).',
+    ),
 });
 
 /**
@@ -554,6 +563,15 @@ export const ProcessCommandHookSchema = z.object({
   once: z.boolean().optional().describe('If true, runs once and is removed'),
   async: z.boolean().optional().describe('If true, runs in background without blocking'),
   asyncRewake: z.boolean().optional().describe('If true, wakes model when async hook completes'),
+  additionalContextLimit: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      'Approximate token threshold for spilling this hook\'s additionalContext to disk. ' +
+        'Unset uses the default (2500 tokens); 0 disables spilling (hard truncate only).',
+    ),
 });
 
 /**

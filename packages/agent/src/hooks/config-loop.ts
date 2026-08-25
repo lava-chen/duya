@@ -26,6 +26,11 @@ import { readHooksConfig } from './config.js';
 import { executeHook, executeHookBackground, hookCommandLine } from './executor.js';
 import { hookCircuitBreaker, hookBreakerKey } from './circuit-breaker.js';
 import type { BaseHookInput, HookMatcher, HookCommand, HooksSettings } from './types.js';
+import {
+  governHookContext,
+  renderHookContextEnvelope,
+  type HookContextInfo,
+} from './injection.js';
 import { logger } from '../utils/logger.js';
 
 /** After every builtin steering hook (10/20/30) — user hooks steer last. */
@@ -40,6 +45,21 @@ export interface ConfiguredLoopHookDeps {
   hooks?: HooksSettings;
   /** Working directory passed to command hooks; defaults to process.cwd(). */
   cwd?: string;
+  /**
+   * Run-level cap on total injected hook-context tokens across ALL bridged
+   * events (PostToolUse fires every turn, so per-hook limits alone do not
+   * bound cumulative volume). Default {@link RUN_INJECTION_BUDGET_TOKENS}.
+   */
+  runInjectionBudgetTokens?: number;
+}
+
+/** Default run-level cap on total hook-context injection (tokens). */
+export const RUN_INJECTION_BUDGET_TOKENS = 50_000;
+
+/** Shared spend tracker for one createConfiguredLoopHooks() call (= one run). */
+interface InjectionBudget {
+  cap: number;
+  spent: number;
 }
 
 /**
@@ -50,12 +70,16 @@ export function createConfiguredLoopHooks(deps?: ConfiguredLoopHookDeps): LoopHo
   const settings = deps?.hooks !== undefined ? deps.hooks : readHooksConfig();
   if (!settings) return [];
   const cwd = deps?.cwd ?? process.cwd();
+  const budget: InjectionBudget = {
+    cap: deps?.runInjectionBudgetTokens ?? RUN_INJECTION_BUDGET_TOKENS,
+    spent: 0,
+  };
 
   const registrations: LoopHookRegistration[] = [];
   for (const event of BRIDGED_EVENTS) {
     const matchers = settings[event];
     if (!matchers || matchers.length === 0) continue;
-    registrations.push(buildRegistration(event, matchers, cwd));
+    registrations.push(buildRegistration(event, matchers, cwd, budget));
   }
 
   // PreFinalize is the one configured event the loop bus dispatches that
@@ -75,6 +99,7 @@ function buildRegistration(
   event: BridgedEvent,
   matchers: HookMatcher[],
   cwd: string,
+  budget: InjectionBudget,
 ): LoopHookRegistration {
   return {
     id: `config.${event}`,
@@ -82,7 +107,7 @@ function buildRegistration(
     priority: CONFIG_HOOK_PRIORITY,
     handler: async (ctx: LoopHookDispatchContext) => {
       const input = buildHookInput(event, ctx, cwd);
-      const contexts: string[] = [];
+      const blocks: string[] = [];
       for (const matcher of matchers) {
         if (!matcherMatches(matcher, ctx, event)) continue;
         for (const hook of matcher.hooks) {
@@ -115,26 +140,58 @@ function buildRegistration(
             }
           }
           const result = await executeHook(hook, input, { cwd });
-          if (result.ok) {
-            if (result.additionalContext) contexts.push(result.additionalContext);
+          const rawContext = collectHookContext(result, hook.type);
+          if (!rawContext) {
+            if (result.ok || result.exitCode !== undefined) continue;
+            logger.warn(
+              `[ConfigHook] ${event} ${hook.type} hook failed (skipped): ${result.error ?? 'unknown error'}`,
+            );
             continue;
           }
-          // Verifier semantics: a command hook that ran but exited non-zero
-          // reported problems (e.g. lint/typecheck failures). Feed its
-          // diagnostic back to the model instead of swallowing it — the
-          // whole point of a post-edit verifier. True infra failures (spawn
-          // failure, timeout) carry no `exitCode` and stay silent (fail-open).
-          if (result.exitCode !== undefined) {
-            if (result.error) contexts.push(`[verify:${hook.type}] ${result.error}`);
+          // Context-injection governance: budget → envelope. Each hook's
+          // output is governed individually so one noisy hook cannot blow
+          // the combined block past its own limit.
+          const info: HookContextInfo = {
+            event,
+            hookName: hookCommandLine(hook),
+            hookType: hook.type,
+            seq: typeof (input as { turnCount?: number }).turnCount === 'number'
+              ? (input as { turnCount: number }).turnCount
+              : undefined,
+          };
+          const governed = governHookContext(rawContext, info, {
+            limitTokens: (hook as { additionalContextLimit?: number }).additionalContextLimit,
+            sessionId: input.session_id || undefined,
+          });
+          // Run-level aggregate budget: PostToolUse fires every turn, so
+          // per-hook limits alone never bound cumulative volume. Once the
+          // run budget is exhausted, further outputs degrade to a one-line
+          // marker instead of silently disappearing (the model is told why).
+          const remaining = budget.cap - budget.spent;
+          if (governed.estimatedTokens > remaining) {
+            logger.warn(
+              `[ConfigHook] ${event} hook context omitted: run injection budget exhausted ` +
+                `(${budget.spent}/${budget.cap} tokens)`,
+            );
+            blocks.push(renderHookContextEnvelope(
+              info,
+              `[hook output omitted: run hook-context budget exhausted (${budget.spent}/${budget.cap} tokens spent)]`,
+            ));
             continue;
           }
-          logger.warn(
-            `[ConfigHook] ${event} ${hook.type} hook failed (skipped): ${result.error ?? 'unknown error'}`,
-          );
+          budget.spent += governed.estimatedTokens;
+          blocks.push(renderHookContextEnvelope(info, governed.content));
         }
       }
-      if (contexts.length === 0) return;
-      return { type: 'inject', injection: contexts.join('\n\n'), source: 'custom' };
+      if (blocks.length === 0) return;
+      return {
+        type: 'inject' as const,
+        injection: blocks.join('\n\n'),
+        source: 'custom' as const,
+        // Event-level replace-last key: a newer combined block replaces the
+        // previous one in place; an unchanged block is deduped entirely.
+        dedupKey: `config.${event}`,
+      };
     },
   };
 }
@@ -194,4 +251,22 @@ function patternMatches(pattern: string, value: string): boolean {
   } catch {
     return value.includes(pattern);
   }
+}
+
+/**
+ * Extract the injectable text from one execution result: success carries
+ * `additionalContext`; verifier semantics feed a non-zero exit's diagnostic
+ * back instead of swallowing it (the whole point of a post-edit verifier).
+ * True infra failures (spawn failure, timeout) carry no `exitCode` and stay
+ * silent (fail-open). Returns null when there is nothing to inject.
+ */
+function collectHookContext(
+  result: Awaited<ReturnType<typeof executeHook>>,
+  hookType: HookCommand['type'],
+): string | null {
+  if (result.ok) return result.additionalContext ?? null;
+  if (result.exitCode !== undefined) {
+    return result.error ? `[verify:${hookType}] ${result.error}` : null;
+  }
+  return null;
 }

@@ -536,7 +536,11 @@ describe('createConfiguredLoopHooks', () => {
       seqIndex: 0,
       messages: [],
     });
-    expect(effects).toEqual([{ type: 'inject', injection: 'pre-turn-ctx', source: 'custom' }]);
+    expect(effects).toHaveLength(1);
+    expect(effects[0]).toMatchObject({ type: 'inject', source: 'custom', dedupKey: 'config.PreTurn' });
+    const preInj = (effects[0] as { injection: string }).injection;
+    expect(preInj).toContain('<hook-context event="PreTurn"');
+    expect(preInj).toContain('pre-turn-ctx');
   });
 
   it('PostToolUse matcher filters by tool name; no matcher matches everything', async () => {
@@ -559,8 +563,10 @@ describe('createConfiguredLoopHooks', () => {
       ],
     });
     expect(withRead).toHaveLength(1);
-    expect(withRead[0]).toMatchObject({ type: 'inject', source: 'custom' });
-    expect((withRead[0] as { injection: string }).injection).toBe('read-ctx\n\nany-ctx');
+    expect(withRead[0]).toMatchObject({ type: 'inject', source: 'custom', dedupKey: 'config.PostToolUse' });
+    const withReadInj = (withRead[0] as { injection: string }).injection;
+    expect(withReadInj).toContain('read-ctx');
+    expect(withReadInj).toContain('any-ctx');
 
     const withoutRead = await bus.dispatch('PostToolUse', {
       sessionId: 's1',
@@ -570,7 +576,9 @@ describe('createConfiguredLoopHooks', () => {
       toolCalls: [{ name: 'Bash', input: {} }],
     });
     expect(withoutRead).toHaveLength(1);
-    expect((withoutRead[0] as { injection: string }).injection).toBe('any-ctx');
+    const withoutReadInj = (withoutRead[0] as { injection: string }).injection;
+    expect(withoutReadInj).toContain('any-ctx');
+    expect(withoutReadInj).not.toContain('read-ctx');
   });
 
   it('failed hooks are skipped (fail-open), successful ones still inject', async () => {
@@ -588,7 +596,44 @@ describe('createConfiguredLoopHooks', () => {
       messages: [],
     });
     expect(effects).toHaveLength(1);
-    expect(effects[0]).toMatchObject({ type: 'inject', injection: 'good-ctx', source: 'custom' });
+    expect(effects[0]).toMatchObject({ type: 'inject', source: 'custom', dedupKey: 'config.PostTurn' });
+    expect((effects[0] as { injection: string }).injection).toContain('good-ctx');
+  });
+
+  it('omits hook context once the run-level injection budget is exhausted', async () => {
+    // ~60 tokens of context per dispatch; cap at 150 → two dispatches fit
+    // (120), the third degrades to the omission marker. Content is generated
+    // at runtime so the hook attribute (command line) stays short.
+    const filler = 'x'.repeat(240);
+    const settings: HooksSettings = {
+      PreTurn: [{ hooks: [{ type: 'command', command: `node -e "process.stdout.write(JSON.stringify({additionalContext:'x'.repeat(240)}))"` }] }],
+    };
+    const bus = busOf(createConfiguredLoopHooks({
+      hooks: settings,
+      cwd: CWD,
+      runInjectionBudgetTokens: 150,
+    }));
+
+    const dispatchOnce = () => bus.dispatch('PreTurn', {
+      sessionId: 's1',
+      turnCount: 1,
+      seqIndex: 0,
+      messages: [],
+    });
+
+    const first = await dispatchOnce();
+    expect(first).toHaveLength(1);
+    const firstInj = (first[0] as { injection: string }).injection;
+    expect(firstInj).toContain(filler);
+
+    const second = await dispatchOnce();
+    expect((second[0] as { injection: string }).injection).toContain(filler);
+
+    const third = await dispatchOnce();
+    const thirdInj = (third[0] as { injection: string }).injection;
+    expect(thirdInj).not.toContain(filler);
+    expect(thirdInj).toContain('budget exhausted');
+    expect(thirdInj).toContain('<hook-context event="PreTurn"');
   });
 
   it('injects a non-zero-exit command diagnostic back to the model (verifier)', async () => {

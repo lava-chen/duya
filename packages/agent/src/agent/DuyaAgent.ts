@@ -66,6 +66,11 @@ import { MCPManager } from '../mcp/index.js';
 import { buildMCPCapabilityCatalog } from '../mcp/capability-catalog.js';
 import type { MailboxRow } from '../session/db.js';
 import { LoopHookBus, applyLoopHookEffect, type LoopHookDispatchContext } from '../hooks/loop.js';
+import {
+  applyHookInjection,
+  renderHookContextEnvelope,
+  type InjectableMessage,
+} from '../hooks/injection.js';
 import { createBuiltinLoopHooks } from '../hooks/builtin.js';
 import { createConfiguredLoopHooks } from '../hooks/config-loop.js';
 import { ConfigHooksRunner } from '../hooks/events.js';
@@ -223,6 +228,14 @@ export class duyaAgent {
    * `streamChat` (post-compaction refresh) do not duplicate the block.
    */
   private promptContexts: string[] = [];
+
+  /**
+   * Context-injection hardening: hook context blocks already delivered to
+   * the model this run (UserPromptSubmit / SessionStart). Kept after the
+   * initial drain so a mid-run compaction re-projection can restore any
+   * block the transient runtime-context layer lost. Reset per streamChat.
+   */
+  private promptContextBlocks: string[] = [];
   /**
    * Plan 437: hook invocations emitted during this `streamChat` call,
    * in arrival order. Drained by `drainPendingHookMessages()` at the
@@ -665,6 +678,9 @@ export class duyaAgent {
     );
     if (submitCtx && submitCtx.contexts.length > 0) {
       this.promptContexts = submitCtx.contexts.slice();
+      // Fresh run: previous run's delivered blocks must not leak into this
+      // one's restore set.
+      this.promptContextBlocks = [];
       logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) — queued for first-turn injection`);
     }
 
@@ -676,6 +692,16 @@ export class duyaAgent {
     );
     if (startCtx && startCtx.contexts.length > 0) {
       logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
+      // Context-injection hardening: SessionStart contexts used to be logged
+      // and discarded — fatal for memory-RAG hooks that do their retrieval
+      // exactly once per session. Route them through the same transient
+      // `promptContexts` rail as UserPromptSubmit, wrapped in a provenance
+      // envelope so the model can attribute the block.
+      for (let i = 0; i < startCtx.contexts.length; i += 1) {
+        this.promptContexts.push(
+          renderHookContextEnvelope({ event: 'SessionStart', hookName: 'session-start', seq: i }, startCtx.contexts[i]),
+        );
+      }
     }
 
     // Resolve agent profile early so mode dispatch can use promptSystem for auto-resolution
@@ -750,7 +776,7 @@ export class duyaAgent {
     // from legacy system messages and compaction reinjected context is
     // extracted into PromptSegments and merged into the system prompt. The
     // resulting messages array contains only user/assistant/tool roles.
-    const projected = this._projectModelMessages(systemPromptContent);
+    const projected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
     systemPromptContent = projected.systemPromptContent;
     let messages = projected.messages;
 
@@ -1244,7 +1270,7 @@ export class duyaAgent {
             // message list and update its baseline count.
             this.onMessagesCompacted?.(this.messages.length);
             // Re-project model messages from the updated timeline.
-            const reProjected = this._projectModelMessages(systemPromptContent);
+            const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
             systemPromptContent = reProjected.systemPromptContent;
             messages = reProjected.messages;
           }
@@ -1473,6 +1499,23 @@ export class duyaAgent {
             if (preCtx && preCtx.contexts.length > 0) {
               logger.debug(
                 `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
+              );
+              // Context-injection hardening: PreToolUse is advisory, not a
+              // decision point — its contexts are injected as an enveloped
+              // reminder keyed per tool so repeated firings replace the
+              // previous block instead of stacking. Fail-open by contract.
+              const advisory = preCtx.contexts
+                .map((c, i) => renderHookContextEnvelope(
+                  { event: 'PreToolUse', hookName: 'pre-tool-use', toolName: event.data.name, toolUseId: event.data.id, seq: i },
+                  c,
+                ))
+                .join('\n\n');
+              applyHookInjection(
+                messages as unknown as InjectableMessage[],
+                `PreToolUse:${event.data.name}`,
+                renderSystemReminder(advisory),
+                'custom',
+                { id: crypto.randomUUID(), now: Date.now() },
               );
             }
 
@@ -1990,7 +2033,7 @@ export class duyaAgent {
             const compactEntry = await this.compactionController.compactProactive();
             if (compactEntry) {
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
-              const reProjected = this._projectModelMessages(systemPromptContent);
+              const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
               systemPromptContent = reProjected.systemPromptContent;
               messages = reProjected.messages;
               // Retry this turn with compacted messages
@@ -3370,6 +3413,7 @@ export class duyaAgent {
    */
   private _projectModelMessages(
     systemPromptContent: string,
+    opts: { injectHookContexts?: boolean } = {},
   ): { systemPromptContent: string; messages: Message[] } {
     const snapshot = this.timeline.snapshot();
     const context = buildAgentContext(snapshot);
@@ -3384,33 +3428,44 @@ export class duyaAgent {
     const projection = projectModelMessages(context.messages, { systemSegments });
     const messages: Message[] = [...projection.messages];
 
-    // Plan 430 — drain `this.promptContexts` (UserPromptSubmit hook
-    // additionalContext lines, e.g. the memory-RAG `### 相关记忆` block)
-    // into the first projection as runtime_context messages. Each block
-    // is wrapped in `<system-reminder>` and tagged source='custom', exactly
-    // matching the loop-hook injection shape so the model sees one uniform
-    // "steering message" rail (same provider projection; the renderer skips
-    // it because adaptLoopNudgeContext defaults to visibility='hidden').
+    // Context-injection hardening (UserPromptSubmit / SessionStart hook
+    // additionalContext): each block is wrapped in `<system-reminder>` and
+    // tagged source='custom', exactly matching the loop-hook injection
+    // shape so the model sees one uniform "steering message" rail.
     //
-    // We drain on the FIRST projection of the streamChat call only — later
-    // re-projections within the same call (after proactive/context-exceeded
-    // compaction at DuyaAgent.ts:~1130 and ~1820) reuse the same drained
-    // `messages` array via `messages = reProjected.messages`, so clearing
-    // here is enough to keep a multi-turn run from re-injecting the same
-    // memory block on every compaction refresh.
-    if (this.promptContexts.length > 0) {
-      for (let i = 0; i < this.promptContexts.length; i += 1) {
-        const reminder = adaptLoopNudgeContext(
-          renderSystemReminder(this.promptContexts[i]),
-          'custom',
-          { seqIndex: messages.length + i },
+    // Ensure-present semantics: pending blocks move into
+    // `promptContextBlocks` on first injection; every streaming projection
+    // afterwards re-injects any block the working array lost — which is
+    // exactly what a mid-run compaction re-projection does to transient
+    // runtime context. Dedup by content hash makes this idempotent.
+    // Non-streaming callers (side questions) pass no flag and skip this.
+    if (opts.injectHookContexts === true) {
+      // Move pending blocks into the delivered set; indices >= freshFrom
+      // belong to THIS call's drain (initial injection, not restoration).
+      const freshFrom = this.promptContextBlocks.length;
+      if (this.promptContexts.length > 0) {
+        logger.info(
+          `[Agent] injecting ${this.promptContexts.length} hook context block(s) into first turn (source='custom')`,
         );
-        messages.push(projectRuntimeContextToProviderMessage(reminder));
+        this.promptContextBlocks.push(...this.promptContexts);
+        this.promptContexts = [];
       }
-      logger.info(
-        `[Agent] injected ${this.promptContexts.length} UserPromptSubmit context block(s) into first turn (source='custom')`,
-      );
-      this.promptContexts = [];
+      let restored = 0;
+      for (let i = 0; i < this.promptContextBlocks.length; i += 1) {
+        const action = applyHookInjection(
+          messages as unknown as InjectableMessage[],
+          undefined,
+          renderSystemReminder(this.promptContextBlocks[i]),
+          'custom',
+          { now: Date.now() },
+        );
+        if (action === 'injected' && i < freshFrom) {
+          restored += 1;
+        }
+      }
+      if (restored > 0) {
+        logger.info(`[Agent] restored ${restored} hook context block(s) after re-projection`);
+      }
     }
 
     // Merge projected system with existing system prompt
