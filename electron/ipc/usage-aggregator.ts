@@ -28,12 +28,14 @@
  */
 
 import type { MessageRow } from './core-db-adapters';
+import { computeCacheWaste, type CacheSequenceEntry } from './cache-waste';
 import {
   MODEL_PALETTE,
   type UsageSummary,
   type UsageTotals,
   type UsageAggregates,
   type DailyUsageEntry,
+  type CacheHealthTotals,
   type UsageSessionSummary,
   type ModelUsageEntry,
 } from '../../src/types/usage';
@@ -143,6 +145,10 @@ export interface SessionUsageFacts {
     /** Cache-inclusive processed volume: exclusive input + cache + output. */
     volume: number;
   }>;
+  /** Ordered timeline for the cache-waste scanner (plan 444): usage events
+   *  with exclusive buckets plus compaction boundaries, in row order.
+   *  Pricing-independent so it stays cacheable. */
+  cacheSequence: CacheSequenceEntry[];
 }
 
 export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
@@ -158,6 +164,7 @@ export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
     activeDates: [],
     messagesPerDate: {},
     usageRows: [],
+    cacheSequence: [],
   };
   const dates = new Set<string>();
 
@@ -179,18 +186,32 @@ export function extractSessionFacts(rows: MessageRow[]): SessionUsageFacts {
     dates.add(date);
     facts.messagesPerDate[date] = (facts.messagesPerDate[date] ?? 0) + 1;
 
-    const usage = parseUsage(row.token_usage);
-    if (usage) {
-      const buckets = toExclusiveBuckets(usage);
-      facts.usageRows.push({
-        date,
-        input: buckets.input,
-        output: usage.output,
-        cacheRead: buckets.cacheRead,
-        cacheWrite: buckets.cacheWrite,
-        volume: buckets.input + usage.output + buckets.cacheRead + buckets.cacheWrite,
-      });
+    // Compaction checkpoint markers reset the cache-waste baseline: the
+    // context legitimately changed, the next prompt is new content.
+    if (row.msg_type === 'compact_checkpoint') {
+      facts.cacheSequence.push({ kind: 'compaction' });
+      continue;
     }
+
+    const usage = parseUsage(row.token_usage);
+    if (!usage) continue;
+    const buckets = toExclusiveBuckets(usage);
+    facts.usageRows.push({
+      date,
+      input: buckets.input,
+      output: usage.output,
+      cacheRead: buckets.cacheRead,
+      cacheWrite: buckets.cacheWrite,
+      volume: buckets.input + usage.output + buckets.cacheRead + buckets.cacheWrite,
+    });
+    facts.cacheSequence.push({
+      kind: 'usage',
+      ts: row.created_at,
+      input: buckets.input,
+      output: usage.output,
+      cacheRead: buckets.cacheRead,
+      cacheWrite: buckets.cacheWrite,
+    });
   }
 
   facts.activeDates = Array.from(dates);
@@ -248,6 +269,12 @@ export function aggregateUsageFromFacts(
   const modelTokensMap = new Map<string, number>();
   const modelCostMap = new Map<string, number>();
   const sessionSummaries: UsageSessionSummary[] = [];
+  const cacheHealth: CacheHealthTotals = {
+    missedTokens: 0,
+    missedCost: 0,
+    missCount: 0,
+    ttlExpiredMissCount: 0,
+  };
 
   const dailyFor = (date: string): DailyUsageEntry & { sessionIds: Set<string> } => {
     let daily = dailyMap.get(date);
@@ -287,6 +314,11 @@ export function aggregateUsageFromFacts(
     let sessionCacheRead = 0;
     let sessionCacheWrite = 0;
     const sessionDaily = new Map<string, { tokens: number; cost: number }>();
+    const sessionCacheHealth = computeCacheWaste(facts.cacheSequence, pricing);
+    cacheHealth.missedTokens += sessionCacheHealth.missedTokens;
+    cacheHealth.missedCost += sessionCacheHealth.missedCost;
+    cacheHealth.missCount += sessionCacheHealth.missCount;
+    cacheHealth.ttlExpiredMissCount += sessionCacheHealth.ttlExpiredMissCount;
 
     aggregates.messages.total += facts.messageTotal;
     aggregates.messages.user += facts.userCount;
@@ -365,6 +397,7 @@ export function aggregateUsageFromFacts(
       outputTokens: sessionOutput,
       cacheReadTokens: sessionCacheRead,
       cacheWriteTokens: sessionCacheWrite,
+      cacheHealth: toCacheHealthTotals(sessionCacheHealth),
       messageCount: facts.messageTotal,
       toolCallCount: facts.toolCallCount,
       errorCount: facts.errorCount,
@@ -440,7 +473,19 @@ export function aggregateUsageFromFacts(
     dailyData,
     modelUsage,
     sessions: sessionList,
+    cacheHealth,
     generatedAt: now,
+  };
+}
+
+function toCacheHealthTotals(
+  r: Omit<import('./cache-waste').CacheWasteResult, 'misses'>,
+): CacheHealthTotals {
+  return {
+    missedTokens: r.missedTokens,
+    missedCost: r.missedCost,
+    missCount: r.missCount,
+    ttlExpiredMissCount: r.ttlExpiredMissCount,
   };
 }
 

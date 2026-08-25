@@ -416,3 +416,50 @@ describe('facts split + cache', () => {
     expect(cache.get('s1', '100:200')).toBe(facts);
   });
 });
+
+describe('cache health (plan 444)', () => {
+  const t0 = new Date(2026, 7, 15, 10, 0).getTime();
+
+  function usageRow(id: string, ts: number, u: Record<string, number>): MessageRow {
+    return msgRow({ id, token_usage: JSON.stringify(u), created_at: ts });
+  }
+
+  it('extractSessionFacts builds an ordered cacheSequence with compaction markers', () => {
+    const rows = [
+      usageRow('a1', t0, { input_tokens: 1000, output_tokens: 10, cache_creation_input_tokens: 49_000 }),
+      msgRow({ id: 'cp', role: 'system', msg_type: 'compact_checkpoint', seq_index: 2 }),
+      usageRow('a2', t0 + 1000, { input_tokens: 50_000, output_tokens: 10 }),
+    ];
+    const facts = extractSessionFacts(rows);
+    expect(facts.cacheSequence).toHaveLength(3);
+    expect(facts.cacheSequence[0]).toMatchObject({ kind: 'usage', input: 1000, cacheWrite: 49_000 });
+    expect(facts.cacheSequence[1]).toEqual({ kind: 'compaction' });
+    expect(facts.cacheSequence[2]).toMatchObject({ kind: 'usage', input: 50_000 });
+  });
+
+  it('aggregates per-session and summary-level cacheHealth across the pipeline', () => {
+    // Turn 1 writes a 50k prompt; turn 2 re-bills the whole thing at input rate.
+    const rows = [
+      usageRow('a1', t0, { input_tokens: 1000, output_tokens: 10, cache_creation_input_tokens: 49_000 }),
+      usageRow('a2', t0 + 60_000, { input_tokens: 50_000, output_tokens: 10 }),
+    ];
+    const summary = aggregateUsage([session('s1', rows)], pricedLookup);
+
+    expect(summary.cacheHealth.missCount).toBe(1);
+    expect(summary.cacheHealth.missedTokens).toBe(50_000);
+    expect(summary.cacheHealth.ttlExpiredMissCount).toBe(0);
+    expect(summary.cacheHealth.missedCost).toBeCloseTo((50_000 * (3 - 0.3)) / 1_000_000, 8);
+    expect(summary.sessions[0].cacheHealth).toEqual(summary.cacheHealth);
+  });
+
+  it('compaction boundary suppresses the miss that would follow it', () => {
+    const rows = [
+      usageRow('a1', t0, { input_tokens: 1000, output_tokens: 10, cache_creation_input_tokens: 49_000 }),
+      msgRow({ id: 'cp', role: 'system', msg_type: 'compact_checkpoint', seq_index: 2 }),
+      usageRow('a2', t0 + 1000, { input_tokens: 50_000, output_tokens: 10 }),
+    ];
+    const summary = aggregateUsage([session('s1', rows)], pricedLookup);
+    expect(summary.cacheHealth.missCount).toBe(0);
+    expect(summary.cacheHealth.missedTokens).toBe(0);
+  });
+});
