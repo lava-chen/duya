@@ -38,8 +38,27 @@ export function buildPowerShellArgs(command: string): string[] {
   ];
 }
 
+/**
+ * Prefix every unix-shell command with an extglob disable. Extended globs can
+ * expand malicious filenames AFTER our security validation has already run
+ * (the same post-validation expansion attack claude-code defends against).
+ * bash exposes `shopt`; zsh (the fallback login shell on some Unix hosts)
+ * needs `setopt` instead. Both probes are silenced so an unexpected fallback
+ * shell adds no stderr noise, and the guard cannot change the command's exit
+ * status because the user command runs last.
+ */
+export function buildExtglobGuard(shellName: string): string {
+  if (shellName.toLowerCase().includes('zsh')) {
+    return 'setopt NO_EXTENDED_GLOB 2>/dev/null';
+  }
+  return 'command -v shopt >/dev/null 2>&1 && shopt -u extglob';
+}
+
 function buildUnixShellArgs(shellInfo: ShellInfo, command: string): string[] {
-  return [shellInfo.execArg, command];
+  return [
+    shellInfo.execArg,
+    `${buildExtglobGuard(shellInfo.name)}; ${command}`,
+  ];
 }
 
 export function resolveShellProvider(
