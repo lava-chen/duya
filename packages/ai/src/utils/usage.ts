@@ -25,6 +25,20 @@ export type UsageLike = {
   input_tokens_details?: {
     cached_tokens?: number
   }
+  completion_tokens_details?: {
+    reasoning_tokens?: number
+  }
+
+  /** Anthropic cache_creation breakdown by TTL tier. 1h writes are billed at
+   *  2x the base write price and must be tracked separately. */
+  cache_creation?: {
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+  }
+
+  // Reasoning/thinking tokens (a subset of output, not an addition to it)
+  reasoning_tokens?: number
+  reasoning?: number
 
   // Generic aliases
   input?: number
@@ -56,12 +70,20 @@ export type UsageLike = {
 export interface NormalizedUsage {
   /** Non-cached input tokens */
   input: number
-  /** Output tokens */
+  /** Output tokens (already includes reasoning tokens when reported) */
   output: number
   /** Cache read tokens (cache hit) */
   cacheRead: number
   /** Cache write tokens (cache creation) */
   cacheWrite: number
+  /** Subset of `cacheWrite` written with 1h retention (Anthropic only,
+   *  billed at 2x). Undefined when the provider does not report the split. */
+  cacheWrite1h?: number
+  /** Reasoning/thinking tokens — a subset of `output`, NOT an independent
+   *  addition. Undefined expresses "provider does not report this"; never
+   *  collapse it to 0 or downstream cost/audit logic cannot tell the cases
+   *  apart. */
+  reasoning?: number
   /** Total tokens if reported */
   total: number
 }
@@ -113,11 +135,33 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage {
     normalizeTokenCount(raw.input_tokens_details?.cached_tokens)
 
   // Extract cache write
-  const cacheWrite =
+  const rawCacheWrite =
     normalizeTokenCount(raw.cache_creation_tokens) ||
     normalizeTokenCount(raw.cache_creation_input_tokens) ||
-    normalizeTokenCount(raw.cache_write) ||
-    normalizeTokenCount(raw.prompt_tokens_details?.cache_write_tokens)
+    normalizeTokenCount(raw.prompt_tokens_details?.cache_write_tokens) ||
+    normalizeTokenCount(raw.cache_write)
+
+  // Anthropic TTL split: sum the explicit tiers when present, otherwise the
+  // top-level cache_creation fields already cover it via the chain above.
+  const cacheWrite1hRaw = asFiniteNumber(raw.cache_creation?.ephemeral_1h_input_tokens)
+  const cacheWrite5mRaw = asFiniteNumber(raw.cache_creation?.ephemeral_5m_input_tokens)
+  let cacheWrite = rawCacheWrite
+  let cacheWrite1h: number | undefined
+  if (cacheWrite1hRaw !== undefined || cacheWrite5mRaw !== undefined) {
+    const tierSum = Math.max(0, Math.trunc(cacheWrite5mRaw ?? 0)) + Math.max(0, Math.trunc(cacheWrite1hRaw ?? 0))
+    if (tierSum > 0) cacheWrite = tierSum
+    if (cacheWrite1hRaw !== undefined) {
+      cacheWrite1h = Math.max(0, Math.trunc(cacheWrite1hRaw))
+    }
+  }
+
+  // Reasoning is a subset of output: undefined means the provider does not
+  // report it (distinct from a reported 0).
+  const reasoningRaw =
+    asFiniteNumber(raw.completion_tokens_details?.reasoning_tokens) ??
+    asFiniteNumber(raw.reasoning_tokens) ??
+    asFiniteNumber(raw.reasoning)
+  const reasoning = reasoningRaw === undefined ? undefined : Math.max(0, Math.trunc(reasoningRaw))
 
   // Extract input tokens
   const rawInput =
@@ -141,22 +185,28 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage {
 
   const input = normalizeTokenCount(normalizedInput)
 
-  // Extract output tokens
-  const output =
-    normalizeTokenCount(raw.output_tokens) ??
-    normalizeTokenCount(raw.completion_tokens) ??
-    normalizeTokenCount(raw.output) ??
-    normalizeTokenCount(raw.predicted_n) ??
-    normalizeTokenCount(raw.timings?.predicted_n)
+  // Extract output tokens. NOTE: must fall through on undefined (asFiniteNumber),
+  // not on 0 — normalizeTokenCount here would break the ?? chain and yield 0
+  // for any provider that only reports completion_tokens/predicted_n.
+  const outputRaw =
+    asFiniteNumber(raw.output_tokens) ??
+    asFiniteNumber(raw.completion_tokens) ??
+    asFiniteNumber(raw.output) ??
+    asFiniteNumber(raw.predicted_n) ??
+    asFiniteNumber(raw.timings?.predicted_n)
+  const output = outputRaw === undefined ? 0 : Math.max(0, Math.trunc(outputRaw))
 
   // Extract total
-  const total = normalizeTokenCount(raw.total_tokens ?? raw.total)
+  const totalRaw = asFiniteNumber(raw.total_tokens) ?? asFiniteNumber(raw.total)
+  const total = totalRaw === undefined ? 0 : Math.max(0, Math.trunc(totalRaw))
 
   return {
     input,
     output,
     cacheRead,
     cacheWrite,
+    ...(cacheWrite1h !== undefined && { cacheWrite1h }),
+    ...(reasoning !== undefined && { reasoning }),
     total: total || input + output + cacheRead + cacheWrite,
   }
 }
