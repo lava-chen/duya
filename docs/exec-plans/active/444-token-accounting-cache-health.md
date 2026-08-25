@@ -1,6 +1,6 @@
 # Plan 444: Token Accounting 升级 — pi 标准 Usage 结构 + 缓存浪费扫描器
 
-> **Status**: T1/T2 完成（2026-08-24）；T3 UI 待做
+> **Status**: T1/T2/T3 完成（2026-08-24，commits 75a08eee / 2b10e1b6 / f813e191）；UI 交互验证待 Playwright MCP
 > **Priority**: P0
 > **Created**: 2026-08-24
 > **Source**: [token-accounting.md](../../references/harness-comparison/token-accounting.md)（harness 对比结论）
@@ -45,10 +45,11 @@
       （pricing 无关、可缓存），聚合阶段按 session 计算 CacheHealth，
       DTO 加 `cacheHealth` 字段（totals + per-session）
 
-### T3 设置页「缓存健康」面板（P1，本 plan 后续）
+### T3 设置页「缓存健康」面板（P1）
 
-- [ ] UsageDashboard 增加缓存健康区块：总浪费成本、miss 次数、TTL 归因提示
-- [ ] Playwright MCP 验证
+- [x] UsageDashboard 摘要网格增加缓存浪费卡片：浪费成本、miss 次数、
+      TTL 归因提示（`src/components/usage/UsageSummaryGrid.tsx` + i18n）
+- [ ] Playwright MCP 验证（本会话无 MCP 工具；typecheck + vite build 已过）
 
 ## Decisions
 
