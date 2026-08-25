@@ -73,11 +73,26 @@ export interface UsageSessionSummary {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Cache-waste scan for this session (see electron/ipc/cache-waste.ts). */
+  cacheHealth: CacheHealthTotals;
   messageCount: number;
   toolCallCount: number;
   errorCount: number;
   durationMs: number;
   dailyBreakdown: { date: string; tokens: number; cost: number }[];
+}
+
+/** Quantified prompt-cache waste: prompt tokens that were in the previous
+ *  turn's context but were re-billed instead of served from cache.
+ *  See docs/references/harness-comparison/token-accounting.md. */
+export interface CacheHealthTotals {
+  missedTokens: number;
+  missedCost: number;
+  /** Number of counted misses (turns above the 1024-token noise floor). */
+  missCount: number;
+  /** Counted misses whose idle gap exceeded the ~5min cache TTL — likely
+   *  expiry rather than an unexplained cache break. */
+  ttlExpiredMissCount: number;
 }
 
 export interface UsageAggregates {
@@ -126,6 +141,8 @@ export interface UsageSummary {
   dailyData: DailyUsageEntry[];
   modelUsage: ModelUsageEntry[];
   sessions: UsageSessionSummary[];
+  /** Session-summed cache waste (see CacheHealthTotals). */
+  cacheHealth: CacheHealthTotals;
   generatedAt: number;
 }
 
