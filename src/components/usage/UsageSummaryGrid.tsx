@@ -16,6 +16,10 @@ export const UsageSummaryGrid: React.FC<UsageSummaryGridProps> = ({ summary }) =
   const inputOutputText = `${formatNumber(totals.input)} ${t('usage.input')} · ${formatNumber(totals.output)} ${t('usage.output')}`;
   const costSuffix = totals.costEstimated ? ` · ${t('usage.costEstimated')}` : '';
 
+  // Cache-waste scan covers all sessions (not daily-bucketed), so it does not
+  // follow the dashboard time-range filter.
+  const cacheHealth = summary.cacheHealth ?? { missedTokens: 0, missedCost: 0, missCount: 0, ttlExpiredMissCount: 0 };
+
   const cards: UsageStatCardData[] = [
     {
       label: t('usage.tokenUsage'),
@@ -75,6 +79,16 @@ export const UsageSummaryGrid: React.FC<UsageSummaryGridProps> = ({ summary }) =
       format: 'number',
       subtext: `${aggregates.tools.uniqueTools} ${t('usage.uniqueTools')}`,
       status: aggregates.tools.totalCalls > 0 ? 'good' : 'neutral',
+    },
+    {
+      label: t('usage.cacheWaste'),
+      value: cacheHealth.missedCost,
+      format: 'currency',
+      subtext:
+        cacheHealth.missCount === 0
+          ? t('usage.cacheWasteNone')
+          : `${t('usage.cacheMisses', { count: cacheHealth.missCount, tokens: formatNumber(cacheHealth.missedTokens) })}${cacheHealth.ttlExpiredMissCount > 0 ? ` · ${t('usage.cacheTtlHint', { count: cacheHealth.ttlExpiredMissCount })}` : ''}`,
+      status: cacheHealth.missCount === 0 ? 'good' : 'warn',
     },
   ];
 
