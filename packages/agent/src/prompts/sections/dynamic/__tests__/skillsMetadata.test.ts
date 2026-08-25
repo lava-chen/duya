@@ -131,4 +131,19 @@ describe('skillsMetadata (pi-style <available_skills> catalog)', () => {
     getSkillRegistry().register(makeSkill({ isHidden: true }));
     expect(getSkillsMetadataSection(context(['Read']))).toBeNull();
   });
+
+  it('truncates descriptions beyond the 250-char listing budget', () => {
+    const long = 'x'.repeat(400);
+    const catalog = formatSkillCatalog([makeSkill({ description: long })]);
+
+    // Clamped to MAX_LISTING_DESC_CHARS (250) incl. ellipsis, XML-escaped.
+    const expected = 'x'.repeat(249) + '…';
+    expect(catalog).toContain(`<description>${expected}</description>`);
+    expect(catalog).not.toContain('x'.repeat(250));
+  });
+
+  it('keeps descriptions within budget untouched', () => {
+    const catalog = formatSkillCatalog([makeSkill({ description: 'short' })]);
+    expect(catalog).toContain('<description>short</description>');
+  });
 });
