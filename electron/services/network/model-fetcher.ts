@@ -27,6 +27,22 @@ export interface FetchedModel {
    * renderer seed the per-model context window instead of assuming 200K/1M.
    */
   contextLength?: number;
+  /**
+   * Per-request output ceiling (tokens), when the source API exposes it
+   * (e.g. OpenRouter `top_provider.max_completion_tokens`). Flows into the
+   * capability table so the agent can size max_tokens correctly instead of
+   * falling back to the built-in default — critical for reasoning models
+   * whose thinking shares the output budget.
+   */
+  maxOutputTokens?: number;
+  /**
+   * Capability flags reported by aggregator-style model lists (e.g.
+   * OpenRouter `architecture.input_modalities` / `supported_parameters`).
+   * Absent when the source API doesn't report them.
+   */
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
   /** Local-runtime models only (LM Studio / Ollama): currently loaded. */
   isLoaded?: boolean;
 }
@@ -264,6 +280,62 @@ interface RawModelEntry {
   display_name?: unknown;
   displayName?: unknown;
   created?: unknown;
+  // Aggregator-style fields (OpenRouter `/api/v1/models`):
+  top_provider?: unknown;
+  architecture?: unknown;
+  supported_parameters?: unknown;
+}
+
+/**
+ * Extract the per-request output ceiling from an OpenRouter-style
+ * `top_provider.max_completion_tokens` field. Returns `undefined` for every
+ * non-OpenRouter-shaped entry (LM Studio, plain OpenAI) so callers can tell
+ * "not reported" from a real value.
+ */
+function extractMaxOutputTokens(raw: RawModelEntry): number | undefined {
+  if (!raw.top_provider || typeof raw.top_provider !== 'object') return undefined;
+  const value = (raw.top_provider as Record<string, unknown>).max_completion_tokens;
+  return asInt(value);
+}
+
+/**
+ * Extract capability flags from OpenRouter-style fields:
+ * - `architecture.input_modalities` containing `'image'` → supportsVision
+ * - `supported_parameters` containing `'tools'` → supportsToolUse
+ * - `supported_parameters` containing `'reasoning'` → supportsReasoning
+ *
+ * Mirrors the LM Studio extraction above in spirit: every field the source
+ * API doesn't report stays `undefined` so downstream treats it as unknown,
+ * not false.
+ */
+function extractAggregatorCapabilities(raw: RawModelEntry): {
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+} {
+  const out: {
+    supportsVision?: boolean;
+    supportsToolUse?: boolean;
+    supportsReasoning?: boolean;
+  } = {};
+
+  if (
+    raw.architecture && typeof raw.architecture === 'object' &&
+    Array.isArray((raw.architecture as Record<string, unknown>).input_modalities)
+  ) {
+    const modalities = (raw.architecture as Record<string, unknown>).input_modalities as unknown[];
+    out.supportsVision = modalities.some((m) => typeof m === 'string' && m.toLowerCase() === 'image');
+  }
+
+  if (Array.isArray(raw.supported_parameters)) {
+    const params = raw.supported_parameters as unknown[];
+    const has = (name: string) =>
+      params.some((p) => typeof p === 'string' && p.toLowerCase() === name);
+    if (has('tools')) out.supportsToolUse = true;
+    if (has('reasoning')) out.supportsReasoning = true;
+  }
+
+  return out;
 }
 
 function asInt(value: unknown): number | undefined {
@@ -425,6 +497,10 @@ function extractModels(json: unknown): FetchedModel[] | null {
       );
       const ctxRaw = loadedCtx ?? maxCtx;
       const capabilities = extractCapabilities(entry.capabilities);
+      // Aggregator-style flags (OpenRouter). LM Studio entries don't carry
+      // these fields, so both extractions can run unconditionally and merge.
+      const maxOutputTokens = extractMaxOutputTokens(entry);
+      const aggregatorCaps = extractAggregatorCapabilities(entry);
       const formatRaw = entry.format;
       const format =
         typeof formatRaw === 'string' && formatRaw.length > 0 ? formatRaw : null;
@@ -450,13 +526,20 @@ function extractModels(json: unknown): FetchedModel[] | null {
             : {}),
         ...(capabilities.supportsVision !== undefined
           ? { supportsVision: capabilities.supportsVision }
-          : {}),
+          : aggregatorCaps.supportsVision !== undefined
+            ? { supportsVision: aggregatorCaps.supportsVision }
+            : {}),
         ...(capabilities.supportsToolUse !== undefined
           ? { supportsToolUse: capabilities.supportsToolUse }
-          : {}),
+          : aggregatorCaps.supportsToolUse !== undefined
+            ? { supportsToolUse: aggregatorCaps.supportsToolUse }
+            : {}),
         ...(capabilities.supportsReasoning !== undefined
           ? { supportsReasoning: capabilities.supportsReasoning }
-          : {}),
+          : aggregatorCaps.supportsReasoning !== undefined
+            ? { supportsReasoning: aggregatorCaps.supportsReasoning }
+            : {}),
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
         ...(capabilities.reasoningEffortOptions !== undefined
           ? { reasoningEffortOptions: capabilities.reasoningEffortOptions }
           : {}),
