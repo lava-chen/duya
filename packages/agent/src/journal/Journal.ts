@@ -43,6 +43,8 @@ export interface JournalOptions {
 export class Journal {
   private readonly sessionId: string;
   private readonly onError: (kind: string, err: unknown) => void;
+  /** In-flight emit promises — drained by flush() before the turn-end ack. */
+  private readonly pending = new Set<Promise<void>>();
 
   constructor(opts: JournalOptions) {
     this.sessionId = opts.sessionId;
@@ -91,8 +93,9 @@ export class Journal {
 
   /**
    * Append a rebase event for compaction / edit-resend. The rebase event is
-   * the SOLE persistence path for these operations going forward — the old
-   * `rewriteSession` mutation path will be removed in Phase 4.
+   * the SOLE production persistence path for these operations — the old
+   * `rewriteSession` mutation path is deprecated (kept only for test rollback
+   * and emergency recovery).
    *
    * Pass `supersededUpToSeq = null` (the compaction form) to supersede ALL
    * raw messages preceding the rebase in the trace; survivors are matched
@@ -112,7 +115,7 @@ export class Journal {
     // Convert agent-core Message[] → MessageEntry[] for the storage layer.
     // The db-bridge's journal:emit handler forwards the payload verbatim,
     // so the wire shape must match what MessageLog expects.
-    const newEntries = this.toMessageEntries(newMessages);
+    const newEntries = this.toMessageEntries(newMessages, createdAt, turnId);
     const event = {
       type: 'rebase' as const,
       id: deterministicEventId(`${turnId}:${supersededUpToSeq ?? 'all'}`, 'rebase'),
@@ -130,12 +133,17 @@ export class Journal {
    * `electron/ipc/core-db-adapters.ts:ipcMessageToNewEvent` — kept local so
    * the journal does not depend on the electron-side adapter module.
    */
-  private toMessageEntries(Msgs: Message[]): MessageEntry[] {
-    return Msgs.map((m, i) => ({
+  private toMessageEntries(msgs: Message[], createdAt: number, turnId: string | null): MessageEntry[] {
+    // Fallback ids MUST be deterministic for INSERT OR IGNORE dedup: a
+    // boundary re-emitted after a crash/retry collapses into the original
+    // row instead of forking a duplicate. Derived from the rebase's own
+    // stable inputs (turnId + position + createdAt), never Date.now() at
+    // conversion time.
+    return msgs.map((m, i) => ({
       type: 'message' as const,
-      id: m.id ?? `journal-rebase-${i}-${Date.now()}`,
+      id: m.id ?? `journal-rebase:${this.sessionId}:${turnId ?? 'anon'}:${i}:${createdAt}`,
       parentId: null,
-      createdAt: m.timestamp ?? Date.now(),
+      createdAt: m.timestamp ?? createdAt,
       message: ingestMessage(m, { index: i }),
     }));
   }
@@ -143,47 +151,59 @@ export class Journal {
   // ─── Private helpers ───
 
   /**
-   * Build a MessageEntry-shaped DTO for the journal emit. The db-bridge
-   * extension (journal:emit) recognises the `kind` discriminator and routes
-   * to the right wrapper. For now we reuse `message:append` with a wrapper
-   * DTO whose `kind` field carries the event type — see db-bridge.ts.
+   * Wait for every in-flight fire-and-forget emit to settle. The agent loop
+   * never awaits individual emits (a slow write must not stall the stream),
+   * but the turn-end `chat:db_persisted` ack MUST NOT be sent while emits
+   * are still in flight — the renderer treats that ack as the signal to
+   * reload durable rows, and a premature read would see a partial timeline.
+   * Resolves even when individual emits failed (onError already reported).
+   */
+  async flush(): Promise<void> {
+    while (this.pending.size > 0) {
+      await Promise.allSettled([...this.pending]);
+    }
+  }
+
+  /** Register an emit promise so flush() can wait for it. */
+  private trackPending(p: Promise<void>): void {
+    const wrapped = p.finally(() => {
+      this.pending.delete(wrapped);
+    });
+    this.pending.add(wrapped);
+  }
+
+  /**
+   * Build a MessageEntry-shaped DTO for the journal emit. Routed through
+   * `message:append`, so the flat field list must stay in sync with
+   * `IpcMessageDTO` (electron/ipc/core-db-adapters.ts). The single
+   * `JOURNAL_MESSAGE_FIELDS` key list below is the only place to update
+   * when the persisted Message surface grows.
    */
   private fire(kind: string, msg: Message, turnId: string | null | undefined): void {
-    const dto = {
+    const source = msg as unknown as Record<string, unknown>;
+    const dto: Record<string, unknown> = {
       id: deterministicEventId(msg.id, kind),
       session_id: this.sessionId,
-      role: msg.role,
-      content: msg.content,
-      timestamp: msg.timestamp ?? Date.now(),
-      // journal:emit discriminator
+      // message:append journal discriminator (see db-bridge.ts)
       kind,
-      seq_index: msg.seq_index,
-      msg_type: msg.msg_type,
-      tool_call_id: msg.tool_call_id,
-      tool_name: msg.tool_name,
-      tool_input: msg.tool_input,
-      thinking: msg.thinking,
-      displayContent: msg.displayContent,
-      status: msg.status,
-      duration_ms: msg.duration_ms,
-      name: msg.name,
-      parent_tool_call_id: msg.parent_tool_call_id,
-      attachments: msg.attachments,
-      viz_spec: msg.viz_spec,
-      sub_agent_id: msg.sub_agent_id,
-      token_usage: msg.metadata?.token_usage as string | undefined,
     };
-    messageDb
-      .append(this.sessionId, [dto], turnId ?? null)
-      .then((result) => {
-        const r = result as { success?: boolean; reason?: string } | undefined;
-        if (!r?.success) {
-          this.onError(kind, new Error(`append returned ${JSON.stringify(result)}`));
-        }
-      })
-      .catch((err: unknown) => {
-        this.onError(kind, err);
-      });
+    for (const field of JOURNAL_MESSAGE_FIELDS) {
+      if (source[field] !== undefined) dto[field] = source[field];
+    }
+    dto.token_usage = msg.metadata?.token_usage as string | undefined;
+    this.trackPending(
+      messageDb
+        .append(this.sessionId, [dto], turnId ?? null)
+        .then((result) => {
+          const r = result as { success?: boolean; reason?: string } | undefined;
+          if (!r?.success) {
+            this.onError(kind, new Error(`append returned ${JSON.stringify(result)}`));
+          }
+        })
+        .catch((err: unknown) => {
+          this.onError(kind, err);
+        }),
+    );
   }
 
   /**
@@ -192,17 +212,19 @@ export class Journal {
    * field is unchanged. Pass-through IPC.
    */
   private fireEventRaw(kind: string, event: unknown, turnId: string | null | undefined): void {
-    messageDb
-      .append(this.sessionId, [event], turnId ?? null)
-      .then((result) => {
-        const r = result as { success?: boolean; reason?: string } | undefined;
-        if (!r?.success) {
-          this.onError(kind, new Error(`append returned ${JSON.stringify(result)}`));
-        }
-      })
-      .catch((err: unknown) => {
-        this.onError(kind, err);
-      });
+    this.trackPending(
+      messageDb
+        .append(this.sessionId, [event], turnId ?? null)
+        .then((result) => {
+          const r = result as { success?: boolean; reason?: string } | undefined;
+          if (!r?.success) {
+            this.onError(kind, new Error(`append returned ${JSON.stringify(result)}`));
+          }
+        })
+        .catch((err: unknown) => {
+          this.onError(kind, err);
+        }),
+    );
   }
 
   /** Emit a typed RolloutEvent (used by hook_invoked). */
@@ -222,3 +244,27 @@ export class Journal {
 function deterministicEventId(sourceId: string | undefined, kind: string): string {
   return `journal:${sourceId ?? 'anon'}:${kind}`;
 }
+/**
+ * Flat Message fields copied verbatim into the journal emit DTO. Must cover
+ * every field `ipcMessageToNewEvent` reads from `IpcMessageDTO` — when a new
+ * persisted Message field is added there, add it here too.
+ */
+const JOURNAL_MESSAGE_FIELDS: readonly string[] = [
+  'role',
+  'content',
+  'timestamp',
+  'seq_index',
+  'msg_type',
+  'tool_call_id',
+  'tool_name',
+  'tool_input',
+  'thinking',
+  'displayContent',
+  'status',
+  'duration_ms',
+  'name',
+  'parent_tool_call_id',
+  'attachments',
+  'viz_spec',
+  'sub_agent_id',
+];

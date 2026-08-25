@@ -392,13 +392,19 @@ export function storedEventToIpcMessage(event: StoredEvent): MessageRow | null {
 export function storedEventsToIpcMessages(events: StoredEvent[]): MessageRow[] {
   if (events.length === 0) return [];
 
+  // Parse payloads and keep only message/compaction entries for projection.
+  // Rollout process events (rebase / hook_invoked / ...) are audit rows:
+  // `projectTimelinePersistenceMessages` (via buildAgentContext) drops them,
+  // so feeding them in would shift the message↔event pairing below and
+  // corrupt seq/createdAt/turnId for every row after the first event.
+  const eventById = new Map<string, StoredEvent>();
   const entries: MessageTimelineEntry[] = [];
-  const validIndices: number[] = [];
-  for (let i = 0; i < events.length; i++) {
+  for (const event of events) {
     try {
-      const entry = JSON.parse(events[i].payload) as MessageTimelineEntry;
+      const entry = JSON.parse(event.payload) as MessageTimelineEntry;
+      if (entry.type !== 'message' && entry.type !== 'compaction') continue;
       entries.push(entry);
-      validIndices.push(i);
+      if (entry.id && !eventById.has(entry.id)) eventById.set(entry.id, event);
     } catch {
       // Skip unparseable payloads
     }
@@ -407,14 +413,18 @@ export function storedEventsToIpcMessages(events: StoredEvent[]): MessageRow[] {
   const messages = projectTimelinePersistenceMessages(entries);
   const rows: MessageRow[] = [];
 
-  // Zip messages with events. In the common case (no compaction), each
-  // entry produces exactly one message, so indices align. With compaction,
-  // the checkpoint marker replaces the compacted prefix — we attach it to
-  // the first compacted event's StoredEvent for seq/ordering purposes.
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    const eventIdx = validIndices[i] ?? validIndices[validIndices.length - 1] ?? i;
-    const event = events[eventIdx];
+  // Pair each projected message back to its source StoredEvent BY ID, not by
+  // position: the projection may drop entries (compaction prefix collapse,
+  // hidden messages) or synthesize markers, so index-based zipping misaligns
+  // metadata whenever the trace is not 1:1.
+  for (const msg of messages) {
+    let event = msg.id ? eventById.get(msg.id) : undefined;
+    if (!event && msg.id?.endsWith(':checkpoint')) {
+      // projectTimelinePersistenceMessages synthesizes a compaction marker
+      // with id `${checkpoint.id}:checkpoint`; attach it to the compaction
+      // entry's StoredEvent for seq/ordering purposes.
+      event = eventById.get(msg.id.slice(0, -':checkpoint'.length));
+    }
     if (event) {
       rows.push(messageToIpcRow(msg, event));
     }

@@ -2321,6 +2321,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // and attached to the final chat:done so the renderer can surface why
     // the run stopped.
     let turnEndReason: string | undefined;
+    /** True once the agent loop yielded `done` and we held it back for the
+     *  post-flush persistence barrier below. */
+    let deferredDone = false;
     let eventCount = 0;
     // Stable-boundary persistence baseline: capture the message count at turn
     // start so the single end-of-turn append can persist exactly the messages
@@ -2454,11 +2457,18 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
 
       const agentMsg = convertSSEToAgentMessage(event);
       if (agentMsg) {
-        // Plan 441: chat:done flows through directly. Each persisted event
-        // is emitted at its semantic completion boundary (user_msg_added,
-        // assistant_message_finalized, tool_result_added) via the Journal
-        // wired into _pushDurable, so there is no longer a turn-end batch
-        // to gate SSE close on. chat:done is the natural turn-end signal.
+        // Plan 441 follow-up: hold `chat:done` instead of forwarding it
+        // inline. The renderer's terminal handoff (App.tsx) only swaps the
+        // live stream view for durable rows when a SUCCESSFUL `db_persisted`
+        // ack precedes `done`; forwarding done here raced ahead of the
+        // journal flush, the ack could never precede it, and the message
+        // list went blank at turn end. The held event is re-emitted after
+        // the flush + bookkeeping block below.
+        if (agentMsg.type === 'chat:done') {
+          turnEndReason = (agentMsg as { reason?: string }).reason;
+          deferredDone = true;
+          continue;
+        }
         if (DEBUG_IPC && (
           agentMsg.type === 'chat:tool_use'
           || agentMsg.type === 'chat:tool_result'
@@ -2593,13 +2603,26 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     } else {
       warn(`[Agent-Process] No messages to save for session ${msg.sessionId}`);
       await persistTurnReview(msg.sessionId, msg.id, turnReviewBaseline);
+    }
+
+    // Turn-end persistence barrier: wait for every fire-and-forget journal
+    // emit to settle, acknowledge durability to the renderer, then release
+    // the deferred chat:done. Order matters — App.tsx's terminal handoff only
+    // swaps the live stream view for durable rows when dbPersisted.success
+    // arrives before done; without this ack the message list went blank at
+    // turn end until the user re-entered the session.
+    await agent.journal?.flush();
+    sendToMain({
+      type: 'chat:db_persisted',
+      sessionId: msg.sessionId,
+      success: true,
+      messageCount: agentMessages.length,
+    });
+    if (deferredDone) {
       sendToMain({
         type: 'chat:done',
         sessionId: msg.sessionId,
-        turnId: msg.id,
         reason: turnEndReason,
-        finalContent: '',
-        conversationText: '',
       });
     }
 

@@ -1041,9 +1041,15 @@ function makeSnippet(text: string, matchIndex: number, queryLen: number): string
  * rebase supersedes every MessageEntry with `seq <= supersededUpToSeq` (or
  * ALL prior messages when the bound is null/undefined) that appears strictly
  * before the rebase in seq order, replacing them with the rebase's
- * `newMessages`. Kept messages survive via id matching against newMessages.
- * Rebases themselves, compaction entries, and rollout-process events are
- * preserved verbatim — they are audit artifacts and do not get superseded.
+ * `newMessages`. Rebases themselves, compaction entries, and rollout-process
+ * events are preserved verbatim — they are audit artifacts.
+ *
+ * Supersession rule (simplified — see plan 441 follow-up): ANY message row
+ * covered by a later in-scope rebase is dropped, whether it is a raw row or
+ * an earlier rebase's emission. A message carried forward inside a rebase's
+ * `newMessages` is represented by that rebase's own emission; keeping the
+ * original row too would duplicate it (this bit the truncate and compaction
+ * callers, which pass all survivors as newMessages with a null bound).
  *
  * Why forward-pass semantics: a rebase refers to `seq` values from the raw
  * file, not from any intermediate projected state. Walking the raw trace
@@ -1073,19 +1079,18 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
 
   /**
    * True iff some rebase that appears strictly LATER in the trace supersedes
-   * this row's seq AND does not explicitly keep this id via its newMessages.
-   * Applies uniformly to both raw messages and rebase-emitted messages.
+   * this row. Applies uniformly to raw messages and rebase-emitted messages:
+   * carried-forward messages are represented by the carrying rebase's own
+   * emission, so no kept-by-id exemption is needed (and allowing one would
+   * duplicate every survivor of truncate and compaction rebases).
    */
-  const supersededByLaterRebase = (msgSeq: number, msgId: string): boolean => {
+  const supersededByLaterRebase = (msgSeq: number): boolean => {
     for (let i = rebases.length - 1; i >= 0; i--) {
       const rb = rebases[i];
       const bound = rb.entry.supersededUpToSeq;
       // null/undefined bound = "supersede ALL prior messages" (compaction form).
       const inScope = bound == null || bound < 0 || msgSeq <= bound;
-      if (rb.seq > msgSeq && inScope) {
-        const keptByRebase = rb.entry.newMessages.some((m) => m.id === msgId);
-        if (!keptByRebase) return true;
-      }
+      if (rb.seq > msgSeq && inScope) return true;
     }
     return false;
   };
@@ -1096,7 +1101,7 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
     const entry = row.entry;
 
     if (entry.type === 'message') {
-      if (supersededByLaterRebase(row.seq, entry.id)) continue;
+      if (supersededByLaterRebase(row.seq)) continue;
       result.push(row);
       continue;
     }
@@ -1106,10 +1111,9 @@ export function applyRebases(rows: TimelineEntryRow[]): TimelineEntryRow[] {
       result.push(row);
       // Emit its newMessages, each placed at the rebase's seq. They are
       // ALSO subject to later-rebase supersession — a rebase-emitted row is
-      // no more durable than a raw row with the same seq, so the same check
-      // applies.
+      // no more durable than a raw row with the same seq.
       for (const m of entry.newMessages) {
-        if (supersededByLaterRebase(row.seq, m.id)) continue;
+        if (supersededByLaterRebase(row.seq)) continue;
         result.push({ entry: m, seq: row.seq });
       }
       continue;
