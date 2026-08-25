@@ -176,6 +176,25 @@ describe('applyRebases', () => {
     expect(out.map((r) => r.entry.id)).toEqual(['c-1', 'rb-1', 'u-3']);
   });
 
+  it('does not duplicate a survivor that a rebase carries forward (truncate*/compaction form)', () => {
+    // Regression: truncateAfter/truncateFromInclusive pass ALL survivors as
+    // newMessages with a null bound. The old kept-by-id exemption kept the
+    // RAW row alive AND emitted the carried copy, duplicating the entire
+    // prefix after one rewind. The raw rows must yield to the rebase's own
+    // emission — exactly one copy per id.
+    const rows: TimelineEntryRow[] = [
+      row(userMsg('u-1', 'first', 1), 1),
+      row(assistantMsg('a-1', 'reply', 2), 2),
+      row(userMsg('u-2', 'second prompt (rewind target)', 3), 3),
+      // Rewind to u-2: null bound, survivors u-1/a-1/u-2 carried verbatim.
+      row(rebase('rb-1', null, [userMsg('u-1', 'first', 1), assistantMsg('a-1', 'reply', 2), userMsg('u-2', 'second prompt (rewind target)', 3)], 4), 4),
+    ];
+
+    const out = applyRebases(rows);
+    const ids = out.map((r) => r.entry.id);
+    expect(ids).toEqual(['rb-1', 'u-1', 'a-1', 'u-2']);
+  });
+
   it('multiple rebases compose in order: each drops messages superseded by any LATER rebase', () => {
     const rows: TimelineEntryRow[] = [
       row(userMsg('u-1', 'first', 1), 1),

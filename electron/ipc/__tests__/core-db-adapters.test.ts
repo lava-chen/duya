@@ -97,6 +97,21 @@ function makeToolDTO(id: string, toolCallId: string, createdAt: number): Record<
   };
 }
 
+function makeToolUseDTO(id: string, toolCallId: string, createdAt: number): Record<string, unknown> {
+  return {
+    id,
+    session_id: 'sess-1',
+    role: 'assistant',
+    content: JSON.stringify([
+      { type: 'tool_use', id: toolCallId, name: 'BashTool', input: { command: 'echo hello' } },
+    ]),
+    msg_type: 'tool_use',
+    tool_call_id: toolCallId,
+    status: 'done',
+    created_at: createdAt,
+  };
+}
+
 function createSessionsFixture(db: SqliteDatabase): void {
   db.exec(`
     CREATE TABLE sessions (
@@ -208,13 +223,16 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
 
     it('tool message round-trips tool_name, tool_input, parent_tool_call_id', () => {
       const t = Date.now();
+      // Plan 441 read-side repair drops orphan tool_results (providers 400 on
+      // dangling tool_call ids), so round-trip through a PAIRED tool_use.
+      const useEvent = ipcMessageToNewEvent('sess-1', makeToolUseDTO('m-use', 'tc-1', t) as never);
       const dto = makeToolDTO('m-3', 'tc-1', t);
       const event = ipcMessageToNewEvent('sess-1', dto as never);
-      messageLog.appendBatch([event]);
+      messageLog.appendBatch([useEvent, event]);
 
       const stored = messageLog.listBySession('sess-1');
-      expect(stored).toHaveLength(1);
-      const row = storedEventToIpcMessage(stored[0])!;
+      expect(stored).toHaveLength(2);
+      const row = storedEventToIpcMessage(stored.find((e) => e.id === 'm-3')!)!;
 
       expect(row.id).toBe('m-3');
       expect(row.role).toBe('tool');
@@ -235,12 +253,16 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
           browserResults: { screenshot: 'huge-base64-blob' },
         },
       };
+      // Paired with its tool_use so read-side repair keeps it (plan 441).
+      const useEvent = ipcMessageToNewEvent('sess-1', makeToolUseDTO('m-meta-use', 'tc-meta', t) as never);
       const event = ipcMessageToNewEvent('sess-1', dto as never);
-      messageLog.appendBatch([event]);
+      messageLog.appendBatch([useEvent, event]);
 
       const stored = messageLog.listBySession('sess-1');
-      expect(stored).toHaveLength(1);
-      const entry = JSON.parse(stored[0].payload) as {
+      expect(stored).toHaveLength(2);
+      const entry = JSON.parse(
+        stored.find((e) => e.id === 'm-meta')!.payload,
+      ) as {
         message?: { metadata?: Record<string, unknown> };
       };
       const md = entry.message?.metadata ?? {};
@@ -254,17 +276,27 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       const events: NewEvent[] = [
         ipcMessageToNewEvent('sess-1', makeUserDTO('m-1', 'first', t) as never),
         ipcMessageToNewEvent('sess-1', makeAssistantDTO('m-2', t + 1) as never),
-        ipcMessageToNewEvent('sess-1', makeToolDTO('m-3', 'tc-1', t + 2) as never),
+        ipcMessageToNewEvent('sess-1', makeToolUseDTO('m-use', 'tc-1', t + 2) as never),
+        ipcMessageToNewEvent('sess-1', makeToolDTO('m-3', 'tc-1', t + 3) as never),
       ];
       messageLog.appendBatch(events);
 
       const stored = messageLog.listBySession('sess-1');
       const rows = storedEventsToIpcMessages(stored);
-      expect(rows).toHaveLength(3);
-      expect(rows[0].id).toBe('m-1');
-      expect(rows[1].id).toBe('m-2');
-      expect(rows[2].id).toBe('m-3');
-      expect(rows.map((r) => r.seq_index)).toEqual([1, 2, 3]);
+      expect(rows).toHaveLength(4);
+      expect(rows.map((r) => r.id)).toEqual(['m-1', 'm-2', 'm-use', 'm-3']);
+      expect(rows.map((r) => r.seq_index)).toEqual([1, 2, 3, 4]);
+    });
+
+    it('orphan tool_result without a matching tool_use is dropped by read-side repair (plan 441)', () => {
+      const t = Date.now();
+      const event = ipcMessageToNewEvent('sess-1', makeToolDTO('m-orphan', 'tc-none', t) as never);
+      messageLog.appendBatch([event]);
+
+      // Providers reject dangling tool_results with 400 — the projection must
+      // not surface them.
+      const stored = messageLog.listBySession('sess-1');
+      expect(stored).toHaveLength(0);
     });
   });
 

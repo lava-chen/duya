@@ -421,13 +421,26 @@ export function registerDbHandlers(): void {
     // Keep [0, cutIdx] (inclusive of the target — truncateAfter keeps target).
     const removedEvents = events.slice(cutIdx + 1);
     const restored = await restoreFilesForEvents(removedEvents);
-    const keptEvents: NewEvent[] = events.slice(0, cutIdx + 1).map((e) => ({
-      id: e.id,
-      sessionId: e.sessionId,
-      turnId: e.turnId,
-      payload: JSON.parse(e.payload),
-      createdAt: e.createdAt,
-    }));
+    // Only message/compaction entries may be carried inside a rebase's
+    // newMessages. Embedding rollout event rows (e.g. an older rebase) would
+    // nest non-message payloads into the projection and grow unboundedly
+    // across repeated rewinds.
+    const keptEvents: NewEvent[] = events.slice(0, cutIdx + 1)
+      .filter((e) => {
+        try {
+          const t = (JSON.parse(e.payload) as { type?: string }).type;
+          return t === 'message' || t === 'compaction';
+        } catch {
+          return false;
+        }
+      })
+      .map((e) => ({
+        id: e.id,
+        sessionId: e.sessionId,
+        turnId: e.turnId,
+        payload: JSON.parse(e.payload),
+        createdAt: e.createdAt,
+      }));
     const deletedCount = events.length - keptEvents.length;
     messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
     return { deletedCount, restoredFiles: restored.restoredFiles };
@@ -443,13 +456,23 @@ export function registerDbHandlers(): void {
     // Keep [0, cutIdx) (exclusive of the target — truncateFromInclusive removes target).
     const removedEvents = events.slice(cutIdx);
     const restored = await restoreFilesForEvents(removedEvents);
-    const keptEvents: NewEvent[] = events.slice(0, cutIdx).map((e) => ({
-      id: e.id,
-      sessionId: e.sessionId,
-      turnId: e.turnId,
-      payload: JSON.parse(e.payload),
-      createdAt: e.createdAt,
-    }));
+    // Same filter as truncateAfter: carry only message/compaction entries.
+    const keptEvents: NewEvent[] = events.slice(0, cutIdx)
+      .filter((e) => {
+        try {
+          const t = (JSON.parse(e.payload) as { type?: string }).type;
+          return t === 'message' || t === 'compaction';
+        } catch {
+          return false;
+        }
+      })
+      .map((e) => ({
+        id: e.id,
+        sessionId: e.sessionId,
+        turnId: e.turnId,
+        payload: JSON.parse(e.payload),
+        createdAt: e.createdAt,
+      }));
     const deletedCount = events.length - keptEvents.length;
     messageLog.appendRebase(sessionId, null, null, keptEvents); // null bound: supersede all prior; survivors kept by id
     return { deletedCount, restoredFiles: restored.restoredFiles };
