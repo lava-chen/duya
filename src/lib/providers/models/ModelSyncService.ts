@@ -144,7 +144,7 @@ function pickCapabilities(raw: Record<string, unknown>): {
   reasoningEffortOptions?: string[];
 } {
   const caps = raw.capabilities;
-  if (!caps || typeof caps !== 'object') return {};
+  if (!caps || typeof caps !== 'object') return pickAggregatorCapabilities(raw);
   const c = caps as Record<string, unknown>;
   const out: {
     supportsVision?: boolean;
@@ -168,7 +168,70 @@ function pickCapabilities(raw: Record<string, unknown>): {
       out.supportsReasoning = false;
     }
   }
+  // Merge aggregator-style flags (OpenRouter) when the LM Studio block
+  // didn't already report them. Non-aggregator entries have neither.
+  const agg = pickAggregatorCapabilities(raw);
+  if (out.supportsVision === undefined) out.supportsVision = agg.supportsVision;
+  if (out.supportsToolUse === undefined) out.supportsToolUse = agg.supportsToolUse;
+  if (out.supportsReasoning === undefined) out.supportsReasoning = agg.supportsReasoning;
   return out;
+}
+
+/**
+ * Extract capability flags from OpenRouter-style `/models` entries:
+ * - `architecture.input_modalities` containing `'image'` → supportsVision
+ * - `supported_parameters` containing `'tools'` → supportsToolUse
+ * - `supported_parameters` containing `'reasoning'` → supportsReasoning
+ *
+ * Mirrors `extractAggregatorCapabilities` in
+ * `electron/services/network/model-fetcher.ts` so both fetch paths agree.
+ * Returns empty for non-OpenRouter-shaped entries (LM Studio, plain OpenAI).
+ */
+function pickAggregatorCapabilities(raw: Record<string, unknown>): {
+  supportsVision?: boolean;
+  supportsToolUse?: boolean;
+  supportsReasoning?: boolean;
+} {
+  const out: {
+    supportsVision?: boolean;
+    supportsToolUse?: boolean;
+    supportsReasoning?: boolean;
+  } = {};
+
+  const architecture = raw.architecture;
+  if (
+    architecture && typeof architecture === 'object' &&
+    Array.isArray((architecture as Record<string, unknown>).input_modalities)
+  ) {
+    const modalities = (architecture as Record<string, unknown>).input_modalities as unknown[];
+    out.supportsVision = modalities.some(
+      (m) => typeof m === 'string' && m.toLowerCase() === 'image',
+    );
+  }
+
+  if (Array.isArray(raw.supported_parameters)) {
+    const params = raw.supported_parameters as unknown[];
+    const has = (name: string) =>
+      params.some((p) => typeof p === 'string' && p.toLowerCase() === name);
+    if (has('tools')) out.supportsToolUse = true;
+    if (has('reasoning')) out.supportsReasoning = true;
+  }
+
+  return out;
+}
+
+/**
+ * Extract the per-request output ceiling from an OpenRouter-style
+ * `top_provider.max_completion_tokens`. Returns `undefined` when the field is
+ * absent so callers can distinguish "not reported" from a real value.
+ */
+function pickMaxOutputTokens(raw: Record<string, unknown>): number | undefined {
+  const top = raw.top_provider;
+  if (!top || typeof top !== 'object') return undefined;
+  const value = (top as Record<string, unknown>).max_completion_tokens;
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
 }
 
 export class ModelSyncService {
@@ -281,6 +344,7 @@ export class ModelSyncService {
           if (!id) continue;
           const caps = pickCapabilities(raw);
           const ctx = pickContextWindow(raw);
+          const maxOutputTokens = pickMaxOutputTokens(raw);
           models.push({
             providerId: provider.id,
             modelId: id,
@@ -291,6 +355,7 @@ export class ModelSyncService {
             ...(ctx.contextWindowMax !== undefined
               ? { contextWindow: ctx.contextWindowMax }
               : {}),
+            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(caps.supportsVision !== undefined ? { supportsVision: caps.supportsVision } : {}),
             ...(caps.supportsToolUse !== undefined ? { supportsToolUse: caps.supportsToolUse } : {}),
             ...(caps.supportsReasoning !== undefined

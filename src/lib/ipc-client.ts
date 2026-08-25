@@ -932,6 +932,14 @@ export interface FetchedModel {
    */
   contextWindowMax?: number;
   /**
+   * Per-request output ceiling (tokens), when the source API exposes it
+   * (e.g. OpenRouter `top_provider.max_completion_tokens`). Persisted to
+   * the capability table so the agent can size max_tokens correctly
+   * instead of falling back to the built-in default — critical for
+   * reasoning models whose thinking shares the output budget.
+   */
+  maxOutputTokens?: number;
+  /**
    * Whether the model accepts image input. Sourced from LM Studio
    * `capabilities.vision`. `undefined` when the source does not expose
    * it (e.g. plain OpenAI `/v1/models`).

@@ -257,6 +257,7 @@ export function useProviderModels({
               m.supportsToolUse !== undefined ||
               m.supportsReasoning !== undefined ||
               typeof m.contextWindowMax === 'number' ||
+              typeof m.maxOutputTokens === 'number' ||
               (m.reasoningEffortOptions !== undefined &&
                 m.reasoningEffortOptions.length > 0) ||
               m.isLoaded === true;
@@ -271,6 +272,9 @@ export function useProviderModels({
                 : typeof m.contextLength === 'number' && m.contextLength > 0
                   ? { contextWindow: m.contextLength }
                   : {}),
+              ...(typeof m.maxOutputTokens === 'number' && m.maxOutputTokens > 0
+                ? { maxOutputTokens: m.maxOutputTokens }
+                : {}),
               ...(m.supportsVision !== undefined ? { supportsVision: m.supportsVision } : {}),
               ...(m.supportsToolUse !== undefined ? { supportsToolUse: m.supportsToolUse } : {}),
               ...(m.supportsReasoning !== undefined ? { supportsReasoning: m.supportsReasoning } : {}),

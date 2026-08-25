@@ -400,12 +400,14 @@ describe('fetchProviderModels — end-to-end with mocked fetch', () => {
         ownedBy: null,
         contextLength: 2048,
         contextWindowMax: 262144,
+        isLoaded: true,
       },
       {
         id: 'openai/gpt-oss-20b',
         ownedBy: null,
         contextLength: 131072,
         contextWindowMax: 131072,
+        isLoaded: false,
       },
     ]);
     expect(String(fetchMock.mock.calls[0][0])).toBe(
@@ -443,7 +445,7 @@ describe('fetchProviderModels — end-to-end with mocked fetch', () => {
     // `max_context_length` (here the raw payload omits the max so
     // `contextWindowMax` falls back to the loaded context length).
     expect(result.models).toEqual([
-      { id: 'qwen3.8-27b', ownedBy: null, contextLength: 8192, contextWindowMax: 8192 },
+      { id: 'qwen3.8-27b', ownedBy: null, contextLength: 8192, contextWindowMax: 8192, isLoaded: true },
     ]);
     expect(String(fetchMock.mock.calls[0][0])).toBe(
       'http://localhost:1234/api/v1/models',
@@ -572,6 +574,7 @@ describe('extractModels — LM Studio rich capabilities', () => {
     expect(result.models?.[0]).toEqual({
       id: 'gpt-4o',
       ownedBy: null,
+      isLoaded: false,
     });
     expect(result.models?.[0]?.supportsVision).toBeUndefined();
     expect(result.models?.[0]?.supportsToolUse).toBeUndefined();
@@ -813,5 +816,78 @@ describe('extractModels — reasoning effort options (LM Studio allowed_options)
     });
     expect(result.models?.[0]?.reasoningEffortOptions).toBeUndefined();
     expect(result.models?.[0]?.supportsReasoning).toBe(true);
+  });
+});
+
+describe('fetchProviderModels — OpenRouter-style aggregator entries', () => {
+  function fetchOpenRouter(body: unknown) {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 200, body }));
+    return fetchProviderModels({
+      protocol: 'openai-compatible',
+      base_url: 'https://openrouter.ai/api/v1',
+      api_key: 'sk-or-test',
+      auth_style: 'api_key',
+    });
+  }
+
+  it('extracts maxOutputTokens from top_provider.max_completion_tokens', async () => {
+    const result = await fetchOpenRouter({
+      data: [
+        {
+          id: 'vendor/ox-alpha',
+          context_length: 200000,
+          top_provider: { context_length: 200000, max_completion_tokens: 16384 },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(result.models?.[0]).toMatchObject({
+      id: 'vendor/ox-alpha',
+      contextLength: 200000,
+      maxOutputTokens: 16384,
+    });
+  });
+
+  it('maps architecture.input_modalities / supported_parameters to capability flags', async () => {
+    const result = await fetchOpenRouter({
+      data: [
+        {
+          id: 'vendor/ox-alpha',
+          architecture: {
+            modality: 'text+image->text',
+            input_modalities: ['text', 'image'],
+          },
+          supported_parameters: ['tools', 'reasoning'],
+        },
+        {
+          id: 'vendor/text-only',
+          architecture: { input_modalities: ['text'] },
+          supported_parameters: ['temperature'],
+        },
+      ],
+    });
+    expect(result.models?.[0]).toMatchObject({
+      id: 'vendor/ox-alpha',
+      supportsVision: true,
+      supportsToolUse: true,
+      supportsReasoning: true,
+    });
+    expect(result.models?.[1]).toMatchObject({
+      id: 'vendor/text-only',
+      supportsVision: false,
+    });
+    expect(result.models?.[1]?.supportsToolUse).toBeUndefined();
+    expect(result.models?.[1]?.supportsReasoning).toBeUndefined();
+  });
+
+  it('reports nothing when the entry has no aggregator fields (plain OpenAI shape)', async () => {
+    const result = await fetchOpenRouter({
+      data: [{ id: 'gpt-x' }],
+    });
+    const m = result.models?.[0];
+    expect(m?.supportsVision).toBeUndefined();
+    expect(m?.supportsToolUse).toBeUndefined();
+    expect(m?.supportsReasoning).toBeUndefined();
+    expect(m?.maxOutputTokens).toBeUndefined();
   });
 });

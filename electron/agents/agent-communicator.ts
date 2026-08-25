@@ -181,6 +181,11 @@ export function registerAgentHandlers(): void {
         headers: cfg.headers,
         model: cfg.model,
         modelCapabilities: cfg.modelCapabilities,
+        // ModelCompat flags (thinking format, supportsFinishReason, …) are
+        // consumed by DuyaAgent (runtimeConfig.modelCompat) to build the LLM
+        // client. Without this field every provider runs compat-less in the
+        // main chat path and reasoning models lose their thinking wiring.
+        modelCompat: cfg.modelCompat,
         requestOptions: cfg.requestOptions,
       };
     }
@@ -392,6 +397,8 @@ export function registerAgentHandlers(): void {
         headers: cfg.headers,
         model: cfg.model,
         modelCapabilities: cfg.modelCapabilities,
+        // See the note above: DuyaAgent reads runtimeConfig.modelCompat.
+        modelCompat: cfg.modelCompat,
         requestOptions: cfg.requestOptions,
       };
     }
@@ -449,6 +456,8 @@ export function registerAgentHandlers(): void {
         headers: cfg.headers,
         model: cfg.model,
         modelCapabilities: cfg.modelCapabilities,
+        // See the note above: DuyaAgent reads runtimeConfig.modelCompat.
+        modelCompat: cfg.modelCompat,
         requestOptions: cfg.requestOptions,
       };
     }

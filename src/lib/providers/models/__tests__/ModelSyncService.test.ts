@@ -271,3 +271,111 @@ describe('ModelSyncService.fetchOpenAICompatibleModels \u2014 LM Studio rich end
     expect(result.models[0].isLoaded).toBe(false);
   });
 });
+describe('ModelSyncService.fetchOpenAICompatibleModels — OpenRouter-style entries', () => {
+  function openRouterProvider(): LlmProvider {
+    return openAiProvider({
+      id: 'openrouter',
+      name: 'OpenRouter',
+      endpoints: { baseUrl: 'https://openrouter.ai/api/v1', isFullUrl: false },
+      auth: { type: 'api-key', apiKey: 'sk-or-test' },
+    });
+  }
+
+  it('extracts maxOutputTokens from top_provider.max_completion_tokens', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: [
+          {
+            id: 'vendor/ox-alpha',
+            context_length: 200000,
+            top_provider: { context_length: 200000, max_completion_tokens: 16384 },
+          },
+        ],
+      }),
+    );
+
+    const svc = new ModelSyncService();
+    const result = await svc.fetchOpenAICompatibleModels(openRouterProvider());
+
+    expect(result.ok).toBe(true);
+    expect(result.models).toHaveLength(1);
+    expect(result.models[0]).toMatchObject({
+      modelId: 'vendor/ox-alpha',
+      contextWindow: 200000,
+      maxOutputTokens: 16384,
+    });
+  });
+
+  it('maps architecture.input_modalities and supported_parameters to capability flags', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: [
+          {
+            id: 'vendor/ox-alpha',
+            context_length: 200000,
+            architecture: {
+              modality: 'text+image->text',
+              input_modalities: ['text', 'image'],
+            },
+            supported_parameters: ['tools', 'reasoning', 'max_tokens'],
+          },
+        ],
+      }),
+    );
+
+    const svc = new ModelSyncService();
+    const result = await svc.fetchOpenAICompatibleModels(openRouterProvider());
+
+    expect(result.models[0]).toMatchObject({
+      modelId: 'vendor/ox-alpha',
+      supportsVision: true,
+      supportsToolUse: true,
+      supportsReasoning: true,
+    });
+  });
+
+  it('leaves capability flags undefined for plain OpenAI-shaped entries (unknown ≠ false)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: [{ id: 'gpt-x' }],
+      }),
+    );
+
+    const svc = new ModelSyncService();
+    const result = await svc.fetchOpenAICompatibleModels(openRouterProvider());
+
+    expect(result.ok).toBe(true);
+    const m = result.models[0];
+    expect(m.supportsVision).toBeUndefined();
+    expect(m.supportsToolUse).toBeUndefined();
+    expect(m.supportsReasoning).toBeUndefined();
+    expect(m.maxOutputTokens).toBeUndefined();
+  });
+
+  it('LM Studio capabilities win over aggregator fields when both are present', async () => {
+    // Hybrid entry: LM Studio `capabilities` block + aggregator fields.
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        models: [
+          {
+            type: 'llm',
+            key: 'hybrid',
+            capabilities: { vision: false, trained_for_tool_use: false, reasoning: { default: 'off' } },
+            architecture: { input_modalities: ['text', 'image'] },
+            supported_parameters: ['tools', 'reasoning'],
+          },
+        ],
+      }),
+    );
+
+    const svc = new ModelSyncService();
+    const result = await svc.fetchOpenAICompatibleModels(lmStudioProvider());
+
+    expect(result.models[0]).toMatchObject({
+      modelId: 'hybrid',
+      supportsVision: false,
+      supportsToolUse: false,
+      supportsReasoning: false,
+    });
+  });
+});
