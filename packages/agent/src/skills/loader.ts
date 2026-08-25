@@ -22,6 +22,51 @@ const SKILL_ENABLED_OVERRIDES_KEY = 'skillEnabledOverrides';
 type SkillEnabledOverrides = Record<string, boolean>;
 
 /**
+ * Directory names never scanned for skills. Dot-directories are skipped
+ * wholesale (`.git`, `.svn`, caches); the explicit list covers common
+ * dependency/build noise that can appear inside project skill trees.
+ * System skills (`<bundled>/​.system`) are unaffected: `loadSystemSkills`
+ * enumerates the *contents* of `.system`, not `.system` itself.
+ */
+const SKIP_SCAN_DIR_NAMES = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '__pycache__',
+  '.venv',
+  'venv',
+]);
+
+function shouldSkipScanDir(entryName: string): boolean {
+  return entryName.startsWith('.') || SKIP_SCAN_DIR_NAMES.has(entryName);
+}
+
+/**
+ * Agent Skills spec limits (aligned with pi's discovery rules):
+ * a skill name is at most 64 characters and its frontmatter description at
+ * most 1024. Violations produce a loud diagnostic instead of a silent drop —
+ * the skill still loads, but the log names the offender so authors can fix it.
+ */
+const MAX_SKILL_NAME_CHARS = 64;
+const MAX_SKILL_DESCRIPTION_CHARS = 1024;
+
+function validateSkillSpec(name: string, description: string, source: SkillSource): void {
+  if (name.length > MAX_SKILL_NAME_CHARS) {
+    console.warn(
+      `[Skills] Diagnostic: skill name '${name.slice(0, 32)}…' (${source}) exceeds ${MAX_SKILL_NAME_CHARS} chars (${name.length}); rename the directory to comply with the Agent Skills spec`,
+    );
+  }
+  if (description.length > MAX_SKILL_DESCRIPTION_CHARS) {
+    console.warn(
+      `[Skills] Diagnostic: skill '${name}' (${source}) description exceeds ${MAX_SKILL_DESCRIPTION_CHARS} chars (${description.length}); only the first 250 chars reach the model-facing catalog`,
+    );
+  }
+}
+
+/**
  * Check if the current platform matches the skill's supported platforms
  * @param platforms - Array of supported platforms from skill frontmatter
  * @returns true if skill should be loaded on current platform
@@ -171,6 +216,9 @@ async function createSkillFromDirectory(
     frontmatter['user-invocable'] === false ? false : true;
   const whenToUse = frontmatter['when-to-use'] as string | undefined;
   const description = (frontmatter.description as string) || skillName;
+
+  validateSkillSpec(skillName, description, source);
+
   const argumentHint = frontmatter['argument-hint'] as string | undefined;
   const model = frontmatter.model as string | undefined;
   const effort = frontmatter.effort as number | undefined;
@@ -279,8 +327,10 @@ async function readCategoryDescription(dirPath: string): Promise<string | undefi
  * Load skills from a specific directory
  * If the directory has a DESCRIPTION.md, it's a category directory
  * and skills are loaded from subdirectories with category inherited from parent
+ *
+ * Exported for tests and tooling; production entry point is `loadSkills`.
  */
-async function loadSkillsFromDirectory(
+export async function loadSkillsFromDirectory(
   dirPath: string,
   source: SkillSource,
   parentCategory?: SkillCategory,
@@ -317,6 +367,8 @@ async function loadSkillsFromDirectory(
     // 'user'/'project' source and could trip findings that only system
     // skills are trusted to skip.
     if (entry === '.system') continue;
+    // Never descend into dependency/build/dot noise (see SKIP_SCAN_DIR_NAMES).
+    if (shouldSkipScanDir(entry)) continue;
 
     const entryPath = path.join(dirPath, entry);
 
@@ -342,7 +394,11 @@ async function loadSkillsFromDirectory(
     } else {
       // If not a skill directory, recursively try to load as category directory
       // This handles nested category structures like skills/apple/apple-notes/
-      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, inheritedCategory, securityBypassSkills, bundledSkillNames, skipSecurityScan);
+      // Propagate the entry-name-derived category (e.g. 'development') so
+      // <root>/development/<skill> inherits it even though the nested call
+      // re-derives isCategoryDir from its own DESCRIPTION.md.
+      const nestedParent = CATEGORY_MAP[entry.toLowerCase()] ?? inheritedCategory;
+      const nestedSkills = await loadSkillsFromDirectory(entryPath, effectiveSource, nestedParent, securityBypassSkills, bundledSkillNames, skipSecurityScan);
       skills.push(...nestedSkills);
     }
   }

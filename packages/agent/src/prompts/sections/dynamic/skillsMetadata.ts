@@ -15,6 +15,19 @@ import type { PromptSkill } from '../../../skills/types.js'
 import { TOOL_NAMES } from '../../types.js'
 import type { PromptContext } from '../../types.js'
 
+/**
+ * Per-skill description cap for the catalog listing (aligned with
+ * claude-code-haha's MAX_LISTING_DESC_CHARS). The catalog exists only for
+ * discovery — the full SKILL.md is loaded on demand — so verbose descriptions
+ * waste first-turn cache_creation tokens without improving match rate.
+ */
+const MAX_LISTING_DESC_CHARS = 250
+
+function clampDescription(value: string): string {
+  if (value.length <= MAX_LISTING_DESC_CHARS) return value;
+  return `${value.slice(0, MAX_LISTING_DESC_CHARS - 1).trimEnd()}…`;
+}
+
 function escapeXml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -38,30 +51,26 @@ export function formatSkillCatalog(skills: PromptSkill[]): string {
   const otherSkills = byName(skills.filter(s => s.source !== 'system'))
 
   const lines: string[] = ['<available_skills>']
+  const renderSkill = (skill: PromptSkill): void => {
+    lines.push('  <skill>')
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`)
+    lines.push(`    <description>${escapeXml(clampDescription(skill.description))}</description>`)
+    const location = skillLocation(skill)
+    if (location) {
+      lines.push(`    <location>${escapeXml(location)}</location>`)
+    }
+    lines.push('  </skill>')
+  }
   if (systemSkills.length > 0) {
     lines.push('  <!-- System (DUYA itself) -->')
     for (const skill of systemSkills) {
-      lines.push('  <skill>')
-      lines.push(`    <name>${escapeXml(skill.name)}</name>`)
-      lines.push(`    <description>${escapeXml(skill.description)}</description>`)
-      const location = skillLocation(skill)
-      if (location) {
-        lines.push(`    <location>${escapeXml(location)}</location>`)
-      }
-      lines.push('  </skill>')
+      renderSkill(skill)
     }
   }
   if (otherSkills.length > 0) {
     lines.push('  <!-- Other skills -->')
     for (const skill of otherSkills) {
-      lines.push('  <skill>')
-      lines.push(`    <name>${escapeXml(skill.name)}</name>`)
-      lines.push(`    <description>${escapeXml(skill.description)}</description>`)
-      const location = skillLocation(skill)
-      if (location) {
-        lines.push(`    <location>${escapeXml(location)}</location>`)
-      }
-      lines.push('  </skill>')
+      renderSkill(skill)
     }
   }
   lines.push('</available_skills>')
