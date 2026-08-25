@@ -6,10 +6,7 @@
  */
 
 import { readFileSync, statSync } from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { killProcessTree } from '../utils/processTreeKill.js';
 
 export type BashTaskStatus = 'running' | 'completed' | 'killed' | 'disk_limit' | 'error';
 
@@ -156,7 +153,9 @@ export class BashTaskRegistry {
   }
 
   /**
-   * Kill a background task by PID. On Windows uses taskkill /F /T.
+   * Kill a background task's whole process tree via killProcessTree —
+   * `taskkill /T` on Windows, pgid SIGTERM→SIGKILL escalation on Unix. A
+   * bare `process.kill(pid)` would orphan bash's grandchildren.
    */
   async stopTask(taskId: string): Promise<{ success: boolean; message: string }> {
     const task = this.tasks.get(taskId);
@@ -168,24 +167,15 @@ export class BashTaskRegistry {
       return { success: false, message: `Task ${taskId} is not running (status: ${task.status})` };
     }
 
-    try {
-      if (process.platform === 'win32') {
-        await execAsync(`taskkill /F /T /PID ${task.pid}`, { windowsHide: true });
-      } else {
-        process.kill(task.pid, 'SIGKILL');
-      }
-
-      this.markKilled(taskId, 'Stopped by user');
-      return { success: true, message: `Task ${taskId} stopped` };
-    } catch (err) {
-      const msg = (err as Error).message;
-      if (msg.includes('not found') || msg.includes('no such process')) {
-        // Process already gone
-        this.markCompleted(taskId, -1, 'Process already exited');
-        return { success: true, message: `Task ${taskId} process was already gone` };
-      }
-      return { success: false, message: `Failed to stop task: ${msg}` };
+    if (!this.isProcessAlive(task.pid)) {
+      // Process is already gone; treat as a completed run rather than a kill.
+      this.markCompleted(taskId, -1, 'Process already exited');
+      return { success: true, message: `Task ${taskId} process was already gone` };
     }
+
+    await killProcessTree(task.pid);
+    this.markKilled(taskId, 'Stopped by user');
+    return { success: true, message: `Task ${taskId} stopped` };
   }
 
   /**
