@@ -2845,6 +2845,10 @@ async function discoverPluginSkillPaths(): Promise<string[]> {
 
 async function reloadSkills(): Promise<void> {
   try {
+    // Plan 445: no explicit cache handling needed here. loadSkillsFromDirectory
+    // resolves each child directory through the per-skill snapshot cache, so
+    // this full reload only re-parses SKILL.md files whose subtree changed;
+    // unchanged skills reuse their previous PromptSkill objects.
     const registry = getSkillRegistry();
     // Clear existing non-bundled skills (system-level skills are
     // re-registered idempotently by loadSkills; keeping them out of the
