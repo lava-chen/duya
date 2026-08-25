@@ -120,11 +120,27 @@ node packages/agent/dist/cli/index.js [options]
   - `refactor(electron): extract ipc handlers to separate modules`
   - `docs: update AGENTS.md commit message format`
 - Atomic: one logical change per commit. Do not mix unrelated fixes.
-- Landing changes: use the [Worktree → PR workflow](#worktree--pr-workflow).
-  Merge via `gh pr merge --merge` so the merge node stays visible in the
-  graph. Never squash, never fast-forward-only.
+- Landing changes that warrant isolation (large features, framework
+  shifts, multi-module work — see [Worktree → PR workflow](#worktree--pr-workflow)):
+  open a worktree + PR and merge via `gh pr merge --merge` so the merge
+  node stays visible in the graph. Never squash, never fast-forward-only.
+  Small fixes may skip the worktree and commit straight to `master`.
 
 ### Worktree → PR workflow
+
+Use this workflow for **large feature additions or framework changes**
+(`feat:` scope spanning multiple modules, mode/profile/permission
+shifts, Agent Server / IPC surface changes, packaging or build-system
+rework, anything touching plan 224/411/413/423 mode machinery). It is
+the safe default when the diff is hard to review in one sitting or
+risks breaking `master` for other agents / the packaged build.
+
+**Small changes and small bug fixes may be committed straight to
+`master`**: typo / comment fixes, scoped `fix:` to one or two files,
+config tweaks, dependency bumps, doc updates, or any change small
+enough to revert in a single commit. Skip the worktree, skip the PR,
+commit + push directly. Use judgment — when in doubt, default to
+worktree.
 
 Standard loop for agent / parallel work — verified end to end
 (implement → commit → PR #14 → merge). The shared checkout is never
