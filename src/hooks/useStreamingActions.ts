@@ -1,8 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { subscribeToStreamingEvents, type StreamingEvent } from '@/lib/stream-session-manager';
+import {
+  extractDurableToolIds,
+  subtractDurableStreamingEvents,
+} from '@/lib/durable-stream-subtraction';
 import type { ActionItem } from '@/components/chat/ToolActionsGroup';
 import { buildToolAction } from '@/components/chat/tools/normalize';
 import { useShowHookInvocations } from './useShowHookInvocations';
+import { useConversationStore } from '@/stores/conversation-store';
 
 function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
   const actions: ActionItem[] = [];
@@ -124,8 +129,28 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
   const latestEventsRef = useRef<StreamingEvent[] | null>(null);
   const frameRef = useRef<number | null>(null);
   // Plan 437: re-read the toggle on every render so a mid-round toggle
-  // in Settings → Hooks takes effect on the next animation frame flush.
+  // change in Settings → Hooks takes effect on the next animation frame flush.
   const showHookInvocations = useShowHookInvocations();
+
+  // Plan 447: subtract the durable-covered prefix of the streaming timeline
+  // (plan 441 persists rounds to the DB mid-turn, so switching back to an
+  // active session replays them under StreamingMessage). Durable tool ids
+  // come from the conversation store's DB-loaded rows; kept in a ref so the
+  // rAF flush always sees the latest value without resubscribing.
+  const durableMessages = useConversationStore((s) => s.messages[sessionId]);
+  const durableIds = useMemo(
+    () => extractDurableToolIds(durableMessages ?? []),
+    [durableMessages],
+  );
+  const durableIdsRef = useRef(durableIds);
+  const scheduleFlushRef = useRef<(() => void) | null>(null);
+
+  // Re-flush when a DB reload lands after events were already flushed,
+  // otherwise the subtraction would only apply on the next stream event.
+  useEffect(() => {
+    durableIdsRef.current = durableIds;
+    scheduleFlushRef.current?.();
+  }, [durableIds]);
 
   useEffect(() => {
     // Reset on sessionId change so a new session starts fresh.
@@ -139,7 +164,9 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
         // Plan 437: drop hook events when the user has toggled them off
         // in Settings → Hooks. Read the latest value at flush time so a
         // mid-round toggle takes effect immediately.
-        setActions(streamingEventsToActionsFiltered(events, showHookInvocations));
+        // Plan 447: drop events already covered by durable DB rows first.
+        const pending = subtractDurableStreamingEvents(events, durableIdsRef.current);
+        setActions(streamingEventsToActionsFiltered(pending, showHookInvocations));
       }
     };
 
@@ -151,6 +178,7 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
       }
       frameRef.current = requestAnimationFrame(flush);
     };
+    scheduleFlushRef.current = scheduleFlush;
 
     const unsubscribe = subscribeToStreamingEvents(sessionId, (events) => {
       latestEventsRef.current = events;
@@ -159,6 +187,7 @@ export function useStreamingActions(sessionId: string): ActionItem[] {
 
     return () => {
       unsubscribe();
+      scheduleFlushRef.current = null;
       if (frameRef.current !== null && typeof cancelAnimationFrame !== 'undefined') {
         cancelAnimationFrame(frameRef.current);
       }

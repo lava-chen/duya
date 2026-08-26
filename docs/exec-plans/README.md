@@ -97,6 +97,12 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [314-tool-catalog-snapshot](./active/314-tool-catalog-snapshot.md) | Tool catalog snapshot design | P1 | Planning |
 | [439-canvas-capture-region-canvas-coords](./active/439-canvas-capture-region-canvas-coords.md) | `canvas_capture` region 用画布 grid 坐标 + 渲染端自动取景（临时平移缩放后还原），视口外区域可截 | P0 | 代码+单测完成；Electron 手动验证待办 |
 
+### Chat / Streaming
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [447-streaming-durable-dedup](./active/447-streaming-durable-dedup.md) | Session switch-back duplicate rendering — subtract durable-covered prefix from streamingEvents before building streaming actions (plan 441 mid-turn persistence vs StreamSessionManager snapshot) | P1 | Phase 1-3 implemented; manual UI verification pending |
+
 ### Plugin / MCP / App Connection
 
 | Plan | Description | Priority | Status |
