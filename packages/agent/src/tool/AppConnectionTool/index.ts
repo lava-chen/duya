@@ -114,12 +114,26 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 
       if (!response.success) {
         const error = response.error ?? { code: 'UNKNOWN', message: 'Unknown error' };
+        // Plan 450: connector_auth_required mid-call → fire a structured
+        // SSE event so the renderer can show a re-authorization card.
+        // The agent itself only sees the standard error; the elicitation
+        // surface lives in the UI (mirroring codex auth_elicitation).
+        if (error.code === 'connector_auth_required' && context.sendToMain) {
+          context.sendToMain({
+            type: 'chat:connector_auth_required',
+            sessionId: context.options?.sessionId,
+            toolName,
+            provider: desc.provider,
+            connectionId: desc.connectionId,
+          });
+        }
         // Surface `connection_not_available` / `connection_revoked` with
         // a user-actionable hint so the LLM can tell the user to reconnect.
         const message =
           error.code === 'connection_not_available' ||
           error.code === 'connection_revoked' ||
-          error.code === 'connection_not_found'
+          error.code === 'connection_not_found' ||
+          error.code === 'connector_auth_required'
             ? `${error.message} — the user may need to reconnect the ${desc.provider} account.`
             : error.message;
         return {

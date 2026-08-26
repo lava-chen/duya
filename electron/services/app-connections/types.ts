@@ -138,6 +138,9 @@ export type AppConnectionErrorCode =
   | 'connection_not_found'
   | 'connection_not_available'
   | 'connection_revoked'
+  /** Plan 450: user-actionable auth failure mid-call. Signals the renderer
+   *  to surface a re-authorization card rather than a dead-end error. */
+  | 'connector_auth_required'
   | 'provider_error'
   | 'invalid_grant'
   | 'network_error'

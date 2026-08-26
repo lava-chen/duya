@@ -139,6 +139,20 @@ export class ConnectorService {
         { connectionId, provider: conn.provider, code: tokenResult.error.code },
         COMPONENT,
       );
+      // Plan 450: mid-session auth failure → user-actionable auth_required.
+      // Mid-session (the connection row was already 'connected' at start)
+      // means refresh failed or the token was revoked server-side, so the
+      // user must re-authorize before any tool in this connection works
+      // again. Routes through the renderer auth card instead of surfacing
+      // a generic connection_revoked dead-end.
+      if (tokenResult.error.code === 'connection_revoked' ||
+          (tokenResult.error.code === 'connection_not_available' && conn.status === 'connected')) {
+        return failure(
+          'connector_auth_required',
+          `Re-authorization required for ${conn.provider}`,
+          false,
+        );
+      }
       return failure(
         tokenResult.error.code,
         tokenResult.error.message,

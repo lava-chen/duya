@@ -2,6 +2,7 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import type {
   ConnectorInputSchema,
@@ -85,10 +86,30 @@ export class RemoteMcpConnector {
     if (!session.tools.has(toolName)) {
       return { success: false, error: { code: 'unknown_action', message: `Remote MCP tool is unavailable: ${toolName}`, retriable: false } };
     }
-    const result = await session.client.callTool(
-      { name: toolName, arguments: isRecord(args) ? args : {} },
-      CallToolResultSchema,
-    );
+    let result;
+    try {
+      result = await session.client.callTool(
+        { name: toolName, arguments: isRecord(args) ? args : {} },
+        CallToolResultSchema,
+      );
+    } catch (error) {
+      // Plan 450: mid-call auth failure (token revoked server-side after the
+      // session cached the bearer). Surface a structured `connector_auth_required`
+      // error so the agent-side executor can emit an elicitation event and the
+      // renderer can prompt for re-authorization. The MCP SDK's authProvider
+      // would otherwise loop on refresh attempts the user can't see.
+      if (error instanceof UnauthorizedError) {
+        return {
+          success: false,
+          error: {
+            code: 'connector_auth_required',
+            message: `Remote MCP session for ${provider} requires re-authorization`,
+            retriable: false,
+          },
+        };
+      }
+      throw error;
+    }
     return {
       success: !result.isError,
       data: {

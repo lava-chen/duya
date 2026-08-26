@@ -64,14 +64,22 @@
 
 ### Phase B: 用时引导授权（elicitation 对齐）
 
-- [ ] 错误分类：`remote-mcp.ts` invoke 捕获 401/`UnauthorizedError`/token refresh 失败 →
-      结构化错误 `{ code:'connector_auth_required', provider, installUrl? }`
-- [ ] SSE 事件：worker `chat:connector_auth_required` → router 转发 → renderer
-      `AuthRequiredCard`（provider icon + 文案 + 「去授权」「忽略」）
-- [ ] 「去授权」：调 `appConnection:connect`(providerId) 走完整 OAuth loopback → 成功后
-      `notifyAgentServerAppConnectionReload()` → 卡片转成功态并自动重发原工具调用
-      （重试一次上限，防循环）
-- [ ] 单测：错误分类映射、SSE 载荷形状、重试一次上限
+- [x] 错误分类：`remote-mcp.ts` 捕获 `UnauthorizedError` → 结构化 `connector_auth_required`
+      错误；`connector-service.ts` 在 `connection_revoked`/`not_available` 中 session 状态
+      仍为 connected 时也映射为 `connector_auth_required`
+- [x] 新错误码 `connector_auth_required` 加进 `AppConnectionErrorCode`
+- [x] worker 侧 `AppConnectionTool` executor 在收到该码时 `context.sendToMain` 发
+      `chat:connector_auth_required {provider,connectionId,toolName}`，并改错误提示文案
+- [x] router 转发为 SSE `connector_auth_required`；`agent-sse-client` dispatch +
+      onConnectorAuthRequired 回调
+- [x] `stream-session-manager` 新增 `subscribeToConnectorAuthRequired` / `clearConnectorAuthRequired`，
+      重播最后一次 pending 事件（page remount 兑容）
+- [x] renderer `ConnectorAuthRequiredCard` 组件 + ChatView 装配；“去重新授权”复用
+      Plan 312 的 `appConnection:connect` OAuth loopback
+- [ ] **B3 重试**：代码中连接成功后只清掉卡片，下次用户消息才能重试原调用——
+      Plan 450 原始设计的“自动重试一次”留作后续选代点（需在 worker 记最后一次工具调用
+      载荷，OAuth 成功后重发）
+- [x] i18n 键 zh/en；typecheck (web/agent/cli/conductor/voice) 全绿
 
 ### Phase C: 暴露层策略门 + spec 预算（细节对齐）
 
