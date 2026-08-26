@@ -35,6 +35,7 @@ import type { PromptSystem } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
+import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
@@ -703,6 +704,25 @@ export class duyaAgent {
         this.promptContexts.push(
           renderHookContextEnvelope({ event: 'SessionStart', hookName: 'session-start', seq: i }, startCtx.contexts[i]),
         );
+      }
+    }
+
+    // Plan 450: connector-activation reminder — the user @-mentioned apps in
+    // the composer. Codex parity: a mention changes tool exposure, not the
+    // prompt's capability text; this one-shot reminder only tells the model
+    // the user explicitly named these apps and to prefer their tools.
+    if (options?.mentionedProviders?.length) {
+      const selected = options.mentionedProviders.filter((p) => typeof p === 'string' && p);
+      if (selected.length > 0) {
+        const descriptors = getCachedAppConnectionDescriptors();
+        const lines = selected.map((provider) => {
+          const count = descriptors.filter((d) => d.provider === provider).length;
+          return `- ${provider}: ${count > 0 ? `${count} tool(s) available this run` : 'not connected — tell the user to connect it in Settings → Extensions → Connections'}`;
+        });
+        this.promptContexts.push(
+          `<connector-activation>\nThe user explicitly mentioned these app connections in their message:\n${lines.join('\n')}\nPrefer these apps' tools for tasks matching their capabilities; other tools remain available through tool_search.\n</connector-activation>`,
+        );
+        logger.info(`[Agent] Connector activation: ${selected.join(', ')} (${descriptors.filter((d) => selected.includes(d.provider)).length} tools pre-exposed)`);
       }
     }
 
@@ -2568,6 +2588,18 @@ export class duyaAgent {
         logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    // Plan 450: connector tools of @-mentioned providers skip tool_search
+    // discovery this turn — they join the initial tool list through the
+    // discovered set (exposure promotion), mirroring codex's per-turn
+    // connector selection.
+    const selectedProviders = options?.mentionedProviders?.filter((p) => typeof p === 'string' && p) ?? [];
+    const preExposedConnectorTools = new Set<string>(
+      selectedProviders.length
+        ? getCachedAppConnectionDescriptors()
+            .filter((d) => selectedProviders.includes(d.provider))
+            .map((d) => d.name)
+        : [],
+    );
     // Single-pass tool visibility filter.
     //
     // One question per tool: is it visible to the LLM this turn?
@@ -2594,7 +2626,14 @@ export class duyaAgent {
       `[Agent] Tool snapshot: ${allTools.length} total (${mcpToolCount} MCP, ${allTools.length - mcpToolCount} non-MCP)`,
     );
     const tools: Tool[] = allTools.filter((t) =>
-      isToolVisible(t.name, snapshot.getExposeMode(t.name), EMPTY_DISCOVERED, constraints),
+      isToolVisible(
+        t.name,
+        snapshot.getExposeMode(t.name),
+        preExposedConnectorTools.size > 0
+          ? new Set([...EMPTY_DISCOVERED, ...preExposedConnectorTools])
+          : EMPTY_DISCOVERED,
+        constraints,
+      ),
     );
     logger.info(
       `[Agent] streamChat: ${tools.length}/${allTools.length} tools visible after visibility filter`,

@@ -53,6 +53,11 @@ export interface ChatOptions {
   conductorCanvasId?: string;
   /** Internal background-task follow-up; never supplied by user input. */
   backgroundTaskResume?: boolean;
+  /**
+   * Plan 450: providers @-mentioned in the composer for this run. Forwarded
+   * to the worker so connector tools of these providers skip tool_search.
+   */
+  mentionedProviders?: string[];
 }
 
 export interface AgentEvent {

@@ -161,6 +161,8 @@ interface ChatStartMessage {
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
     displayContent?: string;
     mode?: string;
+    /** Plan 450: @-mentioned providers for this run. */
+    mentionedProviders?: string[];
     titleGenerationModel?: string;
     titleGenerationModelConfig?: {
       provider: string;
@@ -2302,6 +2304,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       agentProfileId: msg.options?.agentProfileId,
       outputStyleConfig: msg.options?.outputStyleConfig,
       mode: msg.options?.mode,
+      // Plan 450: @-mentioned providers for this run (exposure promotion +
+      // connector-activation reminder). See AppConnectionTool/selection.ts.
+      mentionedProviders: msg.options?.mentionedProviders,
       attachments: files,
       displayContent: msg.options?.displayContent,
       // Plan 441: thread the chat:start message id through as the turn id
