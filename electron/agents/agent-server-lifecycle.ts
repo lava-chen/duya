@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { app, BrowserWindow } from 'electron';
-import { getLogger, LogComponent } from '../logging/logger';
+import { getLogger, LogComponent, safeUserDataPath } from '../logging/logger';
 import { handleDbRequest } from './db-bridge';
 import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
@@ -74,6 +74,12 @@ export function spawnAgentServer(): Promise<number> {
       DUYA_AGENT_SERVER: 'true',
       DUYA_BETTER_SQLITE3_PATH: process.env.DUYA_BETTER_SQLITE3_PATH || resolveBetterSqlite3Path(),
       DUYA_CUSTOM_DB_PATH: process.env.DUYA_CUSTOM_DB_PATH || getDatabasePath(),
+      // The agent-server process runs under ELECTRON_RUN_AS_NODE, where
+      // app.getPath is unavailable — without this its WorkerManager falls
+      // back to %TEMP%/duya/logs and worker diagnostics (context-ring.log)
+      // land somewhere the user will never look.
+      DUYA_WORKER_LOG_DIR:
+        process.env.DUYA_WORKER_LOG_DIR ?? path.join(safeUserDataPath(), 'logs'),
       // Dev-only flag forwarded to the agent server and its workers. Packaged
       // builds never set this, so dev-only diagnostics stay disabled in prod.
       ...(app.isPackaged ? {} : { DUYA_DEV: '1' }),
