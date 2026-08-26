@@ -1,5 +1,5 @@
 import React from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -99,6 +99,33 @@ function repairHeadingSyntax(segment: string): string {
   //    marker already at line start.
   out = out.replace(/(?<![#\n])(?<!^)(#{2,6}\s)/gm, '\n$1');
   return out;
+}
+
+/**
+ * URL transform that preserves LOCAL media/file references that
+ * react-markdown's `defaultUrlTransform` would otherwise strip to an empty
+ * string BEFORE our custom `img`/`a` components ever see them:
+ *
+ * - `duya-file:///...` custom protocol (local image/video embedding)
+ * - `data:image/...` / `blob:` (inline previews)
+ * - Windows absolute paths (`C:/...`) — micromark parses the drive letter as
+ *   an unknown scheme, and the default transform drops every non-allowlisted
+ *   scheme, so `![x](E:/a.png)` rendered as `<img alt="x">` with no `src`.
+ * - Unix absolute paths (`/home/...`) and internal routes (`/duya/canvas/..`).
+ *
+ * Everything else keeps the default safe-URL behavior (javascript: etc.
+ * are still stripped).
+ */
+const PRESERVED_URL_RE = /^(?:duya-file:|blob:|data:image\/)/i;
+
+export function preserveLocalUrlTransform(url: string): string {
+  if (!url) return url;
+  if (PRESERVED_URL_RE.test(url)) return url;
+  // Windows absolute path (`C:/...` or `C:\...`).
+  if (/^[a-zA-Z]:[\\/]/.test(url)) return url.replace(/\\/g, '/');
+  // Unix absolute path or app-internal route.
+  if (url.startsWith('/')) return url;
+  return defaultUrlTransform(url);
 }
 
 interface FrontmatterResult {
@@ -210,6 +237,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false }]]}
+        urlTransform={preserveLocalUrlTransform}
         components={markdownComponents}
       >
         {content}
