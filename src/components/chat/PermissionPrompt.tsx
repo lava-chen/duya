@@ -19,6 +19,7 @@ import {
   InfoIcon,
 } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
+import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
 
 interface PermissionPromptProps {
   /** Current pending permission request */
@@ -204,8 +205,11 @@ function GenericPermissionPrompt({
   t: (key: TranslationKey, params?: Record<string, string | number>) => string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [alwaysAllowState, setAlwaysAllowState] = useState<'idle' | 'saving'>('idle');
   const { title, summary } = summarizePermission(pendingPermission);
   const reason = pendingPermission.decisionReason;
+  // Plan 449: app-connection tools can be globally approved ("Always allow").
+  const connector = pendingPermission.connector;
   return (
     <>
       <PanelHeader
@@ -236,6 +240,28 @@ function GenericPermissionPrompt({
         >
           {t('permission.allowOnce')}
         </Button>
+        {connector && !connector.preApproved && (
+          <Button
+            variant="secondary"
+            className="permission-prompt-btn"
+            disabled={alwaysAllowState === 'saving'}
+            onClick={async () => {
+              setAlwaysAllowState('saving');
+              try {
+                const api = getAppConnectionAPI();
+                if (api) {
+                  await api.approveTool(connector.provider, pendingPermission.toolName);
+                }
+              } catch {
+                // Approval save failure must not block the session approval.
+              }
+              setAlwaysAllowState('idle');
+              onPermissionResponse('allow_session');
+            }}
+          >
+            {alwaysAllowState === 'saving' ? '…' : t('permission.alwaysAllow')}
+          </Button>
+        )}
         <Button
           variant="primary"
           className="permission-prompt-btn permission-prompt-btn-primary"

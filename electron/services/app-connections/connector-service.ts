@@ -12,6 +12,7 @@
  */
 
 import { getLogger, LogComponent } from '../../logging/logger';
+import { isToolGloballyApproved } from './tool-approvals.js';
 import { AppConnectionService, getAppConnectionService } from './app-connection-service.js';
 import { TokenService } from './token-service.js';
 import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } from './connector-types.js';
@@ -88,6 +89,17 @@ export class ConnectorService {
       const connector = this.connectors.get(dto.provider);
       if (!connector) continue;
       out.push(...connector.listDescriptors(dto.id));
+    }
+    // Plan 449: stamp global "Always allow" decisions onto descriptors so
+    // the agent-side permission gate can skip the write/modify ask without
+    // an IPC round-trip. Destructive tiers are never stamped.
+    for (const descriptor of out) {
+      if (
+        descriptor.riskTier !== 'destructive' &&
+        isToolGloballyApproved(descriptor.provider, descriptor.name)
+      ) {
+        descriptor.preApproved = true;
+      }
     }
     return out;
   }
