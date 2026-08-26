@@ -77,6 +77,8 @@ export interface CompactProactiveOptions {
   readonly workingDirectory?: string;
   readonly customReinjectContext?: string;
   readonly recentChanges?: readonly unknown[];
+  /** Initiation source — forwarded to CompactionManager loop guards. */
+  readonly trigger?: 'auto' | 'manual' | 'emergency';
 }
 
 function defaultIdGenerator(): string {
