@@ -4,12 +4,13 @@
  * Reads canonical files from the **live** memory root layout that
  * the curation agent actually writes:
  *
- *   <memoryRoot>/global/areas/<slug>.md    — `area` claim type
- *   <memoryRoot>/global/people/<slug>.md   — `person` claim type
+ *   <memoryRoot>/global/areas/<slug>.md        — `area` claim type
+ *   <memoryRoot>/global/people/<slug>.md       — `person` claim type
+ *   <memoryRoot>/global/preferences/<slug>.md  — `preference` claim type
+ *   <memoryRoot>/global/<custom>/<slug>.md     — curator-proposed category
  *
  * Each file has no YAML frontmatter; metadata is derived from:
- *   - directory (`global/areas` → claim_type=`area`,
- *     `global/people` → claim_type=`person`)
+ *   - directory (`global/areas` → claim_type=`area`, custom dirs → dir name)
  *   - filename (`crest-hydrology.md` → canonical_key=`crest-hydrology`)
  *   - H1 title (`# Cresting Computation Hydrology Model` → display title)
  *
@@ -17,8 +18,7 @@
  * prompt-build time):
  *   - MEMORY.md        — searchable registry, one line per active file
  *   - summary.md       — bounded routing summary (top 12 by recency)
- *   - global/areas/index.md — directory listing
- *   - global/people/index.md — directory listing
+ *   - global/<dir>/index.md — directory listing per entity bucket
  *
  * Functions are pure with respect to the filesystem at call time:
  * same files on disk always produce byte-identical output.
@@ -26,6 +26,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+
+import { listEntityDirsSync, type EntityDir } from './entity_dirs.js';
 
 const MAX_BYTES = 64 * 1024;
 const MAX_SUMMARY_CHARS = 6_000;
@@ -47,18 +49,27 @@ interface CanonicalFile {
   mtimeMs: number;
 }
 
-type LiveEntityType = 'area' | 'person' | 'preference';
-
+/**
+ * Entity buckets are discovered dynamically via {@link listEntityDirsSync}:
+ * the three defaults plus any curator-proposed custom category under
+ * `global/` (see `entity_dirs.ts` for why the previous hard-coded list
+ * stranded custom categories). Each entry below is a live-layout bucket.
+ */
 interface LayoutEntry {
-  type: LiveEntityType;
+  /** Canonical-key label (e.g. `area`, `person`, `lessons`). */
+  type: string;
+  /** Directory name under `global/` (e.g. `areas`, `lessons`). */
+  name: string;
   dir: string;
 }
 
-const LAYOUT: ReadonlyArray<LayoutEntry> = [
-  { type: 'area', dir: 'global/areas' },
-  { type: 'person', dir: 'global/people' },
-  { type: 'preference', dir: 'global/preferences' },
-];
+function layoutEntries(memoryRoot: string): LayoutEntry[] {
+  return listEntityDirsSync(memoryRoot).map((e: EntityDir) => ({
+    type: e.type,
+    name: e.name,
+    dir: e.relDir,
+  }));
+}
 
 /** Extract the H1 title (first `# ` heading) or `''` if none. */
 function extractTitle(body: string): string {
@@ -122,10 +133,10 @@ function extractSummary(body: string): string {
   return text;
 }
 
-/** Read every canonical file under the configured layout. */
+/** Read every canonical file under the discovered entity layout. */
 function readLiveFiles(memoryRoot: string): CanonicalFile[] {
   const out: CanonicalFile[] = [];
-  for (const entry of LAYOUT) {
+  for (const entry of layoutEntries(memoryRoot)) {
     const dir = path.join(memoryRoot, entry.dir);
     if (!fs.existsSync(dir)) continue;
     let names: string[];
@@ -270,13 +281,16 @@ export function generateSummaryMdLive(memoryRoot: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Generate `global/<type>/index.md` listing every file under that dir.
+ * Generate `global/<name>/index.md` listing every file under that entity
+ * directory.
  *
- * Returns `''` when the directory doesn't exist or is empty, so the
- * caller can skip the write.
+ * `dirName` is the directory name under `global/` (`areas`, `people`,
+ * `preferences`, or a custom category such as `lessons`) — NOT the claim
+ * type label. Returns `''` when the directory doesn't exist or has no
+ * entries, so the caller can skip the write.
  */
-export function generateIndexMdLive(memoryRoot: string, entityType: LiveEntityType): string {
-  const entry = LAYOUT.find((l) => l.type === entityType);
+export function generateIndexMdLive(memoryRoot: string, dirName: string): string {
+  const entry = layoutEntries(memoryRoot).find((l) => l.name === dirName);
   if (!entry) return '';
   const dir = path.join(memoryRoot, entry.dir);
   if (!fs.existsSync(dir)) return '';
@@ -286,9 +300,10 @@ export function generateIndexMdLive(memoryRoot: string, entityType: LiveEntityTy
     .filter((n) => n.endsWith('.md') && n !== 'index.md');
 
   const title =
-    entityType === 'area' ? 'Areas'
-    : entityType === 'person' ? 'People'
-    : 'Preferences';
+    entry.name === 'areas' ? 'Areas'
+    : entry.name === 'people' ? 'People'
+    : entry.name === 'preferences' ? 'Preferences'
+    : entry.name.charAt(0).toUpperCase() + entry.name.slice(1);
   const lines: string[] = [
     `# ${title} Index`,
     '',

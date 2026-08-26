@@ -1556,6 +1556,11 @@ deterministic, replaceable projections:
   verification.
 - `global/people/` and `global/areas/`: semantic entity projections with index
   files; these are queried explicitly rather than through a broad root search.
+  Custom categories (e.g. `global/lessons/`) can be proposed by the curator
+  via the curation protocol's `new_categories` action and are discovered
+  dynamically by `packages/agent/src/memory-state/entity_dirs.ts` — the single
+  enumeration point shared by the MEMORY.md projection, per-directory indexes,
+  summary synthesis, the curator panorama, and the runtime prompt layout block.
 
 The extractor emits at most five durable candidates with typed canonical keys
 and explicit scope. The consolidator normalizes known aliases, transfers

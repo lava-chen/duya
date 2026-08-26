@@ -34,11 +34,18 @@ import type { AIClient } from '@duya/ai';
 
 import { chatWithTimeout } from './curation_single_shot';
 import { generateSummaryMdLive } from '../../packages/agent/src/memory-state/curation_projection_live';
+import { listEntityDirs } from '../../packages/agent/src/memory-state/entity_dirs';
 
 /** Sidecar file that records the canonical hash the current summary was synthesized from. */
 export const SYNTH_HASH_FILENAME = 'summary.md.synth-hash';
 
-const ENTITY_DIRS = ['global/areas', 'global/people', 'global/preferences'] as const;
+// Entity buckets are discovered dynamically (defaults + curator-proposed
+// custom categories) via the shared `entity_dirs` module — a hard-coded
+// list here used to exclude custom categories from the digest and made
+// `computeCanonicalHash` blind to their files.
+async function entityDirs(memoryRoot: string): Promise<string[]> {
+  return (await listEntityDirs(memoryRoot)).map((e) => e.relDir);
+}
 
 const DEFAULT_TIMEOUT_MS = 4 * 60_000;
 
@@ -68,7 +75,7 @@ const MAX_BLOCK_CHARS = 6_000;
 export async function computeCanonicalHash(memoryRoot: string): Promise<string> {
   const hash = crypto.createHash('sha256');
   const parts: string[] = [];
-  for (const dir of ENTITY_DIRS) {
+  for (const dir of await entityDirs(memoryRoot)) {
     const abs = path.join(memoryRoot, dir);
     let names: string[];
     try {
@@ -441,7 +448,7 @@ async function assembleInput(memoryRoot: string): Promise<string> {
     currentSummary = null; // no summary yet — first synthesis
   }
 
-  for (const dir of ENTITY_DIRS) {
+  for (const dir of await entityDirs(memoryRoot)) {
     const abs = path.join(memoryRoot, dir);
     let names: string[];
     try {
