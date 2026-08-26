@@ -22,7 +22,7 @@ import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { withFileSnapshot } from '../file-snapshot.js';
-import { recordFileRead } from '../file-read-state.js';
+import { computeContentSha, recordFileRead } from '../file-read-state.js';
 
 // ============================================================
 // Input Validation
@@ -191,13 +191,20 @@ export class WriteTool extends BaseTool {
         const { value: result } = await withFileSnapshot(absolutePath, async (preImageSha) => {
           await writeFile(absolutePath, content, encoding as BufferEncoding);
 
-          // Record the observed mtime/size so a following edit in the same
-          // session is anchored to this write without a re-read (plan 428,
-          // file-read-state.ts). Best-effort: a failed stat just means the
-          // next edit will ask for a read first.
+          // Record the observed state so a following edit in the same
+          // session is anchored to this write without a re-read (plan 428).
+          // The written content IS the full new file, so record a full-view
+          // fingerprint (plan 448) — this also makes a following edit immune
+          // to cosmetic mtime churn between the two calls. Best-effort: a
+          // failed stat just means the next edit will ask for a read first.
           try {
             const writeStat = await stat(absolutePath);
-            recordFileRead(absolutePath, { mtimeMs: writeStat.mtimeMs, size: writeStat.size });
+            recordFileRead(absolutePath, {
+              mtimeMs: writeStat.mtimeMs,
+              size: writeStat.size,
+              isFullView: true,
+              contentSha: computeContentSha(content),
+            });
           } catch {
             // ignore
           }
