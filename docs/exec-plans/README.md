@@ -103,7 +103,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 
 | Plan | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [447-streaming-durable-dedup](./active/447-streaming-durable-dedup.md) | Session switch-back duplicate rendering — subtract durable-covered prefix from streamingEvents before building streaming actions (plan 441 mid-turn persistence vs StreamSessionManager snapshot) | P1 | Phase 1-3 implemented; manual UI verification pending |
+| [447-streaming-durable-dedup](./active/447-streaming-durable-dedup.md) | Session switch-back duplicate rendering + mid-run refresh live-state parity — subtract durable-covered prefix from streamingEvents; active-turn rounds keep live tool-group presentation | P1 | Phase 1-4 implemented; manual UI verification pending |
 
 ### Plugin / MCP / App Connection
 

@@ -76,9 +76,30 @@ contains a `tool_use` today, so this does not occur in practice.
 - Full `npm run test` blocked at pretest: better-sqlite3 ABI swap needs the
   `.node` file unlocked (Electron running). Targeted vitest runs used instead.
 
+### Phase 4 — live-state parity on mid-run refresh
+
+Refresh mid-run also snapped already-durable rounds of the active turn to the
+collapsed finished-summary chrome (`MessageItem` never set `isStreaming`),
+while the pre-refresh live view rendered them chrome-less.
+
+- [x] `ToolActionsGroup.isStreaming` now flows to rounds after the last user
+      message while the session streams:
+      `MessageList` computes `activeRunBoundaryIndex` (last user group) and
+      passes `isLiveRun={isStreaming && index > boundary}` through
+      `LazyMessageRow` (memo comparators updated) into `MessageItem`, which
+      forwards `isStreaming={isLiveRun}` to both `ToolActionsGroup` call sites.
+- [x] Turn end / interrupt flips `isStreaming` off → rounds snap to the normal
+      collapsed summary, matching the no-refresh handoff behavior.
+- [x] `npx vitest run src/components/chat/MessageList.test.tsx src/components/chat/MessageItem.test.tsx` passes;
+      full `src/components/chat` suite shows only pre-existing failures
+      (identical under git stash).
+
 ## Decision log
 
 - Render-time subtraction over purging manager state: covers the attach/replay
   path automatically and avoids mutating shared singleton state mid-stream.
 - Cut marker is the last durable `tool_result` (id-based, exact) rather than
   content matching for text/thinking (fragile).
+- Live-state parity reuses the existing `isStreaming` code path of
+  `ToolActionsGroup` instead of adding a third visual mode: mid-run refresh
+  must look exactly like mid-run without refresh.

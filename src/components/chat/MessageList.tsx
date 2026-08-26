@@ -132,6 +132,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   isEditable,
   onEditSend,
   focusMode,
+  isLiveRun,
 }: {
   group: GroupedMessage;
   scrollRoot: React.RefObject<HTMLDivElement | null>;
@@ -142,6 +143,10 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   isEditable?: boolean;
   onEditSend?: (messageId: string, text: string) => void;
   focusMode?: boolean;
+  /** Plan 447: round belongs to the turn currently being streamed —
+   *  render the tool group in the live presentation instead of the
+   *  finished collapsed summary. */
+  isLiveRun?: boolean;
 }) {
   const rowRef = useRef<HTMLDivElement>(null);
   const [isNearViewport, setIsNearViewport] = useState(isAlwaysRendered);
@@ -214,6 +219,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
           isEditable={isEditable}
           onEditSend={onEditSend}
           focusMode={focusMode}
+          isLiveRun={isLiveRun}
         />
       ) : null}
     </div>
@@ -228,6 +234,7 @@ const LazyMessageRow = React.memo(function LazyMessageRow({
   && prev.isEditable === next.isEditable
   && prev.onEditSend === next.onEditSend
   && prev.focusMode === next.focusMode
+  && prev.isLiveRun === next.isLiveRun
 ));
 
 interface MessageNavigatorItem {
@@ -736,6 +743,16 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
   const shouldRenderStreamingMessage = isStreaming;
 
+  // Plan 447: index of the last user group in the transcript. Assistant
+  // rounds after it belong to the turn currently being generated; while
+  // `isStreaming`, they render in the live presentation (see LazyMessageRow).
+  const activeRunBoundaryIndex = useMemo(() => {
+    for (let i = groupedMessages.length - 1; i >= 0; i--) {
+      if (groupedMessages[i].message.role === 'user') return i;
+    }
+    return -1;
+  }, [groupedMessages]);
+
   // Track session changes and reset scroll state
   useEffect(() => {
     const isSessionChanged = prevSessionIdRef.current !== sessionId;
@@ -924,6 +941,10 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
             isEditable={group.message.role === 'user' && group.message.id === lastUserMessageId}
             onEditSend={onEditSend}
             focusMode={focusMode}
+            // Plan 447: rounds after the last user message belong to the turn
+            // being streamed — render them in the live presentation so a
+            // mid-run refresh doesn't snap them to the collapsed final state.
+            isLiveRun={isStreaming && index > activeRunBoundaryIndex}
           />
         ))}
 
