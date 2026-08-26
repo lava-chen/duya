@@ -2132,3 +2132,35 @@ there. It fetches tool schemas, exposes only token-free descriptors to the
 Agent through `appConnection:listDescriptors`, and executes selected tools
 through `appConnection:invoke`. Remote tools default to the `modify` risk tier
 until a provider adapter supplies an audited action-level classification.
+
+### Connector approval experience (Plan 449, codex parity)
+
+Remote MCP tools no longer all prompt on every call. Three layers, mirroring
+codex `AppToolPolicyEvaluator` / approval memory / templates:
+
+- **Annotation-driven tier** (`electron/services/app-connections/risk-policy.ts`):
+  server-published `annotations.readOnlyHint === true` (without
+  `destructiveHint`) maps to `read` (auto-execute); anything uninformative
+  stays `modify` (fail closed). Annotations never promote beyond read —
+  silent writes require a human decision. Each descriptor carries
+  `tierSource: 'annotations' | 'fallback'` and the server `title`.
+- **Approval memory**: session-scoped approvals live in the agent worker
+  (`packages/agent/src/tool/AppConnectionTool/approvals.ts`; worker process =
+  one session). The renderer's "Allow for Session" now records the tool so
+  the gate (`permissions.ts` step 4.5) skips the write/modify ask for the rest
+  of the session. Global "Always Allow" persists under ConfigStore
+  `app_connection_approvals["provider:toolAlias"]`
+  (`electron/services/app-connections/tool-approvals.ts`), is stamped onto
+  descriptors as `preApproved` during `listDescriptorsForConnected()`, and is
+  managed through `appConnection:approveTool` / `revokeToolApproval` /
+  `listToolApprovals` IPC. A `destructive` tier strong-confirm is NEVER
+  exempted by either layer.
+- **Approval message templates**
+  (`packages/agent/src/tool/AppConnectionTool/approval-message.ts`, versioned):
+  provider-keyed table renders a human-readable question (provider label +
+  scope + verb by tier + truncated primary argument) with a generic fallback;
+  the permission event carries `connector: { provider, riskTier, preApproved }`
+  so the card can offer "Always Allow".
+
+When a connection is disconnected its descriptors disappear, which makes any
+orphaned global approval key inert until the same provider+tool reconnects.
