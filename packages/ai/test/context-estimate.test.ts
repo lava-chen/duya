@@ -191,3 +191,54 @@ describe('computeContextEstimate', () => {
     expect(est).toMatchObject({ usedTokens: 12_000, anchored: false });
   });
 });
+
+describe('gateway under-report guard (plan 444)', () => {
+  const big = {
+    role: 'assistant',
+    content: 'old reply',
+    tokenUsage: { input_tokens: 0, output_tokens: 500, cache_hit_tokens: 150_000 },
+  };
+  // Fully-cache-served round with broken reporting: only output, all input
+  // counters zero. True context is ~150k, not ~600.
+  const underReported = {
+    role: 'assistant',
+    content: 'new reply',
+    tokenUsage: { input_tokens: 0, output_tokens: 558 },
+  };
+  const user = { role: 'user', content: 'next question' };
+
+  it('falls back to the previous anchor when the latest is an obvious under-report', () => {
+    const est = computeContextEstimate([big, underReported, user]);
+    expect(est.anchored).toBe(true);
+    expect(est.anchorTokens).toBe(150_500);
+    // base = prev anchor; trailing = the two appended messages
+    expect(est.usedTokens).toBe(150_500 + est.trailingTokens);
+    expect(est.anchorIndex).toBe(1); // latest anchor still indexes the newest message
+  });
+
+  it('respects a genuine post-offload shrink (non-zero real input)', () => {
+    // Projection offload legitimately shrinks the prompt and the provider
+    // still reports real input counters — no fallback may kick in.
+    const shrunk = {
+      role: 'assistant',
+      content: 'post-offload reply',
+      tokenUsage: { input_tokens: 40_000, output_tokens: 147 },
+    };
+    const est = computeContextEstimate([big, shrunk, user]);
+    expect(est.anchorTokens).toBe(40_147);
+    expect(est.usedTokens).toBe(40_147 + est.trailingTokens);
+  });
+
+  it('keeps a small all-zero-input anchor when no larger predecessor exists', () => {
+    // Fresh session whose first round reports zeros: nothing better exists,
+    // so the estimate stays anchored on it instead of deanchoring.
+    const first = {
+      role: 'assistant',
+      content: 'hi',
+      tokenUsage: { input_tokens: 0, output_tokens: 150 },
+    };
+    const est = computeContextEstimate([first, user]);
+    expect(est.anchored).toBe(true);
+    expect(est.usedTokens).toBe(150 + est.trailingTokens);
+  });
+});
