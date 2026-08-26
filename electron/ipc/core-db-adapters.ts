@@ -469,10 +469,12 @@ function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
         ? metadata.provider_state
         : JSON.stringify(metadata.provider_state))
     : null;
-  const tokenUsage = metadata?.token_usage
-    ? (typeof metadata.token_usage === 'string'
-        ? metadata.token_usage
-        : JSON.stringify(metadata.token_usage))
+  // token_usage round-trips through metadata (journal write path), but the
+  // timeline projection also restores the top-level `tokenUsage` field
+  // (LEGACY_KNOWN_KEYS) for in-memory/replayed messages — read both.
+  const rawTokenUsage = msg.metadata?.token_usage ?? (msg as { tokenUsage?: unknown }).tokenUsage;
+  const tokenUsage = rawTokenUsage !== undefined && rawTokenUsage !== null
+    ? (typeof rawTokenUsage === 'string' ? rawTokenUsage : JSON.stringify(rawTokenUsage))
     : null;
 
   return {

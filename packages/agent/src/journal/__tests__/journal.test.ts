@@ -201,3 +201,50 @@ describe('Journal', () => {
     expect(recordedAppends).toHaveLength(0); // empty hookEventId dropped
   });
 });
+describe('Journal token_usage serialization (plan 444 ring fix)', () => {
+  beforeEach(() => {
+    recordedAppends.length = 0;
+  });
+
+  it('serializes a top-level tokenUsage object into dto.token_usage', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.assistantMsgFinalized(
+      assistantMsg({
+        id: 'a-usage',
+        tokenUsage: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 } as Message['tokenUsage'],
+      } as Partial<Message> as Message),
+      'turn-1',
+    );
+
+    expect(recordedAppends).toHaveLength(1);
+    const dto = recordedAppends[0].messages[0] as { token_usage?: string };
+    expect(dto.token_usage).toBeTypeOf('string');
+    expect(JSON.parse(dto.token_usage!)).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_hit_tokens: 100,
+    });
+  });
+
+  it('prefers metadata.token_usage string when no top-level block exists', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.assistantMsgFinalized(
+      assistantMsg({
+        id: 'a-meta',
+        metadata: { token_usage: '{"input_tokens":1}' },
+      } as Partial<Message> as Message),
+      'turn-1',
+    );
+
+    const dto = recordedAppends[0].messages[0] as { token_usage?: string };
+    expect(dto.token_usage).toBe('{"input_tokens":1}');
+  });
+
+  it('omits token_usage when neither source has it', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.assistantMsgFinalized(assistantMsg({ id: 'a-plain' }), 'turn-1');
+
+    const dto = recordedAppends[0].messages[0] as { token_usage?: string };
+    expect(dto.token_usage).toBeUndefined();
+  });
+});

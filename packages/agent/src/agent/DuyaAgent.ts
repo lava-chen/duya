@@ -1618,13 +1618,21 @@ export class duyaAgent {
             if (finalAssistantContent.length > 0 || needsFollowUp) {
               const pushed: Message = { id: crypto.randomUUID(), role: 'assistant', content: finalAssistantContent.length > 0 ? finalAssistantContent : assistantContent, timestamp: Date.now(), duration_ms: Date.now() - streamStartTime, seq_index: seqIndex };
               if (roundResultUsage && ((roundResultUsage.input_tokens ?? 0) + (roundResultUsage.output_tokens ?? 0)) > 0) {
-                (pushed as AssistantMessage).usage = {
+                // Attach BOTH field names: `usage` is the pi-style in-memory
+                // convention read by computeContextEstimate's anchor scan,
+                // `tokenUsage` is the duya projection field listed in
+                // LEGACY_KNOWN_KEYS — without it ingestMessage strips the
+                // block from the timeline and the context ring shows "?"
+                // forever (plan 443 regression, fixed in plan 444).
+                const usageBlock = {
                   input_tokens: roundResultUsage.input_tokens ?? 0,
                   output_tokens: roundResultUsage.output_tokens ?? 0,
                   ...(roundResultUsage.total_tokens !== undefined ? { total_tokens: roundResultUsage.total_tokens } : {}),
                   ...(roundResultUsage.cache_hit_tokens !== undefined ? { cache_hit_tokens: roundResultUsage.cache_hit_tokens } : {}),
                   ...(roundResultUsage.cache_creation_tokens !== undefined ? { cache_creation_tokens: roundResultUsage.cache_creation_tokens } : {}),
                 };
+                (pushed as AssistantMessage).usage = usageBlock;
+                (pushed as Message & { tokenUsage?: unknown }).tokenUsage = usageBlock;
               }
               this._pushDurable(messages, pushed);
             }

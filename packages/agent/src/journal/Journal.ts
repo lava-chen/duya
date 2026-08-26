@@ -190,7 +190,16 @@ export class Journal {
     for (const field of JOURNAL_MESSAGE_FIELDS) {
       if (source[field] !== undefined) dto[field] = source[field];
     }
-    dto.token_usage = msg.metadata?.token_usage as string | undefined;
+    // token_usage: prefer the top-level `tokenUsage` object (duya projection
+    // field, survives ingestMessage via LEGACY_KNOWN_KEYS); fall back to the
+    // legacy metadata string. The rollout entry's metadata is what the read
+    // side (messageToIpcRow / ipcMessageToNewEvent) round-trips.
+    const tokenUsageBlock = source.tokenUsage as Record<string, unknown> | string | undefined;
+    if (tokenUsageBlock !== undefined) {
+      dto.token_usage = typeof tokenUsageBlock === 'string' ? tokenUsageBlock : JSON.stringify(tokenUsageBlock);
+    } else if (msg.metadata?.token_usage !== undefined) {
+      dto.token_usage = msg.metadata.token_usage as string | undefined;
+    }
     this.trackPending(
       messageDb
         .append(this.sessionId, [dto], turnId ?? null)

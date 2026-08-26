@@ -989,3 +989,56 @@ describe('end-to-end: timeline → buildAgentContext → projectModelMessages', 
     expect(tool.role).toBe('tool');
   });
 });
+
+describe('tokenUsage survives the legacy→timeline→legacy round-trip (plan 444 ring fix)', () => {
+  it('keeps tokenUsage (and drops nothing for usage-only attaches after re-ingest)', () => {
+    // This is the exact shape DuyaAgent pushes at the done boundary:
+    // `usage` is the pi-style in-memory field, `tokenUsage` is the duya
+    // projection field. The timeline ingest must keep `tokenUsage` so
+    // getMessages() can anchor the context estimator on it.
+    const pushed = {
+      id: 'a-ring',
+      role: 'assistant' as const,
+      content: [{ type: 'text', text: 'hi' }],
+      timestamp: createdAt,
+      usage: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 },
+      tokenUsage: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 },
+    };
+    const ingested = ingestMessage(pushed as unknown as Message, { index: 0 });
+    expect((ingested as { tokenUsage?: unknown }).tokenUsage).toBeDefined();
+
+    const projected = projectTimelinePersistenceMessages([
+      { type: 'message', id: 'evt-1', parentId: null, createdAt, message: ingested },
+    ]);
+    const assistant = projected.find((m) => m.id === 'a-ring');
+    expect(assistant).toBeDefined();
+    expect(assistant?.tokenUsage).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+      cache_hit_tokens: 100,
+    });
+  });
+
+  it('the projected anchor satisfies computeContextEstimate semantics', async () => {
+    const { computeContextEstimate } = await import('@duya/ai');
+    const pushed = {
+      id: 'a-ring-2',
+      role: 'assistant' as const,
+      content: [{ type: 'text', text: 'hi' }],
+      timestamp: createdAt,
+      usage: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 },
+      tokenUsage: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 },
+    };
+    const ingested = ingestMessage(pushed as unknown as Message, { index: 0 });
+    const projected = projectTimelinePersistenceMessages([
+      { type: 'message', id: 'evt-2', parentId: null, createdAt, message: ingested },
+    ]);
+
+    // This is the exact call emitLiveUsage makes; before the fix the anchor
+    // scan found no usage/tokenUsage and returned anchored=false forever.
+    const estimate = computeContextEstimate(projected as never);
+    expect(estimate.anchored).toBe(true);
+    expect(estimate.anchorIndex).toBe(0);
+    expect(estimate.usedTokens!).toBeGreaterThan(0);
+  });
+});
