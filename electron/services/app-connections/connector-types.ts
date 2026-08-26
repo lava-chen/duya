@@ -38,6 +38,20 @@ export interface ConnectorToolDescriptor {
   inputSchemaSummary: string;
   /** Risk tier — drives the agent-side permission gate (Plan 312 §6). */
   riskTier: RiskTier;
+  /**
+   * How `riskTier` was derived (Plan 449): `'annotations'` means the remote
+   * server published hints we trusted for a read tier; `'fallback'` means
+   * fail-closed defaulting.
+   */
+  tierSource?: 'annotations' | 'fallback';
+  /** Human-readable tool title from server annotations (approval UI). */
+  title?: string;
+  /**
+   * True when the user globally approved this provider+tool pair (Plan 449).
+   * The agent-side permission gate skips the write/modify ask; destructive
+   * strong-confirm is never skipped.
+   */
+  preApproved?: boolean;
   /** Owning provider. */
   provider: ProviderId;
   /**

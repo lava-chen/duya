@@ -12,11 +12,23 @@ import type { ProviderId } from '../types.js';
 import { getProviderConfig } from '../providers/registry.js';
 import { createStoredRemoteMcpOAuthProvider } from '../oauth/remote-mcp-flow.js';
 import type { TokenVault } from '../token-vault.js';
+import {
+  evaluateRemoteToolRiskTier,
+  parseRemoteToolAnnotations,
+  type RemoteToolAnnotations,
+} from '../risk-policy.js';
 
 interface RemoteSession {
   client: Client;
   transport: StreamableHTTPClientTransport;
-  tools: Map<string, { description: string; inputSchema: ConnectorInputSchema }>;
+  tools: Map<
+    string,
+    {
+      description: string;
+      inputSchema: ConnectorInputSchema;
+      annotations?: RemoteToolAnnotations;
+    }
+  >;
 }
 
 function toolAlias(provider: ProviderId, toolName: string): string {
@@ -39,18 +51,23 @@ export class RemoteMcpConnector {
     token: { accessToken: string; tokenType: string },
   ): Promise<ConnectorToolDescriptor[]> {
     const session = await this.ensureSession(connectionId, provider, token);
-    return [...session.tools.entries()].map(([name, tool]) => ({
-      name: toolAlias(provider, name),
-      description: tool.description || `${provider} Remote MCP tool: ${name}`,
-      inputSchema: tool.inputSchema,
-      inputSchemaSummary: `Official ${provider} Remote MCP: ${name}`,
-      // Remote servers control their own tools. Until their action metadata is
-      // normalized by provider adapters, fail closed and request confirmation.
-      riskTier: 'modify',
-      provider,
-      connectionId,
-      action: `remote:${name}`,
-    }));
+    return [...session.tools.entries()].map(([name, tool]) => {
+      // Plan 449: trust server-published hints for read-only tools instead of
+      // prompting on every call. Anything uninformative stays `modify`.
+      const { tier, source } = evaluateRemoteToolRiskTier(tool.annotations);
+      return {
+        name: toolAlias(provider, name),
+        description: tool.description || `${provider} Remote MCP tool: ${name}`,
+        inputSchema: tool.inputSchema,
+        inputSchemaSummary: `Official ${provider} Remote MCP: ${name}`,
+        riskTier: tier,
+        tierSource: source,
+        ...(tool.annotations?.title ? { title: tool.annotations.title } : {}),
+        provider,
+        connectionId,
+        action: `remote:${name}`,
+      };
+    });
   }
 
   async invoke(
@@ -115,6 +132,7 @@ export class RemoteMcpConnector {
           {
             description: tool.description ?? '',
             inputSchema: normalizeInputSchema(tool.inputSchema),
+            annotations: parseRemoteToolAnnotations(tool.annotations),
           },
         ]),
       );
