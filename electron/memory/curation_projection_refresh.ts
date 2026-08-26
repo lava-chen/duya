@@ -2,7 +2,7 @@
  * Memory projection refresh (Plan 417 Task H).
  *
  * After every successful single-shot curation, regenerate the read-only
- * projections (MEMORY.md, summary.md, global/{areas,people}/index.md)
+ * projections (MEMORY.md, summary.md, global/<entity>/index.md)
  * from the live canonical files under `global/`. The functions in
  * `curation_projection_live.ts` produce the right content; this module
  * just handles the write side.
@@ -27,6 +27,7 @@ import {
   generateMemoryMdLive,
   generateIndexMdLive,
 } from '../../packages/agent/src/memory-state/curation_projection_live';
+import { listEntityDirsSync } from '../../packages/agent/src/memory-state/entity_dirs';
 import { cleanStagingTmps } from './curation_file_writer';
 
 // NOTE: summary.md is intentionally NOT a Phase 2 projection anymore.
@@ -59,15 +60,13 @@ export async function refreshProjections(memoryRoot: string): Promise<string[]> 
     touched.push(absolute);
   }
 
-  // Index files per entity directory.
-  for (const entityType of ['area', 'person', 'preference'] as const) {
-    const content = generateIndexMdLive(memoryRoot, entityType);
+  // Index files per entity directory — the three defaults plus any
+  // curator-proposed custom category (dynamic discovery; a hard-coded
+  // list here used to strand custom categories without an index).
+  for (const entityDir of listEntityDirsSync(memoryRoot)) {
+    const content = generateIndexMdLive(memoryRoot, entityDir.name);
     if (content === '') continue;
-    const dir =
-      entityType === 'area' ? 'areas'
-      : entityType === 'person' ? 'people'
-      : 'preferences';
-    const relPath = `global/${dir}/index.md`;
+    const relPath = `${entityDir.relDir}/index.md`;
     const absolute = path.join(memoryRoot, relPath);
     await atomicWrite(absolute, content);
     touched.push(absolute);

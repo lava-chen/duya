@@ -84,4 +84,25 @@ describe('refreshProjections', () => {
     expect(readUtf8(path.join(root, 'MEMORY.md'))).toContain('second');
     expect(readUtf8(path.join(root, 'MEMORY.md'))).toContain('first');
   });
+
+  it('6. custom category gets MEMORY.md entries + its own index.md', async () => {
+    // A curator-proposed category (e.g. `global/lessons/`) must be fully
+    // visible in the projections — with the old hard-coded index loop it
+    // never received an index.md.
+    const lessonsDir = path.join(root, 'global/lessons');
+    fs.mkdirSync(lessonsDir, { recursive: true });
+    fs.writeFileSync(path.join(lessonsDir, 'calculus-101.md'), '# Calculus 101\n\nbody', 'utf8');
+
+    const touched = await refreshProjections(root);
+
+    const memory = readUtf8(path.join(root, 'MEMORY.md'));
+    expect(memory).toContain('## lessons');
+    expect(memory).toContain('**lessons:calculus-101**');
+
+    const lessonsIndex = readUtf8(path.join(root, 'global/lessons/index.md'));
+    expect(lessonsIndex).toContain('# Lessons Index');
+    expect(lessonsIndex).toContain('calculus-101');
+
+    expect(touched.some((p) => p.endsWith('global\\lessons\\index.md') || p.endsWith('global/lessons/index.md'))).toBe(true);
+  });
 });

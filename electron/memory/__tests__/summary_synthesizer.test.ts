@@ -115,6 +115,21 @@ describe('computeCanonicalHash', () => {
     const after = await computeCanonicalHash(fx.memoryRoot);
     expect(after).not.toBe(before);
   });
+
+  it('changes when a custom-category file is added (dynamic entity dirs)', async () => {
+    // A curator-proposed category (e.g. `global/lessons/`) must feed the
+    // canonical hash — with the old hard-coded directory list, new files
+    // there never triggered a re-synthesis.
+    const before = await computeCanonicalHash(fx.memoryRoot);
+    fs.mkdirSync(path.join(fx.memoryRoot, 'global', 'lessons'), { recursive: true });
+    fs.writeFileSync(
+      path.join(fx.memoryRoot, 'global', 'lessons', 'calculus-101.md'),
+      '# Calculus 101\n\nstudying derivatives\n',
+      'utf8',
+    );
+    const after = await computeCanonicalHash(fx.memoryRoot);
+    expect(after).not.toBe(before);
+  });
 });
 
 describe('synthesizeSummary', () => {

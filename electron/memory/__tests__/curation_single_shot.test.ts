@@ -552,6 +552,52 @@ describe('runSingleShotCuration — stage1_policy adaptive loop', () => {
     expect(result.success).toBe(true);
     expect(fs.existsSync(path.join(root, 'global/lessons'))).toBe(true);
     expect(fs.readFileSync(path.join(root, 'global/lessons/math-101.md'), 'utf8')).toContain('calculus');
+    expect(result.newCategoriesCreated).toEqual(['lessons']);
+    expect(result.newCategoriesSkipped).toBeUndefined();
+  });
+
+  it('12b. duplicate new_categories proposal is skipped and reported', async () => {
+    // The category already exists (created by an earlier run) — the
+    // curator cannot see its own past proposals, so a re-proposal must
+    // be skipped silently instead of pretending to create it again.
+    fs.mkdirSync(path.join(root, 'global/lessons'), { recursive: true });
+    const llm = createMockLLMClient(JSON.stringify({
+      decisions: [{ rollout_id: 'r-1', disposition: 'absorbed', reason: 'learner profile' }],
+      actions: [{
+        op: 'append',
+        area_path: 'global/lessons/math-101.md',
+        content: '## Course\n- user is studying calculus',
+        reason: 'learner dimension',
+      }],
+      new_categories: [{
+        name: 'lessons',
+        reason: 'user activity is mostly coursework across many sessions',
+      }],
+    }));
+
+    const result = await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+    expect(result.success).toBe(true);
+    expect(result.newCategoriesCreated).toBeUndefined();
+    expect(result.newCategoriesSkipped).toEqual(['lessons']);
+    // The action still lands in the existing category.
+    expect(fs.readFileSync(path.join(root, 'global/lessons/math-101.md'), 'utf8')).toContain('calculus');
+  });
+
+  it('12c. panorama in the user prompt lists custom categories', async () => {
+    // Downstream visibility contract: the assembled prompt must show the
+    // curator every existing bucket — including custom ones — so it can
+    // tell "already covered" from "missing entirely".
+    seedArea(root, 'global/lessons/calculus-101.md', '# Calculus 101\n\nstudying derivatives');
+    let capturedPrompt = '';
+    const llm = createMockLLMClient((messages) => {
+      capturedPrompt = messages.map((m) => String(m.content)).join('\n');
+      return VALID_REPLY;
+    });
+
+    await runSingleShotCuration({ memoryRoot: root, inputs, llmClient: llm });
+    // The panorama entry is structured: bucket + slug fields.
+    expect(capturedPrompt).toContain('"bucket": "lessons"');
+    expect(capturedPrompt).toContain('"slug": "calculus-101"');
   });
 });
 

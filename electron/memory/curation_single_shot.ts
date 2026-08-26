@@ -37,6 +37,7 @@ import type { AIClient } from '@duya/ai';
 
 import { parseCurationResponse, CurationParseError } from './curation_response_parser';
 import { applyCurationActions, resolveAreaPath, type ApplyResult } from './curation_file_writer';
+import { listEntityDirs, isValidEntityDirName } from '../../packages/agent/src/memory-state/entity_dirs';
 import type { CurationResponse } from './curation_response_parser';
 import {
   applyPolicyEdits,
@@ -123,6 +124,17 @@ export interface RunResult {
    * rate-limit skip). The run itself still succeeded.
    */
   policyErrors?: string[];
+  /**
+   * Custom entity categories created by this run's `new_categories`
+   * proposals (directory actually created under `global/`).
+   */
+  newCategoriesCreated?: string[];
+  /**
+   * Custom category proposals that were skipped: name failed the grammar
+   * guard, or the category already existed (duplicate proposal — the
+   * curator cannot see its own past proposals).
+   */
+  newCategoriesSkipped?: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 4 * 60_000;
@@ -298,6 +310,12 @@ write your first file into it (an action targeting the new directory)
 and emit a stage1_policy update so Stage 1 starts watching the
 signals. If in doubt, fold into "global/areas/" instead — you can
 always promote a category later.
+
+The memory panorama below already lists EVERY existing category,
+including custom ones created by earlier runs. A bucket that appears
+in the panorama is NOT new — do not propose it again; file into the
+existing category instead. Only propose a category that appears
+nowhere in the panorama.
 
 # Decision boundary
 
@@ -507,9 +525,12 @@ async function assembleUserPrompt(
   // Memory panorama: the slug + title + recency of EVERY canonical file,
   // so the curator can tell which dimensions are covered, which are thin,
   // and which are missing entirely. Without this it cannot decide whether
-  // a signal is new or already known.
+  // a signal is new or already known. Entity buckets are discovered
+  // dynamically (defaults + curator-proposed custom categories) — with a
+  // hard-coded list, a custom category created by an earlier run was
+  // invisible here and got re-proposed / misfiled on every cycle.
   const panorama: Array<{ bucket: string; slug: string; title: string; updated: string }> = [];
-  for (const sub of ['global/preferences', 'global/people', 'global/areas'] as const) {
+  for (const sub of (await listEntityDirs(memoryRoot)).map((e) => e.relDir)) {
     const dir = path.join(memoryRoot, sub);
     let names: string[] = [];
     try {
@@ -614,6 +635,8 @@ export async function runSingleShotCuration(
   let policyUpdated: boolean | undefined;
   let policyVersion: number | undefined;
   let policyErrors: string[] = [];
+  const newCategoriesCreated: string[] = [];
+  const newCategoriesSkipped: string[] = [];
 
   try {
     const userPrompt = await assembleUserPrompt(opts.memoryRoot, opts.inputs, opts.policyPath);
@@ -684,24 +707,54 @@ export async function runSingleShotCuration(
     }
 
     if (response !== null) {
-      const applyResult = await applyCurationActions(opts.memoryRoot, response.actions);
-      actionsApplied = applyResult.applied;
-      errors = applyResult.errors;
-
       // New category creation (rare, evidence-gated): create the directory
-      // so subsequent actions in this batch (and later cycles) can write
-      // into it. Non-fatal on failure — the run still succeeded.
+      // BEFORE applying actions so same-batch writes land in a fully
+      // initialized bucket. Guards:
+      //   - name must match the shared category grammar (defense in depth;
+      //     the zod schema already enforces this);
+      //   - an EXISTING category is skipped, not re-created — the curator
+      //     cannot see its own past proposals, and a duplicate proposal
+      //     used to silently pass through (mkdir is idempotent).
       for (const cat of response.new_categories ?? []) {
+        if (!isValidEntityDirName(cat.name)) {
+          newCategoriesSkipped.push(cat.name);
+          console.warn(`[memory] new category rejected (invalid name): ${cat.name}`);
+          continue;
+        }
+        const dirPath = path.join(opts.memoryRoot, 'global', cat.name);
         try {
-          await fs.mkdir(path.join(opts.memoryRoot, 'global', cat.name), { recursive: true });
-          console.warn(`[memory] new category created: global/${cat.name} (${cat.reason.slice(0, 80)})`);
+          let stat;
+          try {
+            stat = await fs.stat(dirPath);
+          } catch {
+            stat = null; // does not exist yet
+          }
+          if (stat?.isDirectory()) {
+            newCategoriesSkipped.push(cat.name);
+            console.warn(
+              `[memory] new category already exists, skipped: global/${cat.name}`,
+            );
+            continue;
+          }
+          // recursive: parent `global/` may not exist yet on first run.
+          await fs.mkdir(dirPath, { recursive: true });
+          newCategoriesCreated.push(cat.name);
+          console.warn(
+            `[memory] new category created: global/${cat.name} (${cat.reason.slice(0, 80)})`,
+          );
         } catch (err) {
+          // Non-fatal: the run still succeeds; applyCurationActions's
+          // atomicWrite re-creates missing parent directories on demand.
           console.warn(
             '[memory] new category creation failed',
             err instanceof Error ? err.message : String(err),
           );
         }
       }
+
+      const applyResult = await applyCurationActions(opts.memoryRoot, response.actions);
+      actionsApplied = applyResult.applied;
+      errors = applyResult.errors;
 
       // Adaptive loop: if the curator proposed surgical policy edits
       // (Plan 433 — incremental, anchored by section + rule id, at most
@@ -788,5 +841,7 @@ export async function runSingleShotCuration(
     ...(policyUpdated !== undefined ? { policyUpdated } : {}),
     ...(policyVersion !== undefined ? { policyVersion } : {}),
     ...(policyErrors.length > 0 ? { policyErrors } : {}),
+    ...(newCategoriesCreated.length > 0 ? { newCategoriesCreated } : {}),
+    ...(newCategoriesSkipped.length > 0 ? { newCategoriesSkipped } : {}),
   };
 }

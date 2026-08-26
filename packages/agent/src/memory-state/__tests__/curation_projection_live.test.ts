@@ -127,29 +127,69 @@ describe('generateIndexMdLive', () => {
   beforeEach(() => { root = mkRoot(); });
   afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
-  it('9. area index lists every .md except index.md', () => {
+  it('9. areas index lists every .md except index.md', () => {
     writeArea(root, 'a-one', '# A One\n\nbody');
     writeArea(root, 'a-two', '# A Two\n\nbody');
-    const md = generateIndexMdLive(root, 'area');
+    const md = generateIndexMdLive(root, 'areas');
     expect(md).toContain('# Areas Index');
     expect(md).toContain('a-one');
     expect(md).toContain('a-two');
   });
 
-  it('10. person index lists every person', () => {
+  it('10. people index lists every person', () => {
     writePerson(root, 'alice', '# Alice\n\nbio');
-    const md = generateIndexMdLive(root, 'person');
+    const md = generateIndexMdLive(root, 'people');
     expect(md).toContain('# People Index');
     expect(md).toContain('alice');
   });
 
   it('11. missing directory → empty string', () => {
-    expect(generateIndexMdLive(root, 'area')).toBe('');
-    expect(generateIndexMdLive(root, 'person')).toBe('');
+    expect(generateIndexMdLive(root, 'areas')).toBe('');
+    expect(generateIndexMdLive(root, 'people')).toBe('');
   });
 
-  it('12. invalid entityType → empty string', () => {
-    // @ts-expect-error intentionally wrong type
+  it('12. unknown directory name → empty string', () => {
+    // Not a directory on disk and not a default bucket.
     expect(generateIndexMdLive(root, 'unknown')).toBe('');
+  });
+});
+
+describe('custom entity categories (curator-proposed)', () => {
+  let root: string;
+  beforeEach(() => { root = mkRoot(); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  function writeCustom(dir: string, slug: string, body: string): void {
+    const full = path.join(root, 'global', dir);
+    fs.mkdirSync(full, { recursive: true });
+    fs.writeFileSync(path.join(full, `${slug}.md`), body, 'utf8');
+  }
+
+  it('13. MEMORY.md includes a section for a custom category', () => {
+    writeCustom('lessons', 'calculus-101', '# Calculus 101\n\n## Summary\n\nStudying derivatives.');
+    const md = generateMemoryMdLive(root);
+    expect(md).toContain('## lessons');
+    expect(md).toContain('**lessons:calculus-101**');
+    expect(md).toContain('global/lessons/calculus-101.md');
+  });
+
+  it('14. summary.md includes custom-category files', () => {
+    writeCustom('lessons', 'calculus-101', '# Calculus 101\n\n## Summary\n\nStudying derivatives.');
+    const md = generateSummaryMdLive(root);
+    expect(md).toContain('[lessons]');
+    expect(md).toContain('Studying derivatives.');
+  });
+
+  it('15. custom category index uses a title-cased heading', () => {
+    writeCustom('lessons', 'calculus-101', '# Calculus 101\n\nbody');
+    const md = generateIndexMdLive(root, 'lessons');
+    expect(md).toContain('# Lessons Index');
+    expect(md).toContain('calculus-101');
+  });
+
+  it('16. grammar-violating directories under global/ are ignored', () => {
+    writeCustom('NotValid', 'junk', '# Junk\n\nbody');
+    const md = generateMemoryMdLive(root);
+    expect(md).toBe('');
   });
 });

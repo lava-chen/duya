@@ -23,6 +23,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { parse } from '@iarna/toml'
 import { parseLayout, renderLayoutForPrompt, DEFAULT_LAYOUT, type MemoryLayout } from '../../../memory-state/memory_layout.js'
+import { listEntityDirsSync, DEFAULT_ENTITY_TYPES } from '../../../memory-state/entity_dirs.js'
 import { getDuyaRoot, getDuyaMemoryRoot } from '../../../memory-state/memory_paths.js'
 
 /** `[memory.rag]` in `~/.duya/config.toml` — retrievable memory index (plan 428). */
@@ -81,6 +82,19 @@ export function getMemorySection(ctx: PromptContext): string {
 
   const layoutBlock = renderLayoutForPrompt(layout)
 
+  // Curator-proposed custom categories (e.g. `global/lessons/`) live outside
+  // the code-fixed claim-type layout, so `renderLayoutForPrompt` cannot know
+  // about them. Discover them from disk so the runtime prompt can point the
+  // agent at every existing bucket; without this, a created category was
+  // invisible to the very consumer that reads these files.
+  const defaultTypes = new Set<string>(DEFAULT_ENTITY_TYPES)
+  const customEntityLines = listEntityDirsSync(memoryRoot)
+    .filter((e) => !defaultTypes.has(e.type))
+    .map((e) => `- ${e.type}: ${e.relDir}/<slug>.md`)
+  const fullLayoutBlock = customEntityLines.length > 0
+    ? `${layoutBlock}\n\nCustom categories (curator-proposed):\n\n${customEntityLines.join('\n')}`
+    : layoutBlock
+
   // RAG memory capability (plan 428): describe the background retrieval
   // when configured, otherwise point at the built-in self-config skill.
   const ragEnabled = isRagMemoryEnabled(duyaRoot)
@@ -123,7 +137,7 @@ Decision boundary: should you use memory for a new user query?
 
 Memory layout (entity files by claim type):
 
-${layoutBlock}
+${fullLayoutBlock}
 
 Memory layout (general -> specific):
 
