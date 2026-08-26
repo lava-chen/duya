@@ -1043,6 +1043,7 @@ const zh: Record<TranslationKey, string> = {
   'panel.browser': '浏览器',
   'panel.office': 'Office',
   'panel.closePanel': '关闭面板',
+  'panel.resizeHandle': '调整面板宽度。使用方向键微调，Home/End 到最小/最大，回车重置。',
   'panel.openPanel': '打开侧栏',
   'panel.collapsePanel': '收起面板',
   'panel.expandPanel': '展开面板',
