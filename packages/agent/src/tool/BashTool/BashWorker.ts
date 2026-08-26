@@ -16,7 +16,7 @@ import { promisify } from 'util';
 import { open, unlink } from 'fs/promises';
 import { statSync, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { getBashOutputDir } from '../../utils/duyaRoot.js';
 import type { FileHandle } from 'fs/promises';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
 import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
@@ -230,7 +230,7 @@ function handleExecute(task: ExecuteTask): void {
   }
 
   // Create output file asynchronously
-  const filePath = join(tmpdir(), `duya-bash-${taskId}.log`);
+  const filePath = join(getBashOutputDir(), `duya-bash-${taskId}.log`);
   outputFilePath = filePath;
 
   open(filePath, 'w', 0o644).then(async (fd) => {

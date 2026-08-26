@@ -1,13 +1,6 @@
-import { promises as fs } from 'node:fs'
-import { mkdirSync } from 'node:fs'
-import * as os from 'node:os'
+import { promises as fs, mkdirSync } from 'node:fs'
 import * as path from 'node:path'
-
-function getDuyaRoot(): string {
-  const envPath = process.env.DUYA_APP_DATA_PATH
-  if (envPath) return envPath
-  return path.join(os.homedir(), '.duya')
-}
+import { getDuyaRoot } from '../utils/duyaRoot.js'
 
 export class OutputFileWriter {
   static allocate(taskId: string): string {
