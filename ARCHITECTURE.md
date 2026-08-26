@@ -190,6 +190,29 @@ It is exported through the bundle-safe subpath `@duya/agent/message`
 `packages/agent/src/index.ts`, so it never pulls in native deps such as
 better-sqlite3.
 
+#### Compaction trigger guards (loop protection)
+
+Auto-compaction fires from `shouldCompact()` when context usage exceeds 78%
+of the window. Three guards sit in front of that threshold
+(`packages/agent/src/compact/CompactionManager.ts`, constants in `compact/types.ts`):
+
+- **Usage anchoring.** The agent feeds each provider `result` event's prompt
+  volume back via `setObservedPromptTokens()`; threshold decisions prefer this
+  real number over the character-heuristic estimate (estimator drift alone can
+  no longer fire a compaction).
+- **Post-compaction cooldown** (`AUTO_COMPACT_COOLDOWN_MS`, 2 min). Every
+  successful compact blocks proactive re-triggering for the window; `shouldPrefire`
+  respects it too. Manual `/compact` and emergency recovery are exempt.
+- **Loop breaker.** If consecutive auto-compactions show <10% growth in
+  `tokensBefore` (`COMPACT_LOOP_DELTA_RATIO`), strikes accumulate; two strikes
+  emit `compaction_loop_suspected` and block auto-compaction for 10 minutes.
+  A post-compact self-check flags `overThresholdAfterCompact` when the final
+  projection still sits at/above the threshold.
+
+These exist because session `5e930b44` (2026-08-26) compacted every ~50–90s:
+a post-compaction projection still reading over threshold had nothing
+preventing immediate re-triggering, burning one summarizer call per turn.
+
 ### Message Persistence
 
 Message persistence converges on a single append-only writer with

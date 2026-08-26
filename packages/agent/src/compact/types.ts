@@ -130,6 +130,37 @@ export const COMPACTION_THRESHOLDS = {
 } as const
 
 /**
+ * Minimum wall-clock interval between two proactive auto-compactions.
+ *
+ * Guards against the compaction loop observed on session 5e930b44 (2026-08-26):
+ * a post-compaction projection that still reads over the threshold (estimator
+ * drift, reinjection, hook re-projection) re-triggered compaction every
+ * ~50-90s, burning one summarizer call per turn while regenerating an
+ * identical summary. Emergency compaction on `context_length_exceeded` and
+ * manual /compact bypass this cooldown by design — they call compact()
+ * directly, not through shouldCompact().
+ */
+export const AUTO_COMPACT_COOLDOWN_MS = 120_000
+
+/**
+ * Relative growth in `tokensBefore` two consecutive compactions must show to
+ * be considered independent work. Below this delta, the second compaction is
+ * counted as a loop strike; two strikes suppress auto-compaction for
+ * LOOP_BREAK_BLOCK_MS because compacting the same content again cannot make
+ * progress.
+ */
+export const COMPACT_LOOP_DELTA_RATIO = 0.10
+
+/** How many near-identical compactions (see COMPACT_LOOP_DELTA_RATIO)
+ *  trigger the loop breaker. */
+export const COMPACT_LOOP_STRIKES = 2
+
+/** Suppression window once the loop breaker trips. Long enough to outlast a
+ *  stuck turn loop, short enough that a genuinely new user message recovers
+ *  without operator intervention after ~10 minutes. */
+export const COMPACT_LOOP_BREAK_BLOCK_MS = 600_000
+
+/**
  * Circuit breaker: max consecutive compression failures per session
  */
 export const MAX_CONSECUTIVE_FAILURES = 3
@@ -154,6 +185,12 @@ export interface CompactOptions {
   strategy?: string
   maxMessagesToKeep?: number
   customInstructions?: string
+  /**
+   * Who initiated this compaction. `'auto'` compactions are subject to the
+   * cooldown and loop-breaker guards; `'manual'` (/compact) and `'emergency'`
+   * (context_length_exceeded recovery) always run.
+   */
+  trigger?: 'auto' | 'manual' | 'emergency'
   /**
    * Transient seed for the next compaction, supplied by the manager's
    * prefire pipeline. Strategies prefer this over their persistent

@@ -1278,7 +1278,7 @@ export class duyaAgent {
       if (this.compactionController.shouldCompact()) {
         logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
         try {
-          const compactEntry = await this.compactionController.compactProactive();
+          const compactEntry = await this.compactionController.compactProactive({ trigger: 'auto' });
           if (compactEntry) {
             logger.info(`[Agent] Turn ${turnCount}: Compacted with strategy=${compactEntry.strategy}, removed=${compactEntry.tokensBefore} tokens, retained=${compactEntry.tokensAfter ?? 0} tokens`);
             // The controller appended a checkpoint entry to the timeline
@@ -1974,6 +1974,14 @@ export class duyaAgent {
             }
             roundResultUsage =
               resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage) ? usage : roundResultUsage;
+            // Anchor compaction decisions on real provider usage. Keeps the
+            // largest-prompt result of the turn (see resultPromptVolume note
+            // above) so GLM-style per-round cache reporting cannot collapse
+            // the anchor mid-turn.
+            const observedPrompt = resultPromptVolume(roundResultUsage);
+            if (observedPrompt > 0) {
+              this.compactionManager.setObservedPromptTokens(observedPrompt);
+            }
             yield event;
           }
         }
@@ -2102,7 +2110,7 @@ export class duyaAgent {
         if (isContextLengthError && !this.compactionManager.isCircuitBreakerTriggered()) {
           logger.warn(`[Agent] Turn ${turnCount}: Context length exceeded, attempting compaction`);
           try {
-            const compactEntry = await this.compactionController.compactProactive();
+            const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
             if (compactEntry) {
               logger.info(`[Agent] Turn ${turnCount}: Compaction succeeded, strategy=${compactEntry.strategy}, retained=${compactEntry.tokensAfter ?? 0} tokens`);
               const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
@@ -3612,7 +3620,12 @@ export class duyaAgent {
       throw new Error('Compaction failed: conversation is empty (timeline not hydrated?)')
     }
 
-    const compactEntry = await this.compactionController.compactProactive(options);
+    const compactEntry = await this.compactionController.compactProactive({
+      ...(options ?? {}),
+      // Public entry point serves /compact and worker commands — always manual
+      // unless the caller says otherwise, so loop guards never block a user.
+      trigger: options?.trigger ?? 'manual',
+    });
     if (!compactEntry) {
       return { strategy: 'none', tokensRemoved: 0, tokensRetained: 0, removedCount: 0 };
     }
