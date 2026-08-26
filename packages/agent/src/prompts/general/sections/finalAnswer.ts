@@ -11,7 +11,23 @@
 
 import type { PromptContext } from '../../types.js'
 
-export function getFinalAnswerSection(_ctx: PromptContext): string {
+// Path examples are platform-specific: models that see a Unix-style
+// `/abs/path/...` example while running on Windows invent hybrid forms like
+// `/abs/E:/project/app.py` (placeholder prefix merged with a drive path).
+// Every path rule below therefore shows ONLY the example matching the current
+// platform, with Windows explicitly forbidding any `/abs/` placeholder.
+export function getFinalAnswerSection(ctx: PromptContext): string {
+  const isWindows = ctx.platform === 'win32';
+  const fileLinkExample = isWindows
+    ? '[app.py](C:/project/src/app.py:12). Write drive paths directly, exactly as they exist on disk — NEVER add an `/abs/` or `/abs/path` prefix to a Windows path'
+    : '[app.py](/abs/path/app.py:12)';
+  const spacedExample = isWindows
+    ? '[My Report.md](<C:/Users/me/My Project/My Report.md:3>)'
+    : '[My Report.md](</abs/path/My Project/My Report.md:3>)';
+  const imageRule = isWindows
+    ? '* **To embed a local image, use a markdown image with an absolute Windows drive path and forward slashes**: `![alt](C:/path/to/image.png)` (e.g. `![chart](C:/Users/me/plot.png)`). Use forward slashes, never backslashes — `E:\\4.png` is not rendered correctly. Never write an `/abs/` or `/abs/path` prefix in front of the drive letter.'
+    : '* **To embed a local image, use a markdown image with an absolute path and forward slashes**: `![alt](/abs/path/image.png)`. Verify the file exists at the path you cite.';
+
   return `# Final answer
 
 In your final answer back to the user, focus on the most important information. Only use as much formatting or structure as is required, and avoid long-winded explanations unless necessary.
@@ -21,13 +37,13 @@ In your final answer back to the user, focus on the most important information. 
 Your answer is being rendered by an application for the user. Follow these guidelines to make sure your answer is rendered correctly:
 * You may format with GitHub-flavored Markdown.
 * **When you mention a file or directory, you MUST use a clickable markdown link.** The UI renders these as a file icon followed by a blue filename, so the user can click to open the file. Do not leave file names as plain text or wrapped only in backticks.
-* Prefer absolute paths for file links: [app.py](/abs/path/app.py:12). If you do not know the absolute path, use a relative path or bare filename: [network.py](network.py) or [network.py](network.py:12).
-* If a file path has spaces, wrap the target in angle brackets: [My Report.md](</abs/path/My Project/My Report.md:3>).
+* Prefer absolute paths for file links: ${fileLinkExample}. If you do not know the absolute path, use a relative path or bare filename: [network.py](network.py) or [network.py](network.py:12).
+* If a file path has spaces, wrap the target in angle brackets: ${spacedExample}.
 * Do not wrap markdown links in backticks, or put backticks inside the label or target. This confuses the markdown renderer.
 * Do not use URIs like file://, vscode://, or https:// for file links.
 * Do not provide ranges of lines.
 * Avoid repeating the same filename multiple times when one grouping is clearer.
-* **To embed a local image, use a markdown image with an absolute path and forward slashes.** On Windows write the drive letter with a colon: \`![alt](C:/path/to/image.png)\` (e.g. \`![chart](C:/Users/me/plot.png)\`). On Unix write \`![alt](/abs/path/image.png)\`. Use forward slashes, never backslashes — \`E:\\4.png\` is not rendered correctly. Verify the file exists at the path you cite.
+${imageRule}
 
 ### Visualizations
 
