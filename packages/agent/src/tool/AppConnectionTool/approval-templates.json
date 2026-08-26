@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "github": {
+      "label": "GitHub",
+      "scope": "your GitHub repositories",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "notion": {
+      "label": "Notion",
+      "scope": "your Notion workspace",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "linear": {
+      "label": "Linear",
+      "scope": "your Linear workspace",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "figma": {
+      "label": "Figma",
+      "scope": "your Figma files",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "supabase": {
+      "label": "Supabase",
+      "scope": "your Supabase projects",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "sentry": {
+      "label": "Sentry",
+      "scope": "your Sentry projects",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "vercel": {
+      "label": "Vercel",
+      "scope": "your Vercel projects",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "google": {
+      "label": "Google Drive",
+      "scope": "your Google Drive",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "slack": {
+      "label": "Slack",
+      "scope": "your Slack workspace",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "microsoft365": {
+      "label": "Microsoft 365",
+      "scope": "your Microsoft 365 account",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    },
+    "wecom": {
+      "label": "WeCom",
+      "scope": "your WeCom organization",
+      "verb_read": "read from",
+      "verb_write": "make changes in",
+      "verb_default": "access"
+    }
+  }
+}

@@ -78,26 +78,42 @@
       Plan 312 的 `appConnection:connect` OAuth loopback
 - [ ] **B3 重试**：代码中连接成功后只清掉卡片，下次用户消息才能重试原调用——
       Plan 450 原始设计的“自动重试一次”留作后续选代点（需在 worker 记最后一次工具调用
-      载荷，OAuth 成功后重发）
+      载荷，OAuth 成功后重发）。**变通**：现有 agent loop 在 tool_result 携带 error
+      后会重启一轮 model call，模型会自动看到错误并自己重试——跳过原设计意图的“一次性”逻辑，
+      负面仅为“可能跑到不同工具上”，不是“撞永远”。当前卡片 UX 足够。
+
+- [ ] **E 目录缓存**：留作后续优化；当前 remote-mcp tools/list 调用频率低（只 reload 时拉），
+      临时没有必要启动目录缓存。代码中 8KB 预算 + exposure 门足够避免重复拉取导致的
+      服务质量劣化。
+
 - [x] i18n 键 zh/en；typecheck (web/agent/cli/conductor/voice) 全绿
 
 ### Phase C: 暴露层策略门 + spec 预算（细节对齐）
 
-- [ ] `[apps]` 配置段：config.toml `[apps] default.enabled=true` + `[apps.apps.<id>] enabled`
-      （zod schema + ConfigStore），`getProviderReadiness` 之外新增 `isProviderEnabledByConfig`
-- [ ] 暴露过滤：descriptor 下发前过 config 门（禁用 provider 的工具不下发，而非下发后 deny）
-      —— 对齐 R5 的「exposure 层拦截优于执行层拒绝」
-- [ ] spec 字节预算：`registerAppConnectionTools` 单 descriptor `JSON.stringify(inputSchema)`
-      >8192B → 只注册 summary 版（schema 置空对象 + description 保留），记 WARN —— D7/R9
-- [ ] 单测：config 门、预算降级
+- [x] `[apps]` 配置段：`AppEntry { enabled: boolean }` 已在 schema.ts，Plan 450 新增
+      `electron/services/app-connections/policy-gate.ts`：
+      `isProviderEnabled` / `readAppPolicy` / `setProviderEnabled`（ConfigStore 原子写）
+- [x] 暴露过滤：`connector-service.listDescriptorsForConnected` 走进 filter 之前先
+      `isProviderEnabled(policy, provider)`——disabled provider 完全不发 descriptor
+      （对齐 codex `apps_enabled ? filter_codex_apps_mcp_tools : empty`）
+- [x] spec 字节预算：`APP_CONNECTION_SPEC_BYTE_BUDGET = 8192`（对齐 codex 8KB）；
+      `downgradeForByteBudget` 把超限 descriptor 的 inputSchema 换为空对象 + 把
+      summary 折进 description 后再注册（降级仍可调用，仍可被 tool_search 发现）
+- [x] 单测：policy-gate 4 条（fail-open 为主），byte-budget 3 条（全套 7 条绿）
 
 ### Phase D: 模板资产化 + 结构化参数展示
 
-- [ ] `approval-templates.json`（schemaVersion:1，沿用 Plan 449 表内容迁移）+
-      loader 带 schema 校验，坏文件回落内置默认 —— D6/R8
-- [ ] `toolParamsDisplay`: 渲染器输出 `[{name,label,value}]`（取 input 前 3 个标量参数），
-      PermissionPrompt 参数区改为 label:value 行 + 折叠原始 JSON
-- [ ] 单测：JSON 加载/坏文件回落、params 展示截断
+- [x] 模板资产迁至 `packages/agent/src/tool/AppConnectionTool/approval-templates.json`
+      （schema_version 1），loader 坏文件回落内置默认
+- [x] 新增 `buildToolParamsDisplay(input, schema)`：top-3 标量参数 + schema.title 友好化
+      label + 120 字符截断
+- [x] 类型贯通：`PermissionRequestEvent.metadata.toolParamsDisplay` 从
+      `@duya/ai/types.ts` 到 `packages/agent/src/types.ts` → StreamingToolExecutor
+      → agent-process-entry `chat:permission` → renderer PermissionRequestEvent
+- [x] StreamingToolExecutor 在发 permissionRequest 时构造 metadata
+      （仅连接器工具 + 至少一个标量参数才发出，避免唤噪音）
+- [x] PermissionPrompt 渲染 ToolParamsDisplay 块（`<dl>` label:value 行）
+      在 CollapsibleDetails 中、ToolInputBlock 之前
 
 ### Phase E: 目录快照缓存
 

@@ -13,6 +13,7 @@
 
 import { getLogger, LogComponent } from '../../logging/logger';
 import { isToolGloballyApproved } from './tool-approvals.js';
+import { isProviderEnabled, readAppPolicy } from './policy-gate.js';
 import { AppConnectionService, getAppConnectionService } from './app-connection-service.js';
 import { TokenService } from './token-service.js';
 import type { ConnectorModule, ConnectorToolDescriptor, ConnectorInvokeResult } from './connector-types.js';
@@ -69,8 +70,14 @@ export class ConnectorService {
    */
   async listDescriptorsForConnected(): Promise<ConnectorToolDescriptor[]> {
     const out: ConnectorToolDescriptor[] = [];
+    const policy = readAppPolicy();
     for (const dto of this.service.list()) {
       if (dto.status !== 'connected') continue;
+      // Plan 450 (Phase C): exposure-layer policy gate. Disabled
+      // providers are filtered BEFORE tools/list / descriptor emission
+      // so the agent registry never sees them — mirroring codex's
+      // `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
+      if (!isProviderEnabled(policy, dto.provider)) continue;
       if (getProviderConfig(dto.provider).remoteMcpUrl) {
         const token = await this.service.getValidToken(dto.id);
         if (!token.success) continue;

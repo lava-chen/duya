@@ -188,6 +188,37 @@ export function createAppConnectionTool(desc: AppConnectionToolDescriptor): {
 }
 
 /**
+ * Plan 450 (Phase C): single-descriptor inputSchema byte budget. Mirrors
+ * codex's `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES = 8_000` — any hosted MCP
+ * descriptor whose serialized inputSchema exceeds this is registered
+ * with an empty object schema + summary folded into the description.
+ * Keeps the model prompt bounded when a remote server advertises a
+ * pathologically large schema (e.g. a hundred-property wrapper).
+ */
+export const APP_CONNECTION_SPEC_BYTE_BUDGET = 8192;
+
+function downgradeForByteBudget(desc: AppConnectionToolDescriptor): AppConnectionToolDescriptor {
+  let size: number;
+  try {
+    size = JSON.stringify(desc.inputSchema).length;
+  } catch {
+    size = APP_CONNECTION_SPEC_BYTE_BUDGET + 1;
+  }
+  if (size <= APP_CONNECTION_SPEC_BYTE_BUDGET) return desc;
+  // Lossy fallback: surface the tool's intent via description so
+  // tool_search / the model still know what the tool is for, and
+  // disable structured input by replacing the schema with an empty
+  // object. The executor still receives the raw `args` JSON from the
+  // model so it can fall back to forwarding whatever the host server
+  // accepted before this rewrite.
+  return {
+    ...desc,
+    inputSchema: { type: 'object', properties: {} },
+    description: `${desc.description}\n\n[Schema truncated: ${size} bytes exceeds ${APP_CONNECTION_SPEC_BYTE_BUDGET}-byte budget; use ${desc.inputSchemaSummary}.]`,
+  };
+}
+
+/**
  * Register an array of descriptors into a ToolRegistry. Removes any
  * previously-registered connector tools first (by name) so reloads
  * don't leave stale entries.
@@ -195,7 +226,7 @@ export function createAppConnectionTool(desc: AppConnectionToolDescriptor): {
 export function registerAppConnectionTools(
   registry: import('../registry.js').ToolRegistry,
   descriptors: AppConnectionToolDescriptor[],
-): { added: number; removed: number } {
+): { added: number; removed: number; downgraded: number } {
   // No cleanup needed — the per-turn registry from createBuiltinRegistry
   // is fresh, so there are no stale connector tools to remove. But
   // for safety (e.g. when a custom registry is passed via options),
@@ -212,7 +243,10 @@ export function registerAppConnectionTools(
   }
 
   let added = 0;
-  for (const desc of descriptors) {
+  let downgraded = 0;
+  for (const rawDesc of descriptors) {
+    const desc = downgradeForByteBudget(rawDesc);
+    if (desc !== rawDesc) downgraded++;
     if (registry.has(desc.name)) {
       registry.unregister(desc.name);
     }
@@ -221,7 +255,7 @@ export function registerAppConnectionTools(
     added++;
   }
 
-  return { added, removed };
+  return { added, removed, downgraded };
 }
 
 // --- Descriptor cache ---

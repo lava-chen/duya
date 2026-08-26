@@ -155,10 +155,27 @@ export type PermissionCommandMetadata = {
 }
 
 /**
+ * Plan 450 Phase D: structured tool-parameter display payload for
+ * app-connection approval cards. The renderer surfaces these as tidy
+ * label:value rows instead of raw JSON.
+ */
+export type ConnectorToolParamsDisplay = Array<{
+  name: string;
+  label: string;
+  value: string;
+}>;
+
+/**
  * Metadata attached to permission decisions
  */
 export type PermissionMetadata =
   | { command: PermissionCommandMetadata }
+  | {
+      connector: {
+        provider: string;
+        toolParamsDisplay: ConnectorToolParamsDisplay;
+      };
+    }
   | undefined
 
 /**

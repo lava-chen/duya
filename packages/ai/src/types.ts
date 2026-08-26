@@ -208,6 +208,16 @@ export type StopReason =
 // mode_changed.mode uses `string` instead of AgentRuntimeMode to avoid
 // a dependency on agent-specific types. packages/agent can narrow it.
 
+/**
+ * Plan 450 Phase D: structured parameter display. The renderer
+ * surfaces these as tidy label:value rows above the raw input JSON.
+ */
+export type ConnectorToolParamsDisplayEntry = {
+  name: string;
+  label: string;
+  value: string;
+};
+
 export interface PermissionRequestEvent {
   id: string;
   toolName: string;
@@ -215,6 +225,12 @@ export interface PermissionRequestEvent {
   mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
   expiresAt: number;
   decisionReason?: string;
+  /**
+   * Optional structured metadata attached by the agent core (Plan 450).
+   * Currently used to carry `toolParamsDisplay` for connector tools so
+   * the approval card can render a labeled summary instead of raw JSON.
+   */
+  metadata?: { toolParamsDisplay?: ConnectorToolParamsDisplayEntry[] };
 }
 
 export interface AgentProgressEvent {
@@ -422,6 +438,16 @@ export interface ModelCompat {
    * legitimately never send a finish_reason.
    */
   supportsFinishReason?: boolean;
+  /**
+   * Whether the endpoint respects a `thinking_token_budget` parameter that
+   * caps the number of tokens spent on internal reasoning/thinking, keeping
+   * the rest for the visible answer. When true, duya computes a budget
+   * that reserves at least 1024 tokens for the answer and applies it as
+   * `thinking_token_budget` in the request. Prevents reasoning-heavy models
+   * (e.g. ox-alpha) from consuming the entire `max_tokens` budget in
+   * thinking and leaving zero visible output.
+   */
+  supportsThinkingTokenBudget?: boolean;
 }
 
 // ─── Model pricing (per million tokens, USD) ───
