@@ -51,6 +51,27 @@
       TTL 归因提示（`src/components/usage/UsageSummaryGrid.tsx` + i18n）
 - [ ] Playwright MCP 验证（本会话无 MCP 工具；typecheck + vite build 已过）
 
+### T4 Context Ring "?" 常驻修复（P0，2026-08-24 发现）
+
+用户报告圆环一直显示 "?"。诊断 trace（`%TEMP%\\duya\\logs\\context-ring.log`）
+铁证：`result call: input=0, output=292...` 后依然 `anchored=false anchorIdx=null`
+—— usage 到了但锚点扫描找不到。根因是 **token 字段名三段断裂**：
+
+1. `DuyaAgent.ts` done 时只挂 pi 风格 `usage`，而 timeline ingest 白名单
+   `LEGACY_KNOWN_KEYS` 只有 `tokenUsage` → 投影/锚点全部丢失
+2. `Journal.fire` 的字段表不含 tokenUsage，且只从 metadata 读 token_usage
+   → rollout 落盘也无 usage（解释了 DB 中仅 221/82k 消息有 token_usage）
+3. `messageToIpcRow` 只读 `metadata.token_usage`，不读投影 Message 顶层的
+   `tokenUsage` → 渲染端历史扫描也拿不到数据
+
+- [x] DuyaAgent 同时挂 `usage` + `tokenUsage`（ingest 白名单内，timeline/
+      getMessages 锚点恢复；journal 经由新序列化逻辑落盘）
+- [x] Journal：顶层 tokenUsage 对象序列化为 dto.token_usage（metadata fallback 保留）
+- [x] messageToIpcRow：metadata.token_usage ?? 顶层 msg.tokenUsage 双读
+- [x] 回归测试：journal 序列化 ×3、timeline round-trip + computeContextEstimate
+      锚定 ×2、core-db-adapters round-trip ×1
+- [ ] sqlite ABI 解锁后重跑 core-db-adapters 测试（DUYA 运行中文件被锁）
+
 ## Decisions
 
 - 扫描器放主进程而非 agent core：输入是 rollout MessageRow（seq 有序、含
