@@ -138,6 +138,11 @@ interface MessageItemProps {
   /** Per-session Focus mode: collapse the round into one big action group
    *  and hide intermediate text outputs — only the final reply shows. */
   focusMode?: boolean;
+  /** Plan 447: this round belongs to the turn currently being streamed.
+   *  Render its tool group in the live (chrome-less) presentation instead
+   *  of the finished collapsed summary, so a mid-run refresh keeps the
+   *  same visual state the run had before the reload. */
+  isLiveRun?: boolean;
 }
 
 function parseMessageContent(content: string | unknown[], msgType?: string): {
@@ -499,10 +504,11 @@ function messageItemPropsEqual(prev: MessageItemProps, next: MessageItemProps): 
     && prev.onToolResult === next.onToolResult
     && prev.isEditable === next.isEditable
     && prev.onEditSend === next.onEditSend
-    && prev.focusMode === next.focusMode;
+    && prev.focusMode === next.focusMode
+    && prev.isLiveRun === next.isLiveRun;
 }
 
-function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend, focusMode = false }: MessageItemProps) {
+function MessageItemComponent({ message, toolResults = [], onToolResult, mergedMessages = [], isEditable, onEditSend, focusMode = false, isLiveRun = false }: MessageItemProps) {
   const [copied, setCopied] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState('');
@@ -1056,6 +1062,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
             {hasToolActions && (
               <ToolActionsGroup
                 actions={groupActions}
+                isStreaming={isLiveRun}
                 totalDurationMs={totalRoundDurationMs}
                 forceExpanded={isSubAgentSession}
                 focusMode={focusMode}
@@ -1077,6 +1084,7 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
             {hasActions && (
               <ToolActionsGroup
                 actions={groupActions}
+                isStreaming={isLiveRun}
                 totalDurationMs={totalRoundDurationMs}
                 forceExpanded={isSubAgentSession}
                 focusMode={focusMode}
