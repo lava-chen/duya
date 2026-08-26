@@ -20,6 +20,8 @@ import type {
 import type { ToolRegistry } from './registry.js'
 import type { RenderedToolMessage } from './types.js'
 import { PermissionRequiredError } from './BaseTool.js'
+import { getCachedAppConnectionDescriptors } from './AppConnectionTool/index.js'
+import { buildToolParamsDisplay } from './AppConnectionTool/approval-message.js'
 import { ToolRetryExecutor } from './retry/ToolRetryExecutor.js'
 import { DEFAULT_RETRY_STRATEGIES } from './retry/BuiltInStrategies.js'
 import type { RetryStrategy } from './retry/types.js'
@@ -1257,6 +1259,15 @@ export class StreamingToolExecutor {
           // by the tool's two-phase retry logic. The pre-check id MUST match
           // the throw-path id for `storePendingAnswer` (keyed by id) to
           // resolve the same entry the second-phase `execute()` reads from.
+          // Plan 450 Phase D: attach structured tool-params display for
+          // connector tools so the approval card can render a tidy
+          // label:value summary above the raw input JSON. Only emitted
+          // when the descriptor is known and the renderer would benefit
+          // (i.e. at least one scalar argument exists).
+          const connectorDescriptor = getCachedAppConnectionDescriptors().find((d) => d.name === tool.block.name);
+          const metadata = connectorDescriptor && tool.block.input
+            ? { toolParamsDisplay: buildToolParamsDisplay(tool.block.input as Record<string, unknown>, connectorDescriptor.inputSchema) }
+            : undefined;
           const permissionRequest = {
             id: tool.id,
             toolName: tool.block.name,
@@ -1264,6 +1275,7 @@ export class StreamingToolExecutor {
             mode: permResult.mode || 'generic',
             expiresAt: Date.now() + 5 * 60 * 1000,
             decisionReason: permResult.reason,
+            ...(metadata && metadata.toolParamsDisplay && metadata.toolParamsDisplay.length > 0 ? { metadata } : {}),
           };
 
           try {

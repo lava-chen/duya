@@ -1,14 +1,22 @@
 /**
- * Connector approval message templates (Plan 449 Phase C).
+ * Connector approval message templates (Plan 449 + Plan 450 Phase D).
  *
- * Codex parity: versioned template table (`core/src/mcp_tool_approval_templates.rs`)
- * renders human-readable approval questions per connector instead of a bare
- * tool name. Duya's remote connectors are third-party hosted MCP servers, so
- * the table keys on `provider` (curated intro line) and falls back to a
- * generic renderer built from descriptor metadata (title / description).
+ * Codex parity: versioned template table
+ *   (`core/src/consequential_tool_message_templates.json` schema_version 4)
+ * renders human-readable approval questions per connector instead of a
+ * bare tool name. Duya's remote connectors are third-party hosted MCP
+ * servers, so the table keys on `provider` (curated intro line). An
+ * unknown provider falls back to a generic renderer built from
+ * descriptor metadata (title / description).
  *
- * The schema version guards against stale cached renderings if the table
- * format ever changes.
+ * Plan 450 Phase D adds the `toolParamsDisplay` field: a structured
+ * label:value listing of the top scalar arguments so the permission
+ * card can render a tidy summary instead of raw JSON.
+ *
+ * Storage: `approval-templates.json` is the curated asset (can be
+ * edited independently of the build). If the asset is missing or
+ * malformed the module falls back to an embedded default table so
+ * approval flows never break because of a templating bug.
  */
 
 import type { AppConnectionToolDescriptor } from './index.js';
@@ -16,29 +24,64 @@ import type { AppConnectionToolDescriptor } from './index.js';
 export const APPROVAL_TEMPLATE_SCHEMA_VERSION = 1;
 
 interface ProviderTemplate {
-  /** Curated provider display name used in rendered questions. */
   label: string;
-  /** Intro clause, e.g. "the user's Notion workspace". */
   scope: string;
+  verb_read: string;
+  verb_write: string;
+  verb_default: string;
 }
 
-/**
- * Provider-keyed static table. Unknown providers fall back to the generic
- * renderer — never fail because a template is missing.
- */
-const PROVIDER_TEMPLATES: Record<string, ProviderTemplate> = {
-  github: { label: 'GitHub', scope: 'your GitHub repositories' },
-  notion: { label: 'Notion', scope: 'your Notion workspace' },
-  linear: { label: 'Linear', scope: 'your Linear workspace' },
-  figma: { label: 'Figma', scope: 'your Figma files' },
-  supabase: { label: 'Supabase', scope: 'your Supabase projects' },
-  sentry: { label: 'Sentry', scope: 'your Sentry projects' },
-  vercel: { label: 'Vercel', scope: 'your Vercel projects' },
-  google: { label: 'Google Drive', scope: 'your Google Drive' },
-  slack: { label: 'Slack', scope: 'your Slack workspace' },
-  microsoft365: { label: 'Microsoft 365', scope: 'your Microsoft 365 account' },
-  wecom: { label: 'WeCom', scope: 'your WeCom organization' },
+interface TemplatesAsset {
+  schema_version: number;
+  providers: Record<string, ProviderTemplate>;
+}
+
+const FALLBACK_TEMPLATES: TemplatesAsset = {
+  schema_version: APPROVAL_TEMPLATE_SCHEMA_VERSION,
+  providers: {
+    github: { label: 'GitHub', scope: 'your GitHub repositories', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    notion: { label: 'Notion', scope: 'your Notion workspace', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    linear: { label: 'Linear', scope: 'your Linear workspace', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    figma: { label: 'Figma', scope: 'your Figma files', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    supabase: { label: 'Supabase', scope: 'your Supabase projects', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    sentry: { label: 'Sentry', scope: 'your Sentry projects', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    vercel: { label: 'Vercel', scope: 'your Vercel projects', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    google: { label: 'Google Drive', scope: 'your Google Drive', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    slack: { label: 'Slack', scope: 'your Slack workspace', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    microsoft365: { label: 'Microsoft 365', scope: 'your Microsoft 365 account', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+    wecom: { label: 'WeCom', scope: 'your WeCom organization', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
+  },
 };
+
+function loadTemplates(): TemplatesAsset {
+  try {
+    // Synchronous import of a sibling JSON asset. Bundlers (tsc + esbuild)
+    // both expose the parsed object via `import` for `.json` files.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const asset = require('./approval-templates.json') as TemplatesAsset;
+    if (
+      asset &&
+      typeof asset === 'object' &&
+      asset.schema_version === APPROVAL_TEMPLATE_SCHEMA_VERSION &&
+      asset.providers &&
+      typeof asset.providers === 'object'
+    ) {
+      return asset;
+    }
+  } catch {
+    // Missing or unreadable asset → fall back to embedded defaults.
+  }
+  return FALLBACK_TEMPLATES;
+}
+
+const TEMPLATES = loadTemplates();
+
+/** Pick the verb phrase for a given risk tier (mirrors codex's templates). */
+function pickVerb(template: ProviderTemplate, riskTier: string | undefined): string {
+  if (riskTier === 'read') return template.verb_read;
+  if (riskTier === 'write' || riskTier === 'modify') return template.verb_write;
+  return template.verb_default;
+}
 
 /** Summarize the primary input argument for the approval question. */
 function summarizeInput(input: Record<string, unknown> | undefined): string {
@@ -54,6 +97,70 @@ export interface RenderedApproval {
   schemaVersion: number;
   /** Full approval message shown in the permission card. */
   message: string;
+  /**
+   * Plan 450 Phase D: structured parameter display. The first three
+   * scalar-shaped arguments, each truncated to 120 chars, with labels
+   * drawn from the inputSchema's `properties.<key>.title` when
+   * available and a humanized key otherwise.
+   */
+  toolParamsDisplay: Array<{ name: string; label: string; value: string }>;
+}
+
+const PARAM_LABEL_LIMIT = 120;
+const PARAM_MAX_COUNT = 3;
+
+function camelToLabel(key: string): string {
+  return key
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (c) => c.toUpperCase());
+}
+
+function truncate(value: string): string {
+  return value.length > PARAM_LABEL_LIMIT ? `${value.slice(0, PARAM_LABEL_LIMIT - 1)}…` : value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Build a structured parameter display for the approval card.
+ * Returns an empty array when the tool was invoked with no arguments.
+ */
+export function buildToolParamsDisplay(
+  input: Record<string, unknown> | undefined,
+  schema: { properties?: Record<string, unknown> } | undefined,
+): Array<{ name: string; label: string; value: string }> {
+  if (!input) return [];
+  const props = schema?.properties;
+  const out: Array<{ name: string; label: string; value: string }> = [];
+  for (const [name, value] of Object.entries(input)) {
+    if (out.length >= PARAM_MAX_COUNT) break;
+    if (value === undefined) continue;
+    let displayValue: string;
+    if (value === null) {
+      displayValue = 'null';
+    } else if (typeof value === 'string') {
+      displayValue = truncate(value);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      displayValue = String(value);
+    } else if (Array.isArray(value)) {
+      displayValue = `${value.length} item${value.length === 1 ? '' : 's'}`;
+    } else if (isPlainObject(value)) {
+      try {
+        displayValue = truncate(JSON.stringify(value));
+      } catch {
+        displayValue = '[object]';
+      }
+    } else {
+      displayValue = String(value);
+    }
+    const propMeta = isPlainObject(props?.[name]) ? (props![name] as Record<string, unknown>) : undefined;
+    const label = typeof propMeta?.title === 'string' ? propMeta.title : camelToLabel(name);
+    out.push({ name, label, value: displayValue });
+  }
+  return out;
 }
 
 interface RenderApprovalInput {
@@ -62,41 +169,32 @@ interface RenderApprovalInput {
   title?: string;
   description?: string;
   input?: Record<string, unknown>;
+  inputSchema?: { properties?: Record<string, unknown> };
 }
 
-/**
- * Render an approval message for an app-connection tool. Template hit uses
- * the curated provider wording; anything unknown falls back to a generic
- * but still human-readable question. Never throws.
- */
 export function renderConnectorApprovalMessage(params: RenderApprovalInput): RenderedApproval {
   const { toolName, connector, input } = params;
-  const template = connector ? PROVIDER_TEMPLATES[connector.provider] : undefined;
+  const template = connector ? TEMPLATES.providers[connector.provider] : undefined;
   const displayName = params.title || toolName;
   const argSummary = summarizeInput(input);
   const argSuffix = argSummary ? ` (“${argSummary}”)` : '';
 
   let message: string;
   if (template) {
-    const verb =
-      connector?.riskTier === 'read'
-        ? 'read from'
-        : connector?.riskTier === 'write' || connector?.riskTier === 'modify'
-          ? 'make changes in'
-          : 'access';
+    const verb = pickVerb(template, connector?.riskTier);
     message = `Allow ${template.label} (${displayName}) to ${verb} ${template.scope}${argSuffix}?`;
   } else {
     const source = params.description ? `\n\n${params.description}` : '';
     message = `Allow the connected app to run ${displayName}${argSuffix}?${source}`;
   }
 
-  return { schemaVersion: APPROVAL_TEMPLATE_SCHEMA_VERSION, message };
+  return {
+    schemaVersion: APPROVAL_TEMPLATE_SCHEMA_VERSION,
+    message,
+    toolParamsDisplay: buildToolParamsDisplay(input, params.inputSchema),
+  };
 }
 
-/**
- * Convenience overload used by the permission gate: build render params from
- * a cached descriptor plus the raw tool input.
- */
 export function renderConnectorApprovalFromDescriptor(
   descriptor: AppConnectionToolDescriptor,
   input: Record<string, unknown> | undefined,
@@ -107,5 +205,6 @@ export function renderConnectorApprovalFromDescriptor(
     ...(descriptor.title ? { title: descriptor.title } : {}),
     description: descriptor.description,
     input,
+    inputSchema: descriptor.inputSchema,
   });
 }

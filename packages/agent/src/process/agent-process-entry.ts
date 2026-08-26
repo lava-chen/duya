@@ -1611,7 +1611,7 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 }
 
 // Create permission handler for streaming
-function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number }) => Promise<'allow' | 'deny'> {
+function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number; metadata?: { toolParamsDisplay?: Array<{ name: string; label: string; value: string }> } }) => Promise<'allow' | 'deny'> {
   return (request) => {
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
       const key = pendingPermissionKey(sessId, request.id);
@@ -1663,6 +1663,9 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
                   preApproved: descriptor.preApproved === true,
                 },
               }
+            : {}),
+          ...(request.metadata
+            ? { metadata: { toolParamsDisplay: request.metadata.toolParamsDisplay } }
             : {}),
         },
       });

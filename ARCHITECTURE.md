@@ -2162,5 +2162,36 @@ codex `AppToolPolicyEvaluator` / approval memory / templates:
   the permission event carries `connector: { provider, riskTier, preApproved }`
   so the card can offer "Always Allow".
 
+### Connector activation, exposure gate, and prompt budget (Plan 450, codex parity)
+
+- **@-mention activation** (`extractMentionedProviders` in
+  `src/lib/app-connection-ipc.ts`): typing `@` in the composer surfaces every
+  connected provider as a popover row; selecting one inserts
+  `@<providerId> ` into the message. The renderer-side stream-session-manager
+  scans the final content for those tokens, forwards `mentionedProviders`
+  to the worker, and DuyaAgent promotes those providers' connector tools to
+  expose-always (skipping tool_search discovery) plus injects a one-shot
+  `<connector-activation>` system-reminder into the first model turn.
+- **Exposure-layer policy gate** (`electron/services/app-connections/policy-gate.ts`):
+  reads `[apps]` from ConfigStore and filters providers BEFORE descriptor
+  emission, mirroring codex's `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
+  Disabled providers' tools never enter the agent registry.
+- **Spec byte budget** (`APP_CONNECTION_SPEC_BYTE_BUDGET = 8192`,
+  `downgradeForByteBudget` in `packages/agent/src/tool/AppConnectionTool/index.ts`):
+  descriptors whose serialized inputSchema exceed 8 KB are registered with
+  an empty-object schema + summary folded into description, mirroring codex's
+  `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES`. Keeps prompt size bounded when a
+  hosted MCP server advertises a pathologically large schema.
+- **Structured parameter display**: `buildToolParamsDisplay(input, schema)`
+  renders the top scalar arguments as `label:value` rows on the approval card
+  (Plan 450 Phase D). Wired through StreamingToolExecutor → agent worker
+  → renderer; carried in `PermissionRequestEvent.metadata.toolParamsDisplay`.
+- **Auth elicitation mid-call** (`connector_auth_required` error code,
+  `ConnectorAuthRequiredCard`): a 401 / revoked-token during a tool call
+  emits `chat:connector_auth_required` SSE; the renderer shows a re-auth
+  card that reuses the existing Plan 312 OAuth loopback. The next model
+  round naturally retries the failed call once the agent loop sees the
+  error in the tool_result.
+
 When a connection is disconnected its descriptors disappear, which makes any
 orphaned global approval key inert until the same provider+tool reconnects.
