@@ -19,6 +19,11 @@ import {
 } from '../services/app-connections/app-connection-service';
 import { FlowError } from '../services/app-connections/oauth/flow';
 import { isKnownProvider } from '../services/app-connections/providers/registry';
+import {
+  approveToolGlobally,
+  revokeToolApprovalGlobally,
+  listGlobalToolApprovals,
+} from '../services/app-connections/tool-approvals';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import type {
   AppConnectionStatusDTO,
@@ -295,6 +300,72 @@ export function registerAppConnectionHandlers(): void {
           COMPONENT,
         );
         return { success: false, error: 'Failed to disconnect' };
+      }
+    },
+  );
+
+  // --- appConnection:approveTool (Plan 449) ---
+  // Persist a global "Always allow" decision for provider+tool and refresh
+  // worker descriptors so the preApproved stamp reaches the permission gate.
+  ipcMain.handle(
+    'appConnection:approveTool',
+    async (_event, provider: string, toolAlias: string): Promise<{ success: boolean; error?: string }> => {
+      if (!isKnownProvider(provider) || typeof toolAlias !== 'string' || !toolAlias) {
+        return { success: false, error: 'provider and toolAlias are required' };
+      }
+      try {
+        approveToolGlobally(provider, toolAlias);
+        await notifyAgentServerAppConnectionReload();
+        return { success: true };
+      } catch (err) {
+        logger.error(
+          'appConnection:approveTool failed',
+          err instanceof Error ? err : new Error(String(err)),
+          { provider, toolAlias },
+          COMPONENT,
+        );
+        return { success: false, error: 'Failed to save approval' };
+      }
+    },
+  );
+
+  // --- appConnection:revokeToolApproval (Plan 449) ---
+  ipcMain.handle(
+    'appConnection:revokeToolApproval',
+    async (_event, provider: string, toolAlias: string): Promise<{ success: boolean; error?: string }> => {
+      if (!isKnownProvider(provider) || typeof toolAlias !== 'string' || !toolAlias) {
+        return { success: false, error: 'provider and toolAlias are required' };
+      }
+      try {
+        revokeToolApprovalGlobally(provider, toolAlias);
+        await notifyAgentServerAppConnectionReload();
+        return { success: true };
+      } catch (err) {
+        logger.error(
+          'appConnection:revokeToolApproval failed',
+          err instanceof Error ? err : new Error(String(err)),
+          { provider, toolAlias },
+          COMPONENT,
+        );
+        return { success: false, error: 'Failed to revoke approval' };
+      }
+    },
+  );
+
+  // --- appConnection:listToolApprovals (Plan 449) ---
+  ipcMain.handle(
+    'appConnection:listToolApprovals',
+    async (): Promise<{ success: boolean; data?: string[]; error?: string }> => {
+      try {
+        return { success: true, data: listGlobalToolApprovals() };
+      } catch (err) {
+        logger.error(
+          'appConnection:listToolApprovals failed',
+          err instanceof Error ? err : new Error(String(err)),
+          undefined,
+          COMPONENT,
+        );
+        return { success: false, error: 'Failed to list approvals' };
       }
     },
   );

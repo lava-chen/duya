@@ -84,5 +84,14 @@ export function getAppConnectionAPI() {
     disconnect: async (connectionId: string): Promise<AppConnectionDisconnectResponse> => {
       return api.appConnection.disconnect(connectionId) as Promise<AppConnectionDisconnectResponse>;
     },
+    approveTool: async (provider: string, toolAlias: string): Promise<{ success: boolean; error?: string }> => {
+      return api.appConnection.approveTool(provider, toolAlias);
+    },
+    revokeToolApproval: async (provider: string, toolAlias: string): Promise<{ success: boolean; error?: string }> => {
+      return api.appConnection.revokeToolApproval(provider, toolAlias);
+    },
+    listToolApprovals: async (): Promise<{ success: boolean; data?: string[]; error?: string }> => {
+      return api.appConnection.listToolApprovals();
+    },
   };
 }

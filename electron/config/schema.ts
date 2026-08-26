@@ -326,6 +326,8 @@ export interface DuyaConfig {
   channels: ChannelsConfig;
   gateway_proxy: GatewayProxyConfig;
   approvals: Record<string, unknown>;
+  /** [app_connection_approvals."provider:toolAlias"] — Plan 449 global tool approvals. */
+  app_connection_approvals: Record<string, 'allow'>;
   command_allowlist: unknown[];
 
   mcp_servers: Record<string, McpServerEntry>;
@@ -469,6 +471,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   },
   gateway_proxy: { global_enabled: true, channels: {} },
   approvals: {},
+  app_connection_approvals: {},
   command_allowlist: [],
   mcp_servers: {},
   plugins: {},

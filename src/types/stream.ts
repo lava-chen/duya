@@ -101,6 +101,8 @@ export interface PermissionRequestEvent {
   mode: 'generic' | 'ask_user_question' | 'exit_plan_mode';
   expiresAt: number;
   decisionReason?: string;
+  /** Present only for app-connection tools (Plan 449): enables "Always allow". */
+  connector?: { provider: string; riskTier: string; preApproved: boolean };
   suggestions?: Array<{
     type: string;
     destination: string;
