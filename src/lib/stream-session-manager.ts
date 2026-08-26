@@ -1744,7 +1744,11 @@ class StreamSessionManager {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
     const existingResultIndex = s.toolResults.findIndex((existing) => existing.tool_use_id === result.tool_use_id);
-    if (s.loadedToolResultIds.has(result.tool_use_id) && existingResultIndex !== -1) return;
+    // Plan 447: skip unconditionally when the result is already durable —
+    // previously the guard required the result to also exist in snapshot
+    // state, so a replayed durable event (attach path) could re-enter and
+    // duplicate the row.
+    if (s.loadedToolResultIds.has(result.tool_use_id)) return;
     // B8: same rationale as handleToolUseEvent — do not touch
     // pendingPermissionRequest or phase during the user's decision window.
     if (s.phase === 'awaiting_permission') {
