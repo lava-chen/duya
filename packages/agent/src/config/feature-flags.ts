@@ -24,3 +24,16 @@ export const DUYA_SLIM_SUBAGENT_AGENTSMd: boolean = envFlag(
 export function isSubagentSlimAgentsMdEnabled(): boolean {
   return DUYA_SLIM_SUBAGENT_AGENTSMd;
 }
+
+/**
+ * `duya_nested_agents_md` — when enabled (default), tools that touch files
+ * below the session cwd pull in subtree AGENTS.md / `.duya/rules/*.md` and
+ * ancestor-chain conditional (`paths:` globs) rules as one-shot user-role
+ * reminders (Plan 408b, claude-code-haha nested_memory parity). Override via
+ * the `DUYA_NESTED_AGENTS_MD` env var (`false`/`0` to disable).
+ */
+const DUYA_NESTED_AGENTS_MD = envFlag('DUYA_NESTED_AGENTS_MD', true);
+
+export function isNestedAgentsMdEnabled(): boolean {
+  return DUYA_NESTED_AGENTS_MD;
+}

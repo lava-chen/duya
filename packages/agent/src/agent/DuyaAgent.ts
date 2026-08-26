@@ -33,6 +33,8 @@ import type {
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
+import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
+import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
@@ -1861,6 +1863,51 @@ export class duyaAgent {
                 consecutiveIdenticalToolCalls: streak,
               })) {
                 applyLoopHookEffect(messages, effect, seqIndex);
+              }
+
+              // Plan 408b: nested AGENTS.md on-demand loading. Tools that
+              // touched files under the project root pull in subtree
+              // AGENTS.md / conditional rules as a one-shot user-role
+              // reminder (cc-haha nested_memory parity). Per-file dedup is
+              // handled by the manager's session-level loaded set.
+              if (
+                this.omitAgentsMd !== true &&
+                isNestedAgentsMdEnabled() &&
+                turnToolCalls.length > 0
+              ) {
+                try {
+                  const triggerPaths = extractTriggerPaths(
+                    turnToolCalls,
+                    this.workingDirectory ?? process.cwd(),
+                  );
+                  if (triggerPaths.length > 0) {
+                    const nestedFiles = await getAgentsMdManager().collectNestedMemory(triggerPaths);
+                    if (nestedFiles.length > 0) {
+                      const block = getAgentsMdManager().renderNestedMemoryBlock(nestedFiles);
+                      if (block) {
+                        const action = applyHookInjection(
+                          messages as unknown as InjectableMessage[],
+                          undefined,
+                          renderSystemReminder(block),
+                          'nested-agents-md',
+                          { id: crypto.randomUUID(), now: Date.now() },
+                        );
+                        logger.info(
+                          `Nested AGENTS.md injected (${action})`,
+                          { count: nestedFiles.length },
+                          'AgentsMd',
+                        );
+                      }
+                    }
+                  }
+                } catch (err) {
+                  // Nested memory is advisory — never fail the turn on it.
+                  logger.warn(
+                    `Nested AGENTS.md collection failed: ${err instanceof Error ? err.message : String(err)}`,
+                    undefined,
+                    'AgentsMd',
+                  );
+                }
               }
             }
 

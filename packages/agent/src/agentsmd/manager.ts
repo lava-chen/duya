@@ -10,6 +10,9 @@ import * as fs from 'fs'
 import type { AgentsFileInfo, AgentsMdConfig } from './types.js'
 import { DEFAULT_AGENTS_MD_CONFIG } from './types.js'
 import { loadAgentsMdFiles, buildAgentsMdPrompt } from './loader.js'
+import {
+  collectNestedMemoryFiles,
+} from './nested-loader.js'
 import { logger } from '../utils/logger.js'
 
 // =============================================================================
@@ -35,6 +38,11 @@ export class AgentsMdManager {
   // (cwd → root) on every prompt-build boundary.
   private _lastScanPath: string | undefined
   private _lastFileMtimes: Map<string, number> = new Map()
+
+  // Plan 408b: session-level set of nested memory files already injected.
+  // Non-evicting on purpose — re-injecting the same AGENTS.md wastes window
+  // (cc-haha loadedNestedMemoryPaths parity). Normalized paths only.
+  private _loadedNestedPaths: Set<string> = new Set()
 
   constructor(config?: Partial<AgentsMdConfig>) {
     this._config = {
@@ -213,6 +221,7 @@ export class AgentsMdManager {
     this._initialized = false
     this._lastScanPath = undefined
     this._lastFileMtimes = new Map()
+    this._loadedNestedPaths = new Set()
   }
 
   /**
@@ -230,6 +239,43 @@ export class AgentsMdManager {
    */
   getConfig(): AgentsMdConfig {
     return { ...this._config }
+  }
+
+  // ===========================================================================
+  // Nested memory (Plan 408b)
+  // ===========================================================================
+
+  /**
+   * Discover and return the delta of nested memory files for this turn's
+   * trigger paths. Returned files are marked injected in the session-level
+   * set so subsequent turns never see them again.
+   */
+  async collectNestedMemory(triggerPaths: readonly string[]): Promise<AgentsFileInfo[]> {
+    if (!this._initialized || triggerPaths.length === 0) {
+      return []
+    }
+    return collectNestedMemoryFiles({
+      cwd: this._projectPath,
+      triggerPaths,
+      loadedPaths: this._loadedNestedPaths,
+    })
+  }
+
+  /**
+   * Render one injection block for nested memory files. Same envelope as
+   * `buildAgentsMdPrompt` but without MEMORY_INSTRUCTION_PROMPT — that
+   * preamble belongs to the eager first-load only. Empty input → ''.
+   */
+  renderNestedMemoryBlock(files: AgentsFileInfo[]): string {
+    if (files.length === 0) return ''
+    const memories = files
+      .filter((f) => f.content)
+      .map(
+        (f) =>
+          `Contents of ${f.path} (project instructions, nested directory):\n\n${f.content}`,
+      )
+    if (memories.length === 0) return ''
+    return `<system-reminder>\n<project_instructions_spec>\n${memories.join('\n\n')}\n</project_instructions_spec>\n</system-reminder>`
   }
 
   // ===========================================================================
