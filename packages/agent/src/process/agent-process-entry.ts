@@ -52,6 +52,8 @@ import { classifyError, APIErrorType, computeContextEstimate, normalizePromptTok
 import type { PromptProfile } from '../prompts/modes/types.js';
 // Plan 312: type-only import for the App Connection tool descriptor.
 import type { AppConnectionToolDescriptor } from '../tool/AppConnectionTool/index.js';
+import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
+import { rememberSessionApproval } from '../tool/AppConnectionTool/approvals.js';
 import { buildSandboxImage, setSandboxEnabled } from '../sandbox/index.js';
 import { duyaAgent } from '../agent/DuyaAgent.js';
 import { Journal } from '../journal/Journal.js';
@@ -460,6 +462,8 @@ type PendingPermissionEntry = {
   resolve: (decision: 'allow' | 'deny') => void;
   reject: (error: Error) => void;
   timeoutHandle: ReturnType<typeof setTimeout>;
+  /** Tool name captured at request time (Plan 449 session approval memory). */
+  toolName?: string;
 };
 
 const pendingPermissions = new Map<string, PendingPermissionEntry>();
@@ -1632,7 +1636,11 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
         (timeoutHandle as { unref: () => void }).unref();
       }
 
-      pendingPermissions.set(key, { resolve, reject, timeoutHandle });
+      pendingPermissions.set(key, { resolve, reject, timeoutHandle, toolName: request.toolName });
+
+      // Plan 449: attach connector metadata when the tool is an app-connection
+      // tool so the renderer can offer "Always allow" (global approval).
+      const descriptor = getCachedAppConnectionDescriptors().find((d) => d.name === request.toolName);
 
       sendToMain({
         type: 'chat:permission',
@@ -1643,6 +1651,15 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
           toolInput: request.toolInput,
           mode: request.mode,
           expiresAt: request.expiresAt,
+          ...(descriptor
+            ? {
+                connector: {
+                  provider: descriptor.provider,
+                  riskTier: descriptor.riskTier,
+                  preApproved: descriptor.preApproved === true,
+                },
+              }
+            : {}),
         },
       });
     });
@@ -3603,6 +3620,17 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             clearTimeout(pending.timeoutHandle);
             pendingPermissions.delete(key);
             if (decision === 'allow' || decision === 'allow_once' || decision === 'allow_for_session') {
+              // Plan 449: `allow_for_session` on an app-connection tool now
+              // actually remembers — same tool skips the write/modify ask for
+              // the rest of this worker's (session-scoped) lifetime.
+              if (decision === 'allow_for_session' && pending.toolName) {
+                const connectorDescriptor = getCachedAppConnectionDescriptors().find(
+                  (d) => d.name === pending.toolName,
+                );
+                if (connectorDescriptor) {
+                  rememberSessionApproval(pending.toolName);
+                }
+              }
               pending.resolve('allow');
             } else {
               pending.resolve('deny');

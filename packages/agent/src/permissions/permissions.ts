@@ -47,6 +47,10 @@ import {
   checkPowerShellSecurity,
   isReadOnlyPowerShellCommand,
 } from '../tool/PowerShellTool/security.js'
+// Plan 449: connector approval memory + templated approval messages.
+import { isSessionApproved } from '../tool/AppConnectionTool/approvals.js'
+import { renderConnectorApprovalFromDescriptor } from '../tool/AppConnectionTool/approval-message.js'
+import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js'
 
 const PERMISSION_RULE_SOURCES = [
   'userSettings',
@@ -409,6 +413,9 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
     const riskTier = appState.toolPermissionContext.getToolRiskTier?.(toolName);
     if (riskTier !== undefined) {
       const tierBehavior = riskTierToBehavior(riskTier, appState.toolPermissionContext.mode);
+      const connectorDescriptor = getCachedAppConnectionDescriptors().find(
+        (d) => d.name === toolName,
+      );
       if (tierBehavior === 'strong-confirm') {
         return {
           behavior: 'ask',
@@ -421,9 +428,35 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
         };
       }
       if (tierBehavior === 'ask') {
+        // Plan 449: approval memory — a globally approved (preApproved,
+        // stamped by main) or session-approved connector tool skips the ask.
+        // Destructive never reaches this branch (strong-confirm above), so
+        // the exemption is write/modify-only by construction.
+        //
+        // NOTE: this returns 'allow' directly instead of falling through —
+        // in default mode the pipeline's final fallback asks for ANY unknown
+        // tool, which would defeat the memory. Remote connector calls are
+        // out-of-workspace HTTP actions by definition; the workspace and
+        // catastrophic file checks below do not apply to them.
+        const approvalExempt =
+          connectorDescriptor !== undefined &&
+          (connectorDescriptor.preApproved === true || isSessionApproved(toolName));
+        if (approvalExempt) {
+          return {
+            behavior: 'allow',
+            decisionReason: {
+              type: 'safetyCheck',
+              reason: `User approved ${toolName} (connector approval memory).`,
+              classifierApprovable: false,
+            },
+          };
+        }
+        const message = connectorDescriptor
+          ? renderConnectorApprovalFromDescriptor(connectorDescriptor, input).message
+          : createPermissionRequestMessage(toolName);
         return {
           behavior: 'ask',
-          message: createPermissionRequestMessage(toolName),
+          message,
           decisionReason: {
             type: 'safetyCheck',
             reason: `riskTier=${riskTier} requires confirmation before execution.`,
