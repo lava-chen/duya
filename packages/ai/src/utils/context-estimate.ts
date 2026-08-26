@@ -200,23 +200,37 @@ export function normalizePromptTokens(
   return { prompt, output };
 }
 
+/** True when a usage block reports output but ALL input-side counters are
+ *  zero. Some gateways omit the cached volume entirely on fully-cached
+ *  rounds, so the block cannot be trusted as a context-size anchor. */
+function isUnderReportedUsage(usage: ContextUsageBlock): boolean {
+  const src = usage.last_call ?? usage;
+  return (
+    (src.input_tokens || 0) === 0 &&
+    (src.cache_hit_tokens || 0) === 0 &&
+    (src.cache_creation_tokens || 0) === 0 &&
+    (src.output_tokens || 0) > 0
+  );
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // The estimator
 // ──────────────────────────────────────────────────────────────────────────
 
 function isUsableAnchor(
   msg: ContextEstimateMessage,
-): { value: number } | undefined {
+): { value: number; underReported: boolean } | undefined {
   if (msg.role !== 'assistant') return undefined;
   if (msg.stopReason === 'aborted' || msg.stopReason === 'error') return undefined;
   const usage = msg.usage ?? msg.tokenUsage;
   if (!usage) return undefined;
+  const underReported = isUnderReportedUsage(usage);
   const { prompt, output } = normalizePromptTokens(usage);
   const total = prompt + output;
   // All-zero usage renders as an empty ring; cache-only requests (input=0,
   // large hits) are meaningful and survive via normalizePromptTokens.
   if (total <= 0 && !(prompt > 0)) return undefined;
-  return { value: prompt + output };
+  return { value: prompt + output, underReported };
 }
 
 /**
@@ -250,16 +264,23 @@ export function computeContextEstimate(
     }
   }
 
-  // Backwards scan for the latest usable anchor past the boundary.
+  // Backwards scan for the latest usable anchor past the boundary, plus the
+  // one before it (under-report fallback base).
   let anchorIndex: number | null = null;
   let anchorValue = 0;
+  let anchorUnderReported = false;
+  let prevAnchorValue = 0;
   for (let i = messages.length - 1; i > boundaryIndex; i--) {
     const usable = isUsableAnchor(messages[i]);
-    if (usable) {
+    if (!usable) continue;
+    if (anchorIndex === null) {
       anchorIndex = i;
       anchorValue = usable.value;
-      break;
+      anchorUnderReported = usable.underReported;
+      continue;
     }
+    prevAnchorValue = usable.value;
+    break;
   }
 
   if (anchorIndex !== null) {
@@ -267,11 +288,22 @@ export function computeContextEstimate(
     for (let i = anchorIndex + 1; i < messages.length; i++) {
       trailing += estimateMessageTokens(messages[i]);
     }
+    // Gateway under-report guard: a fully-cache-served round can report
+    // all-zero input components (only output), which would collapse the ring
+    // mid-session. When the previous anchor is drastically larger and the
+    // latest usage is an obvious under-report, fall back to it as the base.
+    // Legitimate shrink paths are unaffected: compaction resets the scan at
+    // the boundary, rewind shortens the list itself, and projection offload
+    // rounds still report real input counters.
+    const base =
+      anchorUnderReported && prevAnchorValue > anchorValue + trailing
+        ? prevAnchorValue
+        : anchorValue;
     return {
-      usedTokens: anchorValue + trailing,
+      usedTokens: base + trailing,
       anchored: true,
       anchorIndex,
-      anchorTokens: anchorValue,
+      anchorTokens: base,
       trailingTokens: trailing,
     };
   }
