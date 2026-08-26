@@ -8,7 +8,6 @@ import { spawn } from 'child_process';
 import { open } from 'fs/promises';
 import { writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
 import type { ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolPermissionContext } from '../../permissions/types.js';
 import type { ToolExecutor } from '../registry.js';
@@ -23,6 +22,7 @@ import type {
 } from '../types.js';
 import { SandboxManager, getActiveProvider, executeIsolated, wrapCommand } from '../../sandbox/index.js';
 import { resolveShellProvider, type ShellProviderKind } from '../../utils/shell/providers.js';
+import { getBashOutputDir } from '../../utils/duyaRoot.js';
 import { killProcessTree } from '../../utils/processTreeKill.js';
 import {
   analyzeShellFailure,
@@ -76,7 +76,8 @@ function getWindowsEncodingEnv(): Record<string, string> {
  * persisted rollout and, more importantly, floods the CURRENT model context
  * (projection offload only trims historical messages). Root fix: cap the
  * output at the tool boundary — keep a readable tail, spill the full output to
- * a temp file, and tell the model where it is so it can read more on demand.
+ * a file under ~/.duya/bash-outputs (durable across reboots, unlike
+ * os.tmpdir), and tell the model where it is so it can read more on demand.
  */
 export const BASH_MAX_OUTPUT_CHARS = 30_000;
 export const BASH_MAX_OUTPUT_LINES = 1_000;
@@ -96,7 +97,7 @@ export function truncateShellOutput(content: string): TruncatedShellOutput {
   const totalLines = lines.length;
   let fullOutputPath: string | undefined;
   try {
-    fullOutputPath = join(tmpdir(), `duya-bash-full-${crypto.randomUUID()}.log`);
+    fullOutputPath = join(getBashOutputDir(), `duya-bash-full-${crypto.randomUUID()}.log`);
     writeFileSync(fullOutputPath, trimmed, 'utf8');
   } catch {
     fullOutputPath = undefined;
@@ -609,8 +610,8 @@ export class BashTool extends BaseTool implements ToolExecutor {
    * Execute a command in the background.
    *
    * Spawns a detached child process whose stdout/stderr are redirected to a
-   * temp file, registers it in BashTaskRegistry so the UI can list/inspect
-   * it, and returns immediately. When the process exits, the close handler
+   * log file under ~/.duya/bash-outputs, registers it in BashTaskRegistry so
+   * the UI can list/inspect it, and returns immediately. When the process exits, the close handler
    * marks the task complete and enqueues a notification so the LLM can
    * resume the conversation with the final exit code.
    *
@@ -642,7 +643,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
       executionPlanReason,
     } = params;
 
-    const outputFile = join(tmpdir(), `duya-bash-${toolUseId}.log`);
+    const outputFile = join(getBashOutputDir(), `duya-bash-${toolUseId}.log`);
 
     try {
       const fd = await open(outputFile, 'w', 0o644);

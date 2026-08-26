@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { getDuyaRoot } from '../../utils/duyaRoot.js';
 
 /**
  * Per-session task output directory. Memoized so that /clear (which
@@ -8,7 +8,8 @@ import { tmpdir } from 'os';
  *
  * Resolution order:
  * 1. `<projectTemp>/<sessionId>/tasks/` (preferred - survives restarts)
- * 2. `os.tmpdir()/duya-tasks/<sessionId>/` (fallback when projectTemp unavailable)
+ * 2. `~/.duya/tasks/<sessionId>/` (fallback when projectTemp unavailable;
+ *    still durable across reboots, unlike os.tmpdir)
  */
 const _dirCache = new Map<string, string>();
 
@@ -29,7 +30,7 @@ function resolveBaseDir(): string {
   } catch {
     // ignore
   }
-  return join(tmpdir(), 'duya-tasks');
+  return join(getDuyaRoot(), 'tasks');
 }
 
 export function getTaskOutputDir(sessionId: string): string {
