@@ -1102,22 +1102,28 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           </>
         )}
 
-        <div className="flex items-center gap-2 mt-3">
-          <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-            {formatMessageTime(message.timestamp, t, locale)}
-          </span>
-          <IconButton
-            variant="ghost"
-            size="md"
-            shape="square"
-            aria-label="Copy message"
-            onClick={copyToClipboard}
-            className="hover:bg-muted/50 text-muted-foreground/60 hover:text-foreground"
-            title="Copy message"
-          >
-            {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
-          </IconButton>
-        </div>
+        {/* Plan 447: hide the time + copy chrome for rounds of the turn
+            currently being streamed — pre-refresh they render inside one
+            continuous StreamingMessage with no per-round separators, and
+            the footer returns once the run ends. */}
+        {!isLiveRun && (
+          <div className="flex items-center gap-2 mt-3">
+            <span className="text-[11px] text-muted-foreground/60 tabular-nums">
+              {formatMessageTime(message.timestamp, t, locale)}
+            </span>
+            <IconButton
+              variant="ghost"
+              size="md"
+              shape="square"
+              aria-label="Copy message"
+              onClick={copyToClipboard}
+              className="hover:bg-muted/50 text-muted-foreground/60 hover:text-foreground"
+              title="Copy message"
+            >
+              {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+            </IconButton>
+          </div>
+        )}
       </div>
     </div>
   );
