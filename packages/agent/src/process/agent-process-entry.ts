@@ -2425,12 +2425,29 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
             tokenUsage.cache_hit_tokens = (tokenUsage.cache_hit_tokens ?? 0) + cacheHitTokens;
             tokenUsage.cache_creation_tokens = (tokenUsage.cache_creation_tokens ?? 0) + cacheCreationTokens;
           }
-          lastCallUsage = {
+          // last_call feeds the persisted anchor (normalizePromptTokens
+          // prefers it on reload) and the footer's per-request line. Keep the
+          // LARGEST-prompt call of the turn, not the latest: GLM-style
+          // gateways report a near-fresh prefix (input=0, tiny hit) on some
+          // rounds, and a collapsed last_call would permanently shrink the
+          // ring after an app restart. Context only grows within a turn.
+          const candidateAnchor = {
             input_tokens: rawInput,
             output_tokens: outputTokens,
             cache_hit_tokens: cacheHitTokens,
             cache_creation_tokens: cacheCreationTokens,
           };
+          const anchorVolume = (
+            u: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
+          ): number => {
+            const input = u.input_tokens ?? 0;
+            const hit = u.cache_hit_tokens ?? 0;
+            const write = u.cache_creation_tokens ?? 0;
+            return (hit > input || write > input ? input + hit + write : input) + (u.output_tokens ?? 0);
+          };
+          if (!lastCallUsage || anchorVolume(candidateAnchor) >= anchorVolume(lastCallUsage)) {
+            lastCallUsage = candidateAnchor;
+          }
           ringTrace(`result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the

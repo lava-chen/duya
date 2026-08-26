@@ -1244,6 +1244,22 @@ export class duyaAgent {
       // immediately before `done`). Attached to the pushed assistant message
       // (pi parity) so context estimation can anchor on real API numbers —
       // see computeContextEstimate in @duya/ai.
+      // NOTE: keep the LARGEST-prompt result of the turn, not the latest.
+      // Some gateways (GLM-style cache reporting) report a near-fresh prefix
+      // (input_tokens=0, tiny cache hit) on individual rounds, which made the
+      // context ring collapse to ~1% for an instant between tool rounds.
+      // Conversation context only grows within a turn, so max is always the
+      // truthful anchor; compaction resets via compactedPending separately.
+      const resultPromptVolume = (
+        u?: { input_tokens?: number; output_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number },
+      ): number => {
+        if (!u) return 0;
+        const input = u.input_tokens ?? 0;
+        const hit = u.cache_hit_tokens ?? 0;
+        const write = u.cache_creation_tokens ?? 0;
+        const prompt = hit > input || write > input ? input + hit + write : input;
+        return prompt + (u.output_tokens ?? 0);
+      };
       let roundResultUsage:
         | { input_tokens?: number; output_tokens?: number; total_tokens?: number; cache_hit_tokens?: number; cache_creation_tokens?: number }
         | undefined = undefined;
@@ -1909,7 +1925,8 @@ export class duyaAgent {
             if (used > 0 && this.modeCoordinator) {
               void this.modeCoordinator.reportGoalTokenUsage(used);
             }
-            roundResultUsage = usage;
+            roundResultUsage =
+              resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage) ? usage : roundResultUsage;
             yield event;
           }
         }
