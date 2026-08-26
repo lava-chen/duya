@@ -1,10 +1,11 @@
 ﻿"use client";
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { ConnectorIcon } from "./connector-icons";
+import { getAppConnectionAPI } from "@/lib/app-connection-ipc";
 import type {
   AppConnectionProviderDTO,
   AppConnectionStatusDTO,
@@ -44,6 +45,97 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+/**
+ * Global "Always Allow" management (Plan 449). Lists every provider:tool
+ * approval persisted by the permission card's Always Allow button and lets
+ * the user revoke it; revocation refreshes worker descriptors so the gate
+ * asks again on the next call.
+ */
+function ApprovedToolsSection() {
+  const { t } = useTranslation();
+  const [approvals, setApprovals] = useState<string[]>([]);
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const api = getAppConnectionAPI();
+    if (!api) return;
+    try {
+      const res = await api.listToolApprovals();
+      setApprovals(res.data ?? []);
+    } catch {
+      // Leave the previous list in place on transient failures.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const key of approvals) {
+      const idx = key.indexOf(":");
+      if (idx <= 0) continue;
+      const provider = key.slice(0, idx);
+      const tool = key.slice(idx + 1);
+      const list = map.get(provider) ?? [];
+      list.push(tool);
+      map.set(provider, list);
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [approvals]);
+
+  if (grouped.length === 0) return null;
+
+  const revoke = async (provider: string, tool: string) => {
+    setRevoking(`${provider}:${tool}`);
+    try {
+      const api = getAppConnectionAPI();
+      if (api) await api.revokeToolApproval(provider, tool);
+      await refresh();
+    } catch {
+      // Keep the row; the user can retry.
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  return (
+    <div className="mt-4 rounded-lg border border-border/40 bg-[var(--surface)] overflow-hidden">
+      <div className="px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/30">
+        {t("extensions.approvals.title")}
+        <span className="ml-2 font-normal">{t("extensions.approvals.hint")}</span>
+      </div>
+      {grouped.map(([provider, tools]) => (
+        <div key={provider} className="px-4 py-3 border-b border-border/20 last:border-b-0">
+          <div className="flex items-center gap-2 mb-2">
+            <ConnectorIcon provider={provider as ProviderId} size={16} />
+            <span className="text-sm font-medium text-foreground">{provider}</span>
+          </div>
+          <div className="flex flex-col gap-1 pl-6">
+            {tools.sort().map((tool) => {
+              const key = `${provider}:${tool}`;
+              return (
+                <div key={tool} className="flex items-center justify-between gap-3">
+                  <code className="text-xs text-muted-foreground truncate">{tool}</code>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={revoking === key}
+                    onClick={() => void revoke(provider, tool)}
+                  >
+                    {t("extensions.approvals.revoke")}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ConnectionsSubPage({
   connections,
   providers,
@@ -78,6 +170,7 @@ export function ConnectionsSubPage({
   }
 
   return (
+    <div>
     <div className="rounded-lg border border-border/40 bg-[var(--surface)] overflow-hidden">
       {/* Header */}
       <div
@@ -154,6 +247,8 @@ export function ConnectionsSubPage({
           </div>
         );
       })}
+    </div>
+    <ApprovedToolsSection />
     </div>
   );
 }
