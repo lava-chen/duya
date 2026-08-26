@@ -33,6 +33,10 @@ export interface PanelContextValue {
   activateTab: (tabId: string) => void;
   updateTabTitle: (tabId: string, title: string) => void;
   updateTabFavicon: (tabId: string, favicon: string | undefined) => void;
+  /** Persist a user-dragged width for the page type (called on drag end). */
+  rememberUserWidth: (pageId: PageId, width: number) => void;
+  /** Forget the remembered width for a page and restore its default. */
+  resetPanelWidth: (pageId: PageId) => void;
   openOrActivatePage: (pageId: PageId, params?: Record<string, unknown>) => string;
   reorderTabs: (fromId: string, toId: string, position: "before" | "after") => void;
 }
@@ -56,6 +60,10 @@ const MAX_PANEL_RATIO = 0.6;
 export { MIN_PANEL_WIDTH, MAX_PANEL_WIDTH, MAX_PANEL_RATIO, MIN_CHAT_WIDTH };
 
 const PANEL_STORAGE_PREFIX = "duya:panel:v2:";
+// Remembers the last width the user explicitly dragged a page to, keyed by
+// PageId. Applied on open/activate instead of the descriptor's static
+// `preferredWidth` so a manual resize survives tab switches and reloads.
+const USER_WIDTHS_STORAGE_KEY = "duya:panel:user-widths:v1";
 const HOME_PANEL_KEY = "__home__";
 
 interface PersistedPanelState {
@@ -207,6 +215,60 @@ function getWorkspaceWidth(): number {
   return workspace?.getBoundingClientRect().width ?? window.innerWidth;
 }
 
+interface WidthBoundsOptions {
+  minWidth?: number;
+  maxWidth?: number | null;
+  maxWidthRatio?: number;
+}
+
+/**
+ * Clamp an arbitrary width against the shared panel caps plus a page
+ * descriptor's own bounds. The upper bound is the tightest of: absolute
+ * ceiling, ratio cap, and chat-column protection; when the lower bound
+ * exceeds it on narrow workspaces the upper bound wins so the chat column
+ * never shrinks below its protected minimum.
+ */
+export function clampWidthToBounds(width: number, options: WidthBoundsOptions, workspaceWidth: number): number {
+  const maxWidth = panelMaxWidth(options.maxWidth);
+  const maxByRatio = workspaceWidth * (options.maxWidthRatio ?? MAX_PANEL_RATIO);
+  const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
+  const upperBound = Math.min(maxWidth, maxByRatio, maxWithChat);
+  const lowerBound = Math.max(MIN_PANEL_WIDTH, options.minWidth ?? MIN_PANEL_WIDTH);
+  return Math.max(Math.min(lowerBound, upperBound), Math.min(width, upperBound));
+}
+
+function loadUserWidths(): Partial<Record<PageId, number>> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(USER_WIDTHS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const widths: Partial<Record<PageId, number>> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!isPageId(key)) continue;
+      if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) continue;
+      widths[key] = value;
+    }
+    return widths;
+  } catch {
+    return {};
+  }
+}
+
+function saveUserWidths(widths: Partial<Record<PageId, number>>): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (Object.keys(widths).length === 0) {
+      window.localStorage.removeItem(USER_WIDTHS_STORAGE_KEY);
+    } else {
+      window.localStorage.setItem(USER_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+    }
+  } catch {
+    // Quota / private mode — fail silently, the in-memory map still works.
+  }
+}
+
 export interface PanelWidthOptions {
   workspaceWidth: number;
   preferredWidth?: number;
@@ -277,6 +339,7 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   }
   const initial = initialRef.current ?? emptyPanelState();
 
+  const [userWidths, setUserWidths] = useState<Partial<Record<PageId, number>>>(loadUserWidths);
   const [panelOpen, setPanelOpen] = useState<boolean>(initial.panelOpen);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
   const [panelView, setPanelView] = useState<PanelView>(initial.panelView);
@@ -296,6 +359,29 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
   }, [activeThreadId]);
+
+  const activeTabIdRef = useRef(activeTabId);
+  useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
+
+  // Re-clamp the panel width when the workspace itself resizes (window
+  // resize, sidebar collapse, devtools dock). Without this the stale pixel
+  // width could overflow the window or violate the chat-column minimum
+  // until the next drag or tab switch.
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const workspace = document.querySelector(".app-workspace-row");
+    if (!workspace) return;
+    const observer = new ResizeObserver(() => {
+      const tab = tabsRef.current.find((t) => t.id === activeTabIdRef.current);
+      if (!tab) return;
+      const descriptor = getPageDescriptor(tab.pageId);
+      setPanelWidth((width) => clampWidthToBounds(width, descriptor, getWorkspaceWidth()));
+    });
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, []);
 
   const tabsRef = useRef<PageTab[]>(tabs);
   useEffect(() => {
@@ -340,11 +426,19 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Mirror for stable callbacks (applyPageLayout is a dependency of
+  // openPanel / activateTab and must not churn when widths change).
+  const userWidthsRef = useRef(userWidths);
+  userWidthsRef.current = userWidths;
+
   const applyPageLayout = useCallback((pageId: PageId) => {
     const descriptor = getPageDescriptor(pageId);
+    const remembered = userWidthsRef.current[pageId];
     const nextWidth = resolvePanelWidth({
       workspaceWidth: getWorkspaceWidth(),
-      preferredWidth: descriptor.preferredWidth,
+      // A user-dragged width wins over the descriptor default so manual
+      // resizes survive opening/activating another tab of the same page.
+      preferredWidth: remembered ?? descriptor.preferredWidth,
       minWidth: descriptor.minWidth,
       widthRatio: descriptor.widthRatio,
       maxWidthRatio: descriptor.maxWidthRatio,
@@ -368,6 +462,38 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
 
   const handleSetWidth = useCallback((width: number) => {
     setPanelWidth(clampPanelWidth(width));
+  }, []);
+
+  /** Persist a user-initiated width (drag end) for the given page type. */
+  const rememberUserWidth = useCallback((pageId: PageId, width: number) => {
+    if (!Number.isFinite(width)) return;
+    setUserWidths((prev) => {
+      const rounded = Math.round(width);
+      if (prev[pageId] === rounded) return prev;
+      const next = { ...prev, [pageId]: rounded };
+      saveUserWidths(next);
+      return next;
+    });
+  }, []);
+
+  /** Drop the remembered width for a page and restore its descriptor default. */
+  const resetPanelWidth = useCallback((pageId: PageId) => {
+    setUserWidths((prev) => {
+      if (!(pageId in prev)) return prev;
+      const next = { ...prev };
+      delete next[pageId];
+      saveUserWidths(next);
+      return next;
+    });
+    const descriptor = getPageDescriptor(pageId);
+    setPanelWidth(resolvePanelWidth({
+      workspaceWidth: getWorkspaceWidth(),
+      preferredWidth: descriptor.preferredWidth,
+      minWidth: descriptor.minWidth,
+      widthRatio: descriptor.widthRatio,
+      maxWidthRatio: descriptor.maxWidthRatio,
+      maxWidth: descriptor.maxWidth,
+    }));
   }, []);
 
   const openPanel = useCallback<PanelContextValue["openPanel"]>((pageId, params) => {
@@ -721,6 +847,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       togglePanel,
       panelWidth,
       setPanelWidth: handleSetWidth,
+      rememberUserWidth,
+      resetPanelWidth,
       workspaceExpanded,
       setWorkspaceExpanded,
       workspaceTreeOpen,
@@ -742,6 +870,8 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
       togglePanel,
       panelWidth,
       handleSetWidth,
+      rememberUserWidth,
+      resetPanelWidth,
       workspaceExpanded,
       setWorkspaceExpanded,
       workspaceTreeOpen,

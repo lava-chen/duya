@@ -1054,6 +1054,7 @@ const en = {
   'panel.browser': 'Browser',
   'panel.office': 'Office',
   'panel.closePanel': 'Close Panel',
+  'panel.resizeHandle': 'Resize panel width. Use arrow keys to adjust, Home/End for min/max, Enter to reset.',
   'panel.openPanel': 'Open Side Panel',
   'panel.collapsePanel': 'Collapse Panel',
   'panel.expandPanel': 'Expand Panel',

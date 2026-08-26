@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/hooks/useTranslation";
-import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_CHAT_WIDTH, MIN_PANEL_WIDTH, usePanel } from "@/hooks/usePanel";
+import { MAX_PANEL_RATIO, MAX_PANEL_WIDTH, MIN_PANEL_WIDTH, clampWidthToBounds, usePanel } from "@/hooks/usePanel";
 import { PanelHeader } from "./PanelHeader";
 import { PAGE_REGISTRY, getPageDescriptor, type PageDescriptor, type PageId } from "./panels/registry";
 import { ResizeHandle } from "./ResizeHandle";
@@ -38,6 +38,8 @@ export function PanelZone() {
     setPanelWidth,
     togglePanel,
     openOrActivatePage,
+    rememberUserWidth,
+    resetPanelWidth,
     tabs,
     activeTabId,
     workspaceExpanded,
@@ -49,6 +51,9 @@ export function PanelZone() {
   const threads = useConversationStore((s) => s.threads);
   const [resizing, setResizing] = useState(false);
   const resizeStartWidthRef = useRef(panelWidth);
+  // Last width produced by the in-flight drag; committed to the per-page
+  // width memory on drag end.
+  const lastDragWidthRef = useRef(panelWidth);
   const taskDrawerOpen = useTaskDrawerOpen();
   const isSessionView = currentView === "chat" && !!activeThreadId;
 
@@ -92,22 +97,42 @@ export function PanelZone() {
     [openOrActivatePage, paramsFor]
   );
 
-  const handleResize = useCallback(
-    (delta: number) => {
-      const nextWidth = resizeStartWidthRef.current - delta;
+  const clampActiveWidth = useCallback(
+    (width: number) => {
       const workspace = document.querySelector(".app-workspace-row");
       const workspaceWidth = workspace?.getBoundingClientRect().width ?? window.innerWidth;
-      const maxByRatio = workspaceWidth * activePanelMaxRatio;
-      const maxWithChat = workspaceWidth - MIN_CHAT_WIDTH;
-      const upperBound = Math.min(activePanelMaxWidth, maxByRatio, maxWithChat);
-      const lowerBound = Math.max(MIN_PANEL_WIDTH, activePanelMinWidth);
-      // When lowerBound > upperBound (narrow workspace), clamp to
-      // upperBound so the drag never pushes the panel past the chat
-      // column's protected minimum width.
-      const safeLower = Math.min(lowerBound, upperBound);
-      setPanelWidth(Math.max(safeLower, Math.min(nextWidth, upperBound)));
+      return clampWidthToBounds(width, {
+        minWidth: activePanelMinWidth,
+        maxWidth: activeDescriptor?.maxWidth,
+        maxWidthRatio: activePanelMaxRatio,
+      }, workspaceWidth);
     },
-    [activePanelMaxRatio, activePanelMaxWidth, activePanelMinWidth, setPanelWidth]
+    [activePanelMaxRatio, activePanelMinWidth, activeDescriptor]
+  );
+
+  const handleResize = useCallback(
+    (delta: number) => {
+      // When lowerBound > upperBound (narrow workspace), the shared clamp
+      // picks upperBound so the drag never pushes the panel past the chat
+      // column's protected minimum width.
+      const nextWidth = clampActiveWidth(resizeStartWidthRef.current - delta);
+      lastDragWidthRef.current = nextWidth;
+      setPanelWidth(nextWidth);
+    },
+    [clampActiveWidth, setPanelWidth]
+  );
+
+  /** Absolute width request from keyboard interaction; persists as user width. */
+  const handleWidthRequest = useCallback(
+    (nextWidth: number) => {
+      const clamped = clampActiveWidth(nextWidth);
+      lastDragWidthRef.current = clamped;
+      setPanelWidth(clamped);
+      if (activeTab && !workspaceExpanded) {
+        rememberUserWidth(activeTab.pageId, clamped);
+      }
+    },
+    [activeTab, clampActiveWidth, rememberUserWidth, setPanelWidth, workspaceExpanded]
   );
 
   useEffect(() => {
@@ -160,7 +185,18 @@ export function PanelZone() {
             setResizing(true);
           }}
           onResize={handleResize}
-          onResizeEnd={() => setResizing(false)}
+          onResizeEnd={() => {
+            setResizing(false);
+            if (activeTab) {
+              rememberUserWidth(activeTab.pageId, lastDragWidthRef.current);
+            }
+          }}
+          width={panelWidth}
+          minWidth={Math.max(MIN_PANEL_WIDTH, activePanelMinWidth)}
+          maxWidth={activePanelMaxWidth === Number.POSITIVE_INFINITY ? undefined : activePanelMaxWidth}
+          onWidthRequest={handleWidthRequest}
+          onReset={activeTab ? () => resetPanelWidth(activeTab.pageId) : undefined}
+          label={t('panel.resizeHandle')}
         />
       )}
 
