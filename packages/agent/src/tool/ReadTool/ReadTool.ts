@@ -55,7 +55,7 @@ import {
   suggestPathUnderCwd,
 } from './path-suggest.js';
 import { serializeParseResult } from './result-builder.js';
-import { recordFileRead } from '../file-read-state.js';
+import { computeContentSha, recordFileRead } from '../file-read-state.js';
 import { isModelLikelyMultimodal } from '../../utils/multimodal-detection.js';
 
 // Re-export ReadInput + validateReadInput for tests / external callers
@@ -512,7 +512,11 @@ export class ReadTool extends BaseTool {
 
       // Record the observed mtime/size so edit can anchor old_string to
       // this exact version of the file (plan 428, file-read-state.ts).
-      recordFileRead(resolved, { mtimeMs: statResult.mtimeMs, size: statResult.size });
+      // Document parses are never a full raw-content view (plan 448):
+      // the extracted text differs from the bytes on disk, so no
+      // content fingerprint is recorded and the staleness exemption
+      // never applies to doc-mode reads.
+      recordFileRead(resolved, { mtimeMs: statResult.mtimeMs, size: statResult.size, isFullView: false });
 
       return { id, name: 'read', result: finalText, metadata, images };
     } catch (error) {
@@ -726,12 +730,22 @@ export async function readFileContent(
     }
 
     const range = parseLineRange(line_range);
-    const content = await readFile(resolvedPath, 'utf-8');
+    const rawContent = await readFile(resolvedPath, 'utf-8');
+    // Strip a leading UTF-8 BOM from text output (plan 448): it is invisible
+    // noise for the model, and if left in the first line it leaks into copied
+    // old_strings and breaks exact matching downstream. computeContentSha
+    // applies the same normalization, so staleness fingerprints stay
+    // comparable between read and edit.
+    const hadBom = rawContent.charCodeAt(0) === 0xfeff;
+    const content = hadBom ? rawContent.slice(1) : rawContent;
     const lines = content.split('\n');
 
     let output: string;
     let startLine: number;
     let endLine: number;
+    // False when a "full" read was actually truncated by the line/byte caps:
+    // the model saw a prefix, not the whole file (plan 448).
+    let fullReadTruncated = false;
     if (range) {
       const startIdx = range.start - 1;
       endLine = range.end === -1 ? lines.length : range.end;
@@ -774,31 +788,72 @@ export async function readFileContent(
       const overLineLimit = totalLines > FULL_READ_MAX_LINES;
       const lineCapped = overLineLimit ? lines.slice(0, FULL_READ_MAX_LINES).join('\n') : content;
       const overByteLimit = Buffer.byteLength(lineCapped, 'utf-8') > FULL_READ_MAX_BYTES;
-      const body = overByteLimit
-        ? Buffer.from(lineCapped, 'utf-8').subarray(0, FULL_READ_MAX_BYTES).toString('utf-8')
-        : lineCapped;
+      fullReadTruncated = overLineLimit || overByteLimit;
+      let body = lineCapped;
+      let midLineCut = false;
+      if (overByteLimit) {
+        // Cut at the last complete line that fits the byte budget (plan 448):
+        // a raw Buffer.subarray().toString() can split a multi-byte UTF-8
+        // sequence mid-character, leaving mojibake at the tail — guaranteed
+        // to happen on CJK-heavy files. Only when even the first line alone
+        // exceeds the budget do we fall back to a hard cut at a code-point
+        // boundary.
+        const kept: string[] = [];
+        let used = 0;
+        for (const line of lineCapped.split('\n')) {
+          const lineBytes = Buffer.byteLength(line, 'utf-8') + 1; // +1 newline
+          if (used + lineBytes > FULL_READ_MAX_BYTES) {
+            if (kept.length > 0) break;
+            // First line alone exceeds the budget: hard-cut inside it,
+            // stepping back off UTF-8 continuation bytes (10xxxxxx).
+            kept.push(truncateUtf8Safe(line, FULL_READ_MAX_BYTES));
+            midLineCut = true;
+            break;
+          }
+          kept.push(line);
+          used += lineBytes;
+        }
+        body = kept.join('\n');
+      }
 
       output = body;
       startLine = 1;
       endLine = body.split('\n').length;
 
-      if (overLineLimit || overByteLimit) {
+      if (fullReadTruncated) {
         // Mirror the line_range note style so the model knows a partial
         // view is not the whole file and how to continue (plan 428).
         const notes: string[] = [];
         if (overLineLimit) notes.push(`truncated to first ${FULL_READ_MAX_LINES} of ${totalLines} lines`);
-        if (overByteLimit) notes.push(`truncated at ~${Math.ceil(FULL_READ_MAX_BYTES / 1024)}KB`);
+        if (overByteLimit) {
+          notes.push(midLineCut ? `truncated at ~${Math.ceil(FULL_READ_MAX_BYTES / 1024)}KB mid-line (single line exceeds limit)` : `truncated at ~${Math.ceil(FULL_READ_MAX_BYTES / 1024)}KB`);
+        }
         output += `\n\n[Read metadata: returned ${endLine} of ${totalLines} lines. ${notes.join('; ')}. Use line_range to read the remaining lines.]`;
       }
     }
 
-    // Record the observed mtime/size (full and line_range reads alike) so
-    // edit can verify its old_string is anchored to this version of the
-    // file (plan 428, file-read-state.ts). Best-effort: if the file vanishes
-    // between read and stat there is nothing left to anchor.
+    // Record the observed state (full and line_range reads alike) so edit
+    // can verify its old_string is anchored to this version of the file
+    // (plan 428, extended by plan 448). The post-read re-stat guards against
+    // the file changing mid-read; hashing uses the content we actually
+    // returned. Full reads record a content fingerprint that enables the
+    // Windows mtime-churn exemption in EditTool; range reads are partial
+    // views and never qualify.
     try {
       const readStat = await stat(resolvedPath);
-      recordFileRead(resolvedPath, { mtimeMs: readStat.mtimeMs, size: readStat.size });
+      if (!range && !fullReadTruncated) {
+        // Untouched full read: fingerprint enables EditTool's Windows
+        // mtime-churn exemption (content-equality fallback).
+        recordFileRead(resolvedPath, {
+          mtimeMs: readStat.mtimeMs,
+          size: readStat.size,
+          isFullView: true,
+          contentSha: computeContentSha(content),
+        });
+      } else {
+        // Partial view (line_range, or full read cut by caps): never exempt.
+        recordFileRead(resolvedPath, { mtimeMs: readStat.mtimeMs, size: readStat.size, isFullView: false });
+      }
     } catch {
       // ignore — the read itself already succeeded
     }
@@ -811,6 +866,7 @@ export async function readFileContent(
         filePath: normalizePath(resolvedPath),
         lineCount: endLine - startLine + 1,
         totalLines: lines.length,
+        ...(hadBom ? { hadBom: true } : {}),
       },
     };
   } catch (error) {
@@ -826,6 +882,19 @@ export async function readFileContent(
     }
     return { id, name: 'read', result: `Error reading file: ${errorMessage}`, error: true };
   }
+}
+
+/**
+ * Hard-cut a single string at maxBytes without splitting a UTF-8 code point:
+ * step back over continuation bytes (10xxxxxx) until the boundary lands on
+ * a lead byte. Used only when one line exceeds the whole byte budget.
+ */
+function truncateUtf8Safe(line: string, maxBytes: number): string {
+  const buf = Buffer.from(line, 'utf-8');
+  if (buf.length <= maxBytes) return line;
+  let cut = maxBytes;
+  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--;
+  return buf.subarray(0, cut).toString('utf-8');
 }
 
 /**
