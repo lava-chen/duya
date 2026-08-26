@@ -354,8 +354,11 @@ export function useSlashCommands(opts: {
   // Static "add context" items — attachment + mode + MCP, shown for `@` and
   // when the plus button is pressed. All static (no async fetch needed).
   const contextItems = useMemo<PopoverItem[]>(
-    () => [addFilesItem, ...modeItems, mcpItem, ...(connectorItems ?? [])],
-    [addFilesItem, modeItems, mcpItem, connectorItems],
+    // Plan 450: connector items right after addFilesItem so connected apps
+    // sit at the top of the `@` popover (mirroring codex's layout where
+    // app mentions are the first thing users see after attachments).
+    () => [addFilesItem, ...(connectorItems ?? []), ...modeItems, mcpItem],
+    [addFilesItem, connectorItems, modeItems, mcpItem],
   );
 
   // Build the "use commands & skills" items (settings + registry commands +
