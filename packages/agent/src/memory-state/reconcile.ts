@@ -105,10 +105,19 @@ export function reconcileProjections(db: Database, opts: ReconcileOptions = {}):
     if (!fs.existsSync(expectedPath)) {
       needsWrite = true;
     } else {
+      // A file is consistent when its content matches EITHER anchor:
+      //   - `content_hash_at_write` — the hash recorded when the row was
+      //     written, OR
+      //   - the CURRENT deterministic rendering of the row.
+      // Legacy rows extracted before a render-format change carry a
+      // `content_hash_at_write` computed over the OLD format, so it can
+      // never match again. Without the second anchor, every reconcile
+      // rewrote those files (identical content) forever — observed in
+      // the wild as `mismatched:N, written:N` on every worker start with
+      // the same N rows looping indefinitely.
       const diskHash = computeContentHash(fs.readFileSync(expectedPath, 'utf8'));
-      const expectedHash =
-        row.content_hash_at_write ?? computeContentHash(renderRolloutSummaryFile(row));
-      if (diskHash !== expectedHash) {
+      const renderedHash = computeContentHash(renderRolloutSummaryFile(row));
+      if (diskHash !== row.content_hash_at_write && diskHash !== renderedHash) {
         needsWrite = true;
         mismatched.push(expectedPath);
       }

@@ -371,6 +371,31 @@ describe('reconcileProjections (D12)', () => {
     expect(outboxRows(db)).toHaveLength(0);
   });
 
+  it('legacy stale content_hash_at_write with current-format file is consistent (no rewrite loop)', () => {
+    // Regression for the observed-in-the-wild loop: rows extracted before
+    // a render-format change carry a `content_hash_at_write` computed over
+    // the OLD format. The on-disk file holds the CURRENT rendering, so the
+    // old anchor can never match — every reconcile rewrote all such files
+    // (mismatched:N / written:N on every worker start, forever). The fix
+    // accepts EITHER hash, so this row must plan nothing.
+    const id = insertStage1Output(db, { rollout_id: ID_A, generated_at: T0 });
+    const filePath = writeConsistentProjection(db, fixture.memoryRoot, id);
+    // Overwrite the anchor with a hash of different ("old format") content.
+    db.prepare('UPDATE stage1_outputs SET content_hash_at_write = ? WHERE rollout_id = ?').run(
+      computeContentHash('---\nlegacy frontmatter shape\n---\n\nold body'),
+      id
+    );
+
+    const report = reconcileProjections(db, { rootDir: fixture.memoryRoot, now: T0 });
+
+    expect(report.written).toHaveLength(0);
+    expect(report.mismatched).toHaveLength(0);
+    expect(outboxRows(db)).toHaveLength(0);
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(
+      renderRolloutSummaryFile(getStage1Row(db, id))
+    );
+  });
+
   it('repeated reconcile runs do not enqueue redundant outbox rows (no write/delete loop)', () => {
     // Pin the original symptom: an unchanged session whose file
     // existed before the fix caused the outbox to accumulate ~24
