@@ -24,7 +24,7 @@
  * drift. A single call can edit many files at once.
  */
 
-import { readFile, writeFile, rename, rm, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, rename, rm, mkdir, stat } from 'node:fs/promises';
 import { resolve, isAbsolute, dirname } from 'node:path';
 import type { ToolResult } from '../../types.js';
 import { BaseTool } from '../BaseTool.js';
@@ -41,9 +41,31 @@ import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
+import { computeContentSha, invalidateFileRead, recordFileRead } from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Edit/Write). */
 const fileSnapshotStore = new FileSnapshotStore();
+
+/**
+ * Re-anchor the session read-state after this tool's own successful write
+ * (plan 448). Without this, apply_patch followed by an edit on the same
+ * file would be rejected as stale and force a pointless re-read of content
+ * the agent itself just wrote. Best-effort: a failed stat just means the
+ * next edit asks for a re-read.
+ */
+async function reAnchorReadState(path: string, content: string): Promise<void> {
+  try {
+    const s = await stat(path);
+    recordFileRead(path, {
+      mtimeMs: s.mtimeMs,
+      size: s.size,
+      isFullView: true,
+      contentSha: computeContentSha(content),
+    });
+  } catch {
+    // ignore
+  }
+}
 
 // ============================================================
 // Input Validation
@@ -426,6 +448,7 @@ export class ApplyPatchTool extends BaseTool {
               // ENOENT / unreadable — new file, nothing to snapshot.
             }
             await writeFileAtomic(resolved, (op.content ?? '') + '\n');
+            await reAnchorReadState(resolved, (op.content ?? '') + '\n');
             applied.push(`added ${op.path}`);
           } else if (op.kind === 'delete') {
             // Plan 429 #3: snapshot the file before deleting it so a rewind
@@ -438,6 +461,9 @@ export class ApplyPatchTool extends BaseTool {
               // ENOENT / unreadable — nothing to snapshot.
             }
             await rm(resolved, { force: true });
+            // The path no longer exists; drop any stale anchor so a follow-up
+            // edit fails with "not been read" instead of a confusing stat error.
+            invalidateFileRead(resolved);
             applied.push(`deleted ${op.path}`);
           } else {
             // update
@@ -520,6 +546,7 @@ export class ApplyPatchTool extends BaseTool {
             if (hadCRLF) result = result.replace(/\n/g, '\r\n');
             if (hasBOM) result = '\uFEFF' + result;
             await writeFileAtomic(resolved, result);
+            await reAnchorReadState(resolved, result);
             applied.push(`updated ${op.path}`);
           }
         } catch (err) {

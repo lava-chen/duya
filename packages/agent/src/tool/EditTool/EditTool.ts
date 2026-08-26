@@ -22,7 +22,7 @@ import { expandPath } from '../../utils/path.js';
 import { isPathWithinRoots } from '../allowedRoots.js';
 import { withFileMutationQueue } from '../file-mutation-queue.js';
 import { FileSnapshotStore } from '../file-snapshot-store.js';
-import { getFileReadState, recordFileRead } from '../file-read-state.js';
+import { computeContentSha, getFileReadState, recordFileRead } from '../file-read-state.js';
 
 /** Module-level content-addressed snapshot store (shared with Write/ApplyPatch). */
 const fileSnapshotStore = new FileSnapshotStore();
@@ -426,7 +426,9 @@ function buildNotFoundDiagnostic(opts: {
   return parts.join('\n');
 }
 
-/** Map fs error messages to friendly tool errors. */
+/**
+ * Map fs error messages to friendly tool errors.
+ */
 function mapFsError(errorMessage: string, filePath: string): string {
   if (errorMessage.includes('ENOENT') || errorMessage.includes('no such file')) {
     return `Error: File not found: ${filePath}`;
@@ -435,6 +437,17 @@ function mapFsError(errorMessage: string, filePath: string): string {
     return `Error: Permission denied: ${filePath}`;
   }
   return `Error editing file: ${errorMessage}`;
+}
+
+/**
+ * mtime comparison with a small tolerance (plan 448). Windows filesystems
+ * plus cloud-sync/AV/indexer churn produce meaningless sub-millisecond
+ * mtime bumps between two stat() calls, and float equality across separate
+ * stat rounds trips is unreliable. Treat mtimes within 1ms as unchanged;
+ * real external edits move mtime by far more.
+ */
+function isMtimeWithinTolerance(a: number, b: number): boolean {
+  return Math.abs(a - b) <= 1;
 }
 
 /**
@@ -592,7 +605,33 @@ export async function executeEdit(
         error: true,
       };
     }
-    if (readState.mtimeMs !== currentStat.mtimeMs) {
+
+    // Content must be loaded regardless so the staleness exemption can
+    // compare fingerprints (plan 448); the edit needs it anyway.
+    let content: string;
+    try {
+      content = await readFile(resolvedPath, 'utf-8');
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
+    }
+
+    // Staleness: mtime within tolerance AND size identical means untouched.
+    // Exemption (claude-code-haha style, plan 448): when mtime/size say the
+    // file drifted but the recorded observation was a FULL view whose sha256
+    // still matches current disk bytes, the drift was cosmetic (OneDrive sync,
+    // antivirus, indexer touching mtime without changing content) and the
+    // edit proceeds. Partial views never qualify — a truncated view cannot
+    // vouch for content it never saw.
+    const mtimeStale = !isMtimeWithinTolerance(readState.mtimeMs, currentStat.mtimeMs);
+    const sizeStale = readState.size !== currentStat.size;
+    let stale = mtimeStale || sizeStale;
+    if (stale && readState.isFullView && readState.contentSha !== undefined) {
+      if (computeContentSha(content) === readState.contentSha) {
+        stale = false;
+      }
+    }
+    if (stale) {
       return {
         id: toolUseId,
         name: 'edit',
@@ -602,14 +641,6 @@ export async function executeEdit(
           'Re-read the file with the read tool, then retry the edit with a fresh old_string.',
         error: true,
       };
-    }
-
-    let content: string;
-    try {
-      content = await readFile(resolvedPath, 'utf-8');
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return { id: toolUseId, name: 'edit', result: mapFsError(errorMessage, file_path), error: true };
     }
 
     // Plan 429 #3: snapshot the pre-edit content (best-effort) so a session
@@ -700,11 +731,18 @@ export async function executeEdit(
 
       // Re-anchor the read state to this tool's own write so consecutive
       // edits in the same session are not rejected as stale (plan 428).
-      // Best-effort: a racing stat failure just means the next edit asks
-      // for a re-read.
+      // The written string IS the full new content, so record a full-view
+      // fingerprint (plan 448) — this also makes the next edit immune to
+      // cosmetic mtime churn between the two calls. Best-effort: a racing
+      // stat failure just means the next edit asks for a re-read.
       try {
         const postStat = await stat(resolvedPath);
-        recordFileRead(resolvedPath, { mtimeMs: postStat.mtimeMs, size: postStat.size });
+        recordFileRead(resolvedPath, {
+          mtimeMs: postStat.mtimeMs,
+          size: postStat.size,
+          isFullView: true,
+          contentSha: computeContentSha(result),
+        });
       } catch {
         // ignore
       }
