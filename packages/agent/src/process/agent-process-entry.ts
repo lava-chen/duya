@@ -293,8 +293,10 @@ const emitLiveUsage = (
       : 0) || systemFallbackTokens || 0;
   const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
   const anchored = estimate.anchored && !compactedPending;
+  // Multiple workers share one trace file — prefix every line so interleaved
+  // sessions stay attributable.
   ringTrace(
-    `emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
+    `[${targetSessionId.slice(0, 8)}] emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`, 
   );
   // Last-request per-call fields for the stats line: read off the anchor
   // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
@@ -2465,7 +2467,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           if (!lastCallUsage || anchorVolume(candidateAnchor) >= anchorVolume(lastCallUsage)) {
             lastCallUsage = candidateAnchor;
           }
-          ringTrace(`result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}`);
+          ringTrace(`[${(msg.sessionId ?? sessionId ?? '?').slice(0, 8)}] result call: input=${rawInput}, output=${outputTokens}, cacheHit=${cacheHitTokens}, cacheWrite=${cacheCreationTokens}, normalizedInput=${normalizedInput}`);
           // A real request just landed — its usage rides on the assistant
           // message DuyaAgent pushes right after `done` (plan 443), so the
           // pure estimator anchors on it directly. Clear the post-compaction
