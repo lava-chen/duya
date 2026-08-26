@@ -221,6 +221,28 @@ describe.skipIf(!nativeSqliteAvailable)('core-db-adapters', () => {
       expect(row.msg_type).toBe('text');
     });
 
+    it('assistant token_usage round-trips via metadata (plan 444 ring fix)', () => {
+      const t = Date.now();
+      const dto = {
+        ...makeAssistantDTO('m-tu', t),
+        token_usage: JSON.stringify({
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_hit_tokens: 100,
+          last_call: { input_tokens: 10, output_tokens: 5, cache_hit_tokens: 100 },
+        }),
+      };
+      const event = ipcMessageToNewEvent('sess-1', dto as never);
+      messageLog.appendBatch([event]);
+
+      const stored = messageLog.listBySession('sess-1');
+      const row = storedEventToIpcMessage(stored.find((e) => e.id === 'm-tu')!)!;
+      expect(row.token_usage).not.toBeNull();
+      const parsed = JSON.parse(row.token_usage!);
+      expect(parsed.cache_hit_tokens).toBe(100);
+      expect(parsed.last_call.input_tokens).toBe(10);
+    });
+
     it('tool message round-trips tool_name, tool_input, parent_tool_call_id', () => {
       const t = Date.now();
       // Plan 441 read-side repair drops orphan tool_results (providers 400 on
