@@ -204,9 +204,16 @@ export function resolveLocalFilePath(value: string, cwd?: string | null): string
   // `/abs/path/C:/...`), strip it so the real path wins — the placeholder
   // would otherwise resolve to a nonexistent drive-relative path. Mirrors
   // the media-src handling in rewriteMediaSrc.
-  if (clean.startsWith('/abs/path/')) {
-    const stripped = clean.slice('/abs/path'.length).replace(/^\/+/, '');
-    if (isWindowsAbsolute(stripped)) clean = stripped;
+  // Models also emit the shortened `/abs/C:/...` variant; strip that too.
+  const ABS_PREFIXES = ['/abs/path', '/abs'];
+  for (const prefix of ABS_PREFIXES) {
+    if (clean.startsWith(`${prefix}/`)) {
+      const stripped = clean.slice(prefix.length).replace(/^\/+/, '');
+      if (isWindowsAbsolute(stripped)) {
+        clean = stripped;
+        break;
+      }
+    }
   }
 
   // Windows absolute path: normalize to backslashes and return as-is.

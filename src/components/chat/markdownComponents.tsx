@@ -51,13 +51,19 @@ export function rewriteMediaSrc(src: string): string {
   // through. Anything else that begins with `/` is a Unix absolute path.
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;
   if (isUnixAbsolutePath(src)) {
-    const stripped = src.startsWith(`${ABS_PATH_PLACEHOLDER}/`)
-      ? src.slice(ABS_PATH_PLACEHOLDER.length)
-      : src;
-    if (isWindowsAbsolutePath(stripped)) {
-      return `duya-file:///${stripped.replace(/\\/g, '/')}`;
+    // Models emit the taught `/abs/path/` placeholder and a shortened
+    // `/abs/` variant; strip either when a real Windows drive path follows
+    // (e.g. `/abs/E:/Projects/a.png` → `E:/Projects/a.png`).
+    for (const prefix of [ABS_PATH_PLACEHOLDER, '/abs']) {
+      const withSlash = `${prefix}/`;
+      if (src.startsWith(withSlash)) {
+        const stripped = src.slice(prefix.length).replace(/^\/+/, '');
+        if (isWindowsAbsolutePath(stripped)) {
+          return `duya-file:///${stripped.replace(/\\/g, '/')}`;
+        }
+      }
     }
-    return `duya-file://${stripped}`;
+    return `duya-file://${src}`;
   }
   return src;
 }

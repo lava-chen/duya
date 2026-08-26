@@ -148,6 +148,13 @@ describe('chat-file-links / resolveLocalFilePath', () => {
       .toBe('C:\\Users\\me\\notes.md');
   });
 
+  it('strips the shortened /abs placeholder in front of a Windows drive path', () => {
+    // Models emit `/abs/E:/...` (placeholder + drive path merged) — the pill
+    // renders but the raw path does not exist on disk unless we strip it.
+    expect(resolveLocalFilePath('/abs/E:/Projects/MCTS/video/scenes/01_intro.py'))
+      .toBe('E:\\Projects\\MCTS\\video\\scenes\\01_intro.py');
+  });
+
   it('preserves absolute Windows paths', () => {
     expect(resolveLocalFilePath('E:\\foo\\bar.html', 'C:\\elsewhere'))
       .toBe('E:\\foo\\bar.html');
