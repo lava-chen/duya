@@ -117,6 +117,12 @@ export function useSlashCommands(opts: {
   setTriggerPos: (pos: number | null) => void;
   closePopover: () => void;
   sessionId?: string;
+  /**
+   * Plan 450: connected app-connection providers surfaced as @-mention
+   * items in the context popover. Selected items insert `@<providerId> `,
+   * which the stream-session-manager extracts back to `mentionedProviders`.
+   */
+  connectorItems?: PopoverItem[];
 }): UseSlashCommandsReturn {
   const {
     textareaRef,
@@ -132,6 +138,7 @@ export function useSlashCommands(opts: {
     setTriggerPos,
     closePopover,
     sessionId,
+    connectorItems,
   } = opts;
 
   const { t, locale } = useTranslation();
@@ -347,8 +354,8 @@ export function useSlashCommands(opts: {
   // Static "add context" items — attachment + mode + MCP, shown for `@` and
   // when the plus button is pressed. All static (no async fetch needed).
   const contextItems = useMemo<PopoverItem[]>(
-    () => [addFilesItem, ...modeItems, mcpItem],
-    [addFilesItem, modeItems, mcpItem],
+    () => [addFilesItem, ...modeItems, mcpItem, ...(connectorItems ?? [])],
+    [addFilesItem, modeItems, mcpItem, connectorItems],
   );
 
   // Build the "use commands & skills" items (settings + registry commands +

@@ -95,3 +95,49 @@ export function getAppConnectionAPI() {
     },
   };
 }
+
+/**
+ * Plan 450: extract provider ids @-mentioned in user content.
+ *
+ * The composer inserts `@<providerId> ` tokens when the user picks an app
+ * connection from the @ popover (file-mention insertion path), e.g.
+ * "@notion create a page about today's stand-up". This helper scans the
+ * final message for those tokens, case-insensitive, word-boundary, and
+ * returns the matching provider ids in first-seen order. Uniqueness is
+ * preserved (one provider counted once even when mentioned repeatedly).
+ *
+ * Unknown `@<word>` tokens are silently ignored — only providers in
+ * `availableProviders` (typically the connected set) are returned, matching
+ * codex's `find_app_mentions` rule that a mention must resolve to an
+ * accessible, enabled app.
+ */
+export function extractMentionedProviders(
+  content: string,
+  availableProviders: Array<{ id: string; label?: string }>,
+): string[] {
+  if (!content || !content.includes('@') || availableProviders.length === 0) return [];
+
+  // Build a label -> id map for label-based mentions (display-friendly).
+  const byIdOrLabel = new Map<string, string>();
+  for (const p of availableProviders) {
+    if (!p.id) continue;
+    byIdOrLabel.set(p.id.toLowerCase(), p.id);
+    if (p.label) byIdOrLabel.set(p.label.toLowerCase().trim(), p.id);
+  }
+
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  // Word-boundary scan: @<letters/digits/underscore/hyphen/dot>+ at a
+  // boundary that is either start-of-string or a non-identifier
+  // character (matches codex's plain-name mention extraction).
+  const re = /(?:^|[^\p{L}\p{N}_])@([\p{L}\p{N}_.-]+)/gu;
+  for (const match of content.matchAll(re)) {
+    const raw = match[1].toLowerCase();
+    const id = byIdOrLabel.get(raw);
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      ordered.push(id);
+    }
+  }
+  return ordered;
+}

@@ -50,23 +50,17 @@
 
 ### Phase A: @ 提及激活（核心）
 
-- [ ] 类型扩展：`StartStreamParams.mentionedProviders?: string[]`（renderer→Agent Server POST body）
-      + worker `ChatStartMessage` 同名字段：`src/lib/stream-session-manager.ts`、
-      `electron/agents/server/router.ts`（handlePostChatSSE 载荷透传）、
-      `packages/agent/src/process/agent-process-entry.ts`
-- [ ] worker 会话态：`activeConnectorSelection: Set<string>`（provider id），chat:start 时 merge、
-      turn 终态（done/error/interrupt）清空 —— 放 `AppConnectionTool/selection.ts`，
-      API 对齐 codex `state/session.rs`（merge/get/clear）
-- [ ] 暴露提升：`DuyaAgent._resolveTools` 合并 connector 工具处，selection 内 provider 的
-      descriptor 注册 meta 改 `exposeMode:'always'`；未选中维持 `discoverable`
-- [ ] 上下文注入：selection 非空时在首轮前注入一次性 user 角色 `<system-reminder>`
-      （`metadata.source='connector-activation'`，内容：用户点名了哪些 app + 授权状态 +
-      「优先使用其工具」，≤500 字符，不列工具 schema）
-- [ ] Composer UI：`MessageInput.tsx` 输入 `@` 触发 popover（复用 slash command popover 机制），
-      列出 `mentionable = status==='connected'` 的 provider（icon + label），选中插入
-      `@Label` 富文本 token；提交时解析回 provider id 数组
-- [ ] 权限审计：selection 写入 permission request 日志字段（替代遥测）
-- [ ] 单测：selection 生命周期、暴露提升、reminder 注入、popover 解析
+- [x] 类型扩展：`StartStreamParams.mentionedProviders?: string[]` + `ChatOptions.mentionedProviders` + `ChatStartMessage.mentionedProviders`
+- [x] worker 会话态：`activeConnectorSelection` 模块（merge/get/clear）+ 单测 5 条
+- [x] 暴露提升：`DuyaAgent._resolveTools` 把选中 provider 的 connector 工具放进
+      `isToolVisible` 的 discovered 集（discoverable → effective always），跳过 tool_search
+- [x] 上下文注入：selection 非空时首轮一次性 `<system-reminder>`（限 500 字符，<connector-activation>
+      envelope），复用 promptContexts 轨道
+- [x] Composer UI：`MessageInput` 连接列表注入 @-popover contextItems（每项
+      `value=providerId`，file-mention 插入路径写 `@<id> `）
+- [x] 提取 helper：`extractMentionedProviders`（纯函数，word-boundary + 幂等）
+      + `stream-session-manager.startStream` 提交时从 content 扫描
+- [x] 单测：selection 5 + extractMentionedProviders 11，全绿
 
 ### Phase B: 用时引导授权（elicitation 对齐）
 

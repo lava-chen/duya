@@ -20,6 +20,7 @@ import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
 import { interruptChat } from './agent-sse-client';
+import { extractMentionedProviders } from './app-connection-ipc';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
 import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
@@ -305,6 +306,11 @@ interface StartStreamParams {
   titleGenerationModel?: string;
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   mode?: string;
+  /**
+   * Plan 450: providers @-mentioned in the composer for this run. Forwarded
+   * to the worker so connector tools of these providers skip tool_search.
+   */
+  mentionedProviders?: string[];
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
   /**
@@ -1048,6 +1054,36 @@ class StreamSessionManager {
     });
   }
 
+  /**
+   * Plan 450: resolve `@<providerId> ` tokens in the user message to
+   * `mentionedProviders`. Connects to the App Connections API to
+   * enumerate connected providers, then delegates the token scan to the
+   * pure `extractMentionedProviders` helper. Best-effort; returns an empty
+   * object on failure so the agent falls back to default discoverable tools.
+   */
+  private async resolveMentionedProviders(
+    content: string,
+  ): Promise<{ mentionedProviders?: string[] }> {
+    try {
+      // Lazy import to avoid bundling electronAPI types into the message
+      // library entry points that don't need it (test runners, SSR shims).
+      const { getAppConnectionAPI } = await import('./app-connection-ipc');
+      const api = getAppConnectionAPI();
+      if (!api) return {};
+      const [list, providers] = await Promise.all([api.list(), api.providers()]);
+      const connected = (list.data ?? [])
+        .filter((c) => c.status === 'connected')
+        .map((c) => c.provider);
+      const available = (providers.data ?? [])
+        .filter((p) => connected.includes(p.id))
+        .map((p) => ({ id: p.id, label: p.label }));
+      const mentioned = extractMentionedProviders(content, available);
+      return mentioned.length > 0 ? { mentionedProviders: mentioned } : {};
+    } catch {
+      return {};
+    }
+  }
+
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
     const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
 
@@ -1322,6 +1358,11 @@ class StreamSessionManager {
         outputStyleConfig: params.outputStyleConfig,
         displayContent: params.displayContent,
         mode: params.mode,
+        // Plan 450: scan the message for @<providerId> tokens from the
+        // context popover. Best-effort; failure to enumerate connections
+        // (e.g. agent server unreachable during typing) leaves the array
+        // empty, which simply degrades to the default discoverable tools.
+        ...(await this.resolveMentionedProviders(params.content)),
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
