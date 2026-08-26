@@ -45,6 +45,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [419-permission-decision-bus](./active/419-permission-decision-bus.md) | 权限决策总线 — appState 批准标记通道修复（no-op → 真实）+ MCP 接入标准权限管线 + 类型化 PermissionContext + 信任模型细化 | P0 | ✅ P0 完成（2026-08-11）；P1/P2 待办 |
 | [428-harness-signal-contracts](./active/428-harness-signal-contracts.md) | Harness 信号契约修复 — is_error 贯通（executor→projector→anthropic）+ edit read 状态/mtime 追踪 + apply_patch 接入写权限（8/14-16 会话审计三大 P0） | P0 | ✅ Tasks A–C + 独立项全完成（2026-08-17）；手动会话验证待办 |
 | [448-read-edit-freshness-protocol](./active/448-read-edit-freshness-protocol.md) | Read/Edit 新鲜度协议 — read-state 升级（full-view+contentSha，Windows mtime 豁免）+ ApplyPatch re-anchor/两阶段校验 + WriteTool read-first 门 + 写路径 CRLF/原子写收拢（五 harness 调研落地） | P0 | Phase 1 ✅（2026-08-26）；Phase 2/3 待开工 |
+| [449-app-connection-approval-parity](./active/449-app-connection-approval-parity.md) | App Connection 审批体验对齐 codex：MCP annotations→riskTier 自动分级（只读免确认）+ 审批记忆（会话级 Set + ConfigStore 全局 preApproved）+ 版本化审批文案模板 | P0 | Implementation |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
