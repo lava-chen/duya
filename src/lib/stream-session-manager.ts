@@ -451,6 +451,7 @@ interface SessionState {
   agentProgressEvents: AgentProgressEvent[];
   streamingEvents: StreamingEvent[];
   pendingPermissionRequest: PermissionRequestEvent | null;
+  pendingConnectorAuthRequest: { provider?: string; connectionId?: string; toolName?: string } | null;
   // Deduplication: tool IDs already loaded from DB on page refresh
   loadedToolUseIds: Set<string>;
   loadedToolResultIds: Set<string>;
@@ -459,6 +460,8 @@ interface SessionState {
   fieldListeners: FieldListeners;
   streamingEventsListeners: Set<(events: StreamingEvent[]) => void>;
   permissionListeners: Set<(request: PermissionRequestEvent) => void>;
+  /** Plan 450: listeners for app-connection re-authorization events. */
+  authRequiredListeners: Set<(data: { provider?: string; connectionId?: string; toolName?: string }) => void>;
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
@@ -551,7 +554,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -577,6 +580,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     agentProgressEvents: [],
     streamingEvents: [],
     pendingPermissionRequest: null,
+    pendingConnectorAuthRequest: null,
     loadedToolUseIds: new Set(),
     loadedToolResultIds: new Set(),
   };
@@ -861,6 +865,7 @@ class StreamSessionManager {
         fieldListeners: this.createFieldListeners(),
         streamingEventsListeners: new Set(),
         permissionListeners: new Set(),
+        authRequiredListeners: new Set(),
         modeChangedListeners: new Set(),
         goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
@@ -1491,6 +1496,15 @@ class StreamSessionManager {
           this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined);
           break;
 
+        case 'connector_auth_required':
+          // Plan 450: pass through to dedicated listeners (AuthRequiredCard).
+          this.handleConnectorAuthRequiredEvent(
+            sessionId,
+            streamId,
+            (event.data ?? {}) as { provider?: string; connectionId?: string; toolName?: string },
+          );
+          break;
+
         case 'mode_changed':
           this.handleModeChangedEvent(sessionId, streamId, event.data as ModeChangedEvent | undefined);
           break;
@@ -1918,6 +1932,29 @@ class StreamSessionManager {
   }
 
   /**
+   * Plan 450: surface connector re-authorization events so the renderer
+   * can prompt the user without polluting the chat error stream. The
+   * last seen event per session is memoized so a fresh subscriber (e.g.
+   * page remount) can replay the latest card without an extra round-trip.
+   */
+  private handleConnectorAuthRequiredEvent(
+    sessionId: string,
+    streamId: string,
+    data: { provider?: string; connectionId?: string; toolName?: string },
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.pendingConnectorAuthRequest = data;
+    s.authRequiredListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (error) {
+        console.error(`[stream-session-manager] Auth-required listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
+  /**
    * Plan 224 follow-up: handle `mode_changed` SSE event emitted by the
    * agent after a mode-switch tool call (EnterPlanMode / ExitPlanMode /
    * SwitchMode) completes. Notifies registered listeners so ChatView
@@ -2342,6 +2379,36 @@ class StreamSessionManager {
   }
 
   /**
+   * Plan 450: subscribe to per-session connector re-authorization events.
+   * Replays the latest pending event so a remounting UI shows the card
+   * without waiting for the next failed call.
+   */
+  subscribeToConnectorAuthRequired(
+    sessionId: string,
+    listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.authRequiredListeners.add(listener);
+    if (state.pendingConnectorAuthRequest) {
+      try {
+        listener(state.pendingConnectorAuthRequest);
+      } catch (error) {
+        console.error(`[stream-session-manager] Auth-required listener immediate replay error for ${sessionId}:`, error);
+      }
+    }
+    return () => {
+      state.authRequiredListeners.delete(listener);
+    };
+  }
+
+  /** Clear the latest pending auth-required event after the user acted on it. */
+  clearConnectorAuthRequired(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.pendingConnectorAuthRequest = null;
+  }
+
+  /**
    * Clear the stored pending permission request for a session. Called after
    * the user resolves a permission (e.g. answers an AskUserQuestion) so a
    * later re-subscription (page switch / remount) does NOT replay a stale
@@ -2455,6 +2522,7 @@ class StreamSessionManager {
       fieldListeners: this.createFieldListeners(),
       streamingEventsListeners: new Set(),
       permissionListeners: new Set(),
+      authRequiredListeners: new Set(),
       modeChangedListeners: new Set(),
       goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
@@ -3511,6 +3579,12 @@ export const streamSessionManager = getStreamManager();
 
 export const ensureSession = (sessionId: string) => streamSessionManager.ensureSession(sessionId);
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
+export const subscribeToConnectorAuthRequired = (
+  sessionId: string,
+  listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+) => streamSessionManager.subscribeToConnectorAuthRequired(sessionId, listener);
+export const clearConnectorAuthRequired = (sessionId: string) =>
+  streamSessionManager.clearConnectorAuthRequired(sessionId);
 export const resumeBackgroundTask = (sessionId: string) => streamSessionManager.resumeBackgroundTask(sessionId);
 export const attachToExistingStream = (sessionId: string) => streamSessionManager.attachToExistingStream(sessionId);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);

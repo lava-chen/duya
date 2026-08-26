@@ -197,6 +197,20 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'error',
       data: { message: event.message || 'Unknown error', code: event.code },
     };
+  } else if (msgType === 'chat:connector_auth_required') {
+    // Plan 450: re-authorization elicitation. Forwarded to the renderer
+    // as a discrete event so the AuthRequiredCard can surface a button
+    // without polluting the chat error stream. The rest of the event
+    // payload (provider, connectionId, toolName) is passed through as
+    // `data` so the renderer doesn't need to reach into the wire shape.
+    sseEvent = {
+      type: 'connector_auth_required',
+      data: {
+        provider: (event as { provider?: string }).provider,
+        connectionId: (event as { connectionId?: string }).connectionId,
+        toolName: (event as { toolName?: string }).toolName,
+      },
+    };
   } else if (msgType === 'chat:db_persisted') {
     sseEvent = { type: 'db_persisted', data: event };
   } else if (msgType === 'chat:title_generated') {
