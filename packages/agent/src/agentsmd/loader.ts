@@ -333,9 +333,11 @@ function parseAgentsFileContent(
 }
 
 /**
- * Process a single AGENTS.md file and its includes
+ * Process a single AGENTS.md file and its includes.
+ * Exported for plan 408b nested-loader reuse (same parsing pipeline:
+ * frontmatter globs + HTML-comment strip + @include expansion).
  */
-async function processAgentsFile(
+export async function processAgentsFile(
   filePath: string,
   type: AgentsMemoryType,
   processedPaths: Set<string>,

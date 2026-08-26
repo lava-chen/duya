@@ -741,6 +741,15 @@ repository plans and specifications remain the durable source of truth.
   Research）定义 `omitClaudeMd: true`，经 `runAgent` 传播为 `omitAgentsMd`，
   `preBuildHook` 跳过 AGENTS.md 刷新、DuyaAgent 跳过 system 拼接。由
   `duya_slim_subagent_agentsmd` feature flag（默认开）门控。
+- **嵌套目录按需加载（Plan 408b）**：eager 加载只覆盖 cwd→root 祖先链；
+  cwd 以下子树的 AGENTS.md / `.duya/rules/*.md` 由 PostToolUse 点按需发现——
+  read/edit/write/grep/glob 触碰项目内路径时，`nested-loader.ts` 沿触发文件
+  所在目录链（cwd 以下）探测指令文件，并匹配祖先链上带 `paths:` frontmatter
+  的条件规则（picomatch），经 `applyHookInjection` 作为一次性 user 角色
+  `<system-reminder>` 注入（`metadata.source = 'nested-agents-md'`）。会话级
+  Set 去重，每份文件只注入一次；`omitAgentsMd` 子代理跳过；由
+  `duya_nested_agents_md` feature flag（默认开，env `DUYA_NESTED_AGENTS_MD`
+  可关）门控。对齐 claude-code-haha nested_memory 语义。
 
 #### Recent session directory (Plan 229)
 
