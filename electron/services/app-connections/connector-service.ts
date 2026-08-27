@@ -80,7 +80,17 @@ export class ConnectorService {
       if (!isProviderEnabled(policy, dto.provider)) continue;
       if (getProviderConfig(dto.provider).remoteMcpUrl) {
         const token = await this.service.getValidToken(dto.id);
-        if (!token.success) continue;
+        if (!token.success) {
+          // Silent `continue` here left the agent's descriptor cache without
+          // this provider while the UI still showed it as connected — the
+          // model was then told the app was "not connected". At least log it.
+          this.logger.warn(
+            'App Connection: descriptor list skipped (no valid token)',
+            { connectionId: dto.id, provider: dto.provider, code: token.error.code },
+            COMPONENT,
+          );
+          continue;
+        }
         try {
           out.push(...await this.remoteMcp.listDescriptors(dto.id, dto.provider, token.data));
         } catch (error) {

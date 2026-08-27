@@ -84,8 +84,14 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
     if (server) {
       const s = server;
       server = null;
-      s.close().catch(() => {
-        // ignore
+      // `http.Server.close()` returns the Server, not a Promise — chaining
+      // `.catch` on it threw a TypeError that escaped as an uncaught
+      // exception from this timer/request callback. Use the callback form.
+      s.close((err) => {
+        if (err) {
+          // Expected when a keep-alive connection is still open; harmless.
+          logger.debug('Loopback server close reported an error', { message: err.message }, COMPONENT);
+        }
       });
     }
   };
