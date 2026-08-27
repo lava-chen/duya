@@ -28,44 +28,79 @@ export function useCanvasManagement(): void {
   // Snapshot the action references in a ref-free style — Zustand
   // returns stable function references so this is only for clarity.
   useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+
+    const subscribe = (port: {
+      onCanvasChanged: (
+        cb: (event: {
+          operation: "create" | "switch" | "rename";
+          canvas: Record<string, unknown>;
+          currentCanvasId?: string;
+        }) => void,
+      ) => () => void;
+    }) => {
+      if (cancelled) return;
+      if (typeof port.onCanvasChanged !== "function") {
+        console.warn(
+          "[useCanvasManagement] conductorPort.onCanvasChanged is unavailable; " +
+            "canvas_manage create/switch/rename results will not reach the renderer. " +
+            "Rebuild the electron preload (npm run build:electron).",
+        );
+        return;
+      }
+
+      unsubscribe = port.onCanvasChanged((event) => {
+        const canvas = normalizeCanvas(event.canvas);
+        if (!canvas) return;
+
+        switch (event.operation) {
+          case "create":
+            // De-duplicate in case the broadcast races the renderer's own
+            // initial list load; addCanvas otherwise appends, which can
+            // produce duplicate entries after a re-mount.
+            addCanvas(canvas);
+            if (event.currentCanvasId === canvas.id) {
+              setActiveCanvas(canvas.id);
+            }
+            break;
+          case "switch":
+            setActiveCanvas(canvas.id);
+            break;
+          case "rename":
+            updateCanvas(canvas);
+            break;
+          default:
+            // Unknown operation — ignore rather than crash.
+            break;
+        }
+      });
+    };
+
     const port = window.electronAPI?.getConductorPort?.();
-    if (!port || typeof port.onCanvasChanged !== "function") {
-      console.warn(
-        "[useCanvasManagement] conductorPort.onCanvasChanged is unavailable; " +
-          "canvas_manage create/switch/rename results will not reach the renderer. " +
-          "Rebuild the electron preload (npm run build:electron).",
-      );
-      return;
+    if (port) {
+      // Port already ready (re-mount, or main process beat us to it).
+      subscribe(port as Parameters<typeof subscribe>[0]);
+    } else {
+      // Wait for the ready event the preload fires once the MessagePort
+      // has been assigned. Without this, the hook would silently give up
+      // and canvas_manage create/switch/rename broadcasts would never
+      // reach the renderer, producing stale sidebar state.
+      const handleReady = () => {
+        const p = window.electronAPI?.getConductorPort?.();
+        if (p) subscribe(p as Parameters<typeof subscribe>[0]);
+      };
+      window.addEventListener("conductor-port-ready", handleReady, { once: true });
+      return () => {
+        cancelled = true;
+        window.removeEventListener("conductor-port-ready", handleReady);
+        unsubscribe?.();
+      };
     }
 
-    const unsubscribe = port.onCanvasChanged((event) => {
-      const canvas = normalizeCanvas(event.canvas);
-      if (!canvas) return;
-
-      switch (event.operation) {
-        case "create":
-          // De-duplicate in case the broadcast races the renderer's own
-          // initial list load; addCanvas otherwise appends, which can
-          // produce duplicate entries after a re-mount.
-          addCanvas(canvas);
-          if (event.currentCanvasId === canvas.id) {
-            setActiveCanvas(canvas.id);
-          }
-          break;
-        case "switch":
-          setActiveCanvas(canvas.id);
-          break;
-        case "rename":
-          updateCanvas(canvas);
-          break;
-        default:
-          // Unknown operation — ignore rather than crash.
-          break;
-      }
-    });
-
     return () => {
-      unsubscribe();
+      cancelled = true;
+      unsubscribe?.();
     };
   }, [addCanvas, updateCanvas, setActiveCanvas, setCanvases]);
 }
