@@ -67,10 +67,42 @@ describe('computeNextRunAt', () => {
     expect(computeNextRunAt({ kind: 'every', every: '1h' }, 0, now)).toBe(now + 3_600_000);
   });
 
-  it('cron: computes the next occurrence', () => {
-    const next = computeNextRunAt({ kind: 'cron', expr: '0 9 * * *' }, 0, now);
+  it('cron: returns the first occurrence strictly after the anchor', () => {
+    // Pin TZ so the assertion is not flaky on hosts whose local timezone is
+    // not UTC — croner interprets a tz-less cron in the host's local zone.
+    const schedule: CronSchedule = { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' };
+    // Anchor on epoch (lastRunAt = 0, never fired) → first 9am UTC after the epoch.
+    expect(computeNextRunAt(schedule, 0, now)).toBe(Date.UTC(1970, 0, 1, 9, 0, 0));
+    // Anchor on yesterday 09:30 UTC (last fire drifted past the schedule) →
+    // next runtime is today's 09:00 UTC.
+    expect(
+      computeNextRunAt(schedule, Date.UTC(2026, 7, 10, 9, 30, 0), now),
+    ).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+  });
+
+  it('cron: returns past occurrences as-is so the scheduler can catch up', () => {
+    const schedule: CronSchedule = { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' };
+    // Tick lands 30s after yesterday's scheduled fire. nextRunAt must be the
+    // missed occurrence (yesterday 09:00 UTC) so the scheduler tick filter
+    // `nextRunAt <= now` matches and fires the job. Regression guard for the
+    // bug where nextRun(now) always returned a future time and the cron
+    // could never fire via the polling tick.
+    const tickAt = Date.UTC(2026, 7, 11, 9, 0, 30);
+    const next = computeNextRunAt(schedule, Date.UTC(2026, 7, 10, 9, 0, 0), tickAt);
     expect(next).not.toBeNull();
-    expect(next!).toBeGreaterThan(now);
+    expect(next!).toBeLessThanOrEqual(tickAt);
+    expect(next!).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+  });
+
+  it('cron: respects endAt by returning null when the next occurrence is past it', () => {
+    const schedule: CronSchedule = {
+      kind: 'cron',
+      expr: '0 9 * * *',
+      tz: 'UTC',
+      endAt: '2026-08-10T08:00:00Z',
+    };
+    // Last fire was well before endAt; the next 9am would be after endAt.
+    expect(computeNextRunAt(schedule, Date.UTC(2026, 7, 9, 9, 0, 0), now)).toBeNull();
   });
 
   it('respects endAt', () => {
