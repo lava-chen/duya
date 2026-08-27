@@ -89,14 +89,27 @@ function onGatewayExit(
   onRestart: () => void,
 ): void {
   const pid = gatewayProcess?.pid;
-  getLogger().error('Gateway process exited', new Error(`Exit code: ${code}, signal: ${signal}`), { pid, code, signal }, LogComponent.Gateway);
-
   gatewayProcess = null;
 
+  // Distinguish an intentional stop (triggered by `stopGatewayProcess` for
+  // a reload / shutdown / app quit) from an unexpected crash. The previous
+  // version logged every exit at ERROR, which made the noisy SIGTERM
+  // pattern from rapid reload-on-settings-change look like a crash loop.
   if (stopRequested) {
-    getLogger().info('Gateway stop was requested, not restarting', undefined, LogComponent.Gateway);
+    getLogger().info(
+      'Gateway process stopped (requested)',
+      { pid, code, signal },
+      LogComponent.Gateway,
+    );
     return;
   }
+
+  getLogger().error(
+    'Gateway process exited unexpectedly',
+    new Error(`Exit code: ${code}, signal: ${signal}`),
+    { pid, code, signal },
+    LogComponent.Gateway,
+  );
 
   const now = Date.now();
   if (now - restartWindowStart > 60_000) {

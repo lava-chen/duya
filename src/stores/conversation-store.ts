@@ -923,13 +923,23 @@ export const useConversationStore = create<ConversationState>()(
           // empty/stale map. Only hydrate the active session when needed;
           // individual navigation still calls loadThreadMessages().
           const messages: Record<string, Message[]> = { ...get().messages };
-          const activeThreadId = get().activeThreadId;
+          let activeThreadId = get().activeThreadId;
           if (activeThreadId && dbThreadIds.has(activeThreadId) && messages[activeThreadId] === undefined) {
             const threadData = await getThreadIPC(activeThreadId);
             if (threadData) {
               messages[activeThreadId] = mapIpcMessagesToStore(threadData.messages || []);
               registerLoadedMessages(activeThreadId, threadData.messages);
             }
+          } else if (activeThreadId && !dbThreadIds.has(activeThreadId)) {
+            // Persisted activeThreadId no longer exists in the DB (deleted,
+            // migrated, or orphaned by an older config). Clearing it here
+            // prevents the boot-splash watchdog in App.tsx from force-
+            // dismissing 5s later; the user lands on the welcome screen and
+            // can navigate to any other thread from the sidebar.
+            console.warn(
+              `[Store] Clearing orphaned activeThreadId: ${activeThreadId.slice(0, 8)} (not in DB)`,
+            );
+            activeThreadId = null;
           }
 
           // Load projects (already converted to camelCase by getProjectGroupsIPC)
@@ -946,6 +956,7 @@ export const useConversationStore = create<ConversationState>()(
           set({
             threads: mergedThreads,
             messages,
+            activeThreadId,
             projects,
             noProjectWorkspace,
             lastSyncAt: now,
@@ -956,7 +967,13 @@ export const useConversationStore = create<ConversationState>()(
           });
         } catch (error) {
           console.error('[Store] Failed to load from database:', error);
-          // On error, keep existing data but mark as hydrated
+          // On error, keep existing data but mark as hydrated. The catch
+          // path is intentionally conservative: we do NOT clear the
+          // persisted activeThreadId here because the failure may be
+          // transient (one of the IPC calls threw), and the user's intent
+          // (their last open thread) is more important than recovering a
+          // possibly-orphaned ID. The success path above handles the
+          // orphan case explicitly; here we just unblock the boot splash.
           set({ isHydrated: true });
         }
       },
