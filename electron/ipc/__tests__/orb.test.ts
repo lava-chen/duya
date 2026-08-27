@@ -107,10 +107,12 @@ describe('automation:orb:submit', () => {
     const h = handlers().get('automation:orb:submit')!;
     const result = await h({}, { prompt: 'hello' });
 
-    expect(result).toEqual({
-      accepted: true,
-      note: expect.stringContaining('wakeless'),
-    });
+    // Plan 453 Task G: the handler now delegates to
+    // startWakelessChat which returns { accepted, sessionId, note }.
+    // We only assert the parts the renderer relies on.
+    expect(result.accepted).toBe(true);
+    expect(typeof result.sessionId).toBe('string');
+    expect(result.sessionId).toMatch(/^wakeless-[0-9a-f-]{36}$/i);
     expect(send).toHaveBeenCalledWith(
       'automation:orb:show-loading',
       expect.objectContaining({ stage: 'thinking' }),
@@ -127,14 +129,26 @@ describe('automation:orb:show-input', () => {
 });
 
 describe('automation:orb:insert-tab', () => {
-  it('returns the not-implemented placeholder for now', async () => {
+  it('delegates to the Insert Tab service and returns the structured result', async () => {
+    // Plan 453 Task I: the handler now delegates to
+    // insertTabToFocusedField. In test env OSContextBridge is
+    // disabled by default → service returns ok:false +
+    // 'os-context-bridge-disabled'. We assert the rejection reason
+    // rather than the happy path because nut.js + the agent
+    // bridge are not available in the unit test sandbox.
     const h = handlers().get('automation:orb:insert-tab')!;
     const result = await h({}, { text: 'sample' });
-    expect(result).toEqual({
-      ok: false,
-      reason: 'not-implemented',
-      note: expect.any(String),
-    });
+    expect(result.ok).toBe(false);
+    expect([
+      'os-context-bridge-disabled',
+      'no-os-context-snapshot',
+      'focused-field-redacted',
+      'no-focused-entity',
+      'unsupported-focused-entity-kind:File',
+      'unsupported-focused-entity-kind:Document',
+      'nut-js-load-failed',
+      'nut-type-failed',
+    ]).toContain(result.reason);
   });
 });
 
