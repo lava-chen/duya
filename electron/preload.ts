@@ -490,6 +490,13 @@ export interface GatewayAPI {
   pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
   feishuQrBegin: () => Promise<{ success: boolean; result?: { qr_url?: string; device_code?: string; user_code?: string; interval?: number; expire_in?: number }; error?: string }>
   feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; result?: { app_id?: string; app_secret?: string; open_id?: string; domain?: string }; error?: string }>
+  // Permission handling
+  getPendingPermission: (sessionId: string) => Promise<{
+    id: string
+    toolName: string
+    toolInput: Record<string, unknown>
+  } | null>
+  resolvePermission: (sessionId: string, decision: 'allow' | 'deny') => Promise<{ success: boolean }>
 }
 
 export interface AutomationAPI {
@@ -1299,7 +1306,6 @@ ipcRenderer.on('conductor-port', (event) => {
   const [port] = event.ports
   if (port) {
     conductorPort = port
-    conductorPortReady = true;
     console.log('[preload] conductorPort assigned, time:', Date.now());
     port.onmessage = (e) => {
       console.log('[preload] conductorPort.onmessage:', e.data?.type, 'time:', Date.now());
@@ -1378,20 +1384,16 @@ function getConfigPortAPI(): ConfigPortAPI | null {
 }
 
 // Helper functions for conductorPort API
-let conductorPortReady = false;
 function getConductorPortAPI(): ConductorPortAPI | null {
   if (!conductorPort) {
-    // Only warn on the first poll: the renderer often calls this
-    // before the main process has finished wiring up the MessagePort
-    // (postMessage from did-finish-load is async). Logging on every
-    // call floods the console and buries real signal.
-    if (!conductorPortReady) {
-      conductorPortReady = true;
-      console.warn('[preload] getConductorPortAPI: conductorPort is null (waiting for main to send the port)');
-    }
+    // The MessagePort is delivered asynchronously via webContents.postMessage
+    // from the main process (window-manager.ts). Renderer consumers
+    // (useCanvasCaptureRequest, useCanvasManagement, conductor-bridge) all
+    // listen for the `conductor-port-ready` CustomEvent the preload dispatches
+    // once the port lands, so this null path is a legitimate mid-boot state
+    // rather than a fault. Callers handle null gracefully; no log needed.
     return null;
   }
-  conductorPortReady = true;
 
   const registerHandler = (type: string, handler: (data: unknown) => void): () => void => {
     let handlers = conductorPortHandlers.get(type);
@@ -1807,6 +1809,10 @@ const electronAPI: ElectronAPI = {
     feishuQrBegin: () => ipcRenderer.invoke('gateway:feishu:qr:begin'),
     feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) =>
       ipcRenderer.invoke('gateway:feishu:qr:poll', begin),
+    // Permission handling
+    getPendingPermission: (sessionId: string) => ipcRenderer.invoke('gateway:getPendingPermission', sessionId),
+    resolvePermission: (sessionId: string, decision: 'allow' | 'deny') =>
+      ipcRenderer.invoke('gateway:resolvePermission', sessionId, decision),
   },
   automation: {
     listCrons: () => ipcRenderer.invoke('automation:cron:list'),

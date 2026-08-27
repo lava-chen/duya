@@ -23,10 +23,19 @@ const execAsync = promisify(exec);
 // polyfill, and esbuild CJS without the polyfill like `build-electron.mjs`
 // where `import.meta` is `undefined` but CJS exposes `__dirname`). Computed
 // lazily so the crash does not happen at module-init time.
+//
+// NOTE: the property access on `import.meta` MUST stay in source as the
+// literal expression below — esbuild's `import.meta.url` define in
+// scripts/build-agent-bundle.mjs only matches the exact syntactic shape.
+// Reading `import.meta` to an intermediate variable would defeat the
+// define (CJS exposes `import.meta` as `{}`), and esbuild would print
+// `empty-import-meta` at bundle time. Type-cast the same expression so
+// TypeScript accepts it without changing the runtime shape.
 function resolveDirname(): string {
-  const meta = import.meta as { url?: string } | undefined;
-  if (meta && typeof meta.url === 'string') {
-    return path.dirname(fileURLToPath(meta.url));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const metaUrl: string | undefined = (import.meta as any).url;
+  if (typeof metaUrl === 'string' && metaUrl.length > 0) {
+    return path.dirname(fileURLToPath(metaUrl));
   }
   return __dirname;
 }
