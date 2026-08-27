@@ -34,15 +34,27 @@ export function openAIResponsesStreams(options: AIClientOptions & { apiFormat: '
 /**
  * Bedrock ConverseStream adapter (Plan 451 Phase 3).
  *
- * Constructs a Bedrock client from the standard AIClientOptions shape and
- * wraps it as a ProviderStreams. Bedrock requires AWS credentials in
- * addition to the standard `apiKey` field; the caller passes them via the
- * `options.headers` field using the following keys:
+ * Wraps a Bedrock client as a ProviderStreams. Bedrock requires AWS
+ * credentials in addition to the standard `apiKey` field; the caller passes
+ * them via the `options.headers` field on the per-stream `ProviderStreams`
+ * invocation:
  *
  *   x-aws-access-key-id    required
  *   x-aws-secret-access-key required
  *   x-aws-session-token     optional, for STS / cross-account roles
  *   x-aws-region            optional, defaults to 'us-east-1'
+ *
+ * Note: `headers` is not in the standard ProviderStreams options shape,
+ * so we read from `model` extra fields or the consumer must use the
+ * alternative constructor (`createBedrockConverseClient` directly) for
+ * credential-bearing flows. The MVP adapter here accepts credentials via
+ * the `options.headers` snapshot at construction time.
+ *
+ * If no credentials are provided at construction time, the adapter
+ * returns a passthrough that throws a clear error on first stream call
+ * instead of failing the entire `createProvider` (which would break
+ * catalog introspection — Plan 451 Phase 6 catalog tests rely on
+ * `bedrock.models` being discoverable without credentials).
  */
 export function bedrockConverseStreams(options: AIClientOptions & { apiFormat: 'bedrock' }): ProviderStreams<'bedrock'> {
   const awsAccessKeyId = options.headers?.['x-aws-access-key-id'];
@@ -50,9 +62,16 @@ export function bedrockConverseStreams(options: AIClientOptions & { apiFormat: '
   const awsSessionToken = options.headers?.['x-aws-session-token'];
   const awsRegion = options.headers?.['x-aws-region'] ?? 'us-east-1';
   if (!awsAccessKeyId || !awsSecretAccessKey) {
-    throw new Error(
-      'bedrockConverseStreams: AWS credentials required in options.headers (x-aws-access-key-id / x-aws-secret-access-key)',
-    );
+    // No credentials at construction — defer the error to stream time so
+    // catalog introspection (Phase 6) keeps working. The first stream()
+    // call will throw with a clear message.
+    return {
+      stream: async function* () {
+        throw new Error(
+          'bedrockConverseStreams: AWS credentials required in options.headers (x-aws-access-key-id / x-aws-secret-access-key). Set them before invoking provider.stream().',
+        );
+      },
+    };
   }
   return fromClient(
     createBedrockConverseClient({

@@ -18,6 +18,8 @@ export { xaiModels } from './xai.models.js';
 export { stepfunModels } from './stepfun.models.js';
 export { volcengineModels } from './volcengine.models.js';
 export { bailianModels } from './bailian.models.js';
+export { bedrockModels } from './bedrock.models.js';
+export { googleModels } from './google.models.js';
 
 import type { Model } from '../types.js';
 import { minimaxModels } from './minimax.models.js';
@@ -35,6 +37,8 @@ import { xaiModels } from './xai.models.js';
 import { stepfunModels } from './stepfun.models.js';
 import { volcengineModels } from './volcengine.models.js';
 import { bailianModels } from './bailian.models.js';
+import { bedrockModels } from './bedrock.models.js';
+import { googleModels } from './google.models.js';
 
 export const allProviderModels: Model[] = [
   ...minimaxModels,
@@ -53,4 +57,6 @@ export const allProviderModels: Model[] = [
   ...stepfunModels,
   ...volcengineModels,
   ...bailianModels,
+  ...bedrockModels,
+  ...googleModels,
 ];

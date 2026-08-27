@@ -2,6 +2,7 @@ import type { Model } from '../types.js';
 import { createProvider } from './create-provider.js';
 import { envApiKeyAuth } from '../auth/helpers.js';
 import { bedrockConverseStreams } from './adapters.js';
+import { bedrockModels } from './bedrock.models.js';
 
 /**
  * Bedrock Converse provider (Plan 451 Phase 3).
@@ -22,7 +23,7 @@ export const bedrock = createProvider<'bedrock'>({
   name: 'AWS Bedrock',
   baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
   auth: envApiKeyAuth('AWS_ACCESS_KEY_ID', ['AWS_ACCESS_KEY_ID']),
-  models: [] as Model<'bedrock'>[],
+  models: bedrockModels,
   api: bedrockConverseStreams({
     apiKey: '',
     baseURL: 'https://bedrock-runtime.us-east-1.amazonaws.com',
