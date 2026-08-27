@@ -613,14 +613,30 @@ export function MessageInput({
   // writes `@<providerId> ` into the textarea; the stream-session-manager
   // extracts those tokens back to provider ids on submit.
   const [connectorItems, setConnectorItems] = useState<PopoverItem[]>([]);
+
+  // Plan 450: refresh the @ connector list on mount, on sessionId change,
+  // and every time the user opens the `@` context popover (typed or via
+  // plus button). Covers the case where a provider was connected in
+  // Settings *after* the chat tab mounted — useEffect-[] alone left the
+  // list permanently empty in that scenario.
   const refreshConnectorItems = useCallback(async () => {
+    // eslint-disable-next-line no-console
+    console.log('[plan450-debug] refreshConnectorItems called');
     const api = getAppConnectionAPI();
     if (!api) {
+      // eslint-disable-next-line no-console
+      console.log('[plan450-debug] no appConnection API on window');
       setConnectorItems([]);
       return;
     }
     try {
       const [list, providers] = await Promise.all([api.list(), api.providers()]);
+      // eslint-disable-next-line no-console
+      console.log('[plan450-debug] fetched', {
+        listCount: list.data?.length ?? 0,
+        connectedCount: (list.data ?? []).filter((c) => c.status === 'connected').length,
+        providerIds: (providers.data ?? []).map((p) => p.id),
+      });
       const byId = new Map((providers.data ?? []).map((p) => [p.id, p]));
       const items: PopoverItem[] = (list.data ?? [])
         .filter((c) => c.status === 'connected' && byId.has(c.provider))
@@ -645,17 +661,16 @@ export function MessageInput({
             installedSource: 'agents' as const,
           } satisfies PopoverItem;
         });
+      // eslint-disable-next-line no-console
+      console.log('[plan450-debug] built items', items.map((i) => i.label));
       setConnectorItems(items);
-    } catch {
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.log('[plan450-debug] refresh threw', err);
       setConnectorItems([]);
     }
   }, []);
 
-  // Plan 450: refresh the @ connector list on mount, on sessionId change,
-  // and every time the user opens the `@` context popover (typed or via
-  // plus button). Covers the case where a provider was connected in
-  // Settings *after* the chat tab mounted — useEffect-[] alone left the
-  // list permanently empty in that scenario.
   useEffect(() => {
     void refreshConnectorItems();
   }, [refreshConnectorItems, sessionId, popoverMode]);
