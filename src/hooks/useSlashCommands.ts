@@ -1,6 +1,6 @@
 // useSlashCommands.ts - Hook for slash command detection and handling
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
 import { getCommandsForPlatform } from '@/lib/commands';
@@ -360,6 +360,18 @@ export function useSlashCommands(opts: {
     () => [addFilesItem, ...(connectorItems ?? []), ...modeItems, mcpItem],
     [addFilesItem, connectorItems, modeItems, mcpItem],
   );
+
+  // Plan 450 follow-up: when `contextItems` changes (e.g. the MessageInput's
+  // async connector fetch completes and updates `connectorItems`) AND the
+  // `@` popover is currently open, push the latest items into the popover.
+  // Without this, handleInputChange's initial setPopoverItems(contextItems)
+  // freezes the (empty) snapshot at trigger time and the popover never
+  // updates even after the fetch finishes.
+  useEffect(() => {
+    if (popoverMode === 'context') {
+      setPopoverItems(contextItems);
+    }
+  }, [contextItems, popoverMode, setPopoverItems]);
 
   // Build the "use commands & skills" items (settings + registry commands +
   // loaded skills) for typing `/`. Skills are loaded asynchronously.
