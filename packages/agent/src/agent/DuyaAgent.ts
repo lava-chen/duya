@@ -36,6 +36,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
+import { buildAppsSystemSection, collectConnectorActivationInjection } from '../mentions/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
@@ -707,22 +708,17 @@ export class duyaAgent {
       }
     }
 
-    // Plan 450: connector-activation reminder — the user @-mentioned apps in
-    // the composer. Codex parity: a mention changes tool exposure, not the
-    // prompt's capability text; this one-shot reminder only tells the model
-    // the user explicitly named these apps and to prefer their tools.
+    // Plan 450 Phase G: connector-activation reminder — the user @-mentioned
+    // apps in the composer. Codex parity: a mention changes tool exposure,
+    // not the prompt's capability text; this one-shot reminder only tells the
+    // model the user explicitly named these apps and to prefer their tools.
+    // Rendering lives in the mentions framework (packages/agent/src/mentions).
     if (options?.mentionedProviders?.length) {
-      const selected = options.mentionedProviders.filter((p) => typeof p === 'string' && p);
-      if (selected.length > 0) {
-        const descriptors = getCachedAppConnectionDescriptors();
-        const lines = selected.map((provider) => {
-          const count = descriptors.filter((d) => d.provider === provider).length;
-          return `- ${provider}: ${count > 0 ? `${count} tool(s) available this run` : 'not connected — tell the user to connect it in Settings → Extensions → Connections'}`;
-        });
-        this.promptContexts.push(
-          `<connector-activation>\nThe user explicitly mentioned these app connections in their message:\n${lines.join('\n')}\nPrefer these apps' tools for tasks matching their capabilities; other tools remain available through tool_search.\n</connector-activation>`,
-        );
-        logger.info(`[Agent] Connector activation: ${selected.join(', ')} (${descriptors.filter((d) => selected.includes(d.provider)).length} tools pre-exposed)`);
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectConnectorActivationInjection(options.mentionedProviders, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
       }
     }
 
@@ -2746,6 +2742,18 @@ export class duyaAgent {
         systemPromptContent = systemPromptContent
           ? `${systemPromptContent}\n\n${mcpCatalog}`
           : mcpCatalog;
+      }
+
+      // Plan 450 Phase G: persistent "Apps (Connectors)" section — codex's
+      // developer-role apps_instructions parity. Rendered whenever any app
+      // connection has tool descriptors, so the model knows the mention
+      // syntax and can trigger apps implicitly, not only on turns where the
+      // user @-mentioned one. Null (omitted) when nothing is connected.
+      const appsSection = buildAppsSystemSection(getCachedAppConnectionDescriptors());
+      if (appsSection) {
+        systemPromptContent = systemPromptContent
+          ? `${systemPromptContent}\n\n${appsSection}`
+          : appsSection;
       }
     }
 

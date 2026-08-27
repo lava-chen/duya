@@ -2210,14 +2210,28 @@ codex `AppToolPolicyEvaluator` / approval memory / templates:
 
 ### Connector activation, exposure gate, and prompt budget (Plan 450, codex parity)
 
-- **@-mention activation** (`extractMentionedProviders` in
+- **@-mention activation** (`rewriteAppMentionTokens` in
   `src/lib/app-connection-ipc.ts`): typing `@` in the composer surfaces every
   connected provider as a popover row; selecting one inserts
-  `@<providerId> ` into the message. The renderer-side stream-session-manager
-  scans the final content for those tokens, forwards `mentionedProviders`
-  to the worker, and DuyaAgent promotes those providers' connector tools to
-  expose-always (skipping tool_search discovery) plus injects a one-shot
-  `<connector-activation>` system-reminder into the first model turn.
+  `@<providerId> ` into the message. At submit time the renderer-side
+  stream-session-manager rewrites each token into a codex-style structured
+  link `[@Label](app://<providerId>)` (Plan 450 Phase G — the model sees a
+  resolvable `app://` reference instead of a bare word), keeps the original
+  text as `displayContent` for UI/storage, and forwards `mentionedProviders`
+  to the worker. The agent pre-fetches fresh descriptors when a mentioned
+  provider is missing from the boot-time cache
+  (`agent-process-entry.ts`), DuyaAgent promotes those providers' connector
+  tools to expose-always (skipping tool_search discovery), and injects a
+  one-shot `<connector-activation>` system-reminder (listing tool names,
+  neutral wording when tools are not exposed) into the first model turn.
+- **Mentions framework** (`packages/agent/src/mentions/index.ts`, Phase G):
+  typed `MentionTarget` (`app` | `skill` | `file` | `mcp`) + `TurnInjection`
+  + `buildAppsSystemSection`. The `app` kind is implemented; `skill`/`file`/
+  `mcp` reserve the interface. The persistent "## Apps (Connectors)" system
+  section (codex `apps_instructions.rs` parity) renders whenever any
+  connected app has tool descriptors — mention syntax, per-app tool lists,
+  and the tool_search pointer — so the model can trigger apps implicitly,
+  not only on turns with an explicit `@`.
 - **Exposure-layer policy gate** (`electron/services/app-connections/policy-gate.ts`):
   reads `[apps]` from ConfigStore and filters providers BEFORE descriptor
   emission, mirroring codex's `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
