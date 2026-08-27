@@ -22,6 +22,7 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../registry.js';
+import { readToolExposureConfig } from '../../config/tool-exposure.js';
 
 /**
  * Descriptor shape sent from the main process. Mirrors
@@ -53,6 +54,12 @@ export interface AppConnectionToolDescriptor {
    */
   preApproved?: boolean;
   provider: string;
+  /**
+   * Display label stamped by the main process (Plan 450 Phase G), e.g.
+   * `Notion`. Consumed by the mentions framework for prompt rendering;
+   * absent when the descriptor came from an older main process.
+   */
+  providerLabel?: string;
   connectionId: string;
   action: string;
 }
@@ -155,9 +162,13 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 }
 
 /**
- * Build the `ToolMetaInput` for a descriptor. Connector tools are
- * `discoverable` (Plan 241): they only enter the LLM's default tool list
- * after `tool_search` surfaces them, keeping the prompt budget lean.
+ * Build the `ToolMetaInput` for a descriptor.
+ *
+ * Plan 452 Phase A: connector tools register `always` (Direct) by default —
+ * codex parity where one exposure rule covers MCP and app tools alike, so a
+ * connected app's tools are available without a tool_search round-trip.
+ * `[tools] on_demand_discovery` flips them back to `discoverable` for a lean
+ * prompt (the @-mention pre-exposure path still promotes them per-turn).
  *
  * Plan 312 Phase 4: the `riskTier` is forwarded so the permission gate
  * can apply tier-based gating (read/draft auto-execute, write/modify
@@ -165,7 +176,7 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
  */
 function buildMeta(desc: AppConnectionToolDescriptor): ToolMetaInput {
   return {
-    exposeMode: 'discoverable',
+    exposeMode: readToolExposureConfig().onDemandDiscovery ? 'discoverable' : 'always',
     inputSchemaSummary: desc.inputSchemaSummary,
     riskTier: desc.riskTier,
   };

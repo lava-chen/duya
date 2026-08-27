@@ -2246,11 +2246,22 @@ codex `AppToolPolicyEvaluator` / approval memory / templates:
   emission, mirroring codex's `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
   Disabled providers' tools never enter the agent registry.
 - **Spec byte budget** (`APP_CONNECTION_SPEC_BYTE_BUDGET = 8192`,
-  `downgradeForByteBudget` in `packages/agent/src/tool/AppConnectionTool/index.ts`):
-  descriptors whose serialized inputSchema exceed 8 KB are registered with
+  `downgradeForByteBudget` in `packages/agent/src/tool/AppConnectionTool/index.ts`;
+  `TOOL_SPEC_BYTE_BUDGET` / `downgradeToolSchemaForBudget` in
+  `packages/agent/src/tool/spec-budget.ts` for the MCP side):
+  tools whose serialized inputSchema exceed 8 KB are registered with
   an empty-object schema + summary folded into description, mirroring codex's
   `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES`. Keeps prompt size bounded when a
   hosted MCP server advertises a pathologically large schema.
+- **Direct exposure by default** (`packages/agent/src/config/tool-exposure.ts`,
+  plan 452 Phase A): MCP and app-connector tools register `always` — the
+  full schema rides every request, mirroring codex's single Direct/Deferred
+  rule applied to both. `[tools] on_demand_discovery` in `~/.duya/config.toml`
+  (Settings → MCP toggle) flips them back to `discoverable` (tool_search-only)
+  for a lean prompt; deliberately not model-capability-gated since duya's
+  tool_search is client-side and works with any function-calling model. The
+  plan-450 per-turn @-mention exposure promotion was retired with this change;
+  the `<connector-activation>` reminder remains as a naming signal.
 - **Structured parameter display**: `buildToolParamsDisplay(input, schema)`
   renders the top scalar arguments as `label:value` rows on the approval card
   (Plan 450 Phase D). Wired through StreamingToolExecutor → agent worker

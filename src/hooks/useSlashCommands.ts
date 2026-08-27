@@ -147,22 +147,6 @@ export function useSlashCommands(opts: {
   // toggle state so the check mark updates without closing the menu.
   const focusEnabled = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
 
-  // Static "add context" items — MCP server toggles + the MCP submenu entry.
-  // MCP lives under `@添加上上下文` (mode + plugin usage), not under settings.
-  const mcpItem = useMemo<PopoverItem>(() => {
-    const isZh = locale === 'zh';
-    return {
-      label: isZh ? 'MCP 服务器' : 'MCP servers',
-      value: '__mcp',
-      description: isZh ? '工具开关' : 'Tool toggles',
-      icon: PlugIcon,
-      kind: 'settings_submenu' as const,
-      submenu: 'mcp' as const,
-      group: 'settings' as const,
-      category: 'context' as const,
-    };
-  }, [locale]);
-
   // Static settings items (not slash commands, not filterable). These belong
   // to the `/使用指令和技能` category (settings + skills). MCP is excluded —
   // it is part of `@添加上下文` instead.
@@ -351,14 +335,16 @@ export function useSlashCommands(opts: {
     };
   }, [locale]);
 
-  // Static "add context" items — attachment + mode + MCP, shown for `@` and
-  // when the plus button is pressed. All static (no async fetch needed).
+  // Static "add context" items — attachment + modes + connectors, shown for
+  // `@` and when the plus button is pressed. All static (no async fetch
+  // needed). Plan 452 Phase A: the MCP entry moved out — server toggles live
+  // in Settings only, and MCP tools are Direct-exposed (no @-activation).
   const contextItems = useMemo<PopoverItem[]>(
     // Plan 450: connector items right after addFilesItem so connected apps
     // sit at the top of the `@` popover (mirroring codex's layout where
     // app mentions are the first thing users see after attachments).
-    () => [addFilesItem, ...(connectorItems ?? []), ...modeItems, mcpItem],
-    [addFilesItem, connectorItems, modeItems, mcpItem],
+    () => [addFilesItem, ...(connectorItems ?? []), ...modeItems],
+    [addFilesItem, connectorItems, modeItems],
   );
 
   // Plan 450 follow-up: when `contextItems` changes (e.g. the MessageInput's

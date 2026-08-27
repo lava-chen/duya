@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { parseMcpInput, isMultiConfig } from "@/lib/mcp-parser";
 import type { ParsedMCPConfig } from "@/lib/mcp-parser";
 import { fetchMCPInventorySnapshot, hasMCPInventoryAPI } from "@/lib/mcp-inventory-ipc";
+import { getConfigValue, setConfig } from "@/lib/config-port-bus";
 import type { MCPInventorySnapshotDTO, MCPPluginDeclaredServerDTO } from "@/lib/mcp-inventory-types";
 import {
   PRESET_MCP_SERVERS,
@@ -227,6 +228,25 @@ export function MCPSection() {
 
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
   const [inventory, setInventory] = useState<MCPInventorySnapshotDTO | null>(null);
+
+  // Plan 452 Phase A: global tool-exposure switch. Default OFF = Direct
+  // (MCP + connector tool schemas ride every request); ON = on-demand
+  // discovery (tools register discoverable, surfaced via tool_search).
+  // Persisted at `tools.on_demand_discovery` in ~/.duya/config.toml; the
+  // agent worker re-reads it on every MCP/connector (re)registration.
+  const [onDemandDiscovery, setOnDemandDiscovery] = useState(false);
+  useEffect(() => {
+    getConfigValue('tools.on_demand_discovery')
+      .then((v) => setOnDemandDiscovery(v === true))
+      .catch(() => undefined);
+  }, []);
+  const handleToggleOnDemand = useCallback(() => {
+    setOnDemandDiscovery((prev) => {
+      const next = !prev;
+      setConfig('tools.on_demand_discovery', next);
+      return next;
+    });
+  }, []);
   // Phase 3 (MCP runtime status UI): track which server cards are
   // expanded so the tool list is lazy. Reconnect button state is
   // local to each row to debounce double-clicks.
@@ -581,6 +601,32 @@ export function MCPSection() {
             </div>
           </div>
         )}
+      </SettingsCard>
+
+      {/* Plan 452 Phase A: global tool-exposure switch. Tools are Direct by
+          default (schemas ride every request); on-demand discovery flips
+          them to tool_search-only for a lean prompt. */}
+      <SettingsCard className="mb-4">
+        <div className="py-4 flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="font-medium text-foreground">按需工具发现 (On-demand tool discovery)</h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              关闭（默认）：MCP 与应用连接器的工具直接进入每轮请求，无需搜索即可调用。
+              开启：工具注册为可发现状态，模型通过 tool_search 按需加载，prompt 更精简但多一跳。
+              修改后重新连接 MCP 服务器生效。
+            </p>
+          </div>
+          <IconButton
+            variant="default"
+            size="sm"
+            aria-label={onDemandDiscovery ? 'Disable on-demand discovery' : 'Enable on-demand discovery'}
+            title={onDemandDiscovery ? 'Switch to direct exposure (default)' : 'Switch to on-demand discovery'}
+            className={onDemandDiscovery ? '' : 'text-green-600 hover:bg-green-500/10'}
+            onClick={handleToggleOnDemand}
+          >
+            {onDemandDiscovery ? <PowerOffIcon size={18} /> : <PowerIcon size={18} />}
+          </IconButton>
+        </div>
       </SettingsCard>
 
       {servers.length === 0 ? (

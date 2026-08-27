@@ -2706,18 +2706,11 @@ export class duyaAgent {
         logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // Plan 450: connector tools of @-mentioned providers skip tool_search
-    // discovery this turn — they join the initial tool list through the
-    // discovered set (exposure promotion), mirroring codex's per-turn
-    // connector selection.
-    const selectedProviders = options?.mentionedProviders?.filter((p) => typeof p === 'string' && p) ?? [];
-    const preExposedConnectorTools = new Set<string>(
-      selectedProviders.length
-        ? getCachedAppConnectionDescriptors()
-            .filter((d) => selectedProviders.includes(d.provider))
-            .map((d) => d.name)
-        : [],
-    );
+    // Plan 452 Phase A: connector tools now register `always` (Direct) by
+    // default — same rule as MCP tools — so the per-turn @-mention exposure
+    // promotion (preExposedConnectorTools / discovered set) is retired. The
+    // `<connector-activation>` reminder still tells the model which apps the
+    // user explicitly named this turn.
     // Single-pass tool visibility filter.
     //
     // One question per tool: is it visible to the LLM this turn?
@@ -2747,9 +2740,7 @@ export class duyaAgent {
       isToolVisible(
         t.name,
         snapshot.getExposeMode(t.name),
-        preExposedConnectorTools.size > 0
-          ? new Set([...EMPTY_DISCOVERED, ...preExposedConnectorTools])
-          : EMPTY_DISCOVERED,
+        EMPTY_DISCOVERED,
         constraints,
       ),
     );
