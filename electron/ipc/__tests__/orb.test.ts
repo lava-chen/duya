@@ -148,7 +148,7 @@ describe('automation:orb:set-position', () => {
 
 describe('automation:orb:state', () => {
   it('returns the current state from wake service', async () => {
-    mocks.wakeService.getState.mockReturnValueOnce('INPUT');
+    mocks.wakeService.getState.mockReturnValueOnce('INPUT' as never);
     const h = handlers().get('automation:orb:state')!;
     const result = await h({});
     expect(result).toEqual({ state: 'INPUT' });

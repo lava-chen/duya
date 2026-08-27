@@ -103,6 +103,20 @@ export interface ChatStartCommand {
      * headless curator). Mirrors ChatOptions.mode.
      */
     mode?: string;
+    /**
+     * Plan 453 Task G: wakeless chat path. When true:
+     *   - the sessionId must start with `wakeless-` (callers generate
+     *     a fresh UUID per wake);
+     *   - no durable journal entry is created (messages live only in
+     *     the in-memory thread);
+     *   - the agent output stream is forwarded to the orb IPC sink
+     *     (`automation:orb:*`) instead of the main renderer;
+     *   - the session is auto-ended when the orb is collapsed.
+     *
+     * Used by Wake Agent so a "ask from anywhere" session never pollutes
+     * the persistent chat history.
+     */
+    wakeless?: boolean;
   };
 }
 
