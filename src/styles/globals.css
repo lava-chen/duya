@@ -541,7 +541,19 @@ html[data-font="system"] .message-content li {
 }
 
 .markdown-file-link {
+  /* `inline-block` keeps the link as a single atomic inline box so
+   * the icon / favicon at the front and the trailing text can't be
+   * pulled onto separate lines by the line-breaking algorithm — the
+   * whole link either fits on the current line or moves to the next.
+   * `max-width: 100%` caps the link at the parent's content width so
+   * a long file path / URL doesn't overflow the chat column, and
+   * `word-break: break-all` + `overflow-wrap: anywhere` let the
+   * browser break inside the otherwise-unbroken path / URL. Net
+   * effect: long links wrap onto multiple lines INSIDE the link
+   * pill, while the icon stays anchored at the top-left of the link
+   * (never alone on its own line). */
   display: inline-block;
+  max-width: 100%;
   /* Match the inline `<code>` font stack used by MarkdownRenderer so a
    * filename like `network.py` renders in the same monospace face the
    * user sees elsewhere for code identifiers. Body text remains in
@@ -568,9 +580,11 @@ html[data-font="system"] .message-content li {
    * points at a link. */
   text-decoration: none;
   transition: color 150ms ease, text-decoration-color 150ms ease;
-  /* inline-block + vertical-align:baseline lines up the link's text
-   * baseline with the surrounding paragraph instead of being lifted
-   * by a flex-centered icon (the previous `inline-flex; align-items:
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  /* vertical-align:baseline lines up the link's text baseline with
+   * the surrounding paragraph instead of being lifted by a
+   * flex-centered icon (the previous `inline-flex; align-items:
    * center` placed the icon mid-line and visually raised the pill). */
   vertical-align: baseline;
 }
@@ -647,8 +661,13 @@ html[data-theme="dark"] .terminal-banner-error {
 }
 
 .markdown-file-link__name {
+  /* Inherits `word-break: break-all` + `overflow-wrap: anywhere` from
+   * the parent `.markdown-file-link`. Removing the previous
+   * `white-space: nowrap` is what lets a long file path break across
+   * multiple lines when the chat column is narrow. `min-width: 0`
+   * lets a flex / grid ancestor shrink the span instead of forcing
+   * the path onto one overflowing line. */
   min-width: 0;
-  white-space: nowrap;
 }
 
 /* External web links: the favicon is an inline-block at the front of

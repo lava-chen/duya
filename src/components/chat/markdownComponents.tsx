@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { CodeBlock } from './CodeBlock';
-import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas } from '@/lib/chat-file-links';
+import { openLocalArtifactTarget, isLikelyLocalFileReference, isLocalhostUrl, fileNameFromPath, isPathInsideRoot, parseInternalCanvasLink, openConductorCanvas, tryDecodeURI } from '@/lib/chat-file-links';
 import { useConversationStore } from '@/stores/conversation-store';
 import { ImagePreviewModal } from './ImagePreviewModal';
 import { FileIcon, ChalkboardIcon } from '../icons';
@@ -144,6 +144,18 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     isBareFileName = true;
   }
 
+  // Decode percent-encoded paths / URLs (e.g. `E:/.../%E5%8F%91%E7%A5%A8` →
+  // `E:/.../发票`) before any downstream classification. Models sometimes
+  // emit the URL-encoded form in both the link label and the destination;
+  // decoding once here means the local-file branch sees the real path
+  // (so its basename extraction produces readable Chinese) and external
+  // links render decoded text. The original href is still passed to
+  // `<a>` below so the click target is exactly what the model wrote —
+  // navigation is unaffected.
+  if (typeof resolvedHref === 'string') {
+    resolvedHref = tryDecodeURI(resolvedHref);
+  }
+
   // Internal canvas routes (`/duya/canvas/<id>`, taught to the agent by the
   // conductor prompt) must be classified BEFORE the local-file check: any
   // `/...` href otherwise matches isLikelyLocalFileReference and renders as
@@ -227,20 +239,27 @@ function MarkdownAnchor({ href, children }: { href?: string; children?: React.Re
     );
   }
 
+  // External web links: also decode the addressable href so the
+  // browser's right-click "Copy link" / hover tooltip show the
+  // readable form (e.g. `https://example.com/发票`) instead of the
+  // raw percent-encoded form. `openLink` already validates against
+  // `http(s):` schemes and is unaffected by percent-decoding.
+  const externalHref = typeof href === 'string' ? tryDecodeURI(href) : href;
+
   return (
     <a
-      href={href}
+      href={externalHref}
       className="markdown-file-link markdown-link-external"
       target="_blank"
       rel="noopener noreferrer"
       onClick={(e) => {
         e.preventDefault();
-        if (href) openLink(href);
+        if (externalHref) openLink(externalHref);
       }}
-      title={openLinksInExternalBrowser ? `Open in default browser: ${href}` : `Open in DUYA browser: ${href}`}
+      title={openLinksInExternalBrowser ? `Open in default browser: ${externalHref}` : `Open in DUYA browser: ${externalHref}`}
     >
-      {typeof href === 'string' && <LinkFavicon url={href} />}
-      {children}
+      {typeof externalHref === 'string' && <LinkFavicon url={externalHref} />}
+      {typeof children === 'string' ? tryDecodeURI(children) : children}
     </a>
   );
 }
