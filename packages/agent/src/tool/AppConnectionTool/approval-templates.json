@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "providers": {
     "github": {
       "label": "GitHub",
@@ -78,5 +78,119 @@
       "verb_write": "make changes in",
       "verb_default": "access"
     }
-  }
+  },
+  "tool_overrides": [
+    {
+      "match": { "provider": "github", "action_pattern": "^remote:add_comment" },
+      "label": "Add comment",
+      "scope": "a pull request on your GitHub repositories",
+      "verb_read": "read comments on",
+      "verb_write": "add a comment to",
+      "verb_default": "add a comment to"
+    },
+    {
+      "match": { "provider": "github", "action_pattern": "^remote:create_pull" },
+      "label": "Open pull request",
+      "scope": "your GitHub repositories",
+      "verb_read": "review",
+      "verb_write": "open a pull request on",
+      "verb_default": "open a pull request on"
+    },
+    {
+      "match": { "provider": "github", "action_pattern": "^remote:merge_pull" },
+      "label": "Merge pull request",
+      "scope": "your GitHub repositories",
+      "verb_read": "view",
+      "verb_write": "merge a pull request on",
+      "verb_default": "merge a pull request on"
+    },
+    {
+      "match": { "provider": "github", "action_pattern": "^remote:create_issue" },
+      "label": "Create issue",
+      "scope": "your GitHub repositories",
+      "verb_read": "view",
+      "verb_write": "create an issue on",
+      "verb_default": "create an issue on"
+    },
+    {
+      "match": { "provider": "notion", "action_pattern": "^remote:create" },
+      "label": "Create in Notion",
+      "scope": "your Notion workspace",
+      "verb_read": "view",
+      "verb_write": "create new content in",
+      "verb_default": "create new content in"
+    },
+    {
+      "match": { "provider": "notion", "action_pattern": "^remote:update" },
+      "label": "Update Notion",
+      "scope": "your Notion workspace",
+      "verb_read": "view",
+      "verb_write": "update content in",
+      "verb_default": "update content in"
+    },
+    {
+      "match": { "provider": "notion", "action_pattern": "^remote:delete" },
+      "label": "Delete in Notion",
+      "scope": "your Notion workspace",
+      "verb_read": "view",
+      "verb_write": "delete content from",
+      "verb_default": "delete content from"
+    },
+    {
+      "match": { "provider": "linear", "action_pattern": "^remote:create_issue" },
+      "label": "Create Linear issue",
+      "scope": "your Linear workspace",
+      "verb_read": "view",
+      "verb_write": "create an issue in",
+      "verb_default": "create an issue in"
+    },
+    {
+      "match": { "provider": "linear", "action_pattern": "^remote:update_issue" },
+      "label": "Update Linear issue",
+      "scope": "your Linear workspace",
+      "verb_read": "view",
+      "verb_write": "update an issue in",
+      "verb_default": "update an issue in"
+    },
+    {
+      "match": { "provider": "figma", "action_pattern": "^remote:export" },
+      "label": "Export Figma design",
+      "scope": "your Figma files",
+      "verb_read": "view",
+      "verb_write": "export a design from",
+      "verb_default": "export a design from"
+    },
+    {
+      "match": { "provider": "supabase", "action_pattern": "^remote:apply_migration" },
+      "label": "Apply Supabase migration",
+      "scope": "your Supabase projects",
+      "verb_read": "view",
+      "verb_write": "apply a database migration to",
+      "verb_default": "apply a database migration to"
+    },
+    {
+      "match": { "provider": "supabase", "action_pattern": "^remote:execute_sql" },
+      "label": "Run SQL on Supabase",
+      "scope": "your Supabase projects",
+      "verb_read": "view",
+      "verb_write": "run SQL on",
+      "verb_default": "run SQL on"
+    },
+    {
+      "match": { "provider": "vercel", "action_pattern": "^remote:deploy" },
+      "label": "Deploy to Vercel",
+      "scope": "your Vercel projects",
+      "verb_read": "view",
+      "verb_write": "deploy a project on",
+      "verb_default": "deploy a project on"
+    },
+    {
+      "match": { "provider": "slack", "action_pattern": "^remote:send_message" },
+      "label": "Send Slack message",
+      "scope": "your Slack workspace",
+      "verb_read": "view",
+      "verb_write": "send a message in",
+      "verb_default": "send a message in"
+    }
+  ]
 }

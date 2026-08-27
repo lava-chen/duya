@@ -21,7 +21,7 @@
 
 import type { AppConnectionToolDescriptor } from './index.js';
 
-export const APPROVAL_TEMPLATE_SCHEMA_VERSION = 1;
+export const APPROVAL_TEMPLATE_SCHEMA_VERSION = 2;
 
 interface ProviderTemplate {
   label: string;
@@ -31,9 +31,21 @@ interface ProviderTemplate {
   verb_default: string;
 }
 
+/**
+ * Plan 450 Phase F: per-tool template overrides. Matched against the
+ * descriptor's `action` (e.g. `remote:create_pull`) by regex; the
+ * provider key must also match. A match produces a more specific human
+ * question ("Allow {label} to add a comment to a pull request on your
+ * GitHub repositories?") than the generic provider template.
+ */
+interface ToolOverrideTemplate extends ProviderTemplate {
+  match: { provider: string; action_pattern: string };
+}
+
 interface TemplatesAsset {
   schema_version: number;
   providers: Record<string, ProviderTemplate>;
+  tool_overrides?: ToolOverrideTemplate[];
 }
 
 const FALLBACK_TEMPLATES: TemplatesAsset = {
@@ -51,6 +63,7 @@ const FALLBACK_TEMPLATES: TemplatesAsset = {
     microsoft365: { label: 'Microsoft 365', scope: 'your Microsoft 365 account', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
     wecom: { label: 'WeCom', scope: 'your WeCom organization', verb_read: 'read from', verb_write: 'make changes in', verb_default: 'access' },
   },
+  tool_overrides: [],
 };
 
 function loadTemplates(): TemplatesAsset {
@@ -66,7 +79,7 @@ function loadTemplates(): TemplatesAsset {
       asset.providers &&
       typeof asset.providers === 'object'
     ) {
-      return asset;
+      return { tool_overrides: [], ...asset };
     }
   } catch {
     // Missing or unreadable asset → fall back to embedded defaults.
@@ -75,6 +88,38 @@ function loadTemplates(): TemplatesAsset {
 }
 
 const TEMPLATES = loadTemplates();
+
+/** Compile an action_pattern once per asset load for fast lookup. */
+const COMPILED_OVERRIDES: Array<{
+  template: ToolOverrideTemplate;
+  regex: RegExp;
+}> = (TEMPLATES.tool_overrides ?? []).map((template) => ({
+  template,
+  regex: new RegExp(template.match.action_pattern),
+}));
+
+/**
+ * Resolve the most specific template for a connector tool. Order:
+ * tool override (provider + regex against action) → provider template →
+ * null (caller falls back to the generic renderer).
+ */
+function resolveTemplate(
+  provider: string | undefined,
+  action: string | undefined,
+): ProviderTemplate | null {
+  if (provider && action) {
+    for (const entry of COMPILED_OVERRIDES) {
+      if (entry.template.match.provider !== provider) continue;
+      if (entry.regex.test(action)) {
+        return entry.template;
+      }
+    }
+  }
+  if (provider) {
+    return TEMPLATES.providers[provider] ?? null;
+  }
+  return null;
+}
 
 /** Pick the verb phrase for a given risk tier (mirrors codex's templates). */
 function pickVerb(template: ProviderTemplate, riskTier: string | undefined): string {
@@ -170,11 +215,17 @@ interface RenderApprovalInput {
   description?: string;
   input?: Record<string, unknown>;
   inputSchema?: { properties?: Record<string, unknown> };
+  /**
+   * Plan 450 Phase F: the connector's stable action key (e.g.
+   * `remote:create_pull`). Optional; when present, per-tool overrides
+   * are tried first.
+   */
+  action?: string;
 }
 
 export function renderConnectorApprovalMessage(params: RenderApprovalInput): RenderedApproval {
-  const { toolName, connector, input } = params;
-  const template = connector ? TEMPLATES.providers[connector.provider] : undefined;
+  const { toolName, connector, input, action } = params;
+  const template = resolveTemplate(connector?.provider, action);
   const displayName = params.title || toolName;
   const argSummary = summarizeInput(input);
   const argSuffix = argSummary ? ` (“${argSummary}”)` : '';
@@ -206,5 +257,6 @@ export function renderConnectorApprovalFromDescriptor(
     description: descriptor.description,
     input,
     inputSchema: descriptor.inputSchema,
+    action: descriptor.action,
   });
 }

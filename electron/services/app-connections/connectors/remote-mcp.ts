@@ -4,6 +4,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import {
+  deleteCatalogCache,
+  isFresh,
+  readCatalogCache,
+  writeCatalogCache,
+  type CachedSnapshot,
+} from '../catalog-cache.js';
 import type {
   ConnectorInputSchema,
   ConnectorInvokeResult,
@@ -30,6 +37,32 @@ interface RemoteSession {
       annotations?: RemoteToolAnnotations;
     }
   >;
+}
+
+/**
+ * Plan 450 Phase E: hydrated tool shape used by both the live
+ * `listTools()` path and the catalog cache fast-path. Identical to
+ * `RemoteSession['tools']`'s value type but lifted to a named alias so
+ * the cache hydration helper can return a typed map without circular
+ * aliasing.
+ */
+type HydratedTool = {
+  description: string;
+  inputSchema: ConnectorInputSchema;
+  annotations?: RemoteToolAnnotations;
+};
+
+function hydrateTools(raw: import('../catalog-cache.js').CachedSnapshot['tools']): Map<string, HydratedTool> {
+  return new Map(
+    raw.map((tool) => [
+      tool.name,
+      {
+        description: tool.description ?? '',
+        inputSchema: normalizeInputSchema(tool.inputSchema),
+        annotations: parseRemoteToolAnnotations(tool.annotations),
+      },
+    ]),
+  );
 }
 
 function toolAlias(provider: ProviderId, toolName: string): string {
@@ -125,6 +158,10 @@ export class RemoteMcpConnector {
   async disconnect(connectionId: string): Promise<void> {
     const session = this.sessions.get(connectionId);
     this.sessions.delete(connectionId);
+    // Plan 450 Phase E: also drop the catalog snapshot so the next
+    // re-authorization starts from a fresh tools/list rather than
+    // reusing stale state.
+    deleteCatalogCache(connectionId);
     if (!session) return;
     await session.client.close().catch(() => undefined);
     await session.transport.close().catch(() => undefined);
@@ -146,17 +183,68 @@ export class RemoteMcpConnector {
     const client = new Client({ name: 'duya-desktop', version: '0.1.0' }, { capabilities: {} });
     try {
       await client.connect(transport);
-      const listed = await client.listTools();
-      const tools = new Map(
-        listed.tools.map((tool) => [
-          tool.name,
-          {
-            description: tool.description ?? '',
-            inputSchema: normalizeInputSchema(tool.inputSchema),
-            annotations: parseRemoteToolAnnotations(tool.annotations),
-          },
-        ]),
-      );
+      // Plan 450 Phase E: try the persistent catalog cache first so
+
+      // cold starts don't pay the network round-trip on every session.
+
+      // Stale entries re-fetch foreground; fresh entries skip
+
+      // `listTools()` entirely. The transport/auth is still set up.
+
+      const cached = readCatalogCache(connectionId);
+
+      let tools: Map<string, HydratedTool>;
+
+      if (cached && cached.provider === provider && isFresh(cached) && cached.tools.length > 0) {
+
+        tools = hydrateTools(cached.tools);
+
+      } else {
+
+        const listed = await client.listTools();
+
+        tools = new Map(
+
+          listed.tools.map((tool) => [
+
+            tool.name,
+
+            {
+
+              description: tool.description ?? '',
+
+              inputSchema: normalizeInputSchema(tool.inputSchema),
+
+              annotations: parseRemoteToolAnnotations(tool.annotations),
+
+            },
+
+          ]),
+
+        );
+
+        writeCatalogCache(
+
+          connectionId,
+
+          provider,
+
+          listed.tools.map((tool) => ({
+
+            name: tool.name,
+
+            ...(tool.description !== undefined ? { description: tool.description } : {}),
+
+            ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+
+            ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+
+          })),
+
+        );
+
+      }
+
       const session = { client, transport, tools };
       this.sessions.set(connectionId, session);
       return session;

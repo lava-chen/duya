@@ -22,9 +22,9 @@ function makeDescriptor(overrides?: Partial<AppConnectionToolDescriptor>): AppCo
 
 describe('renderConnectorApprovalMessage (Plan 449)', () => {
   it('reports the schema version', () => {
-    expect(APPROVAL_TEMPLATE_SCHEMA_VERSION).toBe(1);
+    expect(APPROVAL_TEMPLATE_SCHEMA_VERSION).toBe(2);
     const rendered = renderConnectorApprovalMessage({ toolName: 'x' });
-    expect(rendered.schemaVersion).toBe(1);
+    expect(rendered.schemaVersion).toBe(2);
   });
 
   it('uses the curated template for a known provider', () => {
@@ -70,7 +70,7 @@ describe('renderConnectorApprovalMessage (Plan 449)', () => {
 
   it('never throws on missing metadata', () => {
     const rendered = renderConnectorApprovalMessage({ toolName: '' });
-    expect(rendered.schemaVersion).toBe(1);
+    expect(rendered.schemaVersion).toBe(2);
     expect(typeof rendered.message).toBe('string');
   });
 });
