@@ -17,6 +17,33 @@ export function fileNameFromPath(filePath: string): string {
   return clean.split('/').pop() || filePath;
 }
 
+/**
+ * Safely percent-decode a path or URL so non-ASCII characters (Chinese,
+ * Japanese, etc.) render correctly. Returns the input unchanged when it
+ * contains no percent-encoded bytes or when the encoding is malformed
+ * (`decodeURIComponent` throws on a lone `%` or invalid `%XX`).
+ *
+ * This is display-only: the caller decides whether to use the decoded
+ * value for navigation or to keep the original href. For markdown link
+ * rendering we decode both sides because the model occasionally emits
+ * the same percent-encoded text in both the visible label and the
+ * destination — leaving it that way surfaces `%E5%8F%91%E7%A5%A8` as
+ * visible "garbage" instead of `发票`.
+ */
+const PERCENT_ENCODED_RE = /%[0-9A-Fa-f]{2}/;
+
+export function tryDecodeURI(value: string): string {
+  if (!value || !PERCENT_ENCODED_RE.test(value)) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    // Malformed percent-encoding (lone `%`, `%G1`, etc.). Leave the
+    // value untouched rather than dropping it — the link is still
+    // navigable, just not auto-decoded for display.
+    return value;
+  }
+}
+
 export function extensionFromPath(filePath: string): string {
   const name = fileNameFromPath(filePath).toLowerCase();
   const idx = name.lastIndexOf('.');
