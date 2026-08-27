@@ -555,6 +555,52 @@ DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `~
 | 设置面板 | 新增 **Default Provider** 区块，使用 `ProviderPickerView` |
 | CLI | 新增 `duya config provider set-default [id] --clear`；`provider activate` 标记为 deprecated |
 
+#### `@duya/ai` 三层架构（Wire protocol / Family wrapper / Provider catalog）
+
+Plan 451 把 `@duya/ai` 拆成三层,每层职责清晰、对其它层是黑盒:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Provider catalog (packages/ai/src/providers/<name>.ts)                   │
+│   - id, name, baseUrl, auth, model[]                                    │
+│   - 可选 wrappers: Wrapper[] (显式 compose)                       │
+│   - 13 行的极薄 preset;例如 bedrock.ts / glm.ts / minimax.ts        │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓ pipe(base, ...explicit, ...auto)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Family wrappers (packages/ai/src/providers/wrappers/<family>-*.ts)       │
+│   - (ProviderStreams) → ProviderStreams                              │
+│   - 家族级 payload 处理(thinking 字段名 / cache_control /            │
+│     tool_result transport / signature replay / 工具对修复)                │
+│   - anthropic-family-* (Phase 1); openai-family-* 待 P4+              │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Wire protocol (packages/ai/src/api/<protocol>.ts)                        │
+│   - HTTP/SSE/JSON/auth/认证/标准 tool-call shape                            │
+│   - 不感知家族差异,只懂"协议级"差异                                       │
+│   - 输出标准 ProviderStreams                                              │
+│   - 当前 7 个: anthropic / openai-chat / openai-responses /              │
+│     ollama / bedrock / gemini / [vertex P5]                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Shared utilities (packages/ai/src/utils/)                                │
+│   - errors / retry / json-repair / usage / think-tag-parser            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**组合顺序约定**:`pipe(base, w1, w2, w3) === w3(w2(w1(base)))` ——最后一个 wrapper 是最外层(标准 middleware 顺序,跟 Koa/Express 一致)。
+
+**Provider 写 `wrappers` 数组**(显式) + `model.compat` 字段**(隐式) — `createProvider` 在 stream 调用时根据 compat 自动 inject 对应 wrapper,见 `autoWrappersForCompat`。Phase 2 的映射表:
+
+| `model.compat` 字段 | 自动 inject 的 wrapper |
+|---|---|
+| `toolResultTransport: 'text-user-message' \| 'none'` | `anthropicFamilyToolPayloadCompat` |
+| `forceAdaptiveThinking: true` | `anthropicFamilyThinkingReplay`(响应侧 observer) |
+
+设计文档:[`docs/design-docs/2026-07-29-multi-model-reasoning-architecture.md`](./docs/design-docs/2026-07-29-multi-model-reasoning-architecture.md)(设计原文)+ [`docs/exec-plans/active/451-multi-protocol-and-wrapper-layer.md`](./docs/exec-plans/active/451-multi-protocol-and-wrapper-layer.md)(计划)。
+
 ### 安全扫描系统
 
 DUYA 实现了多层安全扫描机制，防止提示词注入和恶意代码执行：
