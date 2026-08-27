@@ -995,6 +995,26 @@ export interface ElectronAPI {
   }
   sync: SyncAPI
   settings: {
+    // Plan 453 Task H: Wake Agent config.
+    getWakeConfig: () => Promise<{
+      enabled: boolean
+      shortcut: string
+      injectOsContext: boolean
+      autoCollapseMs: number
+      orb: { x: number; y: number; displayId: number }
+    }>
+    setWakeConfig: (payload: {
+      enabled?: boolean
+      shortcut?: string
+      injectOsContext?: boolean
+      autoCollapseMs?: number
+      orb?: { x: number; y: number; displayId: number }
+    }) => Promise<{ ok: boolean }>
+    setOrbPosition: (payload: {
+      x: number
+      y: number
+      displayId: number
+    }) => Promise<{ ok: boolean }>
     setAutoStart: (enabled: boolean) => Promise<{ success: boolean; supported: boolean; error?: string }>
     getAutoStartStatus: () => Promise<{ enabled: boolean; canChange: boolean; supported: boolean; platform: string; error?: string }>
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
@@ -1577,6 +1597,27 @@ const electronAPI: ElectronAPI = {
     },
   },
   settings: {
+    // Plan 453 Task H: Wake Agent config bridge.
+    getWakeConfig: () =>
+      ipcRenderer.invoke('settings:get-wake-config') as Promise<{
+        enabled: boolean;
+        shortcut: string;
+        injectOsContext: boolean;
+        autoCollapseMs: number;
+        orb: { x: number; y: number; displayId: number };
+      }>,
+    setWakeConfig: (payload: {
+      enabled?: boolean;
+      shortcut?: string;
+      injectOsContext?: boolean;
+      autoCollapseMs?: number;
+      orb?: { x: number; y: number; displayId: number };
+    }) => ipcRenderer.invoke('settings:set-wake-config', payload),
+    setOrbPosition: (payload: {
+      x: number;
+      y: number;
+      displayId: number;
+    }) => ipcRenderer.invoke('settings:set-orb-position', payload),
     setAutoStart: (enabled) => ipcRenderer.invoke('settings:set-auto-start', enabled),
     getAutoStartStatus: () => ipcRenderer.invoke('settings:get-auto-start-status'),
     getMcpServers: async () => {
