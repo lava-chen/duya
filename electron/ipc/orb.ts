@@ -42,12 +42,32 @@ export function registerOrbHandlers(): void {
       );
       getWakeService().setState('LOADING');
       sendOrbShowLoading({ stage: 'thinking' });
-      // Task G wires this into ChatStartCommand.wakeless. For now we
-      // echo a stub response so the IPC pipeline is end-to-end testable.
-      return {
-        accepted: true,
-        note: 'wakeless path wired in Task G; orb submit accepts payload only',
-      };
+
+      // Plan 453 Task G: kick off a wakeless chat session. The agent
+      // worker streams text deltas via the regular chat:text event;
+      // the agent communicator routes them through here when the
+      // sessionId starts with `wakeless-`.
+      try {
+        const { startWakelessChat } = await import(
+          '../services/orb-wakeless-chat'
+        );
+        const result = await startWakelessChat(payload.prompt);
+        return result;
+      } catch (err) {
+        logger.warn(
+          'orb:submit failed to start wakeless chat',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+          LogComponent.Orb,
+        );
+        return {
+          accepted: false,
+          note:
+            'wakeless chat start failed; orb submit rejected. ' +
+            'See agent logs.',
+        };
+      }
     },
   );
 

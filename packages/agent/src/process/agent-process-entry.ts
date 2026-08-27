@@ -160,6 +160,16 @@ interface ChatStartMessage {
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
     displayContent?: string;
+    /**
+     * Plan 453 Task G: wakeless chat path. When true:
+     *   - sessionId should start with `wakeless-` (callers generate
+     *     a fresh UUID per wake);
+     *   - the journal ref is cleared on the agent for this turn so
+     *     messages never reach the rollout file;
+     *   - the orb IPC owns the response stream (see
+     *     `electron/services/orb-wakeless-chat.ts`).
+     */
+    wakeless?: boolean;
     mode?: string;
     /** Plan 450: @-mentioned providers for this run. */
     mentionedProviders?: string[];
@@ -1683,6 +1693,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   if (!agent) {
     sendToMain({ type: 'chat:error', message: 'Agent not initialized', sessionId: msg.sessionId });
     return;
+  }
+
+  // Plan 453 Task G: wakeless path. When `options.wakeless === true`,
+  // the session is ephemeral — closing the orb discards everything
+  // and we never write a rollout file. We strip the journal ref on
+  // the agent so subsequent `_pushDurable` calls (which already
+  // check `this.journal`) are no-ops.
+  if (msg.options?.wakeless === true) {
+    if (!msg.sessionId.startsWith('wakeless-')) {
+      log(
+        `[Agent-Process] WARN: wakeless=true but sessionId=${msg.sessionId} lacks 'wakeless-' prefix`,
+      );
+    }
+    log(
+      `[Agent-Process] wakeless=true; journal + timeline-persist disabled for sessionId=${msg.sessionId}`,
+    );
+    agent.journal = undefined;
   }
 
   // Plan 314: wait for the long-lived ToolCatalog to have MCP tools
