@@ -369,11 +369,6 @@ export function useSlashCommands(opts: {
   // updates even after the fetch finishes.
   useEffect(() => {
     if (popoverMode === 'context') {
-      // eslint-disable-next-line no-console
-      console.log('[plan450-debug] sync popover items', {
-        count: contextItems.length,
-        sample: contextItems.slice(0, 5).map((i) => i.label),
-      });
       setPopoverItems(contextItems);
     }
   }, [contextItems, popoverMode, setPopoverItems]);
