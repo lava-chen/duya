@@ -40,6 +40,8 @@ import type {
 } from '@duya/plugin-core';
 import type { MCPServerConfig, Tool, ToolUseContext } from '../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
+import { readToolExposureConfig } from '../config/tool-exposure.js';
+import { downgradeToolSchemaForBudget } from '../tool/spec-budget.js';
 import { MCPManager } from './index.js';
 import { ToolRegistry, MCPRegistryReplaceError } from '../tool/registry.js';
 import {
@@ -551,13 +553,17 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
     };
     preparedEntries.push({
       key: t.internalKey,
-      definition: t,
+      // Plan 452 Phase A: bound the spec — Direct exposure rides every
+      // request, so a pathologically large server schema must not.
+      definition: downgradeToolSchemaForBudget(t, 'Input schema from the connected MCP server.').definition,
       executor,
       meta: {
         // Plan 241: MCP tools are part of the user's toolset — expose them
         // in the default tool list. (Previously 'discoverable', which hid
         // every MCP tool behind a tool_search round-trip.)
-        exposeMode: 'always',
+        // Plan 452 Phase A: `[tools] on_demand_discovery` opts back into
+        // tool_search-only exposure for a lean prompt.
+        exposeMode: readToolExposureConfig().onDemandDiscovery ? 'discoverable' : 'always',
         inputSchemaSummary: 'Input schema from the connected MCP server.',
       },
     });
