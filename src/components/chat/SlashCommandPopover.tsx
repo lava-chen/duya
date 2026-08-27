@@ -1021,6 +1021,12 @@ export function SlashCommandPopover({
   const mcpGroup = filteredItems.filter(
     (item) => item.submenu === 'mcp',
   );
+  // Plan 450: connected app-connection providers (Plan 450 @-mention
+  // activation). Rendered between MCP and the attachments row so the most
+  // relevant tools sit at the top of the popover.
+  const appsGroup = filteredItems.filter(
+    (item) => item.group === 'apps',
+  );
   const settingsGroup = filteredItems.filter(
     (item) => item.group === 'settings' && item.submenu !== 'mcp',
   );
@@ -1029,9 +1035,10 @@ export function SlashCommandPopover({
   );
 
   const isContext = popoverMode === 'context';
-  // Cumulative start index for the Mode/MCP sections (after the attachments row).
+  // Cumulative start index for the Mode/MCP/Apps sections (after the attachments row).
   const modeStart = attachmentsGroup.length;
   const mcpStart = modeStart + modeGroup.length;
+  const appsStart = mcpStart + mcpGroup.length;
   const settingsEnd = settingsGroup.length;
 
   return (
@@ -1067,6 +1074,7 @@ export function SlashCommandPopover({
                   renderRow(item, idx, idx === selectedIndex))}
                 {renderSection('Mode', modeGroup, modeStart)}
                 {renderSection('MCP', mcpGroup, mcpStart)}
+                {renderSection('Apps', appsGroup, appsStart)}
               </>
             ) : (
               <>
