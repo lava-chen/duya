@@ -2330,7 +2330,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       outputStyleConfig: msg.options?.outputStyleConfig,
       mode: msg.options?.mode,
       // Plan 450: @-mentioned providers for this run (exposure promotion +
-      // connector-activation reminder). See AppConnectionTool/selection.ts.
+      // connector-activation reminder). See mentions/index.ts.
       mentionedProviders: msg.options?.mentionedProviders,
       // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
       // injection). See mentions/index.ts collectSkillInjection.
