@@ -42,6 +42,10 @@ export interface ContextUsage {
   inputTokens: number;
   /** Session-cumulative token totals across every persisted usage block. */
   totalInput: number;
+  /** Raw (uncached) cumulative input — for the CH% denominator so the rate
+   *  reflects how much of the prompt was served from cache. CH% would
+   *  otherwise be tautological: totalInput already includes cache reads. */
+  totalInputRaw: number;
   totalOutput: number;
   totalCacheRead: number;
   totalCacheWrite: number;
@@ -103,12 +107,14 @@ function scanTotals(
   pricing?: ModelPricing,
 ): {
   totalInput: number;
+  totalInputRaw: number;
   totalOutput: number;
   totalCacheRead: number;
   totalCacheWrite: number;
   totalCost: number;
 } {
   let totalInput = 0;
+  let totalInputRaw = 0;
   let totalOutput = 0;
   let totalCacheRead = 0;
   let totalCacheWrite = 0;
@@ -120,12 +126,13 @@ function scanTotals(
     const cacheRead = msg.tokenUsage.cache_hit_tokens || 0;
     const cacheWrite = msg.tokenUsage.cache_creation_tokens || 0;
     totalInput += normalizeInputTokens(rawInput, cacheRead, cacheWrite);
+    totalInputRaw += rawInput;
     totalOutput += output;
     totalCacheRead += cacheRead;
     totalCacheWrite += cacheWrite;
     totalCost += estimateCost(rawInput, output, cacheRead, cacheWrite, pricing);
   }
-  return { totalInput, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
+  return { totalInput, totalInputRaw, totalOutput, totalCacheRead, totalCacheWrite, totalCost };
 }
 
 /** Assemble the final ContextUsage from used/window/totals — the ONLY place
@@ -141,6 +148,7 @@ function finalize(params: {
   cacheCreationTokens: number;
   totals: {
     totalInput: number;
+    totalInputRaw: number;
     totalOutput: number;
     totalCacheRead: number;
     totalCacheWrite: number;
@@ -154,6 +162,12 @@ function finalize(params: {
     params.contextWindow > 0 ? estimatedNextTurn / params.contextWindow : 0;
   const effectiveRatio = Math.max(ratio, estimatedNextRatio);
   const { totals } = params;
+  // CH% = fraction of the cumulative prompt served from cache. Denominator is
+  // the TRUE raw prompt volume (uncached input + cache read + cache write);
+  // using totalInput (which already includes cache reads) made the rate
+  // collapse to 100% on fully-cached sessions — tautological.
+  const chDenominator =
+    totals.totalInputRaw + totals.totalCacheRead + totals.totalCacheWrite;
   return {
     hasData: params.hasData,
     modelName: params.modelName || 'unknown',
@@ -167,7 +181,7 @@ function finalize(params: {
     outputTokens: params.outputTokens,
     inputTokens: params.inputTokens,
     ...totals,
-    cacheHitRate: totals.totalInput > 0 ? totals.totalCacheRead / totals.totalInput : 0,
+    cacheHitRate: chDenominator > 0 ? totals.totalCacheRead / chDenominator : 0,
     state: stateFor(effectiveRatio),
   };
 }
@@ -217,6 +231,7 @@ export function useContextUsage(
         cacheCreationTokens: live.cacheCreationTokens || 0,
         totals: {
           totalInput: live.totalInput ?? scanTotalsResult.totalInput,
+          totalInputRaw: live.totalInputRaw ?? scanTotalsResult.totalInputRaw,
           totalOutput: live.totalOutput ?? scanTotalsResult.totalOutput,
           totalCacheRead: live.totalCacheHit ?? scanTotalsResult.totalCacheRead,
           totalCacheWrite: live.totalCacheCreation ?? scanTotalsResult.totalCacheWrite,
