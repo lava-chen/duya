@@ -2,11 +2,12 @@ import { createAnthropicClient } from '../api/anthropic-messages.js';
 import { createOpenAICompletionsClient } from '../api/openai-completions.js';
 import { createOpenAIResponsesClient } from '../api/openai-responses.js';
 import { createBedrockConverseClient } from '../api/bedrock-converse.js';
+import { createGoogleGenerativeAiClient } from '../api/google-generative-ai.js';
 import type { AIClient, AIClientOptions, Message } from '../types.js';
 import type { ProviderStreams } from './lazy.js';
 
 /**
- * Wrap an existing AIClient into a ProviderStreams so the provider factory
+ * Wrap an existing AiClient into a ProviderStreams so the provider factory
  * reuses duya's protocol adapters instead of reimplementing them.
  */
 function fromClient(client: AIClient): ProviderStreams {
@@ -60,6 +61,28 @@ export function bedrockConverseStreams(options: AIClientOptions & { apiFormat: '
       sessionToken: awsSessionToken,
       region: awsRegion,
       model: options.model,
+    }),
+  );
+}
+
+/**
+ * Google GenerativeLanguage adapter (Plan 451 Phase 4).
+ *
+ * Direct `fetch`-based Gemini client. The `x-goog-api-key` header is set
+ * from the standard `options.apiKey` field — no extra headers required.
+ *
+ * The endpoint defaults to `https://generativelanguage.googleapis.com/v1beta`
+ * and the path is `/models/{model}:streamGenerateContent?alt=sse`. Override
+ * via `options.baseURL` for testing or proxies.
+ */
+export function googleGenerativeAiStreams(
+  options: AIClientOptions & { apiFormat: 'gemini' },
+): ProviderStreams<'gemini'> {
+  return fromClient(
+    createGoogleGenerativeAiClient({
+      apiKey: options.apiKey,
+      model: options.model,
+      baseUrl: options.baseURL,
     }),
   );
 }
