@@ -31,3 +31,6 @@ export {
   type CacheEligibility,
   type CacheRetention,
 } from './anthropic-family-cache-control.js';
+
+// Phase 2 — compat-flag auto-injection.
+export { autoWrappersForCompat } from './compat-injection.js';
