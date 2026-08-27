@@ -99,9 +99,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     envOverrides: {},
     defaultModels: [
-      { modelId: 'anthropic/claude-3.5-sonnet', displayName: 'Claude 3.5 Sonnet' },
-      { modelId: 'anthropic/claude-3-opus', displayName: 'Claude 3 Opus' },
-      { modelId: 'anthropic/claude-3-haiku', displayName: 'Claude 3 Haiku' },
+      { modelId: 'anthropic/claude-opus-5', displayName: 'Claude Opus 5' },
+      { modelId: 'anthropic/claude-sonnet-5', displayName: 'Claude Sonnet 5' },
+      { modelId: 'openai/gpt-5', displayName: 'GPT-5' },
+      { modelId: 'google/gemini-2.5-pro', displayName: 'Gemini 2.5 Pro' },
+      { modelId: 'minimax/minimax-m3', displayName: 'MiniMax M3 (1M)' },
     ],
     fields: ['api_key'],
     iconKey: 'openrouter',
@@ -151,6 +153,11 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
   },
 
   // ── Zhipu GLM (China) ──
+  // Source of truth: GET https://open.bigmodel.cn/api/anthropic/v1/models
+  // (snapshot 2026-08). Capabilities filled from models.dev `zai` provider.
+  // `modelsSource` is dynamic so future BigModel releases auto-appear
+  // without re-curating this list; `defaultModels` is the seed used by
+  // `useProviderModels` until the user triggers a fetch.
   {
     id: 'glm-cn',
     name: 'GLM (CN)',
@@ -162,13 +169,15 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       API_TIMEOUT_MS: '3000000',
     },
     defaultModels: [
+      { modelId: 'glm-5.3', displayName: 'GLM-5.3' },
+      { modelId: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash' },
+      { modelId: 'glm-5.2', displayName: 'GLM-5.2' },
       { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
       { modelId: 'glm-5', displayName: 'GLM-5' },
       { modelId: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
-      { modelId: 'glm-5v-turbo', displayName: 'GLM-5V Turbo' },
       { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'glm-4.6', displayName: 'GLM-4.6' },
       { modelId: 'glm-4.5', displayName: 'GLM-4.5' },
-      { modelId: 'glm-4.5-flash', displayName: 'GLM-4.5 Flash' },
       { modelId: 'glm-4.5-air', displayName: 'GLM-4.5 Air' },
     ],
     fields: ['api_key'],
@@ -182,13 +191,15 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     },
     providerCategory: 'aggregator',
     authFields: API_KEY_AUTH_FIELDS,
-    modelsSource: { type: 'static' },
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
     iconColor: '#0F62FE',
     websiteUrl: 'https://bigmodel.cn',
     legacyProtocol: 'anthropic',
   },
 
   // ── Zhipu GLM (Global) ──
+  // Mirrors glm-cn; uses the international z.ai endpoint.
+  // baseUrl: https://api.z.ai/api/anthropic — same model set as bigmodel.cn.
   {
     id: 'glm-global',
     name: 'GLM (Global)',
@@ -200,13 +211,15 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
       API_TIMEOUT_MS: '3000000',
     },
     defaultModels: [
+      { modelId: 'glm-5.3', displayName: 'GLM-5.3' },
+      { modelId: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash' },
+      { modelId: 'glm-5.2', displayName: 'GLM-5.2' },
       { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
       { modelId: 'glm-5', displayName: 'GLM-5' },
       { modelId: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
-      { modelId: 'glm-5v-turbo', displayName: 'GLM-5V Turbo' },
       { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'glm-4.6', displayName: 'GLM-4.6' },
       { modelId: 'glm-4.5', displayName: 'GLM-4.5' },
-      { modelId: 'glm-4.5-flash', displayName: 'GLM-4.5 Flash' },
       { modelId: 'glm-4.5-air', displayName: 'GLM-4.5 Air' },
     ],
     fields: ['api_key'],
@@ -220,7 +233,7 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     },
     providerCategory: 'aggregator',
     authFields: API_KEY_AUTH_FIELDS,
-    modelsSource: { type: 'static' },
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
     iconColor: '#0F62FE',
     websiteUrl: 'https://z.ai',
     legacyProtocol: 'anthropic',
@@ -867,6 +880,9 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
   },
 
   // ── GLM (OpenAI-compatible) ──
+  // Pay-as-you-go endpoint. baseUrl already includes `/api/paas/v4`,
+  // so the dynamic fetcher probes `${baseUrl}/v1/models` (root path,
+  // no extra `/v1` prefix) which BigModel exposes.
   {
     id: 'glm-openai',
     name: 'GLM (OpenAI)',
@@ -876,7 +892,16 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     envOverrides: {},
     defaultModels: [
-      { modelId: 'glm-4-plus', displayName: 'GLM-4 Plus' },
+      { modelId: 'glm-5.3', displayName: 'GLM-5.3' },
+      { modelId: 'glm-5.3-flash', displayName: 'GLM-5.3 Flash' },
+      { modelId: 'glm-5.2', displayName: 'GLM-5.2' },
+      { modelId: 'glm-5.1', displayName: 'GLM-5.1' },
+      { modelId: 'glm-5', displayName: 'GLM-5' },
+      { modelId: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
+      { modelId: 'glm-4.7', displayName: 'GLM-4.7' },
+      { modelId: 'glm-4.6', displayName: 'GLM-4.6' },
+      { modelId: 'glm-4.5', displayName: 'GLM-4.5' },
+      { modelId: 'glm-4.5-air', displayName: 'GLM-4.5 Air' },
     ],
     fields: ['api_key'],
     iconKey: 'zhipu',
@@ -886,7 +911,7 @@ export const BUILTIN_CATALOG_ENTRIES: ProviderCatalogEntry[] = [
     },
     providerCategory: 'official',
     authFields: API_KEY_AUTH_FIELDS,
-    modelsSource: { type: 'static' },
+    modelsSource: { type: 'openai-compatible-models', path: '/v1/models' },
     websiteUrl: 'https://open.bigmodel.cn',
     legacyProtocol: 'openai-compatible',
   },
