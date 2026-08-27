@@ -78,6 +78,69 @@ export function registerSettingsHandlers(): void {
     persistAllowedExtensionIds(current);
   });
 
+  // Plan 453 Task H: Wake Agent settings (config.toml [wake] section).
+  ipcMain.handle('settings:get-wake-config', async () => {
+    const configStore = getConfigStore();
+    return {
+      enabled: (configStore.getByPath('wake.enabled') ?? true) as boolean,
+      shortcut:
+        (configStore.getByPath('wake.shortcut') as string | undefined) ??
+        'CommandOrControl+Shift+Space',
+      injectOsContext: (configStore.getByPath('wake.inject_os_context') ??
+        true) as boolean,
+      autoCollapseMs: (configStore.getByPath('wake.auto_collapse_ms') ??
+        60_000) as number,
+      orb: (configStore.getByPath('wake.orb') as
+        | { x: number; y: number; displayId: number }
+        | undefined) ?? { x: 100, y: 100, displayId: 0 },
+    };
+  });
+
+  ipcMain.handle(
+    'settings:set-wake-config',
+    async (
+      _event,
+      payload: {
+        enabled?: boolean;
+        shortcut?: string;
+        injectOsContext?: boolean;
+        autoCollapseMs?: number;
+        orb?: { x: number; y: number; displayId: number };
+      },
+    ) => {
+      const configStore = getConfigStore();
+      if (payload.enabled !== undefined) {
+        configStore.set('wake.enabled', payload.enabled);
+      }
+      if (payload.shortcut !== undefined) {
+        configStore.set('wake.shortcut', payload.shortcut);
+      }
+      if (payload.injectOsContext !== undefined) {
+        configStore.set('wake.inject_os_context', payload.injectOsContext);
+      }
+      if (payload.autoCollapseMs !== undefined) {
+        configStore.set('wake.auto_collapse_ms', payload.autoCollapseMs);
+      }
+      if (payload.orb !== undefined) {
+        configStore.set('wake.orb', payload.orb);
+      }
+      return { ok: true };
+    },
+  );
+
+  // Plan 453 Task H: persist orb position (called when the user drags
+  // the ball; the renderer can debounce these calls).
+  ipcMain.handle(
+    'settings:set-orb-position',
+    async (
+      _event,
+      payload: { x: number; y: number; displayId: number },
+    ) => {
+      getConfigStore().set('wake.orb', payload);
+      return { ok: true };
+    },
+  );
+
   // Auto-start settings
   ipcMain.handle('settings:set-auto-start', async (_event, enabled: boolean) => {
     try {
