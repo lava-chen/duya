@@ -16,6 +16,7 @@ import { volcengine } from './volcengine.js';
 import { bailian } from './bailian.js';
 import { minimax } from './minimax.js';
 import { minimaxCn } from './minimax-cn.js';
+import { bedrock } from './bedrock.js';
 
 /** Every built-in provider factory def. */
 export const allProviders: readonly Provider[] = [
@@ -34,6 +35,7 @@ export const allProviders: readonly Provider[] = [
   bailian,
   minimax,
   minimaxCn,
+  bedrock,
 ];
 
 /** Build a Models collection over all built-in providers. */
