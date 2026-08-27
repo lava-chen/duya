@@ -96,7 +96,14 @@ export function assertValidSchedule(schedule: CronSchedule): void {
  * - `every`: cadence anchored on `lastRunAt` (or `now` for a job that never ran),
  *   so restarting the app does not shift the phase. A candidate already in the
  *   past is returned as-is; the tick treats it as due once (catch-up, no burst).
- * - `cron`: next occurrence via `croner`.
+ * - `cron`: next occurrence via `croner`, anchored on `lastRunAt` so the same
+ *   scheduled fire cannot repeat within one tick interval. A candidate already
+ *   in the past is returned as-is; the tick treats it as due once (catch-up).
+ *   NOTE: `croner.Cron.nextRun(t)` is strictly-after `t`, so the anchor must
+ *   come from caller (`lastRunAt` for previously-fired jobs, `createdAt` for
+ *   brand-new jobs) — never from `nowMs`. Anchoring on `nowMs` made the
+ *   scheduler permanently miss every `cron` schedule (see plan forthcoming in
+ *   docs/exec-plans/active).
  *
  * Returns `null` when the schedule is exhausted (past one-shot / endAt reached).
  */
@@ -123,9 +130,14 @@ export function computeNextRunAt(schedule: CronSchedule, lastRunAtMs: number, no
   const expr = schedule.expr?.trim() || '';
   if (!expr) return null;
   const cron = new Cron(expr, { timezone: schedule.tz || undefined, catch: false });
-  const next = cron.nextRun(new Date(nowMs));
+  // Anchor on lastRunAtMs (NOT nowMs): croner.nextRun is strictly-after its
+  // argument, so anchoring on nowMs always returns a future time and the
+  // tick filter `nextRunAt <= now` can never match. The returned time can
+  // legitimately be in the past when lastRunAt is far enough back — that
+  // is the catch-up signal, and the tick filter handles it.
+  const next = cron.nextRun(new Date(lastRunAtMs));
   if (!next) return null;
   const nextMs = next.getTime();
-  if (!Number.isFinite(nextMs) || nextMs <= nowMs) return null;
+  if (!Number.isFinite(nextMs)) return null;
   return withinEnd(nextMs);
 }

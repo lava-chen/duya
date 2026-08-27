@@ -107,6 +107,65 @@ describe('AutomationScheduler', () => {
     expect(mocks.runCronInSession).not.toHaveBeenCalled();
   });
 
+  it('fires a daily-9am cron via the polling tick (regression: cron schedules were silently never firing)', async () => {
+    // Regression guard: `computeNextRunAt` used to anchor cron schedules on
+    // `nowMs`, and croner.nextRun is strictly-after. Combined with the
+    // `nextRunAt <= now` filter, this meant daily/hourly cron jobs never
+    // fired through the tick. The fix anchors on `lastRunAt`/`createdAt`;
+    // here we simulate an app that has been idle past the scheduled time
+    // by setting lastRunAt to yesterday 09:00 — the tick must now detect
+    // today's 09:00 as due and fire exactly once.
+    const cron = scheduler.createCron(
+      makeInput({
+        name: 'daily 9am',
+        schedule: { kind: 'cron', expr: '0 9 * * *' },
+      }),
+    );
+    // Pretend the previous fire was yesterday at 09:00; today's 09:00 is overdue.
+    const yesterday9 = Date.now() - 24 * 3600_000;
+    store.markRunResult(cron.id, { lastRunAt: yesterday9, error: null, retryCount: 0 });
+
+    await scheduler.tick();
+    await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalledTimes(1));
+  });
+
+  it('fires a freshly-created cron on the next tick after its first scheduled occurrence (regression: first run was unreachable)', async () => {
+    // Regression guard for the very-first-run path. We pin `Date.now()` to a
+    // known instant so the test is not flaky around the daily 9am boundary:
+    // pretend the cron was created at 08:00 UTC and the scheduler is now
+    // ticking at 09:00:30 UTC. The next 9am strictly after 08:00 is today
+    // 09:00 UTC, which is <= now → the tick filter must fire.
+    //
+    // Two clock phases are needed: `createCron` writes the on-disk
+    // `created_at`, so the mock must be set BEFORE creating the cron and
+    // advanced AFTER. Mutating `doc.jobs[i].created_at` directly is racy
+    // because `tick()` calls `store.load()` and re-reads from disk.
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      // Phase 1: pretend create time is 08:00 UTC.
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 8, 0, 0));
+      const cron = scheduler.createCron(
+        makeInput({
+          name: 'fresh daily',
+          schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' },
+        }),
+      );
+
+      // Phase 2: advance clock to 09:00:30 UTC — the tick.
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 9, 0, 30));
+
+      const seeded = store.getCron(cron.id)!;
+      expect(seeded.nextRunAt).not.toBeNull();
+      expect(seeded.nextRunAt!).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+      expect(seeded.nextRunAt!).toBeLessThanOrEqual(Date.now());
+
+      await scheduler.tick();
+      await vi.waitFor(() => expect(mocks.runCronInSession).toHaveBeenCalledTimes(1));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('runCronNow returns a handle and executes in the background', async () => {
     const cron = scheduler.createCron(makeInput());
     const handle = await scheduler.runCronNow(cron.id);
