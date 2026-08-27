@@ -1124,6 +1124,7 @@ export interface ElectronAPI {
   import: ImportAPI
   voice: VoiceAPI
   ide: IdeAPI
+  orb: OrbAPI
 }
 
 export interface IdeInfo {
@@ -1201,6 +1202,42 @@ interface ImportAPI {
   apply: (params: unknown) => Promise<unknown>
   rollback: (params: { batchId: string }) => Promise<void>
   history: () => Promise<unknown[]>
+}
+
+// Plan 453 Task E: Orb client surface.
+export interface OrbAPI {
+  submit: (prompt: string) => Promise<{ accepted: boolean; note?: string }>
+  showInput: () => Promise<{ ok: boolean }>
+  insertTab: (text: string) => Promise<{
+    ok: boolean
+    reason?: string
+    note?: string
+  }>
+  setPosition: (position: {
+    x: number
+    y: number
+    displayId: number
+  }) => Promise<{ ok: boolean }>
+  state: () => Promise<{ state: string }>
+  collapse: () => Promise<{ ok: boolean }>
+  onChunk: (
+    callback: (chunk: { delta: string; turnId: string }) => void,
+  ) => () => void
+  onShowInput: (callback: () => void) => () => void
+  onShowLoading: (
+    callback: (payload: { stage: string }) => void,
+  ) => () => void
+  onUpdateProgress: (
+    callback: (payload: { stage: string; label: string }) => void,
+  ) => () => void
+  onShowResult: (
+    callback: (payload: {
+      turnId: string
+      text: string
+      finishedAt: string
+    }) => void,
+  ) => () => void
+  onHide: (callback: () => void) => () => void
 }
 
 // Callback registry for sync events
@@ -2180,6 +2217,76 @@ const electronAPI: ElectronAPI = {
     list: () => ipcRenderer.invoke('ide:list'),
     getDefault: () => ipcRenderer.invoke('ide:get-default'),
     open: (id: string, target: string) => ipcRenderer.invoke('ide:open', id, target),
+  },
+  // Plan 453 Task E: orb client surface.
+  orb: {
+    submit: (prompt: string) =>
+      ipcRenderer.invoke('automation:orb:submit', { prompt }),
+    showInput: () => ipcRenderer.invoke('automation:orb:show-input'),
+    insertTab: (text: string) =>
+      ipcRenderer.invoke('automation:orb:insert-tab', { text }),
+    setPosition: (position: { x: number; y: number; displayId: number }) =>
+      ipcRenderer.invoke('automation:orb:set-position', position),
+    state: () =>
+      ipcRenderer.invoke('automation:orb:state') as Promise<{ state: string }>,
+    collapse: () => ipcRenderer.invoke('automation:orb:collapse'),
+    onChunk: (callback: (chunk: { delta: string; turnId: string }) => void) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        chunk: { delta: string; turnId: string },
+      ) => callback(chunk);
+      ipcRenderer.on('automation:orb:chunk', handler);
+      return () => ipcRenderer.removeListener('automation:orb:chunk', handler);
+    },
+    onShowInput: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('automation:orb:show-input', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-input', handler);
+    },
+    onShowLoading: (
+      callback: (payload: { stage: string }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { stage: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:show-loading', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-loading', handler);
+    },
+    onUpdateProgress: (
+      callback: (payload: { stage: string; label: string }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { stage: string; label: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:update-progress', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:update-progress', handler);
+    },
+    onShowResult: (
+      callback: (payload: {
+        turnId: string;
+        text: string;
+        finishedAt: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { turnId: string; text: string; finishedAt: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:show-result', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-result', handler);
+    },
+    onHide: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('automation:orb:hide', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:hide', handler);
+    },
   },
 }
 

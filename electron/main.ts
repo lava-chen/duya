@@ -398,7 +398,7 @@ if (gotTheLock) {
       // Default `wake.enabled` is true when unset (privacy-by-default
       // means we ship with the bridge on; the daemon itself is opt-in
       // by file presence).
-      const wakeEnabled = (configStore.get('wake.enabled') ?? true) !== false;
+      const wakeEnabled = (configStore.getByPath('wake.enabled') ?? true) !== false;
       if (wakeEnabled) {
         const resolved = await resolveComputerUseDaemonEntry();
         if (resolved) {
@@ -422,6 +422,62 @@ if (gotTheLock) {
     } catch (error) {
       logger.error(
         'Failed to start computer-use-demo daemon',
+        error instanceof Error ? error : new Error(String(error)),
+        undefined,
+        'Main',
+      );
+    }
+
+    // ============================================================
+    // Step 0.9: Wake Agent hotkey + Orb (Plan 453 Task E)
+    // ============================================================
+    // Registers the global hotkey + IPC handlers + wires the orb
+    // window accessor so the orb IPC can send `main → orb` messages.
+    // The actual orb BrowserWindow is created lazily on first wake.
+    try {
+      const { initializeWakeService, defaultOrbPosition } =
+        await import('./services/wake');
+      const { registerOrbHandlers, setOrbWindowAccessor } =
+        await import('./ipc/orb');
+      const configStore = getConfigStore();
+      const wakeEnabled = (configStore.getByPath('wake.enabled') ?? true) !== false;
+      if (wakeEnabled) {
+        const shortcut = (configStore.getByPath('wake.shortcut') as string | undefined) ??
+          'CommandOrControl+Shift+Space';
+        const wake = initializeWakeService({
+          defaultShortcut: shortcut,
+          orbDevUrl: !app.isPackaged
+            ? (process.env.DUYA_ORB_DEV_URL ?? 'http://localhost:5173/orb')
+            : undefined,
+          orbResourcesPath: app.isPackaged
+            ? path.join(process.resourcesPath, 'orb')
+            : undefined,
+        });
+        // Restore persisted position if available.
+        const persisted = configStore.getByPath('wake.orb') as
+          | { x?: number; y?: number; displayId?: number }
+          | undefined;
+        if (persisted && typeof persisted.x === 'number' && typeof persisted.y === 'number') {
+          wake.setPosition({
+            x: persisted.x,
+            y: persisted.y,
+            displayId: typeof persisted.displayId === 'number' ? persisted.displayId : 0,
+          });
+        } else {
+          wake.setPosition(defaultOrbPosition());
+        }
+        // Wire orb IPC handlers + accessor for `main → orb` sends.
+        registerOrbHandlers();
+        setOrbWindowAccessor(() => wake.getOrbWindow());
+        logger.info(
+          'Wake service initialized',
+          { shortcut },
+          'Main',
+        );
+      }
+    } catch (error) {
+      logger.error(
+        'Failed to initialize wake service',
         error instanceof Error ? error : new Error(String(error)),
         undefined,
         'Main',
