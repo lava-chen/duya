@@ -79,19 +79,22 @@ export function registerOrbHandlers(): void {
   ipcMain.handle(
     'automation:orb:insert-tab',
     async (_event, payload: { text: string }) => {
-      // Task I implements the actual nut.js type. For Task E we just
-      // log the request and return a placeholder result so the IPC
-      // contract is wired end-to-end.
-      logger.info(
-        'orb:insert-tab received',
-        { length: payload.text?.length ?? 0 },
-        LogComponent.Orb,
+      // Plan 453 Task I: actual nut.js wiring. The service reads
+      // OSContextBridge to refuse password / redaction, then types
+      // into the focused field. Returns a structured result so the
+      // renderer can show an error inline.
+      const { insertTabToFocusedField } = await import(
+        '../services/orb-insert-tab'
       );
-      return {
-        ok: false,
-        reason: 'not-implemented',
-        note: 'Task I wires nut.js keyboard.type; current placeholder logs the request',
-      };
+      const result = await insertTabToFocusedField(payload.text);
+      if (!result.ok) {
+        logger.warn(
+          'orb:insert-tab rejected',
+          { reason: result.reason, length: payload.text?.length ?? 0 },
+          LogComponent.Orb,
+        );
+      }
+      return result;
     },
   );
 

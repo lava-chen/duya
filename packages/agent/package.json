@@ -21,6 +21,10 @@
     "./message": {
       "types": "./dist/message/index.d.ts",
       "default": "./dist/message/index.js"
+    },
+    "./context/os-context": {
+      "types": "./dist/context/os-context/index.d.ts",
+      "default": "./dist/context/os-context/index.js"
     }
   },
   "scripts": {
