@@ -22,7 +22,6 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../registry.js';
-import { readToolExposureConfig } from '../../config/tool-exposure.js';
 
 /**
  * Descriptor shape sent from the main process. Mirrors
@@ -162,13 +161,12 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 }
 
 /**
- * Build the `ToolMetaInput` for a descriptor.
- *
- * Plan 452 Phase A: connector tools register `always` (Direct) by default —
- * codex parity where one exposure rule covers MCP and app tools alike, so a
- * connected app's tools are available without a tool_search round-trip.
- * `[tools] on_demand_discovery` flips them back to `discoverable` for a lean
- * prompt (the @-mention pre-exposure path still promotes them per-turn).
+ * Build the `ToolMetaInput` for a descriptor. Connector tools are
+ * `discoverable`: they enter the LLM's default tool list only when the user
+ * @-mentions their provider this turn (exposure promotion in
+ * `DuyaAgent._resolveTools`), or after `tool_search` surfaces them. The
+ * persistent "Apps (Connectors)" system section keeps the model aware of
+ * what exists either way.
  *
  * Plan 312 Phase 4: the `riskTier` is forwarded so the permission gate
  * can apply tier-based gating (read/draft auto-execute, write/modify
@@ -176,7 +174,7 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
  */
 function buildMeta(desc: AppConnectionToolDescriptor): ToolMetaInput {
   return {
-    exposeMode: readToolExposureConfig().onDemandDiscovery ? 'discoverable' : 'always',
+    exposeMode: 'discoverable',
     inputSchemaSummary: desc.inputSchemaSummary,
     riskTier: desc.riskTier,
   };

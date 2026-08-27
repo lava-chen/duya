@@ -229,11 +229,12 @@ export function MCPSection() {
   const [agentProfiles, setAgentProfiles] = useState<AgentProfile[]>([]);
   const [inventory, setInventory] = useState<MCPInventorySnapshotDTO | null>(null);
 
-  // Plan 452 Phase A: global tool-exposure switch. Default OFF = Direct
-  // (MCP + connector tool schemas ride every request); ON = on-demand
-  // discovery (tools register discoverable, surfaced via tool_search).
+  // Plan 452 Phase A: global MCP exposure switch. Default OFF = Direct
+  // (MCP tool schemas ride every request); ON = on-demand discovery
+  // (MCP tools register discoverable, surfaced via tool_search). Connector
+  // (app) tools are unaffected — always @-mention/tool_search gated.
   // Persisted at `tools.on_demand_discovery` in ~/.duya/config.toml; the
-  // agent worker re-reads it on every MCP/connector (re)registration.
+  // agent worker re-reads it on every MCP (re)registration.
   const [onDemandDiscovery, setOnDemandDiscovery] = useState(false);
   useEffect(() => {
     getConfigValue('tools.on_demand_discovery')
@@ -611,8 +612,9 @@ export function MCPSection() {
           <div className="min-w-0">
             <h3 className="font-medium text-foreground">按需工具发现 (On-demand tool discovery)</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              关闭（默认）：MCP 与应用连接器的工具直接进入每轮请求，无需搜索即可调用。
-              开启：工具注册为可发现状态，模型通过 tool_search 按需加载，prompt 更精简但多一跳。
+              关闭（默认）：MCP 服务器的工具直接进入每轮请求，无需搜索即可调用。
+              开启：MCP 工具注册为可发现状态，模型通过 tool_search 按需加载，prompt 更精简但多一跳。
+              应用连接器（App）工具不受此项影响——始终由 @ 提及或 tool_search 激活。
               修改后重新连接 MCP 服务器生效。
             </p>
           </div>
