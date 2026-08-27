@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
 import { randomUUID } from 'crypto';
-import { platform as getPlatform, tmpdir } from 'os';
+import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -382,6 +382,50 @@ if (gotTheLock) {
       initAutomationScheduler();
     } catch (error) {
       logger.error('Failed to initialize automation scheduler', error instanceof Error ? error : new Error(String(error)), undefined, 'Main');
+    }
+
+    // ============================================================
+    // Step 0.85: computer-use-demo daemon (Plan 453 Task D)
+    // ============================================================
+    // The daemon runs as a long-lived child process and writes
+    // `~/.duya/context/<sessionId>.json` for the OSContextBridge. Only
+    // initialised when `[wake] enabled = true`; if disabled, we skip
+    // spawn entirely (the bridge stays quiet per its default state).
+    try {
+      const { setComputerUseDaemonOptions, getComputerUseDaemon } =
+        await import('./services/computer-use-daemon');
+      const configStore = getConfigStore();
+      // Default `wake.enabled` is true when unset (privacy-by-default
+      // means we ship with the bridge on; the daemon itself is opt-in
+      // by file presence).
+      const wakeEnabled = (configStore.get('wake.enabled') ?? true) !== false;
+      if (wakeEnabled) {
+        const resolved = await resolveComputerUseDaemonEntry();
+        if (resolved) {
+          const { entry, runtime } = resolved;
+          setComputerUseDaemonOptions({
+            entry,
+            runtime,
+            cwd: path.dirname(entry),
+            contextDir: path.join(homedir(), '.duya', 'context'),
+          });
+          await getComputerUseDaemon().start();
+        } else {
+          logger.info(
+            'ComputerUseDaemon entry not found; skipping spawn. ' +
+              'Build the daemon (cd E:\\Projects\\computer-use-demo && npm run build) or run it externally.',
+            undefined,
+            'Main',
+          );
+        }
+      }
+    } catch (error) {
+      logger.error(
+        'Failed to start computer-use-demo daemon',
+        error instanceof Error ? error : new Error(String(error)),
+        undefined,
+        'Main',
+      );
     }
 
     // ============================================================
@@ -976,4 +1020,65 @@ async function ensureMemoryConfigDir(configRoot: string): Promise<void> {
       JSON.stringify({ schema_version: DEFAULT_LAYOUT.schema_version, entities }, null, 2),
     );
   }
+}
+
+/**
+ * Resolve the computer-use-demo daemon entry point.
+ *
+ * Order of attempts:
+ *   1. Production: `process.resourcesPath/computer-use-demo/dist/main.js`
+ *      (set up by electron-builder extraResources in a later phase).
+ *   2. Dev: `E:/Projects/computer-use-demo/src/main.ts` paired with
+ *      the bundled `tsx` from the repo's `node_modules`.
+ *
+ * Returns `{ entry, runtime }` on success, null when neither path
+ * resolves. Callers should log a "daemon not available" message and
+ * skip spawn rather than crashing startup.
+ */
+async function resolveComputerUseDaemonEntry(): Promise<
+  { entry: string; runtime: string } | null
+> {
+  const fs = await import('node:fs/promises');
+  const pathMod = await import('node:path');
+
+  // 1. Production packaged path.
+  const prodEntry = pathMod.join(
+    process.resourcesPath ?? '',
+    'computer-use-demo',
+    'dist',
+    'main.js',
+  );
+  try {
+    await fs.access(prodEntry);
+    return { entry: prodEntry, runtime: process.execPath };
+  } catch {
+    // not packaged; fall through
+  }
+
+  // 2. Dev path: tsx + daemon source. We honor a few common locations.
+  const tsxBin = pathMod.join(
+    process.cwd(),
+    'node_modules',
+    '.bin',
+    process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
+  );
+  const candidates = [
+    'E:/Projects/computer-use-demo/src/main.ts',
+    pathMod.join(process.cwd(), '..', 'computer-use-demo', 'src', 'main.ts'),
+  ];
+  for (const c of candidates) {
+    try {
+      await fs.access(c);
+      try {
+        await fs.access(tsxBin);
+        return { entry: c, runtime: tsxBin };
+      } catch {
+        // no tsx; bail
+        return null;
+      }
+    } catch {
+      // try next
+    }
+  }
+  return null;
 }
