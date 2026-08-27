@@ -36,7 +36,7 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { buildAppsSystemSection, collectConnectorActivationInjection } from '../mentions/index.js';
+import { buildAppsSystemSection, collectConnectorActivationInjection, collectSkillInjections } from '../mentions/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
@@ -719,6 +719,21 @@ export class duyaAgent {
       if (injection) {
         this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
         logger.info(`[Agent] Connector activation: ${options.mentionedProviders.join(', ')}`);
+      }
+    }
+
+    // Plan 450 Phase H: `/skill-name` mentions — inject the SKILL.md body as
+    // a `<skill>` fragment this turn (codex UserInput::Skill parity), so the
+    // model executes the skill immediately instead of having to notice the
+    // catalog entry and load it with a read round-trip. Resolution happens
+    // against the agent's own skill registry (see collectSkillInjections).
+    if (options?.mentionedSkills?.length) {
+      const skillInjections = await collectSkillInjections(options.mentionedSkills);
+      for (const injection of skillInjections) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+      }
+      if (skillInjections.length > 0) {
+        logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
       }
     }
 

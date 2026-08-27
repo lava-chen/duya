@@ -296,6 +296,14 @@ export interface ChatOptions {
    * the first model turn. Cleared implicitly per streamChat call.
    */
   mentionedProviders?: string[];
+  /**
+   * Plan 450 Phase H: skills whose `/name` command the user submitted this
+   * run. Resolved against the skill registry and injected as `<skill>`
+   * fragments (SKILL.md body) into the first model turn — codex
+   * `UserInput::Skill` parity. Never trust paths from the renderer; the
+   * registry owns the lookup.
+   */
+  mentionedSkills?: string[];
   /** Mode modifier ID for this chat turn (for example, 'research'). */
   mode?: string;
   /**
