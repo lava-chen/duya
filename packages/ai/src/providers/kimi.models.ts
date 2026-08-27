@@ -1,16 +1,112 @@
-// Model data. Hand-curated as the base; generated (models.dev) fields fill gaps.
+// Model data. Sourced from https://openrouter.ai/api/v1/models (public,
+// no key). OpenRouter is a no-auth model directory that proxies all the
+// major Chinese vendors; we strip the upstream prefix and route through
+// the provider's direct baseUrl. contextWindow / maxTokens / cost /
+// modalities / reasoning flag all come from upstream metadata, which the
+// direct endpoints honour identically.
 import type { Model } from '../types.js';
 
 export const kimiModels: Model<'openai-chat'>[] = [
   {
-    id: 'moonshot-v1-auto',
-    name: 'Moonshot v1 Auto',
+    id: 'kimi-k3',
+    name: "MoonshotAI: Kimi K3",
+    api: 'openai-chat',
+    providerId: 'kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    reasoning: true,
+    input: ['text', 'image'],
+    contextWindow: 1048576,
+    maxTokens: 943718,
+    cost: {
+      input: 0.000003,
+      output: 0.000015,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: 'kimi-k2.7-code',
+    name: "MoonshotAI: Kimi K2.7 Code",
+    api: 'openai-chat',
+    providerId: 'kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    reasoning: true,
+    input: ['text', 'image'],
+    contextWindow: 262144,
+    maxTokens: 235929,
+    cost: {
+      input: 0.000001,
+      output: 0.000003,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: 'kimi-k2.6',
+    name: "MoonshotAI: Kimi K2.6",
+    api: 'openai-chat',
+    providerId: 'kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    reasoning: true,
+    input: ['text', 'image'],
+    contextWindow: 262144,
+    maxTokens: 235929,
+    cost: {
+      input: 0.000001,
+      output: 0.000004,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: 'kimi-k2.5',
+    name: "MoonshotAI: Kimi K2.5",
+    api: 'openai-chat',
+    providerId: 'kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    reasoning: true,
+    input: ['text', 'image'],
+    contextWindow: 262144,
+    maxTokens: 235929,
+    cost: {
+      input: 0.000001,
+      output: 0.000003,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: 'kimi-k2-thinking',
+    name: "MoonshotAI: Kimi K2 Thinking",
+    api: 'openai-chat',
+    providerId: 'kimi',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    reasoning: true,
+    input: ['text'],
+    contextWindow: 262144,
+    maxTokens: 100352,
+    cost: {
+      input: 0.000001,
+      output: 0.000003,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+  },
+  {
+    id: 'kimi-k2',
+    name: "MoonshotAI: Kimi K2 0711",
     api: 'openai-chat',
     providerId: 'kimi',
     baseUrl: 'https://api.moonshot.cn/v1',
     reasoning: false,
     input: ['text'],
-    contextWindow: 128000,
-    maxTokens: 8192,
+    contextWindow: 131072,
+    maxTokens: 100352,
+    cost: {
+      input: 0.000001,
+      output: 0.000002,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
   },
 ];
