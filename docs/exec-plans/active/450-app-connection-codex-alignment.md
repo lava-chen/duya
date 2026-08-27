@@ -104,22 +104,28 @@
 ### Phase D: 模板资产化 + 结构化参数展示
 
 - [x] 模板资产迁至 `packages/agent/src/tool/AppConnectionTool/approval-templates.json`
-      （schema_version 1），loader 坏文件回落内置默认
-- [x] 新增 `buildToolParamsDisplay(input, schema)`：top-3 标量参数 + schema.title 友好化
-      label + 120 字符截断
+      （schema_version 2），loader 坏文件回落内置默认
+- [x] `buildToolParamsDisplay(input, schema)`：top-3 标量参数 + schema.title 友好化
+      label + 120 字符截断（上一笔 commit 已落地）
 - [x] 类型贯通：`PermissionRequestEvent.metadata.toolParamsDisplay` 从
-      `@duya/ai/types.ts` 到 `packages/agent/src/types.ts` → StreamingToolExecutor
-      → agent-process-entry `chat:permission` → renderer PermissionRequestEvent
-- [x] StreamingToolExecutor 在发 permissionRequest 时构造 metadata
-      （仅连接器工具 + 至少一个标量参数才发出，避免唤噪音）
-- [x] PermissionPrompt 渲染 ToolParamsDisplay 块（`<dl>` label:value 行）
-      在 CollapsibleDetails 中、ToolInputBlock 之前
+      `@duya/ai/types.ts` → agent process entry → renderer PermissionRequestEvent
+      （上一笔 commit 已落地）
+- [x] 新增 `tool_overrides`：14 条 curated 工具动作模板（github: add_comment/...
+      notion: create/update/delete，linear: create_issue/update_issue，figma: export，
+      supabase: apply_migration/execute_sql，vercel: deploy，slack: send_message）
+- [x] 路由顺序：tool_override (provider + regex on action) → provider → 通用渲染器；
+      `renderConnectorApprovalFromDescriptor` 透传 `descriptor.action`
+- [x] 单测：override 匹配 8 条 + 原版 7 条（全套绿）
 
 ### Phase E: 目录快照缓存
 
-- [ ] `catalog-cache.ts`：tools/list 结果按 connectionId 落盘（含 fetchedAt），TTL 3600s；
-      `ensureSession` 先读缓存立即返回 descriptors，后台过期刷新 —— D8/R10
-- [ ] 连接断开/撤销 → 删对应缓存文件
+- [x] `electron/services/app-connections/catalog-cache.ts`：
+      atomic write (tmp+rename) + TTL `CONNECTORS_CACHE_TTL_MS = 3_600_000`
+      + `isFresh` 检查 + 断开时清理。与 codex `CONNECTORS_CACHE_TTL` 对齐
+- [x] `remote-mcp.ts`：`ensureSession` 中先读缓存——新鲜且同 provider
+      则跳过 `client.listTools()`，过期或缺失才拉取并写盘
+- [x] `disconnect` 调 `deleteCatalogCache(connectionId)` 避免重新授权时重用陈旧清单
+- [x] 单测 8 条（全套绿）：roundtrip、TTL 边界、坏 JSON、别键、delete
 - [ ] 单测：TTL 判定、坏 JSON 回落、断开清理
 
 ### Phase F: 验证
