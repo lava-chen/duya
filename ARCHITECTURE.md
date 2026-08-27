@@ -2224,14 +2224,23 @@ codex `AppToolPolicyEvaluator` / approval memory / templates:
   tools to expose-always (skipping tool_search discovery), and injects a
   one-shot `<connector-activation>` system-reminder (listing tool names,
   neutral wording when tools are not exposed) into the first model turn.
-- **Mentions framework** (`packages/agent/src/mentions/index.ts`, Phase G):
+- **Mentions framework** (`packages/agent/src/mentions/index.ts`, Phase G+H):
   typed `MentionTarget` (`app` | `skill` | `file` | `mcp`) + `TurnInjection`
-  + `buildAppsSystemSection`. The `app` kind is implemented; `skill`/`file`/
-  `mcp` reserve the interface. The persistent "## Apps (Connectors)" system
-  section (codex `apps_instructions.rs` parity) renders whenever any
+  + `buildAppsSystemSection`. The `app` and `skill` kinds are implemented;
+  `file`/`mcp` reserve the interface. The persistent "## Apps (Connectors)"
+  system section (codex `apps_instructions.rs` parity) renders whenever any
   connected app has tool descriptors — mention syntax, per-app tool lists,
   and the tool_search pointer — so the model can trigger apps implicitly,
   not only on turns with an explicit `@`.
+- **Skill mention injection** (`rewriteSkillMentionTokens` in
+  `src/lib/skill-mentions.ts`, Phase H): a leading `/name` (or line-leading)
+  command is rewritten to `[/name](skill://name)` for the model and the name
+  is forwarded as `mentionedSkills`. The agent resolves the name against its
+  own skill registry (renderer names are hints, never paths) and injects the
+  SKILL.md body — loaded via the same `getPromptForCommand` the Skill tool
+  uses — as a `<skill>` fragment into the first model turn (codex
+  `UserInput::Skill` parity). Hidden / model-invocation-disabled /
+  conditional skills are never injected.
 - **Exposure-layer policy gate** (`electron/services/app-connections/policy-gate.ts`):
   reads `[apps]` from ConfigStore and filters providers BEFORE descriptor
   emission, mirroring codex's `apps_enabled ? filter_codex_apps_mcp_tools : empty`.

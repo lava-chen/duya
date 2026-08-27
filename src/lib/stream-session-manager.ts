@@ -1088,6 +1088,31 @@ class StreamSessionManager {
     }
   }
 
+  /**
+   * Plan 450 Phase H: rewrite a leading `/skill-name` composer command into
+   * a codex-style `[/name](skill://name)` link and extract the mentioned
+   * skill names for structured transport. The name list comes from the same
+   * `skills.list` IPC the `/` popover uses, so only real registry skills are
+   * rewritten (built-in composer commands and prose `/paths` pass through).
+   * Best-effort; on failure the content is returned unchanged.
+   */
+  private async resolveSkillMentions(
+    content: string,
+  ): Promise<{ content: string; mentionedSkills: string[] }> {
+    interface SkillListEntry { name: string; aliases?: string[] }
+    interface SkillsListApi { list?: () => Promise<{ success: boolean; skills?: SkillListEntry[] }> }
+    try {
+      const api = (window as unknown as { electronAPI?: { skills?: SkillsListApi } }).electronAPI?.skills;
+      const result = await api?.list?.();
+      const available = (result?.skills ?? []).map((s) => ({ name: s.name, aliases: s.aliases }));
+      if (available.length === 0) return { content, mentionedSkills: [] };
+      const { rewriteSkillMentionTokens } = await import('./skill-mentions');
+      return rewriteSkillMentionTokens(content, available);
+    } catch {
+      return { content, mentionedSkills: [] };
+    }
+  }
+
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
     const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
 
@@ -1357,7 +1382,11 @@ class StreamSessionManager {
       // the content unchanged and the array empty, which simply degrades
       // to the default discoverable tools.
       const appMentions = await this.resolveAppMentions(params.content);
-      await client.startChat(sessionId, appMentions.content, {
+      // Plan 450 Phase H: same treatment for a leading `/skill-name` —
+      // rewritten to `[/name](skill://name)` and transported as
+      // `mentionedSkills` so the agent injects the SKILL.md body this turn.
+      const skillMentions = await this.resolveSkillMentions(appMentions.content);
+      await client.startChat(sessionId, skillMentions.content, {
         model: params.model,
         maxTokens: params.maxTokens,
         maxTurns: params.maxTurns,
@@ -1373,6 +1402,9 @@ class StreamSessionManager {
         mode: params.mode,
         ...(appMentions.mentionedProviders.length > 0
           ? { mentionedProviders: appMentions.mentionedProviders }
+          : {}),
+        ...(skillMentions.mentionedSkills.length > 0
+          ? { mentionedSkills: skillMentions.mentionedSkills }
           : {}),
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,

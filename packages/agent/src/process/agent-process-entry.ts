@@ -163,6 +163,8 @@ interface ChatStartMessage {
     mode?: string;
     /** Plan 450: @-mentioned providers for this run. */
     mentionedProviders?: string[];
+    /** Plan 450 Phase H: `/skill-name` mentioned this run. */
+    mentionedSkills?: string[];
     titleGenerationModel?: string;
     titleGenerationModelConfig?: {
       provider: string;
@@ -2330,6 +2332,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Plan 450: @-mentioned providers for this run (exposure promotion +
       // connector-activation reminder). See AppConnectionTool/selection.ts.
       mentionedProviders: msg.options?.mentionedProviders,
+      // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
+      // injection). See mentions/index.ts collectSkillInjection.
+      mentionedSkills: msg.options?.mentionedSkills,
       attachments: files,
       displayContent: msg.options?.displayContent,
       // Plan 441: thread the chat:start message id through as the turn id

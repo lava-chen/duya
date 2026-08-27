@@ -58,6 +58,12 @@ export interface ChatOptions {
    * to the worker so connector tools of these providers skip tool_search.
    */
   mentionedProviders?: string[];
+  /**
+   * Plan 450 Phase H: skills whose `/name` command the user submitted this
+   * run. Forwarded to the worker so the agent injects the SKILL.md body as a
+   * `<skill>` fragment instead of relying on the model to load it.
+   */
+  mentionedSkills?: string[];
 }
 
 export interface AgentEvent {

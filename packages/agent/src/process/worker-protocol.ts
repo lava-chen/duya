@@ -66,6 +66,8 @@ export interface ChatStartCommand {
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
     displayContent?: string;
+    /** Plan 450 Phase H: `/skill-name` mentioned this run (see ChatOptions). */
+    mentionedSkills?: string[];
     parsedDocs?: Array<{
       filename: string;
       charCount: number;

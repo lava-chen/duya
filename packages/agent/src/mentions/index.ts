@@ -126,6 +126,92 @@ export function buildAppsSystemSection(
 }
 
 // Reserved for the next framework milestones (plan 450 Phase H+):
-//   - collectSkillInjection(target: MentionTarget) — skill:// SKILL.md fragment
 //   - collectFileInjection(target: MentionTarget)  — file:// attachment pointer
 // See codex `core/src/plugins/render.rs` for the injection-shape reference.
+
+import { join } from 'node:path';
+import { getSkillRegistry } from '../skills/registry.js';
+import type { ToolUseContext } from '../types.js';
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Collect `<skill>` fragment injections for the `/name` skills mentioned
+ * this turn (Plan 450 Phase H) — codex `UserInput::Skill` +
+ * `load_skill_prompts` parity.
+ *
+ * Names are resolved against the agent's OWN skill registry (alias-aware);
+ * renderer-supplied names are hints, never paths, so nothing from the
+ * composer is trusted as a filesystem location. Loading goes through
+ * `skill.getPromptForCommand` — the exact same source the Skill tool uses —
+ * so the injected body matches what an explicit Skill invocation would see.
+ * Skills that are hidden, model-invocation-disabled, conditional-pending, or
+ * disabled are silently skipped (fail-open for the user's message text,
+ * fail-closed for the injection).
+ */
+export async function collectSkillInjections(
+  selectedSkills: readonly unknown[],
+): Promise<TurnInjection[]> {
+  const names = selectedSkills.filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
+  if (names.length === 0) return [];
+
+  const registry = getSkillRegistry();
+  const context: ToolUseContext = {
+    toolUseId: crypto.randomUUID(),
+    abortController: new AbortController(),
+    getAppState: () => ({}),
+    setAppState: () => {},
+    options: {
+      tools: [],
+      commands: [],
+      mainLoopModel: '',
+      mcpClients: [],
+    },
+  };
+
+  const injections: TurnInjection[] = [];
+  const seen = new Set<string>();
+  for (const name of names) {
+    const skill = registry.get(name.trim());
+    if (!skill || seen.has(skill.name)) continue;
+    seen.add(skill.name);
+    // Same visibility rules as the `<available_skills>` catalog
+    // (registry.listModelInvocable): a skill the model cannot load must not
+    // be force-injected either.
+    if (
+      skill.isHidden
+      || skill.disableModelInvocation
+      || skill.isConditional
+      || skill.isEnabled?.() === false
+    ) {
+      continue;
+    }
+
+    let body: string;
+    try {
+      body = await skill.getPromptForCommand('', context);
+    } catch {
+      continue;
+    }
+    if (!body) continue;
+
+    const location = skill.skillRoot ? join(skill.skillRoot, 'SKILL.md') : undefined;
+    injections.push({
+      envelope: 'skill',
+      body: [
+        `<name>${escapeXml(skill.name)}</name>`,
+        ...(location ? [`<location>${escapeXml(location)}</location>`] : []),
+        '',
+        body,
+      ].join('\n'),
+    });
+  }
+  return injections;
+}
