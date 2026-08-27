@@ -1,7 +1,7 @@
 /**
  * OSContextBridge public barrel.
  *
- * Plan 453 Task B.
+ * Plan 453 Task B / Task C.
  */
 
 export type { OSContext, OSFocusedEntity, AcceptedSchemaVersion } from './types.js';
@@ -34,3 +34,21 @@ export type {
   OSContextErrorListener,
 } from './bridge.js';
 export { getOSContextBridge, __resetOSContextBridge } from './bridge.js';
+
+export type { ContextualUserFragment } from '../contextual-user-fragment.js';
+export {
+  CONTEXTUAL_USER_FRAGMENT_MATCHERS,
+  isContextualFragment,
+  renderFragment,
+  renderFragments,
+} from '../contextual-user-fragment.js';
+
+export {
+  CONTENT_KIND as OS_CONTEXT_FRAGMENT_KIND,
+  OSContextUserFragment,
+  OS_CONTEXT_FRAGMENT_TOKEN_BUDGET,
+  injectOSContextFragment,
+  renderSnapshot,
+  truncate,
+  truncateMiddleWithTokenBudget,
+} from './fragment.js';

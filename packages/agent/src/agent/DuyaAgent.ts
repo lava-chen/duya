@@ -98,6 +98,12 @@ import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
+
+// Plan 453 Task C: contextual-user-fragment injection channel.
+import {
+  getOSContextBridge,
+  injectOSContextFragment,
+} from '../context/os-context/index.js';
 import {
   getDiscoveredToolPrompts,
   harvestDiscoveredTools,
@@ -1462,6 +1468,12 @@ export class duyaAgent {
         // contexts) into the provider payload. These are never persisted to
         // the durable history.
         await this._injectRuntimeContext(llmMessages, options, deferredContexts);
+
+        // Plan 453 Task C: append OSContext as a contextual user fragment on
+        // every turn. The bridge is the integration seam — tests can swap
+        // it via __setBridgeForTest. The fragment is ephemeral (lives only
+        // on `llmMessages`; never lands in the durable timeline).
+        injectOSContextFragment(llmMessages, runtimePromptMessageId);
         // Cache the system-prompt + tool-surface estimate for the live
         // context ring's no-usage fallback. Only the provider contract is
         // counted (name/description/input_schema), mirroring what is
