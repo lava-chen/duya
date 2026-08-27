@@ -162,6 +162,12 @@ export class AgentServerClient {
             outputStyleConfig: options?.outputStyleConfig,
             displayContent: options?.displayContent,
             mode: options?.mode,
+            // Plan 450: mention lists for per-turn activation (app connectors)
+            // and skill-fragment injection. These MUST be forwarded explicitly —
+            // this body is a whitelist; anything omitted never reaches the
+            // worker's chat:start options.
+            mentionedProviders: options?.mentionedProviders,
+            mentionedSkills: options?.mentionedSkills,
             maxTurns: options?.maxTurns,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
