@@ -9,3 +9,25 @@
  */
 
 export { pipe, type Wrapper } from './compose.js';
+
+// Phase 1 — anthropic family wrappers.
+export {
+  anthropicFamilyToolPayloadCompat,
+  applyToolResultTransport,
+  resolveToolResultTransport,
+  isDeepSeekAnthropicEndpoint,
+} from './anthropic-family-tool-payload-compat.js';
+export {
+  anthropicFamilyThinkingReplay,
+  type ThinkingSignatureObserver,
+} from './anthropic-family-thinking-replay.js';
+export {
+  checkCacheEligibility,
+  applyCacheControl,
+  applyCacheControlToSystem,
+  stripCacheControl,
+  hasCacheControl,
+  type CacheControl,
+  type CacheEligibility,
+  type CacheRetention,
+} from './anthropic-family-cache-control.js';
