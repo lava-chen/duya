@@ -20,7 +20,6 @@ import { STREAM_IDLE_TIMEOUT_MS } from './constants';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
 import { interruptChat } from './agent-sse-client';
-import { extractMentionedProviders } from './app-connection-ipc';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
 import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
@@ -1060,21 +1059,22 @@ class StreamSessionManager {
   }
 
   /**
-   * Plan 450: resolve `@<providerId> ` tokens in the user message to
-   * `mentionedProviders`. Connects to the App Connections API to
-   * enumerate connected providers, then delegates the token scan to the
-   * pure `extractMentionedProviders` helper. Best-effort; returns an empty
-   * object on failure so the agent falls back to default discoverable tools.
+   * Plan 450 Phase G: resolve `@<providerId>`/`@<label>` tokens in the user
+   * message and rewrite them to codex-style `[@label](app://id)` links that
+   * the model can resolve. Connects to the App Connections API to enumerate
+   * connected providers, then delegates to the pure `rewriteAppMentionTokens`
+   * helper. Best-effort; on failure returns the content unchanged with no
+   * mentions so the agent falls back to default discoverable tools.
    */
-  private async resolveMentionedProviders(
+  private async resolveAppMentions(
     content: string,
-  ): Promise<{ mentionedProviders?: string[] }> {
+  ): Promise<{ content: string; mentionedProviders: string[] }> {
     try {
       // Lazy import to avoid bundling electronAPI types into the message
       // library entry points that don't need it (test runners, SSR shims).
-      const { getAppConnectionAPI } = await import('./app-connection-ipc');
+      const { getAppConnectionAPI, rewriteAppMentionTokens } = await import('./app-connection-ipc');
       const api = getAppConnectionAPI();
-      if (!api) return {};
+      if (!api) return { content, mentionedProviders: [] };
       const [list, providers] = await Promise.all([api.list(), api.providers()]);
       const connected = (list.data ?? [])
         .filter((c) => c.status === 'connected')
@@ -1082,10 +1082,9 @@ class StreamSessionManager {
       const available = (providers.data ?? [])
         .filter((p) => connected.includes(p.id))
         .map((p) => ({ id: p.id, label: p.label }));
-      const mentioned = extractMentionedProviders(content, available);
-      return mentioned.length > 0 ? { mentionedProviders: mentioned } : {};
+      return rewriteAppMentionTokens(content, available);
     } catch {
-      return {};
+      return { content, mentionedProviders: [] };
     }
   }
 
@@ -1351,7 +1350,14 @@ class StreamSessionManager {
       hasImageChunks: !!f.imageChunks,
     })) ?? []);
     try {
-      await client.startChat(sessionId, params.content, {
+      // Plan 450 Phase G: rewrite `@<provider>` composer tokens into
+      // `[@label](app://id)` links for the model and extract the mention
+      // list for per-turn activation. Best-effort; failure to enumerate
+      // connections (e.g. agent server unreachable during typing) leaves
+      // the content unchanged and the array empty, which simply degrades
+      // to the default discoverable tools.
+      const appMentions = await this.resolveAppMentions(params.content);
+      await client.startChat(sessionId, appMentions.content, {
         model: params.model,
         maxTokens: params.maxTokens,
         maxTurns: params.maxTurns,
@@ -1361,13 +1367,13 @@ class StreamSessionManager {
         files: params.files,
         agentProfileId: params.agentProfileId,
         outputStyleConfig: params.outputStyleConfig,
-        displayContent: params.displayContent,
+        // The rewritten content is model-facing; keep the composer's original
+        // text as the stored/displayed user message when no explicit override.
+        displayContent: params.displayContent ?? params.content,
         mode: params.mode,
-        // Plan 450: scan the message for @<providerId> tokens from the
-        // context popover. Best-effort; failure to enumerate connections
-        // (e.g. agent server unreachable during typing) leaves the array
-        // empty, which simply degrades to the default discoverable tools.
-        ...(await this.resolveMentionedProviders(params.content)),
+        ...(appMentions.mentionedProviders.length > 0
+          ? { mentionedProviders: appMentions.mentionedProviders }
+          : {}),
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,

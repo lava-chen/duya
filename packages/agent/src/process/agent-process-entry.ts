@@ -2301,6 +2301,26 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Fresh read per streamChat — hot reload semantics (hooks/config.ts).
     const steering = getSteeringConfig();
 
+    // Plan 450 Phase G: descriptor-cache freshness for @-mention turns.
+    // The cache is a boot/reload-time snapshot; a mentioned provider with
+    // zero cached descriptors used to make the activation reminder claim the
+    // app was "not connected" even though the UI showed it as connected.
+    // Before the run starts, refetch once when any mentioned provider is
+    // missing from the cache. Best-effort: a failed refetch keeps the stale
+    // cache and the agent's reminder wording stays neutral about it.
+    const mentionedProviders = msg.options?.mentionedProviders?.filter(
+      (p: unknown): p is string => typeof p === 'string' && p.length > 0,
+    );
+    if (mentionedProviders && mentionedProviders.length > 0) {
+      const cachedProviders = new Set(
+        (await import('../tool/AppConnectionTool/index.js')).getCachedAppConnectionDescriptors().map((d) => d.provider),
+      );
+      if (mentionedProviders.some((p: string) => !cachedProviders.has(p))) {
+        log('[Agent-Process] App Connection: mentioned provider missing from descriptor cache — refetching');
+        await reloadAppConnectionTools();
+      }
+    }
+
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,

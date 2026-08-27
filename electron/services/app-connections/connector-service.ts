@@ -110,7 +110,10 @@ export class ConnectorService {
     // Plan 449: stamp global "Always allow" decisions onto descriptors so
     // the agent-side permission gate can skip the write/modify ask without
     // an IPC round-trip. Destructive tiers are never stamped.
+    // Plan 450 Phase G: also stamp the display label so the agent's Apps
+    // system section and activation reminder can show `Notion`, not `notion`.
     for (const descriptor of out) {
+      descriptor.providerLabel = getProviderConfig(descriptor.provider)?.label;
       if (
         descriptor.riskTier !== 'destructive' &&
         isToolGloballyApproved(descriptor.provider, descriptor.name)
