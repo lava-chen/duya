@@ -36,11 +36,23 @@ export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudge
 // Summary quality guard
 export { cleanSummaryText, isDegenerateSummary, MIN_SUMMARY_CHARS } from './summaryGuard.js'
 
-// Failure classification + suppression
+// Failure classification + suppression (grok-aligned 5-state machine)
 export {
   classifyCompactFailure,
+  classifySuppressReason,
   CompactSuppression,
   isRetryableCompactFailure,
+  reasonToSuppressState,
+  suppressReasonMessage,
+  suppressReasonToString,
+  suppressStateToString,
+  SUPPRESS_NONE,
+  SUPPRESS_TURN,
+  SUPPRESS_STICKY,
+  SUPPRESS_UNTIL_SUCCESS,
+  SUPPRESS_AUTH,
   SUPPRESS_WINDOW_MS,
   type CompactFailureKind,
+  type SuppressReason,
+  type SuppressState,
 } from './compactErrors.js'

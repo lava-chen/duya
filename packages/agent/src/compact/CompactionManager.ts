@@ -13,16 +13,20 @@ import type {
   TokenBudget,
   CompactOptions,
 } from './types.js'
-import { DEFAULT_CONTEXT_WINDOW, COMPACTION_THRESHOLDS, AUTO_COMPACT_COOLDOWN_MS, COMPACT_LOOP_DELTA_RATIO, COMPACT_LOOP_STRIKES, COMPACT_LOOP_BREAK_BLOCK_MS } from './types.js'
+import { DEFAULT_CONTEXT_WINDOW, COMPACTION_THRESHOLDS } from './types.js'
 import { TokenBudgetManager, estimateMessagesTokens } from './tokenBudget.js'
 import { logger } from '../utils/logger.js'
 import { SessionMemoryCompactStrategy } from './strategies/index.js'
 import { PostCompactReinjector, type ReinjectorConfig, type SkillContextEntry } from './PostCompactReinjector.js'
 import type { FileChangeRecord as SessionMemoryFileChangeRecord } from './strategies/SessionMemoryCompactStrategy.js'
 import {
-  classifyCompactFailure,
+  classifySuppressReason,
   CompactSuppression,
-  isRetryableCompactFailure,
+  suppressReasonMessage,
+  suppressReasonToString,
+  suppressStateToString,
+  SUPPRESS_STICKY,
+  type SuppressReason,
 } from './compactErrors.js'
 import { fitCompactedToBudget, validateCompactedHistory } from './historySanitize.js'
 
@@ -81,12 +85,6 @@ export type CompactionManagerEvent =
   | { type: 'compaction_complete'; result: CompactionResult }
   | { type: 'compaction_error'; error: string }
   | { type: 'reinject_complete'; files: number; skills: number }
-  | {
-      type: 'compaction_loop_suspected'
-      tokensBefore: number
-      previousTokensBefore: number
-      strikes: number
-    }
 
 /**
  * Enhanced compaction result with reinjection info
@@ -114,7 +112,6 @@ export class CompactionManager {
   private strategies: Map<string, CompactionStrategy> = new Map()
   private budget: TokenBudgetManager
   private contextTokens = 0
-  private consecutiveFailures = 0
   private lastCompactionAt?: number
   private eventHandlers: Set<(event: CompactionManagerEvent) => void> = new Set()
   private summarizer?: (text: string, prompt: string) => Promise<string>
@@ -126,16 +123,10 @@ export class CompactionManager {
   private prefireCache?: { fingerprint: string; summary: string }
   private memoryFlush?: (summary: string) => Promise<void>
 
-  // ─── Loop guards (plan: compaction stability) ────────────────────────────
+  // ─── Loop guards (grok-aligned 5-state suppression) ──────────────────────
   /** Last prompt usage reported by the provider for a real request. Anchors
    *  shouldCompact on reality instead of the char heuristic when available. */
   private observedPromptTokens?: number
-  /** Wall-clock block on proactive compaction (cooldown + loop breaker). */
-  private proactiveBlockedUntil = 0
-  /** tokensBefore of the last successful compact — loop-breaker baseline. */
-  private lastCompactTokensBefore?: number
-  /** Consecutive compactions whose tokensBefore grew less than the delta ratio. */
-  private loopStrikes = 0
 
   constructor(config: CompactionManagerConfig = {}) {
     const maxTokens = config.maxTokens ?? DEFAULT_CONTEXT_WINDOW
@@ -232,6 +223,23 @@ export class CompactionManager {
   }
 
   /**
+   * Update the context window at runtime (model switch). The threshold
+   * (78% of `maxTokens`) recomputes automatically — the very next
+   * `shouldCompact()` call uses the new ratio.
+   */
+  updateMaxTokens(maxTokens: number): void {
+    if (maxTokens <= 0) return
+    this.budget.maxTokens = maxTokens
+  }
+
+  /**
+   * Read the current context window.
+   */
+  getMaxTokens(): number {
+    return this.budget.maxTokens
+  }
+
+  /**
    * Update context token count from a message projection.
    *
    * This estimate is the FALLBACK input for compaction decisions. When the
@@ -277,32 +285,37 @@ export class CompactionManager {
     return this.observedPromptTokens ?? this.contextTokens
   }
 
-  /** Whether proactive (auto) compaction currently respects a time block —
-   *  either the post-compaction cooldown or the loop-breaker suppression. */
-  private isProactivelyBlocked(now = Date.now()): boolean {
-    return now < this.proactiveBlockedUntil
-  }
-
-  /** Consecutive near-zero-growth compactions recorded by the loop breaker.
-   *  Observability for hosts/tests; saturation means auto-compaction is gated. */
-  getLoopStrikes(): number {
-    return this.loopStrikes
+  /**
+   * Public-read variant of {@link effectiveTotalTokens} for callers that want
+   * to check whether the context has actually exceeded the model's window
+   * (preflight overflow, grok `check_preflight_overflow`). Distinct from the
+   * 78% threshold check in `shouldCompact()`: the preflight fires only when
+   * we are genuinely over `contextWindow`, not when we are merely approaching
+   * it.
+   */
+  effectiveTotalTokensForOverflowCheck(): number {
+    return this.effectiveTotalTokens()
   }
 
   /**
    * Check if compaction should be triggered.
    *
-   * Three guards sit in front of the raw threshold:
-   * 1. Failure suppression (pre-existing CompactSuppression window).
-   * 2. Proactive time block: cooldown after any successful compact plus the
-   *    longer loop-breaker block — see AUTO_COMPACT_COOLDOWN_MS /
-   *    COMPACT_LOOP_BREAK_BLOCK_MS.
-   * 3. Anchoring: prefers the provider-reported prompt volume over the
+   * Two guards sit in front of the raw threshold:
+   * 1. Failure suppression (grok-style 5-state machine — see
+   *    {@link CompactSuppression}): auto-compaction is gated whenever the
+   *    state is not NONE. Manual /compact and emergency recovery bypass
+   *    this gate by calling `compact()` directly.
+   * 2. Anchoring: prefers the provider-reported prompt volume over the
    *    character-heuristic estimate so estimator drift alone cannot fire it.
+   *
+   * The previous cooldown + loop-strikes + circuit-breaker three-piece set
+   * (AUTO_COMPACT_COOLDOWN_MS / COMPACT_LOOP_*) was retired in favour of
+   * the per-reason clear triggers in {@link CompactSuppression}: each
+   * failure class now clears on the event that actually resolves it
+   * (turn start, budget change, LLM 200, login), not on a fixed window.
    */
   shouldCompact(): boolean {
-    if (this.suppression.isSuppressed('session')) return false
-    if (this.isProactivelyBlocked()) return false
+    if (this.suppression.isActive()) return false
     const stats = this.getStats()
     const strategy = this.strategies.get('session_memory')
     if (!strategy) return false
@@ -350,9 +363,9 @@ export class CompactionManager {
    */
   shouldPrefire(messages: Message[]): boolean {
     if (this.suppression.isSuppressed('session')) return false
-    // Respect the same time blocks as shouldCompact: during a cooldown or a
-    // loop-breaker block there is nothing worth pre-summarizing.
-    if (this.isProactivelyBlocked()) return false
+    // Respect the same suppression as shouldCompact: when auto-compaction is
+    // gated by the 5-state machine, there is nothing worth pre-summarizing.
+    if (this.suppression.isActive()) return false
     const stats = this.getStats()
     if (stats.totalTokens <= 0 || stats.maxTokens <= 0) return false
     const ratio = stats.totalTokens / stats.maxTokens
@@ -414,19 +427,12 @@ export class CompactionManager {
     // progress and each attempt costs a summarizer call. Manual /compact and
     // emergency recovery bypass this gate by design.
     const trigger = options?.trigger ?? 'manual'
-    if (trigger === 'auto' && this.loopStrikes >= COMPACT_LOOP_STRIKES) {
-      logger.warn(
-        `Compaction aborted by loop breaker: ${this.loopStrikes} consecutive compactions with <${Math.round(COMPACT_LOOP_DELTA_RATIO * 100)}% growth (tokensBefore baseline=${this.lastCompactTokensBefore ?? '?'})`,
-        undefined,
-        'Compaction',
-      )
-      return {
-        messages: [],
-        tokensRemoved: 0,
-        tokensRetained: 0,
-        strategy: 'none',
-      }
-    }
+
+    // Loop-breaker retired: STICKY/UNTIL_SUCCESS/AUTH suppression now blocks
+    // auto-compaction upstream in `shouldCompact()`. Emergency, manual, and
+    // the new preflight_overflow / model_switch triggers call `compact()`
+    // directly, so a STICKY state from a previous Size failure does not
+    // block them — the user explicitly asked for a retry.
 
     this.emit({ type: 'compaction_start', strategy: strategy.name })
 
@@ -489,17 +495,20 @@ export class CompactionManager {
       this.lastCompactionAt = Date.now()
       this.contextTokens = estimateMessagesTokens(finalMessages)
       this.budget.setContextTokens(this.contextTokens)
-      this.consecutiveFailures = 0
 
-      // Loop guards: cooldown for every successful compact, cadence tracking
-      // to detect "compacted but nothing changed" loops. See
-      // AUTO_COMPACT_COOLDOWN_MS / COMPACT_LOOP_* in types.ts.
+      // Loop guards (grok-aligned 5-state machine). The legacy
+      // cooldown/loop-strikes fields were retired; clearOnBudgetChange is
+      // the only per-compaction transition we drive from the success path.
+      // See AUTO_COMPACT_COOLDOWN_MS / COMPACT_LOOP_* in types.ts.
       const tokensBeforeNow = estimateMessagesTokens(messages)
-      this.trackCompactionCadence(tokensBeforeNow, trigger)
-      this.proactiveBlockedUntil = Math.max(
-        this.proactiveBlockedUntil,
-        Date.now() + AUTO_COMPACT_COOLDOWN_MS,
-      )
+      // Loop-breaker retired: STICKY (size/schema) failure clears on a real
+      // context-budget change — i.e. this very compaction (tokensAfter < tokensBefore).
+      // TURN (other) clears at the next turn start (handled in onTurnStart()).
+      // UNTIL_SUCCESS / AUTH survive until their own clear trigger.
+      const tokensAfterNow = estimateMessagesTokens(finalMessages)
+      if (tokensAfterNow < tokensBeforeNow) {
+        this.suppression.clearOnBudgetChange()
+      }
       // The pre-compact usage anchor no longer describes the post-compact
       // projection; fall back to fresh estimates until the next response.
       this.clearObservedPromptTokens()
@@ -594,63 +603,24 @@ export class CompactionManager {
       this.emit({ type: 'compaction_complete', result })
       return result
     } catch (error) {
-      const kind = classifyCompactFailure(error)
-      if (isRetryableCompactFailure(kind)) {
-        this.consecutiveFailures++
-      } else {
-        // Deterministic / cancelled failures won't succeed on retry — suppress
-        // auto-compaction for a window so the loop does not spin needlessly.
-        this.suppression.suppress('session')
-        this.consecutiveFailures = 0
-      }
+      // Grok-aligned error handling: classify into a SuppressReason, apply
+      // the corresponding 5-state suppression (compare_exchange NONE → state).
+      // Cancelled (user abort) does not suppress — it is not a fault of the
+      // compaction pipeline and the user may retry immediately.
+      const reason = classifySuppressReason(error)
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      if (reason !== null) {
+        const applied = this.suppression.trySuppress(reason)
+        if (applied) {
+          logger.warn(
+            `Auto-compaction suppressed after ${suppressReasonToString(reason)} failure (state=${suppressStateToString(this.suppression.getState())}): ${suppressReasonMessage(reason)}`,
+            { trigger, reason: suppressReasonToString(reason) },
+            'Compaction',
+          )
+        }
+      }
       this.emit({ type: 'compaction_error', error: errorMessage })
       throw error
-    }
-  }
-
-  /**
-   * Track cadence between consecutive compactions and arm the loop breaker.
-   *
-   * A compaction whose input size grew less than COMPACT_LOOP_DELTA_RATIO since
-   * the previous one is counted as a loop strike (only for 'auto' triggers);
-   * COMPACT_LOOP_STRIKES consecutive strikes block proactive compaction for
-   * COMPACT_LOOP_BREAK_BLOCK_MS and emit `compaction_loop_suspected`. Meaningful
-   * growth resets the strikes.
-   */
-  private trackCompactionCadence(tokensBefore: number, trigger: 'auto' | 'manual' | 'emergency'): void {
-    const previous = this.lastCompactTokensBefore
-    this.lastCompactTokensBefore = tokensBefore
-    if (previous === undefined || previous <= 0 || trigger !== 'auto') return
-
-    const growth = (tokensBefore - previous) / previous
-    if (growth >= COMPACT_LOOP_DELTA_RATIO) {
-      this.loopStrikes = 0
-      return
-    }
-
-    this.loopStrikes += 1
-    if (this.loopStrikes >= COMPACT_LOOP_STRIKES) {
-      this.proactiveBlockedUntil = Math.max(
-        this.proactiveBlockedUntil,
-        Date.now() + COMPACT_LOOP_BREAK_BLOCK_MS,
-      )
-      logger.warn(
-        'Compaction loop detected: suppressing auto-compaction',
-        {
-          strikes: this.loopStrikes,
-          previousTokensBefore: previous,
-          tokensBefore,
-          blockedForMs: COMPACT_LOOP_BREAK_BLOCK_MS,
-        },
-        'Compaction',
-      )
-      this.emit({
-        type: 'compaction_loop_suspected',
-        tokensBefore,
-        previousTokensBefore: previous,
-        strikes: this.loopStrikes,
-      })
     }
   }
 
@@ -696,17 +666,73 @@ export class CompactionManager {
   }
 
   /**
-   * Check if circuit breaker is triggered
+   * Whether the 5-state suppression machine is currently gating
+   * auto-compaction (any state ≠ NONE). Used by callers (e.g. DuyaAgent's
+   * emergency overflow path) to decide whether to attempt a recovery
+   * compaction even when the auto gate is closed.
+   *
+   * Replaces the legacy `isCircuitBreakerTriggered` (which counted
+   * consecutive failures against a fixed `MAX_CONSECUTIVE_FAILURES` of 3).
+   * The new shape carries the failure reason via `getSuppressionState()`.
    */
   isCircuitBreakerTriggered(): boolean {
-    return this.consecutiveFailures >= 3
+    return this.suppression.isActive()
   }
 
   /**
-   * Reset circuit breaker
+   * Read the current suppression state (0..4). For telemetry / UI surfaces.
+   * See {@link SUPPRESS_NONE} / `SUPPRESS_TURN` / `SUPPRESS_STICKY` /
+   * `SUPPRESS_UNTIL_SUCCESS` / `SUPPRESS_AUTH` in `compactErrors.ts`.
    */
-  resetCircuitBreaker(): void {
-    this.consecutiveFailures = 0
+  getSuppressionState(): number {
+    return this.suppression.getState()
+  }
+
+  /**
+   * Turn-boundary hook. The agent calls this at the start of every turn so
+   * the SUPPRESS_TURN state (set by a transient `other` failure on the
+   * previous turn) can clear and auto-compaction can resume. Other states
+   * (STICKY/UNTIL_SUCCESS/AUTH) survive this hook — their clear triggers
+   * are not time-based.
+   */
+  onTurnStart(): void {
+    if (this.suppression.clearOnTurnStart()) {
+      logger.info(
+        'Auto-compaction suppression cleared at turn start',
+        { state: suppressStateToString(this.suppression.getState()) },
+        'Compaction',
+      )
+    }
+  }
+
+  /**
+   * Success-path hook. The agent calls this when a healthy LLM response
+   * lands (status 200, valid usage, not aborted). Clears TURN/STICKY/
+   * UNTIL_SUCCESS; AUTH survives because its clear trigger is a login
+   * refresh, not a 200.
+   */
+  onLlmSuccess(): void {
+    if (this.suppression.clearOnSuccess()) {
+      logger.info(
+        'Auto-compaction suppression cleared after LLM success',
+        { state: suppressStateToString(this.suppression.getState()) },
+        'Compaction',
+      )
+    }
+  }
+
+  /**
+   * Auth-refresh hook. Called when a token refresh or `/login` succeeds.
+   * Clears AUTH; other states are unrelated and survive.
+   */
+  onAuthRefresh(): void {
+    if (this.suppression.clearOnAuthRefresh()) {
+      logger.info(
+        'Auto-compaction suppression cleared after auth refresh',
+        undefined,
+        'Compaction',
+      )
+    }
   }
 
   /**
@@ -730,11 +756,12 @@ export class CompactionManager {
     this.reinjector?.clearCache()
     this.contextTokens = 0
     this.lastCompactionAt = undefined
-    this.consecutiveFailures = 0
     this.observedPromptTokens = undefined
-    this.proactiveBlockedUntil = 0
-    this.lastCompactTokensBefore = undefined
-    this.loopStrikes = 0
+    // Reset the 5-state suppression machine — a new session should not
+    // inherit suppression from a previous one. The legacy
+    // cooldown/loop-strikes fields were removed in the grok alignment
+    // (see types.ts note).
+    this.suppression.reset()
   }
 }
 

@@ -151,19 +151,20 @@ export const AUTO_COMPACT_COOLDOWN_MS = 120_000
  */
 export const COMPACT_LOOP_DELTA_RATIO = 0.10
 
-/** How many near-identical compactions (see COMPACT_LOOP_DELTA_RATIO)
- *  trigger the loop breaker. */
-export const COMPACT_LOOP_STRIKES = 2
-
-/** Suppression window once the loop breaker trips. Long enough to outlast a
- *  stuck turn loop, short enough that a genuinely new user message recovers
- *  without operator intervention after ~10 minutes. */
-export const COMPACT_LOOP_BREAK_BLOCK_MS = 600_000
-
-/**
- * Circuit breaker: max consecutive compression failures per session
- */
-export const MAX_CONSECUTIVE_FAILURES = 3
+// Note: the cooldown/loop-strikes/circuit-breaker constants that used to live
+// here were removed when CompactionManager was aligned with grok's 5-state
+// suppression machine (see compactErrors.ts `SuppressState` and the grok
+// reference at `xai-grok-shell/src/session/compaction.rs:444-810`). Each
+// grok-aligned state has its own clear trigger:
+//   - SUPPRESS_TURN         cleared on turn start
+//   - SUPPRESS_STICKY       cleared on a context-budget change (successful
+//                           compaction, rewind, or model switch)
+//   - SUPPRESS_UNTIL_SUCCESS cleared on the next healthy LLM 200 response
+//   - SUPPRESS_AUTH         cleared on token refresh / login
+// A single rolling cooldown window cannot express these scopes — a single
+// 10-minute block after a Size failure is the wrong shape for an auth
+// failure (which only resolves on login) or a credit failure (which only
+// resolves on next LLM 200).
 
 // ============================================================
 // Compaction Event Types
@@ -190,7 +191,12 @@ export interface CompactOptions {
    * cooldown and loop-breaker guards; `'manual'` (/compact) and `'emergency'`
    * (context_length_exceeded recovery) always run.
    */
-  trigger?: 'auto' | 'manual' | 'emergency'
+  trigger?:
+    | 'auto'
+    | 'manual'
+    | 'emergency'
+    | 'preflight_overflow'
+    | 'model_switch'
   /**
    * Transient seed for the next compaction, supplied by the manager's
    * prefire pipeline. Strategies prefer this over their persistent

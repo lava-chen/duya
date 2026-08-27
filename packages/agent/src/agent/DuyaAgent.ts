@@ -551,6 +551,12 @@ export class duyaAgent {
   }
 
   private _model!: string;
+  /**
+   * Snapshot of the model id observed at the end of the previous streamChat
+   * call. Used to detect model switches at the top of streamChat so the
+   * grok-aligned `maybe_compact_on_model_switch` trigger fires.
+   */
+  private _lastSeenModel?: string;
   get model(): string {
     return this._model;
   }
@@ -800,6 +806,45 @@ export class duyaAgent {
         ? this.runtimeConfig.modelCapabilities.contextWindow
         : DEFAULT_CONTEXT_WINDOW;
 
+    // Grok-aligned model-switch trigger (`maybe_compact_on_model_switch`,
+    // grok `compaction.rs:1984-2016`). When the model or its context window
+    // changes, the prior compaction decision is stale: a larger window
+    // may have over-compressed (now we can keep more), a smaller window
+    // MUST compact to fit. STICKY suppression is also cleared inside
+    // CompactionManager.compact() because a window change is exactly the
+    // budget change it was waiting for.
+    //
+    // First streamChat (`_lastSeenModel` undefined) is treated as the
+    // baseline — no model-switch compaction, just record what we saw so
+    // the *next* streamChat can detect drift.
+    if (this._lastSeenModel !== undefined) {
+      const previousContextWindow = this.compactionManager.getMaxTokens();
+      const previousModel = this._lastSeenModel;
+      if (
+        previousModel !== this._model ||
+        previousContextWindow !== contextWindow
+      ) {
+        try {
+          await this.compactionController.compactProactive({
+            trigger: 'model_switch',
+          });
+        } catch (modelSwitchError) {
+          // model_switch is best-effort: a failed model-switch compact does
+          // not block the turn. The error is surfaced via the
+          // `compaction_error` event for telemetry.
+          logger.warn(
+            `[Agent] Model-switch compaction failed: ${
+              modelSwitchError instanceof Error ? modelSwitchError.message : String(modelSwitchError)
+            }`,
+            undefined,
+            'Agent',
+          );
+        }
+        this.compactionManager.updateMaxTokens(contextWindow);
+      }
+    }
+    this._lastSeenModel = this._model;
+
     // Handle options.messages fallback (CLI / harness scenarios)
     if (this.messages.length === 0 && options?.messages?.length) {
       this.setMessages([...options.messages]);
@@ -1038,6 +1083,11 @@ export class duyaAgent {
       discoveredToolPromptSuffix = '';
 
       turnCount++;
+      // Grok-aligned 5-state suppression: clear SUPPRESS_TURN at the start
+      // of every turn so a transient `other` failure on the previous turn
+      // does not bleed into the next one. STICKY/UNTIL_SUCCESS/AUTH are
+      // preserved — their clear triggers are event-based, not turn-based.
+      this.compactionManager.onTurnStart();
       const turnStartTime = Date.now();
       // Tool calls the assistant emits this turn; handed to the PostToolUse
       // dispatch so configured hooks can match on tool names (plan 426 Phase 4).
@@ -1947,6 +1997,59 @@ export class duyaAgent {
             // place, so nothing to copy back here. The next turn reads the
             // same references via this.widgetStyleHistory / this.canvasFreshness.
 
+            // Grok-aligned preflight overflow check
+            // (`check_preflight_overflow`, grok `turn.rs:2711`). After tool
+            // results are committed, see whether the projected context has
+            // *exceeded* the window — a single tool call can blow past the
+            // 78% threshold by itself, and waiting for the next turn's
+            // `shouldCompact()` check risks a `context_length_exceeded`
+            // round-trip. Compacting here is cheaper than retrying the
+            // whole turn.
+            if (toolResultMessageCount > 0) {
+              const projectionForOverflow =
+                this.compactionController.projectInputMessages();
+              this.compactionManager.updateContextTokens(projectionForOverflow);
+              if (
+                this.compactionManager.effectiveTotalTokensForOverflowCheck() >
+                contextWindow
+              ) {
+                try {
+                  const compactEntry =
+                    await this.compactionController.compactProactive({
+                      trigger: 'preflight_overflow',
+                    });
+                  if (compactEntry) {
+                    logger.info(
+                      `[Agent] Turn ${turnCount}: Preflight overflow compaction fired, retained=${compactEntry.tokensAfter ?? 0} tokens`,
+                      undefined,
+                      'Agent',
+                    );
+                    // Re-project model messages from the updated timeline
+                    // so the next iteration (if any) and the next turn
+                    // see the compacted projection.
+                    const reProjected = this._projectModelMessages(
+                      systemPromptContent,
+                      { injectHookContexts: true },
+                    );
+                    systemPromptContent = reProjected.systemPromptContent;
+                    messages = reProjected.messages;
+                  }
+                } catch (overflowError) {
+                  // Best-effort: a failed preflight overflow does not
+                  // block the turn. Fall through to the next iteration.
+                  logger.warn(
+                    `[Agent] Turn ${turnCount}: Preflight overflow compaction failed: ${
+                      overflowError instanceof Error
+                        ? overflowError.message
+                        : String(overflowError)
+                    }`,
+                    undefined,
+                    'Agent',
+                  );
+                }
+              }
+            }
+
             // Do NOT yield the LLM's 'done' event to the SSE client here.
             // In multi-turn conversations, the LLM client yields a 'done' event
             // at the end of each turn. Forwarding it would cause the client to
@@ -2012,6 +2115,10 @@ export class duyaAgent {
             const observedPrompt = resultPromptVolume(roundResultUsage);
             if (observedPrompt > 0) {
               this.compactionManager.setObservedPromptTokens(observedPrompt);
+              // Grok-aligned 5-state suppression: a healthy LLM 200 with
+              // valid usage clears TURN/STICKY/UNTIL_SUCCESS. AUTH survives
+              // — it needs a token refresh, not a 200.
+              this.compactionManager.onLlmSuccess();
             }
             yield event;
           }
@@ -2138,7 +2245,7 @@ export class duyaAgent {
           errorMessage.includes('prompt_too_long') ||
           errorMessage.includes('exceeds limit');
 
-        if (isContextLengthError && !this.compactionManager.isCircuitBreakerTriggered()) {
+        if (isContextLengthError) {
           logger.warn(`[Agent] Turn ${turnCount}: Context length exceeded, attempting compaction`);
           try {
             const compactEntry = await this.compactionController.compactProactive({ trigger: 'emergency' });
