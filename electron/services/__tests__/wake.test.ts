@@ -124,6 +124,26 @@ describe('WakeService initialize', () => {
     });
     expect(() => initializeWakeService({})).not.toThrow();
   });
+
+  it('doubleTap mode registers a single key and intercepts the callback', () => {
+    const wake = initializeWakeService({
+      defaultShortcut: 'Shift+=',
+      doubleTap: true,
+      doubleTapWindowMs: 500,
+    });
+    expect(mocks.globalShortcut.register).toHaveBeenCalledWith(
+      'Shift+=',
+      expect.any(Function),
+    );
+    // The callback registered with globalShortcut is NOT the
+    // wake() entry point — it's the double-tap detector.
+    const registeredCallback = (mocks.globalShortcut.register.mock
+      .calls[0] as unknown as [string, () => void])[1];
+    // First press alone should not wake the orb.
+    const stateBefore = wake.getState();
+    registeredCallback();
+    expect(wake.getState()).toBe(stateBefore);
+  });
 });
 
 describe('WakeService wake/collapse', () => {
@@ -231,5 +251,72 @@ describe('getWakeService', () => {
   it('returns the initialized singleton', () => {
     const wake = initializeWakeService({});
     expect(getWakeService()).toBe(wake);
+  });
+});
+
+describe('WakeService double-tap detection', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function getRegisteredCallback(): () => void {
+    const calls = mocks.globalShortcut.register.mock.calls as unknown as Array<
+      [string, (() => void) | undefined]
+    >;
+    const last = calls[calls.length - 1];
+    return last?.[1] ?? (() => undefined);
+  }
+
+  it('fires wake on the second press within the window', () => {
+    const wake = initializeWakeService({
+      defaultShortcut: 'Shift+=',
+      doubleTap: true,
+      doubleTapWindowMs: 500,
+    });
+    const cb = getRegisteredCallback();
+
+    // First press: nothing.
+    cb();
+    expect(wake.getState()).toBe('DORMANT');
+
+    // Advance just under the window; second press should fire.
+    vi.advanceTimersByTime(200);
+    cb();
+    expect(wake.getState()).toBe('INPUT');
+  });
+
+  it('does not fire when the second press is outside the window', () => {
+    const wake = initializeWakeService({
+      defaultShortcut: 'Shift+=',
+      doubleTap: true,
+      doubleTapWindowMs: 500,
+    });
+    const cb = getRegisteredCallback();
+
+    cb();
+    vi.advanceTimersByTime(800);
+    cb();
+    // The second press resets the counter; only the next press
+    // (within 500ms of this one) would fire.
+    expect(wake.getState()).toBe('DORMANT');
+  });
+
+  it('resets the press counter via the auto-reset timer', () => {
+    const wake = initializeWakeService({
+      defaultShortcut: 'Shift+=',
+      doubleTap: true,
+      doubleTapWindowMs: 500,
+    });
+    const cb = getRegisteredCallback();
+
+    cb();
+    // Wait long enough for the auto-reset (windowMs + 50ms).
+    vi.advanceTimersByTime(700);
+    // Now a single press should NOT fire (counter reset).
+    cb();
+    expect(wake.getState()).toBe('DORMANT');
   });
 });

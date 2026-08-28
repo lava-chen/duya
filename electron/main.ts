@@ -442,12 +442,22 @@ if (gotTheLock) {
       const configStore = getConfigStore();
       const wakeEnabled = (configStore.getByPath('wake.enabled') ?? true) !== false;
       if (wakeEnabled) {
+        // Default trigger: Shift+= pressed twice within 600ms.
+        // Mirrors the daemon's own Shift++= trigger so the user
+        // only learns one combo. Ctrl+Shift+Space is the previous
+        // default and remains available via config.toml [wake]
+        // .shortcut override.
         const shortcut = (configStore.getByPath('wake.shortcut') as string | undefined) ??
-          'CommandOrControl+Shift+Space';
+          'Shift+=';
         const wake = initializeWakeService({
           defaultShortcut: shortcut,
+          doubleTap: true,
+          doubleTapWindowMs: 600,
+          // Dev: vite serves the orb entry at /src/orb/ (multi-input
+          // keeps the source-relative path). Vite runs on port 3000
+          // in this project (see package.json electron:dev).
           orbDevUrl: !app.isPackaged
-            ? (process.env.DUYA_ORB_DEV_URL ?? 'http://localhost:5173/orb')
+            ? (process.env.DUYA_ORB_DEV_URL ?? 'http://localhost:3000/src/orb/')
             : undefined,
           orbResourcesPath: app.isPackaged
             ? path.join(process.resourcesPath, 'orb')

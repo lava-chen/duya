@@ -85,7 +85,7 @@ export function registerSettingsHandlers(): void {
       enabled: (configStore.getByPath('wake.enabled') ?? true) as boolean,
       shortcut:
         (configStore.getByPath('wake.shortcut') as string | undefined) ??
-        'CommandOrControl+Shift+Space',
+        'Shift+=',
       injectOsContext: (configStore.getByPath('wake.inject_os_context') ??
         true) as boolean,
       autoCollapseMs: (configStore.getByPath('wake.auto_collapse_ms') ??
