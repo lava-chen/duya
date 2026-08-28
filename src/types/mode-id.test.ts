@@ -21,6 +21,10 @@ describe('MODE_KIND (plan 413e)', () => {
   it('marks goal as session-level (plan 411)', () => {
     expect(MODE_KIND['goal']).toBe('session');
   });
+
+  it('marks computer-use as session-level (plan 454)', () => {
+    expect(MODE_KIND['computer-use']).toBe('session');
+  });
 });
 
 describe('toggleModeInSet with session-level plan-task', () => {
@@ -65,5 +69,37 @@ describe('goal mode exclusivity (plan 411)', () => {
     const next = toggleModeInSet(new Set(['plan-task']), 'goal');
     expect(next.has('goal')).toBe(true);
     expect(next.has('plan-task')).toBe(true);
+  });
+});
+
+describe('computer-use mode exclusivity (plan 454)', () => {
+  it('computer-use blocks every other session-level mode', () => {
+    const active = new Set<import('@/types/mode-id').ModeModifierId>(['computer-use']);
+    expect(isModeExcludedByActive(active, 'plan-task')).toBe(true);
+    expect(isModeExcludedByActive(active, 'research')).toBe(true);
+    expect(isModeExcludedByActive(active, 'conductor')).toBe(true);
+    expect(isModeExcludedByActive(active, 'goal')).toBe(true);
+  });
+
+  it('toggling computer-use on drops all other session-level modes', () => {
+    const next = toggleModeInSet(
+      new Set<import('@/types/mode-id').ModeModifierId>([
+        'plan-task',
+        'goal',
+      ]),
+      'computer-use',
+    );
+    expect(next.has('computer-use')).toBe(true);
+    expect(next.has('plan-task')).toBe(false);
+    expect(next.has('goal')).toBe(false);
+  });
+
+  it('toggling computer-use off leaves the set intact otherwise', () => {
+    const next = toggleModeInSet(
+      new Set<import('@/types/mode-id').ModeModifierId>(['computer-use']),
+      'computer-use',
+    );
+    expect(next.has('computer-use')).toBe(false);
+    expect(next.size).toBe(0);
   });
 });
