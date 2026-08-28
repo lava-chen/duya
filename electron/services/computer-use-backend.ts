@@ -86,44 +86,85 @@ const sharpAdapter: SharpAdapter = ((input: Buffer | string) => {
 }) as SharpAdapter;
 
 /**
- * Nut adapter. Lazy require so a missing prebuilt binary surfaces a
- * clear error at action time instead of crashing app boot. The real
- * @nut-tree-fork/nut-js API has classes (MouseClass, KeyboardClass)
- * with richer return types; the adapter strips them down to the
- * simple method set the DesktopBackend interface expects.
+ * Nut adapter. GENUINELY lazy: the module-level IIFE previously ran
+ * `require('@nut-tree-fork/nut-js')` at import time, so a broken
+ * transitive dep (xml2js → nested xmlbuilder missing lib/index.js)
+ * threw during `await import('./services/computer-use-backend')` in
+ * main.ts — the try/catch swallowed it and the DesktopBackend was
+ * never registered, making every action fail with "not initialized".
+ *
+ * Now the require fires on first USE (method call or Key/Button
+ * property access via getters) and is memoized. A load failure
+ * surfaces at action time with a remediation hint instead of
+ * silently disabling the whole backend at boot.
  */
-const nutAdapter: NutAdapter = (() => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nutMod = require('@nut-tree-fork/nut-js');
-  const mouse = nutMod.mouse;
-  const keyboard = nutMod.keyboard;
-  return {
-    mouse: {
-      async setPosition(point: { x: number; y: number }): Promise<void> {
-        await mouse.setPosition(point);
-      },
-      async click(button: 'LEFT' | 'RIGHT' | 'MIDDLE' | number): Promise<void> {
-        await mouse.click(button);
-      },
-      async drag(path: Array<{ x: number; y: number }>): Promise<void> {
-        await mouse.drag(path);
-      },
-      async wheel(direction: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', amount: number): Promise<void> {
-        await mouse.wheel(direction, amount);
-      },
+let cachedNutMod: Record<string, unknown> | null = null;
+let nutLoadError: Error | null = null;
+
+function loadNut(): Record<string, unknown> {
+  if (cachedNutMod) return cachedNutMod;
+  if (nutLoadError) throw nutLoadError;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    cachedNutMod = require('@nut-tree-fork/nut-js') as Record<string, unknown>;
+    return cachedNutMod;
+  } catch (err) {
+    nutLoadError = new Error(
+      'nut.js failed to load — mouse/keyboard actions are unavailable. ' +
+      'Fix: run `npm run rebuild:node` (or reinstall @nut-tree-fork/nut-js), ' +
+      'then restart DUYA. Original error: ' +
+      (err instanceof Error ? err.message : String(err)),
+    );
+    logger.warn(
+      'computer-use: nut.js load failed',
+      { error: nutLoadError.message },
+      LogComponent.ComputerUse,
+    );
+    throw nutLoadError;
+  }
+}
+
+const nutAdapter: NutAdapter = {
+  mouse: {
+    async setPosition(point: { x: number; y: number }): Promise<void> {
+      const nut = loadNut() as { mouse: { setPosition(p: { x: number; y: number }): Promise<unknown> } };
+      await nut.mouse.setPosition(point);
     },
-    keyboard: {
-      async type(text: string, opts?: { delayMs?: number }): Promise<void> {
-        await keyboard.type(text, opts);
-      },
-      async pressKey(...keys: Array<string | number>): Promise<void> {
-        await keyboard.pressKey(...keys);
-      },
+    async click(button: 'LEFT' | 'RIGHT' | 'MIDDLE' | number): Promise<void> {
+      const nut = loadNut() as { mouse: { click(b: 'LEFT' | 'RIGHT' | 'MIDDLE' | number): Promise<unknown> } };
+      await nut.mouse.click(button);
     },
-    Key: nutMod.Key as unknown as Record<string, string | number>,
-    Button: nutMod.Button as unknown as Record<'LEFT' | 'RIGHT' | 'MIDDLE', 'LEFT' | 'RIGHT' | 'MIDDLE' | number>,
-  };
-})();
+    async drag(path: Array<{ x: number; y: number }>): Promise<void> {
+      const nut = loadNut() as { mouse: { drag(p: Array<{ x: number; y: number }>): Promise<unknown> } };
+      await nut.mouse.drag(path);
+    },
+    async wheel(direction: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', amount: number): Promise<void> {
+      const nut = loadNut() as { mouse: { wheel(d: 'UP' | 'DOWN' | 'LEFT' | 'RIGHT', a: number): Promise<unknown> } };
+      await nut.mouse.wheel(direction, amount);
+    },
+  },
+  keyboard: {
+    async type(text: string, opts?: { delayMs?: number }): Promise<void> {
+      const nut = loadNut() as { keyboard: { type(t: string, o?: { delayMs?: number }): Promise<unknown> } };
+      await nut.keyboard.type(text, opts);
+    },
+    async pressKey(...keys: Array<string | number>): Promise<void> {
+      const nut = loadNut() as { keyboard: { pressKey(...k: Array<string | number>): Promise<unknown> } };
+      await nut.keyboard.pressKey(...keys);
+    },
+  },
+  // Getters: the backend reads `.Key` / `.Button` synchronously when
+  // mapping key names — the getter triggers the lazy load on first
+  // access instead of at module import.
+  get Key(): Record<string, string | number> {
+    const nut = loadNut() as { Key: Record<string, string | number> };
+    return nut.Key;
+  },
+  get Button(): Record<'LEFT' | 'RIGHT' | 'MIDDLE', 'LEFT' | 'RIGHT' | 'MIDDLE' | number> {
+    const nut = loadNut() as { Button: Record<'LEFT' | 'RIGHT' | 'MIDDLE', 'LEFT' | 'RIGHT' | 'MIDDLE' | number> };
+    return nut.Button;
+  },
+} as NutAdapter;
 
 /**
  * listAppsProvider: read the visible app list from OSContextBridge.
