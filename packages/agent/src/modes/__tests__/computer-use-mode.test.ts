@@ -38,6 +38,17 @@ describe('computerUseMode — registration', () => {
     expect(computerUseMode.tools?.overrideFilter).toBe(true);
   });
 
+  it('prepends a system prompt teaching the SOM workflow', () => {
+    const prefix = computerUseMode.prompt?.prefix;
+    expect(typeof prefix).toBe('string');
+    const text = prefix as string;
+    expect(text).toContain('Computer Use Mode Active');
+    expect(text).toContain("action: 'capture'");
+    expect(text).toContain('element: N');
+    expect(text).toContain('APP_BLOCKED');
+    expect(text).toContain('REDACTED_FIELD');
+  });
+
   it('declares the expected display metadata', () => {
     expect(computerUseMode.display?.label).toBe('Computer Use');
     expect(computerUseMode.display?.icon).toBe('MousePointerClick');
