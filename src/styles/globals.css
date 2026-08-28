@@ -10613,8 +10613,10 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 20px 0 14px;
-  /* Same background as the tab bar above and no bottom rule, so the
-   * tab strip and the preview header read as one seamless header. */
+  /* Same background as the tab bar above (no rule between them — the
+   * two rows read as one header), but keep the rule BELOW: it separates
+   * the header from the preview canvas. */
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
   background: var(--main-bg);
   box-sizing: border-box;
 }
