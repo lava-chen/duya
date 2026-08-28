@@ -9266,7 +9266,9 @@ html[data-message-font-size="large"] .prose h3 {
   padding: 0 6px;
   gap: 4px;
   background: var(--main-bg);
-  border-bottom: 1px solid var(--border);
+  /* No bottom rule: the tab bar and the page header below it share the
+   * same background and read as one continuous header zone, Codex-style. */
+  border-bottom: none;
 }
 
 .panel-header-empty {
@@ -9281,9 +9283,12 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-header-tabs {
   display: flex;
-  flex: 1;
+  /* Hug the tab content (shrink only under pressure) so the "+"
+   * add button sits right after the last tab, Codex-style — instead
+   * of being pushed to the far edge of the bar. */
+  flex: 0 1 auto;
   min-width: 0;
-  gap: 2px;
+  gap: 3px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -9311,14 +9316,18 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-tab:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
+/* Codex-style active tab: soft filled chip with a faint lift shadow, no
+ * outline. Fill uses a text-mix so it stays visible in both themes
+ * (white-alpha fallbacks vanish on the light background). */
 .panel-header-tab.active {
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  background: color-mix(in srgb, var(--text) 9%, transparent);
   color: var(--text);
-  border-color: var(--border);
+  border-color: transparent;
+  box-shadow: 0 1px 3px color-mix(in srgb, black 12%, transparent);
 }
 
 .panel-header-tab-title {
@@ -9355,7 +9364,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-tab-close:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -9397,7 +9406,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-icon-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -10604,8 +10613,9 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 20px 0 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
+  /* Same background as the tab bar above and no bottom rule, so the
+   * tab strip and the preview header read as one seamless header. */
+  background: var(--main-bg);
   box-sizing: border-box;
 }
 
@@ -10645,9 +10655,9 @@ html[data-message-font-size="large"] .prose h3 {
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   overflow: hidden;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.35;
   color: var(--muted);
 }
@@ -10664,20 +10674,23 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 1 auto;
 }
 
-.file-preview-path-root {
-  font-weight: 600;
+/* Codex-style breadcrumb: all segments share the muted tone; only the
+ * trailing file name steps up to the text color so the eye lands on it. */
+.file-preview-path-file {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .file-preview-path-separator {
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--muted) 62%, transparent);
-  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  font-size: 12px;
 }
 
 .file-preview-actions {
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   /* Safety margin so the rightmost "Open" button never brushes
    * against the padding edge of the toolbar. */
   padding-right: 2px;
@@ -10732,14 +10745,17 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   height: 28px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  /* Neutral outlined pill, Codex-style: surface background + hairline
+   * border, no accent tint — the breadcrumb stays the visual anchor. */
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  background: var(--surface-solid);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 4%, transparent);
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .file-preview-open-group:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--surface-hover);
 }
 
 .file-preview-open-group button {
@@ -10747,6 +10763,7 @@ html[data-message-font-size="large"] .prose h3 {
   height: 100%;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -10756,12 +10773,20 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-preview-open-group .file-preview-open-ide {
-  width: 32px;
+  width: auto;
+  padding: 0 4px 0 10px;
+}
+
+.file-preview-open-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .file-preview-open-group .file-preview-open-caret {
-  width: 18px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  width: 20px;
+  border-left: 1px solid var(--border);
   color: var(--muted);
 }
 
@@ -11034,7 +11059,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-zone-open .panel-header-tabs {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   max-width: none;
   overflow-x: auto;
   overflow-y: hidden;
@@ -11051,7 +11076,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-header-add-page.active,
 .panel-header-add-page:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -11062,8 +11087,10 @@ html[data-message-font-size="large"] .prose h3 {
 .panel-add-menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
-  left: auto;
+  /* The + button sits right after the last tab (near the left edge) —
+   * grow the menu rightward so it doesn't extend past the panel edge. */
+  left: 0;
+  right: auto;
   z-index: 30;
   width: 232px;
   max-width: min(232px, calc(100vw - 28px));
@@ -11071,10 +11098,12 @@ html[data-message-font-size="large"] .prose h3 {
   flex-direction: column;
   gap: 1px;
   padding: 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  /* Match the input-box settings popup: flat command-menu surface, hairline
+   * border, one soft shadow layer — no heavy elevation. */
+  border: 1px solid var(--command-menu-border);
   border-radius: 10px;
-  background: var(--surface-solid, var(--sidebar-bg));
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.16);
+  background: var(--command-menu-bg);
+  box-shadow: var(--command-menu-shadow);
   isolation: isolate;
 }
 
@@ -11091,7 +11120,7 @@ html[data-message-font-size="large"] .prose h3 {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
@@ -11115,13 +11144,13 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-add-menu-main {
   gap: 8px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .panel-add-menu-meta {
   gap: 6px;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--command-menu-muted, var(--muted));
 }
 
 .panel-add-menu-icon {
@@ -11131,7 +11160,7 @@ html[data-message-font-size="large"] .prose h3 {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  color: var(--text);
+  color: var(--command-menu-muted, var(--muted));
 }
 
 .panel-add-menu-name {
@@ -11140,21 +11169,17 @@ html[data-message-font-size="large"] .prose h3 {
   white-space: nowrap;
 }
 
+/* Plain muted text, no chip background — same treatment as the input
+ * popups' shortcut hints. */
 .panel-add-menu-shortcut {
-  padding: 0 6px;
-  border-radius: 4px;
-  background: var(--chip);
-  color: var(--text);
+  color: var(--command-menu-muted, var(--muted));
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 16px;
 }
 
 .panel-add-menu-hint {
-  padding: 0 6px;
-  border-radius: 4px;
-  background: var(--chip);
-  color: var(--muted);
+  color: var(--command-menu-muted, var(--muted));
   font-size: 11px;
   line-height: 16px;
 }
@@ -13219,7 +13244,9 @@ html[data-message-font-size="large"] .prose h3 {
   position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
+  /* Lives below the full-width preview toolbar inside the flex-column
+   * panel, so it flexes to the remaining height instead of 100%. */
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -13250,8 +13277,11 @@ html[data-message-font-size="large"] .prose h3 {
   background: var(--main-bg);
 }
 
+/* The tree's own 40px header only holds a duplicate collapse toggle;
+ * the preview toolbar's tree toggle is always visible, so the row is
+ * dead weight under the full-width header — hide it. */
 .panel-file-tree-header {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: flex-end;
   height: 40px;
