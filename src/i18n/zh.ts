@@ -447,6 +447,7 @@ const zh: Record<TranslationKey, string> = {
   'settings.performance.lowPowerActive': '低功耗模式已生效 —— 轮询放缓、视觉简化、空闲 worker 更快回收。',
   'settings.performance.lowPowerInactive': '低功耗模式未生效。',
   'settings.usage': '用量统计',
+  'settings.wake': 'Wake Agent',
   'settings.support': '支持',
   'settings.agents': 'Agents',
   'settings.hooks': 'Hooks',
@@ -479,6 +480,7 @@ const zh: Record<TranslationKey, string> = {
   'settings.group.extensions': '扩展',
   'settings.group.system': '系统',
   'settings.group.customize': '自定义',
+  'settings.group.tools': '工具',
 
   'settings.memory.title': '记忆',
   'settings.memory.description': '管理 DUYA 如何在对话间记住上下文。',

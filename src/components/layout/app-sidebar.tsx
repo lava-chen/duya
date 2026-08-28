@@ -35,6 +35,7 @@ import {
   CornersInIcon,
   CornersOutIcon,
   NotePencilIcon,
+  CircleNotchIcon,
 } from "@/components/icons";
 import { useConversationStore, type Thread, type ProjectGroup, type ViewType, type SettingsTab, type ProjectSortBy, type ProjectGroupBy } from "@/stores/conversation-store";
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
@@ -129,6 +130,14 @@ const settingsNavGroups: {
       { id: 'usage', labelKey: 'settings.usage', icon: BarChartIcon },
       { id: 'performance', labelKey: 'settings.performance', icon: LightningIcon },
       { id: 'support', labelKey: 'settings.support', icon: QuestionIcon },
+    ],
+  },
+  {
+    id: 'tools',
+    labelKey: 'settings.group.tools',
+    items: [
+      // Plan 453 Task H: Wake Agent (Ctrl+Shift+Space orb).
+      { id: 'wake', labelKey: 'settings.wake', icon: CircleNotchIcon },
     ],
   },
 ];
