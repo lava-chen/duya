@@ -9,8 +9,10 @@
 export type {
   ActionResult,
   AppInfo,
+  Bbox,
   CaptureOptions,
   CaptureResult,
+  ClickCount,
   ClickOptions,
   DesktopBackend,
   DragOptions,

@@ -97,6 +97,7 @@ function buildClickOptions(p: Record<string, unknown>): Record<string, unknown> 
     x: p.x,
     y: p.y,
     button: p.button,
+    count: p.count,
     modifiers: p.modifiers,
   };
 }
@@ -245,10 +246,40 @@ async function runAction(
           text,
           delayMs: typeof data.delayMs === 'number' ? data.delayMs : undefined,
         });
+        if (!r.ok) {
+          return { success: false, action, data: r };
+        }
+        // Auto follow-up screenshot (mirrors claude-quickstarts
+        // `type`): the model almost always wants to see the
+        // effect of its typing. We take a fresh capture without
+        // SOM overlay to keep the payload small.
+        let followUpScreenshot: { base64: string; width: number; height: number } | null = null;
+        try {
+          const cap = await backend.capture({ somMode: false });
+          if (cap.base64) {
+            followUpScreenshot = {
+              base64: cap.base64,
+              width: cap.width,
+              height: cap.height,
+            };
+          }
+        } catch (err) {
+          // Auto-screenshot is best-effort. If it fails the type
+          // action still succeeded; the model can call capture
+          // explicitly.
+          logger.debug(
+            'computer-use: type follow-up screenshot failed',
+            { error: err instanceof Error ? err.message : String(err) },
+            LogComponent.ComputerUse,
+          );
+        }
         return {
-          success: r.ok,
+          success: true,
           action,
-          data: r,
+          data: {
+            typeResult: r,
+            screenshot: followUpScreenshot,
+          },
         };
       }
       case 'key': {
@@ -397,6 +428,22 @@ async function runAction(
       case 'wait': {
         await backend.wait({ ms: typeof data.ms === 'number' ? data.ms : 100 });
         return { success: true, action };
+      }
+      case 'zoom': {
+        // Zoom is a region-restricted SOM capture. The full screen
+        // is still returned, but only elements falling inside the
+        // rectangle get an index marker, so the model can focus on
+        // a small UI area (e.g. a single dialog or list).
+        const cap = await backend.capture({
+          somMode: true,
+          region: {
+            x: typeof data.x === 'number' ? data.x : 0,
+            y: typeof data.y === 'number' ? data.y : 0,
+            w: typeof data.w === 'number' ? data.w : 0,
+            h: typeof data.h === 'number' ? data.h : 0,
+          },
+        });
+        return { success: true, action, data: cap };
       }
       default: {
         // Exhaustive check — TS will complain if a new action is

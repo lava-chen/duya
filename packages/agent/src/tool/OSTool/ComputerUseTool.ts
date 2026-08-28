@@ -46,7 +46,7 @@ export const definition: Tool = {
     'Drive the host operating system desktop directly. ' +
     'Pick an `action` to dispatch:\n' +
     '  - capture: screenshot of the screen (set somMode=true to overlay numbered element indexes)\n' +
-    '  - click: click at element index (preferred) or x/y coords\n' +
+    '  - click: click at element index (preferred) or x/y coords. Set count=double/triple for word/line selection\n' +
     '  - type: type text into the currently focused field\n' +
     '  - key: press a single key with optional modifiers (ctrl/alt/shift/meta)\n' +
     '  - scroll: scroll the mouse wheel (direction + amount 1..100)\n' +
@@ -54,7 +54,8 @@ export const definition: Tool = {
     '  - window_switch: focus a window by title or processName\n' +
     '  - list_apps: enumerate visible apps\n' +
     '  - set_value: replace the value in the focused field\n' +
-    '  - wait: sleep ms milliseconds\n\n' +
+    '  - wait: sleep ms milliseconds\n' +
+    '  - zoom: capture screen with SOM overlay restricted to a region (x, y, w, h). Use to inspect small UI areas without losing full-screen context.\n\n' +
     'Best practice:\n' +
     '  1. capture(somMode=true) — see what the user is looking at\n' +
     '  2. click(element=N) — target the labeled bbox, not pixel coords\n' +
@@ -97,6 +98,11 @@ export const definition: Tool = {
         enum: ['left', 'right', 'middle'],
         description: 'click: mouse button (default left)',
       },
+      count: {
+        type: 'string',
+        enum: ['single', 'double', 'triple'],
+        description: 'click: number of clicks (default single). double/triple for selecting words/lines.',
+      },
       direction: {
         type: 'string',
         enum: ['up', 'down', 'left', 'right'],
@@ -104,6 +110,10 @@ export const definition: Tool = {
       },
       amount: { type: 'number', description: 'scroll: number of wheel ticks' },
       ms: { type: 'number', description: 'wait: milliseconds to sleep' },
+      // zoom: x and y are already in the click/drag fields above;
+      // only w and h are new for the region rectangle.
+      w: { type: 'number', description: 'zoom: region width' },
+      h: { type: 'number', description: 'zoom: region height' },
       delayMs: { type: 'number', description: 'type/set_value: per-keystroke delay' },
       title: { type: 'string', description: 'window_switch: window title substring' },
       processName: { type: 'string', description: 'window_switch: process name substring' },

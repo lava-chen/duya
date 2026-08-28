@@ -19,6 +19,7 @@ export const COMPUTER_USE_ACTIONS = [
   'list_apps',
   'set_value',
   'wait',
+  'zoom',
 ] as const;
 
 export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];

@@ -36,6 +36,7 @@ export const COMPUTER_USE_ACTIONS = [
   'list_apps',
   'set_value',
   'wait',
+  'zoom',
 ] as const;
 
 export const COMPUTER_USE_ACTION_LIST: readonly string[] = COMPUTER_USE_ACTIONS;
