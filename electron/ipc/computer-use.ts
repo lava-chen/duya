@@ -31,11 +31,13 @@ import {
 } from '../../packages/agent/dist/tool/OSTool/ComputerUseTool.js';
 import {
   buildArgsPreview,
+  checkAccess,
   getDefaultApprovalBridge,
   getDefaultDesktopBackend,
   requiresConfirmation,
   validateKeyCombo,
   validateTextFull,
+  type AppAccessPolicy,
 } from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
@@ -161,6 +163,67 @@ async function requestApprovalIfNeeded(
 }
 
 /**
+ * Cached Computer Use access policy. Loaded lazily from config on
+ * first use (defaults to deny-by-default) and refreshed whenever
+ * the config store broadcasts a change.
+ */
+let cachedAccessPolicy: AppAccessPolicy | null = null;
+
+/**
+ * Read the [computer_use] access policy from the config store. Uses
+ * `ConfigStore` if available; falls back to the deny-by-default
+ * constant when the store isn't reachable (unit tests, CLI).
+ */
+function getAccessPolicy(): AppAccessPolicy {
+  if (cachedAccessPolicy) return cachedAccessPolicy;
+  try {
+    // Lazy import keeps the module independent of the config tree.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getConfigStore } = require('../config/store-instance') as {
+      getConfigStore: () => { getByPath(path: string): unknown };
+    };
+    const store = getConfigStore();
+    const raw = store.getByPath('computer_use') as AppAccessPolicy | undefined;
+    cachedAccessPolicy = {
+      default_access: raw?.default_access ?? 'deny',
+      allowed_apps: raw?.allowed_apps ?? [],
+      denied_apps: raw?.denied_apps ?? [],
+    };
+  } catch {
+    cachedAccessPolicy = { default_access: 'deny', allowed_apps: [], denied_apps: [] };
+  }
+  return cachedAccessPolicy;
+}
+
+/**
+ * Evaluate whether the current foreground app is permitted to be
+ * automated by Computer Use. Uses OSContextBridge for the app info
+ * (same source the daemon writes). Denies-by-default when the policy
+ * has no allow-list entry for the foreground app.
+ */
+function checkForegroundAccess(): { ok: boolean; reason?: string } {
+  try {
+    const ctx = getOSContextBridge().getCurrent();
+    const verdict = checkAccess(getAccessPolicy(), {
+      processName: (ctx?.foreground as { exeName?: string } | undefined)?.exeName ?? null,
+      title: (ctx?.foreground as { title?: string } | undefined)?.title ?? null,
+      focusedEntity: ctx?.focusedEntity ?? null,
+    });
+    return verdict.allowed ? { ok: true } : { ok: false, reason: verdict.reason };
+  } catch (err) {
+    logger.warn(
+      'computer-use: access check threw',
+      { error: err instanceof Error ? err.message : String(err) },
+      LogComponent.ComputerUse,
+    );
+    return {
+      ok: false,
+      reason: 'Access policy evaluation failed; action refused for safety.',
+    };
+  }
+}
+
+/**
  * Dispatch a single computer_use action against the DesktopBackend
  * singleton. Returns the envelope. Never throws — every failure is
  * captured into the envelope so the tool layer can render it.
@@ -190,6 +253,24 @@ async function runAction(
         };
       }
       case 'click': {
+        // Access gate: refuse to click on an app that the policy
+        // doesn't allow.
+        const access = checkForegroundAccess();
+        if (!access.ok) {
+          logger.warn(
+            'computer-use: click refused — app access policy',
+            { reason: access.reason, sessionId: sessionId ?? null },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.APP_BLOCKED,
+              message: access.reason ?? 'app blocked by access policy',
+            },
+          };
+        }
         // Approval gate (destructive).
         const approval = await requestApprovalIfNeeded(action, data);
         if (!approval.ok) {
@@ -211,6 +292,23 @@ async function runAction(
         };
       }
       case 'type': {
+        // Access gate: typing into an unapproved app is refused.
+        const access = checkForegroundAccess();
+        if (!access.ok) {
+          logger.warn(
+            'computer-use: type refused — app access policy',
+            { reason: access.reason, sessionId: sessionId ?? null },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.APP_BLOCKED,
+              message: access.reason ?? 'app blocked by access policy',
+            },
+          };
+        }
         const redacted = getRedactedReason();
         if (redacted) {
           logger.warn(
@@ -351,6 +449,24 @@ async function runAction(
         };
       }
       case 'window_switch': {
+        // Access gate: refuse to switch to a window whose app the
+        // policy doesn't allow.
+        const access = checkForegroundAccess();
+        if (!access.ok) {
+          logger.warn(
+            'computer-use: window_switch refused — app access policy',
+            { reason: access.reason, sessionId: sessionId ?? null },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.APP_BLOCKED,
+              message: access.reason ?? 'app blocked by access policy',
+            },
+          };
+        }
         const approval = await requestApprovalIfNeeded(action, data);
         if (!approval.ok) {
           return envelopeError(

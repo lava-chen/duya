@@ -25,4 +25,5 @@ export * from './som/index.js';
 export * from './safety/index.js';
 export * from './memory/index.js';
 export * from './approval/index.js';
+export * from './access.js';
 export * from './types.js';
