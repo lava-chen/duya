@@ -29,7 +29,10 @@
  *   https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html
  */
 
-import { createHash, createHmac } from 'node:crypto';
+import type {
+  createHash as _createHash,
+  createHmac as _createHmac,
+} from 'node:crypto';
 import type {
   AIClient,
   AIClientOptions,
@@ -49,15 +52,33 @@ import { emitSSE } from './emit-sse.js';
 
 // =============================================================================
 // AWS SigV4 (hand-rolled, node:crypto only)
+//
+// `node:crypto` is lazy-loaded so the file can be imported in the renderer
+// without Vite externalizing it. Vite externalizes bare `node:` specifiers
+// for browser bundles; by deferring the actual `require()` to call time we
+// keep the provider metadata reachable in the renderer while only paying
+// the Node-only cost in the main process (where Bedrock signing runs).
 // =============================================================================
+
+type CreateHash = typeof _createHash;
+type CreateHmac = typeof _createHmac;
+
+/** Lazy require — throws a clear error if called outside Node. */
+function nodeCrypto(): { createHash: CreateHash; createHmac: CreateHmac } {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const mod = require('node:crypto') as typeof import('node:crypto');
+  return { createHash: mod.createHash, createHmac: mod.createHmac };
+}
 
 /** SHA-256 hex digest of `body`. */
 function sha256Hex(body: string | Uint8Array): string {
+  const { createHash } = nodeCrypto();
   return createHash('sha256').update(body).digest('hex');
 }
 
 /** HMAC-SHA256 of `data` with `key`. */
 function hmac(key: Buffer | string, data: string): Buffer {
+  const { createHmac } = nodeCrypto();
   return createHmac('sha256', key).update(data).digest();
 }
 
@@ -159,9 +180,7 @@ export function signBedrockRequest(params: SigV4SigningParams): SigV4Headers {
     params.region,
     service,
   );
-  const signature = createHmac('sha256', signingKey)
-    .update(stringToSign)
-    .digest('hex');
+  const signature = hmac(signingKey, stringToSign).toString('hex');
 
   const authorization =
     `AWS4-HMAC-SHA256 Credential=${params.accessKeyId}/${credentialScope}, ` +
