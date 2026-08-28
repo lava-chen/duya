@@ -440,6 +440,23 @@ async function runAction(
 }
 
 /**
+ * Process-to-process dispatcher: called from the agent-server lifecycle
+ * when a `computer-use:execute` message arrives from a worker. Returns
+ * the same envelope shape as the IPC handler.
+ *
+ * Splitting this out keeps the lifecycle handler thin (no IPC plumbing
+ * duplication) and gives the renderer a single source of truth for the
+ * dispatcher logic.
+ */
+export async function dispatchComputerUseAction(input: {
+  action: ComputerUseAction;
+  payload: Record<string, unknown>;
+  sessionId?: string;
+}): Promise<ComputerUseToolEnvelope> {
+  return runAction(input.action, input.payload, input.sessionId);
+}
+
+/**
  * Register the IPC handler. Call once from electron/main.ts at boot.
  */
 export function registerComputerUseHandlers(): void {

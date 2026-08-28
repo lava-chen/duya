@@ -8,6 +8,7 @@ import { killProcessTree } from '../lib/process-cleanup';
 import { getDatabasePath } from '../db/connection';
 import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
 import { getConnectorService } from '../services/app-connections/connector-service';
+import { dispatchComputerUseAction } from '../ipc/computer-use';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -246,6 +247,54 @@ export function spawnAgentServer(): Promise<number> {
                 error: { code: 'INTERNAL', message: err instanceof Error ? err.message : String(err) },
               });
             }
+          });
+        return;
+      }
+
+      // Plan 454: route computer-use:execute to the Computer Use IPC
+      // dispatcher (electron/ipc/computer-use.ts). The agent-side
+      // computer_use tool calls context.ipcRequest('computer-use:execute',
+      // ...); the agent-server forwards the message here; the dispatcher
+      // runs the action against the DesktopBackend singleton and writes
+      // an audit log entry. The response shape matches the envelope the
+      // computer_use tool executor expects.
+      if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string') {
+        const action = typeof msg.action === 'string' ? msg.action : null;
+        const payload = (msg.payload as Record<string, unknown> | undefined) ?? {};
+        const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+        if (!action) {
+          if (!child.killed) {
+            child.send({
+              type: 'computer-use:execute:response',
+              requestId: msg.requestId,
+              success: false,
+              error: { code: 'SCHEMA_INVALID', message: 'missing action in computer-use:execute payload' },
+            });
+          }
+          return;
+        }
+        void dispatchComputerUseAction({ action, payload, sessionId })
+          .then((envelope) => {
+            if (child.killed) return;
+            child.send({
+              type: 'computer-use:execute:response',
+              requestId: msg.requestId,
+              success: envelope.success,
+              data: envelope,
+              error: envelope.error,
+            });
+          })
+          .catch((err) => {
+            if (child.killed) return;
+            child.send({
+              type: 'computer-use:execute:response',
+              requestId: msg.requestId,
+              success: false,
+              error: {
+                code: 'IPC_EXCEPTION',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            });
           });
         return;
       }

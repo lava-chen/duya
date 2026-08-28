@@ -461,6 +461,11 @@ async function handlePostChat(
             workerDbRequests.set(`rpc:${msg.requestId}`, child);
             process.send(msg);
           }
+          // Plan 454: forward computer-use:execute to the main process.
+          if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
+            workerDbRequests.set(`rpc:${msg.requestId}`, child);
+            process.send(msg);
+          }
         });
 
 
@@ -1250,6 +1255,11 @@ async function lazySpawnWorkerForCompact(
     }
     // Plan 312: forward appConnection:listDescriptors to the main process.
     if (msg.type === 'appConnection:listDescriptors' && typeof msg.requestId === 'string' && process.send) {
+      workerDbRequests.set(`rpc:${msg.requestId}`, child);
+      process.send(msg);
+    }
+    // Plan 454: forward computer-use:execute to the main process.
+    if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
       workerDbRequests.set(`rpc:${msg.requestId}`, child);
       process.send(msg);
     }
