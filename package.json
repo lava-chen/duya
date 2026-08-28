@@ -128,6 +128,7 @@
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "sharp": "^0.33.5",
     "rbush": "^4.0.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
