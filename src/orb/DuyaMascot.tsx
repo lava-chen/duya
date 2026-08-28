@@ -38,9 +38,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { Expression } from './expressions/types';
 import { MOUTH_PATHS } from './expressions/duya-expressions';
 import type { GazeController, GazeSample } from './hooks/useOrbGaze';
+import type { TweenedPath } from './expressions/pathTween';
 
 interface DuyaMascotProps {
-  /** Frozen expression. The renderer re-draws when this changes. */
+  /** Live expression. The renderer re-draws every frame during
+   *  state transitions (driven by useExpressionTransition). */
   expression: Expression;
   /**
    * Optional gaze controller. When provided, the pupil follows the
@@ -55,10 +57,14 @@ interface DuyaMascotProps {
    */
   gazeOverride?: GazeSample | null;
   /**
-   * Override the mouth path directly. When set, the active
-   * expression's mouth is ignored (the tween drives it).
+   * Tweened mouth path. When supplied (typically by
+   * `useExpressionTransition`), the renderer uses this in place
+   * of the static `expression.mouth` path. The tween handles
+   * both linear interpolation (same mouth kind) and cross-fade
+   * (different mouth kinds) by setting `d: null` and pairing
+   * `opacityA` / `opacityB`.
    */
-  mouthOverride?: { d: string | null; opacityA: number; opacityB: number } | null;
+  mouthTween?: TweenedPath;
   /** Render at a different size; default 50 (CSS px). */
   size?: number;
   /**
@@ -72,7 +78,7 @@ export function DuyaMascot({
   expression,
   gaze,
   gazeOverride,
-  mouthOverride,
+  mouthTween,
   size = 50,
   accent,
 }: DuyaMascotProps) {
@@ -114,16 +120,21 @@ export function DuyaMascot({
     expression.pupilDy;
   const pupilR = expression.pupilR * expression.eyeOpenness;
 
-  // Mouth: respect override (tween) if present, else expression mouth.
-  const mouthD = mouthOverride
-    ? mouthOverride.d ?? (expression.mouth === 'hidden' ? '' : MOUTH_PATHS[expression.mouth])
-    : expression.mouth === 'hidden'
-      ? ''
-      : MOUTH_PATHS[expression.mouth];
-  const mouthOpacityA = mouthOverride ? mouthOverride.opacityA : 1;
-  const mouthOpacityB = mouthOverride ? mouthOverride.opacityB : 0;
-  // When the tween cross-fades, render both mouth paths layered.
-  const renderMouthB = mouthOverride?.d === null;
+  // Mouth: respect the tween (from useExpressionTransition) when
+  // supplied, otherwise fall back to the static expression mouth.
+  // The tween decides whether to linear-interp the path or
+  // cross-fade two paths (the latter sets d: null and pairs
+  // opacityA / opacityB).
+  const staticD =
+    expression.mouth === 'hidden' ? '' : MOUTH_PATHS[expression.mouth] || '';
+  const mouthD = mouthTween
+    ? mouthTween.d ?? staticD
+    : staticD;
+  const mouthOpacityA = mouthTween ? mouthTween.opacityA : 1;
+  const mouthOpacityB = mouthTween ? mouthTween.opacityB : 0;
+  // When the tween cross-fades, render the second path (target
+  // expression's static mouth) alongside the first.
+  const isCrossFade = mouthTween?.d === null;
 
   // Body geometry. Slight asymmetric blob — wider on the left
   // (where the body bulges in the original duya icon), with a
@@ -272,14 +283,14 @@ export function DuyaMascot({
           opacity={mouthOpacityA * 0.7}
         />
       )}
-      {renderMouthB && mouthOverride && (
+      {isCrossFade && mouthTween && staticD && mouthOpacityB > 0 && (
         <path
-          d={MOUTH_PATHS[expression.mouth] /* fallback when null */}
+          d={staticD}
           fill="none"
           stroke="#160921"
           strokeWidth={1.6}
           strokeLinecap="round"
-          opacity={0}
+          opacity={mouthOpacityB * 0.7}
         />
       )}
     </svg>

@@ -1,19 +1,23 @@
 /**
- * OrbBall — DORMANT state.
+ * OrbBall \u2014 DORMANT / LOADING shared ball component.
  *
- * The persistent 50x50 anchor that lives on the user's desktop.
- * - Drag handle: mousedown → main process initiates window drag
- * - Hover: subtle scale up
- * - Click (single): triggers showInput via main process IPC
+ * Owns the gaze controller and the expression-transition hook.
+ * Re-renders 60fps during state transitions (eye + mouth morph);
+ * idle in steady state.
  *
- * The visual is now a `DuyaMascot` with the DORMANT expression
- * (neutral / awake, idle). The mascot owns the eye + mouth +
- * body; this component is just the clickable wrapper.
+ * The orb's "state" (DORMANT/INPUT/LOADING/RESULT) is owned by
+ * the parent. This component only sees `loading` (DORMANT vs.
+ * LOADING) and picks the corresponding target expression. We
+ * don't yet morph between the input's FOCUSED expression and
+ * the loading's THINKING expression \u2014 INPUT uses its own
+ * component (OrbInput) so the cross-fade there would need a
+ * shared ball, deferred to a follow-up.
  */
 import { type MouseEvent } from 'react';
 
 import { DuyaMascot } from '../DuyaMascot';
 import { EXPRESSION_NEUTRAL, EXPRESSION_THINKING } from '../expressions/duya-expressions';
+import { useExpressionTransition } from '../hooks/useExpressionTransition';
 import { useOrbGaze } from '../hooks/useOrbGaze';
 
 interface OrbBallProps {
@@ -39,6 +43,13 @@ export function OrbBall({ onMouseDown, loading = false }: OrbBallProps) {
   // subscribes inside its own effect.
   const gaze = useOrbGaze(loading ? 'inward' : 'drift');
 
+  // Expression transition: when `loading` flips, we morph from
+  // the current visual state to the new target over ~260ms.
+  // The hook returns the live interpolated expression every
+  // frame; once settled it idles.
+  const target = loading ? EXPRESSION_THINKING : EXPRESSION_NEUTRAL;
+  const sample = useExpressionTransition(target, 260);
+
   return (
     <div
       className="orb-ball orb-drag"
@@ -49,8 +60,9 @@ export function OrbBall({ onMouseDown, loading = false }: OrbBallProps) {
     >
       <div className="orb-ball-mascot" aria-hidden="true">
         <DuyaMascot
-          expression={loading ? EXPRESSION_THINKING : EXPRESSION_NEUTRAL}
+          expression={sample.expression}
           gaze={gaze}
+          mouthTween={sample.mouthTween}
         />
       </div>
     </div>
