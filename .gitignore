@@ -105,6 +105,7 @@ coverage/
 !packages/agent/tests/**/*.spec.tsx
 !packages/agent/src/**/__tests__/*.test.ts
 !packages/agent/src/**/__tests__/*.test.tsx
+!packages/computer-use/src/**/__tests__/*.test.ts
 !packages/plugin-core/tests/**/*.test.ts
 !packages/plugin-core/tests/**/*.test.tsx
 !packages/plugin-core/tests/**/*.spec.ts

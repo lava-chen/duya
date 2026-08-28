@@ -29,7 +29,14 @@ import {
   ComputerUseErrorCode,
   type ComputerUseToolEnvelope,
 } from '../../packages/agent/dist/tool/OSTool/ComputerUseTool.js';
-import { getDefaultDesktopBackend } from '@duya/computer-use';
+import {
+  buildArgsPreview,
+  getDefaultApprovalBridge,
+  getDefaultDesktopBackend,
+  requiresConfirmation,
+  validateKeyCombo,
+  validateTextFull,
+} from '@duya/computer-use';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
 import { getOSContextBridge } from '../../packages/agent/dist/context/os-context/index.js';
@@ -111,6 +118,48 @@ function buildDragOptions(p: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Run the approval gate when the action requires confirmation.
+ * Returns `{ ok: true }` when the action may proceed, or
+ * `{ ok: false, reason }` when the user denied / timed out.
+ *
+ * Side effect: writes to `userConfirmed` via closure (the audit log
+ * picks this up after runAction completes).
+ */
+async function requestApprovalIfNeeded(
+  action: ComputerUseAction,
+  data: Record<string, unknown>,
+): Promise<{ ok: boolean; reason: string }> {
+  if (!requiresConfirmation(action)) return { ok: true, reason: '' };
+  const bridge = getDefaultApprovalBridge();
+  const req = {
+    requestId: crypto.randomUUID(),
+    action,
+    argsPreview: buildArgsPreview(data),
+    issuedAt: new Date().toISOString(),
+    timeoutMs: 3_000,
+  };
+  try {
+    const result = await bridge.requestApproval(req);
+    if (result.approved) return { ok: true, reason: '' };
+    const reason =
+      result.reason === 'timeout'
+        ? `approval timed out after ${req.timeoutMs}ms — action cancelled`
+        : `user denied the action (${result.reason})`;
+    logger.info(
+      'computer-use: approval denied',
+      { action, requestId: req.requestId, reason: result.reason, sessionId: null },
+      LogComponent.ComputerUse,
+    );
+    return { ok: false, reason };
+  } catch (err) {
+    return {
+      ok: false,
+      reason: `approval bridge error: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
  * Dispatch a single computer_use action against the DesktopBackend
  * singleton. Returns the envelope. Never throws — every failure is
  * captured into the envelope so the tool layer can render it.
@@ -140,6 +189,15 @@ async function runAction(
         };
       }
       case 'click': {
+        // Approval gate (destructive).
+        const approval = await requestApprovalIfNeeded(action, data);
+        if (!approval.ok) {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.USER_REJECTED,
+            approval.reason,
+          );
+        }
         const clickOpts = buildClickOptions(data);
         const r = await backend.click(clickOpts as never);
         return {
@@ -161,8 +219,30 @@ async function runAction(
           );
           return envelopeError(action, ComputerUseErrorCode.REDACTED_FIELD, redacted);
         }
+        // Safety gate: text + multiline-shell patterns.
+        const text = String(data.text ?? '');
+        const safety = validateTextFull(text);
+        if (!safety.allowed) {
+          logger.warn(
+            'computer-use: type refused — safety gate',
+            {
+              action,
+              reasons: safety.reasons.map((r) => r.code),
+              sessionId: sessionId ?? null,
+            },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.BLOCKED,
+              message: safety.reasons.map((r) => r.reason).join('; '),
+            },
+          };
+        }
         const r = await backend.typeText({
-          text: String(data.text ?? ''),
+          text,
           delayMs: typeof data.delayMs === 'number' ? data.delayMs : undefined,
         });
         return {
@@ -172,6 +252,32 @@ async function runAction(
         };
       }
       case 'key': {
+        // Safety gate: blocked key combos.
+        const safety = validateKeyCombo({
+          key: String(data.key),
+          modifiers: Array.isArray(data.modifiers)
+            ? (data.modifiers as ('ctrl' | 'alt' | 'shift' | 'meta')[])
+            : undefined,
+        });
+        if (!safety.allowed) {
+          logger.warn(
+            'computer-use: key refused — safety gate',
+            {
+              action,
+              reasons: safety.reasons.map((r) => r.code),
+              sessionId: sessionId ?? null,
+            },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.BLOCKED,
+              message: safety.reasons.map((r) => r.reason).join('; '),
+            },
+          };
+        }
         const r = await backend.key({
           key: String(data.key),
           modifiers: Array.isArray(data.modifiers) ? (data.modifiers as never) : undefined,
@@ -194,6 +300,14 @@ async function runAction(
         };
       }
       case 'drag': {
+        const approval = await requestApprovalIfNeeded(action, data);
+        if (!approval.ok) {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.USER_REJECTED,
+            approval.reason,
+          );
+        }
         const dragOpts = buildDragOptions(data);
         const r = await backend.drag(dragOpts as never);
         return {
@@ -206,6 +320,14 @@ async function runAction(
         };
       }
       case 'window_switch': {
+        const approval = await requestApprovalIfNeeded(action, data);
+        if (!approval.ok) {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.USER_REJECTED,
+            approval.reason,
+          );
+        }
         const r = await backend.focusApp({
           title: typeof data.title === 'string' ? data.title : undefined,
           processName: typeof data.processName === 'string' ? data.processName : undefined,
@@ -233,8 +355,37 @@ async function runAction(
           );
           return envelopeError(action, ComputerUseErrorCode.REDACTED_FIELD, redacted);
         }
+        const value = String(data.value ?? '');
+        const safety = validateTextFull(value);
+        if (!safety.allowed) {
+          logger.warn(
+            'computer-use: set_value refused — safety gate',
+            {
+              action,
+              reasons: safety.reasons.map((r) => r.code),
+              sessionId: sessionId ?? null,
+            },
+            LogComponent.ComputerUse,
+          );
+          return {
+            success: false,
+            action,
+            error: {
+              code: ComputerUseErrorCode.BLOCKED,
+              message: safety.reasons.map((r) => r.reason).join('; '),
+            },
+          };
+        }
+        const approval = await requestApprovalIfNeeded(action, data);
+        if (!approval.ok) {
+          return envelopeError(
+            action,
+            ComputerUseErrorCode.USER_REJECTED,
+            approval.reason,
+          );
+        }
         const r = await backend.setValue({
-          value: String(data.value ?? ''),
+          value,
           delayMs: typeof data.delayMs === 'number' ? data.delayMs : undefined,
         });
         return {
