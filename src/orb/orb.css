@@ -147,37 +147,74 @@ textarea {
   width: var(--orb-size);
   height: var(--orb-size);
   border-radius: var(--orb-radius);
-  background: var(--orb-bg-glass);
+  /* Duya brand-tinted frosted glass: a soft purple wash over the
+     surface so the ball reads as part of the brand family even on
+     backgrounds where pure white-on-transparent disappears. */
+  background:
+    radial-gradient(
+      circle at 30% 25%,
+      rgba(199, 155, 255, 0.18) 0%,
+      rgba(124, 58, 237, 0.08) 45%,
+      rgba(255, 255, 255, 0.55) 70%
+    ),
+    var(--orb-bg-glass);
   backdrop-filter: var(--orb-blur);
   -webkit-backdrop-filter: var(--orb-blur);
-  border: 1px solid var(--orb-border);
-  box-shadow: var(--orb-shadow-md);
+  /* Subtle inner glow + brand-color rim. The rim is a single
+     1.5px ring with a duya-purple tint, lifted on hover. */
+  border: 1.5px solid rgba(124, 58, 237, 0.28);
+  box-shadow:
+    var(--orb-shadow-md),
+    inset 0 0 18px rgba(124, 58, 237, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: grab;
-  transition: transform var(--orb-transition-fast) var(--orb-easing),
-    box-shadow var(--orb-transition-fast) var(--orb-easing);
+  transition:
+    transform var(--orb-transition-fast) var(--orb-easing),
+    box-shadow var(--orb-transition-fast) var(--orb-easing),
+    border-color var(--orb-transition-fast) var(--orb-easing);
   will-change: transform;
+  /* Idle breathing — 3.2s slow scale so the ball feels alive
+     without being distracting. Disabled on hover so the user
+     feels in control. */
+  animation: orb-idle 3.2s var(--orb-easing) infinite;
 }
 
 .orb-ball:hover {
-  transform: scale(1.05);
-  box-shadow: var(--orb-shadow-lg);
+  transform: scale(1.06);
+  border-color: rgba(124, 58, 237, 0.55);
+  box-shadow:
+    var(--orb-shadow-lg),
+    inset 0 0 22px rgba(124, 58, 237, 0.18),
+    0 0 0 4px rgba(124, 58, 237, 0.06);
+  animation-play-state: paused;
 }
 
 .orb-ball:active {
   cursor: grabbing;
-  transform: scale(0.95);
+  transform: scale(0.94);
+  animation-play-state: paused;
+}
+
+@keyframes orb-idle {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.025);
+  }
 }
 
 .orb-ball-logo {
-  width: 60%;
-  height: 60%;
-  /* duya robot face SVG embedded via background-image — see OrbBall.tsx */
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
+  width: 78%;
+  height: 78%;
+  /* duya mascot SVG (see OrbBall.tsx). Sized to leave a thin
+     duya-purple rim visible around the body so the silhouette of
+     the brand creature is recognizable at 50px. */
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1.5px rgba(22, 9, 33, 0.35));
 }
 
 /* ─ ─ LOADING: OrbBall + Progress Bubble ─────────────────────────────────── */
