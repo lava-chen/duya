@@ -40,6 +40,18 @@ export interface CaptureResult {
   capturedAt: string;
 }
 
+/**
+ * Axis-aligned bounding box in screen coordinates (logical pixels,
+ * top-left origin). Used for SOM element regions and for
+ * `zoom`-style region-restricted captures.
+ */
+export interface Bbox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface SomElement {
   /**
    * 1-based index. The LLM says "click element 5" and the tool
@@ -47,7 +59,7 @@ export interface SomElement {
    */
   index: number;
   /** Bounding box in screen coordinates (logical pixels). */
-  bbox: { x: number; y: number; w: number; h: number };
+  bbox: Bbox;
   /** Short label rendered next to the bbox in the overlay. */
   label: string;
   /**
@@ -66,13 +78,28 @@ export interface SomElement {
  *   primary-button contrast).
  * - `displayId`: when set, target a specific display; defaults to the
  *   primary (0).
+ * - `region`: when set, restrict the SOM element detection to the
+ *   given rectangle. The capture itself is still the full screen;
+ *   the region only narrows which elements get numbered. Combined
+ *   with the agent's `zoom` action this lets the model inspect
+ *   small UI areas without losing the full-screen context.
  */
 export interface CaptureOptions {
   somMode?: boolean;
   displayId?: number;
+  region?: Bbox;
 }
 
 export type MouseButton = 'left' | 'right' | 'middle';
+
+/**
+ * Click count. `single` is the default (one click). `double` and
+ * `triple` are used for double-click / triple-click on selectable
+ * text and list items. The backend dispatches the appropriate
+ * number of `mouse.click` events with a short inter-click delay
+ * (typically ~10ms, matching OS conventions).
+ */
+export type ClickCount = 'single' | 'double' | 'triple';
 
 /**
  * Click options. Prefer `element` (SOM index) over raw coordinates —
@@ -90,6 +117,8 @@ export interface ClickOptions {
   y?: number;
   /** Mouse button. Defaults to 'left'. */
   button?: MouseButton;
+  /** Click count. Defaults to 'single'. 'double' and 'triple' fire 2/3 clicks. */
+  count?: ClickCount;
   /** Modifier keys held during the click (nut.js Key enum values). */
   modifiers?: Array<'ctrl' | 'alt' | 'shift' | 'meta'>;
 }

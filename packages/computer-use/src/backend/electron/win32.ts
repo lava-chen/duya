@@ -162,6 +162,7 @@ export class ElectronDesktopBackend implements DesktopBackend {
     const start = Date.now();
     const somMode = opts?.somMode === true;
     const displayId = opts?.displayId ?? 0;
+    const region = opts?.region;
 
     const sources = await this.opts.electron.desktopCapturer.getSources({
       types: ['screen'],
@@ -204,6 +205,19 @@ export class ElectronDesktopBackend implements DesktopBackend {
           height: nativeSize.height,
         });
       }
+      // When a region is set, only number elements that fall within
+      // the rectangle. The full capture is still returned (so the
+      // model can see context), but the overlay highlights a
+      // specific UI area.
+      if (region && elements.length > 0) {
+        elements = elements.filter(
+          (el) =>
+            el.bbox.x + el.bbox.w >= region.x &&
+            el.bbox.x <= region.x + region.w &&
+            el.bbox.y + el.bbox.h >= region.y &&
+            el.bbox.y <= region.y + region.h,
+        );
+      }
       if (this.opts.renderOverlay && elements.length > 0) {
         renderedBuffer = await this.opts.renderOverlay(nativeBuffer, elements);
       }
@@ -234,7 +248,18 @@ export class ElectronDesktopBackend implements DesktopBackend {
       }
       await this.opts.nut.mouse.setPosition(point);
       const button = this.toNutButton(opts.button ?? 'left');
-      await this.opts.nut.mouse.click(button);
+      const count = opts.count ?? 'single';
+      // Inter-click delay matching OS conventions (~10ms). For
+      // double/triple click, the OS uses a small delay between
+      // presses so the multi-click registers as a single gesture.
+      const interClickDelayMs = 10;
+      const totalClicks = count === 'single' ? 1 : count === 'double' ? 2 : 3;
+      for (let i = 0; i < totalClicks; i++) {
+        await this.opts.nut.mouse.click(button);
+        if (i < totalClicks - 1) {
+          await new Promise<void>((resolve) => setTimeout(resolve, interClickDelayMs));
+        }
+      }
       return { ok: true, durationMs: Date.now() - start };
     } catch (err) {
       return {

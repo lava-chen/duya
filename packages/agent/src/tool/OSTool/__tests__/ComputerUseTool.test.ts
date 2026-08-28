@@ -110,6 +110,40 @@ describe('computerUseInputSchema', () => {
     expect(r.success).toBe(false);
   });
 
+  it('accepts click count=single (default), double, triple', () => {
+    expect(computerUseInputSchema.safeParse({ action: 'click', x: 1, y: 2, count: 'single' }).success).toBe(true);
+    expect(computerUseInputSchema.safeParse({ action: 'click', x: 1, y: 2, count: 'double' }).success).toBe(true);
+    expect(computerUseInputSchema.safeParse({ action: 'click', x: 1, y: 2, count: 'triple' }).success).toBe(true);
+  });
+
+  it('rejects click count with an unknown value', () => {
+    const r = computerUseInputSchema.safeParse({
+      action: 'click',
+      x: 1,
+      y: 2,
+      count: 'quadruple',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('accepts zoom with positive region', () => {
+    const r = computerUseInputSchema.safeParse({
+      action: 'zoom',
+      x: 100,
+      y: 200,
+      w: 400,
+      h: 300,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('rejects zoom with non-positive dimensions', () => {
+    const r1 = computerUseInputSchema.safeParse({ action: 'zoom', x: 0, y: 0, w: 0, h: 100 });
+    expect(r1.success).toBe(false);
+    const r2 = computerUseInputSchema.safeParse({ action: 'zoom', x: 0, y: 0, w: 100, h: 0 });
+    expect(r2.success).toBe(false);
+  });
+
   it('type accepts empty text', () => {
     const r = computerUseInputSchema.safeParse({ action: 'type', text: '' });
     expect(r.success).toBe(true);
@@ -148,6 +182,8 @@ function minimalValidInput(action: string): Record<string, unknown> {
       return { action: 'set_value', value: 'v' };
     case 'wait':
       return { action: 'wait', ms: 100 };
+    case 'zoom':
+      return { action: 'zoom', x: 0, y: 0, w: 100, h: 100 };
     default:
       return { action };
   }

@@ -3,6 +3,7 @@ import { reformatTransform } from './transforms/reformatCompress.js'
 import { offloadTransform } from './transforms/offloadCompress.js'
 import { createCanvasTransform } from './transforms/canvasTransform.js'
 import { microTransform } from './transforms/microTransform.js'
+import { imageTruncationTransform } from './transforms/imageTruncationTransform.js'
 
 /**
  * A projection-layer transform that rewrites the message array sent to the
@@ -43,7 +44,8 @@ export interface ProjectionPipelineConfig {
  * Build the default projection pipeline. Honours `config.canvasEnabled`
  * (falls back to `DUYA_COMPRESS_CANVAS_HISTORY`). Order is:
  *   reformat (grep/glob JSON → CSV) → offload (long read/bash bodies) →
- *   canvas (canvas_* history) → micro (recent-N-aware small tool cleanup).
+ *   canvas (canvas_* history) → micro (recent-N-aware small tool cleanup)
+ *   → image-truncation (drop old screenshots to bound token cost).
  */
 export function buildDefaultTransforms(
   config: ProjectionPipelineConfig = {},
@@ -54,6 +56,7 @@ export function buildDefaultTransforms(
     offloadTransform,
     createCanvasTransform({ enabled: canvasEnabled }),
     microTransform,
+    imageTruncationTransform,
   ]
 }
 

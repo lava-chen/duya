@@ -58,6 +58,7 @@ const clickShape = z
     x: finiteNumber.optional(),
     y: finiteNumber.optional(),
     button: z.enum(['left', 'right', 'middle']).optional(),
+    count: z.enum(['single', 'double', 'triple']).optional(),
     modifiers: z
       .array(z.enum(['ctrl', 'alt', 'shift', 'meta']))
       .max(4)
@@ -173,6 +174,24 @@ const waitShape = z
   })
   .strict();
 
+const zoomShape = z
+  .object({
+    action: z.literal('zoom'),
+    // Region in screen coordinates (logical pixels, top-left origin).
+    x: finiteNumber,
+    y: finiteNumber,
+    w: finiteNumber.int().positive(),
+    h: finiteNumber.int().positive(),
+    timeoutMs,
+  })
+  .strict()
+  .refine(
+    (v) => v.x >= 0 && v.y >= 0 && v.w > 0 && v.h > 0,
+    {
+      message: 'zoom region requires positive x, y, w, h',
+    },
+  );
+
 // ─────────────────────────────────────────────────────────────────────
 // Discriminated union
 // ─────────────────────────────────────────────────────────────────────
@@ -193,6 +212,7 @@ export const computerUseInputSchema = z.discriminatedUnion(
     listAppsShape,
     setValueShape,
     waitShape,
+    zoomShape,
   ],
 );
 
