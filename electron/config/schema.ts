@@ -431,11 +431,11 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   tts: {},
   stt: { enabled: true },
   // Computer Use Mode (plan 454) access policy. Default is
-  // deny-by-default; the user must explicitly opt in to which apps
-  // the model may automate. Override via config.toml
-  // [computer_use] allowed_apps / denied_apps.
+  // allow-by-default so the feature works out of the box in dev;
+  // users can tighten by adding `allowed_apps` + setting
+  // `default_access = "deny"` in config.toml.
   computer_use: {
-    default_access: 'deny',
+    default_access: 'allow',
     allowed_apps: [],
     denied_apps: [],
     max_image_budget: 5,

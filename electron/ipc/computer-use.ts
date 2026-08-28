@@ -184,13 +184,26 @@ function getAccessPolicy(): AppAccessPolicy {
     };
     const store = getConfigStore();
     const raw = store.getByPath('computer_use') as AppAccessPolicy | undefined;
-    cachedAccessPolicy = {
-      default_access: raw?.default_access ?? 'deny',
-      allowed_apps: raw?.allowed_apps ?? [],
-      denied_apps: raw?.denied_apps ?? [],
-    };
+    if (raw === undefined) {
+      // No [computer_use] section configured: keep the feature usable
+      // (allow-by-default) so dev / first-run works out of the box.
+      // Users who want to restrict it add allowed_apps + set
+      // default_access = "deny".
+      cachedAccessPolicy = { default_access: 'allow', allowed_apps: [], denied_apps: [] };
+    } else {
+      // User explicitly configured the section: honor their values
+      // with a deny default so an allow-list-only config locks
+      // everything else down.
+      cachedAccessPolicy = {
+        default_access: raw?.default_access ?? 'deny',
+        allowed_apps: raw?.allowed_apps ?? [],
+        denied_apps: raw?.denied_apps ?? [],
+      };
+    }
   } catch {
-    cachedAccessPolicy = { default_access: 'deny', allowed_apps: [], denied_apps: [] };
+    // Store unreachable (unit tests, CLI): allow by default so
+    // non-Electron contexts don't hard-fail every action.
+    cachedAccessPolicy = { default_access: 'allow', allowed_apps: [], denied_apps: [] };
   }
   return cachedAccessPolicy;
 }
@@ -586,20 +599,13 @@ async function runAction(
       ComputerUseErrorCode.IPC_EXCEPTION,
       err instanceof Error ? err.message : String(err),
     );
-  } finally {
-    logComputerUseAction({
-      ts: new Date().toISOString(),
-      action,
-      sessionId: sessionId ?? '',
-      // We don't have the structured envelope here yet; the caller
-      // writes the success/failure audit when it has the final shape.
-      // Inline a coarse audit for the throw path; success audits are
-      // added by the wrapping handler below.
-      ok: true, // overwritten below when handler wraps
-      userConfirmed,
-      durationMs: Date.now() - start,
-    });
   }
+  // Audit is written by the dispatch boundaries (dispatchComputerUseAction
+  // for the agent-server path, registerComputerUseHandlers for the renderer
+  // IPC path) once the final envelope shape is known — runAction itself
+  // previously double-wrote (a coarse ok:true here + the real one in the
+  // handler), which made failure audits look like successes.
+  void userConfirmed;
 }
 
 /**
@@ -616,7 +622,19 @@ export async function dispatchComputerUseAction(input: {
   payload: Record<string, unknown>;
   sessionId?: string;
 }): Promise<ComputerUseToolEnvelope> {
-  return runAction(input.action, input.payload, input.sessionId);
+  const start = Date.now();
+  const envelope = await runAction(input.action, input.payload, input.sessionId);
+  logComputerUseAction({
+    ts: new Date().toISOString(),
+    action: input.action,
+    sessionId: input.sessionId ?? '',
+    ok: envelope.success,
+    userConfirmed: false, // renderer-side confirmation state not tracked yet
+    durationMs: Date.now() - start,
+    errorCode: envelope.error?.code,
+    args: input.payload,
+  });
+  return envelope;
 }
 
 /**
