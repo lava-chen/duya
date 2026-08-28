@@ -126,6 +126,14 @@
   --foreground: #1a1a1a;
   --muted: #6b6b6b;
   --border: rgba(0, 0, 0, 0.06);
+  /* Border scale — the ONLY three border colors. Rules:
+   * --border       default edge (cards, headers, inputs)
+   * --border-weak  muted dividers (status bars, in-list separators)
+   * --border-strong interactive emphasis (hover/active edges)
+   * Never hard-code rgba/hex border colors or ad-hoc color-mix. */
+  --border-weak: var(--border-weak);
+  --border-strong: color-mix(in srgb, var(--text) 22%, var(--border));
+  --border-width: 1px;
   --grid-dot: rgba(0, 0, 0, 0.06);
   --accent: #7c3aed;
   --accent-soft: rgba(124, 58, 237, 0.2);
@@ -473,7 +481,7 @@ html[data-font="system"] .message-content li {
 .prose-sm code,
 .prose :not(pre) > code {
   background-color: #f0f0f0 !important;
-  border: 1px solid #d4d4d3 !important;
+  border: 1px solid var(--border) !important;
 }
 
 /* Allow long inline code (paths, identifiers) to wrap inside the message
@@ -719,7 +727,7 @@ html[data-theme="dark"] .terminal-banner-error {
 [data-theme="dark"] .prose-sm code,
 [data-theme="dark"] .prose :not(pre) > code {
   background-color: #252525 !important;
-  border: 1px solid #444441 !important;
+  border: 1px solid var(--border) !important;
 }
 
 /* Inline code inside code blocks should match code block background */
@@ -839,7 +847,7 @@ a {
   flex-direction: column;
   gap: 7px;
   padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background:
     linear-gradient(180deg, color-mix(in srgb, #fff 4%, transparent), transparent 46%),
@@ -8235,7 +8243,7 @@ html[data-theme="light"] .ask-question-option.selected {
 .finite-canvas-surface {
   position: relative;
   margin: 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--bg-surface);
   box-shadow:
@@ -8302,7 +8310,7 @@ html[data-theme="light"] .ask-question-option.selected {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--border);
   border-radius: 7px;
   background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   color: var(--text-secondary);
@@ -10131,7 +10139,7 @@ html[data-message-font-size="large"] .prose h3 {
   max-height: min(560px, calc(100% - 0px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--surface-solid);
   box-shadow: none;
@@ -10144,7 +10152,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 8px;
   padding: 0 10px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-bottom: 1px solid var(--border-weak);
 }
 
 .task-card-title {
@@ -10222,7 +10230,7 @@ html[data-message-font-size="large"] .prose h3 {
 .task-card-section + .task-card-section {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-top: 1px solid var(--border-weak);
 }
 
 .task-card-section-header {
@@ -10387,7 +10395,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: flex-start;
   gap: 6px;
   padding: 8px 10px 9px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-bottom: 1px solid var(--border-weak);
   background: color-mix(in srgb, var(--accent) 9%, transparent);
   border-left: 2px solid var(--accent);
 }
@@ -10616,7 +10624,7 @@ html[data-message-font-size="large"] .prose h3 {
   /* Same background as the tab bar above (no rule between them — the
    * two rows read as one header), but keep the rule BELOW: it separates
    * the header from the preview canvas. */
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom: 1px solid var(--border);
   background: var(--main-bg);
   box-sizing: border-box;
 }
@@ -10882,7 +10890,7 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 auto;
   min-width: 52px;
   padding: 10px 0 40px;
-  border-right: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-solid) 48%, var(--main-bg));
   user-select: none;
 }
@@ -10982,7 +10990,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--accent) 8%, var(--main-bg));
   color: var(--muted);
   font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
@@ -11219,7 +11227,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 12px 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-bottom: 1px solid var(--border);
   background: #191a1c;
 }
 
@@ -11353,7 +11361,7 @@ html[data-message-font-size="large"] .prose h3 {
   margin-bottom: 24px;
   overflow: hidden;
   padding: 9% 10%;
-  border: 1px solid #d8dbe0;
+  border: 1px solid var(--border);
   background: #fff;
   box-shadow: 0 2px 16px rgb(0 0 0 / 35%);
   color: #202124;
@@ -11391,7 +11399,7 @@ html[data-message-font-size="large"] .prose h3 {
 .office-sheet {
   min-width: 640px;
   margin-bottom: 20px;
-  border: 1px solid #cfd3d8;
+  border: 1px solid var(--border);
   background: #fff;
   box-shadow: 0 2px 14px rgb(0 0 0 / 28%);
 }
@@ -11416,8 +11424,8 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 36px;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid #dfe2e6;
-  border-bottom: 1px solid #dfe2e6;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: #f5f6f7;
   color: #858a92;
   font-size: 10px;
@@ -11430,8 +11438,8 @@ html[data-message-font-size="large"] .prose h3 {
   overflow: hidden;
   padding: 5px 8px;
   border: 0;
-  border-right: 1px solid #e1e3e6;
-  border-bottom: 1px solid #e1e3e6;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: #fff;
   color: #25282c;
   font: inherit;
@@ -11458,7 +11466,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 6px;
   padding: 0 11px;
-  border: 1px solid #d8dbe0;
+  border: 1px solid var(--border);
   border-radius: 9px;
   background: #fff;
   box-shadow: 0 5px 18px rgb(0 0 0 / 26%);
@@ -11514,7 +11522,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   justify-content: center;
   margin-bottom: 4px;
-  border: 1px solid #36383d;
+  border: 1px solid var(--border);
   border-radius: 16px;
   background: #202124;
   color: #b8bac0;
@@ -11530,7 +11538,7 @@ html[data-message-font-size="large"] .prose h3 {
   gap: 7px;
   margin-top: 8px;
   padding: 0 13px;
-  border: 1px solid #42454b;
+  border: 1px solid var(--border);
   border-radius: 9px;
   background: #292b2f;
   color: #f0f1f3;
@@ -11599,7 +11607,7 @@ html[data-message-font-size="large"] .prose h3 {
 .browser-panel-icon-btn:hover:not(:disabled) {
   color: var(--foreground);
   background: var(--surface-hover);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  border-color: var(--border-weak);
 }
 
 .browser-panel-icon-btn:disabled {
@@ -12075,7 +12083,7 @@ html[data-message-font-size="large"] .prose h3 {
   min-width: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 8px;
   background: var(--surface-solid, var(--panel-bg));
   color: var(--text);
@@ -12097,7 +12105,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 13px 6px 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 1px solid var(--border-weak);
   background: transparent;
 }
 
@@ -12140,7 +12148,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
@@ -12310,7 +12318,7 @@ html[data-message-font-size="large"] .prose h3 {
   overflow: hidden;
   flex-shrink: 0;
   padding: 5px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top: 1px solid var(--border-weak);
   color: var(--text-tertiary, var(--muted));
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 10px;
@@ -12330,7 +12338,7 @@ html[data-message-font-size="large"] .prose h3 {
   min-height: 360px;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 16px;
   background: var(--surface-solid, var(--panel-bg));
   color: var(--text);
@@ -12751,7 +12759,7 @@ html[data-message-font-size="large"] .prose h3 {
 .code-review-panel {
   --review-muted: color-mix(in srgb, var(--text-muted) 84%, transparent);
   --review-surface: var(--main-bg);
-  --review-border: color-mix(in srgb, var(--border) 82%, transparent);
+  --review-border: var(--border);
   --review-add: #31c578;
   --review-remove: #ef6262;
   display: flex;
@@ -12856,7 +12864,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .code-review-scope-select:hover {
-  border-color: color-mix(in srgb, var(--border) 140%, transparent);
+  border-color: var(--border-strong);
 }
 
 .code-review-scope-select:focus-visible {
@@ -13055,8 +13063,8 @@ html[data-message-font-size="large"] .prose h3 {
 
 .code-review-hunk {
   margin: 14px 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top: 1px solid var(--border-weak);
+  border-bottom: 1px solid var(--border-weak);
 }
 
 .code-review-hunk-header {
@@ -13156,7 +13164,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .code-review-split-row > .code-review-line:first-child {
-  border-right: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-right: 1px solid var(--border-weak);
 }
 
 .code-review-line-empty {
@@ -13289,7 +13297,7 @@ html[data-message-font-size="large"] .prose h3 {
   height: 40px;
   flex: 0 0 40px;
   padding: 0 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
 }
 
@@ -13862,7 +13870,7 @@ html[data-message-font-size="large"] .prose h3 {
   z-index: 50;
   width: min(360px, 80vw);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-solid, var(--surface));
   box-shadow: var(--shadow-resting);

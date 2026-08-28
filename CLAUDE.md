@@ -298,6 +298,7 @@ git ls-remote --tags origin refs/tags/v<X>
 - Comments: English only. Never write comments in Chinese.
 - External boundaries: prefer `zod` or existing schema helpers.
 - UI: use CSS variables from `globals.css` (`var(--bg-canvas)`, `var(--text)`, `var(--accent)`). Support both light and dark modes (`data-theme`).
+- Borders: only the three border tokens at `--border-width` (1px) — `var(--border)` (default edge), `var(--border-weak)` (muted divider), `var(--border-strong)` (interactive emphasis). Never hard-code border rgba/hex colors or ad-hoc `color-mix`; status/accent-tinted borders are the only exception.
 - Follow existing patterns in `src/components/` before creating new ones.
 - Use Tailwind + custom CSS classes from `globals.css`.
 
