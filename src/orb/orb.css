@@ -207,14 +207,24 @@ textarea {
   }
 }
 
-.orb-ball-logo {
-  width: 78%;
-  height: 78%;
-  /* duya mascot SVG (see OrbBall.tsx). Sized to leave a thin
-     duya-purple rim visible around the body so the silhouette of
-     the brand creature is recognizable at 50px. */
+.orb-ball-mascot {
+  width: 86%;
+  height: 86%;
+  /* DuyaMascot SVG (see DuyaMascot.tsx). Sized so a 50px ball
+     renders the mascot at 43px — leaves a thin duya-purple rim
+     visible around the body, matching the brand rim on the
+     surrounding glass surface. */
   pointer-events: none;
   filter: drop-shadow(0 1px 1.5px rgba(22, 9, 33, 0.35));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb-ball-mascot svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
 /* ─ ─ LOADING: OrbBall + Progress Bubble ─────────────────────────────────── */
