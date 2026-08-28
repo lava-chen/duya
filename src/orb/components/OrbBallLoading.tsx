@@ -1,11 +1,13 @@
 /**
  * OrbBallLoading — LOADING state.
  *
- * 球回归 + 右上小气泡。气泡显示"思考中 / 正在用 xxx 工具",
- * 通过 `automation:orb:update-progress` IPC 由 main 进程推送。
+ * Ball returns + right-top progress bubble. Bubble content
+ * ("thinking" / "using tool X") is pushed by main via the
+ * `automation:orb:update-progress` IPC.
  *
- * 球自身继续 pulse 动画,提示"在工作"。眼睛用 OrbBall 的
- * `loading` 变体(闭眼弧线)以增加"在处理"的语义。
+ * The ball itself reuses OrbBall with `loading=true`, which picks
+ * the THINKING expression and points the gaze controller at
+ * `inward` mode (pupil eases to center while the agent works).
  */
 import type { MouseEvent } from 'react';
 import type { ProgressInfo } from '../types';
