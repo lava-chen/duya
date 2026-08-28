@@ -36,7 +36,7 @@ interface WakeConfig {
 
 const DEFAULT_CONFIG: WakeConfig = {
   enabled: true,
-  shortcut: 'CommandOrControl+Shift+Space',
+  shortcut: 'Shift+=',
   injectOsContext: true,
   autoCollapseMs: 60_000,
   orb: { x: 100, y: 100, displayId: 0 },
@@ -123,10 +123,10 @@ export function WakeAgentSection() {
         />
 
         <SettingsInput
-          label="Global shortcut"
-          description="Electron globalShortcut string. Empty falls back to Ctrl+Shift+Space."
+          label="Global shortcut (double-tap)"
+          description="Press this key twice in quick succession to wake. Default: Shift+= pressed twice within 600ms. Empty falls back to Shift+=."
           value={config.shortcut}
-          placeholder="CommandOrControl+Shift+Space"
+          placeholder="Shift+="
           disabled={saving}
           onChange={(value: string) => void save({ shortcut: value })}
         />

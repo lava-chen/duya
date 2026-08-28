@@ -50,6 +50,15 @@ export interface OrbPosition {
 export interface WakeOptions {
   /** Default shortcut. Defaults to `CommandOrControl+Shift+Space`. */
   defaultShortcut?: string;
+  /**
+   * Treat the registered shortcut as the first half of a double-tap
+   * (e.g. `Shift+=` pressed twice within `doubleTapWindowMs`).
+   * Matches the daemon's `computer-use-demo` Shift++= trigger so the
+   * user only has to learn one combo for the whole wake surface.
+   */
+  doubleTap?: boolean;
+  /** Sliding window for double-tap detection. Default 600ms. */
+  doubleTapWindowMs?: number;
   /** Dev URL for the orb vite entry. */
   orbDevUrl?: string;
   /** Built orb entry directory (resources/orb/ in production). */
@@ -95,8 +104,13 @@ class WakeServiceImpl implements WakeService {
   private emitter = new EventEmitter();
   private position: OrbPosition = { x: 100, y: 100, displayId: 0 };
   private registeredShortcut: string | null = null;
-  private readonly opts: Required<Pick<WakeOptions, 'defaultShortcut'>> &
+  private readonly opts: Required<Pick<WakeOptions,
+    'defaultShortcut' | 'doubleTap' | 'doubleTapWindowMs'>> &
     Pick<WakeOptions, 'orbDevUrl' | 'orbResourcesPath' | 'bounds'>;
+  /** Double-tap state. */
+  private lastPressMs = 0;
+  private pressCount = 0;
+  private doubleTapTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: WakeOptions) {
     this.opts = {
@@ -104,24 +118,37 @@ class WakeServiceImpl implements WakeService {
       orbDevUrl: opts.orbDevUrl,
       orbResourcesPath: opts.orbResourcesPath,
       bounds: opts.bounds,
+      doubleTap: opts.doubleTap ?? false,
+      doubleTapWindowMs: opts.doubleTapWindowMs ?? 600,
     };
   }
 
   initialize(): void {
     const shortcut = this.opts.defaultShortcut;
     try {
-      const ok = globalShortcut.register(shortcut, () => this.wake());
+      // When double-tap mode is on, we register the raw shortcut and
+      // intercept the callback so the wake only fires on the second
+      // press within the sliding window. Otherwise the globalShortcut
+      // callback directly invokes wake().
+      const callback = this.opts.doubleTap
+        ? () => this.handleDoubleTapPress()
+        : () => this.wake();
+      const ok = globalShortcut.register(shortcut, callback);
       if (!ok) {
         logger.warn(
           'Wake: globalShortcut.register returned false (likely already bound)',
-          { shortcut },
+          { shortcut, doubleTap: this.opts.doubleTap },
           LogComponent.Orb,
         );
       } else {
         this.registeredShortcut = shortcut;
         logger.info(
           'Wake: hotkey registered',
-          { shortcut },
+          {
+            shortcut,
+            doubleTap: this.opts.doubleTap,
+            windowMs: this.opts.doubleTapWindowMs,
+          },
           LogComponent.Orb,
         );
       }
@@ -135,6 +162,45 @@ class WakeServiceImpl implements WakeService {
         LogComponent.Orb,
       );
     }
+  }
+
+  /**
+   * Called for every press of the underlying globalShortcut when
+   * doubleTap mode is on. Sliding-window detector: two presses
+   * within `doubleTapWindowMs` fire `wake()`; the second press
+   * resets the counter. We don't gate on `Shift held` (the daemon
+   * does, but Electron's globalShortcut only fires when the modifier
+   * is held so the gate is implicit).
+   */
+  private handleDoubleTapPress(): void {
+    const now = Date.now();
+    const delta = now - this.lastPressMs;
+    this.pressCount = delta > this.opts.doubleTapWindowMs ? 1 : this.pressCount + 1;
+    this.lastPressMs = now;
+
+    logger.debug(
+      'Wake: double-tap press',
+      { count: this.pressCount, deltaMs: delta },
+      LogComponent.Orb,
+    );
+
+    if (this.pressCount >= 2) {
+      this.pressCount = 0;
+      if (this.doubleTapTimer) {
+        clearTimeout(this.doubleTapTimer);
+        this.doubleTapTimer = null;
+      }
+      this.wake();
+      return;
+    }
+
+    // Auto-reset the counter after the window elapses so a stray
+    // single press doesn't sit there forever.
+    if (this.doubleTapTimer) clearTimeout(this.doubleTapTimer);
+    this.doubleTapTimer = setTimeout(() => {
+      this.pressCount = 0;
+      this.doubleTapTimer = null;
+    }, this.opts.doubleTapWindowMs + 50);
   }
 
   wake(): void {
