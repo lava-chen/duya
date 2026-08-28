@@ -268,6 +268,26 @@ if (gotTheLock) {
     registerDbHandlers();
     registerConductorHandlers();
 
+    // Plan 454 follow-up: register the DesktopBackend singleton so
+    // electron/ipc/computer-use.ts can dispatch actions. The init
+    // is best-effort — if nut.js / sharp fail to load (headless CI,
+    // missing prebuilt binary), the mode still registers but every
+    // call returns a structured error from the dispatcher.
+    try {
+      const { initializeComputerUseBackend } = await import(
+        './services/computer-use-backend'
+      );
+      initializeComputerUseBackend();
+    } catch (err) {
+      logger.warn(
+        'Computer Use backend bootstrap import failed',
+        {
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'Main',
+      );
+    }
+
     // Plan 429 #3 cleanup strategy: sweep pre-image snapshot blobs whose
     // referencing turns no longer exist in any rollout. Delayed + detached so
     // startup latency is unaffected; a missed run simply waits for the next.

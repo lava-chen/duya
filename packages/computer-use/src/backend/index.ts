@@ -34,6 +34,10 @@ export {
   ElectronDesktopBackend,
   createElectronDesktopBackend,
   type ElectronDesktopBackendOptions,
+  type ElectronAdapter,
+  type NutAdapter,
+  type SharpAdapter,
+  type SharpPipeline,
 } from './electron/index.js';
 
 export {
