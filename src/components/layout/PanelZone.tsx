@@ -157,7 +157,7 @@ export function PanelZone() {
             aria-label={panelOpen ? t('panel.closePanel') : t('panel.openPanel')}
             aria-expanded={panelOpen}
           >
-            <SidebarRightIcon size={16} stroke={1.75} />
+            <SidebarRightIcon size={16} stroke={1.5} />
           </button>
 
           {panelOpen && activeTab && (
@@ -170,8 +170,8 @@ export function PanelZone() {
               data-testid="workspace-expand"
             >
               {workspaceExpanded
-                ? <CornersInIcon size={20} stroke={1.5} />
-                : <CornersOutIcon size={20} stroke={1.5} />}
+                ? <CornersInIcon size={16} stroke={1.5} />
+                : <CornersOutIcon size={16} stroke={1.5} />}
             </button>
           )}
         </>

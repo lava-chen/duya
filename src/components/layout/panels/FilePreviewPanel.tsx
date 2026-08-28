@@ -17,8 +17,7 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
-import { getFileTypeIcon } from "@/components/file-tree/file-type-icon";
-import { IdeBrandIcon } from "@/components/ide/ide-brand-icons";
+import { CodeIcon } from "@/components/icons";
 import {
   OptionPanel,
   type OptionPanelItem,
@@ -668,10 +667,6 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     () => preview?.name || filePath.replace(/\\/g, "/").split("/").filter(Boolean).pop() || tab.title || "",
     [preview?.name, filePath, tab.title],
   );
-  const FileTypeIcon = useMemo(() => getFileTypeIcon(preview?.extension), [preview?.extension]);
-  // Breadcrumb segments for the *directory* path (all but the file name).
-  const pathBreadcrumb = useMemo(() => breadcrumb?.slice(0, -1), [breadcrumb]);
-
   const isMarkdown = useMemo(() => MARKDOWN_EXTENSIONS.has(preview?.extension ?? ""), [preview?.extension]);
   const lineCount = useMemo(() => lineCountOf(preview?.content ?? ""), [preview?.content]);
   const languageLabel = LANGUAGE_LABELS[language] ?? language;
@@ -704,16 +699,21 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     const ideItems: OptionPanelItem[] = ides.map((ide) => ({
       id: `ide:${ide.id}`,
       label: t('filePreview.openInIde', { name: ide.name }),
-      icon: <IdeBrandIcon id={ide.id} size={14} />,
+      // Neutral line icon: the colored brand fills read as noise next to
+      // the menu's monochrome line icons — the label carries the identity.
+      icon: <CodeIcon size={14} stroke={1.5} />,
       searchText: ide.name,
     }));
     return [
       ...ideItems,
       { id: 'default', label: t('filePreview.openWithDefault'), icon: <ArrowSquareOutIcon size={14} stroke={1.5} /> },
       { id: 'reveal', label: t('filePreview.revealInFolder'), icon: <FolderOpenIcon size={14} stroke={1.5} /> },
+      ...(preview?.kind === "text"
+        ? [{ id: 'copy-content', label: t('filePreview.copyContent'), icon: <CopyIcon size={14} stroke={1.5} /> }]
+        : []),
       { id: 'copy', label: t('filePreview.copyPath'), icon: <CopyIcon size={14} stroke={1.5} /> },
     ];
-  }, [ides, t]);
+  }, [ides, preview?.kind, t]);
 
   const handleRevealInFolder = useCallback(() => {
     setOpenMenuOpen(false);
@@ -750,58 +750,65 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
       handleOpenWithDefault();
     } else if (item.id === 'reveal') {
       handleRevealInFolder();
+    } else if (item.id === 'copy-content') {
+      void handleCopyContent();
     } else if (item.id === 'copy') {
       handleCopyPath();
     }
-  }, [handleOpenInIde, handleOpenWithDefault, handleRevealInFolder, handleCopyPath]);
+  }, [handleOpenInIde, handleOpenWithDefault, handleRevealInFolder, handleCopyPath, handleCopyContent]);
 
   if (!filePath) {
     return (
-      <PanelFileTreeSplit workingDirectory={workingDirectory}>
-      <div className="file-preview-empty">
-        <FolderOpenIcon size={32} stroke={1.25} />
-        <strong>{t('filePreview.openFile')}</strong>
-        <span>{t('filePreview.selectFileHint')}</span>
+      <div className="file-preview-panel">
+        <PanelFileTreeSplit workingDirectory={workingDirectory}>
+          <div className="file-preview-empty">
+            <FolderOpenIcon size={32} stroke={1.25} />
+            <strong>{t('filePreview.openFile')}</strong>
+            <span>{t('filePreview.selectFileHint')}</span>
+          </div>
+        </PanelFileTreeSplit>
       </div>
-      </PanelFileTreeSplit>
     );
   }
 
   const truncatedHint = preview?.truncated ? t('filePreview.truncatedHint') : "";
 
   return (
-    <PanelFileTreeSplit workingDirectory={workingDirectory}>
     <div className="file-preview-panel">
       <div className="file-preview-toolbar">
         <div className="file-preview-title">
-          {FileTypeIcon && (
-            <span className="file-preview-filetype"><FileTypeIcon size={16} stroke={1.5} /></span>
-          )}
-          <span className="file-preview-filename" title={fileName}>{fileName}</span>
-          {(rootName || (pathBreadcrumb && pathBreadcrumb.length > 0)) && (
+          {breadcrumb ? (
             <span className="file-preview-path" title={filePath}>
               {rootName && <span className="file-preview-path-root">{rootName}</span>}
-              {pathBreadcrumb?.map((segment) => (
-                <span key={segment.fullPath} className="file-preview-path-segment">
-                  <span className="file-preview-path-separator">/</span>
+              {breadcrumb.map((segment, index) => (
+                <span
+                  key={segment.fullPath}
+                  className={`file-preview-path-segment${index === breadcrumb.length - 1 ? " file-preview-path-file" : ""}`}
+                >
+                  <span className="file-preview-path-separator">›</span>
                   {segment.name}
                 </span>
               ))}
             </span>
+          ) : (
+            <span className="file-preview-filename" title={fileName}>{fileName}</span>
           )}
         </div>
         <div className="file-preview-actions">
-          {preview?.success && preview.kind === "text" && (
+          {panel && workingDirectory && (
             <IconButton
               type="button"
               variant="default"
               shape="square"
               size="md"
-              onClick={handleCopyContent}
-              title={t('filePreview.copyContent')}
-              aria-label={t('filePreview.copyContent')}
+              className={workspaceTreeOpen ? "active" : undefined}
+              onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
+              title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+              aria-label={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
+              aria-pressed={workspaceTreeOpen}
+              data-testid="file-tree-toggle"
             >
-              <CopyIcon size={16} stroke={1.5} />
+              <FoldersIcon size={16} stroke={1.5} />
             </IconButton>
           )}
           <div ref={openContainerRef} className="file-preview-open-dropdown">
@@ -814,7 +821,8 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                 aria-label={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
                 title={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
               >
-                {defaultIde ? <IdeBrandIcon id={defaultIde.id} size={16} /> : <ArrowSquareOutIcon size={16} stroke={1.5} />}
+                <CodeIcon size={16} stroke={1.5} />
+                <span className="file-preview-open-label">{t('filePreview.open')}</span>
               </button>
               <button
                 type="button"
@@ -843,25 +851,10 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               />
             )}
           </div>
-          {panel && workingDirectory && (
-            <IconButton
-              type="button"
-              variant="default"
-              shape="square"
-              size="md"
-              className={workspaceTreeOpen ? "active" : undefined}
-              onClick={() => panel.setWorkspaceTreeOpen(!workspaceTreeOpen)}
-              title={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
-              aria-label={workspaceTreeOpen ? t('panel.collapseFileTree') : t('panel.expandFileTree')}
-              aria-pressed={workspaceTreeOpen}
-              data-testid="file-tree-toggle"
-            >
-              <FoldersIcon size={16} stroke={1.5} />
-            </IconButton>
-          )}
         </div>
       </div>
 
+      <PanelFileTreeSplit workingDirectory={workingDirectory}>
       <div className={`file-preview-canvas${preview?.kind === "pdf" ? " file-preview-canvas-pdf" : ""}`} ref={canvasRef} onMouseUp={captureSelection} onClick={handleCanvasClick}>
         {loading && (
           <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
@@ -924,6 +917,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           </Button>
         )}
       </div>
+      </PanelFileTreeSplit>
 
       {!loading && preview?.success && preview.kind === "text" && (
         <div className="file-preview-statusbar">
@@ -939,6 +933,5 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         </div>
       )}
     </div>
-    </PanelFileTreeSplit>
   );
 }
