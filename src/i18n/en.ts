@@ -456,6 +456,7 @@ const en = {
   'settings.performance.lowPowerInactive': 'Low-power mode is inactive.',
   'settings.usage': 'Usage',
   'settings.support': 'Support',
+  'settings.wake': 'Wake Agent',
   'settings.agents': 'Agents',
   'settings.hooks': 'Hooks',
   'settings.hooks.description': 'View loaded agent hooks (builtin loop hooks + hook.json files registered via the [hooks] files array of config.toml), grouped by trigger event.',
@@ -487,6 +488,7 @@ const en = {
   'settings.group.extensions': 'Extensions',
   'settings.group.system': 'System',
   'settings.group.customize': 'Customize',
+  'settings.group.tools': 'Tools',
 
   'settings.memory.title': 'Memory',
   'settings.memory.description': 'Manage how DUYA remembers context across chats.',

@@ -14,6 +14,7 @@ import {
   HooksSection,
   VoiceSection,
   PerformanceSection,
+  WakeAgentSection,
 } from "@/components/settings";
 import { UsageDashboard } from "@/components/usage";
 import { ProviderPickerView } from "@/components/providers/ProviderPickerView";
@@ -43,6 +44,7 @@ export function SettingsView() {
         {settingsTab === "hooks" && <HooksSection />}
         {settingsTab === "voice" && <VoiceSection />}
         {settingsTab === "performance" && <PerformanceSection />}
+        {settingsTab === "wake" && <WakeAgentSection />}
       </div>
     </div>
   );
