@@ -612,13 +612,63 @@ function appConnectionIpcRequest<T = unknown>(
   });
 }
 
+// Plan 454: IPC request for Computer Use tool execution.
+//
+// Routes `computer-use:execute` messages to the main process
+// (electron/ipc/computer-use.ts). The main process owns the
+// DesktopBackend singleton and dispatches each action to it.
+// Distinct from conductorIpcRequest so the main process can route
+// `computer-use:execute` to the Computer Use IPC handler instead
+// of the Conductor executor.
+function computerUseIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 30000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    // Forward the agent's flattened { action, payload, sessionId }
+    // envelope to the main process Computer Use handler.
+    const outerPayload = payload as { action?: string; payload?: unknown; sessionId?: string } | undefined;
+    sendToMain({
+      type: 'computer-use:execute',
+      requestId,
+      action: outerPayload?.action,
+      payload: outerPayload?.payload,
+      sessionId: outerPayload?.sessionId,
+    });
+  });
+}
+
 /**
  * Unified tool IPC dispatcher: routes based on the `channel` argument.
  * - `'conductor:executor:rpc'` → conductorIpcRequest (canvas tools)
  * - `'appConnection:invoke'`    → appConnectionIpcRequest (connector tools)
+ * - `'computer-use:execute'`    → computerUseIpcRequest (plan 454)
  *
  * Plan 312: always injected into the ToolUseContext so App Connection
  * tools work without conductor mode being active.
+ *
+ * Plan 454: the computer-use channel must be matched before the
+ * default `conductorIpcRequest` fallback — otherwise the agent
+ * would send `conductor:executor:rpc` to the main process for a
+ * `computer-use:execute` call, which the ConductorExecutorProxy
+ * does not know how to handle.
  */
 function toolIpcRequest<T = unknown>(
   channel: string,
@@ -627,6 +677,9 @@ function toolIpcRequest<T = unknown>(
 ): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
   if (channel === 'appConnection:invoke') {
     return appConnectionIpcRequest<T>(channel, payload, options);
+  }
+  if (channel === 'computer-use:execute') {
+    return computerUseIpcRequest<T>(channel, payload, options);
   }
   return conductorIpcRequest<T>(channel, payload, options);
 }
@@ -3800,6 +3853,33 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending appConnection descriptor request found for requestId:', requestId);
+          }
+          break;
+        }
+
+        // Plan 454: Computer Use tool execution response. Resolves
+        // the promise created by computerUseIpcRequest so the
+        // computer_use tool executor can unwrap the envelope.
+        case 'computer-use:execute:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending computer-use IPC request found for requestId:', requestId);
           }
           break;
         }
