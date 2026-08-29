@@ -246,6 +246,22 @@ export interface PluginCatalogEntry {
    * entries.
    */
   builtinCacheDir?: string;
+  /**
+   * Plan 455 — marketplace attribution for `source: 'marketplace'` entries.
+   * Matches the ConfigStore `[marketplaces.<name>]` key and the registry
+   * composite key suffix (`<pluginId>@<marketplace>`).
+   */
+  marketplace?: string;
+  /**
+   * Plan 455 — absolute, containment-fenced directory of the plugin inside
+   * its marketplace clone. `PluginManager.installFromCatalog` copies from
+   * here during materialization. Undefined for non-marketplace entries.
+   */
+  marketplacePluginDir?: string;
+  /** Plan 455 — catalog-declared installation policy (codex 17.3.1 parity). */
+  installPolicy?: 'not_available' | 'available' | 'installed_by_default';
+  /** Plan 455 — catalog-declared authentication policy (codex 17.3.1 parity). */
+  authPolicy?: 'on_install' | 'on_use';
   capabilityCounts?: {
     skills: number;
     mcpServers: number;
