@@ -49,6 +49,7 @@ import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerReferencesHandlers } from './ipc/references-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
 import { syncBuiltinPlugins } from './plugins/cache/builtin-sync.js';
+import { ensureOfficialMarketplace, syncAllMarketplaces } from './plugins/marketplace/manager';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
@@ -875,6 +876,34 @@ try {
 } catch (err) {
   logger.warn(
     'Builtin plugin sync failed; catalog may be missing builtin entries',
+    { error: err instanceof Error ? err.message : String(err) },
+    'Main',
+  );
+}
+// ============================================================
+// Step 4.5b: Seed + sync plugin marketplaces (Plan 455).
+//
+// Seeding is synchronous and offline — it only writes the default
+// `official` entry into config.toml. The git sync then runs best-effort
+// in the background: failures (offline, repo unavailable) leave the
+// marketplace marked unsynced and the rest of startup proceeds.
+// ============================================================
+try {
+  ensureOfficialMarketplace();
+  void syncAllMarketplaces().then((outcomes) => {
+    for (const outcome of outcomes) {
+      if (outcome.error) {
+        logger.warn(
+          'Marketplace sync failed (non-fatal)',
+          { marketplace: outcome.marketplace, error: outcome.error },
+          'Main',
+        );
+      }
+    }
+  });
+} catch (err) {
+  logger.warn(
+    'Marketplace seeding failed (non-fatal)',
     { error: err instanceof Error ? err.message : String(err) },
     'Main',
   );
