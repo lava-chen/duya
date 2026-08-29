@@ -307,14 +307,16 @@ export class PluginManager {
     pluginId: string,
     scope: PluginScope = PluginScope.User,
     autoUpdate: boolean = false,
+    /** Plan 455 — disambiguates the same plugin id across marketplaces. */
+    marketplace?: string,
   ): Promise<PluginResult<PluginRegistryEntry>> {
     return withPluginError(pluginId, 'install', async () => {
-      const catalogEntry = getPluginCatalogEntry(pluginId);
+      const catalogEntry = getPluginCatalogEntry(pluginId, marketplace);
       if (!catalogEntry) {
         const err: PluginError = {
           type: 'plugin-not-found',
           plugin: pluginId,
-          marketplace: 'bundled',
+          marketplace: marketplace ?? 'bundled',
         };
         throw err;
       }
@@ -323,20 +325,31 @@ export class PluginManager {
       if (!policyCheck.allowed) {
         const err: PluginError = {
           type: 'marketplace-blocked-by-policy',
-          marketplace: 'bundled',
+          marketplace: catalogEntry.marketplace ?? 'bundled',
           policy: policyCheck.reason!,
+        };
+        throw err;
+      }
+
+      // Plan 455 — catalog-declared installation policy (codex 17.3.1).
+      if (catalogEntry.installPolicy === 'not_available') {
+        const err: PluginError = {
+          type: 'marketplace-blocked-by-policy',
+          marketplace: catalogEntry.marketplace ?? 'bundled',
+          policy: 'plugin installation is marked not_available by its marketplace',
         };
         throw err;
       }
 
       const trustInfo = this.trustEngine.determineTrustLevel(
         catalogEntry.source,
-        undefined,
+        catalogEntry.marketplace,
       );
 
       const version = resolvePluginVersion('', catalogEntry.manifest);
-      const marketplace = catalogEntry.source === 'bundled' ? 'builtin' : catalogEntry.source;
-      const cacheDir = ensurePluginCacheDir(marketplace, pluginId, version);
+      const marketplaceName = catalogEntry.marketplace
+        ?? (catalogEntry.source === 'bundled' ? 'builtin' : catalogEntry.source);
+      const cacheDir = ensurePluginCacheDir(marketplaceName, pluginId, version);
 
       const { installedDir, dataDir, stagingDir } = this.store.getPaths();
       const pluginDataPath = path.join(dataDir, pluginId);
@@ -345,7 +358,13 @@ export class PluginManager {
 
       ensureDir(stagingPath);
 
-      if (catalogEntry.source === 'local') {
+      if (catalogEntry.marketplacePluginDir && fs.existsSync(catalogEntry.marketplacePluginDir)) {
+        // Plan 455 — marketplace install: copy the plugin directory out of
+        // its (containment-fenced) marketplace clone into the versioned
+        // cache. Installed plugins stay independent of later marketplace
+        // refreshes; upgrades are an explicit re-install (decision D5).
+        copyDirectoryRecursive(catalogEntry.marketplacePluginDir, stagingPath);
+      } else if (catalogEntry.source === 'local') {
         const localPaths = getLocalPluginPaths();
         const sourceDir = localPaths.get(catalogEntry.name) || localPaths.get(pluginId);
         if (sourceDir && fs.existsSync(sourceDir)) {
@@ -418,7 +437,7 @@ export class PluginManager {
         source: catalogEntry.source,
         trustLevel: trustInfo.level,
         scope,
-        marketplace,
+        marketplace: marketplaceName,
         autoUpdate,
         installedAt: now,
         updatedAt: now,
@@ -433,7 +452,7 @@ export class PluginManager {
 
       this.store.upsertPlugin(entry);
 
-      this.logger.info('Plugin installed from catalog', { pluginId, version, scope }, LogComponent.Main);
+      this.logger.info('Plugin installed from catalog', { pluginId, version, scope, marketplace: marketplaceName }, LogComponent.Main);
       return entry;
     });
   }
