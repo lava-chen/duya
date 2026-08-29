@@ -36,6 +36,29 @@ export function getMarketplaceCloneDir(name: string, rootOverride?: string): str
   return path.join(rootOverride ?? getMarketplacesCacheRoot(), safeMarketplaceDirName(name));
 }
 
+export interface MarketplaceSourceConfig {
+  source: 'git' | 'local';
+  url?: string;
+  path?: string;
+  ref?: string;
+}
+
+/**
+ * Resolve the on-disk dir a configured marketplace currently lives in:
+ * local sources point at their own directory; git sources at the clone
+ * under the cache root. Returns null when the config entry is incomplete.
+ */
+export function resolveConfiguredMarketplaceDir(
+  name: string,
+  source: MarketplaceSourceConfig,
+): string | null {
+  if (source.source === 'local') {
+    return source.path ?? null;
+  }
+  if (!source.url) return null;
+  return getMarketplaceCloneDir(name);
+}
+
 interface RunGitOptions {
   cwd?: string;
   timeoutMs?: number;
