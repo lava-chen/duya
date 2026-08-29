@@ -14,8 +14,9 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId } from '../types.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 
-const PROVIDER: ProviderId = 'microsoft365';
+const PROVIDER = asAppConnectorId('microsoft365');
 
 const LIST_MESSAGES_ACTION = 'mail.list_messages';
 

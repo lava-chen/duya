@@ -204,7 +204,7 @@ export async function startRemoteMcpAuthorization(
   deps: RemoteMcpAuthorizationDeps,
 ): Promise<AppConnectionStatusDTO> {
   const config = getProviderConfig(provider);
-  if (!config.remoteMcpUrl) {
+  if (!config?.remoteMcpUrl) {
     throw new FlowError('provider_not_configured', `${provider} is not a Remote MCP provider`);
   }
 

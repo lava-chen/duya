@@ -23,6 +23,13 @@ import { createMicrosoft365Connector } from './connectors/microsoft365.js';
 import { createWeComConnector } from './connectors/wecom.js';
 import { RemoteMcpConnector } from './connectors/remote-mcp.js';
 import { getProviderConfig } from './providers/registry.js';
+import {
+  AppConnectorRegistry,
+  declarativeDescriptors,
+  getCustomConnectorFactory,
+  registerCustomConnector,
+} from './app-connector.js';
+import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,
@@ -48,19 +55,39 @@ export interface ConnectorInvokePayload {
 export class ConnectorService {
   private readonly logger = getLogger();
   private readonly service: AppConnectionService;
-  private readonly connectors: Map<ProviderId, ConnectorModule>;
+  /** Plan 455 D2: single resolution source for the connector catalog. */
+  private readonly registry = new AppConnectorRegistry();
   private readonly remoteMcp: RemoteMcpConnector;
+  private readonly fetchImpl: typeof fetch;
+  private readonly customModules = new Map<AppConnectorId, ConnectorModule>();
 
   constructor(deps: ConnectorServiceDeps = {}) {
     this.service = deps.service ?? getAppConnectionService();
     this.remoteMcp = new RemoteMcpConnector(this.service.vault);
-    const fetchImpl = deps.fetchImpl ?? fetch;
-    this.connectors = new Map<ProviderId, ConnectorModule>([
-      ['google', createGoogleConnector(fetchImpl)],
-      ['slack', createSlackConnector(fetchImpl)],
-      ['microsoft365', createMicrosoft365Connector(fetchImpl)],
-      ['wecom', createWeComConnector(this.service.vault)],
-    ]);
+    this.fetchImpl = deps.fetchImpl ?? fetch;
+    // Plan 455 D4: first-party TS connectors are the ONLY custom-binding
+    // residents. slack/microsoft365/google migrate to `rest` declarations
+    // in Plan 460 Phase 2-4; wecom stays (CLI subprocess).
+    registerCustomConnector(asAppConnectorId('google'), (d) => createGoogleConnector(d.fetchImpl));
+    registerCustomConnector(asAppConnectorId('slack'), (d) => createSlackConnector(d.fetchImpl));
+    registerCustomConnector(asAppConnectorId('microsoft365'), (d) => createMicrosoft365Connector(d.fetchImpl));
+    registerCustomConnector(asAppConnectorId('wecom'), () => createWeComConnector(this.service.vault));
+  }
+
+  /** Test/loader seam: plugin `.app.json` declarations (Plan 455 Phase C). */
+  get connectorRegistry(): AppConnectorRegistry {
+    return this.registry;
+  }
+
+  /** Lazily instantiate (and cache) the custom module for a provider. */
+  private customModule(provider: AppConnectorId): ConnectorModule | undefined {
+    const cached = this.customModules.get(provider);
+    if (cached) return cached;
+    const factory = getCustomConnectorFactory(provider);
+    if (!factory) return undefined;
+    const module = factory({ fetchImpl: this.fetchImpl });
+    this.customModules.set(provider, module);
+    return module;
   }
 
   /**
@@ -78,7 +105,17 @@ export class ConnectorService {
       // so the agent registry never sees them — mirroring codex's
       // `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
       if (!isProviderEnabled(policy, dto.provider)) continue;
-      if (getProviderConfig(dto.provider).remoteMcpUrl) {
+      // Plan 455 D2: one resolution instead of per-provider special cases.
+      const resolution = this.registry.resolve(dto.provider);
+      if (!resolution) {
+        this.logger.warn(
+          'App Connection: no connector registered for live connection',
+          { connectionId: dto.id, provider: dto.provider },
+          COMPONENT,
+        );
+        continue;
+      }
+      if (resolution.binding === 'mcp-remote') {
         const token = await this.service.getValidToken(dto.id);
         if (!token.success) {
           // Silent `continue` here left the agent's descriptor cache without
@@ -103,7 +140,13 @@ export class ConnectorService {
         }
         continue;
       }
-      const connector = this.connectors.get(dto.provider);
+      if (resolution.binding === 'rest' && resolution.declaration) {
+        // Plan 460 wires the generic invoker; descriptors are static
+        // declaration data, so listing works before invoke lands.
+        out.push(...declarativeDescriptors(resolution.declaration, dto.id));
+        continue;
+      }
+      const connector = this.customModule(dto.provider);
       if (!connector) continue;
       out.push(...connector.listDescriptors(dto.id));
     }
@@ -113,7 +156,9 @@ export class ConnectorService {
     // Plan 450 Phase G: also stamp the display label so the agent's Apps
     // system section and activation reminder can show `Notion`, not `notion`.
     for (const descriptor of out) {
-      descriptor.providerLabel = getProviderConfig(descriptor.provider)?.label;
+      const resolution = this.registry.resolve(descriptor.provider);
+      descriptor.providerLabel =
+        resolution?.meta?.label ?? getProviderConfig(descriptor.provider)?.label;
       if (
         descriptor.riskTier !== 'destructive' &&
         isToolGloballyApproved(descriptor.provider, descriptor.name)
@@ -140,16 +185,28 @@ export class ConnectorService {
       return failure('connection_not_found', `connection ${connectionId} not found`, false);
     }
 
-    const remoteMcp = getProviderConfig(conn.provider).remoteMcpUrl ? this.remoteMcp : null;
-    const connector = this.connectors.get(conn.provider);
-    if (!connector && !remoteMcp) {
+    // Plan 455 D2: unified binding dispatch.
+    const resolution = this.registry.resolve(conn.provider);
+    if (!resolution) {
       return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
+    }
+    if (resolution.binding === 'rest') {
+      // Plan 460: generic REST template invoker. Until it lands, a
+      // declared-but-unexecutable tool fails closed instead of throwing.
+      return failure(
+        'unknown_action',
+        `REST template connector ${conn.provider} is not executable yet (Plan 460)`,
+        false,
+      );
     }
 
     // Custom-credential providers (e.g. WeCom) read their credentials from
     // the vault directly inside the connector; there is no OAuth token to
     // acquire. Skip the token service for them.
-    const requiresOAuthClient = getProviderConfig(conn.provider).requiresOAuthClient !== false;
+    const requiresOAuthClient =
+      resolution.binding === 'custom'
+        ? getProviderConfig(conn.provider)?.requiresOAuthClient !== false
+        : true;
     const tokenResult = requiresOAuthClient
       ? await this.service.getValidToken(connectionId)
       : { success: true as const, data: { accessToken: '', tokenType: '', expiresAt: null } };
@@ -183,9 +240,15 @@ export class ConnectorService {
     const startedAt = Date.now();
     let result: ConnectorInvokeResult;
     try {
-      result = remoteMcp
-        ? await remoteMcp.invoke(connectionId, conn.provider, action, args, tokenResult.data)
-        : await connector!.invoke(action, args, tokenResult.data.accessToken);
+      if (resolution.binding === 'mcp-remote') {
+        result = await this.remoteMcp.invoke(connectionId, conn.provider, action, args, tokenResult.data);
+      } else {
+        const connector = this.customModule(conn.provider);
+        if (!connector) {
+          return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
+        }
+        result = await connector.invoke(action, args, tokenResult.data.accessToken);
+      }
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
       this.logger.warn(

@@ -18,13 +18,19 @@ interface SlackAuthTestResponse {
   error?: string;
 }
 
-const config = getProviderConfig('slack');
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+
+const config = getProviderConfig(asAppConnectorId('slack'));
+if (!config) {
+  throw new Error('slack connector is not registered');
+}
+const userinfoUrl = config.userinfoUrl!;
 
 export async function fetchSlackAccountIdentity(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ accountId: string; accountLabel: string }> {
-  const resp = await fetchImpl(config.userinfoUrl!, {
+  const resp = await fetchImpl(userinfoUrl!, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {

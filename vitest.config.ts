@@ -1,5 +1,10 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
+import { fileURLToPath } from 'url'
+
+// Resolve workspace plugin-core from THIS checkout (worktree-safe;
+// the node_modules junction pins the primary checkout).
+const PLUGIN_CORE_ROOT = fileURLToPath(new URL('./packages/plugin-core', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -45,6 +50,9 @@ export default defineConfig({
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
       { find: '@', replacement: path.resolve(__dirname, './src') },
+      // Resolve workspace plugin-core from THIS checkout (worktree-safe;
+      // the node_modules junction pins the primary checkout).
+      { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },
       // Mirror vite.config.ts aliases so vitest can resolve
       // `@duya/conductor/renderer/*` to the package's source tree. Without
       // these the test environment errors out when any imported file

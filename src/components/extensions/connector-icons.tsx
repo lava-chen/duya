@@ -157,7 +157,10 @@ function GitHubIcon({ size = 24 }: IconProps) {
   );
 }
 
-const REGISTRY: Record<ProviderId, (props: IconProps) => React.ReactElement> = {
+// Plan 455: the connector catalog is open — plugin-declared ids have no
+// bundled brand icon yet, and the renderer falls back to null (the UI's
+// monogram path covers them).
+const REGISTRY: Partial<Record<string, (props: IconProps) => React.ReactElement>> = {
   google: GoogleIcon,
   slack: SlackIcon,
   microsoft365: MicrosoftIcon,

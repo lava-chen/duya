@@ -175,7 +175,7 @@ export class RemoteMcpConnector {
     const current = this.sessions.get(connectionId);
     if (current) return current;
     const config = getProviderConfig(provider);
-    if (!config.remoteMcpUrl) throw new Error(`${provider} is not a Remote MCP provider`);
+    if (!config?.remoteMcpUrl) throw new Error(`${provider} is not a Remote MCP provider`);
 
     const transport = new StreamableHTTPClientTransport(new URL(config.remoteMcpUrl), {
       authProvider: createStoredRemoteMcpOAuthProvider(this.vault, connectionId),

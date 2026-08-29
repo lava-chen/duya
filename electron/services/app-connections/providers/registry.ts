@@ -1,14 +1,25 @@
 /**
- * Provider client registry — Plan 312 Phase 1.
+ * Connector client registry — Plan 312 Phase 1, opened by Plan 455.
  *
- * Public OAuth client config per provider. Public clients (RFC 8252
+ * Public OAuth client config per connector. Public clients (RFC 8252
  * §6.2) do NOT ship a client secret; we rely on PKCE for security.
  * Slack is the exception that historically requires a secret at the
  * token endpoint — see the plan's Open Question #1; the first cut
  * lets the user supply their own Slack client (setup fields fill
  * clientId/clientSecret).
+ *
+ * Plan 455 Phase A: the registry is a Map keyed by the branded
+ * `AppConnectorId`, not a closed `Record` over a literal union.
+ * Plugin-declared connectors (`.app.json`, Plan 455 D3) register
+ * themselves here via {@link registerProviderConfig} so the OAuth
+ * flows, remote-MCP session setup, and descriptor stamping all treat
+ * builtin and declared connectors identically.
  */
 
+import {
+  asAppConnectorId,
+  type AppConnectorId,
+} from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type { ProviderId } from '../types';
 
 /**
@@ -57,13 +68,14 @@ export interface ProviderReadiness {
 }
 
 /**
- * Built-in client registry. Client IDs ship as a public client and
+ * Built-in client configs. Client IDs ship as a public client and
  * can be overridden per install via the DUYA_APP_CONNECTION_<PROVIDER>_CLIENT_ID
- * env var (read once at first authorization).
+ * env var (read once at first authorization). The bare-string keys are
+ * branded at registration time; per-entry `id` fields are stamped in
+ * the same loop so no literal ever masquerades as the brand.
  */
-const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
+const BUILTIN_CONFIGS: Record<string, Omit<ProviderClientConfig, 'id'>> = {
   google: {
-    id: 'google',
     label: 'Google Drive',
     authUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenUrl: 'https://oauth2.googleapis.com/token',
@@ -87,7 +99,6 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     description: 'Search and read files from Google Drive with source links.',
   },
   slack: {
-    id: 'slack',
     label: 'Slack',
     authUrl: 'https://slack.com/oauth/v2/authorize',
     tokenUrl: 'https://slack.com/api/oauth.v2.access',
@@ -102,7 +113,6 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     description: 'Slack workspace messaging and channels',
   },
   microsoft365: {
-    id: 'microsoft365',
     label: 'Microsoft 365',
     authUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
     tokenUrl: 'https://login.microsoftonline.com/common/oauth2/v2.0/token',
@@ -115,18 +125,17 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
     monogram: 'M',
     description: 'Microsoft 365 (Outlook, OneDrive, Teams)',
   },
-  figma: remoteMcpProvider('figma', 'Figma', 'https://mcp.figma.com/mcp', 'F', 'Figma design files and prototypes'),
-  supabase: remoteMcpProvider('supabase', 'Supabase', 'https://mcp.supabase.com/mcp', 'U', 'Supabase backend and database'),
-  sentry: remoteMcpProvider('sentry', 'Sentry', 'https://mcp.sentry.dev', 'Y', 'Sentry error monitoring and tracing'),
-  vercel: remoteMcpProvider('vercel', 'Vercel', 'https://mcp.vercel.com', 'V', 'Vercel deployments and projects'),
-  notion: remoteMcpProvider('notion', 'Notion', 'https://mcp.notion.com/mcp', 'N', 'Notion pages and databases'),
-  linear: remoteMcpProvider('linear', 'Linear', 'https://mcp.linear.app/mcp', 'L', 'Linear issues and projects'),
-  github: remoteMcpProvider('github', 'GitHub', 'https://api.githubcopilot.com/mcp', 'G', 'GitHub repositories, pull requests, issues, and CI'),
+  figma: remoteMcpConfig('Figma', 'https://mcp.figma.com/mcp', 'F', 'Figma design files and prototypes'),
+  supabase: remoteMcpConfig('Supabase', 'https://mcp.supabase.com/mcp', 'U', 'Supabase backend and database'),
+  sentry: remoteMcpConfig('Sentry', 'https://mcp.sentry.dev', 'Y', 'Sentry error monitoring and tracing'),
+  vercel: remoteMcpConfig('Vercel', 'https://mcp.vercel.com', 'V', 'Vercel deployments and projects'),
+  notion: remoteMcpConfig('Notion', 'https://mcp.notion.com/mcp', 'N', 'Notion pages and databases'),
+  linear: remoteMcpConfig('Linear', 'https://mcp.linear.app/mcp', 'L', 'Linear issues and projects'),
+  github: remoteMcpConfig('GitHub', 'https://api.githubcopilot.com/mcp', 'G', 'GitHub repositories, pull requests, issues, and CI'),
   // WeCom is a custom-credential provider (corpid/corpsecret), not OAuth. It
   // has no network OAuth endpoints; credentials are stored in the vault and
   // injected into the `wecom-cli` child process by the connector.
   wecom: {
-    id: 'wecom',
     label: 'WeCom',
     authUrl: '',
     tokenUrl: '',
@@ -141,21 +150,19 @@ const REGISTRY: Record<ProviderId, ProviderClientConfig> = {
   },
 };
 
-function remoteMcpProvider(
-  id: ProviderId,
+function remoteMcpConfig(
   label: string,
   remoteMcpUrl: string,
   monogram: string,
   description: string,
-): ProviderClientConfig {
+): Omit<ProviderClientConfig, 'id'> {
   return {
-    id,
     label,
     // The MCP SDK discovers the authorization server from the protected
     // resource. These fields are deliberately unused for remote MCP OAuth.
     authUrl: '',
     tokenUrl: '',
-    redirectPath: `/callback/mcp/${id}`,
+    redirectPath: '',
     defaultScopes: [],
     requiresClientSecret: false,
     supportsManualConfiguration: false,
@@ -166,8 +173,41 @@ function remoteMcpProvider(
   };
 }
 
-export function getProviderConfig(provider: ProviderId): ProviderClientConfig {
-  return REGISTRY[provider];
+/** Open registry — Plan 455. Declared connectors register at runtime. */
+const REGISTRY = new Map<AppConnectorId, ProviderClientConfig>(
+  Object.entries(BUILTIN_CONFIGS).map(([key, config]) => [
+    asAppConnectorId(key),
+    { ...config, id: asAppConnectorId(key) },
+  ]),
+);
+
+// remoteMCP configs used a per-id redirect path; stamp it from the key now.
+for (const [id, config] of REGISTRY) {
+  if (!config.redirectPath && config.remoteMcpUrl) {
+    config.redirectPath = `/callback/mcp/${id}`;
+  }
+}
+
+/**
+ * Register a plugin-declared connector (`.app.json` → config projection,
+ * Plan 455 Phase C). Overwrites nothing: an existing id (builtin or
+ * previously registered) rejects the registration — callers surface the
+ * reason as a plugin-load warning.
+ */
+export function registerProviderConfig(config: ProviderClientConfig): { ok: boolean; reason?: string } {
+  if (REGISTRY.has(config.id)) {
+    return { ok: false, reason: `connector ${config.id} is already registered` };
+  }
+  REGISTRY.set(config.id, config);
+  return { ok: true };
+}
+
+export function unregisterProviderConfig(id: AppConnectorId): boolean {
+  return REGISTRY.delete(id);
+}
+
+export function getProviderConfig(provider: ProviderId): ProviderClientConfig | undefined {
+  return REGISTRY.get(provider);
 }
 
 /**
@@ -178,6 +218,9 @@ export function getProviderConfig(provider: ProviderId): ProviderClientConfig {
  */
 export function getProviderReadiness(provider: ProviderId): ProviderReadiness {
   const config = getProviderConfig(provider);
+  if (!config) {
+    return { configured: false, reason: `Connector ${provider} is not registered in this build` };
+  }
   if (config.remoteMcpUrl) {
     return { configured: true };
   }
@@ -202,11 +245,15 @@ export function getProviderReadiness(provider: ProviderId): ProviderReadiness {
 }
 
 export function listProviders(): ProviderClientConfig[] {
-  return Object.values(REGISTRY);
+  return Array.from(REGISTRY.values());
 }
 
-export function isKnownProvider(provider: string): provider is ProviderId {
-  return Object.prototype.hasOwnProperty.call(REGISTRY, provider);
+/**
+ * Type-guard narrow for IPC payloads: validates against the live
+ * (possibly extended) registry and narrows to the branded id.
+ */
+export function isKnownProvider(provider: string): provider is AppConnectorId {
+  return REGISTRY.has(asAppConnectorId(provider));
 }
 
 /**
@@ -216,7 +263,9 @@ export function isKnownProvider(provider: string): provider is ProviderId {
  * holds it in-memory for the lifetime of the process.
  */
 export function overrideClientId(provider: ProviderId, clientId: string): void {
-  REGISTRY[provider] = { ...REGISTRY[provider], clientId };
+  const config = REGISTRY.get(provider);
+  if (!config) return;
+  REGISTRY.set(provider, { ...config, clientId });
 }
 
 /**
@@ -224,7 +273,7 @@ export function overrideClientId(provider: ProviderId, clientId: string): void {
  * with `requiresClientSecret === true`. Held in memory only — the
  * secret NEVER touches disk via this layer.
  */
-const clientSecrets = new Map<ProviderId, string>();
+const clientSecrets = new Map<AppConnectorId, string>();
 export function setClientSecret(provider: ProviderId, secret: string): void {
   clientSecrets.set(provider, secret);
 }
@@ -233,5 +282,8 @@ export function clearClientSecret(provider: ProviderId): void {
   clientSecrets.delete(provider);
 }
 export function getClientSecret(provider: ProviderId): string | undefined {
-  return clientSecrets.get(provider) ?? process.env[`DUYA_APP_CONNECTION_${provider.toUpperCase()}_CLIENT_SECRET`];
+  return (
+    clientSecrets.get(provider) ??
+    process.env[`DUYA_APP_CONNECTION_${provider.toUpperCase()}_CLIENT_SECRET`]
+  );
 }
