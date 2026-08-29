@@ -271,4 +271,112 @@ describe('ComputerUseTool.executor', () => {
     expect(parsed.error.code).toBe(ComputerUseErrorCode.IPC_EXCEPTION);
     expect(parsed.error.message).toMatch(/socket hang up/);
   });
+
+  // Plan 454 follow-up: capture / zoom must lift base64 onto
+  // ToolResult.images so StreamingToolExecutor attaches image content
+  // blocks for vision-capable main models. Non-vision models are
+  // downgraded downstream; OpenAI strips with a fallback hint.
+  it('capture success lifts base64 onto ToolResult.images and strips it from envelope', async () => {
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAA';
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        success: true,
+        action: 'capture',
+        data: {
+          base64,
+          width: 1920,
+          height: 1080,
+          elements: [{ index: 1, bbox: { x: 0, y: 0, w: 100, h: 50 }, label: 'Open' }],
+        },
+      },
+    });
+    const result = await executor.execute(
+      { action: 'capture', somMode: true },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.error).toBeFalsy();
+    expect(result.images).toEqual([{ data: base64, mediaType: 'image/png' }]);
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.base64).toBeUndefined();
+    expect(parsed.data.width).toBe(1920);
+    expect(parsed.data.height).toBe(1080);
+    expect(parsed.data.elements).toHaveLength(1);
+  });
+
+  it('zoom success lifts base64 onto ToolResult.images (same path as capture)', async () => {
+    const base64 = 'iVBORw0KGgoAAAANSUhEUgAA';
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        success: true,
+        action: 'zoom',
+        data: { base64, width: 400, height: 300, elements: [] },
+      },
+    });
+    const result = await executor.execute(
+      { action: 'zoom', x: 0, y: 0, w: 400, h: 300 },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.images).toEqual([{ data: base64, mediaType: 'image/png' }]);
+    const parsed = JSON.parse(result.result);
+    expect(parsed.data.base64).toBeUndefined();
+    expect(parsed.data.width).toBe(400);
+  });
+
+  it('capture success without base64 leaves ToolResult.images undefined', async () => {
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: { success: true, action: 'capture', data: { width: 100, height: 100 } },
+    });
+    const result = await executor.execute(
+      { action: 'capture' },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.images).toBeUndefined();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data.width).toBe(100);
+  });
+
+  it('capture failure does NOT set ToolResult.images (errors are textual only)', async () => {
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: {
+        success: false,
+        action: 'capture',
+        error: { code: ComputerUseErrorCode.BACKEND_UNAVAILABLE, message: 'desktop not ready' },
+      },
+    });
+    const result = await executor.execute(
+      { action: 'capture' },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.error).toBe(true);
+    expect(result.images).toBeUndefined();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.error.code).toBe(ComputerUseErrorCode.BACKEND_UNAVAILABLE);
+  });
+
+  it('non-capture actions (click, type, ...) do NOT set ToolResult.images', async () => {
+    const ipcRequest = vi.fn().mockResolvedValue({
+      success: true,
+      data: { success: true, action: 'click', data: { ok: true, reason: 'clicked element 5' } },
+    });
+    const result = await executor.execute(
+      { action: 'click', element: 5 },
+      undefined,
+      { ipcRequest, options: { sessionId: 's' } } as never,
+    );
+    expect(result.images).toBeUndefined();
+    const parsed = JSON.parse(result.result);
+    expect(parsed.success).toBe(true);
+    expect(parsed.action).toBe('click');
+    expect(parsed.data.ok).toBe(true);
+  });
 });
