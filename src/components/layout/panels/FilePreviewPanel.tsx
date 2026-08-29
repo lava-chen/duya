@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
 import { CodeIcon } from "@/components/icons";
+import { IdeBrandIcon } from "@/components/ide/ide-brand-icons";
 import {
   OptionPanel,
   type OptionPanelItem,
@@ -699,9 +700,9 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     const ideItems: OptionPanelItem[] = ides.map((ide) => ({
       id: `ide:${ide.id}`,
       label: t('filePreview.openInIde', { name: ide.name }),
-      // Neutral line icon: the colored brand fills read as noise next to
-      // the menu's monochrome line icons — the label carries the identity.
-      icon: <CodeIcon size={14} stroke={1.5} />,
+      // Official brand mark so each IDE is recognizable at a glance,
+      // matching the OS-level "Open with" menus.
+      icon: <IdeBrandIcon id={ide.id} size={14} />,
       searchText: ide.name,
     }));
     return [
