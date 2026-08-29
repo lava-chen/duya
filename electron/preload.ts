@@ -805,6 +805,27 @@ export interface PluginSetupLoadResult {
   values: Record<string, string>
 }
 
+// Plan 455 — marketplace view DTO. Mirrors MarketplaceView from
+// electron/plugins/marketplace/manager.ts (main-process type, duplicated
+// here so the renderer never imports main-process modules).
+export interface MarketplaceViewDTO {
+  name: string
+  displayName?: string
+  kind: 'git' | 'local'
+  url?: string
+  path?: string
+  ref?: string
+  addedAt?: string
+  error?: string
+  pluginCount: number
+  pluginNames: string[]
+}
+
+export interface MarketplaceSyncOutcomeDTO {
+  marketplace: string
+  error?: string
+}
+
 export interface PluginAPI {
   catalog: {
     list: (filters?: {
@@ -823,7 +844,14 @@ export interface PluginAPI {
   health: {
     list: () => Promise<{ success: boolean; data: PluginHealthReport[]; error?: string }>
   }
-  install: (payload: { pluginId: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  install: (payload: { pluginId: string; marketplace?: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
+  // Plan 455 — marketplace source management (Local + Git).
+  marketplace: {
+    list: () => Promise<{ success: boolean; data: MarketplaceViewDTO[]; error?: string }>
+    add: (payload: { source: string; ref?: string }) => Promise<{ success: boolean; data?: MarketplaceViewDTO; error?: string }>
+    remove: (payload: { name: string }) => Promise<{ success: boolean; data?: null; error?: string }>
+    refresh: (payload: { name?: string }) => Promise<{ success: boolean; data: MarketplaceSyncOutcomeDTO[]; error?: string }>
+  }
   installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   enable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
   disable: (pluginId: string) => Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>
@@ -2133,7 +2161,13 @@ const electronAPI: ElectronAPI = {
     health: {
       list: () => ipcRenderer.invoke('plugin:health:list'),
     },
-    install: (payload: { pluginId: string }) => ipcRenderer.invoke('plugin:install', payload),
+    install: (payload: { pluginId: string; marketplace?: string }) => ipcRenderer.invoke('plugin:install', payload),
+    marketplace: {
+      list: () => ipcRenderer.invoke('plugin:marketplace:list'),
+      add: (payload: { source: string; ref?: string }) => ipcRenderer.invoke('plugin:marketplace:add', payload),
+      remove: (payload: { name: string }) => ipcRenderer.invoke('plugin:marketplace:remove', payload),
+      refresh: (payload: { name?: string }) => ipcRenderer.invoke('plugin:marketplace:refresh', payload),
+    },
     installLocal: (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }) => ipcRenderer.invoke('plugin:install-local', payload),
     enable: (pluginId: string) => ipcRenderer.invoke('plugin:enable', pluginId),
     disable: (pluginId: string) => ipcRenderer.invoke('plugin:disable', pluginId),

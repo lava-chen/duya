@@ -47,6 +47,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [448-read-edit-freshness-protocol](./active/448-read-edit-freshness-protocol.md) | Read/Edit 新鲜度协议 — read-state 升级（full-view+contentSha，Windows mtime 豁免）+ ApplyPatch re-anchor/两阶段校验 + WriteTool read-first 门 + 写路径 CRLF/原子写收拢（五 harness 调研落地） | P0 | Phase 1 ✅（2026-08-26）；Phase 2/3 待开工 |
 | [449-app-connection-approval-parity](./active/449-app-connection-approval-parity.md) | App Connection 审批体验对齐 codex：MCP annotations→riskTier 自动分级（只读免确认）+ 审批记忆（会话级 Set + ConfigStore 全局 preApproved）+ 版本化审批文案模板 | P0 | ✅ 实现完成（2026-08-27，4 commits）；手动冒烟待办 |
 | [450-app-connection-codex-alignment](./active/450-app-connection-codex-alignment.md) | App Connection 与 codex 全面对齐：@提及按 turn 激活（selection 生命周期 + 暴露提升 + reminder 注入）+ 用时引导授权（auth elicitation 卡片 + 自动重试）+ 暴露层策略门 + spec 字节预算 + 目录缓存 TTL | P1 | Planning |
+| [455-codex-marketplace-and-install](./active/455-codex-marketplace-and-install.md) | codex 对齐插件来源与安装：marketplace = git 仓库 + catalog（5 路径兼容）+ Local/Git 双源 + staging clone + policy 门 + 默认 official 源（取代 88/90） | P0 | In progress |
 | [243-session-search-overhaul](./active/243-session-search-overhaul.md) | Session search overhaul | P1 | Planning |
 | [322-core-db-package-foundation](./completed/322-core-db-package-foundation.md) | ~~`@duya/core-db` 包地基~~ 已作废 → 326 | — | OBSOLETE → 326 |
 | [323-core-db-state-aggregates](./completed/323-core-db-state-aggregates.md) | ~~core-db 状态聚合~~ 已作废 → 327 | — | OBSOLETE → 327 |
@@ -121,9 +122,9 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [86-schema-manifest-llm-friendly](./active/86-schema-manifest-llm-friendly.md) | Schema lenient — Agent-readable `plugin.md` layered design | P0 | Planning |
 | [87-hook-system-full-enhancement](./active/87-hook-system-full-enhancement.md) | Hook system full upgrade — 4 types + 29 events + Async + Matcher | P0 | Planning |
 | [437-hook-row-in-message-flow](./active/437-hook-row-in-message-flow.md) | Hook invocation rows in chat flow — plan-87 hook events render like tool rows with icon + name + click-to-expand additionalContext; persist + settings toggle | P1 | All 6 phases implemented; typecheck clean |
-| [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | Multi-source plugin discovery — GitHub/NPM/Git/URL/Local + priority merge | P1 | Planning |
+| [88-plugin-discovery-multi-source](./active/88-plugin-discovery-multi-source.md) | ~~Multi-source plugin discovery~~ superseded → 455(resolvers 代码已随 04521cb2 删除) | P1 | SUPERSEDED → 455 |
 | [89-plugin-lifecycle-version](./active/89-plugin-lifecycle-version.md) | Plugin lifecycle & versioning — versioned cache + Scope + dependency validation + auto-update | P1 | Planning |
-| [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | Plugin marketplace — catalog + enterprise policy + spoof-protection + sync | P1 | Planning |
+| [90-marketplace-system-implementation](./active/90-marketplace-system-implementation.md) | ~~Plugin marketplace~~ superseded → 455(marketplace 代码已随 04521cb2 删除) | P1 | SUPERSEDED → 455 |
 | [91-structured-error-handling](./active/91-structured-error-handling.md) | Structured error handling — 28 Discriminated-Union PluginError types | P1 | Planning |
 | [92-plugin-security-enterprise-policy](./active/92-plugin-security-enterprise-policy.md) | Plugin security & enterprise policy — Trust Level + path guard + permission + Enterprise Policy | P0 | Planning |
 | [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP marketplace & one-click install | P1 | 待开始 |
