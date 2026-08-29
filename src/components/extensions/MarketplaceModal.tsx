@@ -139,14 +139,16 @@ export function MarketplaceModal({
     );
   }, [catalog, search]);
 
+  // Plan 455 — attribution-based source tabs: builtin plugins and anything
+  // from the official marketplace are "official"; other marketplaces and
+  // local installs are "others". The retired author-name heuristic would
+  // have misclassified any third-party author containing "duya".
   const officialPlugins = useMemo(
     () =>
       filteredCatalog.filter(
         (c) =>
           c.kind !== "skill" &&
-          (c.source === "bundled" ||
-            c.developer?.toLowerCase().includes("duya") ||
-            c.author?.name?.toLowerCase().includes("duya"))
+          (c.source === "bundled" || c.marketplace === "official")
       ),
     [filteredCatalog]
   );
