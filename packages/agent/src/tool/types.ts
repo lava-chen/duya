@@ -139,6 +139,18 @@ export interface ToolResult {
   error?: boolean;
   metadata?: ToolResultMetadata;
   /**
+   * Inline image payloads for multimodal main models. When present,
+   * StreamingToolExecutor attaches them as `image` content blocks on the
+   * `tool_result` message so vision-capable models see the image directly.
+   * Non-vision models are downgraded to placeholder text by transformMessages;
+   * OpenAI tool messages cannot carry images and the OpenAI adapter strips
+   * them with a fallback hint.
+   *
+   * Mirrors `ToolResult.images` from `@duya/ai/types` ({ data, mediaType }).
+   * Used by ReadTool (image files) and ComputerUseTool (capture / zoom).
+   */
+  images?: Array<{ data: string; mediaType: string }>;
+  /**
    * Optional deferred context associated with a tool result. When present, the
    * executor surfaces it as a `deferredContext` update so the agent can inject
    * it as a transient runtime-context message on the next provider turn (never

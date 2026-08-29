@@ -254,10 +254,40 @@ export const executor: ToolExecutor = {
         error: data.error,
       };
 
+      // Plan 454 follow-up: For capture / zoom, lift the base64 PNG out
+      // of the envelope onto ToolResult.images so StreamingToolExecutor
+      // attaches it as image content blocks for vision-capable main
+      // models. Non-vision models are downgraded to placeholder text by
+      // transformMessages; the OpenAI adapter strips images with a
+      // fallback hint in tool messages. Structured metadata
+      // (width / height / elements) stays in the JSON envelope so the
+      // LLM still gets the dimensions + SOM layout in text form.
+      let images: Array<{ data: string; mediaType: string }> | undefined;
+      if (
+        envelope.success &&
+        (action === 'capture' || action === 'zoom') &&
+        envelope.data &&
+        typeof envelope.data === 'object'
+      ) {
+        const captureData = envelope.data as {
+          base64?: unknown;
+          width?: number;
+          height?: number;
+          elements?: unknown[];
+        };
+        if (typeof captureData.base64 === 'string' && captureData.base64.length > 0) {
+          images = [{ data: captureData.base64, mediaType: 'image/png' }];
+          const { base64: _omit, ...rest } = captureData;
+          void _omit;
+          envelope.data = rest;
+        }
+      }
+
       return {
         id: crypto.randomUUID(),
         name: toolName,
         result: JSON.stringify(envelope),
+        images,
         error: !envelope.success,
       };
     } catch (err) {
