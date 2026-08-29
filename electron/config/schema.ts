@@ -271,6 +271,23 @@ export interface PluginEntry {
   marketplace?: string;
 }
 
+/** `[marketplaces.<name>]` — installed plugin marketplace sources (Plan 455).
+ *  A marketplace is a git repo (or local dir) containing a
+ *  `marketplace.json` catalog that lists installable plugins. */
+export interface MarketplaceEntry {
+  source: {
+    source: 'git' | 'local';
+    /** git clone URL (https only). Required when source === 'git'. */
+    url?: string;
+    /** Absolute local directory. Required when source === 'local'. */
+    path?: string;
+    /** Optional branch/tag to track. */
+    ref?: string;
+  };
+  /** ISO timestamp of when the user added the marketplace. */
+  addedAt?: string;
+}
+
 /** [[skills.config]] entry — per-skill enabled override (decision 15). */
 export interface SkillConfigEntry {
   name: string;
@@ -332,6 +349,8 @@ export interface DuyaConfig {
 
   mcp_servers: Record<string, McpServerEntry>;
   plugins: Record<string, PluginEntry>;
+  /** [marketplaces.<name>] — plugin marketplace sources (Plan 455). */
+  marketplaces: Record<string, MarketplaceEntry>;
 
   skills: SkillConfigEntry[]; // [[skills.config]] (decision 15)
   projects: Record<string, ProjectEntry>; // reserved (decision 16)
@@ -475,6 +494,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   command_allowlist: [],
   mcp_servers: {},
   plugins: {},
+  marketplaces: {},
   skills: [], // [[skills.config]] (decision 15)
   projects: {}, // reserved (decision 16)
   features: {}, // reserved (decision 17)
