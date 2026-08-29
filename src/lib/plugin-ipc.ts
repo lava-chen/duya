@@ -20,6 +20,27 @@ interface PluginCatalogFilters {
   installed?: boolean;
 }
 
+// Plan 455 — marketplace view DTOs. Keep in sync with
+// electron/preload.ts MarketplaceViewDTO / MarketplaceSyncOutcomeDTO
+// (preload is excluded from the renderer build, same pattern as voice).
+export interface MarketplaceViewDTO {
+  name: string;
+  displayName?: string;
+  kind: 'git' | 'local';
+  url?: string;
+  path?: string;
+  ref?: string;
+  addedAt?: string;
+  error?: string;
+  pluginCount: number;
+  pluginNames: string[];
+}
+
+export interface MarketplaceSyncOutcomeDTO {
+  marketplace: string;
+  error?: string;
+}
+
 export function getPluginAPI() {
   const api = window.electronAPI;
   if (!api) {
