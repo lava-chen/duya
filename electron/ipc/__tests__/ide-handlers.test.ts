@@ -61,6 +61,8 @@ import {
   detectInstalledIdes,
   openInIde,
   registerIdeHandlers,
+  resolveIconTarget,
+  canExtractIcon,
 } from '../ide-handlers';
 
 describe('ide-handlers', () => {
@@ -160,6 +162,41 @@ describe('ide-handlers', () => {
       expect(ids).not.toContain('cursor');
       // canonical order preserved
       expect(ids.indexOf('vscode')).toBeLessThan(ids.indexOf('trae'));
+    });
+
+    it('leaves icon undefined when shell-icon extraction is unavailable', async () => {
+      // Every candidate "exists"; the electron mock exposes no `app`, so
+      // extraction fails and falls back cleanly to undefined.
+      mocks.fs.existsSync.mockImplementation(() => true);
+      const list = await detectInstalledIdes('win32');
+      expect(list[0]?.icon).toBeUndefined();
+    });
+  });
+
+  describe('shell icon helpers', () => {
+    it('resolveIconTarget returns the executable as-is off macOS', () => {
+      expect(resolveIconTarget('C:\\bin\\Code.exe', 'win32')).toBe('C:\\bin\\Code.exe');
+      expect(resolveIconTarget('/usr/bin/code', 'linux')).toBe('/usr/bin/code');
+    });
+
+    it('resolveIconTarget walks up to the .app bundle on macOS', () => {
+      expect(
+        resolveIconTarget('/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code', 'darwin'),
+      ).toBe('/Applications/Visual Studio Code.app');
+      // No bundle in the path: returned unchanged.
+      expect(resolveIconTarget('/usr/local/bin/zed', 'darwin')).toBe('/usr/local/bin/zed');
+    });
+
+    it('canExtractIcon only accepts real .exe targets on Windows', () => {
+      expect(canExtractIcon('C:\\bin\\Code.exe', 'win32')).toBe(true);
+      // CLI shims would render a generic script icon.
+      expect(canExtractIcon('C:\\bin\\code.cmd', 'win32')).toBe(false);
+    });
+
+    it('canExtractIcon requires an .app bundle on macOS, anything on Linux', () => {
+      expect(canExtractIcon('/Applications/Zed.app', 'darwin')).toBe(true);
+      expect(canExtractIcon('/usr/bin/code', 'darwin')).toBe(false);
+      expect(canExtractIcon('/usr/bin/code', 'linux')).toBe(true);
     });
   });
 
