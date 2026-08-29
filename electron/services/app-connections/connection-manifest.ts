@@ -18,9 +18,12 @@ import fs from 'fs';
 import path from 'path';
 import { getLogger, LogComponent } from '../../logging/logger';
 import type { ProviderId } from './types.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 
 const COMPONENT = 'AppConnectionManifest' as LogComponent;
 
+// Plan 314 allowlist for plugin connection dependencies. Plan 455 opens the
+// catalog; this list stays until 452 Phase B converges the declaration formats.
 const SUPPORTED_PROVIDERS: readonly ProviderId[] = [
   'google',
   'slack',
@@ -28,7 +31,7 @@ const SUPPORTED_PROVIDERS: readonly ProviderId[] = [
   'wecom',
   'notion',
   'github',
-];
+].map(asAppConnectorId);
 
 /**
  * Parsed connection declaration. Plugin authors write the matching

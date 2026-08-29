@@ -6,19 +6,26 @@
  * process; only status DTOs cross the IPC boundary.
  */
 
-/** Provider identifiers supported by the first release. */
-export type ProviderId =
-  | 'google'
-  | 'slack'
-  | 'microsoft365'
-  | 'figma'
-  | 'supabase'
-  | 'sentry'
-  | 'vercel'
-  | 'notion'
-  | 'linear'
-  | 'github'
-  | 'wecom';
+/**
+ * Plan 455 Phase A: the connector catalog is OPEN — `AppConnectorId` is a
+ * branded string, not a closed union. New connectors are declared by
+ * plugin `.app.json` files (Plan 455 D3) and resolved at runtime; the
+ * builtin ids below are well-known residents, not the type's extent.
+ * Codex parity: `codex-rs/plugin/src/lib.rs` `AppConnectorId(pub String)`.
+ */
+export type {
+  AppConnectorId,
+} from '@duya/plugin-core/src/connectors/app-connector-id.js';
+export {
+  asAppConnectorId,
+  BUILTIN_CONNECTOR_IDS,
+  isBuiltinConnectorId,
+  isWellFormedConnectorId,
+  pluginConnectorId,
+} from '@duya/plugin-core/src/connectors/app-connector-id.js';
+
+/** Legacy alias for pre-455 consumers. */
+export type ProviderId = import('@duya/plugin-core/src/connectors/app-connector-id.js').AppConnectorId;
 
 /**
  * Connection lifecycle states.

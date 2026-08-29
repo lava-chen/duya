@@ -152,3 +152,29 @@ export type {
   InstantiateOptions,
   InstantiateResult,
 } from './workflows';
+
+// Plan 455: `.app.json` connector declarations (pure module — safe for any
+// environment; deep imports also work via
+// `@duya/plugin-core/src/connectors/app-schema.js`).
+export {
+  AppDeclarationFileSchema,
+  OAuthClientDeclarationSchema,
+  AppToolDeclarationSchema,
+  AppDeclarationSchema,
+  RestInvokeDeclarationSchema,
+  parseAppDeclarationFile,
+} from './connectors/app-schema.js';
+export type {
+  AppDeclaration,
+  AppToolDeclaration,
+  OAuthClientDeclaration,
+  RestInvokeDeclaration,
+} from './connectors/app-schema.js';
+export {
+  asAppConnectorId,
+  BUILTIN_CONNECTOR_IDS,
+  isBuiltinConnectorId,
+  isWellFormedConnectorId,
+  pluginConnectorId,
+} from './connectors/app-connector-id.js';
+export type { AppConnectorId } from './connectors/app-connector-id.js';
