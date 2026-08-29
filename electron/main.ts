@@ -4,7 +4,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -349,6 +349,13 @@ if (gotTheLock) {
     // `mailbox:list` calls returned "No handler registered".
     registerMailboxHandlers();
     registerTerminalHandlers();
+    // Plan 454: register the computer-use IPC handler so the agent
+    // process can dispatch `computer-use:execute` messages to the
+    // DesktopBackend singleton. Without this, every computer_use
+    // tool call times out at the IPC layer with "No handler
+    // registered" after 30s — exactly the drift signature reported
+    // when this registration was missing.
+    registerComputerUseHandlers();
 
     // ============================================================
     // Step 4.5: Start Agent Server (HTTP+SSE for Agent communication)

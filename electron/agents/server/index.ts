@@ -98,6 +98,24 @@ process.on('message', (msg: Record<string, unknown>) => {
         workerChild.send(msg);
       }
     }
+    return;
+  }
+  // Plan 454: route computer-use:execute:response back to the worker.
+  // Without this branch every computer_use tool call times out after
+  // 30s — the worker's pendingIpcRequests map never receives the
+  // response. The request side (electron/agents/server/router.ts:465)
+  // and the main-side dispatcher (agent-server-lifecycle.ts:261) are
+  // both wired correctly; only this return path was missing.
+  if (msg.type === 'computer-use:execute:response' && typeof msg.requestId === 'string') {
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild) {
+      workerDbRequests.delete(key);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
+    }
+    return;
   }
 });
 
