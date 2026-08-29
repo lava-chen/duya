@@ -21,6 +21,21 @@ import { getOfficialPluginAssets } from '../../packages/plugin-core/src/plugins/
 import { deriveCapabilityCounts } from './capability-counts.js';
 import { parseSkillFrontmatter } from '../utils/skill-parser';
 import { listBuiltinCacheRoots } from './cache/builtin-sync';
+import { readMarketplaceManifest, resolvePluginEntryDir } from './marketplace/manifest';
+import type { MarketplacePluginEntry } from './marketplace/manifest';
+import { resolveConfiguredMarketplaceDir, type MarketplaceSourceConfig } from './marketplace/git-source';
+import { getConfigStore } from '../config/store-instance';
+
+export type { MarketplaceSourceConfig };
+
+/** `[marketplaces]` block reader — shared with marketplace/manager.ts. */
+export function readConfigMarketplaces(): Record<string, MarketplaceSourceConfig & { addedAt?: string }> {
+  const raw = getConfigStore().getByPath('marketplaces');
+  if (raw && typeof raw === 'object') {
+    return raw as Record<string, MarketplaceSourceConfig & { addedAt?: string }>;
+  }
+  return {};
+}
 
 const COMPONENT = 'PluginCatalog' as LogComponent;
 
@@ -207,14 +222,136 @@ export function getPluginCatalog(): PluginCatalogEntry[] {
   const builtinEntries = getBuiltinCatalogEntries();
   const localEntries = getLocalCatalogEntries();
   const skillEntries = getBundledSkillCatalogEntries();
-  cachedCatalog = [...builtinEntries, ...localEntries, ...skillEntries];
+  const marketplaceEntries = getMarketplaceCatalogEntries().entries;
+  cachedCatalog = [...builtinEntries, ...localEntries, ...marketplaceEntries, ...skillEntries];
   cachedCatalogAt = now;
   return cachedCatalog;
 }
 
-export function getPluginCatalogEntry(id: string): PluginCatalogEntry | undefined {
+/**
+ * Look up a catalog entry by id, optionally disambiguated by marketplace
+ * name (Plan 455) — the same plugin id may exist in several marketplaces,
+ * and installs must resolve against the one the user picked.
+ */
+export function getPluginCatalogEntry(id: string, marketplace?: string): PluginCatalogEntry | undefined {
   const catalog = getPluginCatalog();
+  if (marketplace) {
+    return catalog.find((entry) => entry.id === id && entry.marketplace === marketplace);
+  }
   return catalog.find((entry) => entry.id === id);
+}
+
+/** Per-marketplace sync status surfaced alongside the catalog (Plan 455). */
+export interface MarketplaceCatalogStatus {
+  marketplace: string;
+  /** Set when the clone is missing or its manifest failed to read. */
+  error?: string;
+  pluginCount: number;
+}
+
+function marketplaceDirFor(name: string, source: MarketplaceSourceConfig): string | null {
+  return resolveConfiguredMarketplaceDir(name, source);
+}
+
+/**
+ * Plan 455 — build catalog entries from every configured marketplace's
+ * clone. Per-marketplace failures degrade to a status error (the rest of
+ * the catalog still loads); per-plugin failures degrade to a warn log.
+ * Git-source plugin entries inside a manifest are out of scope (Plan 455
+ * ships local-path entries only) and are skipped with a warn.
+ */
+function getMarketplaceCatalogEntries(): {
+  entries: PluginCatalogEntry[];
+  statuses: MarketplaceCatalogStatus[];
+} {
+  const logger = getLogger();
+  const entries: PluginCatalogEntry[] = [];
+  const statuses: MarketplaceCatalogStatus[] = [];
+
+  for (const [name, config] of Object.entries(readConfigMarketplaces())) {
+    const dir = marketplaceDirFor(name, config);
+    if (!dir || !fs.existsSync(dir)) {
+      statuses.push({ marketplace: name, error: 'not synced yet', pluginCount: 0 });
+      continue;
+    }
+
+    let manifest;
+    try {
+      manifest = readMarketplaceManifest(dir);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      logger.warn('Failed to read marketplace manifest', { marketplace: name, error }, COMPONENT);
+      statuses.push({ marketplace: name, error, pluginCount: 0 });
+      continue;
+    }
+    if (!manifest) {
+      statuses.push({ marketplace: name, error: 'no marketplace.json found', pluginCount: 0 });
+      continue;
+    }
+
+    let pluginCount = 0;
+    for (const pluginEntry of manifest.plugins) {
+      try {
+        const entry = buildMarketplaceCatalogEntry(name, dir, pluginEntry);
+        if (entry) {
+          entries.push(entry);
+          pluginCount++;
+        }
+      } catch (err) {
+        logger.warn('Failed to read marketplace plugin', {
+          marketplace: name,
+          plugin: pluginEntry.name,
+          error: err instanceof Error ? err.message : String(err),
+        }, COMPONENT);
+      }
+    }
+    statuses.push({ marketplace: name, pluginCount });
+  }
+
+  return { entries, statuses };
+}
+
+function buildMarketplaceCatalogEntry(
+  marketplaceName: string,
+  marketplaceDir: string,
+  pluginEntry: MarketplacePluginEntry,
+): PluginCatalogEntry | null {
+  if (pluginEntry.source.source !== 'local') {
+    getLogger().warn('Skipping git-source plugin entry inside marketplace (Plan 455 scope)', {
+      marketplace: marketplaceName,
+      plugin: pluginEntry.name,
+    }, COMPONENT);
+    return null;
+  }
+
+  // Fenced resolution — a remote manifest can never point outside its clone.
+  const pluginDir = resolvePluginEntryDir(marketplaceDir, pluginEntry);
+  const manifest = readPluginManifest(pluginDir);
+  const official = marketplaceName === 'official';
+  const category = normalizeCategory(pluginEntry.category ?? manifest.interface?.category);
+
+  return {
+    id: manifest.id || `com.duya.${pluginEntry.name}`,
+    name: manifest.name || pluginEntry.name,
+    version: manifest.version || '0.1.0',
+    description: manifest.description || `Plugin: ${pluginEntry.name}`,
+    icon: resolveIconUrl(manifest, pluginDir),
+    source: 'marketplace',
+    marketplace: marketplaceName,
+    marketplacePluginDir: pluginDir,
+    installPolicy: pluginEntry.policy?.installation ?? 'available',
+    authPolicy: pluginEntry.policy?.authentication,
+    category,
+    trustLevel: official ? 'official' : 'verified',
+    capabilityCounts: deriveCapabilityCounts(manifest, pluginDir),
+    manifest,
+    author: manifest.author,
+  };
+}
+
+/** Sync status for each configured marketplace (Plan 455 IPC surface). */
+export function getMarketplaceStatuses(): MarketplaceCatalogStatus[] {
+  return getMarketplaceCatalogEntries().statuses;
 }
 
 export function getLocalPluginPaths(): Map<string, string> {

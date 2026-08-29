@@ -7,6 +7,7 @@
  * - Plugin detail retrieval
  * - Plugin health listing
  * - Plugin install/enable/disable/remove (mutations with structured errors)
+ * - Plugin marketplace source management (Plan 455: list/add/remove/refresh)
  * - Security: permissions, trust levels, policy
  */
 
@@ -16,6 +17,14 @@ import { join } from 'path';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getPluginManager } from '../plugins/PluginManager';
 import { getPluginCatalogEntry } from '../plugins/catalog';
+import {
+  addMarketplace,
+  listMarketplaces,
+  refreshMarketplace,
+  removeMarketplace,
+  syncAllMarketplaces,
+  type MarketplaceSyncOutcome,
+} from '../plugins/marketplace/manager';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import {
@@ -226,9 +235,9 @@ export function registerPluginHandlers(): void {
   });
 
   // --- plugin:install ---
-  ipcMain.handle('plugin:install', async (_event, payload: { pluginId: string }) => {
+  ipcMain.handle('plugin:install', async (_event, payload: { pluginId: string; marketplace?: string }) => {
     try {
-      const result = await manager.installFromCatalog(payload.pluginId);
+      const result = await manager.installFromCatalog(payload.pluginId, undefined, false, payload.marketplace);
       if (result.success) {
         notifyMcpConfigChanged();
       }
@@ -236,6 +245,68 @@ export function registerPluginHandlers(): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('plugin:install failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:list (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:list', async () => {
+    try {
+      return { success: true, data: listMarketplaces() };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:list failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, data: [], error: message };
+    }
+  });
+
+  // --- plugin:marketplace:add (Plan 455) ---
+  // Accepts owner/repo shorthand, https git URLs (with optional #ref), and
+  // local directory paths — parsed and SSRF-gated by source-parse.
+  ipcMain.handle('plugin:marketplace:add', async (_event, payload: { source: string; ref?: string }) => {
+    try {
+      const view = await addMarketplace(payload.source, payload.ref);
+      logger.info('plugin:marketplace:add', { name: view.name, kind: view.kind }, COMPONENT);
+      return { success: true, data: view };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:add failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:remove (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:remove', async (_event, payload: { name: string }) => {
+    try {
+      removeMarketplace(payload.name);
+      return { success: true, data: null };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:remove failed', err instanceof Error ? err : new Error(message), COMPONENT);
+      return { success: false, error: message };
+    }
+  });
+
+  // --- plugin:marketplace:refresh (Plan 455) ---
+  ipcMain.handle('plugin:marketplace:refresh', async (_event, payload: { name?: string }) => {
+    try {
+      const outcomes: MarketplaceSyncOutcome[] = [];
+      if (payload.name) {
+        try {
+          await refreshMarketplace(payload.name);
+        } catch (err) {
+          outcomes.push({
+            marketplace: payload.name,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      } else {
+        outcomes.push(...(await syncAllMarketplaces()));
+      }
+      return { success: true, data: outcomes };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('plugin:marketplace:refresh failed', err instanceof Error ? err : new Error(message), COMPONENT);
       return { success: false, error: message };
     }
   });

@@ -20,6 +20,27 @@ interface PluginCatalogFilters {
   installed?: boolean;
 }
 
+// Plan 455 — marketplace view DTOs. Keep in sync with
+// electron/preload.ts MarketplaceViewDTO / MarketplaceSyncOutcomeDTO
+// (preload is excluded from the renderer build, same pattern as voice).
+export interface MarketplaceViewDTO {
+  name: string;
+  displayName?: string;
+  kind: 'git' | 'local';
+  url?: string;
+  path?: string;
+  ref?: string;
+  addedAt?: string;
+  error?: string;
+  pluginCount: number;
+  pluginNames: string[];
+}
+
+export interface MarketplaceSyncOutcomeDTO {
+  marketplace: string;
+  error?: string;
+}
+
 export function getPluginAPI() {
   const api = window.electronAPI;
   if (!api) {
@@ -36,8 +57,23 @@ export function getPluginAPI() {
       list: async (): Promise<PluginIpcListResponse<PluginRegistryEntry>> => {
         return api.plugin.registry.list() as Promise<PluginIpcListResponse<PluginRegistryEntry>>;
       },
-      install: async (payload: { pluginId: string }): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
+      install: async (payload: { pluginId: string; marketplace?: string }): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
         return api.plugin.install(payload) as unknown as Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>;
+      },
+      // Plan 455 — marketplace source management (Local + Git).
+      marketplace: {
+        list: async () => {
+          return api.plugin.marketplace.list();
+        },
+        add: async (payload: { source: string; ref?: string }) => {
+          return api.plugin.marketplace.add(payload);
+        },
+        remove: async (name: string) => {
+          return api.plugin.marketplace.remove({ name });
+        },
+        refresh: async (name?: string) => {
+          return api.plugin.marketplace.refresh({ name });
+        },
       },
       installLocal: async (payload: { pluginPath: string; scope?: string; autoUpdate?: boolean }): Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }> => {
         return (api.plugin as any).installLocal(payload) as Promise<{ success: boolean; data?: PluginRegistryEntry; error?: string }>;
