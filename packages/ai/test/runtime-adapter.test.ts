@@ -53,13 +53,15 @@ const auth = (a: RuntimeAuthSource): RuntimeAuthSource => a;
 describe('inferApiFormatFromLegacyProviderType', () => {
   it('maps every legacy type to a runtime apiFormat', () => {
     expect(inferApiFormatFromLegacyProviderType('anthropic')).toBe('anthropic');
-    expect(inferApiFormatFromLegacyProviderType('bedrock')).toBe('anthropic');
-    expect(inferApiFormatFromLegacyProviderType('vertex')).toBe('anthropic');
+    // Plan 451 Phase 3: bedrock / vertex / google / gemini-image now map to
+    // their REAL wire protocol instead of faking anthropic / openai-chat.
+    expect(inferApiFormatFromLegacyProviderType('bedrock')).toBe('bedrock');
+    expect(inferApiFormatFromLegacyProviderType('vertex')).toBe('vertex');
     expect(inferApiFormatFromLegacyProviderType('openai')).toBe('openai-chat');
     expect(inferApiFormatFromLegacyProviderType('openai-compatible')).toBe('openai-chat');
     expect(inferApiFormatFromLegacyProviderType('openrouter')).toBe('openai-chat');
-    expect(inferApiFormatFromLegacyProviderType('google')).toBe('openai-chat');
-    expect(inferApiFormatFromLegacyProviderType('gemini-image')).toBe('openai-chat');
+    expect(inferApiFormatFromLegacyProviderType('google')).toBe('gemini');
+    expect(inferApiFormatFromLegacyProviderType('gemini-image')).toBe('gemini');
     expect(inferApiFormatFromLegacyProviderType('ollama')).toBe('ollama');
   });
 });

@@ -4,6 +4,7 @@ import { conductorMode } from './conductor-mode.js';
 import { planTaskMode } from './plan/plan-task-mode.js';
 import { automationMode } from './automation-mode.js';
 import { goalMode } from './goal/goal-mode.js';
+import { computerUseMode } from './computer-use-mode.js';
 import { ModeTrackerEngine } from './engine/index.js';
 import { planModeTracker } from './plan/plan-tracker.js';
 import { goalModeTracker } from './goal/goal-tracker.js';
@@ -16,6 +17,7 @@ modeModifierRegistry.register(conductorMode);
 modeModifierRegistry.register(planTaskMode);
 modeModifierRegistry.register(automationMode);
 modeModifierRegistry.register(goalMode);
+modeModifierRegistry.register(computerUseMode);
 
 // Mode state-machine engine (plan 413a/413b). Trackers registered here
 // are alive for the whole process and keep their state across streamChat

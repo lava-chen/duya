@@ -13,8 +13,9 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId } from '../types.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 
-const PROVIDER: ProviderId = 'google';
+const PROVIDER = asAppConnectorId('google');
 const DRIVE_SEARCH_ACTION = 'drive.search';
 const DRIVE_GET_ACTION = 'drive.get';
 const DRIVE_READ_ACTION = 'drive.read';

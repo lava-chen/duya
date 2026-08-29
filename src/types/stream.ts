@@ -103,6 +103,8 @@ export interface PermissionRequestEvent {
   decisionReason?: string;
   /** Present only for app-connection tools (Plan 449): enables "Always allow". */
   connector?: { provider: string; riskTier: string; preApproved: boolean };
+  /** Plan 450 Phase D: structured parameter display for the approval card. */
+  metadata?: { toolParamsDisplay?: Array<{ name: string; label: string; value: string }> };
   suggestions?: Array<{
     type: string;
     destination: string;

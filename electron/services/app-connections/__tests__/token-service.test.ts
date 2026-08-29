@@ -10,6 +10,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+const GOOGLE = asAppConnectorId('google');
+const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
@@ -105,7 +108,7 @@ describe('TokenService', () => {
     refreshToken?: string;
   }) {
     const id = opts.id;
-    const provider = opts.provider ?? 'google';
+    const provider = asAppConnectorId(opts.provider ?? 'google');
     store.upsert({
       id,
       provider,

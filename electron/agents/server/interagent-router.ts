@@ -277,6 +277,11 @@ export class InteragentRouter {
         this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
         process.send(msg);
       }
+      // Plan 454: forward computer-use:execute to the main process.
+      if (msg.type === 'computer-use:execute' && typeof msg.requestId === 'string' && process.send) {
+        this.deps.workerDbRequests.set(`rpc:${msg.requestId}`, child);
+        process.send(msg);
+      }
     };
     child.on('message', onDbRequest);
 

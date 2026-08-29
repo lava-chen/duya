@@ -136,15 +136,18 @@ export function inferApiFormatFromLegacyProviderType(
 ): ApiFormat {
   switch (providerType) {
     case 'anthropic':
-    case 'bedrock':
-    case 'vertex':
       return 'anthropic';
+    case 'bedrock':
+      return 'bedrock';
+    case 'vertex':
+      return 'vertex';
     case 'openai':
     case 'openai-compatible':
     case 'openrouter':
+      return 'openai-chat';
     case 'google':
     case 'gemini-image':
-      return 'openai-chat';
+      return 'gemini';
     case 'ollama':
       return 'ollama';
     default:

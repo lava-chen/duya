@@ -1472,6 +1472,11 @@ function FeishuSettingsPanel({
   const [qrStatus, setQrStatus] = useState<string>('');
   const [qrLoading, setQrLoading] = useState(false);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // In-flight guard: a button double-click or a fast re-render between
+  // user actions must not mint two device_codes on Feishu. The button is
+  // also disabled while qrLoading is true, but state updates are async so
+  // a ref is the only race-free way to gate the IPC call.
+  const qrInFlightRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -1484,6 +1489,8 @@ function FeishuSettingsPanel({
   const [qrError, setQrError] = useState<string | null>(null);
 
   const startQrLogin = async () => {
+    if (qrInFlightRef.current) return;
+    qrInFlightRef.current = true;
     setQrLoading(true);
     setQrStatus('');
     setQrError(null);
@@ -1522,6 +1529,7 @@ function FeishuSettingsPanel({
       setQrError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setQrLoading(false);
+      qrInFlightRef.current = false;
     }
   };
 

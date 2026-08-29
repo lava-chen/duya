@@ -187,8 +187,8 @@ async function verifyRemoteMcpConnection(
   try {
     await client.connect(transport);
   } finally {
-    await client.close().catch(() => undefined);
-    await transport.close().catch(() => undefined);
+    await safeClose(client);
+    await safeClose(transport);
   }
 }
 
@@ -204,7 +204,7 @@ export async function startRemoteMcpAuthorization(
   deps: RemoteMcpAuthorizationDeps,
 ): Promise<AppConnectionStatusDTO> {
   const config = getProviderConfig(provider);
-  if (!config.remoteMcpUrl) {
+  if (!config?.remoteMcpUrl) {
     throw new FlowError('provider_not_configured', `${provider} is not a Remote MCP provider`);
   }
 
@@ -287,7 +287,21 @@ export async function startRemoteMcpAuthorization(
     throw error;
   } finally {
     loopback.close();
-    await client.close().catch(() => undefined);
-    await transport.close().catch(() => undefined);
+    await safeClose(client);
+    await safeClose(transport);
+  }
+}
+
+/**
+ * Close an MCP client/transport defensively. A failed `connect()` can leave
+ * the SDK object without a usable `close()` (missing or non-Promise return);
+ * treating that as a no-op keeps the error path from throwing a second,
+ * unhandled exception out of a `finally` block.
+ */
+async function safeClose(closable: { close?: () => unknown }): Promise<void> {
+  try {
+    await Promise.resolve(closable.close?.());
+  } catch {
+    // ignore — best-effort teardown
   }
 }

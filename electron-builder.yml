@@ -60,6 +60,11 @@ extraResources:
   - from: packages/agent/bundle/
     to: agent-bundle/
     filter: ["**/*"]
+  # Plan 453 Task F: Wake Agent orb renderer. Vite emits at
+  # `dist/src/orb/index.html` (path is preserved from src/orb/).
+  - from: dist/src/orb/
+    to: orb/
+    filter: ["**/*"]
   # Prebuilt ripgrep binary fetched by scripts/fetch-ripgrep.mjs (pinned
   # release, cached, non-fatal when offline). resolveBundledRipgrepPath()
   # publishes it as DUYA_RIPGREP_PATH for the agent's grep tool. The fetch

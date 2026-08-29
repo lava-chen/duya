@@ -89,6 +89,14 @@ export default defineConfig({
     minify: 'terser',
     cssMinify: true,
     rollupOptions: {
+      input: {
+        // Main DUYA renderer entry.
+        main: path.resolve(__dirname, 'index.html'),
+        // Plan 453 Task F: Wake Agent orb entry. Build output lands in
+        // `dist-orb/` so it can be packaged separately as a resource
+        // (referenced by electron-builder extraResources).
+        orb: path.resolve(__dirname, 'src/orb/index.html'),
+      },
       output: {
         manualChunks(id) {
           // React core

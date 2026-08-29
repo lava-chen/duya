@@ -17,7 +17,7 @@ export type PopoverItemKind =
    */
   | 'conductor_toggle';
 
-export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills';
+export type PopoverItemGroup = 'attachments' | 'mode' | 'settings' | 'skills' | 'apps';
 
 export type SettingsSubmenu = 'thinking' | 'style' | 'mcp' | 'recap' | 'btw';
 

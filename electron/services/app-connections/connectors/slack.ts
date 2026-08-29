@@ -13,8 +13,9 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId } from '../types.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 
-const PROVIDER: ProviderId = 'slack';
+const PROVIDER = asAppConnectorId('slack');
 
 const SEARCH_MESSAGES_ACTION = 'search.messages';
 

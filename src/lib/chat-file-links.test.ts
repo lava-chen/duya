@@ -17,6 +17,7 @@ import {
   openLocalArtifactTarget,
   openConductorCanvas,
   parseInternalCanvasLink,
+  tryDecodeURI,
 } from '@/lib/chat-file-links';
 
 describe('chat-file-links / isHtmlFile', () => {
@@ -196,6 +197,34 @@ describe('chat-file-links / path helpers', () => {
     expect(extensionFromPath('foo.HTML')).toBe('.html');
     expect(extensionFromPath('foo.tar.gz')).toBe('.gz');
     expect(extensionFromPath('no-extension')).toBe('');
+  });
+});
+
+describe('chat-file-links / tryDecodeURI', () => {
+  it('decodes UTF-8 percent-encoded segments to readable characters', () => {
+    // 发票 = %E5%8F%91%E7%A5%A8 in UTF-8; the renderer used to show the
+    // raw percent-encoded form as "garbage" in long file paths.
+    expect(tryDecodeURI('E:/lavachen/%E5%8F%91%E7%A5%A8%E5%A4%84%E7%90%86/file.pdf'))
+      .toBe('E:/lavachen/发票处理/file.pdf');
+    expect(tryDecodeURI('%E5%8D%97%E4%BA%AC')).toBe('南京');
+  });
+
+  it('returns the input unchanged when there are no percent-encoded bytes', () => {
+    expect(tryDecodeURI('plain/path/file.pdf')).toBe('plain/path/file.pdf');
+    expect(tryDecodeURI('')).toBe('');
+    expect(tryDecodeURI('https://example.com/page')).toBe('https://example.com/page');
+  });
+
+  it('decodes %20 to spaces for readability', () => {
+    expect(tryDecodeURI('E:/Program%20Files/app.exe')).toBe('E:/Program Files/app.exe');
+  });
+
+  it('falls back to the original value on malformed percent-encoding', () => {
+    // Lone `%` is invalid; decodeURIComponent throws URIError. The
+    // helper must swallow the error and return the input so the link
+    // is still navigable, just not auto-decoded for display.
+    expect(tryDecodeURI('E:/100%complete/file.pdf')).toBe('E:/100%complete/file.pdf');
+    expect(tryDecodeURI('https://example.com/%G1')).toBe('https://example.com/%G1');
   });
 });
 

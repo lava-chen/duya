@@ -62,6 +62,16 @@ export function scheduleFingerprint(schedule: CronSchedule): string {
   return `cron:${(schedule.expr ?? '').trim()}|${(schedule.tz ?? '').trim()}`;
 }
 
+/**
+ * `cron` schedules need a pre-creation anchor for `computeNextRunAt`,
+ * because croner's `nextRun` is strictly-after its argument and
+ * `every`/`once` already produce sensible first-run results when anchored
+ * on `now`. See the comment in `jobToCron` for the full rationale.
+ */
+function scheduleNeedsCreatedAtAnchor(schedule: CronSchedule): boolean {
+  return schedule.kind === 'cron';
+}
+
 /** On-disk TOML shape (snake_case); the public API is camelCase `AutomationCron`. */
 export interface CronJobFile {
   id?: string;
@@ -309,6 +319,19 @@ export class CronFileStore {
   private jobToCron(job: CronJobFile): AutomationCron {
     const now = Date.now();
     const lastRunAt = job.last_run_at ?? 0;
+    // Anchor `cron` schedules on `created_at` for jobs that have never run.
+    // croner.nextRun is strictly-after its argument, so anchoring on `now`
+    // would always return a future time and the tick filter
+    // `nextRunAt <= now` could never match — making daily/hourly cron
+    // jobs silently never fire (the first fire would always be the next
+    // scheduled minute after creation, which 60s ticks usually skip past).
+    // Using `created_at` puts the anchor BEFORE the first scheduled
+    // occurrence, so the very next tick on or after that occurrence fires
+    // the job. `every` schedules use `now` as the first-run anchor — they
+    // already work because `every` nextRunAt = anchor + everyMs is in the
+    // near future, not strictly-after the anchor.
+    const nextRunAnchor =
+      lastRunAt > 0 ? lastRunAt : scheduleNeedsCreatedAtAnchor(job.schedule) ? (job.created_at ?? now) : now;
     return {
       id: job.id ?? '',
       name: job.name,
@@ -322,7 +345,7 @@ export class CronFileStore {
       lastRunAt: lastRunAt > 0 ? lastRunAt : null,
       lastError: job.last_error ?? null,
       retryCount: job.retry_count ?? 0,
-      nextRunAt: computeNextRunAt(job.schedule, lastRunAt, now),
+      nextRunAt: computeNextRunAt(job.schedule, nextRunAnchor, now),
       createdAt: job.created_at ?? now,
       updatedAt: job.updated_at ?? now,
     };

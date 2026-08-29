@@ -36,6 +36,8 @@ export interface AgentSSEClientOptions {
     agentSessionId?: string;
   }) => void;
   onPermission?: (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number }) => void;
+  /** Plan 450: re-authorization card surface for app-connection auth failures. */
+  onConnectorAuthRequired?: (data: { provider?: string; connectionId?: string; toolName?: string }) => void;
   onTokenUsage?: (data: { inputTokens: number; outputTokens: number; cacheHitTokens?: number; cacheCreationTokens?: number }) => void;
   onDone?: () => void;
   onError?: (message: string, retryable?: boolean) => void;

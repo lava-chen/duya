@@ -560,8 +560,12 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
             serializeMessagesForSummary,
           )
         } catch (error) {
-          // Log but continue - turn prefix summary is optional
-          console.warn('Turn prefix summarization failed:', error)
+          // Re-throw so CompactionManager.compact() can route the error into
+          // the 5-state suppression machine. Turn-prefix is "optional" in the
+          // sense that the strategy could skip it, but a summarizer failure
+          // here is a hard failure for the whole compaction pass — same as
+          // the main summarizer call below.
+          throw error
         }
       }
     }
@@ -602,8 +606,13 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
         if (isDegenerateSummary(rawSummary)) {
           rawSummary = cleanSummaryText(await this.summarize(conversationText, enhancedPrompt))
         }
-      } catch {
-        rawSummary = ''
+      } catch (summaryError) {
+        // Re-throw so CompactionManager.compact() can route the error into
+        // the 5-state suppression machine (see `classifySuppressReason`).
+        // The previous behaviour (silently setting `rawSummary = ''` and
+        // pretending success) bypassed suppression entirely — a summarizer
+        // that keeps failing on the same content would loop forever.
+        throw summaryError
       }
 
       if (isDegenerateSummary(rawSummary)) {

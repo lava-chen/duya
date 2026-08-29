@@ -490,6 +490,13 @@ export interface GatewayAPI {
   pairingRevoke: (platform: string, platformUserId: string) => Promise<{ revoked: boolean }>
   feishuQrBegin: () => Promise<{ success: boolean; result?: { qr_url?: string; device_code?: string; user_code?: string; interval?: number; expire_in?: number }; error?: string }>
   feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) => Promise<{ success: boolean; result?: { app_id?: string; app_secret?: string; open_id?: string; domain?: string }; error?: string }>
+  // Permission handling
+  getPendingPermission: (sessionId: string) => Promise<{
+    id: string
+    toolName: string
+    toolInput: Record<string, unknown>
+  } | null>
+  resolvePermission: (sessionId: string, decision: 'allow' | 'deny') => Promise<{ success: boolean }>
 }
 
 export interface AutomationAPI {
@@ -1016,6 +1023,26 @@ export interface ElectronAPI {
   }
   sync: SyncAPI
   settings: {
+    // Plan 453 Task H: Wake Agent config.
+    getWakeConfig: () => Promise<{
+      enabled: boolean
+      shortcut: string
+      injectOsContext: boolean
+      autoCollapseMs: number
+      orb: { x: number; y: number; displayId: number }
+    }>
+    setWakeConfig: (payload: {
+      enabled?: boolean
+      shortcut?: string
+      injectOsContext?: boolean
+      autoCollapseMs?: number
+      orb?: { x: number; y: number; displayId: number }
+    }) => Promise<{ ok: boolean }>
+    setOrbPosition: (payload: {
+      x: number
+      y: number
+      displayId: number
+    }) => Promise<{ ok: boolean }>
     setAutoStart: (enabled: boolean) => Promise<{ success: boolean; supported: boolean; error?: string }>
     getAutoStartStatus: () => Promise<{ enabled: boolean; canChange: boolean; supported: boolean; platform: string; error?: string }>
     getMcpServers: () => Promise<{ success: boolean; data: Array<{ name: string; command: string; args?: string[]; env?: Record<string, string>; enabled?: boolean }>; error?: string }>
@@ -1145,12 +1172,15 @@ export interface ElectronAPI {
   import: ImportAPI
   voice: VoiceAPI
   ide: IdeAPI
+  orb: OrbAPI
 }
 
 export interface IdeInfo {
   id: 'vscode' | 'cursor' | 'trae' | 'zed'
   name: string
   executable: string
+  /** OS shell icon (PNG data URL), absent when extraction is unavailable. */
+  icon?: string
 }
 
 export interface IdeAPI {
@@ -1222,6 +1252,42 @@ interface ImportAPI {
   apply: (params: unknown) => Promise<unknown>
   rollback: (params: { batchId: string }) => Promise<void>
   history: () => Promise<unknown[]>
+}
+
+// Plan 453 Task E: Orb client surface.
+export interface OrbAPI {
+  submit: (prompt: string) => Promise<{ accepted: boolean; note?: string }>
+  showInput: () => Promise<{ ok: boolean }>
+  insertTab: (text: string) => Promise<{
+    ok: boolean
+    reason?: string
+    note?: string
+  }>
+  setPosition: (position: {
+    x: number
+    y: number
+    displayId: number
+  }) => Promise<{ ok: boolean }>
+  state: () => Promise<{ state: string }>
+  collapse: () => Promise<{ ok: boolean }>
+  onChunk: (
+    callback: (chunk: { delta: string; turnId: string }) => void,
+  ) => () => void
+  onShowInput: (callback: () => void) => () => void
+  onShowLoading: (
+    callback: (payload: { stage: string }) => void,
+  ) => () => void
+  onUpdateProgress: (
+    callback: (payload: { stage: string; label: string }) => void,
+  ) => () => void
+  onShowResult: (
+    callback: (payload: {
+      turnId: string
+      text: string
+      finishedAt: string
+    }) => void,
+  ) => () => void
+  onHide: (callback: () => void) => () => void
 }
 
 // Callback registry for sync events
@@ -1327,7 +1393,6 @@ ipcRenderer.on('conductor-port', (event) => {
   const [port] = event.ports
   if (port) {
     conductorPort = port
-    conductorPortReady = true;
     console.log('[preload] conductorPort assigned, time:', Date.now());
     port.onmessage = (e) => {
       console.log('[preload] conductorPort.onmessage:', e.data?.type, 'time:', Date.now());
@@ -1406,20 +1471,16 @@ function getConfigPortAPI(): ConfigPortAPI | null {
 }
 
 // Helper functions for conductorPort API
-let conductorPortReady = false;
 function getConductorPortAPI(): ConductorPortAPI | null {
   if (!conductorPort) {
-    // Only warn on the first poll: the renderer often calls this
-    // before the main process has finished wiring up the MessagePort
-    // (postMessage from did-finish-load is async). Logging on every
-    // call floods the console and buries real signal.
-    if (!conductorPortReady) {
-      conductorPortReady = true;
-      console.warn('[preload] getConductorPortAPI: conductorPort is null (waiting for main to send the port)');
-    }
+    // The MessagePort is delivered asynchronously via webContents.postMessage
+    // from the main process (window-manager.ts). Renderer consumers
+    // (useCanvasCaptureRequest, useCanvasManagement, conductor-bridge) all
+    // listen for the `conductor-port-ready` CustomEvent the preload dispatches
+    // once the port lands, so this null path is a legitimate mid-boot state
+    // rather than a fault. Callers handle null gracefully; no log needed.
     return null;
   }
-  conductorPortReady = true;
 
   const registerHandler = (type: string, handler: (data: unknown) => void): () => void => {
     let handlers = conductorPortHandlers.get(type);
@@ -1566,6 +1627,27 @@ const electronAPI: ElectronAPI = {
     },
   },
   settings: {
+    // Plan 453 Task H: Wake Agent config bridge.
+    getWakeConfig: () =>
+      ipcRenderer.invoke('settings:get-wake-config') as Promise<{
+        enabled: boolean;
+        shortcut: string;
+        injectOsContext: boolean;
+        autoCollapseMs: number;
+        orb: { x: number; y: number; displayId: number };
+      }>,
+    setWakeConfig: (payload: {
+      enabled?: boolean;
+      shortcut?: string;
+      injectOsContext?: boolean;
+      autoCollapseMs?: number;
+      orb?: { x: number; y: number; displayId: number };
+    }) => ipcRenderer.invoke('settings:set-wake-config', payload),
+    setOrbPosition: (payload: {
+      x: number;
+      y: number;
+      displayId: number;
+    }) => ipcRenderer.invoke('settings:set-orb-position', payload),
     setAutoStart: (enabled) => ipcRenderer.invoke('settings:set-auto-start', enabled),
     getAutoStartStatus: () => ipcRenderer.invoke('settings:get-auto-start-status'),
     getMcpServers: async () => {
@@ -1835,6 +1917,10 @@ const electronAPI: ElectronAPI = {
     feishuQrBegin: () => ipcRenderer.invoke('gateway:feishu:qr:begin'),
     feishuQrPoll: (begin: { device_code: string; interval: number; expire_in: number }) =>
       ipcRenderer.invoke('gateway:feishu:qr:poll', begin),
+    // Permission handling
+    getPendingPermission: (sessionId: string) => ipcRenderer.invoke('gateway:getPendingPermission', sessionId),
+    resolvePermission: (sessionId: string, decision: 'allow' | 'deny') =>
+      ipcRenderer.invoke('gateway:resolvePermission', sessionId, decision),
   },
   automation: {
     listCrons: () => ipcRenderer.invoke('automation:cron:list'),
@@ -2208,6 +2294,76 @@ const electronAPI: ElectronAPI = {
     list: () => ipcRenderer.invoke('ide:list'),
     getDefault: () => ipcRenderer.invoke('ide:get-default'),
     open: (id: string, target: string) => ipcRenderer.invoke('ide:open', id, target),
+  },
+  // Plan 453 Task E: orb client surface.
+  orb: {
+    submit: (prompt: string) =>
+      ipcRenderer.invoke('automation:orb:submit', { prompt }),
+    showInput: () => ipcRenderer.invoke('automation:orb:show-input'),
+    insertTab: (text: string) =>
+      ipcRenderer.invoke('automation:orb:insert-tab', { text }),
+    setPosition: (position: { x: number; y: number; displayId: number }) =>
+      ipcRenderer.invoke('automation:orb:set-position', position),
+    state: () =>
+      ipcRenderer.invoke('automation:orb:state') as Promise<{ state: string }>,
+    collapse: () => ipcRenderer.invoke('automation:orb:collapse'),
+    onChunk: (callback: (chunk: { delta: string; turnId: string }) => void) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        chunk: { delta: string; turnId: string },
+      ) => callback(chunk);
+      ipcRenderer.on('automation:orb:chunk', handler);
+      return () => ipcRenderer.removeListener('automation:orb:chunk', handler);
+    },
+    onShowInput: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('automation:orb:show-input', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-input', handler);
+    },
+    onShowLoading: (
+      callback: (payload: { stage: string }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { stage: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:show-loading', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-loading', handler);
+    },
+    onUpdateProgress: (
+      callback: (payload: { stage: string; label: string }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { stage: string; label: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:update-progress', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:update-progress', handler);
+    },
+    onShowResult: (
+      callback: (payload: {
+        turnId: string;
+        text: string;
+        finishedAt: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { turnId: string; text: string; finishedAt: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:show-result', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:show-result', handler);
+    },
+    onHide: (callback: () => void) => {
+      const handler = () => callback();
+      ipcRenderer.on('automation:orb:hide', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:hide', handler);
+    },
   },
 }
 

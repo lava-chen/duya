@@ -2,7 +2,7 @@
  * electron/automation/cron-file.test.ts — CronFileStore over a temp cronjob.toml.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -77,6 +77,33 @@ describe('CronFileStore', () => {
     expect(read.lastRunAt).toBe(123);
     expect(read.lastError).toBe('boom');
     expect(read.retryCount).toBe(2);
+  });
+
+  it('fresh cron job anchors nextRunAt on created_at so the first run is reachable (regression: cron schedules never fired)', async () => {
+    // Regression guard: prior to the fix, `jobToCron` anchored `cron`
+    // schedules on `now`, but croner.nextRun(now) returns strictly-after-now,
+    // so the tick filter `nextRunAt <= now` could never match. The fix
+    // anchors brand-new crons on `created_at` instead.
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      // Pretend the cron was created at 08:00 UTC.
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 8, 0, 0));
+      const cron = store.createCron(makeInput({ schedule: { kind: 'cron', expr: '0 9 * * *', tz: 'UTC' } }));
+
+      // Now advance the clock to 09:00:30 UTC — the first tick after the
+      // scheduled occurrence.
+      nowSpy.mockReturnValue(Date.UTC(2026, 7, 11, 9, 0, 30));
+
+      const read = store.getCron(cron.id)!;
+      // Public lastRunAt is still null (never fired).
+      expect(read.lastRunAt).toBeNull();
+      // nextRunAt is today's 09:00 UTC, strictly AFTER created_at (08:00 UTC).
+      expect(read.nextRunAt).toBe(Date.UTC(2026, 7, 11, 9, 0, 0));
+      // And the tick filter nextRunAt <= now resolves to TRUE.
+      expect(read.nextRunAt!).toBeLessThanOrEqual(Date.now());
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('requires name and prompt', () => {

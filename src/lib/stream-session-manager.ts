@@ -305,6 +305,11 @@ interface StartStreamParams {
   titleGenerationModel?: string;
   titleGenerationModelConfig?: { provider: string; apiKey: string; baseURL: string; model: string };
   mode?: string;
+  /**
+   * Plan 450: providers @-mentioned in the composer for this run. Forwarded
+   * to the worker so connector tools of these providers skip tool_search.
+   */
+  mentionedProviders?: string[];
   defaultWorkspaceDirectory?: string;
   securityScanEnabled?: boolean;
   /**
@@ -445,6 +450,7 @@ interface SessionState {
   agentProgressEvents: AgentProgressEvent[];
   streamingEvents: StreamingEvent[];
   pendingPermissionRequest: PermissionRequestEvent | null;
+  pendingConnectorAuthRequest: { provider?: string; connectionId?: string; toolName?: string } | null;
   // Deduplication: tool IDs already loaded from DB on page refresh
   loadedToolUseIds: Set<string>;
   loadedToolResultIds: Set<string>;
@@ -453,6 +459,8 @@ interface SessionState {
   fieldListeners: FieldListeners;
   streamingEventsListeners: Set<(events: StreamingEvent[]) => void>;
   permissionListeners: Set<(request: PermissionRequestEvent) => void>;
+  /** Plan 450: listeners for app-connection re-authorization events. */
+  authRequiredListeners: Set<(data: { provider?: string; connectionId?: string; toolName?: string }) => void>;
   /** Plan 224 follow-up: listeners for agent-initiated runtime mode switches. */
   modeChangedListeners: Set<(event: ModeChangedEvent) => void>;
   goalUpdatedListeners: Set<(event: GoalUpdatedEvent) => void>;
@@ -545,7 +553,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -571,6 +579,7 @@ function createInitialState(sessionId: string): Omit<SessionState, 'listeners' |
     agentProgressEvents: [],
     streamingEvents: [],
     pendingPermissionRequest: null,
+    pendingConnectorAuthRequest: null,
     loadedToolUseIds: new Set(),
     loadedToolResultIds: new Set(),
   };
@@ -855,6 +864,7 @@ class StreamSessionManager {
         fieldListeners: this.createFieldListeners(),
         streamingEventsListeners: new Set(),
         permissionListeners: new Set(),
+        authRequiredListeners: new Set(),
         modeChangedListeners: new Set(),
         goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
@@ -1046,6 +1056,61 @@ class StreamSessionManager {
     void this.resumeBackgroundTask(sessionId).catch((error) => {
       console.error('[stream-session-manager] Failed to resume background task:', error);
     });
+  }
+
+  /**
+   * Plan 450 Phase G: resolve `@<providerId>`/`@<label>` tokens in the user
+   * message and rewrite them to codex-style `[@label](app://id)` links that
+   * the model can resolve. Connects to the App Connections API to enumerate
+   * connected providers, then delegates to the pure `rewriteAppMentionTokens`
+   * helper. Best-effort; on failure returns the content unchanged with no
+   * mentions so the agent falls back to default discoverable tools.
+   */
+  private async resolveAppMentions(
+    content: string,
+  ): Promise<{ content: string; mentionedProviders: string[] }> {
+    try {
+      // Lazy import to avoid bundling electronAPI types into the message
+      // library entry points that don't need it (test runners, SSR shims).
+      const { getAppConnectionAPI, rewriteAppMentionTokens } = await import('./app-connection-ipc');
+      const api = getAppConnectionAPI();
+      if (!api) return { content, mentionedProviders: [] };
+      const [list, providers] = await Promise.all([api.list(), api.providers()]);
+      const connected = (list.data ?? [])
+        .filter((c) => c.status === 'connected')
+        .map((c) => c.provider);
+      const available = (providers.data ?? [])
+        .filter((p) => connected.includes(p.id))
+        .map((p) => ({ id: p.id, label: p.label }));
+      return rewriteAppMentionTokens(content, available);
+    } catch {
+      return { content, mentionedProviders: [] };
+    }
+  }
+
+  /**
+   * Plan 450 Phase H: rewrite a leading `/skill-name` composer command into
+   * a codex-style `[/name](skill://name)` link and extract the mentioned
+   * skill names for structured transport. The name list comes from the same
+   * `skills.list` IPC the `/` popover uses, so only real registry skills are
+   * rewritten (built-in composer commands and prose `/paths` pass through).
+   * Best-effort; on failure the content is returned unchanged.
+   */
+  private async resolveSkillMentions(
+    content: string,
+  ): Promise<{ content: string; mentionedSkills: string[] }> {
+    interface SkillListEntry { name: string; aliases?: string[] }
+    interface SkillsListApi { list?: () => Promise<{ success: boolean; skills?: SkillListEntry[] }> }
+    try {
+      const api = (window as unknown as { electronAPI?: { skills?: SkillsListApi } }).electronAPI?.skills;
+      const result = await api?.list?.();
+      const available = (result?.skills ?? []).map((s) => ({ name: s.name, aliases: s.aliases }));
+      if (available.length === 0) return { content, mentionedSkills: [] };
+      const { rewriteSkillMentionTokens } = await import('./skill-mentions');
+      return rewriteSkillMentionTokens(content, available);
+    } catch {
+      return { content, mentionedSkills: [] };
+    }
   }
 
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
@@ -1310,7 +1375,18 @@ class StreamSessionManager {
       hasImageChunks: !!f.imageChunks,
     })) ?? []);
     try {
-      await client.startChat(sessionId, params.content, {
+      // Plan 450 Phase G: rewrite `@<provider>` composer tokens into
+      // `[@label](app://id)` links for the model and extract the mention
+      // list for per-turn activation. Best-effort; failure to enumerate
+      // connections (e.g. agent server unreachable during typing) leaves
+      // the content unchanged and the array empty, which simply degrades
+      // to the default discoverable tools.
+      const appMentions = await this.resolveAppMentions(params.content);
+      // Plan 450 Phase H: same treatment for a leading `/skill-name` —
+      // rewritten to `[/name](skill://name)` and transported as
+      // `mentionedSkills` so the agent injects the SKILL.md body this turn.
+      const skillMentions = await this.resolveSkillMentions(appMentions.content);
+      await client.startChat(sessionId, skillMentions.content, {
         model: params.model,
         maxTokens: params.maxTokens,
         maxTurns: params.maxTurns,
@@ -1320,8 +1396,16 @@ class StreamSessionManager {
         files: params.files,
         agentProfileId: params.agentProfileId,
         outputStyleConfig: params.outputStyleConfig,
-        displayContent: params.displayContent,
+        // The rewritten content is model-facing; keep the composer's original
+        // text as the stored/displayed user message when no explicit override.
+        displayContent: params.displayContent ?? params.content,
         mode: params.mode,
+        ...(appMentions.mentionedProviders.length > 0
+          ? { mentionedProviders: appMentions.mentionedProviders }
+          : {}),
+        ...(skillMentions.mentionedSkills.length > 0
+          ? { mentionedSkills: skillMentions.mentionedSkills }
+          : {}),
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
         providerConfig: params.providerConfig as unknown as Record<string, unknown> | undefined,
@@ -1448,6 +1532,15 @@ class StreamSessionManager {
 
         case 'permission':
           this.handlePermissionEvent(sessionId, streamId, event.data as { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt?: number } | undefined);
+          break;
+
+        case 'connector_auth_required':
+          // Plan 450: pass through to dedicated listeners (AuthRequiredCard).
+          this.handleConnectorAuthRequiredEvent(
+            sessionId,
+            streamId,
+            (event.data ?? {}) as { provider?: string; connectionId?: string; toolName?: string },
+          );
           break;
 
         case 'mode_changed':
@@ -1877,6 +1970,29 @@ class StreamSessionManager {
   }
 
   /**
+   * Plan 450: surface connector re-authorization events so the renderer
+   * can prompt the user without polluting the chat error stream. The
+   * last seen event per session is memoized so a fresh subscriber (e.g.
+   * page remount) can replay the latest card without an extra round-trip.
+   */
+  private handleConnectorAuthRequiredEvent(
+    sessionId: string,
+    streamId: string,
+    data: { provider?: string; connectionId?: string; toolName?: string },
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.pendingConnectorAuthRequest = data;
+    s.authRequiredListeners.forEach((listener) => {
+      try {
+        listener(data);
+      } catch (error) {
+        console.error(`[stream-session-manager] Auth-required listener error for ${sessionId}:`, error);
+      }
+    });
+  }
+
+  /**
    * Plan 224 follow-up: handle `mode_changed` SSE event emitted by the
    * agent after a mode-switch tool call (EnterPlanMode / ExitPlanMode /
    * SwitchMode) completes. Notifies registered listeners so ChatView
@@ -2301,6 +2417,36 @@ class StreamSessionManager {
   }
 
   /**
+   * Plan 450: subscribe to per-session connector re-authorization events.
+   * Replays the latest pending event so a remounting UI shows the card
+   * without waiting for the next failed call.
+   */
+  subscribeToConnectorAuthRequired(
+    sessionId: string,
+    listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+  ): () => void {
+    const state = this.getOrCreateState(sessionId);
+    state.authRequiredListeners.add(listener);
+    if (state.pendingConnectorAuthRequest) {
+      try {
+        listener(state.pendingConnectorAuthRequest);
+      } catch (error) {
+        console.error(`[stream-session-manager] Auth-required listener immediate replay error for ${sessionId}:`, error);
+      }
+    }
+    return () => {
+      state.authRequiredListeners.delete(listener);
+    };
+  }
+
+  /** Clear the latest pending auth-required event after the user acted on it. */
+  clearConnectorAuthRequired(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    state.pendingConnectorAuthRequest = null;
+  }
+
+  /**
    * Clear the stored pending permission request for a session. Called after
    * the user resolves a permission (e.g. answers an AskUserQuestion) so a
    * later re-subscription (page switch / remount) does NOT replay a stale
@@ -2414,6 +2560,7 @@ class StreamSessionManager {
       fieldListeners: this.createFieldListeners(),
       streamingEventsListeners: new Set(),
       permissionListeners: new Set(),
+      authRequiredListeners: new Set(),
       modeChangedListeners: new Set(),
       goalUpdatedListeners: new Set(),
         researchUpdatedListeners: new Set(),
@@ -3470,6 +3617,12 @@ export const streamSessionManager = getStreamManager();
 
 export const ensureSession = (sessionId: string) => streamSessionManager.ensureSession(sessionId);
 export const startStream = (params: StartStreamParams) => streamSessionManager.startStream(params);
+export const subscribeToConnectorAuthRequired = (
+  sessionId: string,
+  listener: (data: { provider?: string; connectionId?: string; toolName?: string }) => void,
+) => streamSessionManager.subscribeToConnectorAuthRequired(sessionId, listener);
+export const clearConnectorAuthRequired = (sessionId: string) =>
+  streamSessionManager.clearConnectorAuthRequired(sessionId);
 export const resumeBackgroundTask = (sessionId: string) => streamSessionManager.resumeBackgroundTask(sessionId);
 export const attachToExistingStream = (sessionId: string) => streamSessionManager.attachToExistingStream(sessionId);
 export const stopStream = (sessionId: string, reason?: string) => streamSessionManager.stopStream(sessionId, reason);

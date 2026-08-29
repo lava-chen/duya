@@ -2,6 +2,7 @@ import type { ApiFormat, Model, SSEEvent } from '../types.js';
 import type { EnvResolver } from '../auth/helpers.js';
 import type { AuthResult } from '../auth/types.js';
 import type { ProviderStreams } from './lazy.js';
+import type { Wrapper } from './wrappers/compose.js';
 
 /** Declarative auth configuration for a provider. */
 export interface ProviderAuthApiKey {
@@ -30,6 +31,14 @@ export interface Provider<TApi extends ApiFormat = ApiFormat> {
   readonly baseUrl?: string;
   readonly auth: ProviderAuthConfig;
   getModels(): readonly Model<TApi>[];
+  /**
+   * Family-wrapper chain applied to each resolved ProviderStreams before
+   * stream() runs (Plan 451 Phase 0). Wrappers run in argument order;
+   * the LAST wrapper in `pipe()` is OUTERMOST (sees the request first /
+   * events last). Empty array = no wrapping, identical behavior to the
+   * pre-Plan-451 Provider shape.
+   */
+  readonly wrappers: readonly Wrapper[];
   stream(
     model: Model<TApi>,
     options: { messages: unknown[]; systemPrompt?: string },

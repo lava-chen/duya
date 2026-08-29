@@ -10,10 +10,11 @@ import { MessageList, type MessageListRef } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { GoalStatusChip } from './GoalStatusChip';
 import { PermissionPrompt } from './PermissionPrompt';
+import { ConnectorAuthRequiredCard } from './ConnectorAuthRequiredCard';
 import { usePermissions } from '@/hooks/usePermissions';
 import { useNextStepSuggestions } from '@/hooks/useNextStepSuggestions';
 import { dispatchPrefillChatInput } from '@/lib/prefill-chat-input-event';
-import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, attachToExistingStream, getSnapshot } from '@/lib/stream-session-manager';
+import { subscribeToPermissions, subscribeToPhase, subscribeToModeChanged, subscribeToConnectorAuthRequired, clearConnectorAuthRequired, attachToExistingStream, getSnapshot } from '@/lib/stream-session-manager';
 import { getAgentServerClient } from '@/lib/agent-http-client';
 import { InfoIcon, CaretDownIcon } from '@/components/icons';
 import { ChatHeader } from './ChatHeader';
@@ -705,6 +706,31 @@ export function ChatView({
       unsubscribe();
     };
   }, [sessionId, handlePermissionRequest]);
+
+  // Plan 450: connector re-authorization elicitation. A failed tool call
+  // surfaces as a discrete event so we can prompt them with a re-auth
+  // button without polluting the chat error stream.
+  const [pendingAuthRequest, setPendingAuthRequest] = useState<{ provider?: string; connectionId?: string; toolName?: string } | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    const unsubscribe = subscribeToConnectorAuthRequired(sessionId, (data) => {
+      setPendingAuthRequest(data);
+    });
+    return () => unsubscribe();
+  }, [sessionId]);
+  const dismissAuthRequest = useCallback(() => {
+    setPendingAuthRequest(null);
+    clearConnectorAuthRequired(sessionId);
+  }, [sessionId]);
+  // Auto-retry hook (Phase B3): after a successful re-authorization, the
+  // card passes back through here so a placeholder user turn can prompt
+  // the model to re-issue the failed call. The exact mechanism (mailbox
+  // nudge vs. synthetic stream) is left as a future iteration; for now
+  // we just clear the card and let the next user message trigger work.
+  const retryAfterAuth = useCallback(() => {
+    setPendingAuthRequest(null);
+    clearConnectorAuthRequired(sessionId);
+  }, [sessionId]);
 
   // Plan 224 follow-up: subscribe to agent-initiated runtime mode
   // switches (EnterPlanMode / ExitPlanMode / SwitchMode). When the
@@ -1457,6 +1483,15 @@ export function ChatView({
                   <CaretDownIcon size={18} style={{ color: 'var(--muted)' }} />
                 </IconButton>
               </div>
+            )}
+
+            {pendingAuthRequest && (
+              <ConnectorAuthRequiredCard
+                request={pendingAuthRequest}
+                onDismiss={dismissAuthRequest}
+                onRetry={retryAfterAuth}
+                resolveProviderLabel={(id) => id}
+              />
             )}
 
             {!isAskUserQuestionPending && (

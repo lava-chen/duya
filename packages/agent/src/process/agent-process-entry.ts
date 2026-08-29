@@ -160,7 +160,21 @@ interface ChatStartMessage {
     agentProfileId?: string | null;
     outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean };
     displayContent?: string;
+    /**
+     * Plan 453 Task G: wakeless chat path. When true:
+     *   - sessionId should start with `wakeless-` (callers generate
+     *     a fresh UUID per wake);
+     *   - the journal ref is cleared on the agent for this turn so
+     *     messages never reach the rollout file;
+     *   - the orb IPC owns the response stream (see
+     *     `electron/services/orb-wakeless-chat.ts`).
+     */
+    wakeless?: boolean;
     mode?: string;
+    /** Plan 450: @-mentioned providers for this run. */
+    mentionedProviders?: string[];
+    /** Plan 450 Phase H: `/skill-name` mentioned this run. */
+    mentionedSkills?: string[];
     titleGenerationModel?: string;
     titleGenerationModelConfig?: {
       provider: string;
@@ -598,13 +612,63 @@ function appConnectionIpcRequest<T = unknown>(
   });
 }
 
+// Plan 454: IPC request for Computer Use tool execution.
+//
+// Routes `computer-use:execute` messages to the main process
+// (electron/ipc/computer-use.ts). The main process owns the
+// DesktopBackend singleton and dispatches each action to it.
+// Distinct from conductorIpcRequest so the main process can route
+// `computer-use:execute` to the Computer Use IPC handler instead
+// of the Conductor executor.
+function computerUseIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 30000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `computer-use IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    // Forward the agent's flattened { action, payload, sessionId }
+    // envelope to the main process Computer Use handler.
+    const outerPayload = payload as { action?: string; payload?: unknown; sessionId?: string } | undefined;
+    sendToMain({
+      type: 'computer-use:execute',
+      requestId,
+      action: outerPayload?.action,
+      payload: outerPayload?.payload,
+      sessionId: outerPayload?.sessionId,
+    });
+  });
+}
+
 /**
  * Unified tool IPC dispatcher: routes based on the `channel` argument.
  * - `'conductor:executor:rpc'` → conductorIpcRequest (canvas tools)
  * - `'appConnection:invoke'`    → appConnectionIpcRequest (connector tools)
+ * - `'computer-use:execute'`    → computerUseIpcRequest (plan 454)
  *
  * Plan 312: always injected into the ToolUseContext so App Connection
  * tools work without conductor mode being active.
+ *
+ * Plan 454: the computer-use channel must be matched before the
+ * default `conductorIpcRequest` fallback — otherwise the agent
+ * would send `conductor:executor:rpc` to the main process for a
+ * `computer-use:execute` call, which the ConductorExecutorProxy
+ * does not know how to handle.
  */
 function toolIpcRequest<T = unknown>(
   channel: string,
@@ -613,6 +677,9 @@ function toolIpcRequest<T = unknown>(
 ): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
   if (channel === 'appConnection:invoke') {
     return appConnectionIpcRequest<T>(channel, payload, options);
+  }
+  if (channel === 'computer-use:execute') {
+    return computerUseIpcRequest<T>(channel, payload, options);
   }
   return conductorIpcRequest<T>(channel, payload, options);
 }
@@ -1609,7 +1676,7 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
 }
 
 // Create permission handler for streaming
-function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number }) => Promise<'allow' | 'deny'> {
+function createPermissionHandler(sessId: string): (request: { id: string; toolName: string; toolInput: Record<string, unknown>; mode?: string; expiresAt: number; metadata?: { toolParamsDisplay?: Array<{ name: string; label: string; value: string }> } }) => Promise<'allow' | 'deny'> {
   return (request) => {
     return new Promise<'allow' | 'deny'>((resolve, reject) => {
       const key = pendingPermissionKey(sessId, request.id);
@@ -1662,6 +1729,9 @@ function createPermissionHandler(sessId: string): (request: { id: string; toolNa
                 },
               }
             : {}),
+          ...(request.metadata
+            ? { metadata: { toolParamsDisplay: request.metadata.toolParamsDisplay } }
+            : {}),
         },
       });
     });
@@ -1676,6 +1746,23 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
   if (!agent) {
     sendToMain({ type: 'chat:error', message: 'Agent not initialized', sessionId: msg.sessionId });
     return;
+  }
+
+  // Plan 453 Task G: wakeless path. When `options.wakeless === true`,
+  // the session is ephemeral — closing the orb discards everything
+  // and we never write a rollout file. We strip the journal ref on
+  // the agent so subsequent `_pushDurable` calls (which already
+  // check `this.journal`) are no-ops.
+  if (msg.options?.wakeless === true) {
+    if (!msg.sessionId.startsWith('wakeless-')) {
+      log(
+        `[Agent-Process] WARN: wakeless=true but sessionId=${msg.sessionId} lacks 'wakeless-' prefix`,
+      );
+    }
+    log(
+      `[Agent-Process] wakeless=true; journal + timeline-persist disabled for sessionId=${msg.sessionId}`,
+    );
+    agent.journal = undefined;
   }
 
   // Plan 314: wait for the long-lived ToolCatalog to have MCP tools
@@ -2296,12 +2383,38 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
     // Fresh read per streamChat — hot reload semantics (hooks/config.ts).
     const steering = getSteeringConfig();
 
+    // Plan 450 Phase G: descriptor-cache freshness for @-mention turns.
+    // The cache is a boot/reload-time snapshot; a mentioned provider with
+    // zero cached descriptors used to make the activation reminder claim the
+    // app was "not connected" even though the UI showed it as connected.
+    // Before the run starts, refetch once when any mentioned provider is
+    // missing from the cache. Best-effort: a failed refetch keeps the stale
+    // cache and the agent's reminder wording stays neutral about it.
+    const mentionedProviders = msg.options?.mentionedProviders?.filter(
+      (p: unknown): p is string => typeof p === 'string' && p.length > 0,
+    );
+    if (mentionedProviders && mentionedProviders.length > 0) {
+      const cachedProviders = new Set(
+        (await import('../tool/AppConnectionTool/index.js')).getCachedAppConnectionDescriptors().map((d) => d.provider),
+      );
+      if (mentionedProviders.some((p: string) => !cachedProviders.has(p))) {
+        log('[Agent-Process] App Connection: mentioned provider missing from descriptor cache — refetching');
+        await reloadAppConnectionTools();
+      }
+    }
+
     const eventGen = agent.streamChat(messageContent, {
       systemPrompt: effectiveSystemPrompt,
       requestPermission,
       agentProfileId: msg.options?.agentProfileId,
       outputStyleConfig: msg.options?.outputStyleConfig,
       mode: msg.options?.mode,
+      // Plan 450: @-mentioned providers for this run (exposure promotion +
+      // connector-activation reminder). See mentions/index.ts.
+      mentionedProviders: msg.options?.mentionedProviders,
+      // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
+      // injection). See mentions/index.ts collectSkillInjection.
+      mentionedSkills: msg.options?.mentionedSkills,
       attachments: files,
       displayContent: msg.options?.displayContent,
       // Plan 441: thread the chat:start message id through as the turn id
@@ -3740,6 +3853,33 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending appConnection descriptor request found for requestId:', requestId);
+          }
+          break;
+        }
+
+        // Plan 454: Computer Use tool execution response. Resolves
+        // the promise created by computerUseIpcRequest so the
+        // computer_use tool executor can unwrap the envelope.
+        case 'computer-use:execute:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending computer-use IPC request found for requestId:', requestId);
           }
           break;
         }

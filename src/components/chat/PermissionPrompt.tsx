@@ -193,6 +193,28 @@ function ToolInputBlock({ input, t }: { input: Record<string, unknown>; t: (key:
 }
 
 /**
+ * Plan 450 Phase D: structured parameter display. Renders label:value
+ * rows above the raw ToolInputBlock so the user can read what the tool
+ * will be called with at a glance. Falls back to nothing if the
+ * metadata is missing or empty.
+ */
+function ToolParamsDisplay({ params }: { params: Array<{ name: string; label: string; value: string }> }) {
+  if (!params || params.length === 0) return null;
+  return (
+    <dl className="permission-prompt-params">
+      {params.map((p) => (
+        <div key={p.name} className="permission-prompt-params-row">
+          <dt>{p.label}</dt>
+          <dd>
+            <code>{p.value}</code>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * Generic confirmation prompt for tool permission requests
  */
 function GenericPermissionPrompt({
@@ -210,19 +232,21 @@ function GenericPermissionPrompt({
   const reason = pendingPermission.decisionReason;
   // Plan 449: app-connection tools can be globally approved ("Always allow").
   const connector = pendingPermission.connector;
+  const paramsDisplay = pendingPermission.metadata?.toolParamsDisplay;
   return (
     <>
       <PanelHeader
         toolName={pendingPermission.toolName}
         title={title}
         summary={summary}
-        detailCount={reason ? 1 : 0}
+        detailCount={reason || (paramsDisplay && paramsDisplay.length > 0) ? 1 : 0}
         expanded={expanded}
         onToggle={() => setExpanded((v) => !v)}
         t={t}
       />
       {reason && <p className="permission-prompt-reason">{reason}</p>}
       <CollapsibleDetails expanded={expanded} onToggle={() => setExpanded((v) => !v)} t={t}>
+        {paramsDisplay && <ToolParamsDisplay params={paramsDisplay} />}
         <ToolInputBlock input={pendingPermission.toolInput} t={t} />
       </CollapsibleDetails>
       <div className="permission-prompt-actions">

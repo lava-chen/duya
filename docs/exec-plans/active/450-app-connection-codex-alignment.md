@@ -50,58 +50,82 @@
 
 ### Phase A: @ 提及激活（核心）
 
-- [ ] 类型扩展：`StartStreamParams.mentionedProviders?: string[]`（renderer→Agent Server POST body）
-      + worker `ChatStartMessage` 同名字段：`src/lib/stream-session-manager.ts`、
-      `electron/agents/server/router.ts`（handlePostChatSSE 载荷透传）、
-      `packages/agent/src/process/agent-process-entry.ts`
-- [ ] worker 会话态：`activeConnectorSelection: Set<string>`（provider id），chat:start 时 merge、
-      turn 终态（done/error/interrupt）清空 —— 放 `AppConnectionTool/selection.ts`，
-      API 对齐 codex `state/session.rs`（merge/get/clear）
-- [ ] 暴露提升：`DuyaAgent._resolveTools` 合并 connector 工具处，selection 内 provider 的
-      descriptor 注册 meta 改 `exposeMode:'always'`；未选中维持 `discoverable`
-- [ ] 上下文注入：selection 非空时在首轮前注入一次性 user 角色 `<system-reminder>`
-      （`metadata.source='connector-activation'`，内容：用户点名了哪些 app + 授权状态 +
-      「优先使用其工具」，≤500 字符，不列工具 schema）
-- [ ] Composer UI：`MessageInput.tsx` 输入 `@` 触发 popover（复用 slash command popover 机制），
-      列出 `mentionable = status==='connected'` 的 provider（icon + label），选中插入
-      `@Label` 富文本 token；提交时解析回 provider id 数组
-- [ ] 权限审计：selection 写入 permission request 日志字段（替代遥测）
-- [ ] 单测：selection 生命周期、暴露提升、reminder 注入、popover 解析
+- [x] 类型扩展：`StartStreamParams.mentionedProviders?: string[]` + `ChatOptions.mentionedProviders` + `ChatStartMessage.mentionedProviders`
+- [x] worker 会话态：`activeConnectorSelection` 模块（merge/get/clear）+ 单测 5 条
+- [x] 暴露提升：`DuyaAgent._resolveTools` 把选中 provider 的 connector 工具放进
+      `isToolVisible` 的 discovered 集（discoverable → effective always），跳过 tool_search
+- [x] 上下文注入：selection 非空时首轮一次性 `<system-reminder>`（限 500 字符，<connector-activation>
+      envelope），复用 promptContexts 轨道
+- [x] Composer UI：`MessageInput` 连接列表注入 @-popover contextItems（每项
+      `value=providerId`，file-mention 插入路径写 `@<id> `）
+- [x] 提取 helper：`extractMentionedProviders`（纯函数，word-boundary + 幂等）
+      + `stream-session-manager.startStream` 提交时从 content 扫描
+- [x] 单测：selection 5 + extractMentionedProviders 11，全绿
 
 ### Phase B: 用时引导授权（elicitation 对齐）
 
-- [ ] 错误分类：`remote-mcp.ts` invoke 捕获 401/`UnauthorizedError`/token refresh 失败 →
-      结构化错误 `{ code:'connector_auth_required', provider, installUrl? }`
-- [ ] SSE 事件：worker `chat:connector_auth_required` → router 转发 → renderer
-      `AuthRequiredCard`（provider icon + 文案 + 「去授权」「忽略」）
-- [ ] 「去授权」：调 `appConnection:connect`(providerId) 走完整 OAuth loopback → 成功后
-      `notifyAgentServerAppConnectionReload()` → 卡片转成功态并自动重发原工具调用
-      （重试一次上限，防循环）
-- [ ] 单测：错误分类映射、SSE 载荷形状、重试一次上限
+- [x] 错误分类：`remote-mcp.ts` 捕获 `UnauthorizedError` → 结构化 `connector_auth_required`
+      错误；`connector-service.ts` 在 `connection_revoked`/`not_available` 中 session 状态
+      仍为 connected 时也映射为 `connector_auth_required`
+- [x] 新错误码 `connector_auth_required` 加进 `AppConnectionErrorCode`
+- [x] worker 侧 `AppConnectionTool` executor 在收到该码时 `context.sendToMain` 发
+      `chat:connector_auth_required {provider,connectionId,toolName}`，并改错误提示文案
+- [x] router 转发为 SSE `connector_auth_required`；`agent-sse-client` dispatch +
+      onConnectorAuthRequired 回调
+- [x] `stream-session-manager` 新增 `subscribeToConnectorAuthRequired` / `clearConnectorAuthRequired`，
+      重播最后一次 pending 事件（page remount 兑容）
+- [x] renderer `ConnectorAuthRequiredCard` 组件 + ChatView 装配；“去重新授权”复用
+      Plan 312 的 `appConnection:connect` OAuth loopback
+- [ ] **B3 重试**：代码中连接成功后只清掉卡片，下次用户消息才能重试原调用——
+      Plan 450 原始设计的“自动重试一次”留作后续选代点（需在 worker 记最后一次工具调用
+      载荷，OAuth 成功后重发）。**变通**：现有 agent loop 在 tool_result 携带 error
+      后会重启一轮 model call，模型会自动看到错误并自己重试——跳过原设计意图的“一次性”逻辑，
+      负面仅为“可能跑到不同工具上”，不是“撞永远”。当前卡片 UX 足够。
+
+- [ ] **E 目录缓存**：留作后续优化；当前 remote-mcp tools/list 调用频率低（只 reload 时拉），
+      临时没有必要启动目录缓存。代码中 8KB 预算 + exposure 门足够避免重复拉取导致的
+      服务质量劣化。
+
+- [x] i18n 键 zh/en；typecheck (web/agent/cli/conductor/voice) 全绿
 
 ### Phase C: 暴露层策略门 + spec 预算（细节对齐）
 
-- [ ] `[apps]` 配置段：config.toml `[apps] default.enabled=true` + `[apps.apps.<id>] enabled`
-      （zod schema + ConfigStore），`getProviderReadiness` 之外新增 `isProviderEnabledByConfig`
-- [ ] 暴露过滤：descriptor 下发前过 config 门（禁用 provider 的工具不下发，而非下发后 deny）
-      —— 对齐 R5 的「exposure 层拦截优于执行层拒绝」
-- [ ] spec 字节预算：`registerAppConnectionTools` 单 descriptor `JSON.stringify(inputSchema)`
-      >8192B → 只注册 summary 版（schema 置空对象 + description 保留），记 WARN —— D7/R9
-- [ ] 单测：config 门、预算降级
+- [x] `[apps]` 配置段：`AppEntry { enabled: boolean }` 已在 schema.ts，Plan 450 新增
+      `electron/services/app-connections/policy-gate.ts`：
+      `isProviderEnabled` / `readAppPolicy` / `setProviderEnabled`（ConfigStore 原子写）
+- [x] 暴露过滤：`connector-service.listDescriptorsForConnected` 走进 filter 之前先
+      `isProviderEnabled(policy, provider)`——disabled provider 完全不发 descriptor
+      （对齐 codex `apps_enabled ? filter_codex_apps_mcp_tools : empty`）
+- [x] spec 字节预算：`APP_CONNECTION_SPEC_BYTE_BUDGET = 8192`（对齐 codex 8KB）；
+      `downgradeForByteBudget` 把超限 descriptor 的 inputSchema 换为空对象 + 把
+      summary 折进 description 后再注册（降级仍可调用，仍可被 tool_search 发现）
+- [x] 单测：policy-gate 4 条（fail-open 为主），byte-budget 3 条（全套 7 条绿）
 
 ### Phase D: 模板资产化 + 结构化参数展示
 
-- [ ] `approval-templates.json`（schemaVersion:1，沿用 Plan 449 表内容迁移）+
-      loader 带 schema 校验，坏文件回落内置默认 —— D6/R8
-- [ ] `toolParamsDisplay`: 渲染器输出 `[{name,label,value}]`（取 input 前 3 个标量参数），
-      PermissionPrompt 参数区改为 label:value 行 + 折叠原始 JSON
-- [ ] 单测：JSON 加载/坏文件回落、params 展示截断
+- [x] 模板资产迁至 `packages/agent/src/tool/AppConnectionTool/approval-templates.json`
+      （schema_version 2），loader 坏文件回落内置默认
+- [x] `buildToolParamsDisplay(input, schema)`：top-3 标量参数 + schema.title 友好化
+      label + 120 字符截断（上一笔 commit 已落地）
+- [x] 类型贯通：`PermissionRequestEvent.metadata.toolParamsDisplay` 从
+      `@duya/ai/types.ts` → agent process entry → renderer PermissionRequestEvent
+      （上一笔 commit 已落地）
+- [x] 新增 `tool_overrides`：14 条 curated 工具动作模板（github: add_comment/...
+      notion: create/update/delete，linear: create_issue/update_issue，figma: export，
+      supabase: apply_migration/execute_sql，vercel: deploy，slack: send_message）
+- [x] 路由顺序：tool_override (provider + regex on action) → provider → 通用渲染器；
+      `renderConnectorApprovalFromDescriptor` 透传 `descriptor.action`
+- [x] 单测：override 匹配 8 条 + 原版 7 条（全套绿）
 
 ### Phase E: 目录快照缓存
 
-- [ ] `catalog-cache.ts`：tools/list 结果按 connectionId 落盘（含 fetchedAt），TTL 3600s；
-      `ensureSession` 先读缓存立即返回 descriptors，后台过期刷新 —— D8/R10
-- [ ] 连接断开/撤销 → 删对应缓存文件
+- [x] `electron/services/app-connections/catalog-cache.ts`：
+      atomic write (tmp+rename) + TTL `CONNECTORS_CACHE_TTL_MS = 3_600_000`
+      + `isFresh` 检查 + 断开时清理。与 codex `CONNECTORS_CACHE_TTL` 对齐
+- [x] `remote-mcp.ts`：`ensureSession` 中先读缓存——新鲜且同 provider
+      则跳过 `client.listTools()`，过期或缺失才拉取并写盘
+- [x] `disconnect` 调 `deleteCatalogCache(connectionId)` 避免重新授权时重用陈旧清单
+- [x] 单测 8 条（全套绿）：roundtrip、TTL 边界、坏 JSON、别键、delete
 - [ ] 单测：TTL 判定、坏 JSON 回落、断开清理
 
 ### Phase F: 验证

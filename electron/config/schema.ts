@@ -66,6 +66,34 @@ export interface IdeConfig {
   default: string;
 }
 
+/**
+ * `[computer_use]` — Computer Use Mode (plan 454) access policy. Default
+ * is deny-by-default: every window_switch / click / type is refused
+ * unless the foreground app matches `allowed_apps` (substring on
+ * processName or window title, case-insensitive).
+ *
+ *   - `default_access`: "deny" (safe) or "allow" (trust-all)
+ *   - `allowed_apps`: list of substrings; if any matches the
+ *     foreground app's processName or title, the action proceeds
+ *   - `denied_apps`: overrides `allowed_apps` — if a substring here
+ *     matches, the action is always refused
+ *   - `max_image_budget`: override the global
+ *     DUYA_COMPUTER_USE_IMAGE_BUDGET; the agent truncates older
+ *     screenshots in the projected message array to keep the LLM
+ *     request bounded
+ *
+ * Matching is case-insensitive substring; glob wildcards (* / ?) are
+ * supported in each entry. Both `processName` and `window title` are
+ * tested independently — a process name match alone is enough to
+ * permit, but a denied-pattern match is enough to refuse.
+ */
+export interface ComputerUseConfig {
+  default_access?: 'deny' | 'allow';
+  allowed_apps?: string[];
+  denied_apps?: string[];
+  max_image_budget?: number;
+}
+
 export interface AgentConfig {
   /**
    * Optional per-run agentic-turn cap. Absent (the default) means
@@ -339,6 +367,9 @@ export interface DuyaConfig {
   voice: VoiceConfig;
   delegation: Record<string, unknown>;
 
+  /** [computer_use] — Computer Use Mode (plan 454) access policy. */
+  computer_use?: ComputerUseConfig;
+
   session_reset: Record<string, unknown>;
   channels: ChannelsConfig;
   gateway_proxy: GatewayProxyConfig;
@@ -418,6 +449,16 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   security: { redact_secrets: true, secrets_encrypted: false },
   tts: {},
   stt: { enabled: true },
+  // Computer Use Mode (plan 454) access policy. Default is
+  // allow-by-default so the feature works out of the box in dev;
+  // users can tighten by adding `allowed_apps` + setting
+  // `default_access = "deny"` in config.toml.
+  computer_use: {
+    default_access: 'allow',
+    allowed_apps: [],
+    denied_apps: [],
+    max_image_budget: 5,
+  },
   voice: {
     enabled: false,
     input_device: '',

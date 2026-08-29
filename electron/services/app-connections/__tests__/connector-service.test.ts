@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+const GOOGLE = asAppConnectorId('google');
+const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
@@ -63,7 +66,7 @@ function seedConnection(db: DatabaseType, overrides: Partial<AppConnection> = {}
   const now = Date.now();
   const conn: AppConnection = {
     id: 'c1',
-    provider: 'google',
+    provider: GOOGLE,
     accountLabel: 'alice@example.com',
     accountId: 'sub-1',
     scopes: ['drive.metadata.readonly'],
@@ -120,7 +123,7 @@ describe('ConnectorService', () => {
       tokenService,
     });
     // Seed a connected Google connection with a valid token
-    seedConnection(db, { id: 'c-google', provider: 'google' });
+    seedConnection(db, { id: 'c-google', provider: GOOGLE });
     vault.set('c-google', {
       accessToken: 'ya29.test-token',
       refreshToken: 'rt-test',
@@ -133,7 +136,7 @@ describe('ConnectorService', () => {
 
   it('listDescriptorsForConnected returns descriptors for connected connections only', async () => {
     // Add a disconnected connection
-    seedConnection(db, { id: 'c-disc', provider: 'google', status: 'disconnected' });
+    seedConnection(db, { id: 'c-disc', provider: GOOGLE, status: 'disconnected' });
     const descriptors = await connectorService.listDescriptorsForConnected();
     // Only c-google should produce descriptors
     expect(descriptors).toHaveLength(3);

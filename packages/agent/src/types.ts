@@ -289,6 +289,21 @@ export interface ChatOptions {
   requestPermission?: (request: PermissionRequestEvent) => Promise<'allow' | 'deny'>;
   /** Agent profile ID to use for this chat turn */
   agentProfileId?: string | null;
+  /**
+   * Plan 450: providers the user @-mentioned in the composer for this run.
+   * Connector tools of these providers skip tool_search discovery (exposure
+   * promotion) and a one-shot connector-activation reminder is injected into
+   * the first model turn. Cleared implicitly per streamChat call.
+   */
+  mentionedProviders?: string[];
+  /**
+   * Plan 450 Phase H: skills whose `/name` command the user submitted this
+   * run. Resolved against the skill registry and injected as `<skill>`
+   * fragments (SKILL.md body) into the first model turn — codex
+   * `UserInput::Skill` parity. Never trust paths from the renderer; the
+   * registry owns the lookup.
+   */
+  mentionedSkills?: string[];
   /** Mode modifier ID for this chat turn (for example, 'research'). */
   mode?: string;
   /**

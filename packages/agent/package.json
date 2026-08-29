@@ -21,6 +21,10 @@
     "./message": {
       "types": "./dist/message/index.d.ts",
       "default": "./dist/message/index.js"
+    },
+    "./context/os-context": {
+      "types": "./dist/context/os-context/index.d.ts",
+      "default": "./dist/context/os-context/index.js"
     }
   },
   "scripts": {
@@ -38,6 +42,8 @@
     "@commander-js/extra-typings": "^14.0.0",
     "@duya/ai": "0.1.0",
     "@duya/cli": "0.1.0",
+    "@duya/computer-use": "0.0.1",
+    "@duya/computer-use-demo": "0.4.0",
     "@duya/conductor": "0.1.0",
     "@duya/plugin-core": "0.1.0",
     "@inquirer/prompts": "^7.0.0",
@@ -46,6 +52,7 @@
     "better-sqlite3": "^11.10.0",
     "blessed": "^0.1.81",
     "chalk": "^5.6.2",
+    "chokidar": "^3.6.0",
     "diff": "^8.0.4",
     "execa": "^9.6.1",
     "fast-xml-parser": "^4.5.0",
