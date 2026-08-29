@@ -1052,7 +1052,12 @@ export function ExtensionsPage() {
           providers={connectionProviders}
           onInstall={async (plugin) =>
             runPluginAction(plugin.id, () =>
-              pluginApi!.registry.install({ pluginId: plugin.id })
+              pluginApi!.registry.install({
+                pluginId: plugin.id,
+                // Plan 455 — disambiguate the same plugin id across
+                // marketplaces; undefined falls back to the first match.
+                marketplace: plugin.marketplace,
+              })
             )
           }
           onConnectProvider={requestConnection}
