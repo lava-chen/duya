@@ -189,6 +189,34 @@ describe('useContextUsage', () => {
     expect(result.current.used).toBe(9200);
   });
 
+
+  it('reports cacheHitRate against raw input + cache read + cache write (not the tautological totalInput)', () => {
+    // Plan 443 P0: totalInput already includes cache reads (normalizeInputTokens
+    // adds them back when hit > raw), so dividing cacheHit / totalInput was
+    // mathematically always 100% on fully-cached sessions. The fix is to
+    // sum uncached input + cache read + cache write and divide cache reads
+    // by that raw prompt volume.
+    const messages: Message[] = [
+      { id: 'u1', role: 'user', content: 'go', timestamp: Date.now() },
+      makeAssistantMessage({
+        id: 'a1',
+        tokenUsage: {
+          input_tokens: 50,         // tiny uncached delta
+          output_tokens: 20,
+          total_tokens: 60070,
+          cache_hit_tokens: 60000,
+          cache_creation_tokens: 0,
+        },
+      }),
+    ];
+    const { result } = renderHook(() =>
+      useContextUsage(messages, 'claude-sonnet', 200_000, 'sess-ch'),
+    );
+    // CH% = 60000 / (50 + 60000 + 0) ≈ 99.92%, NOT 100%.
+    expect(result.current.cacheHitRate).toBeGreaterThan(0.99);
+    expect(result.current.cacheHitRate).toBeLessThan(1);
+  });
+
   describe('getContextWindowForModel', () => {
     it('prefers the caller-supplied capability window', () => {
       expect(getContextWindowForModel('gpt-4o', 1_000_000)).toBe(1_000_000);

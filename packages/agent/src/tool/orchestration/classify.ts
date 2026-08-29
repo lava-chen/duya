@@ -56,6 +56,11 @@ const TOOL_BATCH_MAP: Record<string, ToolBatch> = {
   exit_plan_mode: ToolBatch.SYSTEM,
   ExitPlanMode: ToolBatch.SYSTEM,
 
+  // Computer Use tool (plan 454) — SYSTEM (exclusive, serial). Desktop
+  // actions drive shared OS state (mouse position, keyboard focus);
+  // parallel clicks/drag would interleave and corrupt the gesture.
+  computer_use: ToolBatch.SYSTEM,
+
   // Canvas Conductor tools (plan 221) — SYSTEM (mutate canvas state)
   canvas_create_element: ToolBatch.SYSTEM,
   canvas_delete_element: ToolBatch.SYSTEM,

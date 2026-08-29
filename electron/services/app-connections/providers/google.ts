@@ -16,13 +16,19 @@ export interface GoogleAccountIdentity {
   picture?: string;
 }
 
-const config: ProviderClientConfig = getProviderConfig('google');
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+
+const config = getProviderConfig(asAppConnectorId('google'));
+if (!config) {
+  throw new Error('google connector is not registered');
+}
+const userinfoUrl = config.userinfoUrl!;
 
 export async function fetchGoogleAccountIdentity(
   accessToken: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ accountId: string; accountLabel: string }> {
-  const resp = await fetchImpl(config.userinfoUrl!, {
+  const resp = await fetchImpl(userinfoUrl!, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!resp.ok) {

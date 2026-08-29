@@ -428,6 +428,9 @@ export const DotsSixVerticalIcon = wrapIcon(IconGripVertical);
 export const HandIcon = wrapIcon(IconHandStop);
 export const HexagonIcon = wrapIcon(IconHexagon);
 export const CursorIcon = wrapIcon(IconPointer);
+// Computer Use mode icon (plan 454) — pointer denotes agent-driven
+// click / drag operations on the OS desktop.
+export const MousePointerClickIcon = wrapIcon(IconPointer);
 export const LinkSimpleIcon = wrapIcon(IconLink);
 export const ListBulletsIcon = wrapIcon(IconList);
 export const NoteIcon = wrapIcon(IconNote);

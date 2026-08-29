@@ -555,6 +555,52 @@ DUYA 采用**多服务商并存**（multi-provider）模型：用户可以在 `~
 | 设置面板 | 新增 **Default Provider** 区块，使用 `ProviderPickerView` |
 | CLI | 新增 `duya config provider set-default [id] --clear`；`provider activate` 标记为 deprecated |
 
+#### `@duya/ai` 三层架构（Wire protocol / Family wrapper / Provider catalog）
+
+Plan 451 把 `@duya/ai` 拆成三层,每层职责清晰、对其它层是黑盒:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Provider catalog (packages/ai/src/providers/<name>.ts)                   │
+│   - id, name, baseUrl, auth, model[]                                    │
+│   - 可选 wrappers: Wrapper[] (显式 compose)                       │
+│   - 13 行的极薄 preset;例如 bedrock.ts / glm.ts / minimax.ts        │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓ pipe(base, ...explicit, ...auto)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Family wrappers (packages/ai/src/providers/wrappers/<family>-*.ts)       │
+│   - (ProviderStreams) → ProviderStreams                              │
+│   - 家族级 payload 处理(thinking 字段名 / cache_control /            │
+│     tool_result transport / signature replay / 工具对修复)                │
+│   - anthropic-family-* (Phase 1); openai-family-* 待 P4+              │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Wire protocol (packages/ai/src/api/<protocol>.ts)                        │
+│   - HTTP/SSE/JSON/auth/认证/标准 tool-call shape                            │
+│   - 不感知家族差异,只懂"协议级"差异                                       │
+│   - 输出标准 ProviderStreams                                              │
+│   - 当前 7 个: anthropic / openai-chat / openai-responses /              │
+│     ollama / bedrock / gemini / [vertex P5]                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────────────────┐
+│ Shared utilities (packages/ai/src/utils/)                                │
+│   - errors / retry / json-repair / usage / think-tag-parser            │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**组合顺序约定**:`pipe(base, w1, w2, w3) === w3(w2(w1(base)))` ——最后一个 wrapper 是最外层(标准 middleware 顺序,跟 Koa/Express 一致)。
+
+**Provider 写 `wrappers` 数组**(显式) + `model.compat` 字段**(隐式) — `createProvider` 在 stream 调用时根据 compat 自动 inject 对应 wrapper,见 `autoWrappersForCompat`。Phase 2 的映射表:
+
+| `model.compat` 字段 | 自动 inject 的 wrapper |
+|---|---|
+| `toolResultTransport: 'text-user-message' \| 'none'` | `anthropicFamilyToolPayloadCompat` |
+| `forceAdaptiveThinking: true` | `anthropicFamilyThinkingReplay`(响应侧 observer) |
+
+设计文档:[`docs/design-docs/2026-07-29-multi-model-reasoning-architecture.md`](./docs/design-docs/2026-07-29-multi-model-reasoning-architecture.md)(设计原文)+ [`docs/exec-plans/active/451-multi-protocol-and-wrapper-layer.md`](./docs/exec-plans/active/451-multi-protocol-and-wrapper-layer.md)(计划)。
+
 ### 安全扫描系统
 
 DUYA 实现了多层安全扫描机制，防止提示词注入和恶意代码执行：
@@ -2185,6 +2231,72 @@ codex `AppToolPolicyEvaluator` / approval memory / templates:
   scope + verb by tier + truncated primary argument) with a generic fallback;
   the permission event carries `connector: { provider, riskTier, preApproved }`
   so the card can offer "Always Allow".
+
+### Connector activation, exposure gate, and prompt budget (Plan 450, codex parity)
+
+- **@-mention activation** (`rewriteAppMentionTokens` in
+  `src/lib/app-connection-ipc.ts`): typing `@` in the composer surfaces every
+  connected provider as a popover row; selecting one inserts
+  `@<providerId> ` into the message. At submit time the renderer-side
+  stream-session-manager rewrites each token into a codex-style structured
+  link `[@Label](app://<providerId>)` (Plan 450 Phase G — the model sees a
+  resolvable `app://` reference instead of a bare word), keeps the original
+  text as `displayContent` for UI/storage, and forwards `mentionedProviders`
+  to the worker. The agent pre-fetches fresh descriptors when a mentioned
+  provider is missing from the boot-time cache
+  (`agent-process-entry.ts`), DuyaAgent promotes those providers' connector
+  tools to expose-always (skipping tool_search discovery), and injects a
+  one-shot `<connector-activation>` system-reminder (listing tool names,
+  neutral wording when tools are not exposed) into the first model turn.
+- **Mentions framework** (`packages/agent/src/mentions/index.ts`, Phase G+H):
+  typed `MentionTarget` (`app` | `skill` | `file` | `mcp`) + `TurnInjection`
+  + `buildAppsSystemSection`. The `app` and `skill` kinds are implemented;
+  `file`/`mcp` reserve the interface. The persistent "## Apps (Connectors)"
+  system section (codex `apps_instructions.rs` parity) renders whenever any
+  connected app has tool descriptors — mention syntax, per-app tool lists,
+  and the tool_search pointer — so the model can trigger apps implicitly,
+  not only on turns with an explicit `@`.
+- **Skill mention injection** (`rewriteSkillMentionTokens` in
+  `src/lib/skill-mentions.ts`, Phase H): a leading `/name` (or line-leading)
+  command is rewritten to `[/name](skill://name)` for the model and the name
+  is forwarded as `mentionedSkills`. The agent resolves the name against its
+  own skill registry (renderer names are hints, never paths) and injects the
+  SKILL.md body — loaded via the same `getPromptForCommand` the Skill tool
+  uses — as a `<skill>` fragment into the first model turn (codex
+  `UserInput::Skill` parity). Hidden / model-invocation-disabled /
+  conditional skills are never injected.
+- **Exposure-layer policy gate** (`electron/services/app-connections/policy-gate.ts`):
+  reads `[apps]` from ConfigStore and filters providers BEFORE descriptor
+  emission, mirroring codex's `apps_enabled ? filter_codex_apps_mcp_tools : empty`.
+  Disabled providers' tools never enter the agent registry.
+- **Spec byte budget** (`APP_CONNECTION_SPEC_BYTE_BUDGET = 8192`,
+  `downgradeForByteBudget` in `packages/agent/src/tool/AppConnectionTool/index.ts`;
+  `TOOL_SPEC_BYTE_BUDGET` / `downgradeToolSchemaForBudget` in
+  `packages/agent/src/tool/spec-budget.ts` for the MCP side):
+  tools whose serialized inputSchema exceed 8 KB are registered with
+  an empty-object schema + summary folded into description, mirroring codex's
+  `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES`. Keeps prompt size bounded when a
+  hosted MCP server advertises a pathologically large schema.
+- **Direct exposure by default for MCP** (`packages/agent/src/config/tool-exposure.ts`,
+  plan 452 Phase A): MCP tools register `always` — the full schema rides
+  every request, mirroring codex's default. `[tools] on_demand_discovery` in
+  `~/.duya/config.toml` (Settings → MCP toggle) flips them back to
+  `discoverable` (tool_search-only) for a lean prompt; deliberately not
+  model-capability-gated since duya's tool_search is client-side and works
+  with any function-calling model. App-connector tools are deliberately kept
+  out of this switch: they stay `discoverable` and are exposed per-turn by
+  @-mention promotion (the "@ to activate" model) — the persistent Apps
+  system section covers awareness without exposure.
+- **Structured parameter display**: `buildToolParamsDisplay(input, schema)`
+  renders the top scalar arguments as `label:value` rows on the approval card
+  (Plan 450 Phase D). Wired through StreamingToolExecutor → agent worker
+  → renderer; carried in `PermissionRequestEvent.metadata.toolParamsDisplay`.
+- **Auth elicitation mid-call** (`connector_auth_required` error code,
+  `ConnectorAuthRequiredCard`): a 401 / revoked-token during a tool call
+  emits `chat:connector_auth_required` SSE; the renderer shows a re-auth
+  card that reuses the existing Plan 312 OAuth loopback. The next model
+  round naturally retries the failed call once the agent loop sees the
+  error in the tool_result.
 
 When a connection is disconnected its descriptors disappear, which makes any
 orphaned global approval key inert until the same provider+tool reconnects.

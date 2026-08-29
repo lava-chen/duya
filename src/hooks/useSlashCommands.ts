@@ -1,6 +1,6 @@
 // useSlashCommands.ts - Hook for slash command detection and handling
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import type { PopoverItem, PopoverMode } from '@/types/slash-command';
 import { detectPopoverTrigger, resolveItemSelection } from '@/lib/message-input-logic';
 import { getCommandsForPlatform } from '@/lib/commands';
@@ -21,6 +21,7 @@ import {
   ChatCircleIcon,
   PaperclipIcon,
   EyeIcon,
+  MousePointerClickIcon,
 } from '@/components/icons';
 import { useFocusModeStore, selectFocusEnabled } from '@/stores/focus-mode-store';
 
@@ -117,6 +118,12 @@ export function useSlashCommands(opts: {
   setTriggerPos: (pos: number | null) => void;
   closePopover: () => void;
   sessionId?: string;
+  /**
+   * Plan 450: connected app-connection providers surfaced as @-mention
+   * items in the context popover. Selected items insert `@<providerId> `,
+   * which the stream-session-manager extracts back to `mentionedProviders`.
+   */
+  connectorItems?: PopoverItem[];
 }): UseSlashCommandsReturn {
   const {
     textareaRef,
@@ -132,6 +139,7 @@ export function useSlashCommands(opts: {
     setTriggerPos,
     closePopover,
     sessionId,
+    connectorItems,
   } = opts;
 
   const { t, locale } = useTranslation();
@@ -139,22 +147,6 @@ export function useSlashCommands(opts: {
   // Per-session Focus display mode — the popover row reflects the live
   // toggle state so the check mark updates without closing the menu.
   const focusEnabled = useFocusModeStore((s) => selectFocusEnabled(s, sessionId));
-
-  // Static "add context" items — MCP server toggles + the MCP submenu entry.
-  // MCP lives under `@添加上上下文` (mode + plugin usage), not under settings.
-  const mcpItem = useMemo<PopoverItem>(() => {
-    const isZh = locale === 'zh';
-    return {
-      label: isZh ? 'MCP 服务器' : 'MCP servers',
-      value: '__mcp',
-      description: isZh ? '工具开关' : 'Tool toggles',
-      icon: PlugIcon,
-      kind: 'settings_submenu' as const,
-      submenu: 'mcp' as const,
-      group: 'settings' as const,
-      category: 'context' as const,
-    };
-  }, [locale]);
 
   // Static settings items (not slash commands, not filterable). These belong
   // to the `/使用指令和技能` category (settings + skills). MCP is excluded —
@@ -261,6 +253,22 @@ export function useSlashCommands(opts: {
         group: 'mode' as const,
         category,
       },
+      {
+        // Plan 454: Computer Use Mode — agent drives the OS desktop
+        // directly via the computer_use tool (capture / click / type /
+        // key / scroll / drag / etc.). Mutually exclusive with every
+        // other session-level mode.
+        label: 'Computer Use',
+        value: '__mode_computer_use',
+        description: isZh
+          ? 'agent 可直接驱动 OS 桌面（截图 + 鼠标 + 键盘）'
+          : 'Agent drives the OS desktop directly (capture + click + type + key)',
+        icon: MousePointerClickIcon,
+        kind: 'mode' as const,
+        modeValue: 'computer-use',
+        group: 'mode' as const,
+        category,
+      },
     ];
   }, [locale]);
 
@@ -344,12 +352,29 @@ export function useSlashCommands(opts: {
     };
   }, [locale]);
 
-  // Static "add context" items — attachment + mode + MCP, shown for `@` and
-  // when the plus button is pressed. All static (no async fetch needed).
+  // Static "add context" items — attachment + modes + connectors, shown for
+  // `@` and when the plus button is pressed. All static (no async fetch
+  // needed). Plan 452 Phase A: the MCP entry moved out — server toggles live
+  // in Settings only, and MCP tools are Direct-exposed (no @-activation).
   const contextItems = useMemo<PopoverItem[]>(
-    () => [addFilesItem, ...modeItems, mcpItem],
-    [addFilesItem, modeItems, mcpItem],
+    // Plan 450: connector items right after addFilesItem so connected apps
+    // sit at the top of the `@` popover (mirroring codex's layout where
+    // app mentions are the first thing users see after attachments).
+    () => [addFilesItem, ...(connectorItems ?? []), ...modeItems],
+    [addFilesItem, connectorItems, modeItems],
   );
+
+  // Plan 450 follow-up: when `contextItems` changes (e.g. the MessageInput's
+  // async connector fetch completes and updates `connectorItems`) AND the
+  // `@` popover is currently open, push the latest items into the popover.
+  // Without this, handleInputChange's initial setPopoverItems(contextItems)
+  // freezes the (empty) snapshot at trigger time and the popover never
+  // updates even after the fetch finishes.
+  useEffect(() => {
+    if (popoverMode === 'context') {
+      setPopoverItems(contextItems);
+    }
+  }, [contextItems, popoverMode, setPopoverItems]);
 
   // Build the "use commands & skills" items (settings + registry commands +
   // loaded skills) for typing `/`. Skills are loaded asynchronously.

@@ -1,0 +1,563 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Orb — Wake Agent UI stylesheet (self-contained)
+ *
+ * 设计原则:
+ *   1. 完全独立,不依赖 globals.css(避免 css monolith 污染)
+ *   2. 主题跟随主窗口,通过 :root[data-theme="dark"|"light"] 切换
+ *   3. CSS variables 集中于 :root 与 [data-theme] 块(便于复用)
+ *   4. 4 态切换用 CSS transitions,避免 JS 动画
+ *   5. 透明背景 + frosted glass backdrop-filter
+ *
+ * 文件组织:
+ *   - Tokens: CSS variables(主题、尺寸、动画时长)
+ *   - Reset: 全局 reset(独立 bundle 不污染外部)
+ *   - Components: OrbBall / OrbInput / OrbResult / 气泡
+ *   - Animations: 4 态过渡
+ *   - Utilities: 拖拽 cursor / 键盘焦点环
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+
+/* ─ ─ Tokens ────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── 尺寸 ── */
+  --orb-size: 50px;
+  --orb-input-width: 280px;
+  --orb-input-height: 100px;
+  --orb-result-width: 350px;
+  --orb-result-height: 350px;
+  --orb-bubble-size: 14px;
+  --orb-bubble-offset: 6px;
+  --orb-radius: 50%;
+
+  /* ── 动画时长 ── */
+  --orb-transition-fast: 120ms;
+  --orb-transition-base: 200ms;
+  --orb-transition-slow: 300ms;
+  --orb-easing: cubic-bezier(0.16, 1, 0.3, 1); /* Apple-style ease-out */
+
+  /* ── 字体 ── */
+  --orb-font-family: 'Styrene', 'Microsoft YaHei', 'PingFang SC',
+    -apple-system, BlinkMacSystemFont, sans-serif;
+  --orb-font-size-input: 13px;
+  --orb-font-size-result: 14px;
+  --orb-font-size-bubble: 11px;
+  --orb-font-weight-normal: 400;
+  --orb-font-weight-medium: 500;
+  --orb-line-height: 1.5;
+
+  /* ── 主题(默认 light) ── */
+  --orb-bg: rgba(255, 255, 255, 0.78);
+  --orb-bg-solid: #ffffff;
+  --orb-bg-glass: rgba(255, 255, 255, 0.65);
+  --orb-fg: #1a1a1a;
+  --orb-fg-muted: #666666;
+  --orb-border: rgba(0, 0, 0, 0.08);
+  --orb-accent: #2563eb;
+  --orb-accent-soft: rgba(37, 99, 235, 0.12);
+  --orb-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --orb-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --orb-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.16);
+  --orb-blur: blur(20px) saturate(180%);
+
+  /* ── 状态色 ── */
+  --orb-state-loading: #2563eb;
+  --orb-state-error: #dc2626;
+  --orb-state-success: #16a34a;
+}
+
+/* dark theme — main window sets [data-theme="dark"] on <html> */
+:root[data-theme='dark'] {
+  --orb-bg: rgba(30, 30, 30, 0.78);
+  --orb-bg-solid: #1e1e1e;
+  --orb-bg-glass: rgba(30, 30, 30, 0.65);
+  --orb-fg: #f5f5f5;
+  --orb-fg-muted: #a0a0a0;
+  --orb-border: rgba(255, 255, 255, 0.1);
+  --orb-accent: #60a5fa;
+  --orb-accent-soft: rgba(96, 165, 250, 0.18);
+  --orb-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+  --orb-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.32);
+  --orb-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.48);
+}
+
+/* ─ ─ Reset ───────────────────────────────────────────────────────────────── */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#orb-root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--orb-font-family);
+  font-size: var(--orb-font-size-input);
+  font-weight: var(--orb-font-weight-normal);
+  line-height: var(--orb-line-height);
+  color: var(--orb-fg);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  outline: none;
+}
+
+/* ─ ─ Window container ──────────────────────────────────────────────────── */
+
+.orb-window {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  overflow: visible;
+}
+
+/* ─ ─ DORMANT: OrbBall ────────────────────────────────────────────────────── */
+
+.orb-ball {
+  width: var(--orb-size);
+  height: var(--orb-size);
+  border-radius: var(--orb-radius);
+  /* Duya brand-tinted frosted glass: a soft purple wash over the
+     surface so the ball reads as part of the brand family even on
+     backgrounds where pure white-on-transparent disappears. */
+  background:
+    radial-gradient(
+      circle at 30% 25%,
+      rgba(199, 155, 255, 0.18) 0%,
+      rgba(124, 58, 237, 0.08) 45%,
+      rgba(255, 255, 255, 0.55) 70%
+    ),
+    var(--orb-bg-glass);
+  backdrop-filter: var(--orb-blur);
+  -webkit-backdrop-filter: var(--orb-blur);
+  /* Subtle inner glow + brand-color rim. The rim is a single
+     1.5px ring with a duya-purple tint, lifted on hover. */
+  border: 1.5px solid rgba(124, 58, 237, 0.28);
+  box-shadow:
+    var(--orb-shadow-md),
+    inset 0 0 18px rgba(124, 58, 237, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  transition:
+    transform var(--orb-transition-fast) var(--orb-easing),
+    box-shadow var(--orb-transition-fast) var(--orb-easing),
+    border-color var(--orb-transition-fast) var(--orb-easing);
+  will-change: transform;
+  /* Idle breathing — 3.2s slow scale so the ball feels alive
+     without being distracting. Disabled on hover so the user
+     feels in control. */
+  animation: orb-idle 3.2s var(--orb-easing) infinite;
+}
+
+.orb-ball:hover {
+  transform: scale(1.06);
+  border-color: rgba(124, 58, 237, 0.55);
+  box-shadow:
+    var(--orb-shadow-lg),
+    inset 0 0 22px rgba(124, 58, 237, 0.18),
+    0 0 0 4px rgba(124, 58, 237, 0.06);
+  animation-play-state: paused;
+}
+
+.orb-ball:active {
+  cursor: grabbing;
+  transform: scale(0.94);
+  animation-play-state: paused;
+}
+
+@keyframes orb-idle {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+.orb-ball-mascot {
+  width: 86%;
+  height: 86%;
+  /* DuyaMascot SVG (see DuyaMascot.tsx). Sized so a 50px ball
+     renders the mascot at 43px — leaves a thin duya-purple rim
+     visible around the body, matching the brand rim on the
+     surrounding glass surface. */
+  pointer-events: none;
+  filter: drop-shadow(0 1px 1.5px rgba(22, 9, 33, 0.35));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb-ball-mascot svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* ─ ─ LOADING: OrbBall + Progress Bubble ─────────────────────────────────── */
+
+.orb-ball-loading {
+  position: relative;
+  width: var(--orb-size);
+  height: var(--orb-size);
+}
+
+.orb-ball-loading .orb-ball {
+  animation: orb-pulse 1.6s var(--orb-easing) infinite;
+}
+
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: var(--orb-shadow-md);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: var(--orb-shadow-lg);
+  }
+}
+
+.orb-progress-bubble {
+  position: absolute;
+  top: calc(var(--orb-bubble-offset) * -1);
+  right: calc(var(--orb-bubble-offset) * -1);
+  min-width: var(--orb-bubble-size);
+  max-width: 180px;
+  height: var(--orb-bubble-size);
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--orb-state-loading);
+  color: #fff;
+  font-size: var(--orb-font-size-bubble);
+  font-weight: var(--orb-font-weight-medium);
+  line-height: var(--orb-bubble-size);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: var(--orb-shadow-sm);
+  animation: orb-bubble-in var(--orb-transition-base) var(--orb-easing);
+}
+
+@keyframes orb-bubble-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Spinner inside bubble when no text */
+.orb-progress-bubble--spinner {
+  width: var(--orb-bubble-size);
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.orb-progress-bubble--spinner::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  animation: orb-spinner 1.2s linear infinite;
+}
+
+@keyframes orb-spinner {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.3;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ─ ─ INPUT: OrbInput ─────────────────────────────────────────────────────── */
+
+.orb-input {
+  width: var(--orb-input-width);
+  height: var(--orb-input-height);
+  background: var(--orb-bg-glass);
+  backdrop-filter: var(--orb-blur);
+  -webkit-backdrop-filter: var(--orb-blur);
+  border: 1px solid var(--orb-border);
+  border-radius: 16px;
+  box-shadow: var(--orb-shadow-lg);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+}
+
+.orb-input-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.orb-input-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--orb-accent-soft);
+  color: var(--orb-accent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: var(--orb-font-weight-medium);
+}
+
+.orb-input-chip-remove {
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity var(--orb-transition-fast);
+}
+
+.orb-input-chip-remove:hover {
+  opacity: 1;
+}
+
+.orb-input-field {
+  flex: 1;
+  background: transparent;
+  color: var(--orb-fg);
+  caret-color: var(--orb-accent);
+  font-size: var(--orb-font-size-input);
+  line-height: 1.4;
+  resize: none;
+}
+
+.orb-input-field::placeholder {
+  color: var(--orb-fg-muted);
+}
+
+.orb-input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.orb-input-icons {
+  display: flex;
+  gap: 6px;
+  color: var(--orb-fg-muted);
+}
+
+.orb-input-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background var(--orb-transition-fast);
+}
+
+.orb-input-icon:hover {
+  background: var(--orb-accent-soft);
+  color: var(--orb-accent);
+}
+
+.orb-input-model {
+  font-size: 11px;
+  color: var(--orb-fg-muted);
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.orb-input-model:hover {
+  background: var(--orb-accent-soft);
+}
+
+/* ─ ─ RESULT: OrbResult ───────────────────────────────────────────────────── */
+
+.orb-result {
+  width: var(--orb-result-width);
+  height: var(--orb-result-height);
+  background: var(--orb-bg-glass);
+  backdrop-filter: var(--orb-blur);
+  -webkit-backdrop-filter: var(--orb-blur);
+  border: 1px solid var(--orb-border);
+  border-radius: 16px;
+  box-shadow: var(--orb-shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.orb-result-body {
+  flex: 1;
+  padding: 16px 20px;
+  overflow-y: auto;
+  font-size: var(--orb-font-size-result);
+  line-height: 1.6;
+  color: var(--orb-fg);
+  user-select: text;
+}
+
+.orb-result-body h1,
+.orb-result-body h2,
+.orb-result-body h3 {
+  margin-top: 0.6em;
+  margin-bottom: 0.3em;
+  font-weight: var(--orb-font-weight-medium);
+}
+
+.orb-result-body h1 {
+  font-size: 18px;
+}
+
+.orb-result-body h2 {
+  font-size: 16px;
+}
+
+.orb-result-body p {
+  margin-bottom: 0.6em;
+}
+
+.orb-result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid var(--orb-border);
+  background: var(--orb-bg);
+}
+
+.orb-result-action {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: var(--orb-font-weight-medium);
+  color: var(--orb-fg);
+  transition: background var(--orb-transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.orb-result-action:hover {
+  background: var(--orb-accent-soft);
+}
+
+.orb-result-action--primary {
+  background: var(--orb-accent);
+  color: #fff;
+}
+
+.orb-result-action--primary:hover {
+  opacity: 0.9;
+  background: var(--orb-accent);
+}
+
+/* ─ ─ State transitions ───────────────────────────────────────────────────── */
+
+.orb-element-enter {
+  animation: orb-fade-in var(--orb-transition-base) var(--orb-easing);
+}
+
+.orb-element-exit {
+  animation: orb-fade-out var(--orb-transition-fast) var(--orb-easing) forwards;
+}
+
+@keyframes orb-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes orb-fade-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+
+/* ─ ─ Utilities ──────────────────────────────────────────────────────────── */
+
+/* Drag region — Electron will treat elements with -webkit-app-region: drag
+   as draggable title bar. We use it on the ball in DORMANT/LOADING states. */
+.orb-drag {
+  -webkit-app-region: drag;
+}
+
+.orb-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Focus ring — accessibility */
+*:focus-visible {
+  outline: 2px solid var(--orb-accent);
+  outline-offset: 2px;
+}
+
+/* Scrollbar — minimal */
+.orb-result-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.orb-result-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.orb-result-body::-webkit-scrollbar-thumb {
+  background: var(--orb-border);
+  border-radius: 3px;
+}

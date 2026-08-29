@@ -53,6 +53,17 @@ export interface ChatOptions {
   conductorCanvasId?: string;
   /** Internal background-task follow-up; never supplied by user input. */
   backgroundTaskResume?: boolean;
+  /**
+   * Plan 450: providers @-mentioned in the composer for this run. Forwarded
+   * to the worker so connector tools of these providers skip tool_search.
+   */
+  mentionedProviders?: string[];
+  /**
+   * Plan 450 Phase H: skills whose `/name` command the user submitted this
+   * run. Forwarded to the worker so the agent injects the SKILL.md body as a
+   * `<skill>` fragment instead of relying on the model to load it.
+   */
+  mentionedSkills?: string[];
 }
 
 export interface AgentEvent {
@@ -151,6 +162,12 @@ export class AgentServerClient {
             outputStyleConfig: options?.outputStyleConfig,
             displayContent: options?.displayContent,
             mode: options?.mode,
+            // Plan 450: mention lists for per-turn activation (app connectors)
+            // and skill-fragment injection. These MUST be forwarded explicitly —
+            // this body is a whitelist; anything omitted never reaches the
+            // worker's chat:start options.
+            mentionedProviders: options?.mentionedProviders,
+            mentionedSkills: options?.mentionedSkills,
             maxTurns: options?.maxTurns,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,

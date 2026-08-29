@@ -24,6 +24,10 @@ export interface IdeInfo {
   name: string;
   /** Executable path resolved at detection time (or empty when not found). */
   executable: string;
+  /** OS shell icon extracted from the executable (PNG data URL), when the
+   *  platform can provide one. The renderer falls back to its built-in
+   *  brand mark when absent. */
+  icon?: string;
 }
 
 interface IdeDef {
@@ -130,7 +134,48 @@ export async function detectInstalledIdes(platform = process.platform): Promise<
       out.push({ id: def.id, name: def.name, executable });
     }
   }
-  return out;
+  // Attach the OS shell icon per IDE; extraction failures simply leave the
+  // field undefined so the renderer falls back to its brand mark.
+  return Promise.all(
+    out.map(async (ide) => ({ ...ide, icon: await extractIdeIcon(ide.executable) })),
+  );
+}
+
+/**
+ * Icon source for shell-icon extraction: on macOS the `.app` bundle (CLI
+ * shims like `.../bin/code` carry no icon), elsewhere the executable itself.
+ */
+export function resolveIconTarget(executable: string, platform = process.platform): string {
+  if (platform !== 'darwin') return executable;
+  // Split on both separators so the resolution stays testable on Windows CI.
+  const segments = executable.split(/[/\\]/);
+  const bundleEnd = segments.findIndex((segment) => segment.endsWith('.app'));
+  return bundleEnd >= 0 ? segments.slice(0, bundleEnd + 1).join('/') : executable;
+}
+
+/**
+ * Whether shell-icon extraction can yield a meaningful icon. Windows CLI
+ * shims (`code.cmd`) would render a generic script icon, so only real `.exe`
+ * targets qualify; on Linux ELF launchers are tried as-is.
+ */
+export function canExtractIcon(executable: string, platform = process.platform): boolean {
+  if (platform === 'win32') return /\.exe$/i.test(executable);
+  if (platform === 'darwin') return resolveIconTarget(executable, platform).endsWith('.app');
+  return true;
+}
+
+/** Extract the OS shell icon for an IDE executable as a PNG data URL —
+ *  the same source the OS "Open with" menus render. */
+async function extractIdeIcon(executable: string): Promise<string | undefined> {
+  if (!canExtractIcon(executable)) return undefined;
+  try {
+    // Dynamic import keeps the module loadable outside Electron (unit tests).
+    const { app } = await import('electron');
+    const image = await app.getFileIcon(resolveIconTarget(executable), { size: 'large' });
+    return image.toDataURL();
+  } catch {
+    return undefined;
+  }
 }
 
 /** Resolve the effective default IDE: config `ide.default` if detected, else

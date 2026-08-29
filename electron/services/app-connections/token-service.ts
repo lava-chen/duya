@@ -94,7 +94,7 @@ export class TokenService {
     // Remote MCP OAuth uses the MCP SDK's authorization provider, which
     // performs refresh-token rotation with the discovered authorization
     // server. Do not send these tokens to the normal provider refresh path.
-    if (getProviderConfig(conn.provider).remoteMcpUrl) {
+    if (getProviderConfig(conn.provider)?.remoteMcpUrl) {
       return ok({
         accessToken: tokens.accessToken,
         tokenType: tokens.tokenType,
@@ -144,6 +144,9 @@ export class TokenService {
   /** Refresh the access token for a connection and persist the new set. */
   private async refreshAndStore(conn: AppConnection, refreshToken: string): Promise<ValidToken> {
     const config = getProviderConfig(conn.provider);
+    if (!config) {
+      throw new RefreshError('refresh_failed', `${conn.provider} is not a registered connector`);
+    }
     const body = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,

@@ -126,6 +126,14 @@
   --foreground: #1a1a1a;
   --muted: #6b6b6b;
   --border: rgba(0, 0, 0, 0.06);
+  /* Border scale — the ONLY three border colors. Rules:
+   * --border       default edge (cards, headers, inputs)
+   * --border-weak  muted dividers (status bars, in-list separators)
+   * --border-strong interactive emphasis (hover/active edges)
+   * Never hard-code rgba/hex border colors or ad-hoc color-mix. */
+  --border-weak: var(--border-weak);
+  --border-strong: color-mix(in srgb, var(--text) 22%, var(--border));
+  --border-width: 1px;
   --grid-dot: rgba(0, 0, 0, 0.06);
   --accent: #7c3aed;
   --accent-soft: rgba(124, 58, 237, 0.2);
@@ -473,7 +481,7 @@ html[data-font="system"] .message-content li {
 .prose-sm code,
 .prose :not(pre) > code {
   background-color: #f0f0f0 !important;
-  border: 1px solid #d4d4d3 !important;
+  border: 1px solid var(--border) !important;
 }
 
 /* Allow long inline code (paths, identifiers) to wrap inside the message
@@ -541,7 +549,19 @@ html[data-font="system"] .message-content li {
 }
 
 .markdown-file-link {
+  /* `inline-block` keeps the link as a single atomic inline box so
+   * the icon / favicon at the front and the trailing text can't be
+   * pulled onto separate lines by the line-breaking algorithm — the
+   * whole link either fits on the current line or moves to the next.
+   * `max-width: 100%` caps the link at the parent's content width so
+   * a long file path / URL doesn't overflow the chat column, and
+   * `word-break: break-all` + `overflow-wrap: anywhere` let the
+   * browser break inside the otherwise-unbroken path / URL. Net
+   * effect: long links wrap onto multiple lines INSIDE the link
+   * pill, while the icon stays anchored at the top-left of the link
+   * (never alone on its own line). */
   display: inline-block;
+  max-width: 100%;
   /* Match the inline `<code>` font stack used by MarkdownRenderer so a
    * filename like `network.py` renders in the same monospace face the
    * user sees elsewhere for code identifiers. Body text remains in
@@ -568,9 +588,11 @@ html[data-font="system"] .message-content li {
    * points at a link. */
   text-decoration: none;
   transition: color 150ms ease, text-decoration-color 150ms ease;
-  /* inline-block + vertical-align:baseline lines up the link's text
-   * baseline with the surrounding paragraph instead of being lifted
-   * by a flex-centered icon (the previous `inline-flex; align-items:
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  /* vertical-align:baseline lines up the link's text baseline with
+   * the surrounding paragraph instead of being lifted by a
+   * flex-centered icon (the previous `inline-flex; align-items:
    * center` placed the icon mid-line and visually raised the pill). */
   vertical-align: baseline;
 }
@@ -647,8 +669,13 @@ html[data-theme="dark"] .terminal-banner-error {
 }
 
 .markdown-file-link__name {
+  /* Inherits `word-break: break-all` + `overflow-wrap: anywhere` from
+   * the parent `.markdown-file-link`. Removing the previous
+   * `white-space: nowrap` is what lets a long file path break across
+   * multiple lines when the chat column is narrow. `min-width: 0`
+   * lets a flex / grid ancestor shrink the span instead of forcing
+   * the path onto one overflowing line. */
   min-width: 0;
-  white-space: nowrap;
 }
 
 /* External web links: the favicon is an inline-block at the front of
@@ -700,7 +727,7 @@ html[data-theme="dark"] .terminal-banner-error {
 [data-theme="dark"] .prose-sm code,
 [data-theme="dark"] .prose :not(pre) > code {
   background-color: #252525 !important;
-  border: 1px solid #444441 !important;
+  border: 1px solid var(--border) !important;
 }
 
 /* Inline code inside code blocks should match code block background */
@@ -820,7 +847,7 @@ a {
   flex-direction: column;
   gap: 7px;
   padding: 11px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border: 1px solid var(--border);
   border-radius: 8px;
   background:
     linear-gradient(180deg, color-mix(in srgb, #fff 4%, transparent), transparent 46%),
@@ -8216,7 +8243,7 @@ html[data-theme="light"] .ask-question-option.selected {
 .finite-canvas-surface {
   position: relative;
   margin: 0 auto;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--bg-surface);
   box-shadow:
@@ -8283,7 +8310,7 @@ html[data-theme="light"] .ask-question-option.selected {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--border);
   border-radius: 7px;
   background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
   color: var(--text-secondary);
@@ -9247,7 +9274,9 @@ html[data-message-font-size="large"] .prose h3 {
   padding: 0 6px;
   gap: 4px;
   background: var(--main-bg);
-  border-bottom: 1px solid var(--border);
+  /* No bottom rule: the tab bar and the page header below it share the
+   * same background and read as one continuous header zone, Codex-style. */
+  border-bottom: none;
 }
 
 .panel-header-empty {
@@ -9262,9 +9291,12 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-header-tabs {
   display: flex;
-  flex: 1;
+  /* Hug the tab content (shrink only under pressure) so the "+"
+   * add button sits right after the last tab, Codex-style — instead
+   * of being pushed to the far edge of the bar. */
+  flex: 0 1 auto;
   min-width: 0;
-  gap: 2px;
+  gap: 3px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -9292,14 +9324,18 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-tab:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
+/* Codex-style active tab: soft filled chip with a faint lift shadow, no
+ * outline. Fill uses a text-mix so it stays visible in both themes
+ * (white-alpha fallbacks vanish on the light background). */
 .panel-header-tab.active {
-  background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
+  background: color-mix(in srgb, var(--text) 9%, transparent);
   color: var(--text);
-  border-color: var(--border);
+  border-color: transparent;
+  box-shadow: 0 1px 3px color-mix(in srgb, black 12%, transparent);
 }
 
 .panel-header-tab-title {
@@ -9336,7 +9372,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-tab-close:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -9378,7 +9414,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-header-icon-btn:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -10103,7 +10139,7 @@ html[data-message-font-size="large"] .prose h3 {
   max-height: min(560px, calc(100% - 0px));
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+  border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--surface-solid);
   box-shadow: none;
@@ -10116,7 +10152,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 8px;
   padding: 0 10px 0 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-bottom: 1px solid var(--border-weak);
 }
 
 .task-card-title {
@@ -10194,7 +10230,7 @@ html[data-message-font-size="large"] .prose h3 {
 .task-card-section + .task-card-section {
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-top: 1px solid var(--border-weak);
 }
 
 .task-card-section-header {
@@ -10359,7 +10395,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: flex-start;
   gap: 6px;
   padding: 8px 10px 9px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-bottom: 1px solid var(--border-weak);
   background: color-mix(in srgb, var(--accent) 9%, transparent);
   border-left: 2px solid var(--accent);
 }
@@ -10585,8 +10621,11 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 20px 0 14px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
-  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
+  /* Same background as the tab bar above (no rule between them — the
+   * two rows read as one header), but keep the rule BELOW: it separates
+   * the header from the preview canvas. */
+  border-bottom: 1px solid var(--border);
+  background: var(--main-bg);
   box-sizing: border-box;
 }
 
@@ -10626,9 +10665,9 @@ html[data-message-font-size="large"] .prose h3 {
   min-width: 0;
   flex: 1 1 auto;
   align-items: center;
-  gap: 2px;
+  gap: 3px;
   overflow: hidden;
-  font-size: 11.5px;
+  font-size: 12px;
   line-height: 1.35;
   color: var(--muted);
 }
@@ -10645,20 +10684,23 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 1 auto;
 }
 
-.file-preview-path-root {
-  font-weight: 600;
+/* Codex-style breadcrumb: all segments share the muted tone; only the
+ * trailing file name steps up to the text color so the eye lands on it. */
+.file-preview-path-file {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .file-preview-path-separator {
   flex: 0 0 auto;
-  color: color-mix(in srgb, var(--muted) 62%, transparent);
-  font-size: 11px;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  font-size: 12px;
 }
 
 .file-preview-actions {
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   /* Safety margin so the rightmost "Open" button never brushes
    * against the padding edge of the toolbar. */
   padding-right: 2px;
@@ -10713,14 +10755,17 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   height: 28px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  /* Neutral outlined pill, Codex-style: surface background + hairline
+   * border, no accent tint — the breadcrumb stays the visual anchor. */
+  border: 1px solid var(--border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  background: var(--surface-solid);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 4%, transparent);
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .file-preview-open-group:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--surface-hover);
 }
 
 .file-preview-open-group button {
@@ -10728,6 +10773,7 @@ html[data-message-font-size="large"] .prose h3 {
   height: 100%;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -10737,12 +10783,27 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .file-preview-open-group .file-preview-open-ide {
-  width: 32px;
+  width: auto;
+  padding: 0 4px 0 10px;
+}
+
+.file-preview-open-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* OS shell icon extracted from the IDE executable (see ide-handlers.ts). */
+.file-preview-ide-icon {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
 }
 
 .file-preview-open-group .file-preview-open-caret {
-  width: 18px;
-  border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
+  width: 20px;
+  border-left: 1px solid var(--border);
   color: var(--muted);
 }
 
@@ -10836,7 +10897,7 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 auto;
   min-width: 52px;
   padding: 10px 0 40px;
-  border-right: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-solid) 48%, var(--main-bg));
   user-select: none;
 }
@@ -10936,7 +10997,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 84%, transparent);
+  border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--accent) 8%, var(--main-bg));
   color: var(--muted);
   font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
@@ -11015,7 +11076,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .panel-zone-open .panel-header-tabs {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   max-width: none;
   overflow-x: auto;
   overflow-y: hidden;
@@ -11032,7 +11093,7 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-header-add-page.active,
 .panel-header-add-page:hover {
-  background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+  background: var(--surface-hover);
   color: var(--text);
 }
 
@@ -11043,8 +11104,10 @@ html[data-message-font-size="large"] .prose h3 {
 .panel-add-menu {
   position: absolute;
   top: calc(100% + 6px);
-  right: 0;
-  left: auto;
+  /* The + button sits right after the last tab (near the left edge) —
+   * grow the menu rightward so it doesn't extend past the panel edge. */
+  left: 0;
+  right: auto;
   z-index: 30;
   width: 232px;
   max-width: min(232px, calc(100vw - 28px));
@@ -11052,10 +11115,12 @@ html[data-message-font-size="large"] .prose h3 {
   flex-direction: column;
   gap: 1px;
   padding: 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  /* Match the input-box settings popup: flat command-menu surface, hairline
+   * border, one soft shadow layer — no heavy elevation. */
+  border: 1px solid var(--command-menu-border);
   border-radius: 10px;
-  background: var(--surface-solid, var(--sidebar-bg));
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32), 0 2px 8px rgba(0, 0, 0, 0.16);
+  background: var(--command-menu-bg);
+  box-shadow: var(--command-menu-shadow);
   isolation: isolate;
 }
 
@@ -11072,7 +11137,7 @@ html[data-message-font-size="large"] .prose h3 {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
   transition: background 120ms ease, color 120ms ease;
@@ -11096,13 +11161,13 @@ html[data-message-font-size="large"] .prose h3 {
 
 .panel-add-menu-main {
   gap: 8px;
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .panel-add-menu-meta {
   gap: 6px;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--command-menu-muted, var(--muted));
 }
 
 .panel-add-menu-icon {
@@ -11112,7 +11177,7 @@ html[data-message-font-size="large"] .prose h3 {
   width: 14px;
   height: 14px;
   flex-shrink: 0;
-  color: var(--text);
+  color: var(--command-menu-muted, var(--muted));
 }
 
 .panel-add-menu-name {
@@ -11121,21 +11186,17 @@ html[data-message-font-size="large"] .prose h3 {
   white-space: nowrap;
 }
 
+/* Plain muted text, no chip background — same treatment as the input
+ * popups' shortcut hints. */
 .panel-add-menu-shortcut {
-  padding: 0 6px;
-  border-radius: 4px;
-  background: var(--chip);
-  color: var(--text);
+  color: var(--command-menu-muted, var(--muted));
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 16px;
 }
 
 .panel-add-menu-hint {
-  padding: 0 6px;
-  border-radius: 4px;
-  background: var(--chip);
-  color: var(--muted);
+  color: var(--command-menu-muted, var(--muted));
   font-size: 11px;
   line-height: 16px;
 }
@@ -11173,7 +11234,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 12px;
   padding: 0 12px 0 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-bottom: 1px solid var(--border);
   background: #191a1c;
 }
 
@@ -11307,7 +11368,7 @@ html[data-message-font-size="large"] .prose h3 {
   margin-bottom: 24px;
   overflow: hidden;
   padding: 9% 10%;
-  border: 1px solid #d8dbe0;
+  border: 1px solid var(--border);
   background: #fff;
   box-shadow: 0 2px 16px rgb(0 0 0 / 35%);
   color: #202124;
@@ -11345,7 +11406,7 @@ html[data-message-font-size="large"] .prose h3 {
 .office-sheet {
   min-width: 640px;
   margin-bottom: 20px;
-  border: 1px solid #cfd3d8;
+  border: 1px solid var(--border);
   background: #fff;
   box-shadow: 0 2px 14px rgb(0 0 0 / 28%);
 }
@@ -11370,8 +11431,8 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 36px;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid #dfe2e6;
-  border-bottom: 1px solid #dfe2e6;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: #f5f6f7;
   color: #858a92;
   font-size: 10px;
@@ -11384,8 +11445,8 @@ html[data-message-font-size="large"] .prose h3 {
   overflow: hidden;
   padding: 5px 8px;
   border: 0;
-  border-right: 1px solid #e1e3e6;
-  border-bottom: 1px solid #e1e3e6;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: #fff;
   color: #25282c;
   font: inherit;
@@ -11412,7 +11473,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 6px;
   padding: 0 11px;
-  border: 1px solid #d8dbe0;
+  border: 1px solid var(--border);
   border-radius: 9px;
   background: #fff;
   box-shadow: 0 5px 18px rgb(0 0 0 / 26%);
@@ -11468,7 +11529,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   justify-content: center;
   margin-bottom: 4px;
-  border: 1px solid #36383d;
+  border: 1px solid var(--border);
   border-radius: 16px;
   background: #202124;
   color: #b8bac0;
@@ -11484,7 +11545,7 @@ html[data-message-font-size="large"] .prose h3 {
   gap: 7px;
   margin-top: 8px;
   padding: 0 13px;
-  border: 1px solid #42454b;
+  border: 1px solid var(--border);
   border-radius: 9px;
   background: #292b2f;
   color: #f0f1f3;
@@ -11553,7 +11614,7 @@ html[data-message-font-size="large"] .prose h3 {
 .browser-panel-icon-btn:hover:not(:disabled) {
   color: var(--foreground);
   background: var(--surface-hover);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  border-color: var(--border-weak);
 }
 
 .browser-panel-icon-btn:disabled {
@@ -12029,7 +12090,7 @@ html[data-message-font-size="large"] .prose h3 {
   min-width: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 8px;
   background: var(--surface-solid, var(--panel-bg));
   color: var(--text);
@@ -12051,7 +12112,7 @@ html[data-message-font-size="large"] .prose h3 {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 13px 6px 16px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-bottom: 1px solid var(--border-weak);
   background: transparent;
 }
 
@@ -12094,7 +12155,7 @@ html[data-message-font-size="large"] .prose h3 {
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
@@ -12264,7 +12325,7 @@ html[data-message-font-size="large"] .prose h3 {
   overflow: hidden;
   flex-shrink: 0;
   padding: 5px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top: 1px solid var(--border-weak);
   color: var(--text-tertiary, var(--muted));
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 10px;
@@ -12284,7 +12345,7 @@ html[data-message-font-size="large"] .prose h3 {
   min-height: 360px;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border: 1px solid var(--border-weak);
   border-radius: 16px;
   background: var(--surface-solid, var(--panel-bg));
   color: var(--text);
@@ -12705,7 +12766,7 @@ html[data-message-font-size="large"] .prose h3 {
 .code-review-panel {
   --review-muted: color-mix(in srgb, var(--text-muted) 84%, transparent);
   --review-surface: var(--main-bg);
-  --review-border: color-mix(in srgb, var(--border) 82%, transparent);
+  --review-border: var(--border);
   --review-add: #31c578;
   --review-remove: #ef6262;
   display: flex;
@@ -12810,7 +12871,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .code-review-scope-select:hover {
-  border-color: color-mix(in srgb, var(--border) 140%, transparent);
+  border-color: var(--border-strong);
 }
 
 .code-review-scope-select:focus-visible {
@@ -13009,8 +13070,8 @@ html[data-message-font-size="large"] .prose h3 {
 
 .code-review-hunk {
   margin: 14px 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  border-top: 1px solid var(--border-weak);
+  border-bottom: 1px solid var(--border-weak);
 }
 
 .code-review-hunk-header {
@@ -13110,7 +13171,7 @@ html[data-message-font-size="large"] .prose h3 {
 }
 
 .code-review-split-row > .code-review-line:first-child {
-  border-right: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-right: 1px solid var(--border-weak);
 }
 
 .code-review-line-empty {
@@ -13200,7 +13261,9 @@ html[data-message-font-size="large"] .prose h3 {
   position: relative;
   display: flex;
   width: 100%;
-  height: 100%;
+  /* Lives below the full-width preview toolbar inside the flex-column
+   * panel, so it flexes to the remaining height instead of 100%. */
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -13231,14 +13294,17 @@ html[data-message-font-size="large"] .prose h3 {
   background: var(--main-bg);
 }
 
+/* The tree's own 40px header only holds a duplicate collapse toggle;
+ * the preview toolbar's tree toggle is always visible, so the row is
+ * dead weight under the full-width header — hide it. */
 .panel-file-tree-header {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: flex-end;
   height: 40px;
   flex: 0 0 40px;
   padding: 0 8px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 92%, transparent);
+  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
 }
 
@@ -13811,7 +13877,7 @@ html[data-message-font-size="large"] .prose h3 {
   z-index: 50;
   width: min(360px, 80vw);
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-solid, var(--surface));
   box-shadow: var(--shadow-resting);

@@ -189,15 +189,15 @@ export function PanelHeader() {
           );
         })}
       </div>
-      <div className="panel-header-actions">
-        <div className="panel-header-add-wrap">
-          <AddPageButton
-            ref={addButtonRef}
-            open={addMenuOpen}
-            onClick={() => setAddMenuOpen((value) => !value)}
-          />
-          {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
-        </div>
+      {/* Sits right after the tab strip (not inside it): the strip clips
+       * overflowing tabs, which would guillotine the add-page menu. */}
+      <div className="panel-header-add-wrap">
+        <AddPageButton
+          ref={addButtonRef}
+          open={addMenuOpen}
+          onClick={() => setAddMenuOpen((value) => !value)}
+        />
+        {addMenuOpen && <AddPageMenu ref={addMenuRef} onSelect={openPage} />}
       </div>
     </div>
   );
@@ -229,7 +229,7 @@ const AddPageButton = forwardRef<
       aria-expanded={open}
       aria-haspopup="menu"
     >
-      <PlusIcon size={16} stroke={1.5} />
+      <PlusIcon size={14} stroke={1.5} />
     </button>
   );
 });

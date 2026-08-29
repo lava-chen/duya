@@ -55,6 +55,12 @@ export interface ConnectorToolDescriptor {
   /** Owning provider. */
   provider: ProviderId;
   /**
+   * Display label stamped by the ConnectorService (Plan 450 Phase G), e.g.
+   * `Notion`. Agent-side prompts use it for human-readable app lists; not
+   * set by connectors themselves.
+   */
+  providerLabel?: string;
+  /**
    * Connection id this descriptor is bound to. The agent-side executor
    * passes this back to the main process so the right token is used.
    */

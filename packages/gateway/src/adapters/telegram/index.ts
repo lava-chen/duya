@@ -116,6 +116,21 @@ export class TelegramAdapter extends BaseAdapter {
     const token = config.credentials['token'];
     if (!token) throw new Error('Telegram bot token is required');
 
+    // Validate token shape so a misconfigured value (e.g. the entire
+    // BotFather welcome message pasted by mistake) fails fast with an
+    // actionable error instead of producing a generic 404 on the first
+    // Bot API call. Telegram bot tokens are `<bot_id>:<secret>` where
+    // `secret` is a 35-char base64-ish string.
+    const tokenShape = /^\d+:[A-Za-z0-9_-]{20,}$/;
+    if (!tokenShape.test(token)) {
+      const preview = token.length > 60 ? `${token.slice(0, 60)}…` : token;
+      throw new Error(
+        `Telegram bot token has unexpected shape: ${JSON.stringify(preview)}. ` +
+          `Expected "<bot_id>:<35-char-secret>" from @BotFather. ` +
+          `Did you paste the entire BotFather welcome message? Re-paste just the token.`,
+      );
+    }
+
     this.token = token;
     this.config = config;
 

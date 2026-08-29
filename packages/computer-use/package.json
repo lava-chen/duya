@@ -1,0 +1,42 @@
+{
+  "name": "@duya/computer-use",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Desktop control backend for Computer Use Mode (plan 454). Platform-agnostic DesktopBackend interface + Electron impl (nut.js + desktopCapturer + sharp) + SOM overlay rendering. Reads OSContextBridge (wake-agent plan 453) but never mutates it.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./backend": {
+      "types": "./dist/backend/index.d.ts",
+      "default": "./dist/backend/index.js"
+    },
+    "./som": {
+      "types": "./dist/som/index.d.ts",
+      "default": "./dist/som/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "build": "npm run clean && tsc --incremental",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@duya/computer-use-demo": "0.4.0",
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.3",
+    "vitest": "^3.0.0"
+  }
+}

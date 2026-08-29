@@ -28,9 +28,10 @@ import type {
   ConnectorToolDescriptor,
 } from '../connector-types.js';
 import type { ProviderId, RiskTier } from '../types.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type { TokenVault } from '../token-vault.js';
 
-const PROVIDER: ProviderId = 'wecom';
+const PROVIDER = asAppConnectorId('wecom');
 
 /** Env contract the trae wecom plugin declares for `wecom-cli`. */
 const WECOM_ACCESS_TOKEN_ENV = 'WECOM_ACCESS_TOKEN';

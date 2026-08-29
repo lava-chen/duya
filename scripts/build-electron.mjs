@@ -25,6 +25,11 @@ async function buildElectron() {
     ],
     sourcemap: true,
     minify: false,
+    alias: {
+      // Resolve workspace plugin-core from this checkout (worktree-safe);
+      // node_modules junctions would otherwise pin the primary checkout.
+      '@duya/plugin-core': path.resolve(__dirname, '../packages/plugin-core/src'),
+    },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS
     // without the `import_meta_url` polyfill (this Electron bundle does

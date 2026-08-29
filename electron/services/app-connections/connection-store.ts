@@ -10,6 +10,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type {
   AppConnection,
   AppConnectionStatus,
@@ -42,7 +43,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
   }
   return {
     id: row.id,
-    provider: row.provider as ProviderId,
+    provider: asAppConnectorId(row.provider),
     accountLabel: row.account_label,
     accountId: row.account_id,
     scopes,

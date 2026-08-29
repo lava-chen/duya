@@ -36,6 +36,11 @@ export function ChannelConnectDialog({ channel, onClose, onConnected }: ChannelC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // React StrictMode mounts components twice in dev, which would otherwise
+  // fire the mount-time `startQrLogin()` twice and waste one device_code
+  // mint on Feishu's auth server. Guard the in-flight call with a ref so the
+  // second mount becomes a no-op until the first call settles.
+  const qrInFlightRef = useRef(false);
 
   const clearPoll = () => {
     if (pollTimerRef.current) {
@@ -45,8 +50,11 @@ export function ChannelConnectDialog({ channel, onClose, onConnected }: ChannelC
   };
 
   useEffect(() => {
-    if (meta.connectMode === "qr") {
-      void startQrLogin();
+    if (meta.connectMode === "qr" && !qrInFlightRef.current) {
+      qrInFlightRef.current = true;
+      void startQrLogin().finally(() => {
+        qrInFlightRef.current = false;
+      });
     }
     return clearPoll;
     // eslint-disable-next-line react-hooks/exhaustive-deps

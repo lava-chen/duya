@@ -63,6 +63,8 @@ import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import type { Task } from '@duya/agent';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
+import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
+import { ConnectorIcon } from '@/components/extensions/connector-icons';
 
 function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
   if (!element) return fallback;
@@ -606,6 +608,72 @@ export function MessageInput({
     ? filterItems(popoverItems, popoverFilter)
     : popoverItems;
 
+  // Plan 450: build @-popover items for currently-connected app providers.
+  // Each item uses `value = providerId` so the file-mention insert path
+  // writes `@<providerId> ` into the textarea; the stream-session-manager
+  // extracts those tokens back to provider ids on submit.
+  const [connectorItems, setConnectorItems] = useState<PopoverItem[]>([]);
+
+  // Plan 450: refresh the @ connector list on mount, on sessionId change,
+  // and every time the user opens the `@` context popover (typed or via
+  // plus button). Covers the case where a provider was connected in
+  // Settings *after* the chat tab mounted — useEffect-[] alone left the
+  // list permanently empty in that scenario.
+  const refreshConnectorItems = useCallback(async () => {
+    const api = getAppConnectionAPI();
+    if (!api) {
+      setConnectorItems([]);
+      return;
+    }
+    try {
+      const [list, providers] = await Promise.all([api.list(), api.providers()]);
+      const byId = new Map((providers.data ?? []).map((p) => [p.id, p]));
+      const items: PopoverItem[] = (list.data ?? [])
+        .filter((c) => c.status === 'connected' && byId.has(c.provider))
+        .sort((a, b) =>
+          (byId.get(a.provider)?.label ?? '').localeCompare(
+            byId.get(b.provider)?.label ?? '',
+          ),
+        )
+        .map((c) => {
+          const p = byId.get(c.provider)!;
+          const IconCmp = ({ size = 16 }: { size?: number }) => (
+            <ConnectorIcon provider={p.id as unknown as Parameters<typeof ConnectorIcon>[0]['provider']} size={size} />
+          );
+          return {
+            label: p.label,
+            value: p.id,
+            description: c.accountLabel || p.description,
+            icon: IconCmp as unknown as PopoverItem['icon'],
+            // Plan 450: the `apps` group is consumed by SlashCommandPopover
+            // under context mode; using the existing `settings` group here
+            // would put the items into the Settings section, which is only
+            // rendered in skill (`/`) mode. See SlashCommandPopover render
+            // branch for the context popover.
+            group: 'apps' as const,
+            category: 'context' as const,
+            source: 'plugin' as const,
+            installedSource: 'agents' as const,
+          } satisfies PopoverItem;
+        });
+      setConnectorItems(items);
+    } catch {
+      setConnectorItems([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshConnectorItems();
+  }, [refreshConnectorItems, sessionId, popoverMode]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshConnectorItems();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshConnectorItems]);
+
   const {
     insertItem,
     handleInputChange: handleSlashInputChange,
@@ -624,6 +692,7 @@ export function MessageInput({
     setTriggerPos,
     closePopover,
     sessionId,
+    connectorItems,
   });
 
   // Per-session Focus display mode — toggled from the slash popover.

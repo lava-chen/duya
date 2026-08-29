@@ -14,6 +14,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+const GOOGLE = asAppConnectorId('google');
+const SLACK = asAppConnectorId('slack');
 
 vi.mock('../../../logging/logger', () => ({
   getLogger: () => ({
@@ -53,7 +56,7 @@ class FakeVault {
 function makeConnection(overrides?: Partial<AppConnection>): AppConnection {
   return {
     id: 'c-test',
-    provider: 'google',
+    provider: GOOGLE,
     accountLabel: 'alice@example.com',
     accountId: 'sub-1',
     scopes: ['openid', 'drive.metadata.readonly'],
@@ -149,7 +152,7 @@ describe('toStatusDTO whitelist', () => {
     const dto = toStatusDTO(conn);
     expect(dto).toEqual({
       id: 'c-test',
-      provider: 'google',
+      provider: GOOGLE,
       accountLabel: 'alice@example.com',
       accountId: 'sub-1',
       scopes: ['openid', 'drive.metadata.readonly'],
@@ -308,8 +311,8 @@ describe('AppConnectionService.connect with policy gate', () => {
           : { allowed: true },
     });
 
-    await expect(service.connect('slack')).rejects.toThrow(FlowError);
-    await expect(service.connect('slack')).rejects.toMatchObject({
+    await expect(service.connect(SLACK)).rejects.toThrow(FlowError);
+    await expect(service.connect(SLACK)).rejects.toMatchObject({
       code: 'provider_blocked',
     });
   });
@@ -322,7 +325,7 @@ describe('AppConnectionService.connect with policy gate', () => {
     });
 
     try {
-      await service.connect('google');
+      await service.connect(GOOGLE);
     } catch {
       // expected — provider_blocked error
     }
@@ -343,7 +346,7 @@ describe('AppConnectionService.connect with policy gate', () => {
     });
 
     try {
-      await service.connect('google');
+      await service.connect(GOOGLE);
       expect.fail('should have thrown');
     } catch (err) {
       expect(err).toBeInstanceOf(FlowError);

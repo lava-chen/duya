@@ -53,6 +53,12 @@ export interface AppConnectionToolDescriptor {
    */
   preApproved?: boolean;
   provider: string;
+  /**
+   * Display label stamped by the main process (Plan 450 Phase G), e.g.
+   * `Notion`. Consumed by the mentions framework for prompt rendering;
+   * absent when the descriptor came from an older main process.
+   */
+  providerLabel?: string;
   connectionId: string;
   action: string;
 }
@@ -114,12 +120,26 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 
       if (!response.success) {
         const error = response.error ?? { code: 'UNKNOWN', message: 'Unknown error' };
+        // Plan 450: connector_auth_required mid-call → fire a structured
+        // SSE event so the renderer can show a re-authorization card.
+        // The agent itself only sees the standard error; the elicitation
+        // surface lives in the UI (mirroring codex auth_elicitation).
+        if (error.code === 'connector_auth_required' && context.sendToMain) {
+          context.sendToMain({
+            type: 'chat:connector_auth_required',
+            sessionId: context.options?.sessionId,
+            toolName,
+            provider: desc.provider,
+            connectionId: desc.connectionId,
+          });
+        }
         // Surface `connection_not_available` / `connection_revoked` with
         // a user-actionable hint so the LLM can tell the user to reconnect.
         const message =
           error.code === 'connection_not_available' ||
           error.code === 'connection_revoked' ||
-          error.code === 'connection_not_found'
+          error.code === 'connection_not_found' ||
+          error.code === 'connector_auth_required'
             ? `${error.message} — the user may need to reconnect the ${desc.provider} account.`
             : error.message;
         return {
@@ -142,8 +162,11 @@ function buildExecutor(desc: AppConnectionToolDescriptor): ToolExecutor {
 
 /**
  * Build the `ToolMetaInput` for a descriptor. Connector tools are
- * `discoverable` (Plan 241): they only enter the LLM's default tool list
- * after `tool_search` surfaces them, keeping the prompt budget lean.
+ * `discoverable`: they enter the LLM's default tool list only when the user
+ * @-mentions their provider this turn (exposure promotion in
+ * `DuyaAgent._resolveTools`), or after `tool_search` surfaces them. The
+ * persistent "Apps (Connectors)" system section keeps the model aware of
+ * what exists either way.
  *
  * Plan 312 Phase 4: the `riskTier` is forwarded so the permission gate
  * can apply tier-based gating (read/draft auto-execute, write/modify
@@ -174,6 +197,37 @@ export function createAppConnectionTool(desc: AppConnectionToolDescriptor): {
 }
 
 /**
+ * Plan 450 (Phase C): single-descriptor inputSchema byte budget. Mirrors
+ * codex's `MAX_AGENT_PLUGIN_MCP_SPEC_BYTES = 8_000` — any hosted MCP
+ * descriptor whose serialized inputSchema exceeds this is registered
+ * with an empty object schema + summary folded into the description.
+ * Keeps the model prompt bounded when a remote server advertises a
+ * pathologically large schema (e.g. a hundred-property wrapper).
+ */
+export const APP_CONNECTION_SPEC_BYTE_BUDGET = 8192;
+
+function downgradeForByteBudget(desc: AppConnectionToolDescriptor): AppConnectionToolDescriptor {
+  let size: number;
+  try {
+    size = JSON.stringify(desc.inputSchema).length;
+  } catch {
+    size = APP_CONNECTION_SPEC_BYTE_BUDGET + 1;
+  }
+  if (size <= APP_CONNECTION_SPEC_BYTE_BUDGET) return desc;
+  // Lossy fallback: surface the tool's intent via description so
+  // tool_search / the model still know what the tool is for, and
+  // disable structured input by replacing the schema with an empty
+  // object. The executor still receives the raw `args` JSON from the
+  // model so it can fall back to forwarding whatever the host server
+  // accepted before this rewrite.
+  return {
+    ...desc,
+    inputSchema: { type: 'object', properties: {} },
+    description: `${desc.description}\n\n[Schema truncated: ${size} bytes exceeds ${APP_CONNECTION_SPEC_BYTE_BUDGET}-byte budget; use ${desc.inputSchemaSummary}.]`,
+  };
+}
+
+/**
  * Register an array of descriptors into a ToolRegistry. Removes any
  * previously-registered connector tools first (by name) so reloads
  * don't leave stale entries.
@@ -181,7 +235,7 @@ export function createAppConnectionTool(desc: AppConnectionToolDescriptor): {
 export function registerAppConnectionTools(
   registry: import('../registry.js').ToolRegistry,
   descriptors: AppConnectionToolDescriptor[],
-): { added: number; removed: number } {
+): { added: number; removed: number; downgraded: number } {
   // No cleanup needed — the per-turn registry from createBuiltinRegistry
   // is fresh, so there are no stale connector tools to remove. But
   // for safety (e.g. when a custom registry is passed via options),
@@ -198,7 +252,10 @@ export function registerAppConnectionTools(
   }
 
   let added = 0;
-  for (const desc of descriptors) {
+  let downgraded = 0;
+  for (const rawDesc of descriptors) {
+    const desc = downgradeForByteBudget(rawDesc);
+    if (desc !== rawDesc) downgraded++;
     if (registry.has(desc.name)) {
       registry.unregister(desc.name);
     }
@@ -207,7 +264,7 @@ export function registerAppConnectionTools(
     added++;
   }
 
-  return { added, removed };
+  return { added, removed, downgraded };
 }
 
 // --- Descriptor cache ---

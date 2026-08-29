@@ -20,7 +20,7 @@ import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../../../logging/logger';
 import { buildPkceChallenge } from './pkce.js';
 import { startLoopbackServer, LoopbackServerError } from './loopback-server.js';
-import { getProviderConfig, getClientSecret, getProviderReadiness } from '../providers/registry.js';
+import { getProviderConfig, getClientSecret, getProviderReadiness, type ProviderClientConfig } from '../providers/registry.js';
 import { fetchGoogleAccountIdentity } from '../providers/google.js';
 import { fetchSlackAccountIdentity } from '../providers/slack.js';
 import { fetchMicrosoft365AccountIdentity } from '../providers/microsoft365.js';
@@ -73,7 +73,9 @@ type IdentityFetcher = (
   fetchImpl: typeof fetch,
 ) => Promise<{ accountId: string; accountLabel: string }>;
 
-const IDENTITY_FETCHERS: Partial<Record<ProviderId, IdentityFetcher>> = {
+// Keyed by plain string: the catalog is open (Plan 455) and unknown
+// providers simply have no identity fetcher.
+const IDENTITY_FETCHERS: Partial<Record<string, IdentityFetcher>> = {
   google: fetchGoogleAccountIdentity,
   slack: fetchSlackAccountIdentity,
   microsoft365: fetchMicrosoft365AccountIdentity,
@@ -113,6 +115,9 @@ export async function startAuthorization(
 ): Promise<AppConnectionStatusDTO> {
   const logger = getLogger();
   const config = getProviderConfig(provider);
+  if (!config) {
+    throw new FlowError('provider_not_configured', `Provider ${provider} is not a registered connector`);
+  }
   const readiness = getProviderReadiness(provider);
   if (!readiness.configured) {
     throw new FlowError('provider_not_configured', readiness.reason ?? `Provider ${provider} is not configured`);
@@ -249,7 +254,7 @@ export async function startAuthorization(
 
 /** Build the provider authorization URL with PKCE + state. */
 function buildAuthUrl(
-  config: ReturnType<typeof getProviderConfig>,
+  config: ProviderClientConfig,
   params: {
     redirectUri: string;
     state: string;
@@ -275,7 +280,7 @@ function buildAuthUrl(
 
 /** Exchange the authorization code for tokens at the provider token endpoint. */
 async function exchangeCodeForTokens(
-  config: ReturnType<typeof getProviderConfig>,
+  config: ProviderClientConfig,
   params: {
     code: string;
     redirectUri: string;

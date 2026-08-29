@@ -7,6 +7,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+const GOOGLE = asAppConnectorId('google');
+const SLACK = asAppConnectorId('slack');
 import Database from 'better-sqlite3';
 import type { Database as DatabaseType } from 'better-sqlite3';
 
@@ -57,7 +60,7 @@ describe('ConnectionStore', () => {
     const store = new ConnectionStore(db);
     const conn = store.upsert({
       id: 'c1',
-      provider: 'google',
+      provider: GOOGLE,
       accountLabel: 'alice@example.com',
       accountId: 'sub-123',
       scopes: ['drive.read', 'gmail.send'],
@@ -77,7 +80,7 @@ describe('ConnectionStore', () => {
     const store = new ConnectionStore(db);
     store.upsert({
       id: 'c2',
-      provider: 'slack',
+      provider: SLACK,
       accountLabel: 'bob',
       accountId: 'U123',
       scopes: [],
@@ -109,7 +112,7 @@ describe('ConnectionStore', () => {
     const store = new ConnectionStore(db);
     store.upsert({
       id: 'a',
-      provider: 'google',
+      provider: GOOGLE,
       accountLabel: 'a',
       accountId: '1',
       scopes: [],
@@ -121,7 +124,7 @@ describe('ConnectionStore', () => {
     });
     store.upsert({
       id: 'b',
-      provider: 'slack',
+      provider: SLACK,
       accountLabel: 'b',
       accountId: '2',
       scopes: [],
@@ -132,15 +135,15 @@ describe('ConnectionStore', () => {
       updatedAt: 2,
     });
     expect(store.list().length).toBe(2);
-    expect(store.listByProvider('google').length).toBe(1);
-    expect(store.listByProvider('slack')[0].id).toBe('b');
+    expect(store.listByProvider(GOOGLE).length).toBe(1);
+    expect(store.listByProvider(SLACK)[0].id).toBe('b');
   });
 
   it('remove', () => {
     const store = new ConnectionStore(db);
     store.upsert({
       id: 'c3',
-      provider: 'google',
+      provider: GOOGLE,
       accountLabel: '',
       accountId: '',
       scopes: [],

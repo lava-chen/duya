@@ -17,6 +17,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+const GOOGLE = asAppConnectorId('google');
+const SLACK = asAppConnectorId('slack');
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -179,7 +182,7 @@ describe('startAuthorization (oauth flow)', () => {
     const { startAuthorization } = await import('../oauth/flow');
     const { fakeFetch, calls } = makeFakeFetch({});
 
-    const dto = await startAuthorization('google', {
+    const dto = await startAuthorization(GOOGLE, {
       upsertConnection: (c) => store.upsert(c),
       storeTokens: (id, t) => vault.set(id, t),
     }, {
@@ -217,7 +220,7 @@ describe('startAuthorization (oauth flow)', () => {
     });
 
     await expect(
-      startAuthorization('google', {
+      startAuthorization(GOOGLE, {
         upsertConnection: (c) => store.upsert(c),
         storeTokens: (id, t) => vault.set(id, t),
       }, {
@@ -237,7 +240,7 @@ describe('startAuthorization (oauth flow)', () => {
     });
 
     await expect(
-      startAuthorization('google', {
+      startAuthorization(GOOGLE, {
         upsertConnection: (c) => store.upsert(c),
         storeTokens: (id, t) => vault.set(id, t),
       }, {
@@ -253,7 +256,7 @@ describe('startAuthorization (oauth flow)', () => {
     const { fakeFetch } = makeFakeFetch({});
 
     await expect(
-      startAuthorization('google', {
+      startAuthorization(GOOGLE, {
         upsertConnection: (c) => store.upsert(c),
         storeTokens: () => { throw new VaultUnavailableError(); },
       }, {
@@ -268,7 +271,7 @@ describe('startAuthorization (oauth flow)', () => {
     const { fakeFetch } = makeFakeFetch({});
 
     await expect(
-      startAuthorization('google', {
+      startAuthorization(GOOGLE, {
         upsertConnection: (c) => store.upsert(c),
         storeTokens: (id, t) => vault.set(id, t),
       }, {

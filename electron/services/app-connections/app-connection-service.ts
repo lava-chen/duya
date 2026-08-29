@@ -32,6 +32,7 @@ import {
   overrideClientId,
   setClientSecret,
 } from './providers/registry.js';
+import { asAppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
 import type {
   AppConnection,
   AppConnectionStatusDTO,
@@ -41,6 +42,8 @@ import type {
   ProviderId,
 } from './types.js';
 import { toStatusDTO } from './types.js';
+
+const WECOM_PROVIDER = asAppConnectorId('wecom');
 
 const COMPONENT = 'AppConnectionService' as LogComponent;
 
@@ -137,6 +140,9 @@ export class AppConnectionService {
     credentials: { clientId: string; clientSecret?: string },
   ): AppConnectionProviderDTO {
     const providerConfig = getProviderConfig(provider);
+    if (!providerConfig) {
+      throw new FlowError('provider_not_configured', `${provider} is not a registered connector`);
+    }
     if (!providerConfig.supportsManualConfiguration) {
       throw new FlowError(
         'provider_not_configured',
@@ -154,6 +160,9 @@ export class AppConnectionService {
     this.hydrateProviderClients();
     const readiness = getProviderReadiness(provider);
     const config = getProviderConfig(provider);
+    if (!config) {
+      throw new FlowError('provider_not_configured', `${provider} is not a registered connector`);
+    }
     return {
       id: provider,
       label: config.label,
@@ -200,21 +209,21 @@ export class AppConnectionService {
       throw new FlowError('provider_not_configured', 'corpid and corpsecret are required');
     }
     if (this.providerBlockCheck) {
-      const gate = this.providerBlockCheck('wecom');
+      const gate = this.providerBlockCheck(WECOM_PROVIDER);
       if (!gate.allowed) {
         throw new FlowError('provider_blocked', gate.reason ?? 'wecom is blocked by enterprise policy');
       }
     }
 
     // Persist the enterprise credentials in the encrypted vault (per-provider).
-    this.vault.setOAuthClient('wecom', { clientId: corpid, clientSecret: corpsecret });
+    this.vault.setOAuthClient(WECOM_PROVIDER, { clientId: corpid, clientSecret: corpsecret });
 
     // Upsert a connected connection for provider wecom so the connector's
     // descriptors surface after reload. Reuse any existing wecom connection id.
-    const existing = this.store.listByProvider('wecom')[0];
+    const existing = this.store.listByProvider(WECOM_PROVIDER)[0];
     const conn: AppConnection = {
       id: existing?.id ?? `wecom-${crypto.randomUUID().slice(0, 8)}`,
-      provider: 'wecom',
+      provider: WECOM_PROVIDER,
       accountLabel: `WeCom enterprise ${corpid}`,
       accountId: corpid,
       scopes: [],
@@ -264,6 +273,9 @@ export class AppConnectionService {
 
     try {
       const config = getProviderConfig(provider);
+      if (!config) {
+        throw new FlowError('provider_not_configured', `${provider} is not a registered connector`);
+      }
       const dto = config.remoteMcpUrl
         ? await startRemoteMcpAuthorization(provider, {
             store: this.store,
@@ -338,7 +350,7 @@ export class AppConnectionService {
   /** Best-effort token revocation at the provider. Never throws. */
   private async revokeAtProvider(provider: ProviderId, connectionId: string): Promise<void> {
     const config = getProviderConfig(provider);
-    if (!config.revokeUrl) {
+    if (!config?.revokeUrl) {
       return;
     }
     const tokens = this.vault.get(connectionId);
