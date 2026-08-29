@@ -1466,7 +1466,31 @@ Unlisted actions are conservatively promoted one tier higher than `read`.
 | --- | --- | --- |
 | `bundled` | `official` | Shipped with DUYA, maintained by the DUYA team |
 | `local` | `local` | Installed from the local marketplace, user-managed |
-| (future) `marketplace` | `community` | Published by third parties (Plan 312) |
+| `marketplace` | `official`（official 源）/ `verified`（第三方源） | Plan 455：从 marketplace clone 安装 |
+
+## Plugin Marketplace（Plan 455）
+
+marketplace = 一个含 `marketplace.json` catalog 的 git 仓库（或本地目录），
+对齐 codex（`codex-deep-dive/17`）。链路：`添加来源` → clone（staging → rename
+原子落盘）→ catalog 浏览 → `installFromCatalog(pluginId, marketplace)`。
+
+- **来源解析**：`packages/plugin-core/src/marketplace/source-parse.ts` ——
+  `owner/repo` 简写、`<src>#<ref>`、仅 https、SSRF host 硬校验（拒绝
+  localhost/环回/私有/保留地址）。
+- **catalog 读取**：`electron/plugins/marketplace/manifest.ts` —— 五个搜索路径
+  （根 `marketplace.json` + codex 兼容的 `.agents/plugins/`、
+  `.claude-plugin/`、`.cursor-plugin/`），zod 校验；manifest 声明的插件路径
+  经 `resolveContainedPath` 围栏（远端内容不可信，`../`/绝对路径拒绝）。
+- **存储**：来源清单在 ConfigStore `[marketplaces]`；clone 在
+  `~/.duya/plugins/cache/marketplaces/<safe-name>/`；默认 `official` 源
+  启动时种子 + 后台同步（失败 WARN 不阻塞）。
+- **安装物化**：与 codex 不同（决策 D5）——从 clone 拷入版本化缓存
+  `cache/{marketplace}/{id}/{version}/` + symlink，marketplace 刷新不被动改
+  已装插件，只标「可升级」，升级为显式重装。policy 门：catalog
+  `policy.installation: not_available` 拒装；`authentication: on_install`
+  预留装后连接引导（全量归 plan 452-B）。
+- **IPC**：`plugin:marketplace:list/add/remove/refresh`；UI 在
+  ExtensionsPage → MarketplaceModal「来源管理」分类。
 
 ### Remote MCP transport status
 
