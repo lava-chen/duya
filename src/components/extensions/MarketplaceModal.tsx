@@ -8,6 +8,7 @@ import { useTranslation } from "@/hooks/useTranslation";
 import { cn } from "@/lib/utils";
 import { getPluginAPI } from "@/lib/plugin-ipc";
 import type { PluginCatalogEntry, PluginRegistryEntry } from "@/lib/plugin-types";
+import type { MarketplaceViewDTO, MarketplaceSyncOutcomeDTO } from "@/lib/plugin-ipc";
 import type {
   AppConnectionProviderDTO,
   AppConnectionStatusDTO,
@@ -19,12 +20,13 @@ import {
   PlugIcon,
   ListChecksIcon,
   SquaresFourIcon,
+  GlobeSimpleIcon,
   XIcon,
 } from "@/components/icons";
 import { PluginDetailView } from "@/components/settings/capabilities/PluginDetailView";
 
 
-type MarketCategory = "plugins" | "skills" | "connectors";
+type MarketCategory = "plugins" | "skills" | "connectors" | "sources";
 type MarketSource = "official" | "others";
 
 interface MarketplaceModalProps {
@@ -49,6 +51,7 @@ const CATEGORY_META: Record<MarketCategory, { labelKey: string; icon: ReactNode 
   plugins: { labelKey: "marketplace.categories.plugins", icon: <PlugIcon size={18} /> },
   skills: { labelKey: "marketplace.categories.skills", icon: <ListChecksIcon size={18} /> },
   connectors: { labelKey: "marketplace.categories.connectors", icon: <SquaresFourIcon size={18} /> },
+  sources: { labelKey: "marketplace.categories.sources", icon: <GlobeSimpleIcon size={18} /> },
 };
 
 export function MarketplaceModal({
@@ -72,19 +75,34 @@ export function MarketplaceModal({
   const [catalog, setCatalog] = useState<PluginCatalogEntry[]>([]);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginCatalogEntry | null>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  // Plan 455 — marketplace source management state.
+  const [marketplaces, setMarketplaces] = useState<MarketplaceViewDTO[]>([]);
+  const [marketplaceBusy, setMarketplaceBusy] = useState<string | null>(null);
+  const [sourceInput, setSourceInput] = useState("");
+  const [sourceError, setSourceError] = useState<string | null>(null);
+
+  const reloadCatalog = useCallback(async () => {
+    const api = getPluginAPI();
+    if (!api) return;
+    const res = await api.catalog.list();
+    if (res.success) setCatalog(res.data);
+  }, []);
+
+  const reloadMarketplaces = useCallback(async () => {
+    const api = getPluginAPI();
+    if (!api) return;
+    const res = await api.registry.marketplace.list();
+    if (res.success) setMarketplaces(res.data);
+  }, []);
 
   useEffect(() => {
     if (!open) {
       setSelectedPlugin(null);
       return;
     }
-    void (async () => {
-      const api = getPluginAPI();
-      if (!api) return;
-      const res = await api.catalog.list();
-      if (res.success) setCatalog(res.data);
-    })();
-  }, [open]);
+    void reloadCatalog();
+    void reloadMarketplaces();
+  }, [open, reloadCatalog, reloadMarketplaces]);
 
   useEffect(() => {
     if (!open) return;
@@ -326,6 +344,12 @@ export function MarketplaceModal({
                                   <span className="truncate">{publisher}</span>
                                   <span className="text-muted-foreground/60">•</span>
                                   <span>v{plugin.version}</span>
+                                  {plugin.marketplace && (
+                                    <>
+                                      <span className="text-muted-foreground/60">•</span>
+                                      <span className="truncate">{plugin.marketplace}</span>
+                                    </>
+                                  )}
                                 </>
                               }
                               description={plugin.shortDescription || plugin.description}
@@ -351,6 +375,60 @@ export function MarketplaceModal({
                     onConnect={onConnectProvider}
                     onConfigure={onConfigureProvider}
                     onDisconnect={onDisconnectConnection}
+                  />
+                )}
+
+                {category === "sources" && (
+                  <SourcesPanel
+                    marketplaces={marketplaces}
+                    busy={marketplaceBusy}
+                    sourceInput={sourceInput}
+                    sourceError={sourceError}
+                    onSourceInputChange={setSourceInput}
+                    onAdd={async (src) => {
+                      const api = getPluginAPI();
+                      if (!api) return;
+                      setSourceError(null);
+                      setMarketplaceBusy("__adding");
+                      try {
+                        const res = await api.registry.marketplace.add({ source: src });
+                        if (res.success) {
+                          setSourceInput("");
+                          await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+                        } else {
+                          setSourceError(res.error ?? t("extensions.actionFailed"));
+                        }
+                      } finally {
+                        setMarketplaceBusy(null);
+                      }
+                    }}
+                    onRefresh={async (name) => {
+                      const api = getPluginAPI();
+                      if (!api) return;
+                      setMarketplaceBusy(name ?? "__all");
+                      try {
+                        await api.registry.marketplace.refresh(name);
+                        await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+                      } finally {
+                        setMarketplaceBusy(null);
+                      }
+                    }}
+                    onRemove={async (name) => {
+                      const api = getPluginAPI();
+                      if (!api) return;
+                      setMarketplaceBusy(name);
+                      try {
+                        const res = await api.registry.marketplace.remove(name);
+                        if (!res.success) {
+                          setSourceError(res.error ?? t("extensions.actionFailed"));
+                        } else {
+                          setSourceError(null);
+                        }
+                        await Promise.all([reloadMarketplaces(), reloadCatalog()]);
+                      } finally {
+                        setMarketplaceBusy(null);
+                      }
+                    }}
                   />
                 )}
 
@@ -395,6 +473,136 @@ export function MarketplaceModal({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Plan 455 — marketplace source management. Lists configured git/local
+ * marketplaces with their sync status; add accepts owner/repo shorthand,
+ * https git URLs (optional #ref), and local directory paths.
+ */
+function SourcesPanel({
+  marketplaces,
+  busy,
+  sourceInput,
+  sourceError,
+  onSourceInputChange,
+  onAdd,
+  onRefresh,
+  onRemove,
+}: {
+  marketplaces: MarketplaceViewDTO[];
+  busy: string | null;
+  sourceInput: string;
+  sourceError: string | null;
+  onSourceInputChange: (value: string) => void;
+  onAdd: (source: string) => Promise<void>;
+  onRefresh: (name?: string) => Promise<void>;
+  onRemove: (name: string) => Promise<void>;
+}) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="space-y-4">
+      {/* Add source */}
+      <div className="rounded-xl border border-border/40 bg-[var(--surface)] p-4 space-y-2">
+        <p className="text-sm font-medium text-foreground">
+          {t("marketplace.sources.addTitle")}
+        </p>
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <Input
+              type="text"
+              placeholder={t("marketplace.sources.addPlaceholder")}
+              value={sourceInput}
+              onChange={(e) => onSourceInputChange(e.target.value)}
+              size="sm"
+              disabled={busy !== null}
+            />
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!sourceInput.trim() || busy !== null}
+            onClick={() => void onAdd(sourceInput.trim())}
+          >
+            {busy === "__adding" ? t("marketplace.sources.adding") : t("marketplace.sources.add")}
+          </Button>
+        </div>
+        {sourceError && (
+          <p className="text-xs text-red-500 break-all">{sourceError}</p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {t("marketplace.sources.addHint")}
+        </p>
+      </div>
+
+      {/* Marketplace list */}
+      {marketplaces.length === 0 ? (
+        <div className="rounded-xl border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
+          <p className="text-sm text-muted-foreground">
+            {t("marketplace.sources.empty")}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {marketplaces.map((market) => {
+            const isBusy = busy === market.name || busy === "__all";
+            return (
+              <div
+                key={market.name}
+                className="rounded-xl border border-border/40 bg-[var(--surface)] p-4 flex items-start justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-foreground">
+                      {market.displayName || market.name}
+                    </span>
+                    <span className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-muted/60 text-muted-foreground">
+                      {market.kind === "git"
+                        ? t("marketplace.sources.kindGit")
+                        : t("marketplace.sources.kindLocal")}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t("marketplace.sources.pluginCount", {
+                        count: market.pluginCount,
+                      })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate mt-1">
+                    {market.kind === "git" ? market.url : market.path}
+                  </p>
+                  {market.error && (
+                    <p className="text-xs text-amber-600 mt-1 break-all">
+                      {t("marketplace.sources.syncError")}: {market.error}
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isBusy || busy !== null || market.kind !== "git"}
+                    title={market.kind !== "git" ? t("marketplace.sources.localNoRefresh") : undefined}
+                    onClick={() => void onRefresh(market.name)}
+                  >
+                    {t("marketplace.sources.refresh")}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={isBusy || busy !== null}
+                    onClick={() => void onRemove(market.name)}
+                  >
+                    {t("marketplace.sources.remove")}
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
