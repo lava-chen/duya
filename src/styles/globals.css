@@ -10794,6 +10794,13 @@ html[data-message-font-size="large"] .prose h3 {
   letter-spacing: 0.01em;
 }
 
+/* OS shell icon extracted from the IDE executable (see ide-handlers.ts). */
+.file-preview-ide-icon {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
 .file-preview-open-group .file-preview-open-caret {
   width: 20px;
   border-left: 1px solid var(--border);

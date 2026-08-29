@@ -1151,6 +1151,8 @@ export interface IdeInfo {
   id: 'vscode' | 'cursor' | 'trae' | 'zed'
   name: string
   executable: string
+  /** OS shell icon (PNG data URL), absent when extraction is unavailable. */
+  icon?: string
 }
 
 export interface IdeAPI {

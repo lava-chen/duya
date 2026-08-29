@@ -347,8 +347,8 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const { placement, maxListHeight } = useOptionPanelPlacement(openMenuOpen, openContainerRef);
   // Detected external IDEs (from `ide:list`) and the effective default used
   // by the "Open" action (`ide:get-default`, honors config `ide.default`).
-  const [ides, setIdes] = useState<Array<{ id: string; name: string; executable: string }>>([]);
-  const [defaultIde, setDefaultIde] = useState<{ id: string; name: string; executable: string } | null>(null);
+  const [ides, setIdes] = useState<Array<{ id: string; name: string; executable: string; icon?: string }>>([]);
+  const [defaultIde, setDefaultIde] = useState<{ id: string; name: string; executable: string; icon?: string } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -700,9 +700,11 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     const ideItems: OptionPanelItem[] = ides.map((ide) => ({
       id: `ide:${ide.id}`,
       label: t('filePreview.openInIde', { name: ide.name }),
-      // Official brand mark so each IDE is recognizable at a glance,
-      // matching the OS-level "Open with" menus.
-      icon: <IdeBrandIcon id={ide.id} size={14} />,
+      // OS shell icon extracted from the IDE executable (same source as the
+      // OS "Open with" menus); the vector brand mark is the fallback.
+      icon: ide.icon
+        ? <img src={ide.icon} alt="" width={16} height={16} className="file-preview-ide-icon" />
+        : <IdeBrandIcon id={ide.id} size={14} />,
       searchText: ide.name,
     }));
     return [
