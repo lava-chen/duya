@@ -438,6 +438,12 @@ export interface PluginCatalogEntry {
   installed?: boolean;
   enabled?: boolean;
   featured?: boolean;
+  /** Plan 455 — marketplace attribution for `source: 'marketplace'` entries. */
+  marketplace?: string;
+  /** Plan 455 — catalog-declared installation policy (codex parity). */
+  installPolicy?: 'not_available' | 'available' | 'installed_by_default';
+  /** Plan 455 — catalog-declared authentication policy (codex parity). */
+  authPolicy?: 'on_install' | 'on_use';
   capabilityCounts: {
     skills: number;
     mcpServers: number;
