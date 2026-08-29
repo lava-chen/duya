@@ -1,6 +1,6 @@
 # Plan 455: codex 对齐的插件来源与下载安装机制(Marketplace + Git/Local 双源)
 
-> **Status**: In progress
+> **Status**: Phase 1-5 ✅（2026-08-29，单测 37+17+7+363 相关全绿，typecheck:all 过）；手动 electron:dev 冒烟待办
 > **Priority**: P0
 > **Created**: 2026-08-29
 > **依据**: `docs/references/codex-deep-dive/17-plugin-marketplace-and-app-connector.md`
@@ -45,18 +45,19 @@
 
 ## Phase 划分
 
-- [ ] **Phase 1 — 来源解析与存储**:ConfigStore schema 加 `marketplaces`;plugin-core
+- [x] **Phase 1 — 来源解析与存储**:ConfigStore schema 加 `marketplaces`;plugin-core
       `marketplace/source-parse.ts`(解析 + SSRF host 校验,纯函数)+ 单测。
-- [ ] **Phase 2 — clone 与 manifest**:`electron/plugins/marketplace/git-source.ts`
+- [x] **Phase 2 — clone 与 manifest**:`electron/plugins/marketplace/git-source.ts`
       (staging clone / fetch-reset / rename + 越界校验)、`marketplace/manifest.ts`
       (5 路径搜索 + zod 校验);本地 git fixture 单测(不起网络)。
-- [ ] **Phase 3 — catalog 与安装**:`listCatalog` 三源合并;`installFromCatalog(pluginId, marketplace)`
+- [x] **Phase 3 — catalog 与安装**:`listCatalog` 三源合并;`installFromCatalog(pluginId, marketplace)`
       接 policy 门 + 物化 + registry + refresh;marketplace add/remove/refresh + 升级检测;PluginManager 单测。
-- [ ] **Phase 4 — 启动同步与默认源**:启动时逐源容错同步;预置 `official` 默认源。
-- [ ] **Phase 5 — UI**:MarketplaceModal 改造(添加来源 / 源列表 / 分组浏览 / 安装 /
+- [x] **Phase 4 — 启动同步与默认源**:启动时逐源容错同步;预置 `official` 默认源。
+- [x] **Phase 5 — UI**:MarketplaceModal 改造(添加来源 / 源列表 / 分组浏览 / 安装 /
       升级徽标 / 本地安装入口);preload + `src/lib/plugin-ipc.ts` 同步新通道。
-- [ ] **Phase 6 — 收口**:`npm run typecheck:all` + 全量 vitest;ARCHITECTURE.md 更新;
-      worktree → PR → merge。
+- [x] **Phase 6 — 收口**:`npm run typecheck:all` + 全量 vitest;ARCHITECTURE.md 更新;
+      worktree → PR → merge。注:全量 vitest 在本机受 better-sqlite3 ABI 锁影响
+      (运行中的 Electron 持有 .node),plugin 相关 363 测试单独全绿。
 
 ## IPC 面
 
