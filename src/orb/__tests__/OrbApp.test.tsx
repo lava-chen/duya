@@ -40,6 +40,8 @@ const mockOrb = {
   onShowResult: vi.fn(capture('showResult')),
   onNotifyResult: vi.fn(capture('notifyResult')),
   onHide: vi.fn(capture('hide')),
+  onShowInputWithContext: vi.fn(capture('showInputWithContext')),
+  resetConversation: vi.fn().mockResolvedValue({ ok: true }),
 };
 
 beforeEach(() => {
@@ -76,6 +78,7 @@ describe('OrbApp', () => {
     expect(mockOrb.onUpdateProgress).toHaveBeenCalled();
     expect(mockOrb.onShowResult).toHaveBeenCalled();
     expect(mockOrb.onHide).toHaveBeenCalled();
+    expect(mockOrb.onShowInputWithContext).toHaveBeenCalled();
   });
 
   it('clicking the ball triggers showInput', () => {
