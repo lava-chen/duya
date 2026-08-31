@@ -449,7 +449,6 @@ function SessionInputRow({
   const popupRef = useRef<HTMLDivElement>(null);
   const modelPopupRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState(pendingText);
-  const [pendingEpoch, setPendingEpoch] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [localAttachments, setLocalAttachments] = useState<Attachment[]>(() =>
     pendingAttachments.map((dataUrl, idx) => ({
@@ -464,12 +463,13 @@ function SessionInputRow({
   const [mentionOpen, setMentionOpen] = useState(false);
   const [mentionItems, setMentionItems] = useState<MentionItem[]>([]);
 
-  // Re-seed local state whenever the parent bumps pendingText or
-  // pendingAttachments (a new wake). `key={epoch}` on the textarea forces
-  // a clean remount so the autogrow height resets.
+  // Re-seed `text` whenever the parent bumps pendingText (a new wake
+  // auto-injected the context preamble). No key={epoch} remount — that
+  // caused the test fireEvent to race with a pending React rerender and
+  // drop the keystroke. The autogrow handler in onChange keeps the height
+  // correct after each keystroke.
   useEffect(() => {
     setText(pendingText);
-    setPendingEpoch((n) => n + 1);
   }, [pendingText]);
   useEffect(() => {
     setLocalAttachments(
@@ -485,7 +485,7 @@ function SessionInputRow({
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, [pendingEpoch]);
+  }, []);
 
   useEffect(() => {
     void Promise.resolve(window.electronAPI?.orb?.chatConfig?.())
@@ -719,7 +719,6 @@ function SessionInputRow({
 
       <textarea
         ref={inputRef}
-        key={pendingEpoch}
         className="orb-input-field"
         value={text}
         onChange={(e) => {
