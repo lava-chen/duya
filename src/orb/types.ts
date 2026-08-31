@@ -29,6 +29,33 @@ export interface ResultContent {
   turnId: string;
 }
 
+/**
+ * 一条会话消息。Phase A 引入,与历史单 `result` 字段并存,Phase B 切换到
+ * 会话式 UI 后 `result` 会被移除。
+ */
+export interface Turn {
+  id: string;
+  role: 'user' | 'assistant';
+  /** 累积的 Markdown 原文(assistant 流式增量;user 最终值) */
+  text: string;
+  /** user 提交的附件 data-URL 列表 */
+  attachments?: string[];
+  createdAt: number;
+  /** 流结束时填,用于会话持久化与长任务庆祝 */
+  finishedAt?: number;
+}
+
+/**
+ * Hotkey 唤醒时主进程推送的自动注入上下文。
+ * Phase A 仅在桥接契约中预留;Phase D 由 wake.ts 的 buildWakeAutoContext 实际填充。
+ */
+export interface WakeAutoContext {
+  screenshotBase64: string | null;
+  contextText: string;
+  foreground: { pid: number; exeName: string; title: string } | null;
+  redacted: boolean;
+}
+
 /** Orb preload API 类型 — mirrors OrbAPI in electron/preload.ts. */
 export interface OrbAPI {
   submit: (
@@ -90,4 +117,14 @@ export interface OrbAPI {
     }) => void,
   ) => () => void;
   onHide: (callback: () => void) => () => void;
+  /**
+   * 主进程拍屏 + OSContext 拼好后发出的开卡事件。
+   * 渲染端应把 pendingText / pendingAttachments 灌进输入区。
+   * Phase A 仅订阅,具体渲染消费在 Phase B/D 落地。
+   */
+  onShowInputWithContext: (
+    callback: (payload: WakeAutoContext) => void,
+  ) => () => void;
+  /** 显式重置会话:清空 messages,保留 orb 窗口与当前 state。 */
+  resetConversation: () => Promise<{ ok: boolean }>;
 }
