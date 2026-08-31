@@ -26,6 +26,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
+import { getConfigStore } from '../config/store-instance.js';
 import { getLogger, LogComponent } from '../logging/logger.js';
 
 /** Component tag for structured logs. */
@@ -440,6 +441,33 @@ class WakeServiceImpl implements WakeService {
       this.orbQueue = [];
       for (const m of queued) {
         if (!win.isDestroyed()) win.webContents.send(m.channel, ...m.args);
+      }
+    });
+
+    // Persist the orb position whenever the user finishes dragging it.
+    // `moved` (post-drag) fires once, vs `move` (per-pixel) which would
+    // thrash the config store. Without this listener the renderer never
+    // calls `setOrbPosition` and `electron/main.ts` only restores the
+    // position that was last persisted — usually `defaultOrbPosition()`,
+    // so any user drag is silently lost across restarts.
+    win.on('moved', () => {
+      if (!this.orbWindow || this.orbWindow.isDestroyed()) return;
+      const b = this.orbWindow.getBounds();
+      let displayId = this.position.displayId;
+      try {
+        displayId = screen.getDisplayMatching(b).id;
+      } catch {
+        // screen unavailable (headless, app shutting down) — keep prior id
+      }
+      this.position = { x: b.x, y: b.y, displayId };
+      try {
+        getConfigStore().set('wake.orb', this.position);
+      } catch (err) {
+        logger.warn(
+          'Wake: failed to persist orb position on move',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.Orb,
+        );
       }
     });
 
