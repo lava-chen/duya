@@ -259,8 +259,24 @@ function buildContextPreamble(): string {
     const selected =
       typeof props.selectedText === 'string' ? props.selectedText.slice(0, 500) : '';
     const text = typeof props.text === 'string' ? props.text.slice(0, 300) : '';
+    // Phase D (Plan session-floater): surface exeName + window title so the
+    // auto-injected preamble tells the user which app they're looking at,
+    // not just the document title. The title alone is ambiguous when the
+    // active document is a markdown file open in VS Code — the user thinks
+    // of it as "VS Code is open", not "filename.md is the foreground".
+    const fg = ctx?.foreground;
+    const exe =
+      fg && typeof fg.exeName === 'string' ? fg.exeName.slice(0, 64) : '';
+    const windowTitle =
+      fg && typeof fg.title === 'string' ? fg.title.slice(0, 120) : '';
     const lines: string[] = ['[用户当前屏幕上下文]'];
-    if (title) lines.push(`- 焦点窗口标题：${title}`);
+    if (exe) {
+      lines.push(
+        `- 前台应用：${exe}${windowTitle ? ` (${windowTitle})` : ''}`,
+      );
+    } else if (windowTitle) {
+      lines.push(`- 焦点窗口标题：${windowTitle}`);
+    }
     if (selected) lines.push(`- 选中文本：${selected}`);
     else if (text) lines.push(`- 可见文本：${text}`);
     return lines.length > 1 ? `${lines.join('\n')}\n\n` : '';
@@ -311,6 +327,71 @@ async function captureScreenBase64(): Promise<string | null> {
     const chosen = selectScreenSource(sources, displayId);
     const png = chosen?.thumbnail?.toPNG();
     return png && png.length > 0 ? png.toString('base64') : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Wake auto-injection (Phase D, Plan session-floater)
+// ---------------------------------------------------------------------------
+
+/**
+ * Envelope pushed to the orb on hotkey wake. The renderer seeds the input
+ * row with `contextText` and pushes the screenshot into the attachments
+ * strip. When `redacted` is true the renderer shows the suppression banner
+ * instead — even a screenshot of a password manager is undesirable.
+ */
+export interface WakeAutoContext {
+  screenshotBase64: string | null;
+  contextText: string;
+  foreground:
+    | { pid: number; exeName: string; title: string }
+    | null;
+  redacted: boolean;
+}
+
+/**
+ * Build the auto-injection envelope for a wake. Returns null when the
+ * OSContextBridge is disabled (user opted out — never inject anything),
+ * the empty-context sentinel when focused-field redaction suppresses both
+ * screenshot and context, or a fully populated envelope otherwise.
+ *
+ * Pure (best-effort) — never throws. All callers should treat the result
+ * as advisory; the orb stays usable with an empty input even when this
+ * returns null.
+ */
+export async function buildWakeAutoContext(): Promise<WakeAutoContext | null> {
+  try {
+    const bridge = getOSContextBridge();
+    if (!bridge.isEnabled()) return null;
+    const ctx = bridge.getCurrent();
+    if (ctx?.redacted === true) {
+      return {
+        screenshotBase64: null,
+        contextText: '',
+        foreground: null,
+        redacted: true,
+      };
+    }
+    const [screenshotBase64, contextText] = await Promise.all([
+      captureScreenBase64(),
+      Promise.resolve(buildContextPreamble()),
+    ]);
+    const fg = ctx?.foreground;
+    return {
+      screenshotBase64,
+      contextText,
+      foreground:
+        fg && typeof fg.pid === 'number' && typeof fg.exeName === 'string'
+          ? {
+              pid: fg.pid,
+              exeName: fg.exeName,
+              title: typeof fg.title === 'string' ? fg.title : '',
+            }
+          : null,
+      redacted: false,
+    };
   } catch {
     return null;
   }

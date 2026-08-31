@@ -26,7 +26,9 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 
+import { getConfigStore } from '../config/store-instance.js';
 import { getLogger, LogComponent } from '../logging/logger.js';
+import { buildWakeAutoContext } from './orb-wakeless-chat.js';
 
 /** Component tag for structured logs. */
 const logger = getLogger();
@@ -69,11 +71,14 @@ export interface WakeOptions {
 
 const DEFAULT_BOUNDS: Record<OrbState, OrbBounds> = {
   DORMANT: { x: 0, y: 0, width: 50, height: 50 },
-  INPUT: { x: 0, y: 0, width: 320, height: 160 },
-  // Wide enough to hold the ball plus the "thinking / 用 tool" progress
-  // bubble INSIDE the window — at 50x50 the bubble was clipped by the OS.
-  LOADING: { x: 0, y: 0, width: 220, height: 60 },
-  RESULT: { x: 0, y: 0, width: 350, height: 350 },
+  // Phase C (Plan session-floater): a single session-card size for
+  // INPUT/LOADING/RESULT — the renderer swaps content inside the window
+  // rather than resizing on every state change. Removes the per-state
+  // resize flash and lets applyBounds short-circuit when bounds are
+  // unchanged.
+  INPUT: { x: 0, y: 0, width: 360, height: 520 },
+  LOADING: { x: 0, y: 0, width: 360, height: 520 },
+  RESULT: { x: 0, y: 0, width: 360, height: 520 },
 };
 
 let _wake: WakeService | null = null;
@@ -103,6 +108,41 @@ export interface WakeService {
   onStateChange(listener: (state: OrbState) => void): () => void;
   /** Test-only: replace singleton. */
   __setForTest(replacement: WakeService | null): void;
+  /**
+   * Phase F (Plan session-floater): explicit new-chat reset that clears
+   * the persisted session in configStore.
+   */
+  resetConversation(): void;
+  /**
+   * Persisted session envelope — Phase F. The orb renderer keeps its
+   * own canonical `messages[]` for fast render; main holds this durable
+   * copy so the conversation survives both the 60s auto-fold and a full
+   * app restart. Capped at 50 turns; oldest dropped on overflow.
+   */
+  appendTurn(turn: SessionTurn): void;
+  getSession(): SessionStore;
+  loadSession(): void;
+}
+
+/**
+ * Shape of the `wake.session` value in configStore. Single field on
+ * purpose: rolling out a multi-session history later is a Phase G+
+ * follow-up that won't have to redefine the persistence envelope.
+   */
+export interface SessionStore {
+  messages: SessionTurn[];
+  updatedAt: number;
+}
+
+/** A turn persisted across folds / restarts. Mirrors the renderer-side
+ *  Turn shape but is JSON-serializable for configStore round-trip. */
+export interface SessionTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  attachments?: string[];
+  createdAt: number;
+  finishedAt?: number;
 }
 
 class WakeServiceImpl implements WakeService {
@@ -127,6 +167,9 @@ class WakeServiceImpl implements WakeService {
   private emitter = new EventEmitter();
   private position: OrbPosition = { x: 100, y: 100, displayId: 0 };
   private registeredShortcut: string | null = null;
+  /** Max turns persisted to the session envelope; oldest silently dropped. */
+  private static readonly SESSION_MAX_TURNS = 50;
+  private session: SessionStore = { messages: [], updatedAt: 0 };
   private readonly opts: Required<Pick<WakeOptions,
     'defaultShortcut' | 'doubleTap' | 'doubleTapWindowMs'>> &
     Pick<WakeOptions, 'orbDevUrl' | 'orbResourcesPath' | 'bounds'>;
@@ -240,11 +283,23 @@ class WakeServiceImpl implements WakeService {
     // Already DORMANT → trigger show-input.
     if (this.state === 'DORMANT') {
       const win = this.ensureOrb();
-      // Park the orb in front of the user rather than wherever it was last
-      // left: the hotkey is global, so the user may be on another app,
-      // another display, or another corner of this one.
-      this.setState('INPUT', this.anchorPoint());
+      // The orb stays at its last drag position (`this.position`); no more
+      // snap-to-cursor. The hotkey is global and the user is often working
+      // elsewhere, so jumping the orb to the cursor was visually jarring.
+      this.setState('INPUT');
       this.sendOrb('automation:orb:show-input');
+      // Phase D (Plan session-floater): also push the auto-injection
+      // envelope (screenshot + os-context preamble + cursor location).
+      // Best-effort, never blocks the wake — `null` from
+      // buildWakeAutoContext means the bridge is disabled and the user
+      // gets a clean empty input.
+      void buildWakeAutoContext()
+        .then((ctx) => {
+          if (ctx) this.sendOrb('automation:orb:show-input-with-context', ctx);
+        })
+        .catch(() => {
+          // best-effort: keep the wake responsive even if capture throws
+        });
       win.show();
       win.focus();
       return;
@@ -255,6 +310,9 @@ class WakeServiceImpl implements WakeService {
         // Resend: a renderer that missed the original event (reload mid-
         // session) would otherwise stay a ball forever in an INPUT-sized
         // window. transition('INPUT') is idempotent on the renderer side.
+        // Phase D: do NOT re-inject context — the first wake already
+        // populated pendingText/pendingAttachments; a second press would
+        // clobber the user's edits.
         this.sendOrb('automation:orb:show-input');
       }
       if (this.orbWindow.isMinimized()) this.orbWindow.restore();
@@ -272,6 +330,62 @@ class WakeServiceImpl implements WakeService {
     // turn runs to completion on the agent server and only surfaces later
     // as a notify badge — wasted tokens and a pinned worker slot.
     void this.cancelWakelessTurn();
+  }
+
+  // ── Phase F: persisted session envelope ──────────────────────────────
+  // The orb renderer keeps a canonical `messages[]` for fast render; this
+  // service holds the durable copy in configStore so the conversation
+  // survives the 60s auto-fold and a full app restart. The renderer asks
+  // for the latest copy via the extended automation:orb:state payload
+  // (see electron/ipc/orb.ts).
+
+  resetConversation(): void {
+    this.session = { messages: [], updatedAt: Date.now() };
+    this.persistSession();
+  }
+
+  appendTurn(turn: SessionTurn): void {
+    this.session = {
+      messages: [...this.session.messages, turn].slice(
+        -WakeServiceImpl.SESSION_MAX_TURNS,
+      ),
+      updatedAt: Date.now(),
+    };
+    this.persistSession();
+  }
+
+  getSession(): SessionStore {
+    return {
+      messages: [...this.session.messages],
+      updatedAt: this.session.updatedAt,
+    };
+  }
+
+  loadSession(): void {
+    try {
+      const raw = getConfigStore().getByPath('wake.session');
+      if (raw && typeof raw === 'object' && Array.isArray((raw as SessionStore).messages)) {
+        this.session = raw as SessionStore;
+      }
+    } catch (err) {
+      logger.warn(
+        'Wake: failed to load persisted session',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.Orb,
+      );
+    }
+  }
+
+  private persistSession(): void {
+    try {
+      getConfigStore().set('wake.session', this.session);
+    } catch (err) {
+      logger.warn(
+        'Wake: failed to persist session',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.Orb,
+      );
+    }
   }
 
   /** Mark a wakeless turn as in-flight: suppress blur-collapse until the turn
@@ -363,10 +477,10 @@ class WakeServiceImpl implements WakeService {
    * Internal: change state and broadcast to listeners + UI.
    * Used by IPC handlers in `electron/ipc/orb.ts`.
    */
-  setState(next: OrbState, centre?: { x: number; y: number }): void {
+  setState(next: OrbState): void {
     if (next === this.state) return;
     this.state = next;
-    this.applyBounds(next, centre);
+    this.applyBounds(next);
     for (const listener of this.emitter.listeners('state')) {
       try {
         (listener as (s: OrbState) => void)(next);
@@ -374,33 +488,6 @@ class WakeServiceImpl implements WakeService {
         // swallow
       }
     }
-  }
-
-  /**
-   * Where the user is working. The cursor wins: it is the only focus signal
-   * that survives another application holding the keyboard, which is exactly
-   * the case the global hotkey exists for. Falls back to the focused window's
-   * centre, then to the orb's own parked position.
-   */
-  private anchorPoint(): { x: number; y: number } {
-    try {
-      const cursor = screen.getCursorScreenPoint();
-      if (Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
-        return { x: cursor.x, y: cursor.y };
-      }
-    } catch {
-      // screen unavailable (headless, or called before app ready)
-    }
-    try {
-      const focused = BrowserWindow.getFocusedWindow();
-      if (focused && !focused.isDestroyed()) {
-        const b = focused.getBounds();
-        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-      }
-    } catch {
-      // fall through
-    }
-    return { x: this.position.x, y: this.position.y };
   }
 
   private ensureOrb(): BrowserWindow {
@@ -463,6 +550,33 @@ class WakeServiceImpl implements WakeService {
       }
     });
 
+    // Persist the orb position whenever the user finishes dragging it.
+    // `moved` (post-drag) fires once, vs `move` (per-pixel) which would
+    // thrash the config store. Without this listener the renderer never
+    // calls `setOrbPosition` and `electron/main.ts` only restores the
+    // position that was last persisted — usually `defaultOrbPosition()`,
+    // so any user drag is silently lost across restarts.
+    win.on('moved', () => {
+      if (!this.orbWindow || this.orbWindow.isDestroyed()) return;
+      const b = this.orbWindow.getBounds();
+      let displayId = this.position.displayId;
+      try {
+        displayId = screen.getDisplayMatching(b).id;
+      } catch {
+        // screen unavailable (headless, app shutting down) — keep prior id
+      }
+      this.position = { x: b.x, y: b.y, displayId };
+      try {
+        getConfigStore().set('wake.orb', this.position);
+      } catch (err) {
+        logger.warn(
+          'Wake: failed to persist orb position on move',
+          { error: err instanceof Error ? err.message : String(err) },
+          LogComponent.Orb,
+        );
+      }
+    });
+
     win.on('closed', () => {
       this.orbReady = false;
       this.orbQueue = [];
@@ -485,18 +599,29 @@ class WakeServiceImpl implements WakeService {
     return win;
   }
 
-  private applyBounds(state: OrbState, centre?: { x: number; y: number }): void {
+  private applyBounds(state: OrbState): void {
     if (!this.orbWindow || this.orbWindow.isDestroyed()) return;
     const spec = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
-    const bounds = centre
-      ? this.boundsNear(centre, state)
-      : {
-          // Snap to the parked position unless the state declares its own x/y.
-          x: spec.x !== 0 ? spec.x : this.position.x,
-          y: spec.y !== 0 ? spec.y : this.position.y,
-          width: spec.width,
-          height: spec.height,
-        };
+    const bounds = {
+      // Snap to the parked position unless the state declares its own x/y.
+      x: spec.x !== 0 ? spec.x : this.position.x,
+      y: spec.y !== 0 ? spec.y : this.position.y,
+      width: spec.width,
+      height: spec.height,
+    };
+    // Skip the call when the window is already at these bounds — every
+    // chunk hit would otherwise toggle resizable:false → true → false and
+    // flash the border on Windows. Now that INPUT/LOADING/RESULT share
+    // 360x520 this short-circuit saves most transitions.
+    const current = this.orbWindow.getBounds();
+    if (
+      current.x === bounds.x &&
+      current.y === bounds.y &&
+      current.width === bounds.width &&
+      current.height === bounds.height
+    ) {
+      return;
+    }
     // Remember where we landed so the following states (LOADING → RESULT →
     // DORMANT) keep the orb in one place instead of snapping back.
     this.position = { ...this.position, x: bounds.x, y: bounds.y };
@@ -510,47 +635,6 @@ class WakeServiceImpl implements WakeService {
     } finally {
       win.setResizable(false);
     }
-  }
-
-  /**
-   * Bounds for `state` centred on `centre`, clamped to the work area of the
-   * display it lands on. Clamping matters on the edges and with multiple
-   * monitors, where an unclamped centre would push the box off-screen or
-   * straddle two displays.
-   */
-  private boundsNear(
-    centre: { x: number; y: number },
-    state: OrbState,
-  ): OrbBounds {
-    const bounds = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
-    let area: Electron.Rectangle | undefined;
-    try {
-      area = screen.getDisplayNearestPoint(centre).workArea;
-    } catch {
-      area = undefined;
-    }
-    const clamp = (v: number, min: number, max: number) =>
-      Math.min(Math.max(v, min), max);
-    const x = area
-      ? clamp(
-          centre.x - bounds.width / 2,
-          area.x,
-          Math.max(area.x, area.x + area.width - bounds.width),
-        )
-      : centre.x - bounds.width / 2;
-    const y = area
-      ? clamp(
-          centre.y - bounds.height / 2,
-          area.y,
-          Math.max(area.y, area.y + area.height - bounds.height),
-        )
-      : centre.y - bounds.height / 2;
-    return {
-      x: Math.round(x),
-      y: Math.round(y),
-      width: bounds.width,
-      height: bounds.height,
-    };
   }
 }
 

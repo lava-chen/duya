@@ -53,6 +53,12 @@ class FakeBrowserWindow {
     width: 50,
     height: 50,
   };
+  /**
+   * Counts every setBounds call. Phase C's applyBounds short-circuits
+   * when bounds are unchanged, so tests can assert no-op behaviour
+   * without measuring timing.
+   */
+  setBoundsCount = 0;
   visible = false;
   webContents = {
     send: vi.fn(),
@@ -77,6 +83,7 @@ class FakeBrowserWindow {
   focus(): void {}
   setBounds(next: { x: number; y: number; width: number; height: number }): void {
     this.bounds = { ...next };
+    this.setBoundsCount++;
   }
   loadURL(url: string): Promise<void> {
     mocks.loadURL(url);
@@ -230,8 +237,20 @@ describe('WakeService position', () => {
     wake.setPosition({ x: 500, y: 300, displayId: 2 });
     wake.wake();
     const win = wake.getOrbWindow() as unknown as FakeBrowserWindow;
-    // INPUT width 280, position 500/300.
-    expect(win.bounds).toEqual({ x: 500, y: 300, width: 280, height: 100 });
+    // Phase C: INPUT is now 360x520 (session card). Position stays at 500/300.
+    expect(win.bounds).toEqual({ x: 500, y: 300, width: 360, height: 520 });
+  });
+
+  it('applyBounds is a no-op when bounds are unchanged (avoids the resizable toggle flash on every chunk)', () => {
+    const wake = initializeWakeService({});
+    wake.setPosition({ x: 200, y: 200, displayId: 0 });
+    wake.wake();
+    const win = wake.getOrbWindow() as unknown as FakeBrowserWindow;
+    const setBoundsCount = win.setBoundsCount;
+    // Trigger a state transition that should now skip setBounds: INPUT → LOADING
+    // share the same 360x520 size.
+    wake.setState('LOADING');
+    expect(win.setBoundsCount).toBe(setBoundsCount);
   });
 
   it('getPosition returns a copy', () => {

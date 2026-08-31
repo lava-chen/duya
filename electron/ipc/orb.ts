@@ -161,7 +161,14 @@ export function registerOrbHandlers(): void {
   );
 
   ipcMain.handle('automation:orb:state', async () => {
-    return { state: getWakeService().getState() };
+    const wake = getWakeService();
+    const session =
+      typeof wake.getSession === 'function' ? wake.getSession() : { messages: [], updatedAt: 0 };
+    // Phase F (Plan session-floater): payload gained `messages` so the
+    // renderer can recover the conversation across reloads. The channel
+    // name is unchanged; only the payload shape grew. Both consumers
+    // (useOrbState mount/focus/poll rescue) read .messages.
+    return { state: wake.getState(), messages: session.messages };
   });
 
   // The model badge / picker in the orb composer: `model` is what the
@@ -223,6 +230,26 @@ export function registerOrbHandlers(): void {
 
   ipcMain.handle('automation:orb:collapse', async () => {
     getWakeService().collapse();
+    return { ok: true };
+  });
+
+  /**
+   * Phase A (Plan session-floater): explicit new-chat reset.
+   * Phase F wires this to WakeService.resetConversation() which clears
+   * the persisted session in configStore. For Phase A we just clear the
+   * canonical state in main and let the renderer drop its messages.
+   */
+  ipcMain.handle('automation:orb:reset-conversation', async () => {
+    const wake = getWakeService();
+    try {
+      wake.resetConversation();
+    } catch (err) {
+      logger.warn(
+        'orb:reset-conversation failed',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.Orb,
+      );
+    }
     return { ok: true };
   });
 }
@@ -295,6 +322,27 @@ export function sendOrbHide(): void {
   const win = getOrbWindow();
   if (win && !win.isDestroyed()) {
     win.webContents.send('automation:orb:hide');
+  }
+}
+
+/**
+ * Phase A (Plan session-floater): hotkey wake auto-injection.
+ * WakeService calls this right after `sendOrbShowInput` on DORMANT→INPUT
+ * with a freshly captured screenshot + OSContext envelope. Renderer uses
+ * the payload to pre-fill the input row + push an attachment chip.
+ *
+ * Phase A only registers the channel; Phase D wires the actual capture in
+ * `electron/services/orb-wakeless-chat.ts:buildWakeAutoContext`.
+ */
+export function sendOrbShowInputWithContext(payload: {
+  screenshotBase64: string | null;
+  contextText: string;
+  foreground: { pid: number; exeName: string; title: string } | null;
+  redacted: boolean;
+}): void {
+  const win = getOrbWindow();
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('automation:orb:show-input-with-context', payload);
   }
 }
 
