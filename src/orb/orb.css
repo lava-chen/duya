@@ -22,10 +22,13 @@
 :root {
   /* ── 尺寸 ── */
   --orb-size: 50px;
-  --orb-input-width: 280px;
-  --orb-input-height: 100px;
-  --orb-result-width: 350px;
-  --orb-result-height: 350px;
+  /* Phase C (Plan session-floater): single session-card size. INPUT,
+   * LOADING and RESULT all host the same 360x520 window with content
+   * swapped inside. Match DEFAULT_BOUNDS in electron/services/wake.ts. */
+  --orb-input-width: 360px;
+  --orb-input-height: 520px;
+  --orb-result-width: 360px;
+  --orb-result-height: 520px;
   --orb-bubble-size: 14px;
   --orb-bubble-offset: 6px;
   --orb-radius: 50%;
