@@ -141,6 +141,15 @@ export class AgentServerClient {
     });
 
     let streamEndedCleanly = false;
+    // Track whether a terminal `done` / `error` event was already emitted on this
+    // stream. SSE streams emit `stream:end` from the post-read finally block on
+    // every clean close, but only one of those should reach
+    // stream-session-manager when the worker already declared the turn terminal.
+    // Without this flag, a late chunk loss on the final `event: done` frame
+    // (Electron IPC, server keep-alive, packaged renderer buffers) drops the
+    // terminal marker and the manager flips an otherwise-completed turn into
+    // `phase = 'error'` with `Stream ended unexpectedly`.
+    let terminalEventReceived = false;
     let response = null;
     try {
       console.log('[agent-http-client] Making POST request to:', `${baseUrl}/sessions/${sessionId}/chat`);
@@ -273,6 +282,9 @@ export class AgentServerClient {
                 content: (event.data as Record<string, unknown>)?.content as string,
                 reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
               };
+              if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
+                terminalEventReceived = true;
+              }
               this.emit(sessionId, mappedEvent);
               // Reset event type after processing
               currentEventType = 'message';
@@ -373,6 +385,9 @@ export class AgentServerClient {
                       content: (event.data as Record<string, unknown>)?.content as string,
                       reason: (event.data as Record<string, unknown>)?.reason as string | undefined,
                     };
+                    if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
+                      terminalEventReceived = true;
+                    }
                     this.emit(sessionId, mappedEvent);
                     currentEventType = 'message';
                   } catch {
@@ -402,15 +417,21 @@ export class AgentServerClient {
       }
     } finally {
       this.abortControllers.delete(sessionId);
-      // If SSE stream ended without a done event (e.g. client disconnect), notify the manager
-      // so it can transition the session to error/completed state instead of leaving it STREAMING
-      if (streamEndedCleanly) {
-        console.log('[agent-http-client] SSE stream ended, emitting stream:end event');
+      // Emit `stream:end` only when the stream closed without a terminal
+      // `done`/`error` event. When the worker already declared the turn
+      // terminal, the manager has all it needs and re-firing here would let
+      // a mid-phase reset (or a stale stream:end event from a previous
+      // streamId that the manager still considers current) flip an
+      // otherwise-completed turn into `phase = 'error'`.
+      if (streamEndedCleanly && !terminalEventReceived) {
+        console.log('[agent-http-client] SSE stream ended without terminal event, emitting stream:end event');
         this.emit(sessionId, {
           type: 'stream:end',
           sessionId,
           data: {},
         });
+      } else if (streamEndedCleanly && terminalEventReceived) {
+        console.log('[agent-http-client] SSE stream ended cleanly after terminal event, skipping stream:end');
       }
     }
   }
@@ -442,6 +463,11 @@ export class AgentServerClient {
     this.abortControllers.set(sessionId, abortController);
 
     let streamEndedCleanly = false;
+    // Same flag as startChat — emit `stream:end` only when no terminal
+    // `done`/`error` was observed. Without this, an attach that ends cleanly
+    // after a terminal event would re-fire `stream:end` into the manager
+    // and risk the same false-positive error transition.
+    let terminalEventReceived = false;
     try {
       const response = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}/chat`, {
         method: 'GET',
@@ -498,6 +524,9 @@ export class AgentServerClient {
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,
               };
+              if (mappedEvent.type === 'done' || mappedEvent.type === 'chat:done' || mappedEvent.type === 'error' || mappedEvent.type === 'chat:error') {
+                terminalEventReceived = true;
+              }
               this.emit(sessionId, mappedEvent);
               currentEventType = 'message';
             } catch {
@@ -519,7 +548,7 @@ export class AgentServerClient {
       }
     } finally {
       this.abortControllers.delete(sessionId);
-      if (streamEndedCleanly) {
+      if (streamEndedCleanly && !terminalEventReceived) {
         this.emit(sessionId, { type: 'stream:end', sessionId, data: {} });
       }
     }
