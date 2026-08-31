@@ -12,7 +12,7 @@ import { getCanvasId, ipcRequest, noContextResult } from './ipc-request.js';
 
 export const TOOL_NAME = 'canvas_manage';
 
-type CanvasManageAction = 'get_current' | 'list' | 'create' | 'switch' | 'rename';
+type CanvasManageAction = 'get_current' | 'list' | 'create' | 'switch' | 'rename' | 'delete';
 
 interface CanvasSummary {
   id: string;
@@ -32,19 +32,20 @@ export const definition: Tool = {
   name: TOOL_NAME,
   description:
     'Manage the session\'s canvas target. Use get_current to identify the bound canvas, list to discover other canvases, ' +
-    'create to make a named canvas, switch to move all later canvas tool calls to another canvas, and rename to give a canvas a meaningful name. ' +
+    'create to make a named canvas, switch to move all later canvas tool calls to another canvas, rename to give a canvas a meaningful name, ' +
+    'and delete to permanently remove a canvas. ' +
     'Switches are durable and also move the visible Conductor panel.',
   input_schema: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['get_current', 'list', 'create', 'switch', 'rename'],
+        enum: ['get_current', 'list', 'create', 'switch', 'rename', 'delete'],
         description: 'Canvas management operation.',
       },
       canvasId: {
         type: 'string',
-        description: 'Target canvas ID. Required for switch; optional for rename (defaults to the current canvas).',
+        description: 'Target canvas ID. Required for switch and delete; optional for rename (defaults to the current canvas).',
       },
       name: {
         type: 'string',
@@ -88,7 +89,7 @@ export const executor: ToolExecutor = {
 
     const action = input.action as CanvasManageAction;
     if (!['get_current', 'list', 'create', 'switch', 'rename'].includes(action)) {
-      return errorResult('action must be get_current, list, create, switch, or rename');
+      return errorResult('action must be get_current, list, create, switch, rename, or delete');
     }
 
     let currentCanvasId: string | undefined;
@@ -112,9 +113,9 @@ export const executor: ToolExecutor = {
       payload.name = name;
     }
 
-    if (action === 'rename') {
+    if (action === 'rename' || action === 'delete') {
       const canvasId = requireTrimmedString(input, 'canvasId') ?? currentCanvasId;
-      if (!canvasId) return errorResult('No current canvas is bound; provide canvasId for rename');
+      if (!canvasId) return errorResult(`No current canvas is bound; provide canvasId for ${action}`);
       payload.canvasId = canvasId;
     }
 
@@ -130,7 +131,19 @@ export const executor: ToolExecutor = {
     if (response.success) {
       const next = response.data?.currentCanvas;
       const affectedCanvas = response.data?.canvas;
-      if (next?.id) {
+
+      // Handle delete: if the current canvas was deleted, clear canvasTarget.
+      // The executor-proxy already cleared the session's canvas binding.
+      if (action === 'delete' && affectedCanvas && affectedCanvas.id === currentCanvasId) {
+        if (context.canvasTarget) {
+          context.canvasTarget.canvasId = undefined;
+          context.canvasTarget.canvasName = undefined;
+        }
+        if (context.canvasFreshness) {
+          context.canvasFreshness.lastListElementsTime = undefined;
+          context.canvasFreshness.recentlyCreatedElementIds.clear();
+        }
+      } else if (next?.id) {
         const targetChanged = next.id !== currentCanvasId;
         if (!context.canvasTarget) context.canvasTarget = {};
         context.canvasTarget.canvasId = next.id;

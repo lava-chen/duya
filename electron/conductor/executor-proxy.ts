@@ -17,6 +17,7 @@ import type {
 } from './executor-types';
 import {
   createCanvas,
+  deleteCanvas,
   listCanvases,
   listCanvasesForProject,
   updateCanvas,
@@ -48,10 +49,11 @@ export type CanvasCaptureFn = (
 }>;
 
 export interface CanvasManagementEvent {
-  operation: 'create' | 'switch' | 'rename';
+  operation: 'create' | 'switch' | 'rename' | 'delete';
   sessionId?: string;
   canvas: ConductorCanvas;
   currentCanvasId?: string;
+  deletedCanvasId?: string;
 }
 
 export type CanvasManagementChangedFn = (event: CanvasManagementEvent) => void;
@@ -120,7 +122,7 @@ export class ConductorExecutorProxy {
 
   private manageCanvas(request: ExecutorRpcRequest): ExecutorRpcResponse {
     const payload = request.payload;
-    const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename';
+    const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename' | 'delete';
     const fallbackCanvasId = payload.currentCanvasId as string | undefined;
     const currentCanvas = this.resolveCurrentCanvas(request.sessionId, fallbackCanvasId);
     // Resolve the session's working directory once so every branch below
@@ -232,6 +234,52 @@ export class ConductorExecutorProxy {
           action,
           canvas: renamed,
           currentCanvas: currentCanvas?.id === renamed.id ? renamed : currentCanvas,
+        },
+      };
+    }
+
+    if (action === 'delete') {
+      const rawCanvasId = payload.canvasId as string | undefined;
+      const canvasId = typeof rawCanvasId === 'string' && rawCanvasId.trim() ? rawCanvasId.trim() : currentCanvas?.id;
+      if (!canvasId) {
+        return { success: false, error: { code: 'INVALID_INPUT', message: 'canvasId is required for delete' } };
+      }
+      const targetToDelete = listCanvases().find((c) => c.id === canvasId);
+      if (!targetToDelete) {
+        return { success: false, error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` } };
+      }
+      if (!this.isCanvasAccessible(targetToDelete, sessionProjectPath)) {
+        return {
+          success: false,
+          error: {
+            code: 'CANVAS_NOT_ACCESSIBLE',
+            message: `Canvas ${canvasId} belongs to a different project and cannot be deleted from this session`,
+          },
+        };
+      }
+      const deleted = deleteCanvas(canvasId);
+      if (!deleted) {
+        return { success: false, error: { code: 'DELETE_FAILED', message: `Failed to delete canvas ${canvasId}` } };
+      }
+      // If the deleted canvas was the current canvas, unbind the session.
+      const wasCurrent = currentCanvas?.id === canvasId;
+      if (wasCurrent && request.sessionId) {
+        getCoreStores().sessions.setExtension(request.sessionId, 'conductor_canvas_id', null);
+      }
+      this.canvasManagementChangedFn?.({
+        operation: 'delete',
+        sessionId: request.sessionId,
+        canvas: targetToDelete,
+        currentCanvasId: wasCurrent ? undefined : currentCanvas?.id,
+        deletedCanvasId: canvasId,
+      });
+      return {
+        success: true,
+        result: {
+          action,
+          deleted: true,
+          canvas: targetToDelete,
+          currentCanvas: wasCurrent ? currentCanvas : undefined,
         },
       };
     }
