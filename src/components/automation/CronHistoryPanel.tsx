@@ -5,6 +5,7 @@ import {
   ArrowRightIcon,
   ClockCounterClockwiseIcon,
 } from '@/components/icons';
+import { PageCard, EmptyState } from '@/components/ui/page';
 import { useTranslation } from '@/hooks/useTranslation';
 
 /**
@@ -38,7 +39,7 @@ function SessionCard({ entry, onOpenChat }: { entry: SessionEntry; onOpenChat: C
   const { t } = useTranslation();
   const { session, cron, scheduleLabel } = entry;
   return (
-    <div className="rounded-xl border border-border/50 bg-[var(--surface)] overflow-hidden transition-colors hover:border-border">
+    <PageCard padding="none">
       <div className="flex items-center gap-3 px-4 py-3">
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{cron.name}</p>
@@ -56,7 +57,7 @@ function SessionCard({ entry, onOpenChat }: { entry: SessionEntry; onOpenChat: C
           <ArrowRightIcon size={12} />
         </button>
       </div>
-    </div>
+    </PageCard>
   );
 }
 
@@ -69,25 +70,23 @@ export function CronHistoryPanel({ sessions, onOpenChat, onRefresh }: CronHistor
 
   if (sessions.length === 0) {
     return (
-      <div className="flex h-full flex-col items-center justify-center pt-5 text-center">
-        <ClockCounterClockwiseIcon size={40} className="mb-3 opacity-30 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">{t('automation.noExecutionHistory')}</p>
-      </div>
+      <EmptyState
+        icon={<ClockCounterClockwiseIcon size={40} />}
+        title={t('automation.noExecutionHistory')}
+      />
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto scrollbar-thin pt-5">
-      <div className="flex flex-col gap-6">
-        <section>
-          <h3 className="mb-3 text-sm font-semibold text-foreground">{t('automation.historyRecent')}</h3>
-          <div className="space-y-2">
-            {sessions.map((entry) => (
-              <SessionCard key={entry.session.id} entry={entry} onOpenChat={onOpenChat} />
-            ))}
-          </div>
-        </section>
-      </div>
+    <div className="flex flex-col gap-6">
+      <section>
+        <h3 className="mb-3 text-sm font-semibold text-foreground">{t('automation.historyRecent')}</h3>
+        <div className="space-y-2">
+          {sessions.map((entry) => (
+            <SessionCard key={entry.session.id} entry={entry} onOpenChat={onOpenChat} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

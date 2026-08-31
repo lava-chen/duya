@@ -123,6 +123,14 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'tool_use_started',
       data: { id: event.id, name: event.name, input: event.input },
     };
+  } else if (msgType === 'chat:tool_use_delta') {
+    // Plan 461: incremental tool-call argument fragment. Forwarded verbatim
+    // (id/name/delta) so the renderer can render partial file content while
+    // the model is still producing the arguments.
+    sseEvent = {
+      type: 'tool_use_delta',
+      data: { id: event.id, name: event.name, delta: event.delta },
+    };
   } else if (msgType === 'chat:tool_use') {
     sseEvent = {
       type: 'tool_use',
@@ -196,6 +204,21 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
     sseEvent = {
       type: 'error',
       data: { message: event.message || 'Unknown error', code: event.code },
+    };
+  } else if (msgType === 'chat:retry') {
+    // Plan 462: LLM transport is retrying after a transient failure. Forward
+    // attempt/maxAttempts + the provider's own wording so the renderer can show
+    // e.g. "余额不足，请充值。（重新连接 1/10）".
+    sseEvent = {
+      type: 'retry',
+      data: {
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+        delayMs: event.delayMs,
+        message: event.message,
+        errorType: event.errorType,
+        statusCode: event.statusCode,
+      },
     };
   } else if (msgType === 'chat:connector_auth_required') {
     // Plan 450: re-authorization elicitation. Forwarded to the renderer
@@ -370,15 +393,25 @@ async function handlePostChat(
     const defaultWorkspaceDirectory = parsed.defaultWorkspaceDirectory;
 
     try {
-      // Validate session exists in DB before proceeding. Without a
-      // chat_sessions row, message persistence would fail with FOREIGN KEY
-      // constraint errors, and the agent worker would run uselessly.
-      const dbSession = await deps.dbRequest('session:get', { id: sessionId });
-      if (!dbSession) {
-        httpLogger.warn('Chat rejected: session not found in DB', { sessionId });
-        revertStreamingLock();
-        sendJson(res, 404, { error: `Session not found: ${sessionId}` });
-        return;
+      // Validate session exists in DB before proceeding (normal sessions).
+      // Without a session row, message persistence would fail with FOREIGN KEY
+      // constraint errors. Wakeless (orb) sessions are explicitly ephemeral:
+      // the worker disables journal + message persistence
+      // (`agent.journal = undefined`), and every other DB write it still
+      // attempts (hook rows, turn review, compaction) is best-effort and
+      // wrapped in try/catch, so a missing row is harmless. Requiring — or
+      // auto-creating — a row here would both reject the orb's synthetic
+      // `wakeless-*` session *and* pollute the user's session list with
+      // throwaway rows. So we skip the check for wakeless turns.
+      const isWakeless = parsed.options?.wakeless === true;
+      if (!isWakeless) {
+        const dbSession = await deps.dbRequest('session:get', { id: sessionId });
+        if (!dbSession) {
+          httpLogger.warn('Chat rejected: session not found in DB', { sessionId });
+          revertStreamingLock();
+          sendJson(res, 404, { error: `Session not found: ${sessionId}` });
+          return;
+        }
       }
 
       const totalMem = os.totalmem();
@@ -569,6 +602,46 @@ async function handlePostChat(
   }); // close req.on('end')
 }
 
+/** SSE 保活间隔：15s，远低于 Node 默认 120s 的套接字空闲超时。 */
+const SSE_KEEPALIVE_MS = 15_000;
+
+/**
+ * 为一个 SSE 响应启用保活：关闭本次响应的套接字空闲超时，并周期性写入一条
+ * SSE 注释行，防止长耗时操作（长思考、上下文压缩）出现 >120s 的静默间隙时
+ * 连接被 Node 的 server.timeout 销毁（现象：agent 进程"自动断掉"）。
+ *
+ * 注释行以 ':' 开头，所有已知消费方都会忽略它，不会被误解析：
+ *   - 网关 electron/gateway/message-bus.ts 按 'data: ' 前缀过滤
+ *   - 前端 src/lib/agent-sse-client.ts 用 /^(event|id|data):/ 正则
+ *   - 前端 src/lib/agent-http-client.ts 用 'data:' / 'event:' 前缀判断
+ *
+ * @returns 停止保活的函数（req 关闭时也会自动停止）
+ */
+function startSSEKeepAlive(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+): () => void {
+  // 兜底：即使外层 server.timeout 被改回非零值，本次响应也不受空闲超时影响
+  res.setTimeout(0);
+
+  const timer = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      clearInterval(timer);
+      return;
+    }
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {
+      // 套接字已关闭，停止写入
+      clearInterval(timer);
+    }
+  }, SSE_KEEPALIVE_MS);
+
+  const stop = (): void => clearInterval(timer);
+  req.on('close', stop);
+  return stop;
+}
+
 function handlePostChatSSE(
   sessionId: string,
   req: http.IncomingMessage,
@@ -586,6 +659,10 @@ function handlePostChatSSE(
     'Access-Control-Allow-Origin': '*',
     'X-Accel-Buffering': 'no',
   });
+
+  // SSE 保活：关闭本次响应的套接字空闲超时，并每 15s 写一条注释行，
+  // 防止长思考期间 >120s 的静默间隙导致连接被销毁。
+  startSSEKeepAlive(req, res);
 
   httpLogger.info('SSE stream opened', { sessionId });
 
@@ -611,7 +688,7 @@ function handlePostChatSSE(
       if (onData && child.stdout) {
         child.stdout.removeListener('data', onData);
       }
-      workerManager.interruptWorker(sessionId);
+      workerManager.interruptWorker(sessionId, 2000, 'sse-client-disconnect');
     }
   });
 
@@ -947,7 +1024,7 @@ function handleDeleteChat(
     }
   }
 
-  const interrupted = workerManager.interruptWorker(sessionId);
+  const interrupted = workerManager.interruptWorker(sessionId, 2000, 'delete');
   sendJson(res, 200, { ok: true, interrupted });
 }
 
@@ -1403,6 +1480,9 @@ async function handlePostCompact(
     'X-Accel-Buffering': 'no',
   });
 
+  // 上下文压缩是一次长耗时 LLM 调用，同样会出现 >120s 的静默间隙
+  startSSEKeepAlive(req, res);
+
   const child = workerManager.getWorker(sessionId);
   if (!child) {
     // Race: worker died between lazy-spawn and getWorker. Surface a specific
@@ -1568,6 +1648,9 @@ function handleGetChat(
     'Access-Control-Allow-Origin': '*',
     'X-Accel-Buffering': 'no',
   });
+
+  // 重连订阅是长连接，同样需要保活
+  startSSEKeepAlive(req, res);
 
   // Replay buffered events the client missed (events with eventId > lastEventId).
   // The event buffer is populated by the main chat path (handlePostChat) via

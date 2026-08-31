@@ -119,7 +119,7 @@ function SecurityBadge({ security, source }: { security?: SkillSecurity; source?
   const { t } = useTranslation();
   if (!security?.scanned) return null;
 
-  if (source === "bundled" || source === "builtin-directory" || source === "system") {
+  if (source === "bundled" || source === "system") {
     return (
       <span className="flex items-center gap-1 text-[0.7rem] text-emerald-600 dark:text-emerald-400">
         <ShieldIcon size={12} />
@@ -359,7 +359,7 @@ function SkillDetailModal({
 
   const securityStatus = useMemo(() => {
     if (!skill.security?.scanned) return null;
-    if (skill.source === "bundled" || skill.source === "builtin-directory" || skill.source === "system") {
+    if (skill.source === "bundled" || skill.source === "system") {
       return { label: t("skills.trustedBuiltin"), variant: "safe" as const };
     }
     if (skill.security.verdict === "dangerous") {
@@ -476,7 +476,6 @@ function SkillDetailModal({
             {/* Bypass action for non-safe user skills */}
             {skill.security?.scanned &&
               skill.source !== "bundled" &&
-              skill.source !== "builtin-directory" &&
               skill.source !== "system" &&
               skill.security.verdict !== "safe" && (
                 <div className="flex items-center gap-3 rounded-lg border border-border/50 bg-muted/20 px-3 py-2">

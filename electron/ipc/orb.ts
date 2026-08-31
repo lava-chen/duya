@@ -20,10 +20,14 @@
  * Plan 453 Task E.
  */
 
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, screen } from 'electron';
 
 import { getLogger, LogComponent } from '../logging/logger.js';
-import { getWakeService, type OrbState } from '../services/wake.js';
+import {
+  armOSContextBridge,
+  getWakeService,
+  type OrbState,
+} from '../services/wake.js';
 
 const logger = getLogger();
 
@@ -34,14 +38,36 @@ export function registerOrbHandlers(): void {
 
   ipcMain.handle(
     'automation:orb:submit',
-    async (_event, payload: { prompt: string }) => {
+    async (
+      _event,
+      payload: { prompt: string; attachments?: string[] },
+    ) => {
       logger.info(
         'orb:submit received',
-        { promptLength: payload.prompt?.length ?? 0 },
+        {
+          promptLength: payload.prompt?.length ?? 0,
+          attachments: payload.attachments?.length ?? 0,
+        },
         LogComponent.Orb,
       );
       getWakeService().setState('LOADING');
+      // Mark the turn in-flight BEFORE the window is resized (applyBounds
+      // toggles `resizable`, which can momentarily drop OS focus and fire a
+      // blur that would otherwise collapse the box and interrupt the worker).
+      getWakeService().markWakelessTurnActive();
       sendOrbShowLoading({ stage: 'thinking' });
+
+      // Data-URL attachments from the orb composer become wakeless files.
+      const files = (payload.attachments ?? []).map((dataUrl, i) => {
+        const match = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(dataUrl);
+        const mime = match?.[1] || 'application/octet-stream';
+        const ext = mime.split('/')[1]?.split('+')[0] || 'bin';
+        return {
+          name: `attachment-${i + 1}.${ext}`,
+          type: mime,
+          url: dataUrl,
+        };
+      });
 
       // Plan 453 Task G: kick off a wakeless chat session. The agent
       // worker streams text deltas via the regular chat:text event;
@@ -51,7 +77,12 @@ export function registerOrbHandlers(): void {
         const { startWakelessChat } = await import(
           '../services/orb-wakeless-chat'
         );
-        const result = await startWakelessChat(payload.prompt);
+        const result = await startWakelessChat(payload.prompt, files);
+        if (!result.accepted) {
+          // Don't leave the orb (main and renderer) stuck in LOADING.
+          getWakeService().setState('DORMANT');
+          sendOrbHide();
+        }
         return result;
       } catch (err) {
         logger.warn(
@@ -61,6 +92,8 @@ export function registerOrbHandlers(): void {
           },
           LogComponent.Orb,
         );
+        getWakeService().setState('DORMANT');
+        sendOrbHide();
         return {
           accepted: false,
           note:
@@ -71,8 +104,29 @@ export function registerOrbHandlers(): void {
     },
   );
 
+  // Fire-and-forget signal from the renderer sent the instant the user
+  // submits — BEFORE the local state transition unmounts the focused textarea.
+  // It arms `wakelessTurnActive` on the main process ahead of any native blur
+  // that the unmount / bounds change might deliver before the `submit` IPC is
+  // even handled, closing the INPUT→LOADING focus-change race.
+  ipcMain.on('automation:orb:submitting', () => {
+    getWakeService().markWakelessTurnActive();
+  });
+
   ipcMain.handle('automation:orb:show-input', async () => {
+    armOSContextBridge();
     getWakeService().setState('INPUT');
+    return { ok: true };
+  });
+
+  // The ball was badged with a notify-result while DORMANT; the user
+  // clicked it, so grow the window into the RESULT card. The renderer
+  // already holds the content.
+  ipcMain.handle('automation:orb:open-result', async () => {
+    // Re-arm: the gate must be open for Insert Tab on a result that was
+    // delivered while the orb was collapsed.
+    armOSContextBridge();
+    getWakeService().setState('RESULT');
     return { ok: true };
   });
 
@@ -108,6 +162,63 @@ export function registerOrbHandlers(): void {
 
   ipcMain.handle('automation:orb:state', async () => {
     return { state: getWakeService().getState() };
+  });
+
+  // The model badge / picker in the orb composer: `model` is what the
+  // wakeless turn will actually use; `options` feeds the picker.
+  ipcMain.handle('automation:orb:chat-config', async () => {
+    try {
+      const { getActiveModelName, listModelOptions } = await import(
+        '../services/orb-wakeless-chat'
+      );
+      return { model: getActiveModelName(), options: listModelOptions() };
+    } catch {
+      return { model: null, options: [] };
+    }
+  });
+
+  ipcMain.handle(
+    'automation:orb:set-model',
+    async (_event, payload: { providerId: string; model: string }) => {
+      const { setWakeModelOverride } = await import(
+        '../services/orb-wakeless-chat'
+      );
+      setWakeModelOverride(payload);
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle('automation:orb:pointer', async () => {
+    // Pointer mood: the renderer can't read the global cursor (sandboxed), so
+    // the main process samples it and reports it relative to the orb window.
+    // Returns null before the orb window exists — the renderer then treats the
+    // pointer as "away" and plays its free moods.
+    const win = windowAccessor();
+    if (!win || win.isDestroyed()) return null;
+    let cursor: Electron.Point;
+    try {
+      cursor = screen.getCursorScreenPoint();
+    } catch {
+      return null;
+    }
+    const b = win.getBounds();
+    const cx = b.x + b.width / 2;
+    const cy = b.y + b.height / 2;
+    return {
+      dx: (cursor.x - cx) / Math.max(1, b.width),
+      dy: (cursor.y - cy) / Math.max(1, b.height),
+      inside:
+        cursor.x >= b.x &&
+        cursor.x <= b.x + b.width &&
+        cursor.y >= b.y &&
+        cursor.y <= b.y + b.height,
+      // 绝对距离（px）：距离分层（近/远/走远）用这个，与窗口大小无关。
+      dist: Math.hypot(cursor.x - cx, cursor.y - cy),
+      // 像素偏移（右/下为正）：眼神跟随用 bloub 的全屏尺度归一，
+      // 除以窗口宽度会把增益放大到光标一离开球就打满极限角。
+      ox: cursor.x - cx,
+      oy: cursor.y - cy,
+    };
   });
 
   ipcMain.handle('automation:orb:collapse', async () => {
@@ -151,6 +262,11 @@ export function sendOrbShowLoading(payload: { stage: 'thinking' | 'tool' | 'fina
 
 /**
  * Push the final result to the orb (LOADING → RESULT).
+ *
+ * If the ball is parked in DORMANT (user collapsed mid-task), don't pop a
+ * 350px card over their work — badge the ball with `notify-result` instead.
+ * The renderer stores the content and shows it when the user clicks the
+ * ball (via `automation:orb:open-result`).
  */
 export function sendOrbResult(payload: {
   turnId: string;
@@ -158,9 +274,18 @@ export function sendOrbResult(payload: {
   finishedAt: string;
 }): void {
   const win = getOrbWindow();
-  if (win && !win.isDestroyed()) {
-    win.webContents.send('automation:orb:show-result', payload);
+  if (!win || win.isDestroyed()) return;
+  let state: OrbState;
+  try {
+    state = getWakeService().getState();
+  } catch {
+    state = 'RESULT';
   }
+  if (state === 'DORMANT') {
+    win.webContents.send('automation:orb:notify-result', payload);
+    return;
+  }
+  win.webContents.send('automation:orb:show-result', payload);
 }
 
 /**

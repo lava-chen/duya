@@ -70,17 +70,9 @@ export class CapabilityManagementService {
     }
 
     // Phase 1B: cross-source inventory.
-    const bundledDir = join(
-      homedir(),
-      '.duya',
-      'agent-package',
-      'plugins',
-      'builtin',
-    );
     const userSkillsDir = join(homedir(), '.duya', 'skills');
 
     const crossSkills = buildCrossSourceSkillCapabilities({
-      bundledDir,
       userDir: userSkillsDir,
     });
     const crossMcp = await buildCrossSourceMCPCapabilities();

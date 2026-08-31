@@ -146,7 +146,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
       <div
         className="inline-flex items-center gap-0.5 rounded-lg p-0.5"
         style={{
-          backgroundColor: 'var(--surface)',
+          backgroundColor: 'var(--composer-bg)',
           border: '1px solid var(--border)',
         }}
       >
@@ -159,7 +159,7 @@ export function AgentModeSelector({ value, onChange, disabled = false }: AgentMo
     <div
       className="agent-mode-selector inline-flex items-center gap-0.5 rounded-lg p-0.5"
       style={{
-        backgroundColor: 'var(--surface)',
+        backgroundColor: 'var(--composer-bg)',
         border: '1px solid var(--border)',
       }}
     >

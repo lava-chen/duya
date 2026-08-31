@@ -145,13 +145,21 @@ function makeSharpFake(): SharpAdapter & {
   compositeCalls: number;
   resizeCalls: number;
 } {
-  const state = { compositeCalls: 0, resizeCalls: 0 };
+  const state = { compositeCalls: 0, resizeCalls: 0, extractCalls: 0 };
   const adapter = ((input: Buffer | string) => {
     const buf = Buffer.isBuffer(input) ? input : Buffer.from(String(input));
     const pipe: SharpPipeline = {
       resize(o) {
         state.resizeCalls++;
         expect(o).toBeDefined();
+        return pipe;
+      },
+      extract(region) {
+        expect(region.left).toBeGreaterThanOrEqual(0);
+        expect(region.top).toBeGreaterThanOrEqual(0);
+        expect(region.width).toBeGreaterThan(0);
+        expect(region.height).toBeGreaterThan(0);
+        state.extractCalls = (state.extractCalls ?? 0) + 1;
         return pipe;
       },
       composite(images) {
@@ -172,18 +180,21 @@ function makeSharpFake(): SharpAdapter & {
   }) as SharpAdapter & {
     compositeCalls: number;
     resizeCalls: number;
+    extractCalls: number;
   };
   adapter.compositeCalls = state.compositeCalls;
   adapter.resizeCalls = state.resizeCalls;
+  adapter.extractCalls = state.extractCalls;
   // Attach the mutable counters via a Proxy so .compositeCalls++ works.
   return new Proxy(adapter, {
     get(target, prop) {
-      if (prop === 'compositeCalls' || prop === 'resizeCalls') return state[prop];
+      if (prop === 'compositeCalls' || prop === 'resizeCalls' || prop === 'extractCalls') return state[prop];
       return Reflect.get(target, prop);
     },
     set(target, prop, value) {
       if (prop === 'compositeCalls') state.compositeCalls = value;
       else if (prop === 'resizeCalls') state.resizeCalls = value;
+      else if (prop === 'extractCalls') state.extractCalls = value;
       else Reflect.set(target, prop, value);
       return true;
     },
@@ -226,7 +237,7 @@ function makeNutFake(): NutAdapter & {
       },
     },
     Key: { Enter: 'Enter', Escape: 'Escape', Tab: 'Tab', A: 'A' },
-    Button: { LEFT: 'LEFT', RIGHT: 'RIGHT', MIDDLE: 'MIDDLE' },
+    Button: { LEFT: 0, RIGHT: 2, MIDDLE: 1 },
   };
 }
 
@@ -267,6 +278,35 @@ describe('ElectronDesktopBackend (Phase 1 contract)', () => {
     expect(cap.elements).toEqual(detected);
   });
 
+  it('capture with region crops to that region and rebases element bboxes', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const detected = [
+      { index: 1, bbox: { x: 800, y: 900, w: 80, h: 30 }, label: 'inside' },
+      { index: 2, bbox: { x: 1500, y: 100, w: 100, h: 50 }, label: 'outside' },
+    ];
+    const renderOverlay = async (img: Buffer) => img;
+    const detectElements = async () => detected;
+    const backend = new ElectronDesktopBackend({
+      electron,
+      sharp,
+      nut: makeNutFake(),
+      detectElements,
+      renderOverlay,
+    });
+
+    const cap = await backend.capture({
+      somMode: true,
+      region: { x: 700, y: 800, w: 400, h: 200 },
+    });
+    expect(sharp.extractCalls).toBe(1);
+    expect(cap.width).toBe(400);
+    expect(cap.height).toBe(200);
+    expect(cap.elements.length).toBe(1);
+    // Rebased to the cropped image: 800-700=100, 900-800=100.
+    expect(cap.elements[0]?.bbox).toEqual({ x: 100, y: 100, w: 80, h: 30 });
+  });
+
   it('click falls back to explicit coords and calls nut.mouse.setPosition+click', async () => {
     const electron = makeElectronFake();
     const sharp = makeSharpFake();
@@ -277,6 +317,22 @@ describe('ElectronDesktopBackend (Phase 1 contract)', () => {
     expect(result.ok).toBe(true);
     expect(nut.mouseCalls.map((c) => c.method)).toEqual(['setPosition', 'click']);
     expect(nut.mouseCalls[0]?.args).toEqual([{ x: 100, y: 200 }]);
+  });
+
+  it('click sends the numeric Button enum value (LEFT=0) to nut.mouse.click', async () => {
+    const electron = makeElectronFake();
+    const sharp = makeSharpFake();
+    const nut = makeNutFake();
+    const backend = new ElectronDesktopBackend({ electron, sharp, nut });
+
+    await backend.click({ x: 10, y: 20, button: 'right' });
+    const clickCall = nut.mouseCalls.find((c) => c.method === 'click');
+    // nut.js expects the numeric value from @nut-tree-fork/shared
+    // Button enum (LEFT=0, MIDDLE=1, RIGHT=2). Strings like
+    // 'LEFT' cause libnut's mouseClick to throw "A string was
+    // expected" because Map.get on the numeric-keyed ButtonLookupMap
+    // returns undefined.
+    expect(clickCall?.args).toEqual([2]);
   });
 
   it('click with element-only ref returns ok=false in Phase 1', async () => {

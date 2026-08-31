@@ -300,16 +300,20 @@ export class WorkerManager {
     this.killWorkerImpl(sessionId, entry.child);
   }
 
-  interruptWorker(sessionId: string, graceMs = 2000): boolean {
+  interruptWorker(sessionId: string, graceMs = 2000, reason = 'unknown'): boolean {
     const child = this.workers.get(sessionId);
     if (!child) return false;
 
     const sent = this.sendCommand(sessionId, { type: 'chat:interrupt', sessionId });
-    workerLogger.info('Worker interrupt requested', {
+    // WARN (not INFO): the default log level is WARN, and the two callers that
+    // matter for wakeless debugging (SSE client disconnect vs DELETE/collapse)
+    // both route through here. `reason` tells us which one fired.
+    workerLogger.warn('Worker interrupt requested', {
       sessionId,
       pid: child.pid,
       sent,
       graceMs,
+      reason,
     });
 
     const timeout = setTimeout(() => {

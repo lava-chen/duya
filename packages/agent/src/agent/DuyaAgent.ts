@@ -36,13 +36,13 @@ import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
 import { getCachedAppConnectionDescriptors } from '../tool/AppConnectionTool/index.js';
-import { buildAppsSystemSection, collectConnectorActivationInjection, collectSkillInjections } from '../mentions/index.js';
+import { buildAppsSystemSection, collectConnectorActivationInjection, collectPluginInjections, collectSkillInjections } from '../mentions/index.js';
 import { DEFAULT_CONTEXT_WINDOW } from '../compact/compact.js';
 import { compressProjectedToolMessages } from '../compact/projectionCompress.js';
 import { createAIClient, createAIClientWithRetry, inferProvider, findModelCompat } from '@duya/ai';
 import type { AIClient, AIClientOptions, RetryConfig, ApiFormat } from '@duya/ai';
 import { resolveDefaultBaseURL, resolveLlmClientDiscriminator } from '@duya/ai';
-import { sleep, createRetryEvent } from '@duya/ai';
+import { sleep, createRetryEvent, createLLMAPIError, extractProviderErrorMessage, APIErrorType } from '@duya/ai';
 import {
   shouldReplayStreamAfterError,
   streamReplayDelayMs,
@@ -746,6 +746,21 @@ export class duyaAgent {
       }
       if (skillInjections.length > 0) {
         logger.info(`[Agent] Skill injection: ${skillInjections.length} skill fragment(s) queued`);
+      }
+    }
+
+    // Plugin @-mentions (the `@` popover lists installed plugins): inject a
+    // one-shot `<plugin-activation>` block listing the plugin's callable
+    // capabilities (connected apps / MCP servers / skills). Connected app
+    // connectors already flowed into `mentionedProviders` renderer-side, so
+    // their tools were exposure-promoted above; this block only adds the
+    // capability map (codex `render_explicit_plugin_instructions` parity).
+    if (options?.mentionedPlugins?.length) {
+      const descriptors = getCachedAppConnectionDescriptors();
+      const injection = collectPluginInjections(options.mentionedPlugins, descriptors);
+      if (injection) {
+        this.promptContexts.push(`<${injection.envelope}>\n${injection.body}\n</${injection.envelope}>`);
+        logger.info(`[Agent] Plugin activation: ${options.mentionedPlugins.map((p) => p.pluginId).join(', ')}`);
       }
     }
 
@@ -1569,11 +1584,14 @@ export class duyaAgent {
               consecutiveToolName = null;
               // Surface the replay through the same channel as the
               // transport-layer retry (`system` + metadata.retryAttempt →
-              // worker boundary emits a chat:retry chip).
+              // worker boundary emits a chat:retry chip). Plan 462: carry the
+              // provider wording so the chip says *why* it is reconnecting.
               yield createRetryEvent(
                 streamReplayAttempt,
                 STREAM_REPLAY_MAX_ATTEMPTS,
                 replayDelayMs,
+                extractProviderErrorMessage(streamError) ??
+                  (streamError instanceof Error ? streamError.message : undefined),
               );
               await sleep(replayDelayMs, requestSignal);
             }
@@ -1589,6 +1607,13 @@ export class duyaAgent {
           }
 
           if (event.type === 'tool_use_started') {
+            yield event;
+
+          } else if (event.type === 'tool_use_delta') {
+            // Plan 461: incremental tool-call argument fragment. Purely
+            // cosmetic on this side (the authoritative input arrives with
+            // `tool_use`), so forward it untouched — the renderer uses it
+            // to render file edits while the model is still writing them.
             yield event;
 
           } else if (event.type === 'tool_use') {
@@ -2339,9 +2364,21 @@ export class duyaAgent {
           }
           yield { type: 'done', reason: 'aborted' };
         } else {
+          // Plan 462: surface the provider's own wording (e.g. "余额不足，
+          // 请充值") with a machine `code`, instead of the raw SDK string
+          // (`429 {"type":"error","error":{...}}`) that ends up in the banner.
+          const llmError = createLLMAPIError(error);
+          const providerMessage = extractProviderErrorMessage(llmError) ?? llmError.message;
           yield {
             type: 'error',
-            data: error instanceof Error ? error.message : 'Unknown error',
+            data: providerMessage,
+            code: llmError.type === APIErrorType.RATE_LIMIT
+              ? 'rate_limit_error'
+              : llmError.type === APIErrorType.INSUFFICIENT_BALANCE
+                ? 'insufficient_balance'
+                : llmError.type === APIErrorType.USAGE_LIMIT
+                  ? 'usage_limit_exceeded'
+                  : undefined,
           };
           yield { type: 'done', reason: 'error' };
         }

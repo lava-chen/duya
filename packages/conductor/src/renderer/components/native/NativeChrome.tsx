@@ -310,20 +310,18 @@ function StickySelectionToolbar({
 type ShapePreset = "filled" | "outline" | "dashed";
 
 const DEFAULT_SHAPE_COLOR = "#F4B566";
-const SHAPE_COLORS = [
-  "#FFFFFF", "#D9E1E8", "#A7B4C2", "#7E8B98",
-  "#4EA4E6", "#8E83EC", "#AB60D5", "#CF69D1",
-  "#55C4BD", "#75B5AC", "#C3B194", "#D99694",
-  "#E77986", DEFAULT_SHAPE_COLOR, "#FFD262",
-] as const;
 
-function shapePresetConfig(preset: ShapePreset, color: string): Record<string, unknown> {
+// Shapes share the agent's semantic color palette: `color` enum key →
+// STICKY_COLORS theme, so user-picked styles match agent-created shapes
+// (same fill, same stroke, same 1px border).
+function shapePresetConfig(preset: ShapePreset, colorKey: StickyColorKey): Record<string, unknown> {
+  const theme = STICKY_COLORS[colorKey] ?? STICKY_COLORS.yellow;
   return {
+    color: colorKey,
     shapePreset: preset,
-    shapeColor: color,
-    bgColor: preset === "filled" ? color : "transparent",
+    bgColor: preset === "filled" ? theme.bg : "transparent",
     borderStyle: {
-      color,
+      color: theme.stroke,
       width: preset === "filled" ? 1 : 2,
       style: preset === "dashed" ? "dashed" : "solid",
     },
@@ -364,11 +362,12 @@ function ShapeSelectionToolbar({
   const activePreset = (element.config.shapePreset as ShapePreset | undefined) ?? "filled";
   const [colorOpen, setColorOpen] = useState(false);
   const colorMenuRef = useRef<HTMLDivElement>(null);
-  const borderStyle = element.config.borderStyle as { color?: string } | undefined;
-  const shapeColor = (element.config.shapeColor as string | undefined)
-    ?? borderStyle?.color
-    ?? (element.config.bgColor as string | undefined)
-    ?? DEFAULT_SHAPE_COLOR;
+  const colorKey = (element.config.color as StickyColorKey | undefined) ?? "yellow";
+  const bgColorValue = element.config.bgColor as string | undefined;
+  // Prefer an explicit custom bgColor (legacy hex), else the semantic theme fill.
+  const shapeColor = (bgColorValue && bgColorValue !== "transparent")
+    ? bgColorValue
+    : STICKY_COLORS[colorKey]?.bg ?? DEFAULT_SHAPE_COLOR;
 
   useEffect(() => {
     if (!colorOpen) return;
@@ -390,7 +389,7 @@ function ShapeSelectionToolbar({
             key={preset}
             type="button"
             title={t(SHAPE_PRESET_KEY[preset])}
-            onClick={() => apply(shapePresetConfig(preset, shapeColor))}
+            onClick={() => apply(shapePresetConfig(preset, colorKey))}
             style={{ ...CAPSULE_BTN_BASE, ...(active ? CAPSULE_BTN_ACTIVE : {}) }}
           >
             <span
@@ -399,7 +398,7 @@ function ShapeSelectionToolbar({
                 height: 13,
                 borderRadius: 3,
                 border: `2px ${preset === "dashed" ? "dashed" : "solid"} ${active ? "#fff" : "var(--text-primary)"}`,
-                background: preset === "filled" ? (active ? "#fff" : "#F4B566") : "transparent",
+                background: preset === "filled" ? (active ? "#fff" : shapeColor) : "transparent",
               }}
             />
           </button>
@@ -434,7 +433,7 @@ function ShapeSelectionToolbar({
               left: "50%",
               transform: "translateX(-50%)",
               display: "grid",
-              gridTemplateColumns: "repeat(4, 28px)",
+              gridTemplateColumns: "repeat(3, 28px)",
               gap: 6,
               padding: 10,
               background: "var(--command-menu-bg)",
@@ -444,27 +443,31 @@ function ShapeSelectionToolbar({
               zIndex: 40,
             }}
           >
-            {SHAPE_COLORS.map((color) => (
-              <button
-                key={color}
-                type="button"
-                title={color}
-                onClick={() => {
-                  apply(shapePresetConfig(activePreset, color));
-                  setColorOpen(false);
-                }}
-                style={{
-                  width: 28,
-                  height: 28,
-                  padding: 0,
-                  borderRadius: "50%",
-                  border: shapeColor === color ? "2px solid var(--text-primary)" : "1px solid var(--command-menu-border)",
-                  background: color,
-                  cursor: "pointer",
-                  boxShadow: shapeColor === color ? "0 0 0 1px var(--canvas-tool-accent)" : undefined,
-                }}
-              />
-            ))}
+            {STICKY_COLOR_KEYS.map((key) => {
+              const hex = STICKY_COLORS[key].bg;
+              const active = hex === shapeColor;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  title={key}
+                  onClick={() => {
+                    apply(shapePresetConfig(activePreset, key));
+                    setColorOpen(false);
+                  }}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    padding: 0,
+                    borderRadius: "50%",
+                    border: active ? "2px solid var(--text-primary)" : "1px solid var(--command-menu-border)",
+                    background: hex,
+                    cursor: "pointer",
+                    boxShadow: active ? "0 0 0 1px var(--canvas-tool-accent)" : undefined,
+                  }}
+                />
+              );
+            })}
           </div>
         )}
       </div>

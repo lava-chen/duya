@@ -203,7 +203,12 @@ export function ConnectionsSubPage({
           >
             <div className="flex items-center gap-2 min-w-0">
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-solid)]">
-                <ConnectorIcon provider={provider.id} size={18} />
+                <ConnectorIcon
+                  provider={provider.id}
+                  size={18}
+                  monogram={provider.monogram}
+                  label={provider.label}
+                />
               </span>
               <span className="font-medium text-foreground truncate">{provider.label}</span>
             </div>

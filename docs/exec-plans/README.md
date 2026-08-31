@@ -115,6 +115,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 |------|-------------|----------|--------|
 | [455-open-connector-registry](./active/455-open-connector-registry.md) | 统一 `AppConnector` 类（三绑定 mcp-remote/rest/custom + 单一工厂 + `AppConnectorRegistry`）+ 插件 `.app.json` 声明层：OAuth client 数据、工具 descriptor 出本地代码；`ProviderId` 闭合 union → branded `AppConnectorId`；custom 绑定仅首等方可注册 | P1 | Phase A/B ✅（2026-08-29）；Phase C 待开工 |
 | [460-rest-template-connector](./active/460-rest-template-connector.md) | REST Template = 统一类的 `rest` 绑定：`.app.json` 声明 OAuth HTTP tool（URL 模板 + headers + response 错误映射）+ 通用 invoker；干掉 slack/microsoft365/google 专属 `connectors/*.ts`；wecom 保留 custom escape hatch；依赖 455 Phase A/B | P1 | Planning |
+| [461-live-tool-input-streaming](./active/461-live-tool-input-streaming.md) | 编辑工具实时流式渲染（Codex/pi 对齐）：`tool_use_delta` 链路（ai→agent→electron→renderer）+ 容错增量 JSON 解析 + 行号/`+N -M`/卡片「正在写入」实时预览 | P1 | ✅ 实现完成（2026-08-30）；手动冒烟待办 |
 | [311-plugin-workflow-templates](./active/311-plugin-workflow-templates.md) | Workflow Templates first-class — manifest v2 `components.workflows` + load + launch + permission | P0 | Planning |
 | [312-app-connection-oauth](./active/312-app-connection-oauth.md) | App Connection infra — safeStorage token vault + loopback/PKCE OAuth + connector tools | P0 | Planning |
 | [313-first-party-plugin-catalog](./active/313-first-party-plugin-catalog.md) | 12 first-party plugin catalog — GitHub/Playwright P0 + Remote MCP + App Connection batches | P0 | Planning |
@@ -178,6 +179,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [84-research-agent-memory-and-literature-plugin](./active/84-research-agent-memory-and-literature-plugin.md) | Research Agent memory + literature plugin | P1 | Planning |
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — auto show session summary on return | P1 | Planning |
 | [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent nested-session sidebar display | P1 | Planning |
+| [472-unified-attachment-card-visual](./active/472-unified-attachment-card-visual.md) | Pasted / ref cards merge with image cards in one row; align to 104×104 rounded-2xl square | P2 | In progress |
 
 ### Infrastructure & Research
 

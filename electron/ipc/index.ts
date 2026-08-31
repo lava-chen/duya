@@ -28,6 +28,9 @@ import {
 import { registerHooksHandlers } from './hooks-handlers';
 import { registerMcpReloadIpcHandler } from './mcp-handlers';
 import { registerComputerUseHandlers } from './computer-use';
+import {
+  registerSidebarSectionsHandlers,
+} from './db-handlers';
 
 export {
   registerSystemHandlers,
@@ -38,6 +41,7 @@ export {
   registerUpdaterHandlers,
   registerDbHandlers,
   registerConductorHandlers,
+  registerSidebarSectionsHandlers,
   registerMailboxHandlers,
   registerAgentHandlers,
   registerNetHandlers,

@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { GearSixIcon } from "@/components/icons";
 import { IconButton } from "@/components/ui/IconButton";
+import { PageFrame, PageHeader } from "@/components/ui/page";
 import { useConversationStore } from "@/stores/conversation-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { usePolling } from "@/hooks/usePolling";
@@ -127,10 +128,11 @@ export function GatewayDashboard() {
   }, []);
 
   return (
-    <div className="gateway-dashboard">
-      <div className="gateway-dashboard-main">
-        <div className="gateway-dashboard-header">
-          <h1 className="gateway-dashboard-title">{t("gateway.title")}</h1>
+    <PageFrame>
+      <PageHeader
+        title={t("gateway.title")}
+        subtitle={t("gateway.subtitle")}
+        actions={
           <IconButton
             variant="default"
             size="lg"
@@ -142,30 +144,30 @@ export function GatewayDashboard() {
           >
             <GearSixIcon size={18} />
           </IconButton>
-        </div>
+        }
+      />
 
-        <div className="gateway-content gateway-content-columns">
-          {/* Connected channels (upper list) */}
-          <ConnectedChannelList
-            status={status}
-            connectedChannels={connectedChannels}
-            adapterMap={adapterMap}
-            sessionCount={sessionCount}
-            controlling={controlling}
-            onToggleBridge={toggleBridge}
-            onChannelClick={handleChannelClick}
-            onSettingsClick={handleSettingsClick}
-          />
+      <div className="flex flex-col">
+        {/* Connected channels (upper list) */}
+        <ConnectedChannelList
+          status={status}
+          connectedChannels={connectedChannels}
+          adapterMap={adapterMap}
+          sessionCount={sessionCount}
+          controlling={controlling}
+          onToggleBridge={toggleBridge}
+          onChannelClick={handleChannelClick}
+          onSettingsClick={handleSettingsClick}
+        />
 
-          {/* Divider */}
-          <div className="channel-list-divider" />
+        {/* Divider */}
+        <div className="channel-list-divider" />
 
-          {/* Connectable channels (lower list) */}
-          <ConnectableChannelList
-            connectableChannels={connectableChannels}
-            onConnect={handleConnect}
-          />
-        </div>
+        {/* Connectable channels (lower list) */}
+        <ConnectableChannelList
+          connectableChannels={connectableChannels}
+          onConnect={handleConnect}
+        />
       </div>
 
       {connectChannel && (
@@ -182,6 +184,6 @@ export function GatewayDashboard() {
           onClose={handleCloseSessions}
         />
       )}
-    </div>
+    </PageFrame>
   );
 }

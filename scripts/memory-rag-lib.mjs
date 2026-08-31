@@ -154,17 +154,28 @@ const SHORT_PHRASES = new Set([
   'bye', 'good', 'nice', 'cool', 'sure', 'got it', 'understood', 'right',
 ]);
 
+/** Surrounding whitespace + punctuation (ASCII & CJK) stripped before the
+ *  length / phrase checks, so "你好。" / "继续？" / "hi!" normalize to their
+ *  bare forms and get skipped instead of slipping through to a RAG call. */
+const TRAILING_PUNCT_RE = /^(?:[\s\p{P}])+|(?:[\s\p{P}])+$/gu;
+
 /**
  * Decide whether a user prompt is worth a retrieval pass. Returns the
- * trimmed prompt (usable for retrieval) or `null` when the prompt is
- * empty, too short, or a known filler phrase.
+ * trimmed prompt (usable for retrieval) or `null` when the prompt is empty,
+ * only punctuation, too short, or a known filler phrase ("你好", "继续",
+ * "ok", …). Stripping surrounding punctuation is what stops "你好。" /
+ * "继续？" from bypassing the short-phrase filter.
  */
 export function filterPrompt(prompt) {
   const trimmed = String(prompt ?? '').trim();
   if (trimmed.length === 0) return null;
-  if (trimmed.length < MIN_PROMPT_CHARS) return null;
-  const lower = trimmed.toLowerCase();
-  if (SHORT_PHRASES.has(trimmed) || SHORT_PHRASES.has(lower)) return null;
+  // Normalize: drop surrounding whitespace/punctuation so a trailing "。"
+  // or "!" does not defeat the short-phrase / length gate.
+  const core = trimmed.replace(TRAILING_PUNCT_RE, '');
+  if (core.length === 0) return null;
+  if (core.length < MIN_PROMPT_CHARS) return null;
+  const lower = core.toLowerCase();
+  if (SHORT_PHRASES.has(core) || SHORT_PHRASES.has(lower)) return null;
   return trimmed;
 }
 

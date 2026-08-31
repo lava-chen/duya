@@ -17,15 +17,16 @@ function ensureDir(dirPath: string): void {
 }
 
 // Composite key: "<pluginId>@<marketplace>". Marketplace defaults to
-// 'builtin' for entries that predate source attribution.
+// 'official' for entries that predate source attribution (builtin plugins
+// were removed — all plugins now come from marketplaces, plan 455).
 function toConfigKey(id: string, marketplace: string): string {
-  return `${id}@${marketplace || 'builtin'}`;
+  return `${id}@${marketplace || 'official'}`;
 }
 
 function parseConfigKey(key: string): { id: string; marketplace: string } {
   const at = key.lastIndexOf('@');
   if (at <= 0) {
-    return { id: key, marketplace: 'builtin' };
+    return { id: key, marketplace: 'official' };
   }
   return { id: key.slice(0, at), marketplace: key.slice(at + 1) };
 }

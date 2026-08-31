@@ -17,6 +17,8 @@ import {
   newWakelessSessionId,
   newWakelessTurnId,
   startWakelessChat,
+  buildWakelessRequestBody,
+  selectScreenSource,
 } from '../orb-wakeless-chat';
 
 describe('newWakelessSessionId', () => {
@@ -58,17 +60,19 @@ describe('WAKELESS_TIMEOUT_MS', () => {
   });
 });
 
-describe('startWakelessChat (stub)', () => {
-  it('returns accepted with a sessionId', async () => {
+describe('startWakelessChat (no agent server in unit tests)', () => {
+  it('rejects when the agent server is not running', async () => {
+    // getAgentServerPort() is null outside the app — the pre-flight
+    // rejection must fire before any fetch is attempted.
     const result = await startWakelessChat('hello');
-    expect(result.accepted).toBe(true);
-    expect(result.sessionId).toMatch(/^wakeless-[0-9a-f-]{36}$/i);
+    expect(result.accepted).toBe(false);
+    expect(result.note).toContain('Agent server');
   });
 
-  it('records the prompt length in the log via a sessionId', async () => {
+  it('rejects before touching the network for long prompts too', async () => {
     const result = await startWakelessChat('a'.repeat(100));
-    expect(result.sessionId).toBeDefined();
-    expect(result.note).toContain('sessionId generated');
+    expect(result.accepted).toBe(false);
+    expect(result.sessionId).toBeUndefined();
   });
 });
 
@@ -77,5 +81,64 @@ describe('interruptWakelessChat (stub)', () => {
     await expect(
       interruptWakelessChat('wakeless-00000000-0000-4000-8000-000000000000'),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('buildWakelessRequestBody (audit bug ③ — working directory)', () => {
+  const providerConfig = { apiKey: 'x' } as Record<string, unknown>;
+  const files = [{ id: '1', name: 'a.txt', type: 'text/plain', url: 'data:,a' }];
+
+  it('includes workingDirectory + defaultWorkspaceDirectory when set', () => {
+    const body = buildWakelessRequestBody({
+      prompt: 'hi',
+      providerConfig,
+      files,
+      workingDirectory: '/home/user/project',
+    });
+    expect(body.workingDirectory).toBe('/home/user/project');
+    expect(body.defaultWorkspaceDirectory).toBe('/home/user/project');
+    expect(body.prompt).toBe('hi');
+    expect(body.providerConfig).toBe(providerConfig);
+    expect(body.options).toEqual({ wakeless: true, files });
+  });
+
+  it('omits both directory keys when undefined (worker falls back to default cwd)', () => {
+    const body = buildWakelessRequestBody({ prompt: 'hi', providerConfig, files });
+    expect(body).not.toHaveProperty('workingDirectory');
+    expect(body).not.toHaveProperty('defaultWorkspaceDirectory');
+    expect(body.options).toEqual({ wakeless: true, files });
+  });
+
+  it('marks the turn as wakeless', () => {
+    const body = buildWakelessRequestBody({ prompt: 'p', providerConfig, files: [] });
+    expect((body.options as { wakeless: boolean }).wakeless).toBe(true);
+  });
+});
+
+describe('selectScreenSource (audit bug ④ — multi-monitor capture)', () => {
+  const mk = (id: string) => ({ display_id: id, id: `screen:${id}`, name: `Screen ${id}` });
+
+  it('returns undefined when there are no sources', () => {
+    expect(selectScreenSource([] as never, 1)).toBeUndefined();
+  });
+
+  it('returns the only source on a single-monitor setup regardless of displayId', () => {
+    const src = mk('1') as never;
+    expect(selectScreenSource([src], 1)).toBe(src);
+    expect(selectScreenSource([src], null)).toBe(src);
+  });
+
+  it('picks the source whose display_id matches the cursor display', () => {
+    const a = mk('1') as never;
+    const b = mk('2') as never;
+    expect(selectScreenSource([a, b], 2)).toBe(b);
+    expect(selectScreenSource([a, b], 1)).toBe(a);
+  });
+
+  it('falls back to sources[0] when no source matches the display', () => {
+    const a = mk('1') as never;
+    const b = mk('2') as never;
+    expect(selectScreenSource([a, b], 99)).toBe(a);
+    expect(selectScreenSource([a, b], null)).toBe(a);
   });
 });

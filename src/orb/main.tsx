@@ -9,6 +9,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { OrbApp } from './OrbApp';
+// Full app token set (:root/[data-theme] vars, Tailwind). orb.css loads
+// after and neutralizes document-level styles (transparent body).
+import '../styles/globals.css';
 import './orb.css';
 
 const root = document.getElementById('orb-root');

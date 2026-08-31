@@ -8,24 +8,121 @@ import { markdownComponents, MarkdownBaseDirectoryContext } from './markdownComp
 import { useTranslation } from '@/hooks/useTranslation';
 
 /**
- * Preprocess markdown text to fix bold syntax issues with text containing parentheses.
+ * Preprocess markdown text to fix bold syntax issues that the strict
+ * CommonMark parser (micromark, used by react-markdown) refuses to render.
  *
- * micromark parser (used by react-markdown) doesn't recognize `**...**` bold when
- * the content contains parentheses like `**text (content)**`. This is a known
- * limitation in CommonMark spec handling of emphasis with punctuation.
+ * Two known failure modes are repaired:
  *
- * We work around it by inserting zero-width spaces (\u200B) inside the bold markers
- * when parentheses are detected within the bold content.
+ *   1. `** Selection **` — whitespace inside the `**` markers. By spec,
+ *      the opening `**` is left-flanking only when NOT followed by
+ *      whitespace, and the closing `**` is right-flanking only when
+ *      NOT preceded by whitespace. Lines like `** Selection **:` therefore
+ *      render as literal asterisks. We trim the whitespace from the
+ *      captured content (preserving any other characters) so the markup
+ *      becomes `**Selection**` and parses cleanly.
+ *
+ *   2. `**(content)**` — when the content contains punctuation such as
+ *      `(`, `)`, `（`, `）` (or `:*:`-style colon gluing), the flanking
+ *      rules can fail too. Inserts zero-width spaces (`\u200B`) inside
+ *      the markers so the delimiters regain valid flanking.
  */
 export function preprocessMarkdownBold(text: string): string {
-  // Match **...** patterns (non-greedy, single line)
-  // Only fix those containing parentheses (full-width or half-width)
+  // Match **...** patterns (non-greedy, single line).
   return text.replace(/\*\*([^\n*]+?)\*\*/g, (match, content) => {
+    const trimmed = content.replace(/^\s+|\s+$/g, '');
+    if (trimmed !== content) {
+      // Whitespace padding `** Selection **` → `**Selection**`.
+      return `**${trimmed}**`;
+    }
     if (/[（）()]/.test(content)) {
+      // Parenthetical content `**(text)**` → `**(text)**`.
       return `**\u200B${content}\u200B**`;
     }
     return match;
   });
+}
+
+// Chinese (Han/Hiragana/Katakana/Hangul) characters and full-width ASCII
+// punctuation. A standalone paragraph that contains CJK is almost
+// certainly prose, so the bare-math auto-wrapper leaves it alone.
+const CJK_RE = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\u3000-\u303f\uff00-\uffef]/;
+
+// Math-only symbols that are vanishingly rare in Chinese/English prose.
+// Greek letters, math operators, superscript digits, double-bar norms,
+// Unicode minus `−` / mid-dot `·` / cross `×`, plus the literal `^`
+// used for superscripts. Used to distinguish a real math expression
+// from "x = 5" or "L = Label" style labels.
+const MATH_SYMBOL_RE =
+  /[πλθμσαβγδεζηικνξορυφχψωΓΔΘΛΞΠΣΦΨΩ∂∇∞∑∫∏√∝→←↑↓∈∉∪∩⊂⊃⊆⊇∅‖±×·÷−≤≥≠≈≡≪≫∠^]/;
+
+// Sentence-ending punctuation. If the line ends with these, it's
+// almost certainly prose, not math.
+const SENTENCE_END_RE = /[。.，,！!？?；;：:]$/;
+
+// A line is a candidate for bare-math wrapping when it has at least
+// one math comparator or assignment (`L =`, `Q ≥`, etc.), or starts
+// with a single Greek-letter identifier like `π ∝ ...`. Pure prose
+// with `(x + y)` won't satisfy it because there's no anchored
+// identifier or math anchor.
+const MATH_ANCHOR_RE =
+  /^[A-Za-zΑ-Ωα-ω][A-Za-z0-9_\-Α-Ωα-ω]*\s*[=<>≤≥≠≡≈]|^[Α-Ωα-ω]\s*[∝→←↑↓]/;
+
+/**
+ * Preprocess a markdown document so that standalone math expressions
+ * are recognised by remark-math even when the author omitted the
+ * usual `$...$` / `$$...$$` delimiters. This is common in user-written
+ * study notes and LLM drafts that were copy-pasted from sources where
+ * the equations never had delimiters.
+ *
+ * Heuristic — a single-line paragraph is rewritten to `$$\n...\n$$`
+ * only when ALL of these hold:
+ *
+ *   1. It is its own paragraph (no list/heading/blockquote prefix).
+ *   2. It already lacks math/code markup (`$`, backticks, fences).
+ *   3. It starts with a math identifier like `L =` or `argmax (`.
+ *   4. It contains at least one math symbol from MATH_SYMBOL_RE.
+ *   5. It does not mix in CJK prose.
+ *   6. It does not end with sentence-ending punctuation.
+ *
+ * False positives are unfriendly (KaTeX would surface stray `$` from
+ * random text), so the heuristic errs on the strict side and only
+ * wraps lines that look unambiguously like equations.
+ */
+export function preprocessBareMathExpressions(text: string): string {
+  return text
+    .split(/\n{2,}/)
+    .map((paragraph, index, all) => {
+      if (index === 0 && /^[ \t]*>/.test(all[index])) return paragraph;
+      const trimmed = paragraph.trim();
+      if (!trimmed) return paragraph;
+      // Skip fenced code blocks, headings, list items, blockquotes.
+      if (/^(```|~~~)/.test(trimmed)) return paragraph;
+      if (/^#{1,6}\s/.test(trimmed)) return paragraph;
+      if (/^[-*+]\s/.test(trimmed)) return paragraph;
+      if (/^\d+\.\s/.test(trimmed)) return paragraph;
+      if (/^>\s?/.test(trimmed)) return paragraph;
+      // Already inside any math/code markup — leave alone.
+      if (trimmed.includes('$') || trimmed.includes('`')) return paragraph;
+      // Single-line paragraphs only; multi-line blocks are usually prose
+      // with embedded expressions that we don't want to rewrite wholesale.
+      if (/\n/.test(trimmed)) return paragraph;
+      if (!MATH_ANCHOR_RE.test(trimmed)) return paragraph;
+      if (!MATH_SYMBOL_RE.test(trimmed)) return paragraph;
+      // A CJK-mixed paragraph is usually prose, but if the line still
+      // contains a second distinct math symbol we treat it as a mixed
+      // math/translation paragraph (e.g. `π ∝ N^α (α=1 近似贪婪)`).
+      if (CJK_RE.test(trimmed) && countMathSymbolHits(trimmed) < 2) {
+        return paragraph;
+      }
+      if (SENTENCE_END_RE.test(trimmed)) return paragraph;
+      return `\n$$\n${trimmed}\n$$\n`;
+    })
+    .join('\n\n');
+}
+
+function countMathSymbolHits(line: string): number {
+  const matches = line.match(MATH_SYMBOL_RE);
+  return matches ? matches.length : 0;
 }
 
 // Convert bare image URLs (https://.../*.jpg|png|gif|webp|bmp|svg) that are
@@ -225,7 +322,9 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 }) => {
   const processed = preprocessBareImageLinks(
     preprocessMarkdownImagePaths(
-      preprocessMarkdownBold(preprocessMarkdownHeadings(children))
+      preprocessBareMathExpressions(
+        preprocessMarkdownBold(preprocessMarkdownHeadings(children))
+      )
     )
   );
   const { meta, content } = parseFrontmatter(processed);

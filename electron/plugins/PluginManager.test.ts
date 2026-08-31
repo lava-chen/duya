@@ -26,10 +26,9 @@ vi.mock('../logging/logger', () => ({
 
 vi.mock('./catalog', () => ({
   getPluginCatalog: vi.fn(() => []),
-  // Plan: plugin-config-simplification — the catalog entry now carries
-  // `builtinCacheDir` (the synced cache root) and a v2 manifest read from
-  // `.duya-plugin/plugin.json`. PluginManager copies the entire cache dir
-  // instead of synthesising an inline `plugin.json`.
+  // Plan 455 — plugins come from marketplaces: the catalog entry carries
+  // `marketplacePluginDir` (the fenced clone dir) and a v2 manifest read
+  // from `.duya-plugin/plugin.json`. PluginManager copies the entire dir.
   getPluginCatalogEntry: vi.fn((pluginId: string) => {
     if (pluginId !== 'com.duya.test-plugin') {
       return null;
@@ -37,8 +36,9 @@ vi.mock('./catalog', () => ({
     return {
       id: 'com.duya.test-plugin',
       name: 'test-plugin',
-      source: 'bundled',
-      builtinCacheDir: state.fixtureDir,
+      source: 'marketplace',
+      marketplace: 'official',
+      marketplacePluginDir: state.fixtureDir,
       manifest: {
         schemaVersion: 'duya.plugin.v2',
         id: 'com.duya.test-plugin',
@@ -143,7 +143,7 @@ import { PluginManager } from './PluginManager';
 /**
  * Build a minimal on-disk fixture plugin at state.fixtureDir with the
  * `.duya-plugin/plugin.json` + skills/ + mcp/ layout that
- * PluginManager.installFromCatalog copies from `builtinCacheDir`.
+ * PluginManager.installFromCatalog copies from `marketplacePluginDir`.
  */
 function buildFixturePlugin(dir: string): void {
   mkdirSync(path.join(dir, '.duya-plugin'), { recursive: true });
@@ -211,11 +211,11 @@ describe('PluginManager.installFromCatalog', () => {
       expect.objectContaining({
         id: 'com.duya.test-plugin',
         version: '0.1.0',
-        marketplace: 'builtin',
+        marketplace: 'official',
       }),
     );
 
-    // The install copies the entire builtin cache dir (including
+    // The install copies the entire marketplace plugin dir (including
     // `.duya-plugin/plugin.json`), NOT a synthesised inline `plugin.json`.
     const minimalManifestPath = path.join(state.cacheDir, '.duya-plugin', 'plugin.json');
     expect(existsSync(minimalManifestPath)).toBe(true);

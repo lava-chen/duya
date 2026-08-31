@@ -39,6 +39,8 @@ export {
   formatErrorForDisplay,
   createErrorEvent,
   createRetryEvent,
+  extractProviderErrorMessage,
+  isBillingShortfallMessage,
 } from './utils/errors.js';
 export {
   normalizeUsage,

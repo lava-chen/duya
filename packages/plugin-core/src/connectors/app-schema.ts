@@ -10,9 +10,11 @@
  *     executed by Plan 460's generic invoker (`rest` binding).
  *
  * Codex parity: `codex-rs/connectors/src/plugin_config.rs` `PluginAppFile`
- * (`{ apps: { <name>: { id, category } } }`); duya uses an array with an
- * explicit `id` so partially-invalid entries can be dropped with a
- * warning instead of losing the whole file.
+ * (`{ apps: { <name>: { id, category } } }`) — the name-keyed map form is
+ * accepted verbatim (this is what the duya-marketplace repo ships), and
+ * duya's array form with an explicit `id` is accepted alongside it so
+ * partially-invalid entries can be dropped with a warning instead of
+ * losing the whole file.
  *
  * Security invariants (455 D5):
  *   - the `oauth` section carries PUBLIC client data only — a declared
@@ -133,8 +135,46 @@ export const AppDeclarationSchema = z.object({
   tools: z.array(AppToolDeclarationSchema).max(64).default([]),
 });
 
+/**
+ * Reference entry in codex name-keyed form. codex `PluginAppFile` maps
+ * `{ <app name>: { id, category? } }` (`connectors/src/plugin_config.rs`)
+ * — the duya-marketplace repo ships exactly this shape, so the parser
+ * accepts BOTH the name-keyed map (normalized into declarations with
+ * `name` from the key) and duya's array form.
+ */
+const NameKeyedReferenceEntrySchema = z
+  .object({
+    id: z
+      .string()
+      .min(1)
+      .max(190)
+      .refine(isWellFormedConnectorId, { message: 'must match ^[a-z][a-z0-9_-]*$' }),
+    category: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+
+const NameKeyedAppsSchema = z.record(
+  z.string().min(1).max(120),
+  NameKeyedReferenceEntrySchema,
+);
+
+function normalizeApps(
+  apps: AppDeclaration[] | Record<string, { id: string; category?: string }>,
+): AppDeclaration[] {
+  if (Array.isArray(apps)) return apps;
+  return Object.entries(apps).map(([name, entry]) => ({
+    id: entry.id,
+    name,
+    tools: [],
+    ...(entry.category !== undefined ? { category: entry.category } : {}),
+  }));
+}
+
 export const AppDeclarationFileSchema = z.object({
-  apps: z.array(AppDeclarationSchema).max(64).default([]),
+  apps: z
+    .union([z.array(AppDeclarationSchema).max(64), NameKeyedAppsSchema])
+    .transform(normalizeApps)
+    .default([]),
 });
 
 export type OAuthClientDeclaration = z.infer<typeof OAuthClientDeclarationSchema>;

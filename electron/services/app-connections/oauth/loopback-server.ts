@@ -21,6 +21,12 @@ import { getLogger, LogComponent } from '../../../logging/logger';
 
 const COMPONENT = 'AppConnectionLoopback' as LogComponent;
 
+/**
+ * Socket bind address. Always the IPv4 loopback IP literal — see the
+ * `server.listen` call below for why a name like `localhost` is unsafe here.
+ */
+const LOOPBACK_BIND_HOST = '127.0.0.1';
+
 export interface LoopbackStartOptions {
   /** Path component of the redirect URI (e.g. `/callback`). Must start with `/`. */
   path: string;
@@ -31,10 +37,14 @@ export interface LoopbackStartOptions {
   /** Preferred port; 0 = OS-assigned ephemeral. */
   preferredPort?: number;
   /**
-   * Hostname advertised in the redirect URI. The server always binds to the
-   * loopback interface (127.0.0.1) for security; this only changes what the
-   * browser and OAuth consent screen display. Defaults to `localhost` so users
-   * see a friendly hostname instead of a raw IP.
+   * Host advertised in the redirect URI. The server ALWAYS binds the IPv4
+   * loopback interface (`127.0.0.1`) for security — see the bind call below.
+   * Defaults to `127.0.0.1` (an IP literal, RFC 8252 §7.3) so the advertised
+   * redirect URI and the bound socket can never disagree.
+   *
+   * Do not pass a DNS name such as `localhost`: on dual-stack hosts it may
+   * resolve to `::1` for the bind while the browser opens the callback over
+   * `127.0.0.1` (or vice versa), and the redirect then never reaches us.
    */
   host?: string;
 }
@@ -63,7 +73,7 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
   const expectedState = options.expectedState;
   const timeoutMs = options.timeoutMs ?? 3 * 60 * 1000;
   const preferredPort = options.preferredPort ?? 0;
-  const host = options.host ?? 'localhost';
+  const host = options.host ?? '127.0.0.1';
 
   let server: http.Server | null = null;
   let timer: NodeJS.Timeout | null = null;
@@ -184,7 +194,13 @@ export function startLoopbackServer(options: LoopbackStartOptions): Promise<Loop
       reject(new LoopbackServerError('server not initialized'));
       return;
     }
-    server.listen(preferredPort, host, () => {
+    // Bind the IPv4 loopback interface explicitly, never the advertised host
+    // name. Passing `localhost` here would follow DNS and can resolve to `::1`
+    // on dual-stack machines, while the system browser opens the redirect over
+    // `127.0.0.1` — the callback is then refused and the authorize attempt
+    // hangs until the 3-minute timeout. Binding an IP literal also keeps the
+    // socket off external interfaces even if a caller passes a bad host.
+    server.listen(preferredPort, LOOPBACK_BIND_HOST, () => {
       const addr = server?.address() as AddressInfo | null;
       if (!addr || typeof addr.port !== 'number') {
         reject(new LoopbackServerError('failed to bind loopback server'));

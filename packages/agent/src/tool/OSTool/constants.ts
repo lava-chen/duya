@@ -2,7 +2,7 @@
  * constants.ts — Computer Use tool naming + action enum (plan 454 §5 Task B).
  *
  * Phase 2 ships a SINGLE tool (`computer_use`) with an action enum
- * covering 10 OS-side operations. This keeps the per-turn schema cost
+ * covering 9 OS-side operations. This keeps the per-turn schema cost
  * low (hermes-agent style) and matches the user's earlier decision
  * (single tool + action enum, recommended default).
  *
@@ -13,10 +13,15 @@
  *   - key            : press key + modifiers
  *   - scroll         : wheel scroll
  *   - drag           : drag between elements/coordinates
- *   - window_switch  : focus a window by title/processName
- *   - list_apps      : enumerate visible apps
  *   - set_value      : replace value in focused field
  *   - wait           : sleep
+ *   - zoom           : region-restricted SOM capture
+ *
+ * `window_switch` / `list_apps` were removed (user decision
+ * 2026-08-29): targeting is pure vision — the model sees the screen
+ * via capture/zoom and clicks; app enumeration / focus switching by
+ * name proved unused in practice and added schema + prompt surface.
+ * The backend keeps the underlying providers for future use.
  *
  * The tool name is `computer_use` — chosen to be domain-specific
  * (not generic `os`) and avoid collisions with the existing `computer-use`
@@ -32,8 +37,6 @@ export const COMPUTER_USE_ACTIONS = [
   'key',
   'scroll',
   'drag',
-  'window_switch',
-  'list_apps',
   'set_value',
   'wait',
   'zoom',
@@ -50,7 +53,6 @@ export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
  */
 export const CONFIRM_REQUIRED_ACTIONS: ReadonlySet<ComputerUseAction> = new Set([
   'click',
-  'window_switch',
   'drag',
   'set_value',
 ]);

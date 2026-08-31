@@ -41,7 +41,6 @@ function mapOrigin(source: PluginRegistryEntry['source']): PluginOrigin {
     case 'bundled':
     case 'marketplace':
     case 'local':
-    case 'builtin-directory':
     case 'development':
       return source;
     default:

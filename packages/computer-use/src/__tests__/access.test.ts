@@ -134,10 +134,42 @@ describe('checkAccess — denied_apps', () => {
 });
 
 describe('checkAccess — edge cases', () => {
-  it('refuses when no app info available', () => {
+  it('refuses when no app info available (default_access=deny)', () => {
+    // Strict mode: no foreground info + deny default = refuse.
     const v = checkAccess(DEFAULT_POLICY, { processName: null, title: null, focusedEntity: null });
     expect(v.allowed).toBe(false);
     expect(v.code).toBe('DENIED_BY_NO_APP');
+  });
+
+  it('permits when no app info available and default_access=allow (fail-open)', () => {
+    // Permissive mode: no foreground info + allow default = permit.
+    // This is the dev / first-run case where the daemon hasn't been
+    // started yet but the user wants to use computer-use. Before this
+    // fix, the function refused unconditionally when candidates was
+    // empty, contradicting the documented default_access=allow contract
+    // in electron/ipc/computer-use.ts::getAccessPolicy and making
+    // click / type / window_switch unusable until the daemon came up.
+    const policy: AppAccessPolicy = {
+      default_access: 'allow',
+      allowed_apps: [],
+      denied_apps: [],
+    };
+    const v = checkAccess(policy, { processName: null, title: null, focusedEntity: null });
+    expect(v.allowed).toBe(true);
+    expect(v.code).toBe('ALLOWED_BY_DEFAULT');
+  });
+
+  it('deny pattern still overrides allow default with no app info', () => {
+    // Belt-and-suspenders: even in permissive mode, an explicit
+    // denied_apps entry must still refuse (we check denied first).
+    const policy: AppAccessPolicy = {
+      default_access: 'allow',
+      allowed_apps: [],
+      denied_apps: ['never-permitted'],
+    };
+    const v = checkAccess(policy, { processName: 'never-permitted', title: null, focusedEntity: null });
+    expect(v.allowed).toBe(false);
+    expect(v.code).toBe('DENIED_BY_PATTERN');
   });
 
   it('default_access=allow permits any app', () => {

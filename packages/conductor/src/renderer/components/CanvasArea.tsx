@@ -1178,8 +1178,6 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
           shape: "rect",
           shapePreset: "filled",
           color: "yellow",
-          bgColor: "#F4B566",
-          borderStyle: { color: "#E98436", width: 1, style: "solid" },
         }))}`);
       } else {
         setActiveTool(tool);
@@ -1404,8 +1402,14 @@ export const CanvasArea: React.FC<CanvasAreaProps> = ({
   // remain at an arbitrary, unreadable scale. Tracking the count avoids
   // fighting a user's drag or a text/style edit. The zoom-lock remains the
   // explicit opt-out for deliberate manual framing.
+  //
+  // Critically, this only auto-fits after the AGENT mutates the scene. When
+  // the user works with canvas tools (draw / delete / etc.), their zoom/pan
+  // must be left exactly where they put it — see lastElementMutationActor.
   useEffect(() => {
     if (elements.length === 0 || userZoomLockRef.current) return;
+    // Only re-fit for agent-originated changes; user tool use keeps its view.
+    if (useConductorStore.getState().lastElementMutationActor !== "agent") return;
     if (zoomFitDebounceRef.current !== null) {
       clearTimeout(zoomFitDebounceRef.current);
     }

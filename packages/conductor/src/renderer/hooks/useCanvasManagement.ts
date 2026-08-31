@@ -119,6 +119,9 @@ interface CanvasSummaryFromMain {
   createdAt?: number;
   updatedAt?: number;
   projectPath?: string | null;
+  isFavorite?: boolean;
+  groupId?: string | null;
+  tags?: string[];
 }
 
 /**
@@ -141,5 +144,8 @@ function normalizeCanvas(raw: unknown): ConductorCanvas | null {
     createdAt: summary.createdAt ?? Date.now(),
     updatedAt: summary.updatedAt ?? Date.now(),
     projectPath: summary.projectPath ?? null,
+    isFavorite: summary.isFavorite === true,
+    groupId: summary.groupId ?? null,
+    tags: Array.isArray(summary.tags) ? summary.tags.filter((t) => typeof t === "string") : [],
   };
 }

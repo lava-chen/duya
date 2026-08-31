@@ -273,6 +273,20 @@ export function initializeSchema(db: BetterSqlite3Db): void {
       layout_config TEXT NOT NULL,
       sort_order INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      is_favorite INTEGER NOT NULL DEFAULT 0,
+      group_id TEXT,
+      tags TEXT NOT NULL DEFAULT '[]'
+    )
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conductor_canvas_groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      project_path TEXT,
+      created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     )
   `);
@@ -817,9 +831,33 @@ function ensureConductorCanvasColumns(db: BetterSqlite3Db): void {
   if (!existing.has('project_path')) {
     db.exec(`ALTER TABLE conductor_canvases ADD COLUMN project_path TEXT`);
   }
+  if (!existing.has('is_favorite')) {
+    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN is_favorite INTEGER NOT NULL DEFAULT 0`);
+  }
+  if (!existing.has('group_id')) {
+    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN group_id TEXT`);
+  }
+  if (!existing.has('tags')) {
+    db.exec(`ALTER TABLE conductor_canvases ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`);
+  }
   db.exec(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_conductor_canvases_project_path ON conductor_canvases(project_path) WHERE project_path IS NOT NULL`,
   );
+
+  // Self-repair: ensure the canvas groups table exists. Older packaged
+  // binaries (pre asset-library) have no groups table, and the asset
+  // library UI would throw "no such table" on every group IPC call.
+  // CREATE TABLE IF NOT EXISTS is idempotent, so this is safe on every startup.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS conductor_canvas_groups (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      project_path TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )
+  `);
 }
 
 function ensureMigrationsTable(db: BetterSqlite3Db): void {
@@ -2461,6 +2499,59 @@ const migrations: Migration[] = [
       } catch {
         // Column already exists.
       }
+    },
+  },
+  {
+    // Plan 471: sidebar section refactor — user-defined groups that wrap
+    // project entries (workingDirectory) in the sidebar. Sections are
+    // rendered at the same top-level as the system kind sections
+    // (cron/gateway/wakeup/uncategorized/pinned). A workingDirectory may
+    // belong to zero or one section; orphan projects fall through to the
+    // "未分组" (uncategorized) system section at render time.
+    id: 53,
+    name: 'create_sidebar_sections_tables',
+    migrate(db: BetterSqlite3Db): void {
+      // User-defined sidebar sections.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sidebar_sections (
+          id          TEXT PRIMARY KEY,
+          name        TEXT NOT NULL,
+          icon        TEXT,
+          color       TEXT,
+          sort_order  INTEGER NOT NULL DEFAULT 0,
+          collapsed   INTEGER NOT NULL DEFAULT 0,
+          created_at  INTEGER NOT NULL,
+          updated_at  INTEGER NOT NULL
+        )
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_sidebar_sections_sort_order
+          ON sidebar_sections(sort_order)
+      `);
+
+      // Mapping table: which project (workingDirectory) lives in which
+      // section. A row's existence asserts membership; deleting the
+      // section cascades so removing a section returns all of its
+      // projects to the "未分组" pool.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS sidebar_section_projects (
+          section_id        TEXT NOT NULL,
+          working_directory TEXT NOT NULL,
+          sort_order        INTEGER NOT NULL DEFAULT 0,
+          created_at        INTEGER NOT NULL,
+          PRIMARY KEY (section_id, working_directory),
+          FOREIGN KEY (section_id) REFERENCES sidebar_sections(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_sidebar_section_projects_section
+          ON sidebar_section_projects(section_id)
+      `);
+      // Reverse lookup (e.g. for unassignProject(workingDirectory)).
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_sidebar_section_projects_wd
+          ON sidebar_section_projects(working_directory)
+      `);
     },
   },
 ];

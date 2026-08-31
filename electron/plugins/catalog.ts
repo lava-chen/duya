@@ -12,6 +12,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { pathToFileURL } from 'url';
 import { app } from 'electron';
 import type { PluginCatalogEntry, PluginCategory, PluginManifest } from './types';
@@ -20,7 +21,6 @@ import { getLogger, LogComponent } from '../logging/logger';
 import { getOfficialPluginAssets } from '../../packages/plugin-core/src/plugins/loader/official-assets.js';
 import { deriveCapabilityCounts } from './capability-counts.js';
 import { parseSkillFrontmatter } from '../utils/skill-parser';
-import { listBuiltinCacheRoots } from './cache/builtin-sync';
 import { readMarketplaceManifest, resolvePluginEntryDir } from './marketplace/manifest';
 import type { MarketplacePluginEntry } from './marketplace/manifest';
 import { resolveConfiguredMarketplaceDir, type MarketplaceSourceConfig } from './marketplace/git-source';
@@ -45,7 +45,7 @@ const COMPONENT = 'PluginCatalog' as LogComponent;
  * load as an `<img src>`. Returns undefined when no icon is declared or the
  * file does not exist.
  */
-function resolveIconUrl(manifest: PluginManifest, pluginRoot: string): string | undefined {
+export function resolveIconUrl(manifest: PluginManifest, pluginRoot: string): string | undefined {
   const relIcon = manifest.interface?.icon;
   if (!relIcon) return undefined;
   const abs = path.resolve(pluginRoot, relIcon.replace(/^\.\//, ''));
@@ -111,7 +111,7 @@ function buildLocalCatalogEntry(
   const description = (manifest.description as string) || `Plugin: ${mpEntry.name}`;
   const author = (manifest.author as { name: string; url?: string }) || { name: 'Unknown' };
 
-  return {
+  return applyInterfaceMetadata({
     id,
     name,
     version,
@@ -125,7 +125,7 @@ function buildLocalCatalogEntry(
     ),
     manifest: manifest as PluginCatalogEntry['manifest'],
     author,
-  };
+  }, manifest as PluginManifest);
 }
 
 function getLocalCatalogEntries(): PluginCatalogEntry[] {
@@ -164,49 +164,84 @@ function getLocalCatalogEntries(): PluginCatalogEntry[] {
   return entries;
 }
 
-// ----------------------------------------------------------------------------
-// Builtin catalog — scan ~/.duya/plugins/cache/builtin/ (populated by
-// syncBuiltinPlugins at startup). Each cache root is read via
-// readPluginManifest; officialAssets are attached when the plugin id
-// matches the audited first-party registry.
-// ----------------------------------------------------------------------------
-
-function getBuiltinCatalogEntries(): PluginCatalogEntry[] {
+/**
+ * Builtin plugin catalog — scans the user-home builtin cache
+ * (`~/.duya/plugins/cache/builtin/<id>/<version>/`) that ships with the
+ * app (github / notion / wecom / obsidian / documents / pdf / ...).
+ *
+ * These plugins were moved to the official marketplace under plan 455, but
+ * the local cache is what actually exists on disk before any git sync, and
+ * registry entries recorded under the `builtin` marketplace (e.g.
+ * `com.duya.github@builtin`) resolve their manifest through this catalog.
+ * `source` is `'builtin-directory'` (see PluginSource).
+ *
+ * `builtinRoot` is injectable for tests; callers omit it to use the default
+ * user-home cache location.
+ */
+export function getBuiltinCatalogEntries(builtinRoot?: string): PluginCatalogEntry[] {
   const logger = getLogger();
-  const roots = listBuiltinCacheRoots();
-  if (roots.length === 0) return [];
+  const root = builtinRoot ?? path.join(os.homedir(), '.duya', 'plugins', 'cache', 'builtin');
+  if (!fs.existsSync(root)) {
+    return [];
+  }
 
   const entries: PluginCatalogEntry[] = [];
-  for (const pluginRoot of roots) {
+  for (const id of fs.readdirSync(root)) {
+    const idDir = path.join(root, id);
+    if (!fs.statSync(idDir).isDirectory()) continue;
+    let versionDir: string | null = null;
     try {
-      const manifest = readPluginManifest(pluginRoot);
-      const officialAssets = getOfficialPluginAssets(manifest.id);
-      const manifestWithAssets: PluginManifest = officialAssets
-        ? { ...manifest, officialAssets }
-        : manifest;
-      const category = normalizeCategory(manifest.interface?.category);
-      entries.push({
-        id: manifest.id,
-        name: manifest.name,
-        version: manifest.version,
-        description: manifest.description,
-        icon: resolveIconUrl(manifest, pluginRoot),
-        source: 'bundled',
-        category,
-        trustLevel: 'official',
-        capabilityCounts: deriveCapabilityCounts(manifestWithAssets, pluginRoot),
-        manifest: manifestWithAssets,
-        author: manifest.author,
-        builtinCacheDir: pluginRoot,
-      });
+      const versions = fs.readdirSync(idDir).filter((v) => fs.statSync(path.join(idDir, v)).isDirectory());
+      // Pick the highest semver-ish version if several exist (descending sort
+      // on numeric segments); fall back to the first directory otherwise.
+      versionDir = versions.sort((a, b) => {
+        const an = a.split('.').map(Number);
+        const bn = b.split('.').map(Number);
+        for (let i = 0; i < Math.max(an.length, bn.length); i++) {
+          const d = (bn[i] ?? 0) - (an[i] ?? 0);
+          if (d !== 0) return d;
+        }
+        return 0;
+      })[0] ?? null;
+    } catch {
+      versionDir = null;
+    }
+    if (!versionDir) continue;
+
+    const pluginDir = path.join(idDir, versionDir);
+    try {
+      const manifest = readPluginManifest(pluginDir);
+      const entry = buildBuiltinCatalogEntry(manifest, pluginDir);
+      if (entry) entries.push(entry);
     } catch (err) {
-      logger.warn('Failed to read builtin plugin manifest from cache', {
-        pluginRoot,
+      logger.warn('Failed to read builtin plugin manifest', {
+        id,
         error: err instanceof Error ? err.message : String(err),
       }, COMPONENT);
     }
   }
   return entries;
+}
+
+function buildBuiltinCatalogEntry(
+  manifest: PluginManifest,
+  pluginDir: string,
+): PluginCatalogEntry | null {
+  if (!manifest?.name) return null;
+  const id = manifest.id || `com.duya.${manifest.name}`;
+  return applyInterfaceMetadata({
+    id,
+    name: manifest.name,
+    version: manifest.version || '0.1.0',
+    description: manifest.description || `Plugin: ${manifest.name}`,
+    icon: resolveIconUrl(manifest, pluginDir),
+    source: 'builtin-directory',
+    category: normalizeCategory(manifest.interface?.category),
+    trustLevel: 'official',
+    capabilityCounts: deriveCapabilityCounts(manifest as PluginCatalogEntry['manifest'], pluginDir),
+    manifest,
+    author: manifest.author,
+  }, manifest);
 }
 
 let cachedCatalog: PluginCatalogEntry[] | null = null;
@@ -219,11 +254,16 @@ export function getPluginCatalog(): PluginCatalogEntry[] {
     return cachedCatalog;
   }
 
-  const builtinEntries = getBuiltinCatalogEntries();
   const localEntries = getLocalCatalogEntries();
   const skillEntries = getBundledSkillCatalogEntries();
   const marketplaceEntries = getMarketplaceCatalogEntries().entries;
-  cachedCatalog = [...builtinEntries, ...localEntries, ...marketplaceEntries, ...skillEntries];
+  // Plan 455 follow-up: builtin plugins ship in the user-home cache
+  // (`~/.duya/plugins/cache/builtin/<id>/<version>/`) and must be part of
+  // the catalog — otherwise registry entries pointing at them can never
+  // resolve a manifest, and downstream consumers (e.g. the composer `@`
+  // plugin list) degrade to empty.
+  const builtinEntries = getBuiltinCatalogEntries();
+  cachedCatalog = [...localEntries, ...builtinEntries, ...marketplaceEntries, ...skillEntries];
   cachedCatalogAt = now;
   return cachedCatalog;
 }
@@ -251,6 +291,25 @@ export interface MarketplaceCatalogStatus {
 
 function marketplaceDirFor(name: string, source: MarketplaceSourceConfig): string | null {
   return resolveConfiguredMarketplaceDir(name, source);
+}
+
+/**
+ * Map manifest `interface` marketing metadata onto a catalog entry
+ * (plan 455 follow-up): short/long copy + defaultPrompt as usageExamples.
+ * All fields optional — builtin/local/marketplace builders share this.
+ */
+function applyInterfaceMetadata(
+  entry: PluginCatalogEntry,
+  manifest: PluginManifest,
+): PluginCatalogEntry {
+  const iface = manifest.interface;
+  if (!iface) return entry;
+  if (iface.shortDescription) entry.shortDescription = iface.shortDescription;
+  if (iface.longDescription) entry.longDescription = iface.longDescription;
+  if (iface.defaultPrompt?.length) {
+    entry.usageExamples = iface.defaultPrompt.map((prompt) => ({ prompt }));
+  }
+  return entry;
 }
 
 /**
@@ -330,7 +389,16 @@ function buildMarketplaceCatalogEntry(
   const official = marketplaceName === 'official';
   const category = normalizeCategory(pluginEntry.category ?? manifest.interface?.category);
 
-  return {
+  // Plan 455: builtin plugins moved to the official marketplace — the
+  // audited first-party asset registry now attaches via the catalog id.
+  const officialAssets = official
+    ? getOfficialPluginAssets(manifest.id || `com.duya.${pluginEntry.name}`)
+    : undefined;
+  const manifestWithAssets: PluginManifest = officialAssets
+    ? { ...manifest, officialAssets }
+    : manifest;
+
+  return applyInterfaceMetadata({
     id: manifest.id || `com.duya.${pluginEntry.name}`,
     name: manifest.name || pluginEntry.name,
     version: manifest.version || '0.1.0',
@@ -343,10 +411,10 @@ function buildMarketplaceCatalogEntry(
     authPolicy: pluginEntry.policy?.authentication,
     category,
     trustLevel: official ? 'official' : 'verified',
-    capabilityCounts: deriveCapabilityCounts(manifest, pluginDir),
-    manifest,
+    capabilityCounts: deriveCapabilityCounts(manifestWithAssets, pluginDir),
+    manifest: manifestWithAssets,
     author: manifest.author,
-  };
+  }, manifest);
 }
 
 /** Sync status for each configured marketplace (Plan 455 IPC surface). */

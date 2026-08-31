@@ -126,6 +126,15 @@
   --foreground: #1a1a1a;
   --muted: #6b6b6b;
   --border: rgba(0, 0, 0, 0.06);
+  /* --border-color: legacy alias consumed by the chat input surface
+   * (MessageInput.tsx uses `inset 0 0 0 1px var(--border-color)` as its
+   * border). Kept identical to --border so the composer edge matches
+   * every other bordered component (cards, headers, inputs). */
+  --border-color: var(--border);
+  /* --composer-bg: chat input surface background. Light theme is pure
+   * white (matches --main-bg) so the composer blends into the canvas;
+   * dark theme keeps the original translucent --surface. */
+  --composer-bg: #ffffff;
   /* Border scale — the ONLY three border colors. Rules:
    * --border       default edge (cards, headers, inputs)
    * --border-weak  muted dividers (status bars, in-list separators)
@@ -187,6 +196,21 @@
   --command-menu-shadow: 0 6px 18px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
   --canvas-tool-accent: #9d3bea;
   --canvas-tool-accent-shadow: rgba(157, 59, 234, 0.22);
+
+  /* Unified page framework — shared by canvas / automation / gateway /
+   * extensions main-window views. One source of truth for max-width,
+   * section spacing and the typography scale so every page renders the
+   * same title / subtitle / body / caption sizes. */
+  --page-max-width: 1200px;
+  --page-gap: 1.5rem;
+  --page-pad-y: 2.5rem;
+  --page-pad-x: 2rem;
+  --page-title-size: 1.75rem;        /* 28px */
+  --page-title-weight: 700;
+  --page-subtitle-size: 0.875rem;    /* 14px */
+  --page-card-title-size: 0.9375rem; /* 15px */
+  --page-body-size: 0.875rem;        /* 14px */
+  --page-caption-size: 0.75rem;      /* 12px */
 }
 
 :root[data-theme="dark"] {
@@ -203,6 +227,10 @@
   --foreground: #ffffff;
   --muted: #8a8a8a;
   --border: rgba(255, 255, 255, 0.08);
+  /* --border-color: dark-theme counterpart, identical to --border */
+  --border-color: var(--border);
+  /* --composer-bg: dark theme keeps the original translucent surface */
+  --composer-bg: var(--surface);
   --grid-dot: rgba(255, 255, 255, 0.08);
   --accent: #a78bfa;
   --accent-soft: rgba(167, 139, 250, 0.24);
@@ -1139,12 +1167,16 @@ a {
 }
 
 .sidebar-project-menu {
+  /* Plan 471 v11: align this popover with the @-mention popover
+     (`command-menu-popover`) — same rounded card + thin border +
+     no drop shadow. The original deep box-shadow made the sidebar
+     ⋯ menu look heavier than the input-field popovers elsewhere in
+     the app; the user wants a uniform "thin card" feel. */
   position: fixed;
   padding: 4px 0;
-  border-radius: 0.4rem;
-  background: var(--surface-solid);
-  border: 1px solid var(--border);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 2px 8px rgba(0, 0, 0, 0.15);
+  border-radius: 12px;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
   min-width: 150px;
   z-index: 100;
 }
@@ -1163,6 +1195,10 @@ a {
   border-radius: 0.3rem;
   font-size: 0.78rem;
   text-align: left;
+  /* Plan 471 v4: same fix as .project-dropdown-item — keep the row
+     contents pinned to the left edge. Slight inset (4px on each side)
+     gives the row a "card within menu" feel like Codex. */
+  justify-content: flex-start;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
@@ -1334,12 +1370,14 @@ a {
 
 /* Project dropdown menu */
 .project-dropdown-menu {
+  /* Plan 471 v11: same thin-card aesthetic as the @-mention popover
+     (command-menu-popover) — no shadow, 12px radius, command-menu tokens. */
   position: fixed;
   z-index: 1000;
   min-width: 160px;
-  background: var(--sidebar-bg);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  border-radius: 12px;
   padding: 0.25rem;
 }
 
@@ -1356,6 +1394,10 @@ a {
   border-radius: 0.3rem;
   cursor: pointer;
   text-align: left;
+  /* Plan 471 v4: override Button's `justify-center` so the icon and
+     label sit flush-left in the dropdown row. The default Button layout
+     centers contents, which is wrong for menu items. */
+  justify-content: flex-start;
   transition: background-color 0.15s ease;
 }
 
@@ -1436,7 +1478,8 @@ a {
    margins (the base `.thread-item` `width: 100%` would otherwise overflow the
    right edge when combined with a margin). `min-width: 0` lets the ellipsis
    apply to the nowrap title. */
-.flat-thread-list .thread-item {
+.flat-thread-list .thread-item,
+.sidebar-section-body .thread-item {
   width: auto;
   margin: 0 0.5rem;
   min-width: 0;
@@ -1527,10 +1570,6 @@ a {
 .thread-item:focus-within .thread-item-actions-default,
 .thread-item:has(.thread-item-actions-hover.open) .thread-item-actions-default {
   opacity: 0;
-}
-
-.thread-item.has-children:hover .thread-item-title {
-  padding-left: 1.1rem;
 }
 
 .thread-item-time {
@@ -1674,74 +1713,6 @@ a {
   height: 1px;
   background: var(--border);
   margin: 0.25rem 0;
-}
-
-/* Nested thread (sub-agent) styles */
-.thread-item-expand-btn {
-  position: absolute;
-  left: 0.15rem;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid var(--border);
-  background: var(--bg-canvas);
-  color: var(--text);
-  border-radius: 4px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  opacity: 0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
-  z-index: 1;
-}
-
-.thread-item.has-children:hover .thread-item-expand-btn,
-.thread-item-expand-btn:hover {
-  opacity: 1;
-  color: var(--text);
-  background: var(--surface);
-  border-color: var(--accent);
-}
-
-.thread-item.sub-agent {
-  padding-left: 1.6rem;
-  font-size: 0.82rem;
-}
-
-.thread-item.sub-agent .thread-item-title {
-  color: var(--muted);
-}
-
-.thread-item-agent-label {
-  flex-shrink: 0;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 0 0.25rem;
-  font-size: 0.625rem;
-  line-height: 1.05rem;
-  color: var(--muted);
-  background: var(--bg-elevated);
-}
-
-.thread-item.sub-agent:hover .thread-item-title,
-.thread-item.sub-agent.active .thread-item-title {
-  color: var(--text);
-}
-
-.sub-agent-dot {
-  font-size: 0.55rem;
-  flex-shrink: 0;
-  line-height: 1;
-}
-
-.thread-item-children {
-  border-left: 1px solid var(--border);
-  margin-left: 0.75rem;
 }
 
 .sub-agent-back-btn {
@@ -2380,6 +2351,12 @@ a {
   margin: 0 auto;
   display: flex;
   flex-direction: column;
+}
+
+/* Extensions page: full-bleed grid (no 800px reading-width constraint). */
+.settings-content.settings-content-full {
+  max-width: none;
+  margin: 0;
 }
 
 .settings-page-content::-webkit-scrollbar {
@@ -4077,74 +4054,135 @@ a {
 }
 
 /* ========================================
-   Pasted Content Attachment Styles
-   ======================================== */
+   Reference Attachment Card (Plan 220 + Plan 472 unified visual)
+   ========================================
+   Plan 220 originally drew pasted-text / terminal-ref / browser-ref /
+   file-tree-ref cards as a 160×80+ rounded-3xl long chip on a row below
+   image cards. Plan 472 collapses every attachment kind (file, image,
+   pasted-text, terminal-ref, browser-ref, file-tree-ref) into the same
+   104×104 rounded-2xl square box so they wrap on a single row. The
+   `.pasted-content-attachment` and `.message-pasted-content-item`
+   selectors are kept as aliases so the legacy fallback render path in
+   MessageItem.tsx (decoded history without the unified bar) inherits
+   the same square shape — visual unity wins over class churn. */
 
-.pasted-content-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.pasted-content-attachment {
+.reference-attachment-card,
+.pasted-content-attachment,
+.message-pasted-content-item {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 160px;
-  min-height: 80px;
-  padding: 0.75rem;
+  width: 104px;
+  height: 104px;
+  flex: 0 0 auto;
+  padding: 0.5rem 0.625rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  /* Plan 220: match the input box's `rounded-3xl` (1.5rem = 24px)
-     exactly. Earlier 28px was slightly larger and read as more
-     curved than the wider input surface. */
-  border-radius: 1.5rem;
-  transition: all 0.2s ease;
+  /* rounded-2xl = 1rem, matches FileAttachmentCard */
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: border-color 0.16s ease, background 0.16s ease,
+    transform 0.16s ease, box-shadow 0.16s ease;
 }
 
-.pasted-content-attachment:hover {
+.reference-attachment-card:hover,
+.pasted-content-attachment:hover,
+.message-pasted-content-item:hover {
   border-color: var(--accent-soft);
   background: var(--surface-hover);
 }
 
+.reference-attachment-card-clickable {
+  cursor: pointer;
+}
+
+.reference-attachment-card-clickable:hover {
+  border-color: var(--accent-soft);
+  background: var(--surface-hover);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+/* Small dark pill in the top-right corner. The two remove buttons share
+   one rule set so the hover-reveal animation is identical across all
+   square reference cards. */
+.reference-attachment-remove,
 .pasted-content-remove {
   position: absolute;
-  top: 0.375rem;
-  right: 0.375rem;
-  width: 1.25rem;
-  height: 1.25rem;
-  border: none;
-  /* Plan 220: circular close button. The wider 28px card radius
-     needs a circular X to feel visually balanced — a 4px rounded
-     button reads as a stray shape on a 28px-rounded card. */
+  top: 0.25rem;
+  right: 0.25rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 0;
   border-radius: 9999px;
-  background: transparent;
-  color: var(--muted);
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   z-index: 10;
-  pointer-events: auto;
-  opacity: 0.6;
-  transition: all 0.15s ease;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
 }
 
-.pasted-content-attachment:hover .pasted-content-remove {
-  opacity: 1;
-}
-
-.pasted-content-remove:hover {
-  background: var(--error-soft);
-  color: var(--error);
-  opacity: 1;
-}
-
+.reference-attachment-card:hover .reference-attachment-remove,
+.pasted-content-attachment:hover .pasted-content-remove,
+.reference-attachment-remove:focus-visible,
 .pasted-content-remove:focus-visible {
   opacity: 1;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+}
+
+.reference-attachment-remove:hover,
+.pasted-content-remove:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.reference-attachment-preview,
+.pasted-content-preview,
+.message-pasted-content-preview {
+  flex: 1;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  opacity: 0.88;
+  /* leave a slot for the corner X — it's hidden until the card hovers
+     but the slot keeps the text from clobbering it when it appears */
+  padding-right: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+.reference-attachment-label,
+.pasted-content-label,
+.message-pasted-content-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0.18rem 0.42rem;
+  border-radius: 9999px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1;
+}
+
+.reference-attachment-label svg,
+.pasted-content-label svg,
+.message-pasted-content-label svg {
+  flex: 0 0 auto;
 }
 
 .browser-screenshot-attachment-card {
@@ -4271,38 +4309,6 @@ a {
 
 .browser-screenshot-attachment-remove:hover {
   background: rgba(0, 0, 0, 0.74);
-}
-
-.pasted-content-preview {
-  flex: 1;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--text);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
-  opacity: 0.85;
-  padding-right: 1rem;
-}
-
-.pasted-content-label {
-  margin-top: 0.5rem;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  padding: 0.25rem 0.5rem;
-  background: var(--chip);
-  border-radius: 0.5rem;
-  align-self: flex-start;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.25rem;
-  line-height: 1;
-  white-space: nowrap;
 }
 
 /* ========================================
@@ -4891,100 +4897,9 @@ a {
   }
 }
 
-/* Message Pasted Content Display */
-.message-pasted-content-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
-}
-
-.message-pasted-content-item {
-  display: flex;
-  flex-direction: column;
-  width: 160px;
-  min-height: 80px;
-  padding: 0.75rem;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  /* Plan 220: match the input box's `rounded-3xl` (1.5rem = 24px)
-     exactly so the card curvature aligns with the input curvature. */
-  border-radius: 1.5rem;
-  text-align: left;
-}
-
-.message-pasted-content-preview {
-  flex: 1;
-  font-size: 0.75rem;
-  line-height: 1.4;
-  color: var(--text);
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  -webkit-box-orient: vertical;
-  word-break: break-word;
-  opacity: 0.85;
-}
-
-.message-pasted-content-label {
-  margin-top: 0.5rem;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-  padding: 0.25rem 0.5rem;
-  background: var(--chip);
-  border-radius: 0.5rem;
-  align-self: flex-start;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 0.25rem;
-  line-height: 1;
-  white-space: nowrap;
-}
-
 /* ============================================
    Gateway Dashboard Styles
    ============================================ */
-
-.gateway-dashboard {
-  display: flex;
-  height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-
-.gateway-dashboard-main {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--main-bg);
-}
-
-.gateway-dashboard-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.5rem;
-  background: var(--main-bg);
-  flex-shrink: 0;
-}
-
-.gateway-dashboard-title {
-  font-size: 1rem;
-  font-weight: 600;
-  color: var(--text);
-  margin: 0;
-  line-height: 1.3;
-}
-
-.gateway-title-copernicus {
-  font-family: 'Copernicus', Georgia, 'Times New Roman', serif;
-  font-size: 1.25rem;
-  font-weight: 400;
-}
 
 .gateway-settings-btn {
   display: flex;
@@ -6761,10 +6676,6 @@ html.compact .skills-section-wrapper {
   gap: 1.5rem;
 }
 
-html.compact .gateway-dashboard-header {
-  padding: 0.75rem 1rem;
-}
-
 html.compact .gateway-section {
   padding: 0.75rem 1rem;
 }
@@ -7630,103 +7541,6 @@ html[data-theme="light"] .ask-question-option.selected {
 }
 
 /* ============================================
-   Sub-Agent Thread Item Styles (Sidebar)
-   ============================================ */
-
-.thread-item-sub-agent-badges {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-}
-
-.thread-item-sub-agent-name {
-  font-size: 0.75rem;
-  font-weight: 500;
-  flex-shrink: 0;
-  max-width: 100px;
-  overflow: hidden;
-  white-space: nowrap;
-  mask-image: linear-gradient(to right, black 85%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
-}
-
-/* Sub-agent thread item variant */
-.sub-agent-thread-item {
-  border: 0;
-  border-radius: 0.35rem;
-  text-align: left;
-  padding: 0.2rem 0.5rem;
-  margin: 0;
-  width: 100%;
-  background: transparent;
-  color: var(--muted);
-  font-size: 0.88rem;
-  cursor: pointer;
-  transition: background-color 0.2s ease, color 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: 0;
-}
-
-.sub-agent-thread-item:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-
-.sub-agent-thread-item.active {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.sub-agent-thread-content {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex: 1;
-  min-width: 0;
-}
-
-.sub-agent-thread-title {
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-  mask-image: linear-gradient(to right, black 85%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
-}
-
-.sub-agent-thread-badge {
-  font-size: 0.75rem;
-  font-weight: 500;
-  flex-shrink: 0;
-  max-width: 120px;
-  overflow: hidden;
-  white-space: nowrap;
-  mask-image: linear-gradient(to right, black 85%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
-}
-
-.sub-agent-thread-meta {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-shrink: 0;
-}
-
-.sub-agent-thread-indicator {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent);
-}
-
-.sub-agent-thread-indicator.completed {
-  color: #22c55e;
-}
-
-/* ============================================
    Widget Renderer Styles
    ============================================ */
 
@@ -8144,23 +7958,6 @@ html[data-theme="light"] .ask-question-option.selected {
   height: 100%;
   overflow: hidden;
   background: var(--main-bg);
-}
-
-.sidebar-conductor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 8px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.sidebar-conductor-canvas {
-  flex: 1;
-  min-height: 0;
-  position: relative;
-  overflow: hidden;
 }
 
 .sidebar-conductor-loading {
@@ -10732,15 +10529,26 @@ html[data-message-font-size="large"] .prose h3 {
   color: var(--accent);
 }
 
-/* "Open" dropdown in the preview toolbar. The trigger button now uses
- * the unified <Button variant="accent" size="sm" /> from Button.tsx,
- * so only dropdown/menu layout rules remain here. Icon rotation
- * (180deg flip for the open-state caret) is applied to the SVG
- * directly via className since Button renders children inline. */
+/* "Open" dropdown in the preview toolbar. The trigger is a segmented
+ * control (`.file-preview-open-group`) — IDE action + caret — and the
+ * floating menu is a regular OptionPanel. Icon rotation (180° flip for
+ * the open-state caret) is applied to the SVG directly via className. */
 .file-preview-open-dropdown {
   position: relative;
   flex: 0 0 auto;
   width: max-content;
+}
+
+/* "Open" dropdown panel sits on the editor canvas, which is already
+ * pure white in light mode (--main-bg). The default OptionPanel surface
+ * inherits --sidebar-bg (#fdf8f5, warm cream) — opt back to pure white
+ * here so the floating menu reads as a sheet detached from the page. */
+.file-preview-open-menu {
+  background-color: var(--main-bg, #ffffff);
+}
+
+:root[data-theme="dark"] .file-preview-open-menu {
+  background-color: var(--sidebar-bg, var(--surface-solid));
 }
 
 .file-preview-open-dropdown svg.rotate-180 {
@@ -10897,8 +10705,10 @@ html[data-message-font-size="large"] .prose h3 {
   flex: 0 0 auto;
   min-width: 52px;
   padding: 10px 0 40px;
-  border-right: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-solid) 48%, var(--main-bg));
+  /* Seamless gutter: no divider, same background as the code area.
+   * Hover/current-line still surface a subtle highlight so the row is
+   * discoverable on click without a permanent vertical rule. */
+  background: transparent;
   user-select: none;
 }
 
@@ -10923,8 +10733,29 @@ html[data-message-font-size="large"] .prose h3 {
 
 .file-preview-line-no.current {
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  /* Soft 8% accent sits in between the `.surface-hover` gutter hover
+   * and the 9%+bordered focus bar: noticeable as "you are here" but
+   * not loud. The same percentage is used on `.file-preview-current-line`
+   * so the highlight reads as a single continuous row band across the
+   * gutter + code body (the gutter background is transparent, so the
+   * overlay from the code-body side bleeds under the line number). */
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   font-weight: 650;
+}
+
+/* Tracks `currentLine` from the canvas click — a single-row highlight
+ * that spans the code body width. Pairs with `.file-preview-line-no.current`
+ * on the gutter side to render one continuous band. Distinct from
+ * `.file-preview-focus-bar` (external trigger, has borders, ~9% + 36%
+ * accent) so the eye can tell "I'm here" from "look here from a tool". */
+.file-preview-current-line {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  transition: top 120ms ease;
 }
 
 .file-preview-code-body {
@@ -10987,42 +10818,6 @@ html[data-message-font-size="large"] .prose h3 {
   user-select: none;
 }
 
-/* VSCode-style bottom status bar: Ln/Col on the left, language and file
- * stats on the right. */
-.file-preview-statusbar {
-  display: flex;
-  min-height: 22px;
-  flex: 0 0 22px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 12px;
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--accent) 8%, var(--main-bg));
-  color: var(--muted);
-  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
-  font-size: 10.5px;
-  font-feature-settings: "tnum";
-  letter-spacing: 0.01em;
-  user-select: none;
-}
-
-.file-preview-statusbar-left,
-.file-preview-statusbar-right {
-  display: inline-flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.file-preview-statusbar-right {
-  gap: 12px;
-  color: var(--muted);
-}
-
-.file-preview-statusbar-left {
-  color: var(--text);
-  font-weight: 550;
-}
 
 .file-preview-markdown {
   width: min(920px, calc(100% - 48px));
@@ -13417,6 +13212,30 @@ html[data-message-font-size="large"] .prose h3 {
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px var(--border) !important;
 }
 
+/* Light theme: lift the expanded composer to pure white so the floated
+ * surface matches --main-bg / --composer-bg. Dark theme is intentionally
+ * left alone (the original --surface-solid still applies). */
+:root:not([data-theme="dark"]) .workspace-floating-composer-expanded .message-input-surface {
+  background-color: var(--main-bg) !important;
+}
+
+/* Light theme: composer-attached panels (sub-agent, queued mailbox,
+ * streaming input) share the composer's white surface, and permission
+ * prompts drop the heavier --command-menu-border in favor of --border —
+ * the whole input stack then reads as one control. Dark theme untouched:
+ * --composer-bg falls back to --surface and these rules don't match. */
+:root:not([data-theme="dark"]) .sub-agent-panel,
+:root:not([data-theme="dark"]) .mailbox-panel,
+:root:not([data-theme="dark"]) .streaming-input-bar {
+  background-color: var(--composer-bg);
+}
+
+:root:not([data-theme="dark"]) .permission-prompt-panel,
+:root:not([data-theme="dark"]) .permission-prompt-panel.resolved,
+:root:not([data-theme="dark"]) .permission-prompt-panel.ask-user-question-panel {
+  border-color: var(--border);
+}
+
 .workspace-floating-composer-expanded .agent-mode-selector {
   background-color: var(--surface-solid) !important;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.26);
@@ -14048,4 +13867,592 @@ html[data-message-font-size="large"] .prose h3 {
 [data-lowpower] * {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+/* ============================================
+   Unified Page Framework (page-* / modal-*)
+   Shared by all main-window views: canvas,
+   automation, gateway, extensions.
+   ============================================ */
+
+/* Page frame owns vertical scrolling + the centered max-width column.
+   The host .app-content drops its own padding so the frame controls it. */
+.app-content:has(.page-frame) {
+  padding: 0;
+}
+
+.page-frame {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.page-frame-inner {
+  width: 100%;
+  max-width: var(--page-max-width);
+  margin: 0 auto;
+  padding: var(--page-pad-y) var(--page-pad-x) 3.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--page-gap);
+  min-height: 100%;
+}
+
+.page-frame::-webkit-scrollbar {
+  width: 8px;
+}
+
+.page-frame::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.page-frame::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+.page-frame::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Page header — title / subtitle / action cluster */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-header-text {
+  min-width: 0;
+}
+
+.page-title {
+  font-size: var(--page-title-size);
+  font-weight: var(--page-title-weight);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--foreground);
+}
+
+.page-subtitle {
+  margin-top: 0.375rem;
+  font-size: var(--page-subtitle-size);
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+/* Page tabs — underline variant (top-level section switcher) */
+.page-tabs {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.page-tab:hover {
+  color: var(--foreground);
+}
+
+.page-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-tab.active {
+  color: var(--foreground);
+}
+
+.page-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--foreground);
+}
+
+.page-tab-count {
+  display: inline-flex;
+  align-items: center;
+  min-width: 1.25rem;
+  justify-content: center;
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  background: var(--surface-hover);
+  color: var(--muted);
+}
+
+.page-tab-count.active {
+  background: var(--foreground);
+  color: var(--main-bg);
+}
+
+/* Page tabs — pill variant (segmented control) */
+.page-tabs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  background: var(--surface);
+}
+
+.page-tab-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.875rem;
+  border-radius: 0.4375rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.page-tab-pill:hover {
+  color: var(--foreground);
+  background: var(--surface-hover);
+}
+
+.page-tab-pill:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.page-tab-pill.active {
+  color: #fff;
+  background: var(--accent);
+}
+
+.page-tab-pill .page-tab-count {
+  background: var(--surface-hover);
+}
+
+.page-tab-pill.active .page-tab-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+/* Page card — unified surface */
+.page-card {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.page-card-pad-sm {
+  padding: 0.75rem;
+}
+
+.page-card-pad-md {
+  padding: 1.25rem;
+}
+
+.page-card-pad-lg {
+  padding: 1.5rem;
+}
+
+.page-card-hover {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.page-card-hover:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+/* Empty state */
+.page-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 3rem 1.5rem;
+  min-height: 12rem;
+}
+
+.page-empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.4;
+  margin-bottom: 0.75rem;
+}
+
+.page-empty-state-title {
+  font-size: var(--page-card-title-size);
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.page-empty-state-desc {
+  margin-top: 0.25rem;
+  font-size: var(--page-caption-size);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 30rem;
+}
+
+.page-empty-state-action {
+  margin-top: 1.25rem;
+}
+
+/* Modal — unified dialog shell */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 90vh;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: var(--main-bg);
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Compact mode — tighter page padding, consistent with settings pages */
+html.compact .app-content:has(.page-frame) {
+  padding: 0;
+}
+
+html.compact .page-frame-inner {
+  padding: 1.25rem 1.25rem 2.5rem;
+}
+
+/* ============================================================
+   Plan 471 — Sidebar section abstraction
+   ============================================================
+   Each top-level sidebar group (项目 / 定时任务 / 网关 / 唤醒 / 置顶 /
+   未分组 / user sections) renders through `.sidebar-section-item`.
+   The header is a button — click it to expand/collapse the body.
+   Sub-styling for individual kinds (`data-section-kind`) tweaks the
+   leading icon tint and left padding without affecting children. */
+
+.sidebar-section-item {
+  /* Plan 471 v6: match the row geometry of `.thread-item` (margin 0,
+     same header padding) so a section header and a session row have the
+     same height and footprint — no visual "jump" between a section title
+     and its child sessions. */
+  margin: 0;
+  border-radius: 0;
+}
+.sidebar-section-item.sidebar-section-soft {
+  /* The "项目" default section uses a slightly dimmer label so it
+     visually defers to user-created sections above it. */
+  opacity: 0.95;
+}
+.sidebar-section-item .sidebar-section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.88rem;
+  font-weight: 400;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-item .sidebar-section-header:hover {
+  background: var(--surface-hover);
+}
+/* Plan 471 v10: "项目" and "定时任务" keep a flat resting look — no
+   hover background wash (user feedback). The chevron + trailing buttons
+   still fade in on hover; only the header's background highlight is
+   suppressed so these two system sections read as static titles. */
+.sidebar-section-item[data-section-id="__system__:project"] .sidebar-section-header:hover,
+.sidebar-section-item[data-section-id="__system__:cron"] .sidebar-section-header:hover {
+  background: transparent;
+}
+.sidebar-section-item .sidebar-section-header:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+.sidebar-section-item .sidebar-section-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  /* Plan 471 v9: the toggle chevron appears only on hover (Codex-like),
+     same as the trailing "⋯ +". The header text itself always shows;
+     the chevron is a hover affordance, not resting decoration.
+     Fixed width keeps the label from shifting when the chevron fades
+     in/out — every section (cron, gateway, wakeup, project, user…)
+     renders the same header geometry so the chevron lands in exactly
+     the same spot relative to the name. */
+  width: 14px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sidebar-section-item .sidebar-section-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.sidebar-section-item .sidebar-section-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+  /* Keep the caret glued to the label ("项目 >"), not pushed to the
+     far right. The trailing slot right-aligns via margin-left:auto. */
+}
+.sidebar-section-item .sidebar-section-count {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface-2, var(--surface));
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  margin-left: 0.25rem;
+}
+.sidebar-section-item .sidebar-section-trailing {
+  margin-left: auto;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  /* Plan 471 v4: trailing "⋯ +" only on hover, matching Codex's
+     minimal-when-resting, expand-on-hover header style. The transition
+     keeps it smooth when the cursor enters / leaves the row. */
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-caret,
+.sidebar-section-item .sidebar-section-caret:focus-visible {
+  opacity: 1;
+}
+.sidebar-section-item .sidebar-section-header:hover .sidebar-section-trailing,
+.sidebar-section-item .sidebar-section-trailing:focus-within {
+  /* Stay visible while the user is interacting with the trailing
+     buttons themselves. The popup menu lives inside the trailing slot,
+     and CSS `:hover` covers it transitively (mouse over a descendant =
+     hover on the ancestor). */
+  opacity: 1;
+}
+.sidebar-section-item .sidebar-section-body {
+  /* Children (ProjectGroupItem / ThreadListItem) manage their own
+     padding; we only provide a small drop-shadow cue when open. */
+  padding: 0;
+}
+
+/* Kind-specific tints. Tuned to the codebase's existing icon palette. */
+.sidebar-section-kind-user {
+  --section-accent: var(--accent, #4f8fff);
+}
+.sidebar-section-kind-user .sidebar-section-name {
+  /* A subtle accent on the label distinguishes a user-created section
+     from system groups without altering the header's height — the
+     previous border-left + padding compensation shifted the caret
+     baseline relative to session rows. */
+  color: var(--section-accent);
+}
+.sidebar-section-kind-cron .sidebar-section-icon,
+.sidebar-section-kind-gateway .sidebar-section-icon,
+.sidebar-section-kind-wakeup .sidebar-section-icon,
+.sidebar-section-kind-pinned .sidebar-section-icon,
+.sidebar-section-kind-project .sidebar-section-icon {
+  color: var(--muted);
+}
+
+/* Section menu trigger button (used inside the trailing slot of user
+   sections — reserved for future rename / delete actions). */
+.sidebar-section-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  border-radius: 0.25rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-menu-trigger:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ============================================================
+   Project right-click menu — section submenu additions
+   ============================================================ */
+
+.project-dropdown-section-row {
+  position: relative;
+  display: block;
+}
+.project-dropdown-item-with-caret {
+  /* Same look as a normal project-dropdown-item; the small `>` chevron
+     on the right hints to the user that a submenu is available. */
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 0.4rem;
+}
+.project-dropdown-submenu {
+  position: absolute;
+  top: -4px;
+  /* Plan 471 v4: pop to the right by default; JS flips to `right: 100%`
+     when the parent menu is too close to the viewport's right edge so
+     the submenu never gets clipped by the screen border. */
+  left: 100%;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+  margin-left: 0.25rem;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  z-index: 50;
+}
+/* When the parent menu sits in the right gutter, the submenu needs to
+   render on the left side of the parent instead. The chevron icon
+   inside the trigger row should also flip so the user sees the visual
+   cue pointing toward the submenu (it now opens to the left). */
+.project-dropdown-submenu-flip-left {
+  left: auto;
+  right: 100%;
+  margin-left: 0;
+  margin-right: 0.25rem;
+}
+.project-dropdown-item-checkable {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+.project-dropdown-item-checkable.is-current {
+  /* The currently assigned section gets a subtle accent dot/bg so the
+     user can see at a glance where the project lives. */
+  background: var(--surface-hover);
+  color: var(--accent, var(--text));
+  font-weight: 600;
+}
+.project-dropdown-item-checkable.is-current::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent, currentColor);
+  margin-right: 2px;
+}
+
+/* "View all N more" link inside a section body (e.g. cron section when
+   it has hidden runs beyond CRON_SIDEBAR_VISIBLE). Sized smaller than
+   thread items so it doesn't look like another session. */
+.sidebar-section-view-all {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.25rem 0.75rem;
+  margin: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.sidebar-section-view-all:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.sidebar-section-view-all:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
 }

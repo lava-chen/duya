@@ -144,6 +144,91 @@ describe('readPluginManifest — minimal .duya-plugin/plugin.json', () => {
       { id: 'token', label: 'API Token', type: 'secret', required: true, connectionId: undefined },
     ]);
   });
+
+  it('derives components.appConnections from .app.json (plan 455 D3)', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'app-plugin', version: '1.0.0', description: 'Declares apps.' }),
+    );
+    // Upstream app-schema array shape (plan 455-open-connector-registry).
+    writeFileSync(
+      join(dir, '.app.json'),
+      JSON.stringify({
+        apps: [{ id: 'github' }, { id: 'slack', category: 'communication' }],
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.components?.appConnections).toEqual(['github', 'slack']);
+  });
+
+  it('prefers .app.json over the legacy apps/connections.json layout', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'dual-plugin', version: '1.0.0', description: 'Both layouts.' }),
+    );
+    writeFileSync(join(dir, '.app.json'), JSON.stringify({ apps: [{ id: 'figma' }] }));
+    mkdirSync(join(dir, 'apps'), { recursive: true });
+    writeFileSync(
+      join(dir, 'apps', 'connections.json'),
+      JSON.stringify([{ id: 'notion', provider: 'notion' }]),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.components?.appConnections).toEqual(['figma']);
+  });
+
+  it('falls back to legacy apps/connections.json when .app.json is absent', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'legacy-plugin', version: '1.0.0', description: 'Legacy apps.' }),
+    );
+    mkdirSync(join(dir, 'apps'), { recursive: true });
+    writeFileSync(
+      join(dir, 'apps', 'connections.json'),
+      JSON.stringify([{ id: 'google', provider: 'google', required: true }]),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.components?.appConnections).toEqual(['google']);
+  });
+
+  it('tolerates a malformed .app.json (empty appConnections, no throw)', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'broken-apps', version: '1.0.0', description: 'Bad .app.json.' }),
+    );
+    writeFileSync(join(dir, '.app.json'), '{ not json');
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.components?.appConnections).toEqual([]);
+  });
+
+  it('parses interface.shortDescription and defaultPrompt (codex parity)', () => {
+    mkdirSync(join(dir, '.duya-plugin'));
+    writeFileSync(
+      join(dir, '.duya-plugin', 'plugin.json'),
+      JSON.stringify({
+        name: 'prompted',
+        version: '1.0.0',
+        description: 'Has prompts.',
+        interface: {
+          displayName: 'Prompted',
+          shortDescription: 'Short and sweet',
+          defaultPrompt: ['Do the thing', '  ', 'x'.repeat(200), 'Second prompt'],
+        },
+      }),
+    );
+
+    const manifest = readPluginManifest(dir);
+    expect(manifest.interface?.shortDescription).toBe('Short and sweet');
+    // Empty and >128-char prompts dropped; capped at 3.
+    expect(manifest.interface?.defaultPrompt).toEqual(['Do the thing', 'Second prompt']);
+  });
 });
 
 // ----------------------------------------------------------------------------

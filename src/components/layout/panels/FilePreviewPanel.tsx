@@ -17,7 +17,6 @@ import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { PanelFileTreeSplit } from "./PanelFileTreeSplit";
-import { CodeIcon } from "@/components/icons";
 import { IdeBrandIcon } from "@/components/ide/ide-brand-icons";
 import {
   OptionPanel,
@@ -158,43 +157,6 @@ function languageFromExtension(extension?: string): string {
   return map[ext] ?? "text";
 }
 
-/** Human-readable labels for the status bar. */
-const LANGUAGE_LABELS: Record<string, string> = {
-  typescript: "TypeScript",
-  tsx: "TSX",
-  javascript: "JavaScript",
-  jsx: "JSX",
-  python: "Python",
-  ruby: "Ruby",
-  go: "Go",
-  rust: "Rust",
-  java: "Java",
-  kotlin: "Kotlin",
-  swift: "Swift",
-  csharp: "C#",
-  cpp: "C++",
-  c: "C",
-  css: "CSS",
-  scss: "SCSS",
-  less: "Less",
-  html: "HTML",
-  json: "JSON",
-  yaml: "YAML",
-  xml: "XML",
-  markdown: "Markdown",
-  sql: "SQL",
-  bash: "Shell",
-  docker: "Dockerfile",
-  toml: "TOML",
-  ini: "INI",
-  graphql: "GraphQL",
-  protobuf: "Protocol Buffers",
-  php: "PHP",
-  lua: "Lua",
-  r: "R",
-  text: "Plain Text",
-};
-
 const MARKDOWN_EXTENSIONS = new Set(["md", "mdx", "markdown"]);
 
 /** Code line height in px. MUST stay in sync with the CSS
@@ -324,6 +286,23 @@ function PreviewHighlightBar({ focusLines }: { focusLines: FocusLines | null }) 
   );
 }
 
+/** Single-row "you are here" overlay that spans the code body. Pairs
+ *  with the gutter's `.file-preview-line-no.current` rule (same color)
+ *  so the highlight reads as one continuous band. Lower intensity than
+ *  `PreviewHighlightBar` (no borders, same percentage), reflecting
+ *  that it's pure cursor tracking rather than an external focus. */
+function PreviewCurrentLine({ currentLine }: { currentLine: number | null }) {
+  if (currentLine == null) return null;
+  const top = (currentLine - 1) * CODE_LINE_HEIGHT + CODE_TOP_PADDING;
+  return (
+    <div
+      className="file-preview-current-line"
+      style={{ top, height: CODE_LINE_HEIGHT }}
+      aria-hidden="true"
+    />
+  );
+}
+
 export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const propFilePath = typeof tab.params?.filePath === "string" ? tab.params.filePath : "";
   const propWorkingDirectory = typeof tab.params?.workingDirectory === "string"
@@ -337,6 +316,14 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [workingDirOverride, setWorkingDirOverride] = useState<string | null>(null);
   const filePath = filePathOverride ?? propFilePath;
   const workingDirectory = workingDirOverride ?? propWorkingDirectory;
+  // Effective directory for the integrated file tree. Standalone previews
+  // (in-chat clicks) ship with an empty workingDirectory on purpose — fall
+  // back to the file's own directory so the file-tree toggle stays visible
+  // and usable in every preview mode instead of silently disappearing.
+  const treeWorkingDirectory = useMemo(
+    () => workingDirectory || (filePath ? getDirectoryPath(filePath) : ""),
+    [workingDirectory, filePath],
+  );
   const canvasRef = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<PreviewPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -669,8 +656,6 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     [preview?.name, filePath, tab.title],
   );
   const isMarkdown = useMemo(() => MARKDOWN_EXTENSIONS.has(preview?.extension ?? ""), [preview?.extension]);
-  const lineCount = useMemo(() => lineCountOf(preview?.content ?? ""), [preview?.content]);
-  const languageLabel = LANGUAGE_LABELS[language] ?? language;
 
   const handleOpenWithDefault = useCallback(() => {
     setOpenMenuOpen(false);
@@ -763,7 +748,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   if (!filePath) {
     return (
       <div className="file-preview-panel">
-        <PanelFileTreeSplit workingDirectory={workingDirectory}>
+        <PanelFileTreeSplit workingDirectory={treeWorkingDirectory}>
           <div className="file-preview-empty">
             <FolderOpenIcon size={32} stroke={1.25} />
             <strong>{t('filePreview.openFile')}</strong>
@@ -798,7 +783,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           )}
         </div>
         <div className="file-preview-actions">
-          {panel && workingDirectory && (
+          {panel && treeWorkingDirectory && (
             <IconButton
               type="button"
               variant="default"
@@ -811,7 +796,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               aria-pressed={workspaceTreeOpen}
               data-testid="file-tree-toggle"
             >
-              <FoldersIcon size={16} stroke={1.5} />
+              <FoldersIcon size={18} stroke={1.5} />
             </IconButton>
           )}
           <div ref={openContainerRef} className="file-preview-open-dropdown">
@@ -824,7 +809,19 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
                 aria-label={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
                 title={defaultIde ? t('filePreview.openInIde', { name: defaultIde.name }) : t('filePreview.openWithDefault')}
               >
-                <CodeIcon size={16} stroke={1.5} />
+                {defaultIde?.icon ? (
+                  <img
+                    src={defaultIde.icon}
+                    alt=""
+                    width={16}
+                    height={16}
+                    className="file-preview-ide-icon"
+                  />
+                ) : defaultIde ? (
+                  <IdeBrandIcon id={defaultIde.id} size={16} />
+                ) : (
+                  <ArrowSquareOutIcon size={16} stroke={1.5} />
+                )}
                 <span className="file-preview-open-label">{t('filePreview.open')}</span>
               </button>
               <button
@@ -857,7 +854,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         </div>
       </div>
 
-      <PanelFileTreeSplit workingDirectory={workingDirectory}>
+      <PanelFileTreeSplit workingDirectory={treeWorkingDirectory}>
       <div className={`file-preview-canvas${preview?.kind === "pdf" ? " file-preview-canvas-pdf" : ""}`} ref={canvasRef} onMouseUp={captureSelection} onClick={handleCanvasClick}>
         {loading && (
           <div className="file-preview-state"><span className="animate-pulse">{t('filePreview.loading')}</span></div>
@@ -889,6 +886,7 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               />
               <div className="file-preview-code-body">
                 <PreviewHighlightBar focusLines={focusLines} />
+                <PreviewCurrentLine currentLine={currentLine} />
                 <PreviewCodeContent
                   content={preview.content || ""}
                   language={language}
@@ -921,20 +919,6 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
         )}
       </div>
       </PanelFileTreeSplit>
-
-      {!loading && preview?.success && preview.kind === "text" && (
-        <div className="file-preview-statusbar">
-          <span className="file-preview-statusbar-left">
-            {t('filePreview.statusLine', { line: currentLine ?? 1 })}
-          </span>
-          <span className="file-preview-statusbar-right">
-            <span>{languageLabel}</span>
-            <span>{t('filePreview.statusLines', { count: lineCount })}</span>
-            <span>UTF-8</span>
-            <span>LF</span>
-          </span>
-        </div>
-      )}
     </div>
   );
 }

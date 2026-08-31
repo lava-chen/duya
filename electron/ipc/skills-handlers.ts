@@ -471,22 +471,6 @@ export function registerSkillsHandlers(): void {
         }
       }
 
-      // Also scan builtin plugin cache directories. The install cache
-      // only contains plugin.json — the skills/ directory lives in the
-      // builtin cache (~/.duya/plugins/cache/builtin/<id>/<version>/skills/).
-      // This makes builtin plugin skills visible even before install.
-      try {
-        const { listBuiltinCachePlugins } = await import('../plugins/cache/builtin-sync.js');
-        for (const candidate of listBuiltinCachePlugins()) {
-          const skillsDir = path.join(candidate.root, 'skills');
-          if (fs.existsSync(skillsDir)) {
-            loadSkillsFromDir(skillsDir, 'plugin', candidate.id);
-          }
-        }
-      } catch (e) {
-        logger.warn('Failed to scan builtin plugin skills', { error: String(e) }, LogComponent.Skills);
-      }
-
       // System-level skills (.system): sync the bundled copies into the
       // user skills directory (~/.duya/skills/.system) so they are ordinary
       // visible files, then surface them read-only (source 'system', always

@@ -69,8 +69,10 @@ export interface WakeOptions {
 
 const DEFAULT_BOUNDS: Record<OrbState, OrbBounds> = {
   DORMANT: { x: 0, y: 0, width: 50, height: 50 },
-  INPUT: { x: 0, y: 0, width: 280, height: 100 },
-  LOADING: { x: 0, y: 0, width: 50, height: 50 },
+  INPUT: { x: 0, y: 0, width: 320, height: 160 },
+  // Wide enough to hold the ball plus the "thinking / 用 tool" progress
+  // bubble INSIDE the window — at 50x50 the bubble was clipped by the OS.
+  LOADING: { x: 0, y: 0, width: 220, height: 60 },
   RESULT: { x: 0, y: 0, width: 350, height: 350 },
 };
 
@@ -83,6 +85,11 @@ export interface WakeService {
   wake(): void;
   /** Esc / external collapse — return to DORMANT. */
   collapse(): void;
+  /** Mark a wakeless turn as in-flight: suppress blur-collapse until the turn
+   *  ends or a hard timeout. See the private `wakelessTurnActive` field. */
+  markWakelessTurnActive(): void;
+  /** Clear the in-flight marker. */
+  clearWakelessTurnActive(): void;
   /** Programmatically transition to a new state. */
   setState(next: OrbState): void;
   /** Get current orb state. */
@@ -101,6 +108,22 @@ export interface WakeService {
 class WakeServiceImpl implements WakeService {
   private orbWindow: BrowserWindow | null = null;
   private state: OrbState = 'DORMANT';
+
+  /**
+   * True while a wakeless turn is in flight. Set the moment the orb submits
+   * (in the submit IPC handler, before the window is resized / the worker is
+   * spawned) and cleared on collapse or a hard safety timeout. While this is
+   * true the INPUT-box blur-collapse is suppressed, so a transient OS focus
+   * flicker during the INPUT→LOADING hand-off (the frameless window can
+   * momentarily lose focus when `setResizable` toggles in `applyBounds`, and
+   * the Windows foreground lock makes this racy) cannot interrupt a turn the
+   * user just started. This is the mechanism that makes LOADING "survive
+   * focus changes (the agent keeps running)" as the blur handler comment
+   * promises.
+   */
+  private wakelessTurnActive = false;
+  private wakelessTurnTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly WAKLESS_TURN_MAX_MS = 5 * 60 * 1000;
   private emitter = new EventEmitter();
   private position: OrbPosition = { x: 100, y: 100, displayId: 0 };
   private registeredShortcut: string | null = null;
@@ -111,6 +134,10 @@ class WakeServiceImpl implements WakeService {
   private lastPressMs = 0;
   private pressCount = 0;
   private doubleTapTimer: NodeJS.Timeout | null = null;
+  /** true once the orb renderer has loaded and can receive `main → orb` IPC. */
+  private orbReady = false;
+  /** Messages sent before the renderer was ready; replayed on did-finish-load. */
+  private orbQueue: Array<{ channel: string; args: unknown[] }> = [];
 
   constructor(opts: WakeOptions) {
     this.opts = {
@@ -204,16 +231,32 @@ class WakeServiceImpl implements WakeService {
   }
 
   wake(): void {
+    // Arm the OS context bridge: the daemon keeps writing snapshots
+    // regardless, but fan-out + the `isEnabled()` gate that
+    // `buildContextPreamble()` / `insertTabToFocusedField()` check stays
+    // off until the user actually opens the orb (privacy by default).
+    // Idempotent, so re-waking an already-open orb is free.
+    armOSContextBridge();
     // Already DORMANT → trigger show-input.
     if (this.state === 'DORMANT') {
-      this.ensureOrb();
-      this.setState('INPUT');
-      this.applyBounds('INPUT');
-      this.orbWindow?.webContents.send('automation:orb:show-input');
+      const win = this.ensureOrb();
+      // Park the orb in front of the user rather than wherever it was last
+      // left: the hotkey is global, so the user may be on another app,
+      // another display, or another corner of this one.
+      this.setState('INPUT', this.anchorPoint());
+      this.sendOrb('automation:orb:show-input');
+      win.show();
+      win.focus();
       return;
     }
     // Already INPUT/LOADING/RESULT → bring to front, do not reset state.
     if (this.orbWindow) {
+      if (this.state === 'INPUT') {
+        // Resend: a renderer that missed the original event (reload mid-
+        // session) would otherwise stay a ball forever in an INPUT-sized
+        // window. transition('INPUT') is idempotent on the renderer side.
+        this.sendOrb('automation:orb:show-input');
+      }
       if (this.orbWindow.isMinimized()) this.orbWindow.restore();
       this.orbWindow.show();
       this.orbWindow.focus();
@@ -222,9 +265,65 @@ class WakeServiceImpl implements WakeService {
 
   collapse(): void {
     if (this.state === 'DORMANT') return;
+    this.clearWakelessTurnActive();
     this.setState('DORMANT');
-    this.applyBounds('DORMANT');
-    this.orbWindow?.webContents.send('automation:orb:hide');
+    this.sendOrb('automation:orb:hide');
+    // Hiding the UI must also stop the worker: without this the wakeless
+    // turn runs to completion on the agent server and only surfaces later
+    // as a notify badge — wasted tokens and a pinned worker slot.
+    void this.cancelWakelessTurn();
+  }
+
+  /** Mark a wakeless turn as in-flight: suppress blur-collapse until the turn
+   *  ends or the safety timeout fires. Idempotent. */
+  markWakelessTurnActive(): void {
+    this.wakelessTurnActive = true;
+    if (this.wakelessTurnTimer !== null) clearTimeout(this.wakelessTurnTimer);
+    this.wakelessTurnTimer = setTimeout(() => {
+      this.wakelessTurnActive = false;
+      this.wakelessTurnTimer = null;
+    }, WakeServiceImpl.WAKLESS_TURN_MAX_MS);
+  }
+
+  /** Clear the in-flight marker (turn ended, user dismissed, or re-wake). */
+  clearWakelessTurnActive(): void {
+    this.wakelessTurnActive = false;
+    if (this.wakelessTurnTimer !== null) {
+      clearTimeout(this.wakelessTurnTimer);
+      this.wakelessTurnTimer = null;
+    }
+  }
+
+  /** Best-effort interrupt of the in-flight wakeless turn, if any. */
+  private async cancelWakelessTurn(): Promise<void> {
+    try {
+      const { interruptActiveWakelessChat } = await import('./orb-wakeless-chat');
+      await interruptActiveWakelessChat();
+    } catch {
+      // best-effort — a leaked turn is not worth breaking collapse over
+    }
+  }
+
+  /**
+   * Send a `main → orb` message, queueing it if the renderer has not loaded
+   * yet.
+   *
+   * The first wake creates the window and immediately pushes `show-input`,
+   * but `loadURL` is async: the renderer registers its `ipcRenderer.on`
+   * listeners only once React mounts, so an early send is silently dropped
+   * and the orb comes up stuck on the ball while the window has already been
+   * resized to the input box. `did-finish-load` is the earliest point at
+   * which the listeners exist (module scripts are deferred, so they run
+   * before it fires).
+   */
+  private sendOrb(channel: string, ...args: unknown[]): void {
+    const win = this.orbWindow;
+    if (!win || win.isDestroyed()) return;
+    if (this.orbReady) {
+      win.webContents.send(channel, ...args);
+      return;
+    }
+    this.orbQueue.push({ channel, args });
   }
 
   getState(): OrbState {
@@ -264,10 +363,10 @@ class WakeServiceImpl implements WakeService {
    * Internal: change state and broadcast to listeners + UI.
    * Used by IPC handlers in `electron/ipc/orb.ts`.
    */
-  setState(next: OrbState): void {
+  setState(next: OrbState, centre?: { x: number; y: number }): void {
     if (next === this.state) return;
     this.state = next;
-    this.applyBounds(next);
+    this.applyBounds(next, centre);
     for (const listener of this.emitter.listeners('state')) {
       try {
         (listener as (s: OrbState) => void)(next);
@@ -275,6 +374,33 @@ class WakeServiceImpl implements WakeService {
         // swallow
       }
     }
+  }
+
+  /**
+   * Where the user is working. The cursor wins: it is the only focus signal
+   * that survives another application holding the keyboard, which is exactly
+   * the case the global hotkey exists for. Falls back to the focused window's
+   * centre, then to the orb's own parked position.
+   */
+  private anchorPoint(): { x: number; y: number } {
+    try {
+      const cursor = screen.getCursorScreenPoint();
+      if (Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
+        return { x: cursor.x, y: cursor.y };
+      }
+    } catch {
+      // screen unavailable (headless, or called before app ready)
+    }
+    try {
+      const focused = BrowserWindow.getFocusedWindow();
+      if (focused && !focused.isDestroyed()) {
+        const b = focused.getBounds();
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+      }
+    } catch {
+      // fall through
+    }
+    return { x: this.position.x, y: this.position.y };
   }
 
   private ensureOrb(): BrowserWindow {
@@ -301,6 +427,11 @@ class WakeServiceImpl implements WakeService {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // Without the preload bundle the orb renderer has no
+        // window.electronAPI: it renders the ball fine (pure SVG) but every
+        // IPC in both directions is a no-op — the hotkey woke the window and
+        // the renderer never learned about it.
+        preload: join(__dirname, 'preload.js'),
       },
     });
 
@@ -308,6 +439,33 @@ class WakeServiceImpl implements WakeService {
     win.on('close', (event) => {
       event.preventDefault();
       this.collapse();
+    });
+
+    // Clicking anywhere outside the input box dismisses it — the input is a
+    // quick capture surface, not something that lingers. Only INPUT: LOADING
+    // must survive focus changes (the agent keeps running) and RESULT stays
+    // until Esc or the auto-fold. While a wakeless turn is in flight the box
+    // must NOT collapse on blur — a real click-away outside the box is still
+    // caught (the turn flag is only set once the user actually submits), and
+    // the spurious focus flicker during submit is ignored.
+    win.on('blur', () => {
+      if (this.state === 'INPUT' && !this.wakelessTurnActive) this.collapse();
+    });
+
+    // Flush anything the main process tried to send while the renderer was
+    // still loading. See `sendOrb`.
+    win.webContents.on('did-finish-load', () => {
+      this.orbReady = true;
+      const queued = this.orbQueue;
+      this.orbQueue = [];
+      for (const m of queued) {
+        if (!win.isDestroyed()) win.webContents.send(m.channel, ...m.args);
+      }
+    });
+
+    win.on('closed', () => {
+      this.orbReady = false;
+      this.orbQueue = [];
     });
 
     if (url.startsWith('file://') && !existsSync(url.slice('file://'.length))) {
@@ -321,22 +479,116 @@ class WakeServiceImpl implements WakeService {
       void win.loadURL(url);
     }
 
-    win.show();
+    // Deliberately not shown here: `wake()` moves the window to the anchor
+    // before the first paint, so it never flashes at the old parked spot.
     this.orbWindow = win;
     return win;
   }
 
-  private applyBounds(state: OrbState): void {
+  private applyBounds(state: OrbState, centre?: { x: number; y: number }): void {
     if (!this.orbWindow || this.orbWindow.isDestroyed()) return;
+    const spec = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
+    const bounds = centre
+      ? this.boundsNear(centre, state)
+      : {
+          // Snap to the parked position unless the state declares its own x/y.
+          x: spec.x !== 0 ? spec.x : this.position.x,
+          y: spec.y !== 0 ? spec.y : this.position.y,
+          width: spec.width,
+          height: spec.height,
+        };
+    // Remember where we landed so the following states (LOADING → RESULT →
+    // DORMANT) keep the orb in one place instead of snapping back.
+    this.position = { ...this.position, x: bounds.x, y: bounds.y };
+    // Windows silently ignores setBounds on non-resizable windows, so the
+    // window must be made resizable for the duration of the call. The orb
+    // stays resizable:false while idle to avoid frameless edge-drag zones.
+    const win = this.orbWindow;
+    try {
+      win.setResizable(true);
+      win.setBounds(bounds);
+    } finally {
+      win.setResizable(false);
+    }
+  }
+
+  /**
+   * Bounds for `state` centred on `centre`, clamped to the work area of the
+   * display it lands on. Clamping matters on the edges and with multiple
+   * monitors, where an unclamped centre would push the box off-screen or
+   * straddle two displays.
+   */
+  private boundsNear(
+    centre: { x: number; y: number },
+    state: OrbState,
+  ): OrbBounds {
     const bounds = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
-    // Snap to current position unless we have state-specific x/y.
-    const next = {
-      x: bounds.x !== 0 ? bounds.x : this.position.x,
-      y: bounds.y !== 0 ? bounds.y : this.position.y,
+    let area: Electron.Rectangle | undefined;
+    try {
+      area = screen.getDisplayNearestPoint(centre).workArea;
+    } catch {
+      area = undefined;
+    }
+    const clamp = (v: number, min: number, max: number) =>
+      Math.min(Math.max(v, min), max);
+    const x = area
+      ? clamp(
+          centre.x - bounds.width / 2,
+          area.x,
+          Math.max(area.x, area.x + area.width - bounds.width),
+        )
+      : centre.x - bounds.width / 2;
+    const y = area
+      ? clamp(
+          centre.y - bounds.height / 2,
+          area.y,
+          Math.max(area.y, area.y + area.height - bounds.height),
+        )
+      : centre.y - bounds.height / 2;
+    return {
+      x: Math.round(x),
+      y: Math.round(y),
       width: bounds.width,
       height: bounds.height,
     };
-    this.orbWindow.setBounds(next);
+  }
+}
+
+/**
+ * Arm the OSContextBridge in the main process (idempotent).
+ *
+ * Both `buildContextPreamble()` (orb context injection) and
+ * `insertTabToFocusedField()` (Insert Tab) refuse to do anything while
+ * `bridge.isEnabled()` is false — and nothing ever enabled it. The only
+ * `enable()` call in the tree lives in the agent *worker* process
+ * (`computer-use-mode.ts`), which is a different singleton, so the orb
+ * ended up with an always-empty context preamble and an Insert Tab that
+ * could never succeed.
+ *
+ * `start()` spins the watcher (idempotent — it keeps the latest daemon
+ * payload warm so the first wake already has a snapshot); `enable()` flips
+ * the consume gate. Called from every orb entry point: hotkey wake (via
+ * `wake()`) and the ball-click / open-result paths in `ipc/orb.ts`, which
+ * bypass `WakeService.wake()` entirely.
+ *
+ * Deliberately never disabled: a result delivered while the orb is DORMANT
+ * is re-opened through `open-result`, and Insert Tab on that card still
+ * needs the gate open. Nothing subscribes in the main process, so leaving
+ * it enabled costs nothing beyond the flag.
+ */
+export function armOSContextBridge(): void {
+  try {
+    void import('../../packages/agent/dist/context/os-context/index.js')
+      .then(({ getOSContextBridge }) => {
+        const bridge = getOSContextBridge();
+        void bridge.start().catch(() => {});
+        bridge.enable();
+      })
+      .catch(() => {
+        // bridge unavailable — orb degrades to a plain-prompt turn
+      });
+  } catch {
+    // ignore
   }
 }
 

@@ -146,7 +146,6 @@ function deriveSecurityVerdict(dir: string): {
 }
 
 export interface CrossSourceSkillOptions {
-  bundledDir: string;
   userDir: string;
 }
 
@@ -155,19 +154,6 @@ export function buildCrossSourceSkillCandidates(
 ): { candidates: SkillCandidate[]; descriptions: Map<string, string> } {
   const candidates: SkillCandidate[] = [];
   const descriptions = new Map<string, string>();
-
-  // Bundled: read from packages/plugin-core/src/plugins/builtin/<name>/skills/<skill>
-  for (const pluginDir of listSubdirectories(options.bundledDir)) {
-    for (const skillName of listSubdirectories(join(options.bundledDir, pluginDir, 'skills'))) {
-      candidates.push({
-        name: skillName,
-        origin: 'plugin',
-        pluginId: pluginDir,
-      });
-      const desc = readSkillDescription(join(options.bundledDir, pluginDir, 'skills', skillName));
-      if (desc) descriptions.set(skillName, desc);
-    }
-  }
 
   // User: read from ~/.duya/skills/<name>
   for (const userSkill of listSubdirectories(options.userDir)) {

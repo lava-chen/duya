@@ -16,9 +16,9 @@ const state = vi.hoisted(() => {
     name: 'test-plugin',
     version: '2.0.0',
     description: 'A test plugin',
-    source: 'bundled',
+    source: 'marketplace',
+    marketplace: 'official',
     trustLevel: 'official',
-    builtinCacheDir: '/tmp/builtin-cache/com.duya.test-plugin/2.0.0',
     manifest: {
       id: 'com.duya.test-plugin',
       name: 'test-plugin',
@@ -131,7 +131,7 @@ beforeEach(() => {
   });
   // Simulate a migrated config: only `enabled` is persisted.
   cfg.set('plugins', {
-    'com.duya.test-plugin@builtin': { enabled: true },
+    'com.duya.test-plugin@official': { enabled: true },
   });
   _setConfigStoreForTest(cfg);
 });
@@ -151,14 +151,14 @@ describe('PluginManager.listInstalled merge', () => {
     expect(item).toMatchObject({
       id: 'com.duya.test-plugin',
       enabled: true,
-      marketplace: 'builtin',
+      marketplace: 'official',
       name: 'test-plugin',
       version: '2.0.0',
-      source: 'bundled',
+      source: 'marketplace',
       trustLevel: 'official',
       scope: 'user',
       autoUpdate: false,
-      installPath: '/tmp/builtin-cache/com.duya.test-plugin/2.0.0',
+      installPath: '',
       dataPath: path.join(dir, 'plugins-data', 'com.duya.test-plugin'),
       setupState: 'complete',
       grantedPermissions: [{ name: 'workspace.read' }],

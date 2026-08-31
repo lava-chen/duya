@@ -186,6 +186,53 @@ describe('StreamSessionManager State Machine', () => {
 
       vi.restoreAllMocks();
     });
+
+    it('surfaces a retry notice with the provider wording (Plan 462)', async () => {
+      const { streamSessionManager } = await import('./stream-session-manager');
+
+      const retries: Array<{ attempt: number; maxAttempts: number; message: string } | null> = [];
+      const statusTexts: Array<string | undefined> = [];
+      streamSessionManager.subscribeToRetry('phase-retry', (info) => {
+        retries.push(info);
+      });
+      streamSessionManager.subscribeToStatusText('phase-retry', (t) => {
+        statusTexts.push(t);
+      });
+
+      const mockFetch = vi.fn().mockResolvedValue(
+        createMockSSEResponse([
+          { type: 'connected' },
+          {
+            type: 'retry',
+            // Router-normalized shape: SSE data = { type, data: { ... } }, and
+            // the http-client unwraps `event.data` before dispatching.
+            data: { type: 'retry', data: { attempt: 1, maxAttempts: 10, delayMs: 500, message: '余额不足或无可用资源包,请充值。', errorType: 'insufficient_balance', statusCode: 429 } },
+          },
+          { type: 'done', data: { type: 'done' } },
+        ])
+      );
+      vi.stubGlobal('fetch', mockFetch);
+
+      await streamSessionManager.startStream({
+        sessionId: 'phase-retry',
+        content: 'Hello',
+      });
+      await new Promise((r) => setTimeout(r, 100));
+
+      // The notice was delivered (attempt 1/10) with the provider wording.
+      expect(retries).toContainEqual({
+        attempt: 1,
+        maxAttempts: 10,
+        delayMs: 500,
+        message: '余额不足或无可用资源包,请充值。',
+      });
+      // Terminal (done) must clear the retry notice so the status line
+      // does not keep showing "重新连接".
+      expect(retries[retries.length - 1]).toBeNull();
+      expect(statusTexts).toContain('余额不足或无可用资源包,请充值。');
+
+      vi.restoreAllMocks();
+    });
   });
 
   describe('context usage live snapshot lifecycle', () => {

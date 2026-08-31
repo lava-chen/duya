@@ -21,6 +21,7 @@ import { getProjectContinuitySection } from '../sections/projectContinuity.js'
 import { getDuyaDesktopContextSection } from '../sections/duyaDesktopContext.js'
 import { getMemorySection } from '../sections/dynamic/memorySection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
+import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
 // Dynamic sections
 import { getPlatformSection } from '../sections/dynamic/platform.js'
@@ -55,6 +56,7 @@ export const codeConfig: PromptSystemConfig = {
     },
     { name: 'workingWithTheUser', compute: getWorkingWithTheUserSection },
     { name: 'rules', compute: getRulesSection },
+    { name: 'configProtection', compute: getConfigProtectionSection },
     { name: 'projectInstructions', compute: getProjectInstructionsSection },
   ],
   dynamicSections: [

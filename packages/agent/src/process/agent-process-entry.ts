@@ -175,6 +175,15 @@ interface ChatStartMessage {
     mentionedProviders?: string[];
     /** Plan 450 Phase H: `/skill-name` mentioned this run. */
     mentionedSkills?: string[];
+    /** Plugins @-mentioned this run — structured capability summaries (see ChatOptions). */
+    mentionedPlugins?: Array<{
+      pluginId: string;
+      name: string;
+      description?: string;
+      appConnections: string[];
+      mcpServers: string[];
+      skillNames: string[];
+    }>;
     titleGenerationModel?: string;
     titleGenerationModelConfig?: {
       provider: string;
@@ -1537,6 +1546,11 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       return { type: 'chat:thinking', content: event.data as string };
     case 'tool_use_started':
       return { type: 'chat:tool_use_started', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
+    // Plan 461: incremental argument fragment for a tool call still being
+    // generated. `delta` is a raw JSON slice — the renderer accumulates it
+    // per tool_use id so the row can render partial file content live.
+    case 'tool_use_delta':
+      return { type: 'chat:tool_use_delta', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, delta: (event.data as { delta: string }).delta };
     case 'tool_use':
       return { type: 'chat:tool_use', id: (event.data as { id: string }).id, name: (event.data as { name: string }).name, input: (event.data as { input?: unknown }).input };
     case 'tool_result':
@@ -1592,14 +1606,18 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
       // new mode + source so the renderer can sync input-box chip/glow.
       return { type: 'chat:mode_changed', ...(event.data as object) };
     case 'system': {
-      const metadata = (event as { metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number } }).metadata;
+      const metadata = (event as { metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number; retryReason?: string; errorType?: string; statusCode?: number } }).metadata;
       if (metadata?.retryAttempt !== undefined) {
         return {
           type: 'chat:retry',
           attempt: metadata.retryAttempt,
           maxAttempts: metadata.maxAttempts ?? 10,
           delayMs: metadata.retryDelayMs ?? 0,
-          message: event.data as string,
+          // Plan 462: carry the provider's own wording so the UI can explain
+          // WHY it is reconnecting (e.g. "余额不足，请充值") — not just a counter.
+          message: metadata.retryReason ?? (event.data as string),
+          errorType: metadata.errorType,
+          statusCode: metadata.statusCode,
         };
       }
       return null;
@@ -2415,6 +2433,9 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       // Plan 450 Phase H: /skill-name mentioned this run (skill fragment
       // injection). See mentions/index.ts collectSkillInjection.
       mentionedSkills: msg.options?.mentionedSkills,
+      // Plugins @-mentioned this run (the @ popover lists installed plugins).
+      // Structured capability summaries; agent injects <plugin-activation>.
+      mentionedPlugins: msg.options?.mentionedPlugins,
       attachments: files,
       displayContent: msg.options?.displayContent,
       // Plan 441: thread the chat:start message id through as the turn id

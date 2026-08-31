@@ -27,6 +27,7 @@
  */
 
 import { app, BrowserWindow, screen } from 'electron';
+import { execFile } from 'node:child_process';
 import {
   setDefaultDesktopBackend,
   ElectronDesktopBackend,
@@ -111,8 +112,10 @@ function loadNut(): Record<string, unknown> {
   } catch (err) {
     nutLoadError = new Error(
       'nut.js failed to load — mouse/keyboard actions are unavailable. ' +
-      'Fix: run `npm run rebuild:node` (or reinstall @nut-tree-fork/nut-js), ' +
-      'then restart DUYA. Original error: ' +
+      'Fix: rebuild the electron bundle (`npm run build:electron`) and restart ' +
+      'DUYA. If the .node file itself is missing, reinstall ' +
+      '@nut-tree-fork/nut-js / @nut-tree-fork/libnut-win32 (N-API, so no ' +
+      'rebuild needed — just `npm install`). Original error: ' +
       (err instanceof Error ? err.message : String(err)),
     );
     logger.warn(
@@ -167,12 +170,167 @@ const nutAdapter: NutAdapter = {
 } as NutAdapter;
 
 /**
- * listAppsProvider: read the visible app list from OSContextBridge.
- * The daemon populates `foreground` + `focusedEntity` in the latest
- * snapshot; we surface a one-entry list with that foreground as the
- * "active" app. Plan 3 may extend to a full window list.
+ * Lazy libnut window-action loader. libnut ships native
+ * EnumWindows-backed window APIs (getWindows / getWindowTitle /
+ * focusWindow) that work cross-process — unlike
+ * BrowserWindow.getAllWindows(), which only sees DUYA's own windows.
+ * The package is already an esbuild external (see build-electron.mjs)
+ * so require() lands on the real module at runtime.
+ */
+interface LibnutWindowAction {
+  getWindows(): Promise<unknown[]>;
+  getWindowTitle(handle: unknown): Promise<string>;
+  focusWindow(handle: unknown): Promise<void>;
+}
+
+let cachedLibnutWindows: LibnutWindowAction | null = null;
+
+function loadLibnutWindows(): LibnutWindowAction | null {
+  if (cachedLibnutWindows) return cachedLibnutWindows;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('@nut-tree-fork/libnut') as {
+      DefaultWindowAction?: new () => LibnutWindowAction;
+    };
+    if (typeof mod.DefaultWindowAction !== 'function') return null;
+    cachedLibnutWindows = new mod.DefaultWindowAction();
+    return cachedLibnutWindows;
+  } catch (err) {
+    logger.warn(
+      'computer-use: libnut window API unavailable',
+      { error: err instanceof Error ? err.message : String(err) },
+      LogComponent.ComputerUse,
+    );
+    return null;
+  }
+}
+
+/** Upper bound on enumerated windows — guards against huge desktops. */
+const MAX_LISTED_WINDOWS = 64;
+
+/** One real top-level OS window with identity info. */
+interface NativeAppWindow {
+  pid: number;
+  processName: string;
+  title: string;
+}
+
+/**
+ * Run a fixed PowerShell snippet and return its stdout. Used instead of
+ * libnut's getWindowTitle on Windows because libnut calls the ANSI
+ * GetWindowTextA — Chinese window titles (微信, ...) come back mojibake
+ * and can never be matched. PowerShell outputs UTF-8 and sees the real
+ * Unicode titles plus pid / process name.
+ */
+function runPowerShell(script: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 10_000, windowsHide: true, maxBuffer: 1 << 20, encoding: 'utf8' },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
+    );
+  });
+}
+
+/**
+ * Enumerate main windows via Get-Process. Returns [] when PowerShell
+ * is unavailable or fails — callers fall back to libnut enumeration.
+ */
+async function listWindowsViaPowerShell(): Promise<NativeAppWindow[]> {
+  try {
+    const stdout = await runPowerShell(
+      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
+      'Get-Process | Where-Object { $_.MainWindowTitle } | ' +
+      'ForEach-Object { "{0}`t{1}`t{2}" -f $_.Id, $_.ProcessName, $_.MainWindowTitle }',
+    );
+    const apps: NativeAppWindow[] = [];
+    for (const line of stdout.split(/\r?\n/)) {
+      if (apps.length >= MAX_LISTED_WINDOWS) break;
+      const [pid, processName, title] = line.split('\t');
+      if (!pid || !title || !title.trim()) continue;
+      const n = Number(pid);
+      if (!Number.isFinite(n)) continue;
+      apps.push({ pid: n, processName: processName ?? '', title });
+    }
+    return apps;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Bring a window to the foreground by PID via user32 P/Invoke.
+ * ShowWindow(SW_RESTORE) un-minimizes first — SetForegroundWindow
+ * alone refuses minimized windows.
+ */
+async function focusWindowViaPowerShell(pid: number): Promise<boolean> {
+  try {
+    const stdout = await runPowerShell(
+      '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ' +
+      '$t = Add-Type -MemberDefinition "[DllImport(\'user32.dll\')] ' +
+      'public static extern bool SetForegroundWindow(IntPtr hWnd); ' +
+      '[DllImport(\'user32.dll\')] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);" ' +
+      '-Name Win -Namespace Native -PassThru; ' +
+      '$p = Get-Process -Id ' + Number(pid) + ' -ErrorAction Stop; ' +
+      '$r1 = $t::ShowWindow($p.MainWindowHandle, 9); ' +
+      '$r2 = $t::SetForegroundWindow($p.MainWindowHandle); ' +
+      'if ($r2) { "ok" } else { "refused" }',
+    );
+    return stdout.trim() === 'ok';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Enumerate visible top-level windows via libnut. Returns [] when the
+ * native API is unavailable or the platform call fails — callers fall
+ * back to the OSContextBridge snapshot.
+ */
+async function listNativeWindows(): Promise<AppInfo[]> {
+  const windows = loadLibnutWindows();
+  if (!windows) return [];
+  try {
+    const handles = await windows.getWindows();
+    if (!Array.isArray(handles)) return [];
+    const apps: AppInfo[] = [];
+    for (const handle of handles) {
+      if (apps.length >= MAX_LISTED_WINDOWS) break;
+      let title = '';
+      try {
+        title = (await windows.getWindowTitle(handle)) ?? '';
+      } catch {
+        continue; // handle died between enumeration and title read
+      }
+      if (!title.trim()) continue;
+      apps.push({ title, processName: '', pid: null });
+    }
+    return apps;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * listAppsProvider: enumerate real top-level windows. Preferred chain:
+ *   1. PowerShell (Windows) — Unicode-correct titles + pid + processName
+ *   2. libnut native enumeration — cross-platform, but ANSI titles
+ *   3. OSContextBridge foreground snapshot — single entry, last resort
  */
 async function listAppsFromContext(): Promise<AppInfo[]> {
+  const viaPs = await listWindowsViaPowerShell();
+  if (viaPs.length > 0) {
+    return viaPs.map((w) => ({
+      title: w.title,
+      processName: w.processName,
+      pid: w.pid,
+    }));
+  }
+
+  const native = await listNativeWindows();
+  if (native.length > 0) return native;
+
   try {
     const ctx = getOSContextBridge().getCurrent();
     if (!ctx) return [];
@@ -193,13 +351,16 @@ async function listAppsFromContext(): Promise<AppInfo[]> {
 }
 
 /**
- * focusAppProvider: best-effort cross-platform window focus. On
- * Windows we use Electron's `BrowserWindow.getAllWindows()` to
- * find a window whose title matches the substring; the call to
- * `moveToFront` activates the OS-level focus.
+ * focusAppProvider: best-effort cross-platform window focus.
  *
- * Other platforms fall back to no-op (the OSContextBridge is the
- * read-side signal; activation here is best-effort).
+ * Pass chain:
+ *   1. PowerShell (Windows) — Unicode-correct title / processName match
+ *      against Get-Process main windows, then user32 SetForegroundWindow
+ *      by PID. Works for ANY process (微信, browsers, ...).
+ *   2. libnut native windows — EnumWindows + native focusWindow; titles
+ *      are ANSI so this only reliably matches ASCII titles.
+ *   3. Electron BrowserWindows — DUYA's own windows, matched on title
+ *      or webContents URL.
  */
 async function focusAppByTitle(
   opts: { title?: string; processName?: string },
@@ -207,7 +368,52 @@ async function focusAppByTitle(
   if (!opts.title && !opts.processName) return false;
   const target = opts.title?.toLowerCase();
   const targetProcess = opts.processName?.toLowerCase();
+  const matches = (title: string, processName = ''): boolean => {
+    const t = title.toLowerCase();
+    const p = processName.toLowerCase();
+    return (
+      (target !== undefined && (t.includes(target) || p.includes(target))) ||
+      (targetProcess !== undefined && (p.includes(targetProcess) || t.includes(targetProcess)))
+    );
+  };
 
+  // Pass 1: PowerShell enumeration + user32 focus by PID (Windows).
+  const viaPs = await listWindowsViaPowerShell();
+  for (const w of viaPs) {
+    if (matches(w.title, w.processName)) {
+      if (await focusWindowViaPowerShell(w.pid)) return true;
+    }
+  }
+
+  // Pass 2: libnut native cross-process windows (non-Windows / PS down).
+  const native = loadLibnutWindows();
+  if (native && target) {
+    try {
+      const handles = await native.getWindows();
+      if (Array.isArray(handles)) {
+        for (const handle of handles) {
+          let title = '';
+          try {
+            title = (await native.getWindowTitle(handle)) ?? '';
+          } catch {
+            continue;
+          }
+          if (matches(title)) {
+            await native.focusWindow(handle);
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(
+        'computer-use: native window focus failed, falling back',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.ComputerUse,
+      );
+    }
+  }
+
+  // Pass 3: DUYA's own Electron windows (matches URL as well as title).
   const wins = BrowserWindow.getAllWindows();
   for (const w of wins) {
     if (w.isDestroyed()) continue;
@@ -220,13 +426,15 @@ async function focusAppByTitle(
       w.focus();
       return true;
     }
+    if (targetProcess && title.includes(targetProcess)) {
+      if (w.isMinimized()) w.restore();
+      w.moveTop();
+      w.show();
+      w.focus();
+      return true;
+    }
   }
 
-  // No match in our process tree. Cross-process focus is OS-specific;
-  // a future phase may add Windows uiAccess / macOS AXAPI hooks.
-  // For now we surface a soft fail so the dispatcher returns ok=false
-  // with a clear reason.
-  void targetProcess; // reserved for future cross-process focus
   return false;
 }
 

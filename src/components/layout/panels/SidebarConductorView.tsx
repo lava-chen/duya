@@ -10,8 +10,9 @@ import {
 } from "@duya/conductor/renderer/components/CanvasPresentationModeToggle";
 import { CanvasErrorBoundary } from "@duya/conductor/renderer/components/CanvasErrorBoundary";
 import { CanvasSelector } from "@duya/conductor/renderer/components/CanvasSelector";
+import { CanvasLibraryView } from "@duya/conductor/renderer/components/CanvasLibraryView";
 import { useConductorStore } from "@duya/conductor/renderer/stores/conductor-store";
-import { listCanvases, createCanvas, getSnapshot, executeAction } from "@duya/conductor/renderer/ipc/conductor-ipc";
+import { listCanvases, listCanvasGroups, getSnapshot, executeAction } from "@duya/conductor/renderer/ipc/conductor-ipc";
 import { registerAllElements } from "@duya/conductor/renderer/elements";
 import { useCanvasCaptureRequest } from "@duya/conductor/renderer/hooks/useCanvasCaptureRequest";
 import "@duya/conductor/renderer/widgets";
@@ -20,6 +21,8 @@ import type { PageTab } from "./registry";
 import { useOptionalPanel } from "@/hooks/usePanel";
 import { useConversationStore } from "@/stores/conversation-store";
 import { IconButton } from "@/components/ui/IconButton";
+import { Button } from "@/components/ui/Button";
+import { ArrowLeftIcon } from "@/components/icons";
 
 export function SidebarConductorView({
   tab,
@@ -31,6 +34,7 @@ export function SidebarConductorView({
   const {
     activeCanvasId,
     setCanvases,
+    setCanvasGroups,
     setActiveCanvas,
     setSnapshot,
     connectBridge,
@@ -71,6 +75,22 @@ export function SidebarConductorView({
   // but ship production users on the canvas view.
   const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("infinite");
 
+  // Asset library home vs canvas editor. The sidebar opens on the
+  // Notion-style multi-canvas library; clicking a card opens its editor.
+  const [libraryOpen, setLibraryOpen] = useState(true);
+
+  const openCanvas = useCallback(
+    async (canvasId: string) => {
+      disconnectBridge();
+      setActiveCanvas(canvasId);
+      const snap = await getSnapshot(canvasId);
+      if (snap) setSnapshot(snap);
+      connectBridge(canvasId);
+      setLibraryOpen(false);
+    },
+    [disconnectBridge, setActiveCanvas, setSnapshot, connectBridge]
+  );
+
   // Register the agent-initiated canvas capture listener so the
   // sidebar canvas can respond to canvas_capture tool calls. Without
   // this, capture requests time out (15s) when the user is in chat
@@ -87,39 +107,17 @@ export function SidebarConductorView({
 
     async function load() {
       try {
-        const list = await listCanvases();
+        const [list, groups] = await Promise.all([listCanvases(), listCanvasGroups()]);
         if (cancelled) return;
 
         setCanvases(list);
+        setCanvasGroups(groups);
 
-        // Decide which canvas to show. Priority:
-        //   1. tab.params.canvasId (frozen tab)
-        //   2. store.activeCanvasId (resume last viewed)
-        //   3. list[0] (first canvas)
-        //   4. create new "Workbench"
-        const desiredId =
-          (tabCanvasId && list.find((c) => c.id === tabCanvasId)?.id) ||
-          (activeCanvasId && list.find((c) => c.id === activeCanvasId)?.id) ||
-          list[0]?.id;
-
-        if (desiredId) {
-          // Always reload the snapshot. The store may have stale
-          // elements from a previous canvas (or none at all) — without
-          // this refresh, reopening the panel shows an empty canvas
-          // until the user manually refreshes.
-          setActiveCanvas(desiredId);
-          const snap = await getSnapshot(desiredId);
-          if (snap && !cancelled) setSnapshot(snap);
-          connectBridge(desiredId);
-        } else {
-          const canvas = await createCanvas("Workbench");
-          if (!cancelled) {
-            setCanvases([canvas]);
-            setActiveCanvas(canvas.id);
-            connectBridge(canvas.id);
-            const snap = await getSnapshot(canvas.id);
-            if (snap) setSnapshot(snap);
-          }
+        // A frozen tab (opened from a chat canvas link) jumps straight
+        // into that canvas's editor. Otherwise the sidebar stays on the
+        // multi-canvas library home and the user picks a canvas to open.
+        if (tabCanvasId && list.some((c) => c.id === tabCanvasId)) {
+          await openCanvas(tabCanvasId);
         }
       } catch (error) {
         setUiError(`Load canvases failed: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -174,10 +172,13 @@ export function SidebarConductorView({
     if (!pendingChatFocusElementId) return;
     const el = elements.find((e) => e.id === pendingChatFocusElementId);
     if (!el) return;
+    // A chat tool-use row asked us to focus an element: make sure the
+    // editor is visible (leave the asset library) before centering.
+    if (libraryOpen) setLibraryOpen(false);
     setSelectedElementId(pendingChatFocusElementId);
     centerOnElement(pendingChatFocusElementId);
     clearPendingChatFocus();
-  }, [pendingChatFocusElementId, elements, centerOnElement, setSelectedElementId, clearPendingChatFocus]);
+  }, [pendingChatFocusElementId, elements, libraryOpen, centerOnElement, setSelectedElementId, clearPendingChatFocus]);
 
   if (isLoading) {
     return (
@@ -189,13 +190,6 @@ export function SidebarConductorView({
 
   return (
     <div className="sidebar-conductor">
-      <div className="sidebar-conductor-header">
-        <CanvasSelector />
-        {import.meta.env.DEV && (
-          <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
-        )}
-      </div>
-
       {uiError && (
         <div
           className="mx-2 mt-2 rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-xs text-[var(--error)] flex items-center justify-between gap-2"
@@ -215,33 +209,57 @@ export function SidebarConductorView({
         </div>
       )}
 
-      <div className="sidebar-conductor-canvas">
-        {activeCanvasId ? (
-          <CanvasErrorBoundary>
-            {presentationMode === "finite" ? (
-              <FiniteCanvasArea
-                elements={elements}
-                readOnly={false}
-                onPositionChange={handlePositionChange}
-                onDeleteElement={handleDeleteElement}
-              />
-            ) : (
-              <CanvasArea
-                elements={elements}
-                readOnly={false}
-                onPositionChange={handlePositionChange}
-                onDeleteElement={handleDeleteElement}
-              />
+      {libraryOpen ? (
+        <CanvasLibraryView onOpenCanvas={openCanvas} />
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-2 shrink-0 px-3 py-2 border-b border-border">
+            <div className="flex items-center gap-2 min-w-0">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setLibraryOpen(true)}
+                aria-label="返回画布库"
+              >
+                <ArrowLeftIcon size={15} />
+                画布库
+              </Button>
+              <CanvasSelector />
+            </div>
+            {import.meta.env.DEV && (
+              <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
             )}
-          </CanvasErrorBoundary>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] text-sm gap-4">
-            <p>Select or create a canvas to begin</p>
           </div>
-        )}
 
-        {presentationMode === "infinite" && <CanvasToolbar />}
-      </div>
+          <div className="relative flex-1 min-h-0">
+            {activeCanvasId ? (
+              <CanvasErrorBoundary>
+                {presentationMode === "finite" ? (
+                  <FiniteCanvasArea
+                    elements={elements}
+                    readOnly={false}
+                    onPositionChange={handlePositionChange}
+                    onDeleteElement={handleDeleteElement}
+                  />
+                ) : (
+                  <CanvasArea
+                    elements={elements}
+                    readOnly={false}
+                    onPositionChange={handlePositionChange}
+                    onDeleteElement={handleDeleteElement}
+                  />
+                )}
+              </CanvasErrorBoundary>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-[var(--muted)] text-sm gap-4">
+                <p>Select or create a canvas to begin</p>
+              </div>
+            )}
+
+            {presentationMode === "infinite" && <CanvasToolbar />}
+          </div>
+        </>
+      )}
     </div>
   );
 }

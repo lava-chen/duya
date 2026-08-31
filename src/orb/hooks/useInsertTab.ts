@@ -7,7 +7,9 @@
 import { useCallback, useState } from 'react';
 
 export interface UseInsertTabReturn {
-  insert: () => Promise<{ ok: boolean; error?: string }>;
+  insert: (
+    text: string,
+  ) => Promise<{ ok: boolean; reason?: string; note?: string; error?: string }>;
   inserting: boolean;
   error: string | null;
   reset: () => void;
@@ -17,13 +19,13 @@ export function useInsertTab(): UseInsertTabReturn {
   const [inserting, setInserting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const insert = useCallback(async () => {
+  const insert = useCallback(async (text: string) => {
     setInserting(true);
     setError(null);
     try {
-      const res = await window.electronAPI?.orb?.insertTab();
+      const res = await window.electronAPI?.orb?.insertTab(text);
       if (!res?.ok) {
-        setError(res?.error ?? '插入失败');
+        setError(res?.reason ?? res?.note ?? '插入失败');
         return res ?? { ok: false };
       }
       return res;

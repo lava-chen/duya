@@ -38,6 +38,24 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
       }
       return null;
     }
+    // Plan 461: surface tool-call argument fragments so the UI can render a
+    // file edit / write *while the model is still producing it* (Codex/pi
+    // TUI parity — the row shows the filename and a ticking line count
+    // instead of sitting blank until the whole tool_use arrives).
+    //
+    // `delta` is an incremental raw-JSON slice, so wire traffic stays
+    // O(total argument bytes) instead of O(n²). It is NOT a complete JSON
+    // document — consumers accumulate per tool_use id and parse leniently.
+    case 'toolcall_delta': {
+      const block = internalEvent.partial.content[internalEvent.contentIndex];
+      if (block && block.type === 'tool_use' && internalEvent.delta) {
+        return {
+          type: 'tool_use_delta',
+          data: { id: block.id, name: block.name, delta: internalEvent.delta },
+        };
+      }
+      return null;
+    }
     case 'toolcall_end':
       return {
         type: 'tool_use',
@@ -51,7 +69,7 @@ export function emitSSE(internalEvent: AssistantMessageEvent): SSEEvent | null {
       return { type: 'done', reason: internalEvent.reason };
     case 'error':
       return { type: 'error', data: internalEvent.reason, code: undefined };
-    // start / text_start / thinking_start / toolcall_delta → no SSEEvent
+    // start / text_start / thinking_start → no SSEEvent
     default:
       return null;
   }

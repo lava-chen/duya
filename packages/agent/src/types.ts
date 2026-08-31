@@ -304,6 +304,24 @@ export interface ChatOptions {
    * registry owns the lookup.
    */
   mentionedSkills?: string[];
+  /**
+   * Plugins the user @-mentioned in the composer for this run (the `@`
+   * popover lists installed plugins). The renderer resolves each plugin's
+   * declared app connectors / MCP servers / skills and transports them as
+   * structured data; the agent injects a one-shot `<plugin-activation>`
+   * block telling the model to prefer those capabilities for the turn.
+   * Connected app connectors of mentioned plugins ALSO flow into
+   * `mentionedProviders` (renderer side), so their tools get exposure
+   * promotion through the existing connector pipeline.
+   */
+  mentionedPlugins?: Array<{
+    pluginId: string;
+    name: string;
+    description?: string;
+    appConnections: string[];
+    mcpServers: string[];
+    skillNames: string[];
+  }>;
   /** Mode modifier ID for this chat turn (for example, 'research'). */
   mode?: string;
   /**

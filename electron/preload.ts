@@ -3,6 +3,12 @@ import type {
   ProjectDatabaseChangeEvent,
   ProjectDatabaseRequest,
 } from '../packages/conductor/src/database/types'
+
+// Sandboxed preloads can only require electron/events/timers/vm — node:crypto
+// is unavailable here. The preload runs in a Chromium context, so Web Crypto's
+// randomUUID is always present.
+const cryptoRandomUUID = (): string => globalThis.crypto.randomUUID();
+
 import type { BashBackgroundTaskSnapshot } from '../src/types/bash-task'
 import type { HookTaskSnapshot } from '../src/types/hook-task'
 import type { UsageSummary } from '../src/types/usage'
@@ -1066,9 +1072,13 @@ export interface ElectronAPI {
     createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => Promise<unknown>
     updateCanvas: (
       id: string,
-      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }
+      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }
     ) => Promise<unknown>
     deleteCanvas: (id: string) => Promise<boolean>
+    listCanvasGroups: (projectPath?: string | null) => Promise<unknown[]>
+    createCanvasGroup: (data: { name: string; projectPath?: string | null }) => Promise<unknown>
+    updateCanvasGroup: (id: string, data: { name?: string; sortOrder?: number }) => Promise<unknown>
+    deleteCanvasGroup: (id: string) => Promise<boolean>
     snapshot: (canvasId: string) => Promise<unknown>
     action: (request: Record<string, unknown>) => Promise<unknown>
     undo: (canvasId: string) => Promise<unknown>
@@ -1080,6 +1090,53 @@ export interface ElectronAPI {
       url: string
       mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full'
     }) => Promise<unknown>
+  }
+  /**
+   * Plan 471: user-defined sidebar sections. Sections wrap one or more
+   * projects (`workingDirectory`) into a top-level sidebar group at the
+   * same level as the built-in system sections (cron / gateway / wakeup
+   * / uncategorized / pinned). All access is fire-and-forget and goes
+   * through the legacy DB IPC.
+   */
+  sidebarSections: {
+    list: () => Promise<{
+      sections: Array<{
+        id: string
+        name: string
+        icon: string | null
+        color: string | null
+        sortOrder: number
+        collapsed: number
+        createdAt: number
+        updatedAt: number
+      }>
+      projects: Array<{
+        sectionId: string
+        workingDirectory: string
+        sortOrder: number
+        createdAt: number
+      }>
+    }>
+    create: (input: { name: string; icon?: string | null; color?: string | null; collapsed?: boolean }) => Promise<{
+      id: string
+      name: string
+      icon: string | null
+      color: string | null
+      sortOrder: number
+      collapsed: number
+      createdAt: number
+      updatedAt: number
+    }>
+    update: (
+      id: string,
+      patch: Partial<{ name: string; icon: string | null; color: string | null; sortOrder: number; collapsed: boolean }>,
+    ) => Promise<unknown>
+    remove: (id: string) => Promise<boolean>
+    assignProject: (sectionId: string, workingDirectory: string) => Promise<unknown>
+    unassignProject: (workingDirectory: string) => Promise<void>
+    reorder: (orderedIds: string[]) => Promise<void>
+    reorderProjects: (sectionId: string, orderedDirs: string[]) => Promise<void>
+    findSectionForProject: (workingDirectory: string) => Promise<string | null>
   }
   projectDatabase: ProjectDatabaseAPI
   thread: ThreadAPI
@@ -1256,8 +1313,19 @@ interface ImportAPI {
 
 // Plan 453 Task E: Orb client surface.
 export interface OrbAPI {
-  submit: (prompt: string) => Promise<{ accepted: boolean; note?: string }>
+  submit: (
+    prompt: string,
+    attachments?: string[],
+  ) => Promise<{ accepted: boolean; note?: string }>
+  /** Fire-and-forget: a turn is starting — arm the in-flight guard before the
+   *  focused textarea unmounts and can fire a spurious OS blur. */
+  markSubmitting: () => void
   showInput: () => Promise<{ ok: boolean }>
+  chatConfig: () => Promise<{
+    model: string | null
+    options: Array<{ providerId: string; label: string; model: string }>
+  }>
+  setModel: (payload: { providerId: string; model: string }) => Promise<{ ok: boolean }>
   insertTab: (text: string) => Promise<{
     ok: boolean
     reason?: string
@@ -1269,6 +1337,15 @@ export interface OrbAPI {
     displayId: number
   }) => Promise<{ ok: boolean }>
   state: () => Promise<{ state: string }>
+  openResult: () => Promise<{ ok: boolean }>
+  pointer: () => Promise<{
+    dx: number
+    dy: number
+    inside: boolean
+    dist: number
+    ox: number
+    oy: number
+  } | null>
   collapse: () => Promise<{ ok: boolean }>
   onChunk: (
     callback: (chunk: { delta: string; turnId: string }) => void,
@@ -1281,6 +1358,13 @@ export interface OrbAPI {
     callback: (payload: { stage: string; label: string }) => void,
   ) => () => void
   onShowResult: (
+    callback: (payload: {
+      turnId: string
+      text: string
+      finishedAt: string
+    }) => void,
+  ) => () => void
+  onNotifyResult: (
     callback: (payload: {
       turnId: string
       text: string
@@ -1734,9 +1818,13 @@ const electronAPI: ElectronAPI = {
     createCanvas: (data: { name: string; description?: string; projectPath?: string | null }) => ipcRenderer.invoke('conductor:canvas:create', data),
     updateCanvas: (
       id: string,
-      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }
+      data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }
     ) => ipcRenderer.invoke('conductor:canvas:update', id, data),
     deleteCanvas: (id: string) => ipcRenderer.invoke('conductor:canvas:delete', id),
+    listCanvasGroups: (projectPath?: string | null) => ipcRenderer.invoke('conductor:canvas:group:list', projectPath),
+    createCanvasGroup: (data: { name: string; projectPath?: string | null }) => ipcRenderer.invoke('conductor:canvas:group:create', data),
+    updateCanvasGroup: (id: string, data: { name?: string; sortOrder?: number }) => ipcRenderer.invoke('conductor:canvas:group:update', id, data),
+    deleteCanvasGroup: (id: string) => ipcRenderer.invoke('conductor:canvas:group:delete', id),
     snapshot: (canvasId: string) => ipcRenderer.invoke('conductor:snapshot', canvasId),
     action: (request: Record<string, unknown>) => ipcRenderer.invoke('conductor:action', request),
     undo: (canvasId: string) => ipcRenderer.invoke('conductor:undo', canvasId),
@@ -1749,6 +1837,25 @@ const electronAPI: ElectronAPI = {
       url: string;
       mode: 'desktop-head' | 'desktop-full' | 'mobile-head' | 'mobile-full';
     }) => ipcRenderer.invoke('conductor:link:captureSnapshot', payload),
+  },
+  sidebarSections: {
+    list: () => ipcRenderer.invoke('sidebar-sections:list'),
+    create: (input: { name: string; icon?: string | null; color?: string | null; collapsed?: boolean }) =>
+      ipcRenderer.invoke('sidebar-sections:create', input),
+    update: (
+      id: string,
+      patch: Partial<{ name: string; icon: string | null; color: string | null; sortOrder: number; collapsed: boolean }>,
+    ) => ipcRenderer.invoke('sidebar-sections:update', id, patch),
+    remove: (id: string) => ipcRenderer.invoke('sidebar-sections:remove', id),
+    assignProject: (sectionId: string, workingDirectory: string) =>
+      ipcRenderer.invoke('sidebar-sections:assignProject', sectionId, workingDirectory),
+    unassignProject: (workingDirectory: string) =>
+      ipcRenderer.invoke('sidebar-sections:unassignProject', workingDirectory),
+    reorder: (orderedIds: string[]) => ipcRenderer.invoke('sidebar-sections:reorder', orderedIds),
+    reorderProjects: (sectionId: string, orderedDirs: string[]) =>
+      ipcRenderer.invoke('sidebar-sections:reorderProjects', sectionId, orderedDirs),
+    findSectionForProject: (workingDirectory: string) =>
+      ipcRenderer.invoke('sidebar-sections:findSectionForProject', workingDirectory),
   },
   projectDatabase: {
     invoke: (request: ProjectDatabaseRequest) => ipcRenderer.invoke('project-database:invoke', request),
@@ -2064,7 +2171,7 @@ const electronAPI: ElectronAPI = {
   // Mailbox API (Plan 202 — PR1)
   mailbox: {
     send: (params) => {
-      const id = crypto.randomUUID();
+      const id = cryptoRandomUUID();
       return ipcRenderer.invoke('mailbox:send', { id, ...params });
     },
     edit: (id, patch) => ipcRenderer.invoke('mailbox:edit', { id, ...patch }),
@@ -2297,15 +2404,22 @@ const electronAPI: ElectronAPI = {
   },
   // Plan 453 Task E: orb client surface.
   orb: {
-    submit: (prompt: string) =>
-      ipcRenderer.invoke('automation:orb:submit', { prompt }),
+    submit: (prompt: string, attachments?: string[]) =>
+      ipcRenderer.invoke('automation:orb:submit', { prompt, attachments }),
+    markSubmitting: () => ipcRenderer.send('automation:orb:submitting'),
     showInput: () => ipcRenderer.invoke('automation:orb:show-input'),
+    chatConfig: () => ipcRenderer.invoke('automation:orb:chat-config'),
+    setModel: (payload: { providerId: string; model: string }) =>
+      ipcRenderer.invoke('automation:orb:set-model', payload),
     insertTab: (text: string) =>
       ipcRenderer.invoke('automation:orb:insert-tab', { text }),
     setPosition: (position: { x: number; y: number; displayId: number }) =>
       ipcRenderer.invoke('automation:orb:set-position', position),
     state: () =>
       ipcRenderer.invoke('automation:orb:state') as Promise<{ state: string }>,
+    openResult: () => ipcRenderer.invoke('automation:orb:open-result'),
+    pointer: () =>
+      ipcRenderer.invoke('automation:orb:pointer'),
     collapse: () => ipcRenderer.invoke('automation:orb:collapse'),
     onChunk: (callback: (chunk: { delta: string; turnId: string }) => void) => {
       const handler = (
@@ -2357,6 +2471,21 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.on('automation:orb:show-result', handler);
       return () =>
         ipcRenderer.removeListener('automation:orb:show-result', handler);
+    },
+    onNotifyResult: (
+      callback: (payload: {
+        turnId: string;
+        text: string;
+        finishedAt: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: { turnId: string; text: string; finishedAt: string },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:notify-result', handler);
+      return () =>
+        ipcRenderer.removeListener('automation:orb:notify-result', handler);
     },
     onHide: (callback: () => void) => {
       const handler = () => callback();

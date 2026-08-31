@@ -269,7 +269,9 @@ const StreamingStatus = React.memo(function StreamingStatus({
   };
  
   const displayStatus = retryInfo
-    ? `Retrying... (${retryInfo.attempt}/${retryInfo.maxAttempts})`
+    ? retryInfo.message
+      ? `${retryInfo.message}（重新连接 ${retryInfo.attempt}/${retryInfo.maxAttempts}）`
+      : `Retrying... (${retryInfo.attempt}/${retryInfo.maxAttempts})`
     : resolveI18nStatusText(statusText, t)
       || getRunningCommandSummary()
       || (content.length > 0 ? t('streaming.generating') : undefined);

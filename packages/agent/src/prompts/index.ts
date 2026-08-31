@@ -53,6 +53,7 @@ export type { ResearchTaskIntent, ResearchPromptRuntimeContext } from './researc
 
 // Shared sections (used by multiple configs)
 export { getProjectContinuitySection } from './sections/projectContinuity.js'
+export { getConfigProtectionSection } from './general/sections/configProtection.js'
 
 // Dynamic Sections
 export { getEnvironmentSection } from './sections/dynamic/environment.js'

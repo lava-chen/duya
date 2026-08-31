@@ -19,7 +19,8 @@
  *   - Phase 3 expands to blocked key combos + text patterns.
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain, screen } from 'electron';
+import { randomUUID } from 'node:crypto';
 
 import {
   COMPUTER_USE_IPC_CHANNEL,
@@ -43,6 +44,16 @@ import {
 import { getLogger, LogComponent } from '../logging/logger.js';
 import { getOSContextBridge } from '../../packages/agent/dist/context/os-context/index.js';
 import { logComputerUseAction } from '../services/computer-use-audit.js';
+import { saveComputerUseCapture } from '../services/computer-use-capture-store.js';
+import {
+  isComputerUseControlRevoked,
+  showComputerUseOverlay,
+} from '../services/computer-use-overlay.js';
+import {
+  clearZoomOrigin,
+  modelPointToScreen,
+  rememberZoomOrigin,
+} from './computer-use-coords.js';
 
 const logger = getLogger();
 
@@ -87,6 +98,19 @@ function getRedactedReason(): string | null {
     // Bridge unavailable in tests — treat as not redacted.
   }
   return null;
+}
+
+/**
+ * Primary display scaleFactor, used to map the model's logical-pixel
+ * image coords into the physical-pixel space nut.js mouse calls expect.
+ * Falls back to 1 when the display readout is unavailable (tests).
+ */
+function getScaleFactor(): number {
+  try {
+    return screen.getPrimaryDisplay().scaleFactor;
+  } catch {
+    return 1;
+  }
 }
 
 /**
@@ -135,7 +159,7 @@ async function requestApprovalIfNeeded(
   if (!requiresConfirmation(action)) return { ok: true, reason: '' };
   const bridge = getDefaultApprovalBridge();
   const req = {
-    requestId: crypto.randomUUID(),
+    requestId: randomUUID(),
     action,
     argsPreview: buildArgsPreview(data),
     issuedAt: new Date().toISOString(),
@@ -237,6 +261,28 @@ function checkForegroundAccess(): { ok: boolean; reason?: string } {
 }
 
 /**
+ * Pull the base64 PNG out of a capture result so it can be persisted.
+ * Returns '' when the shape is unexpected — saving is best-effort.
+ */
+function extractCaptureBase64(cap: unknown): string {
+  if (cap && typeof cap === 'object') {
+    const b64 = (cap as { base64?: unknown }).base64;
+    if (typeof b64 === 'string') return b64;
+  }
+  return '';
+}
+
+/**
+ * Attach the on-disk path of a persisted capture/zoom image onto the
+ * envelope data (`savedTo`), so the session log records where the
+ * user can find what the agent saw. Mutates in place; no-op on null.
+ */
+function attachSavedCapturePath(cap: unknown, savedTo: string | null): void {
+  if (!savedTo || !cap || typeof cap !== 'object') return;
+  (cap as { savedTo?: string }).savedTo = savedTo;
+}
+
+/**
  * Dispatch a single computer_use action against the DesktopBackend
  * singleton. Returns the envelope. Never throws — every failure is
  * captured into the envelope so the tool layer can render it.
@@ -250,15 +296,35 @@ async function runAction(
   let userConfirmed = false;
 
   try {
+    // User stop button: while a revocation is in force, refuse every
+    // action so the agent hands control back to the user.
+    if (isComputerUseControlRevoked()) {
+      return envelopeError(
+        action,
+        ComputerUseErrorCode.USER_REJECTED,
+        'computer control was stopped by the user from the overlay — ask the user before continuing',
+      );
+    }
+    // Visual indicator: purple glow + cursor halo + top stop button.
+    showComputerUseOverlay(sessionId);
+
     const backend = getDefaultDesktopBackend();
     const data = payload;
 
     switch (action) {
       case 'capture': {
+        // Full-screen image — any zoom crop the model was referencing
+        // is stale; click coords are full-image space again.
+        clearZoomOrigin(sessionId);
         const cap = await backend.capture({
           somMode: data.somMode === true,
           displayId: typeof data.displayId === 'number' ? data.displayId : undefined,
         });
+        attachSavedCapturePath(cap, saveComputerUseCapture({
+          sessionId,
+          action: 'capture',
+          base64: extractCaptureBase64(cap),
+        }));
         return {
           success: true,
           action,
@@ -294,6 +360,15 @@ async function runAction(
           );
         }
         const clickOpts = buildClickOptions(data);
+        if (typeof clickOpts.x === 'number' && typeof clickOpts.y === 'number') {
+          const sp = modelPointToScreen(
+            { x: clickOpts.x, y: clickOpts.y },
+            sessionId,
+            getScaleFactor(),
+          );
+          clickOpts.x = sp.x;
+          clickOpts.y = sp.y;
+        }
         const r = await backend.click(clickOpts as never);
         return {
           success: r.ok,
@@ -451,6 +526,28 @@ async function runAction(
           );
         }
         const dragOpts = buildDragOptions(data);
+        const sf = getScaleFactor();
+        if (
+          typeof dragOpts.fromX === 'number' &&
+          typeof dragOpts.fromY === 'number' &&
+          typeof dragOpts.toX === 'number' &&
+          typeof dragOpts.toY === 'number'
+        ) {
+          const from = modelPointToScreen(
+            { x: dragOpts.fromX, y: dragOpts.fromY },
+            sessionId,
+            sf,
+          );
+          const to = modelPointToScreen(
+            { x: dragOpts.toX, y: dragOpts.toY },
+            sessionId,
+            sf,
+          );
+          dragOpts.fromX = from.x;
+          dragOpts.fromY = from.y;
+          dragOpts.toX = to.x;
+          dragOpts.toY = to.y;
+        }
         const r = await backend.drag(dragOpts as never);
         return {
           success: r.ok,
@@ -461,50 +558,9 @@ async function runAction(
             : { code: ComputerUseErrorCode.BACKEND_UNAVAILABLE, message: r.reason ?? 'drag failed' },
         };
       }
-      case 'window_switch': {
-        // Access gate: refuse to switch to a window whose app the
-        // policy doesn't allow.
-        const access = checkForegroundAccess();
-        if (!access.ok) {
-          logger.warn(
-            'computer-use: window_switch refused — app access policy',
-            { reason: access.reason, sessionId: sessionId ?? null },
-            LogComponent.ComputerUse,
-          );
-          return {
-            success: false,
-            action,
-            error: {
-              code: ComputerUseErrorCode.APP_BLOCKED,
-              message: access.reason ?? 'app blocked by access policy',
-            },
-          };
-        }
-        const approval = await requestApprovalIfNeeded(action, data);
-        if (!approval.ok) {
-          return envelopeError(
-            action,
-            ComputerUseErrorCode.USER_REJECTED,
-            approval.reason,
-          );
-        }
-        const r = await backend.focusApp({
-          title: typeof data.title === 'string' ? data.title : undefined,
-          processName: typeof data.processName === 'string' ? data.processName : undefined,
-        });
-        return {
-          success: r.ok,
-          action,
-          data: r,
-          error: r.ok
-            ? undefined
-            : { code: ComputerUseErrorCode.BACKEND_UNAVAILABLE, message: r.reason ?? 'focusApp failed' },
-        };
-      }
-      case 'list_apps': {
-        const apps = await backend.listApps();
-        return { success: true, action, data: { apps } };
-      }
+      // window_switch / list_apps removed (user decision 2026-08-29):
+      // targeting is pure vision — capture/zoom + click. The backend
+      // keeps the underlying focusApp / listApps providers.
       case 'set_value': {
         const redacted = getRedactedReason();
         if (redacted) {
@@ -559,19 +615,41 @@ async function runAction(
         return { success: true, action };
       }
       case 'zoom': {
-        // Zoom is a region-restricted SOM capture. The full screen
-        // is still returned, but only elements falling inside the
-        // rectangle get an index marker, so the model can focus on
-        // a small UI area (e.g. a single dialog or list).
+        // Zoom is a region-restricted SOM capture. The model's next
+        // click coords will be relative to the cropped image, so the
+        // crop origin is remembered and later re-added by
+        // modelPointToScreen. Only remembered when the crop can
+        // actually happen (origin inside the image) — a degenerate
+        // region makes the backend return the full frame untouched.
+        const zoomX = typeof data.x === 'number' ? data.x : 0;
+        const zoomY = typeof data.y === 'number' ? data.y : 0;
+        const zoomW = typeof data.w === 'number' ? data.w : 0;
+        const zoomH = typeof data.h === 'number' ? data.h : 0;
+        const displayBounds = (() => {
+          try {
+            return screen.getPrimaryDisplay().bounds;
+          } catch {
+            return null;
+          }
+        })();
+        const originX = Math.max(0, zoomX);
+        const originY = Math.max(0, zoomY);
+        if (
+          zoomW > 0 &&
+          zoomH > 0 &&
+          (!displayBounds || (zoomX < displayBounds.width && zoomY < displayBounds.height))
+        ) {
+          rememberZoomOrigin(sessionId, { x: originX, y: originY });
+        }
         const cap = await backend.capture({
           somMode: true,
-          region: {
-            x: typeof data.x === 'number' ? data.x : 0,
-            y: typeof data.y === 'number' ? data.y : 0,
-            w: typeof data.w === 'number' ? data.w : 0,
-            h: typeof data.h === 'number' ? data.h : 0,
-          },
+          region: { x: zoomX, y: zoomY, w: zoomW, h: zoomH },
         });
+        attachSavedCapturePath(cap, saveComputerUseCapture({
+          sessionId,
+          action: 'zoom',
+          base64: extractCaptureBase64(cap),
+        }));
         return { success: true, action, data: cap };
       }
       default: {

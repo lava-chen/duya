@@ -64,6 +64,20 @@ export interface ChatOptions {
    * `<skill>` fragment instead of relying on the model to load it.
    */
   mentionedSkills?: string[];
+  /**
+   * Plugins the user @-mentioned this run (the `@` popover lists installed
+   * plugins). Each entry carries the plugin's declared app connectors, MCP
+   * servers and skills; the agent injects a `<plugin-activation>` block so
+   * the model prefers this plugin's capabilities for the turn.
+   */
+  mentionedPlugins?: Array<{
+    pluginId: string;
+    name: string;
+    description?: string;
+    appConnections: string[];
+    mcpServers: string[];
+    skillNames: string[];
+  }>;
 }
 
 export interface AgentEvent {
@@ -73,6 +87,9 @@ export interface AgentEvent {
   id?: string;
   name?: string;
   input?: unknown;
+  /** Plan 461: incremental tool-call argument fragment (raw JSON slice) for
+   *  `tool_use_delta`. Accumulate per `id`; never a complete JSON document. */
+  delta?: string;
   result?: unknown;
   error?: string;
   content?: string;
@@ -168,6 +185,7 @@ export class AgentServerClient {
             // worker's chat:start options.
             mentionedProviders: options?.mentionedProviders,
             mentionedSkills: options?.mentionedSkills,
+            mentionedPlugins: options?.mentionedPlugins,
             maxTurns: options?.maxTurns,
             titleGenerationModel: options?.titleGenerationModel,
             titleGenerationModelConfig: options?.titleGenerationModelConfig,
@@ -268,6 +286,7 @@ export class AgentServerClient {
                 id: (event.data as Record<string, unknown>)?.id as string,
                 name: (event.data as Record<string, unknown>)?.name as string,
                 input: (event.data as Record<string, unknown>)?.input,
+                delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,
@@ -368,6 +387,7 @@ export class AgentServerClient {
                       id: (event.data as Record<string, unknown>)?.id as string,
                       name: (event.data as Record<string, unknown>)?.name as string,
                       input: (event.data as Record<string, unknown>)?.input,
+                      delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
                       result: (event.data as Record<string, unknown>)?.result,
                       error: (event.data as Record<string, unknown>)?.error as string,
                       content: (event.data as Record<string, unknown>)?.content as string,
@@ -494,6 +514,7 @@ export class AgentServerClient {
                 id: (event.data as Record<string, unknown>)?.id as string,
                 name: (event.data as Record<string, unknown>)?.name as string,
                 input: (event.data as Record<string, unknown>)?.input,
+                delta: (event.data as Record<string, unknown>)?.delta as string | undefined,
                 result: (event.data as Record<string, unknown>)?.result,
                 error: (event.data as Record<string, unknown>)?.error as string,
                 content: (event.data as Record<string, unknown>)?.content as string,

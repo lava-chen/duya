@@ -22,7 +22,9 @@ import { createSlackConnector } from './connectors/slack.js';
 import { createMicrosoft365Connector } from './connectors/microsoft365.js';
 import { createWeComConnector } from './connectors/wecom.js';
 import { RemoteMcpConnector } from './connectors/remote-mcp.js';
-import { getProviderConfig } from './providers/registry.js';
+import { invokeRestTemplate } from './connectors/rest-invoker.js';
+import { getProviderConfig, registerProviderConfig, unregisterProviderConfig } from './providers/registry.js';
+import { declarationToProviderConfig } from './declarative/projection.js';
 import {
   AppConnectorRegistry,
   declarativeDescriptors,
@@ -30,6 +32,7 @@ import {
   registerCustomConnector,
 } from './app-connector.js';
 import { asAppConnectorId, type AppConnectorId } from '@duya/plugin-core/src/connectors/app-connector-id.js';
+import type { AppDeclaration } from '@duya/plugin-core/src/connectors/app-schema.js';
 import type {
   AppConnectionErrorCode,
   AppConnectionResult,
@@ -60,6 +63,8 @@ export class ConnectorService {
   private readonly remoteMcp: RemoteMcpConnector;
   private readonly fetchImpl: typeof fetch;
   private readonly customModules = new Map<AppConnectorId, ConnectorModule>();
+  /** Provider ids projected from plugin `.app.json`, keyed by plugin source. */
+  private readonly sourceProviderIds = new Map<string, AppConnectorId[]>();
 
   constructor(deps: ConnectorServiceDeps = {}) {
     this.service = deps.service ?? getAppConnectionService();
@@ -77,6 +82,75 @@ export class ConnectorService {
   /** Test/loader seam: plugin `.app.json` declarations (Plan 455 Phase C). */
   get connectorRegistry(): AppConnectorRegistry {
     return this.registry;
+  }
+
+  /**
+   * Register every connector a plugin declares via `.app.json` (Plan 455
+   * D3 + Plan 460). Each entry is projected into the builtin provider
+   * registry (OAuth endpoints / remote MCP URL) so connect/refresh/remote
+   * flows work unchanged, and into the connector registry for binding
+   * resolution. Idempotent: re-registering an existing id is a no-op.
+   *
+   * Call this after a plugin is installed/enabled and after app startup;
+   * mirror with {@link unregisterPluginAppDeclarations} on remove/disable.
+   */
+  registerPluginAppDeclarations(
+    source: string,
+    declarations: AppDeclaration[],
+  ): { registered: string[]; skipped: { id: string; reason: string }[] } {
+    const registered: string[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+    const providerIds: AppConnectorId[] = [];
+
+    for (const declaration of declarations) {
+      const id = asAppConnectorId(declaration.id);
+
+      const config = declarationToProviderConfig(declaration);
+      if (config) {
+        const projected = registerProviderConfig(config);
+        if (projected.ok) {
+          providerIds.push(id);
+        } else {
+          skipped.push({ id: declaration.id, reason: projected.reason ?? 'provider config already registered' });
+          continue;
+        }
+      }
+
+      const resolved = this.registry.registerDeclaration(declaration, source);
+      if (!resolved.ok) {
+        skipped.push({ id: declaration.id, reason: resolved.reason ?? 'declaration registration failed' });
+        continue;
+      }
+      registered.push(declaration.id);
+    }
+
+    if (providerIds.length > 0) {
+      this.sourceProviderIds.set(source, providerIds);
+    }
+    this.logger.info(
+      'App Connection: plugin app declarations registered',
+      { source, registered: registered.length, skipped: skipped.length },
+      COMPONENT,
+    );
+    return { registered, skipped };
+  }
+
+  /** Unregister every declaration + projected provider from a plugin. */
+  unregisterPluginAppDeclarations(source: string): number {
+    const removed = this.registry.unregisterSource(source);
+    const providerIds = this.sourceProviderIds.get(source) ?? [];
+    for (const id of providerIds) {
+      unregisterProviderConfig(id);
+    }
+    this.sourceProviderIds.delete(source);
+    if (removed > 0 || providerIds.length > 0) {
+      this.logger.info(
+        'App Connection: plugin app declarations unregistered',
+        { source, removed, providers: providerIds.length },
+        COMPONENT,
+      );
+    }
+    return removed;
   }
 
   /** Lazily instantiate (and cache) the custom module for a provider. */
@@ -190,15 +264,6 @@ export class ConnectorService {
     if (!resolution) {
       return failure('unknown_action', `no connector for provider ${conn.provider}`, false);
     }
-    if (resolution.binding === 'rest') {
-      // Plan 460: generic REST template invoker. Until it lands, a
-      // declared-but-unexecutable tool fails closed instead of throwing.
-      return failure(
-        'unknown_action',
-        `REST template connector ${conn.provider} is not executable yet (Plan 460)`,
-        false,
-      );
-    }
 
     // Custom-credential providers (e.g. WeCom) read their credentials from
     // the vault directly inside the connector; there is no OAuth token to
@@ -240,7 +305,27 @@ export class ConnectorService {
     const startedAt = Date.now();
     let result: ConnectorInvokeResult;
     try {
-      if (resolution.binding === 'mcp-remote') {
+      if (resolution.binding === 'rest') {
+        // Plan 460: execute the declared REST template. The tool is found
+        // by its dispatch key (`action` defaults to the tool name).
+        const declaration = resolution.declaration;
+        if (!declaration) {
+          return failure('unknown_action', `no declaration for connector ${conn.provider}`, false);
+        }
+        const tool = declaration.tools.find((t) => (t.action ?? t.name) === action);
+        if (!tool) {
+          return failure('unknown_action', `no REST template tool for action ${action}`, false);
+        }
+        result = await invokeRestTemplate(
+          tool,
+          {
+            args: asRecord(args),
+            accessToken: tokenResult.data.accessToken,
+            tokenType: tokenResult.data.tokenType,
+          },
+          this.fetchImpl,
+        );
+      } else if (resolution.binding === 'mcp-remote') {
         result = await this.remoteMcp.invoke(connectionId, conn.provider, action, args, tokenResult.data);
       } else {
         const connector = this.customModule(conn.provider);
@@ -291,6 +376,13 @@ function failure(
   retriable: boolean,
 ): AppConnectionResult<never> {
   return { success: false, error: { code, message, retriable } };
+}
+
+/** Normalize an unknown args value to a plain record for template expansion. */
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 // --- Singleton ---

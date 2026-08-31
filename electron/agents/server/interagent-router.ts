@@ -537,7 +537,7 @@ export class InteragentRouter {
       invoke.child.removeListener('message', invoke.onDbRequest);
     }
     // Interrupt + kill target worker
-    this.deps.workerManager.interruptWorker(invoke.targetSessionId);
+    this.deps.workerManager.interruptWorker(invoke.targetSessionId, 2000, 'interagent-timeout');
     try {
       this.deps.sessionManager.transitionState(invoke.targetSessionId, SessionState.ERROR);
     } catch {

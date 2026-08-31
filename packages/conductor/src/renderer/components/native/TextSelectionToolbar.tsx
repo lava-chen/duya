@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type { CanvasElement } from "../..//types/conductor";
 import { useStyleUpdate } from "../StylePanel";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -74,18 +74,43 @@ export const TextSelectionToolbar: React.FC<{
   const [colorOpen, setColorOpen] = useState(false);
   const [highlightOpen, setHighlightOpen] = useState(false);
 
+  const colorMenuRef = useRef<HTMLDivElement>(null);
+  const highlightMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close the swatch popovers when clicking outside (mirrors
+  // StickySelectionToolbar / ShapeSelectionToolbar behavior).
+  useEffect(() => {
+    if (!colorOpen && !highlightOpen) return;
+    const handleOutsidePress = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (colorMenuRef.current?.contains(target) || highlightMenuRef.current?.contains(target)) return;
+      setColorOpen(false);
+      setHighlightOpen(false);
+    };
+    const timer = window.setTimeout(() => document.addEventListener("mousedown", handleOutsidePress), 0);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("mousedown", handleOutsidePress);
+    };
+  }, [colorOpen, highlightOpen]);
+
   const chipStyle = (active: boolean): React.CSSProperties => ({
     ...CAPSULE_BTN_BASE,
     width: "auto",
     padding: "0 8px",
-    borderRadius: 12,
+    borderRadius: 7,
     fontSize: 11,
     fontWeight: 500,
     ...(active ? CAPSULE_BTN_ACTIVE : {}),
   });
 
   return (
-    <CapsuleToolbar positioned={false} zoomAware>
+    // Default CapsuleToolbar positioning: absolutely positioned above the
+    // selected element (top: -topOffset, centered horizontally) and
+    // zoom-aware, matching StickySelectionToolbar / ShapeSelectionToolbar.
+    // The previous positioned={false} made this a relative in-flow block
+    // that occupied space inside the element and covered its content.
+    <CapsuleToolbar>
       {FONT_OPTIONS.map((f) => (
         <button
           key={f.value}
@@ -162,7 +187,7 @@ export const TextSelectionToolbar: React.FC<{
 
       <div style={CAPSULE_DIVIDER} />
 
-      <div style={{ position: "relative" }}>
+      <div style={{ position: "relative" }} ref={colorMenuRef}>
         <button
           type="button"
           title={t("conductor.text.textColor")}
@@ -174,7 +199,7 @@ export const TextSelectionToolbar: React.FC<{
             ...CAPSULE_BTN_BASE,
             width: "auto",
             padding: "0 6px",
-            borderRadius: 14,
+            borderRadius: 7,
             gap: 2,
           }}
         >
@@ -201,7 +226,7 @@ export const TextSelectionToolbar: React.FC<{
         )}
       </div>
 
-      <div style={{ position: "relative" }}>
+      <div style={{ position: "relative" }} ref={highlightMenuRef}>
         <button
           type="button"
           title={t("conductor.text.highlightColor")}
@@ -213,7 +238,7 @@ export const TextSelectionToolbar: React.FC<{
             ...CAPSULE_BTN_BASE,
             width: "auto",
             padding: "0 6px",
-            borderRadius: 14,
+            borderRadius: 7,
             gap: 2,
           }}
         >

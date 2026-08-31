@@ -25,7 +25,6 @@ import {
   WarningCircleIcon,
   SpinnerGapIcon,
   SquaresFourIcon,
-  XIcon,
   ChatCirclePlusIcon,
   MonitorIcon,
   ClockCounterClockwiseIcon,
@@ -41,6 +40,14 @@ import { Button } from '@/components/ui/Button';
 import { IconButton } from '@/components/ui/IconButton';
 import { Input } from '@/components/ui/Input';
 import { Switch } from '@/components/ui/Switch';
+import {
+  PageFrame,
+  PageHeader,
+  PageTabs,
+  PageCard,
+  EmptyState,
+  Modal,
+} from '@/components/ui/page';
 import {
   createDefaultScheduleDraft,
   describeScheduleDraft,
@@ -505,128 +512,99 @@ export function AutomationView() {
   }, [sessionsMap, crons]);
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="flex items-start justify-between px-8 pt-8 pb-5 gap-4">
-        <div>
-          <h2
-            className="text-3xl font-bold tracking-tight text-foreground"
-            style={{ fontFamily: "'Copernicus', Georgia, 'Times New Roman', serif" }}
-          >
-            {t('automation.title')}
-          </h2>
-          <p className="mt-2 text-sm text-muted-foreground">{t('automation.subtitle')}</p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            className="whitespace-nowrap rounded-lg"
-            onClick={handleCreateNew}
-            type="button"
-            variant="secondary"
-            size="md"
-          >
-            {t('automation.manualCreate')}
-          </Button>
-          <Button
-            className="whitespace-nowrap rounded-lg"
-            onClick={handleChatCreate}
-            type="button"
-            variant="primary"
-            size="md"
-          >
-            <ChatCirclePlusIcon size={16} />
-            {t('automation.createInChat')}
-          </Button>
-        </div>
-      </div>
+    <PageFrame>
+      <PageHeader
+        title={t('automation.title')}
+        subtitle={t('automation.subtitle')}
+        actions={
+          <>
+            <Button
+              className="whitespace-nowrap"
+              onClick={handleCreateNew}
+              type="button"
+              variant="secondary"
+              size="md"
+            >
+              {t('automation.manualCreate')}
+            </Button>
+            <Button
+              className="whitespace-nowrap"
+              onClick={handleChatCreate}
+              type="button"
+              variant="primary"
+              size="md"
+            >
+              <ChatCirclePlusIcon size={16} />
+              {t('automation.createInChat')}
+            </Button>
+          </>
+        }
+      />
 
-      {/* Tabs */}
-      <div className="px-8 border-b border-border/50">
-        <div className="flex items-center gap-6">
-          {[
-            { key: 'configured', label: t('automation.configured') },
-            { key: 'history', label: t('automation.executionHistory') },
-            { key: 'templates', label: t('automation.taskTemplates') },
-          ].map((tab) => {
-            const active = activeTab === tab.key;
-            return (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => setActiveTab(tab.key as TabKey)}
-                className={`relative pb-3 text-sm font-medium transition-colors ${
-                  active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {tab.label}
-                {active && (
-                  <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t bg-foreground" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <PageTabs
+        tabs={[
+          { id: 'configured', label: t('automation.configured') },
+          { id: 'history', label: t('automation.executionHistory') },
+          { id: 'templates', label: t('automation.taskTemplates') },
+        ]}
+        active={activeTab}
+        onChange={(id) => setActiveTab(id as TabKey)}
+      />
 
       {/* Error Banner */}
       {error && (
-        <div className="mx-8 mt-4 rounded-lg border border-destructive/50 bg-destructive/10 p-3 flex items-center gap-2">
-          <WarningCircleIcon size={16} className="text-destructive" />
-          <span className="text-sm text-destructive">{error}</span>
+        <div className="rounded-lg border border-error/40 bg-error-soft px-4 py-3 flex items-center gap-2">
+          <WarningCircleIcon size={16} className="text-error shrink-0" />
+          <span className="text-sm text-error">{error}</span>
         </div>
       )}
 
       {/* Main Content */}
-      <div className="flex-1 overflow-hidden px-8 pb-8 min-h-0">
         {showEmptyState ? (
-          <div className="h-full flex flex-col items-center justify-center">
-            <AutomationEmptyState
-              onManualCreate={handleCreateNew}
-              onChatCreate={handleChatCreate}
-              onViewTemplates={handleViewTemplates}
-            />
-          </div>
+          <AutomationEmptyState
+            onManualCreate={handleCreateNew}
+            onChatCreate={handleChatCreate}
+            onViewTemplates={handleViewTemplates}
+          />
         ) : activeTab === 'configured' ? (
-          <div className="h-full flex flex-col min-h-0 pt-5">
+          <div className="flex flex-col">
             {/* Cron list */}
-            <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {loading ? (
-                <div className="flex items-center justify-center h-32 text-muted-foreground">
-                  <SpinnerGapIcon size={20} className="animate-spin mr-2" />
-                  {t('automation.loading')}
+            {loading ? (
+              <div className="flex items-center justify-center h-32 text-muted-foreground">
+                <SpinnerGapIcon size={20} className="animate-spin mr-2" />
+                {t('automation.loading')}
+              </div>
+            ) : crons.length === 0 ? (
+              <EmptyState
+                icon={<ClockIcon size={32} />}
+                title={t('automation.noAutomations')}
+              />
+            ) : (
+              <PageCard padding="none">
+                {/* Header */}
+                <div
+                  className="grid items-center gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/30"
+                  style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
+                >
+                  <div>{t('automation.task')}</div>
+                  <div>{t('automation.schedule')}</div>
+                  <div>{t('automation.status')}</div>
+                  <div className="text-right">{t('automation.actions')}</div>
                 </div>
-              ) : crons.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 text-center p-4">
-                  <ClockIcon size={32} className="mb-2 opacity-30 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">{t('automation.noAutomations')}</p>
-                </div>
-              ) : (
-                <div className="rounded-lg border border-border/40 bg-[var(--surface)] overflow-hidden">
-                  {/* Header */}
-                  <div
-                    className="grid items-center gap-4 px-4 py-2 text-xs font-medium text-muted-foreground border-b border-border/30"
-                    style={{ gridTemplateColumns: '2fr 1.5fr 100px 140px' }}
-                  >
-                    <div>{t('automation.task')}</div>
-                    <div>{t('automation.schedule')}</div>
-                    <div>{t('automation.status')}</div>
-                    <div className="text-right">{t('automation.actions')}</div>
-                  </div>
-                  {/* Rows */}
-                  {crons.map((cron) => (
-                    <CronListItem
-                      key={cron.id}
-                      cron={cron}
-                      onEdit={() => handleEditCron(cron)}
-                      onRun={() => void runNow(cron)}
-                      onDelete={() => void removeCron(cron)}
-                      onToggleStatus={() => void toggleCronStatus(cron)}
-                      onViewRuns={() => setActiveTab('history')}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
+                {/* Rows */}
+                {crons.map((cron) => (
+                  <CronListItem
+                    key={cron.id}
+                    cron={cron}
+                    onEdit={() => handleEditCron(cron)}
+                    onRun={() => void runNow(cron)}
+                    onDelete={() => void removeCron(cron)}
+                    onToggleStatus={() => void toggleCronStatus(cron)}
+                    onViewRuns={() => setActiveTab('history')}
+                  />
+                ))}
+              </PageCard>
+            )}
           </div>
         ) : activeTab === 'history' ? (
           <CronHistoryPanel
@@ -635,8 +613,8 @@ export function AutomationView() {
             onRefresh={reloadAllSessions}
           />
         ) : (
-          <div className="h-full flex flex-col pt-5">
-            <div className="mb-4 flex items-center justify-between">
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-muted-foreground">{t('automation.createFromTemplateHint')}</p>
               <Button
                 type="button"
@@ -648,34 +626,31 @@ export function AutomationView() {
                 {t('automation.browseAllTemplates')}
               </Button>
             </div>
-            <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {templates.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-64 text-center p-4">
-                  <SquaresFourIcon size={40} className="mb-3 opacity-30 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">{t('automation.noTemplates')}</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {templates.map((template) => (
-                    <button
-                      key={template.id}
-                      type="button"
-                      onClick={() => handleTemplateSelect(template)}
-                      className="flex flex-col items-start rounded-xl border border-border/50 bg-[var(--surface)] p-4 text-left transition-colors hover:bg-[var(--surface-hover)]"
-                    >
-                      <span className="mb-3 text-2xl">{template.icon}</span>
-                      <p className="text-sm font-medium text-foreground">{template.label_zh}</p>
-                      <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                        {template.description_zh}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {templates.length === 0 ? (
+              <EmptyState
+                icon={<SquaresFourIcon size={40} />}
+                title={t('automation.noTemplates')}
+              />
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {templates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => handleTemplateSelect(template)}
+                    className="page-card page-card-hover flex flex-col items-start p-4 text-left"
+                  >
+                    <span className="mb-3 text-2xl">{template.icon}</span>
+                    <p className="text-sm font-medium text-foreground">{template.label_zh}</p>
+                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                      {template.description_zh}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
-      </div>
 
       {/* NL Create Chat Modal */}
       <QuickCronChatModal
@@ -707,7 +682,7 @@ export function AutomationView() {
         modelsLoading={modelsLoading}
         saving={saving}
       />
-    </div>
+    </PageFrame>
   );
 }
 
@@ -850,15 +825,6 @@ function CronEditModal({
     }
   }, [isOpen, cron]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
   const handleSubmit = async () => {
     setModelError(null);
     setFormError(null);
@@ -931,34 +897,49 @@ function CronEditModal({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border/50 bg-[var(--sidebar-bg)] shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border/50 px-5 py-4">
-          <h3 className="text-base font-semibold text-foreground">
-            {cron ? t('automation.editTask') : t('automation.newTask')}
-          </h3>
-          <div className="flex items-center gap-1">
-            {cron && (
-              <Button type="button" variant="ghost" size="sm" onClick={onClose}>
-                {t('automation.viewHistory')}
-              </Button>
-            )}
-            <IconButton variant="ghost" size="sm" aria-label={t('automation.close')} onClick={onClose}>
-              <XIcon size={18} />
-            </IconButton>
+    <Modal
+      open={isOpen}
+      onClose={onClose}
+      title={cron ? t('automation.editTask') : t('automation.newTask')}
+      maxWidth={672}
+      headerActions={
+        cron ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+            {t('automation.viewHistory')}
+          </Button>
+        ) : undefined
+      }
+      footer={
+        <>
+          <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
+            <MonitorIcon size={14} />
+            <span className="truncate max-w-[220px]">{workingDirDisplay}</span>
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
-          <div className="space-y-5">
+          <Button type="button" variant="ghost" size="md" onClick={onClose}>
+            {t('automation.cancel')}
+          </Button>
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
+            disabled={saving}
+            onClick={() => {
+              void handleSubmit();
+            }}
+          >
+            {saving ? (
+              <>
+                <SpinnerGapIcon size={16} className="animate-spin" />
+                {t('automation.saving')}
+              </>
+            ) : (
+              <>{cron ? t('automation.saveChanges') : t('automation.createAutomation')}</>
+            )}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">{t('automation.name')}</label>
               <Input
@@ -1061,7 +1042,7 @@ function CronEditModal({
                   loading={modelsLoading}
                   variant="full"
                 />
-                {modelError && <p className="text-xs text-destructive">{modelError}</p>}
+                {modelError && <p className="text-xs text-error">{modelError}</p>}
               </div>
               <div className="space-y-2">
                 <label className="text-sm font-medium text-foreground">{t('automation.workingDirectory')}</label>
@@ -1078,43 +1059,13 @@ function CronEditModal({
 
             {formError && (
               <div
-                className="rounded-xl border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+                className="rounded-xl border border-error/40 bg-error-soft px-4 py-3 text-sm text-error"
                 role="alert"
               >
                 {formError}
               </div>
             )}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-border/50 px-5 py-4">
-          <div className="mr-auto flex items-center gap-2 text-xs text-muted-foreground">
-            <MonitorIcon size={14} />
-            <span className="truncate max-w-[220px]">{workingDirDisplay}</span>
-          </div>
-          <Button type="button" variant="ghost" size="md" onClick={onClose}>
-            {t('automation.cancel')}
-          </Button>
-          <Button
-            type="button"
-            variant="primary"
-            size="md"
-            disabled={saving}
-            onClick={() => {
-              void handleSubmit();
-            }}
-          >
-            {saving ? (
-              <>
-                <SpinnerGapIcon size={16} className="animate-spin" />
-                {t('automation.saving')}
-              </>
-            ) : (
-              <>{cron ? t('automation.saveChanges') : t('automation.createAutomation')}</>
-            )}
-          </Button>
-        </div>
       </div>
-    </div>
+    </Modal>
   );
 }

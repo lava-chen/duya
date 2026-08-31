@@ -17,8 +17,10 @@ import type {
 } from '@/types/research';
 import type { PermissionRequestEvent, ModeChangedEvent, GoalUpdatedEvent, ResearchUpdatedEvent } from '@/types/stream';
 import { STREAM_IDLE_TIMEOUT_MS } from './constants';
+import { extractPartialToolFields } from './streaming-tool-input';
 import { showMessageCompletionNotification } from './notification';
 import { getAgentServerClient, type ChatOptions, type AgentEvent } from './agent-http-client';
+import type { PluginMentionCapabilities } from './plugin-mentions';
 import { interruptChat } from './agent-sse-client';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
@@ -157,8 +159,7 @@ async function getProviderConfigById(providerId: string, model: string): Promise
 }
 
 // Check if model string looks like "providerId:modelName" format
-function looksLikeProviderModelFormat(model: string): boolean {
-  // Pattern: starts with alphanumeric provider ID followed by colon, then model name
+function looksLikeProviderModelFormat(model: string): boolean {  // Pattern: starts with alphanumeric provider ID followed by colon, then model name
   // e.g., "openrouter:anthropic/claude-3.5-sonnet" or "anthropic:claude-opus-4-6"
   const parts = model.split(':');
   if (parts.length < 2) return false;
@@ -368,8 +369,17 @@ type FieldListeners = {
   error: Set<(error: StreamingError | null) => void>;
   completedAt: Set<(at: number | null) => void>;
   dbPersisted: Set<(event: SessionStreamSnapshot['dbPersisted']) => void>;
-  retry: Set<(info: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void>;
+  retry: Set<(info: RetryNotice | null) => void>;
 };
+
+/** Plan 462: LLM transport retry notice. `message` is the provider's own
+ *  wording (e.g. "余额不足，请充值") — the UI appends the attempt counter. */
+export interface RetryNotice {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  message: string;
+}
 
 /** Sub-agent progress event */
 export interface AgentProgressEvent {
@@ -478,6 +488,15 @@ interface SessionState {
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
   pendingTextEmit: string;
+  /**
+   * Plan 461: per-tool_use-id accumulated raw JSON argument fragments from
+   * `tool_use_delta` events. Never persisted; cleared when the authoritative
+   * `tool_use` lands. Used to render file edits while the model is still
+   * producing them.
+   */
+  partialToolInputRaw: Map<string, string>;
+  /** 50ms coalescing timer for merging partial tool inputs into toolUses. */
+  partialInputFlushTimer: ReturnType<typeof setTimeout> | null;
   sendRetryMessage: ((content: string) => void) | null;
 }
 
@@ -553,7 +572,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -609,16 +628,25 @@ function buildSnapshot(state: SessionState): SessionStreamSnapshot {
 }
 
 function extractNestedProviderErrorMessage(message: string): string | null {
-  let current = message.trim();
+  // Strip a leading HTTP status prefix ("429 ") — provider SDKs often
+  // stringify `status + JSON body` into error.message, and JSON.parse would
+  // otherwise fail before we even get to the nested fields (Plan 462).
+  let current = message.trim().replace(/^\d{3}\s+/, '');
   for (let depth = 0; depth < 3; depth++) {
     if (!current.startsWith('{')) break;
     try {
       const parsed = JSON.parse(current) as {
-        error?: { message?: string };
+        error?: { message?: string; msg?: string };
         data?: { message?: string };
         message?: string;
+        msg?: string;
       };
-      const next = parsed.error?.message || parsed.data?.message || parsed.message;
+      const next =
+        parsed.error?.message ??
+        parsed.error?.msg ??
+        parsed.message ??
+        parsed.data?.message ??
+        parsed.msg;
       if (!next || next === current) break;
       current = next.trim();
     } catch {
@@ -628,10 +656,29 @@ function extractNestedProviderErrorMessage(message: string): string | null {
   return current && current !== message ? current : null;
 }
 
+/**
+ * Strip `[code]` / `[requestId]` wrapping some providers put around the real
+ * message, e.g. `[1113][余额不足或无可用资源包,请充值。][20260830103053…]`
+ * → `余额不足或无可用资源包，请充值。`
+ */
+function stripBracketNoise(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed.startsWith('[')) return trimmed;
+
+  const groups = [...trimmed.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1].trim());
+  const meaningful = groups.filter(
+    (g) => g.length > 0 && !/^\d+$/.test(g) && !/^[0-9a-f]{16,}$/i.test(g),
+  );
+  if (meaningful.length === 0) return trimmed;
+  return meaningful[0].replace(/[，,]\s*$/, '').trim();
+}
+
 function normalizeStreamError(data: StreamErrorEventData | undefined): StreamingError {
   const rawMessage = data?.message || 'Unknown error';
   const nestedMessage = extractNestedProviderErrorMessage(rawMessage);
-  const providerMessage = nestedMessage || rawMessage;
+  // Plan 462: unwrap `[1113][余额不足…][requestId]` noise so the banner shows
+  // the provider's actual sentence instead of bracketed codes.
+  const providerMessage = stripBracketNoise(nestedMessage || rawMessage);
   const providerLower = providerMessage.toLowerCase();
   const code = data?.code || (
     providerLower.includes('new_sensitive') || providerLower.includes('output new_sensitive')
@@ -648,7 +695,7 @@ function normalizeStreamError(data: StreamErrorEventData | undefined): Streaming
 
   return {
     code,
-    message: nestedMessage || rawMessage,
+    message: providerMessage,
   };
 }
 
@@ -872,6 +919,8 @@ class StreamSessionManager {
         idleTimeout: null,
         textEmitTimeout: null,
         pendingTextEmit: '',
+        partialToolInputRaw: new Map(),
+        partialInputFlushTimer: null,
         sendRetryMessage: null,
       };
       this.sessions.set(sessionId, state);
@@ -1113,6 +1162,81 @@ class StreamSessionManager {
     }
   }
 
+  /**
+   * Plugin mention resolution: the `@` popover lists installed plugins, so a
+   * bare `@pluginId`/`@pluginName` token in the message must be rewritten to a
+   * codex-style `[@Name](plugin://id)` link AND the plugin's connected app
+   * connectors must flow into `mentionedProviders` (the user asked: "if a
+   * plugin contains apps, use the existing app-tool injection"). MCP servers
+   * and skills are NOT separately activated — the agent's `<plugin-activation>`
+   * block lists them so the model knows they exist.
+   *
+   * Runs after `resolveAppMentions`; the merged provider list is authoritative.
+   */
+  private async resolvePluginMentions(
+    content: string,
+    existingProviders: string[],
+  ): Promise<{ content: string; mentionedPlugins: PluginMentionCapabilities[]; mergedProviders: string[] }> {
+    try {
+      // Deliberately does NOT go through plugin-ipc/plugin-types: those pull in
+      // @duya/plugin-core at runtime, which is heavy for the message-library
+      // entry points (test runners, SSR shims). Access the preload surface
+      // directly with a minimal inline shape instead.
+      const { rewritePluginMentionTokens } = await import('./plugin-mentions');
+      const win = window as unknown as {
+        electronAPI?: {
+          plugin?: {
+            registry?: {
+              list: () => Promise<{
+                success: boolean;
+                data?: Array<{
+                  id: string;
+                  name: string;
+                  description?: string;
+                  enabled?: boolean;
+                  manifest?: { components?: { appConnections?: string[]; mcpServers?: string[]; skills?: string[] } };
+                }>;
+                error?: string;
+              }>;
+            };
+          };
+          appConnection?: {
+            list: () => Promise<{
+              success: boolean;
+              data?: Array<{ provider: string; status: string }>;
+              error?: string;
+            }>;
+          };
+        };
+      };
+      const [pluginRes, appRes] = await Promise.all([
+        win.electronAPI?.plugin?.registry?.list?.() ?? Promise.resolve(undefined),
+        win.electronAPI?.appConnection?.list?.() ?? Promise.resolve(undefined),
+      ]);
+      const plugins = (pluginRes?.data ?? []).filter((p) => p.enabled !== false);
+      if (plugins.length === 0) return { content, mentionedPlugins: [], mergedProviders: [...existingProviders] };
+
+      const connected = new Set(
+        (appRes?.data ?? []).filter((c) => c.status === 'connected').map((c) => c.provider),
+      );
+      const available = plugins.map((p): PluginMentionCapabilities => {
+        const comps = p.manifest?.components;
+        return {
+          pluginId: p.id,
+          name: p.name || p.id,
+          description: typeof p.description === 'string' && p.description ? p.description : undefined,
+          appConnections: comps?.appConnections ?? [],
+          mcpServers: comps?.mcpServers ?? [],
+          skillNames: comps?.skills ?? [],
+        };
+      });
+
+      return rewritePluginMentionTokens(content, available, [...connected], existingProviders);
+    } catch {
+      return { content, mentionedPlugins: [], mergedProviders: [...existingProviders] };
+    }
+  }
+
   async startStream(params: StartStreamParams): Promise<StartStreamResult> {
     const { sessionId, content, displayContent, model, providerId, effort, maxTokens, systemPrompt, language, initialGeneration, permissionModeOverride, files, agentProfileId, outputStyleConfig, titleGenerationModel, titleGenerationModelConfig: titleGenConfigParam, mode, defaultWorkspaceDirectory, securityScanEnabled, conductorMode, conductorCanvasId, backgroundTaskResume } = params;
 
@@ -1191,6 +1315,12 @@ class StreamSessionManager {
     state.pendingPermissionRequest = null;
     state.loadedToolUseIds = new Set();
     state.loadedToolResultIds = new Set();
+    // Plan 461: fresh run → no stale partial tool inputs or coalescing timer.
+    this.clearPartialToolInputs(state);
+
+    // Plan 462: a fresh run must not carry over the previous run's retry
+    // notice into the streaming status line.
+    this.notifyRetryListeners(sessionId, null);
 
     this.notifyListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
@@ -1382,10 +1512,18 @@ class StreamSessionManager {
       // the content unchanged and the array empty, which simply degrades
       // to the default discoverable tools.
       const appMentions = await this.resolveAppMentions(params.content);
+      // Plugin mentions: rewrite `@pluginId` → `[@Name](plugin://id)` and merge
+      // the plugin's connected app connectors into `mentionedProviders` (the
+      // `@` popover now lists plugins, so a plugin mention must still activate
+      // its apps through the existing app-tool pipeline).
+      const pluginMentions = await this.resolvePluginMentions(
+        appMentions.content,
+        appMentions.mentionedProviders,
+      );
       // Plan 450 Phase H: same treatment for a leading `/skill-name` —
       // rewritten to `[/name](skill://name)` and transported as
       // `mentionedSkills` so the agent injects the SKILL.md body this turn.
-      const skillMentions = await this.resolveSkillMentions(appMentions.content);
+      const skillMentions = await this.resolveSkillMentions(pluginMentions.content);
       await client.startChat(sessionId, skillMentions.content, {
         model: params.model,
         maxTokens: params.maxTokens,
@@ -1400,11 +1538,14 @@ class StreamSessionManager {
         // text as the stored/displayed user message when no explicit override.
         displayContent: params.displayContent ?? params.content,
         mode: params.mode,
-        ...(appMentions.mentionedProviders.length > 0
-          ? { mentionedProviders: appMentions.mentionedProviders }
+        ...(pluginMentions.mergedProviders.length > 0
+          ? { mentionedProviders: pluginMentions.mergedProviders }
           : {}),
         ...(skillMentions.mentionedSkills.length > 0
           ? { mentionedSkills: skillMentions.mentionedSkills }
+          : {}),
+        ...(pluginMentions.mentionedPlugins.length > 0
+          ? { mentionedPlugins: pluginMentions.mentionedPlugins }
           : {}),
         titleGenerationModel: params.titleGenerationModel,
         titleGenerationModelConfig: params.titleGenerationModelConfig,
@@ -1465,6 +1606,12 @@ class StreamSessionManager {
           );
           break;
 
+        case 'retry':
+        case 'chat:retry':
+          // Plan 462: LLM transport retry notice (provider wording + counter).
+          this.handleRetryEvent(sessionId, streamId, event.data as RetryNotice | undefined);
+          break;
+
         case 'tool_use_started':
         case 'tool_use':
           if (event.name) {
@@ -1472,6 +1619,19 @@ class StreamSessionManager {
               id: event.id || crypto.randomUUID(),
               name: event.name,
               input: event.input,
+            });
+          }
+          break;
+
+        case 'tool_use_delta':
+          // Plan 461: incremental argument fragment for a tool call still
+          // being generated. Coalesced and merged into the matching toolUse
+          // so the file-edit row renders partial content live.
+          if (event.id && typeof event.delta === 'string') {
+            this.handleToolUseDeltaEvent(sessionId, streamId, {
+              id: event.id,
+              name: event.name || '',
+              delta: event.delta,
             });
           }
           break;
@@ -1620,6 +1780,7 @@ class StreamSessionManager {
     state.toolUses = [];
     state.toolResults = [];
     state.streamingEvents = [];
+    this.clearPartialToolInputs(state);
 
     const cleanup = getAgentServerClient().onEvent(sessionId, this.createStreamEventHandler(sessionId, streamId));
     this.messagePortCleanup.set(sessionId, cleanup);
@@ -1667,6 +1828,13 @@ class StreamSessionManager {
           id: (data.id as string) || crypto.randomUUID(),
           name: data.name as string,
           input: data.input as Record<string, unknown>,
+        });
+      } else if (normalizedType === 'tool_use_delta' && data.id) {
+        // Plan 461: embedded-type variant (event.data.type === 'tool_use_delta').
+        this.handleToolUseDeltaEvent(state.sessionId, streamId, {
+          id: data.id as string,
+          name: (data.name as string) || '',
+          delta: (data.delta as string) || '',
         });
       } else if (normalizedType === 'tool_result' && data.id) {
         this.handleToolResultEvent(state.sessionId, streamId, {
@@ -1745,6 +1913,30 @@ class StreamSessionManager {
     this.resetIdleTimeout(sessionId);
   }
 
+  /**
+   * Plan 462: LLM transport is retrying after a transient failure. Notify the
+   * retry subscribers (drives the streaming status line) and mirror the reason
+   * into `statusText` so non-streaming consumers (e.g. session list) also see
+   * why the run is stalled.
+   */
+  private handleRetryEvent(sessionId: string, streamId: string, data: RetryNotice | undefined): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    if (!data) return;
+
+    const notice: RetryNotice = {
+      attempt: data.attempt,
+      maxAttempts: data.maxAttempts,
+      delayMs: data.delayMs,
+      message: data.message?.trim() || '连接中断，正在重试',
+    };
+    this.notifyRetryListeners(sessionId, notice);
+    s.statusText = notice.message;
+    this.notifyStatusTextListeners(sessionId, s.statusText);
+    this.notifyListeners(sessionId);
+    this.resetIdleTimeout(sessionId);
+  }
+
   private handleThinkingEvent(sessionId: string, streamId: string, text: string): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
@@ -1781,6 +1973,9 @@ class StreamSessionManager {
       input: toolUse.input as Record<string, unknown>,
       stage: s.researchStage || undefined,
     };
+    // Plan 461: the authoritative input has arrived — drop any accumulated
+    // partial fragments for this tool call so the row stops streaming.
+    this.dropPartialToolInput(s, toolUse.id);
     const existingIndex = s.toolUses.findIndex((existing) => existing.id === toolUse.id);
     if (existingIndex !== -1) {
       s.toolUses = s.toolUses.map((existing, index) => index === existingIndex ? info : existing);
@@ -1821,6 +2016,86 @@ class StreamSessionManager {
     this.notifyToolListeners(sessionId);
     this.notifyStreamingEventsListeners(sessionId);
     this.resetIdleTimeout(sessionId);
+  }
+
+  /**
+   * Plan 461: accumulate a raw JSON argument fragment for a tool call whose
+   * arguments are still being generated. Coalesced with a short timer —
+   * deltas can arrive per token and we must not re-render the row on every
+   * one. The authoritative `tool_use` input replaces the partial merge when
+   * it lands (see handleToolUseEvent).
+   */
+  private handleToolUseDeltaEvent(
+    sessionId: string,
+    streamId: string,
+    delta: { id: string; name: string; delta: string },
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    if (!delta.delta) return;
+
+    const raw = s.partialToolInputRaw.get(delta.id) || '';
+    // Safety valve: stop accumulating past a 4 MiB fragment. Real LLM
+    // file writes stay far below this; the final tool_use is authoritative
+    // anyway, so truncation only affects the live preview.
+    if (raw.length >= 4 * 1024 * 1024) return;
+    s.partialToolInputRaw.set(delta.id, raw + delta.delta);
+
+    if (s.partialInputFlushTimer !== null) return;
+    s.partialInputFlushTimer = setTimeout(() => {
+      this.flushPartialToolInputs(sessionId, streamId);
+    }, 50);
+  }
+
+  /**
+   * Plan 461: merge every accumulated partial fragment into its matching
+   * ToolUseInfo (in place, so the shared streamingEvents entry picks it up)
+   * and notify subscribers once. Only top-level string fields are merged —
+   * numbers/arrays/objects are skipped because a truncated value would
+   * corrupt the row's shape.
+   */
+  private flushPartialToolInputs(sessionId: string, streamId: string): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.partialInputFlushTimer = null;
+    if (s.partialToolInputRaw.size === 0) return;
+
+    let changed = false;
+    for (const [id, raw] of s.partialToolInputRaw) {
+      const idx = s.toolUses.findIndex((u) => u.id === id);
+      if (idx === -1) continue; // tool_use_started not seen yet — keep raw
+      const fields = extractPartialToolFields(raw);
+      const keys = Object.keys(fields);
+      if (keys.length === 0) continue;
+      const info = s.toolUses[idx];
+      const nextInput = { ...((info.input as Record<string, unknown>) || {}), ...fields };
+      if (JSON.stringify(nextInput) === JSON.stringify(info.input)) continue;
+      info.input = nextInput;
+      changed = true;
+    }
+    if (changed) {
+      this.notifyToolListeners(sessionId);
+      this.notifyStreamingEventsListeners(sessionId);
+    }
+    this.resetIdleTimeout(sessionId);
+  }
+
+  /** Drop accumulated partial fragments for one tool call (or all when
+   *  `id` is omitted). Clears the coalescing timer when the map empties. */
+  private dropPartialToolInput(s: SessionState, id?: string): void {
+    if (id !== undefined) {
+      s.partialToolInputRaw.delete(id);
+    } else {
+      s.partialToolInputRaw.clear();
+    }
+    if (s.partialToolInputRaw.size === 0 && s.partialInputFlushTimer !== null) {
+      clearTimeout(s.partialInputFlushTimer);
+      s.partialInputFlushTimer = null;
+    }
+  }
+
+  private clearPartialToolInputs(s: SessionState): void {
+    this.dropPartialToolInput(s);
   }
 
   private handleToolResultEvent(
@@ -2083,6 +2358,9 @@ class StreamSessionManager {
     // errors invalidate explicitly at their own completion points instead.
     const reason = data?.reason;
 
+    // Plan 462: terminal — drop any pending retry notice from the status line.
+    this.notifyRetryListeners(sessionId, null);
+
     // Early-stop reasons (max_turns / repeated_tool_calls) mean the run ended
     // before the task was done. Surface them as an error banner instead of a
     // silent "completed", so the user understands why tool activity stopped.
@@ -2156,6 +2434,8 @@ class StreamSessionManager {
     s.error = normalizedError.message;
     s.errorCode = normalizedError.code;
     s.completedAt = Date.now();
+    // Plan 462: terminal — drop any pending retry notice.
+    this.notifyRetryListeners(sessionId, null);
     this.notifyPhaseListeners(sessionId, s.phase);
     this.notifyStatusTextListeners(sessionId, s.statusText);
     this.notifyErrorListeners(sessionId, s.error);
@@ -2392,7 +2672,7 @@ class StreamSessionManager {
     return () => { state.fieldListeners.dbPersisted.delete(listener); };
   }
 
-  subscribeToRetry(sessionId: string, listener: (info: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void): () => void {
+  subscribeToRetry(sessionId: string, listener: (info: RetryNotice | null) => void): () => void {
     const state = this.getOrCreateState(sessionId);
     state.fieldListeners.retry.add(listener);
     return () => { state.fieldListeners.retry.delete(listener); };
@@ -2568,6 +2848,8 @@ class StreamSessionManager {
       idleTimeout: null,
       textEmitTimeout: null,
       pendingTextEmit: '',
+      partialToolInputRaw: new Map(),
+      partialInputFlushTimer: null,
       sendRetryMessage: null,
     };
 
@@ -2697,7 +2979,7 @@ class StreamSessionManager {
     });
   }
 
-  private notifyRetryListeners(sessionId: string, info: { attempt: number; maxAttempts: number; delayMs: number; message: string }): void {
+  private notifyRetryListeners(sessionId: string, info: RetryNotice | null): void {
     const state = this.sessions.get(sessionId);
     if (!state) return;
     state.fieldListeners.retry.forEach((listener) => {
@@ -3675,7 +3957,7 @@ export const subscribeToToolTimeout = (sessionId: string, listener: (info: { too
   streamSessionManager.subscribeToToolTimeout(sessionId, listener);
 export const subscribeToError = (sessionId: string, listener: (error: StreamingError | null) => void) =>
   streamSessionManager.subscribeToError(sessionId, listener);
-export const subscribeToRetry = (sessionId: string, listener: (info: { attempt: number; maxAttempts: number; delayMs: number; message: string }) => void) =>
+export const subscribeToRetry = (sessionId: string, listener: (info: RetryNotice | null) => void) =>
   streamSessionManager.subscribeToRetry(sessionId, listener);
 export const subscribeToStreamingEvents = (sessionId: string, listener: (events: StreamingEvent[]) => void) =>
   streamSessionManager.subscribeToStreamingEvents(sessionId, listener);

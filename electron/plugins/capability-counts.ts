@@ -30,8 +30,8 @@ export interface CapabilityCounts {
 /**
  * Derive `capabilityCounts` for a single plugin.
  *
- * If `pluginDir` resolves to an existing directory under
- * `packages/plugin-core/src/plugins/builtin/`, the counts come from the
+ * If `pluginDir` resolves to an existing on-disk plugin directory
+ * (installed copy or marketplace clone), the counts come from the
  * directory's `skills/`, `agents/`, `commands/`, `hooks/hooks.json`
  * (skills, agents, commands, hooks), and `workflows/*.yaml`
  * (workflows, Plan 311). `mcpServers` and `cli` come from

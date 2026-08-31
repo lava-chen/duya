@@ -146,74 +146,25 @@ textarea {
 .orb-ball {
   width: var(--orb-size);
   height: var(--orb-size);
-  border-radius: var(--orb-radius);
-  /* Duya brand-tinted frosted glass: a soft purple wash over the
-     surface so the ball reads as part of the brand family even on
-     backgrounds where pure white-on-transparent disappears. */
-  background:
-    radial-gradient(
-      circle at 30% 25%,
-      rgba(199, 155, 255, 0.18) 0%,
-      rgba(124, 58, 237, 0.08) 45%,
-      rgba(255, 255, 255, 0.55) 70%
-    ),
-    var(--orb-bg-glass);
-  backdrop-filter: var(--orb-blur);
-  -webkit-backdrop-filter: var(--orb-blur);
-  /* Subtle inner glow + brand-color rim. The rim is a single
-     1.5px ring with a duya-purple tint, lifted on hover. */
-  border: 1.5px solid rgba(124, 58, 237, 0.28);
-  box-shadow:
-    var(--orb-shadow-md),
-    inset 0 0 18px rgba(124, 58, 237, 0.08);
+  /* No frosted-glass shell — the creature floats bare on the desktop, exactly
+     like the bloub reference. This container only defines the hit area for
+     click / drag and centres the SVG. */
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: grab;
-  transition:
-    transform var(--orb-transition-fast) var(--orb-easing),
-    box-shadow var(--orb-transition-fast) var(--orb-easing),
-    border-color var(--orb-transition-fast) var(--orb-easing);
-  will-change: transform;
-  /* Idle breathing — 3.2s slow scale so the ball feels alive
-     without being distracting. Disabled on hover so the user
-     feels in control. */
-  animation: orb-idle 3.2s var(--orb-easing) infinite;
-}
-
-.orb-ball:hover {
-  transform: scale(1.06);
-  border-color: rgba(124, 58, 237, 0.55);
-  box-shadow:
-    var(--orb-shadow-lg),
-    inset 0 0 22px rgba(124, 58, 237, 0.18),
-    0 0 0 4px rgba(124, 58, 237, 0.06);
-  animation-play-state: paused;
 }
 
 .orb-ball:active {
   cursor: grabbing;
-  transform: scale(0.94);
-  animation-play-state: paused;
-}
-
-@keyframes orb-idle {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.025);
-  }
 }
 
 .orb-ball-mascot {
-  width: 86%;
-  height: 86%;
-  /* DuyaMascot SVG (see DuyaMascot.tsx). Sized so a 50px ball
-     renders the mascot at 43px — leaves a thin duya-purple rim
-     visible around the body, matching the brand rim on the
-     surrounding glass surface. */
+  width: 94%;
+  height: 94%;
+  /* BloubOrb SVG (see bot/BloubOrb.tsx). With the glass shell gone, the
+     creature takes most of the window; the small margin keeps the liveliness
+     drift from clipping against the window edge. */
   pointer-events: none;
   filter: drop-shadow(0 1px 1.5px rgba(22, 9, 33, 0.35));
   display: flex;
@@ -231,11 +182,14 @@ textarea {
 
 .orb-ball-loading {
   position: relative;
-  width: var(--orb-size);
-  height: var(--orb-size);
+  width: 100%;
+  height: 100%;
 }
 
 .orb-ball-loading .orb-ball {
+  position: absolute;
+  left: 0;
+  bottom: 0;
   animation: orb-pulse 1.6s var(--orb-easing) infinite;
 }
 
@@ -243,18 +197,16 @@ textarea {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: var(--orb-shadow-md);
   }
   50% {
     transform: scale(1.08);
-    box-shadow: var(--orb-shadow-lg);
   }
 }
 
 .orb-progress-bubble {
   position: absolute;
-  top: calc(var(--orb-bubble-offset) * -1);
-  right: calc(var(--orb-bubble-offset) * -1);
+  top: 8px;
+  right: 10px;
   min-width: var(--orb-bubble-size);
   max-width: 180px;
   height: var(--orb-bubble-size);
@@ -318,21 +270,62 @@ textarea {
 
 /* ─ ─ INPUT: OrbInput ─────────────────────────────────────────────────────── */
 
+/* globals.css 定义了整套 app token(:root / [data-theme]),这里只中和它带来的
+   文档级样式——orb 窗口必须是透明无框的。 */
+body {
+  background: transparent !important;
+  margin: 0;
+}
+
 .orb-input {
-  width: var(--orb-input-width);
-  height: var(--orb-input-height);
-  background: var(--orb-bg-glass);
-  backdrop-filter: var(--orb-blur);
-  -webkit-backdrop-filter: var(--orb-blur);
-  border: 1px solid var(--orb-border);
-  border-radius: 16px;
-  box-shadow: var(--orb-shadow-lg);
-  padding: 10px 12px;
+  width: 100%;
+  height: 100%;
+  /* 与 app 输入框同源:实体背景 + app 边框,不做玻璃 */
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shell-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   position: relative;
+  /* overflow: visible so the @/model popups (position:absolute inside the
+     toolbar anchor) can escape the input box instead of being clipped.
+     Children are inset by padding, so rounded corners stay clean. */
+  overflow: visible;
+  color: var(--text);
 }
+
+.orb-input-field {
+  flex: 1;
+  min-height: 0;
+  background: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  -webkit-appearance: none;
+  appearance: none;
+  color: var(--text);
+  caret-color: var(--accent);
+  font-size: var(--orb-font-size-input);
+  line-height: 1.45;
+  resize: none;
+  overflow-y: auto;
+}
+
+.orb-input-field::placeholder {
+  color: var(--muted);
+}
+
+.orb-input-field:focus,
+.orb-input-field:focus-visible {
+  outline: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* ── 附件 chips(粘贴即附件,参考回复框的 Screenshot chip) ───────────── */
 
 .orb-input-attachments {
   display: flex;
@@ -343,78 +336,189 @@ textarea {
 .orb-input-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  background: var(--orb-accent-soft);
-  color: var(--orb-accent);
-  border-radius: 999px;
+  gap: 6px;
+  max-width: 180px;
+  padding: 3px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
   font-size: 11px;
-  font-weight: var(--orb-font-weight-medium);
+  color: var(--text);
+}
+
+.orb-input-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .orb-input-chip-remove {
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
-  opacity: 0.6;
-  transition: opacity var(--orb-transition-fast);
+  padding: 0 2px;
 }
 
 .orb-input-chip-remove:hover {
-  opacity: 1;
+  color: var(--text);
 }
 
-.orb-input-field {
-  flex: 1;
-  background: transparent;
-  color: var(--orb-fg);
-  caret-color: var(--orb-accent);
-  font-size: var(--orb-font-size-input);
-  line-height: 1.4;
-  resize: none;
-}
-
-.orb-input-field::placeholder {
-  color: var(--orb-fg-muted);
-}
+/* ── 工具栏:胶囊控件(布局参考 Grok 回复框,配色保持 duya) ──────────── */
 
 .orb-input-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
 }
 
-.orb-input-icons {
+.orb-input-toolbar-left,
+.orb-input-toolbar-right {
   display: flex;
+  align-items: center;
   gap: 6px;
-  color: var(--orb-fg-muted);
+  min-width: 0;
 }
 
-.orb-input-icon {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
+.orb-pill {
+  height: 24px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--orb-transition-fast), color var(--orb-transition-fast);
+}
+
+.orb-pill:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.orb-pill:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.orb-pill-model {
+  cursor: pointer;
+  user-select: none;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+/* ── 发送按钮(与主应用同款:--send-btn 紫、圆形、ArrowUp) ──────────── */
+
+.orb-input-send {
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: var(--send-btn);
+  color: var(--bg-canvas);
   cursor: pointer;
   transition: background var(--orb-transition-fast);
 }
 
-.orb-input-icon:hover {
-  background: var(--orb-accent-soft);
-  color: var(--orb-accent);
+.orb-input-send:hover:not(:disabled) {
+  background: var(--send-btn-hover);
 }
 
-.orb-input-model {
+.orb-input-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ── @ 内容弹窗(主应用 context popover 的 orb 版) ──────────────────── */
+
+.orb-input-mention-anchor {
+  position: relative;
+  display: flex;
+}
+
+.orb-mention-popup {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  min-width: 200px;
+  max-width: 260px;
+  /* 180px is taller than the orb INPUT window (160px), so long lists
+     overflow past the frameless window and get clipped by the OS.
+     120px fits above the bottom toolbar and still scrolls. */
+  max-height: 120px;
+  overflow-y: auto;
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  z-index: 10;
+}
+
+.orb-mention-empty {
+  padding: 8px 10px;
   font-size: 11px;
-  color: var(--orb-fg-muted);
-  padding: 2px 6px;
-  border-radius: 4px;
-  cursor: pointer;
+  color: var(--muted);
 }
 
-.orb-input-model:hover {
-  background: var(--orb-accent-soft);
+.orb-mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  background: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.orb-mention-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.orb-mention-item:hover {
+  background: var(--surface);
+}
+
+.orb-mention-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.orb-mention-desc {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─ ─ RESULT: OrbResult ───────────────────────────────────────────────────── */
@@ -441,6 +545,11 @@ textarea {
   line-height: 1.6;
   color: var(--orb-fg);
   user-select: text;
+}
+
+.orb-result-text {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .orb-result-body h1,
@@ -560,4 +669,9 @@ textarea {
 .orb-result-body::-webkit-scrollbar-thumb {
   background: var(--orb-border);
   border-radius: 3px;
+}
+.orb-mention-check {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 11px;
 }
