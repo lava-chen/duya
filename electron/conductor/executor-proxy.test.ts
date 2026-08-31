@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   listCanvasesForProject: vi.fn(),
   createCanvas: vi.fn(),
   updateCanvas: vi.fn(),
+  deleteCanvas: vi.fn(),
   getSession: vi.fn(),
   getExtension: vi.fn(),
   setExtension: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../db/queries/conductors', () => {
     listCanvasesForProject: mocks.listCanvasesForProject,
     createCanvas: mocks.createCanvas,
     updateCanvas: mocks.updateCanvas,
+    deleteCanvas: mocks.deleteCanvas,
     getCanvasSnapshot: mocks.getCanvasSnapshot,
     insertElement: vi.fn(),
     updateElementPosition: vi.fn(),
@@ -245,6 +247,85 @@ describe('ConductorExecutorProxy canvas management', () => {
     expect(response.success).toBe(false);
     expect(response.error?.code).toBe('CANVAS_NOT_ACCESSIBLE');
     expect(mocks.updateCanvas).not.toHaveBeenCalled();
+  });
+
+  it('deletes a non-current canvas without unbinding the current session target', async () => {
+    mocks.deleteCanvas.mockReturnValue(true);
+    const proxy = new ConductorExecutorProxy();
+    const changed = vi.fn();
+    proxy.setCanvasManagementChangedFn(changed);
+
+    const response = await proxy.execute(request({ action: 'delete', canvasId: 'canvas-2' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.deleteCanvas).toHaveBeenCalledWith('canvas-2');
+    // Only the deleted canvas should fire the change event; the session
+    // binding must NOT be cleared because the deleted canvas was not current.
+    expect(mocks.setExtension).not.toHaveBeenCalledWith(
+      'session-1',
+      'conductor_canvas_id',
+      null,
+    );
+    expect(changed).toHaveBeenCalledWith({
+      operation: 'delete',
+      sessionId: 'session-1',
+      canvas: secondCanvas,
+      currentCanvasId: 'canvas-1',
+      deletedCanvasId: 'canvas-2',
+    });
+  });
+
+  it('unbinds the session when the deleted canvas was the current one', async () => {
+    mocks.getExtension.mockReturnValue('canvas-1');
+    mocks.deleteCanvas.mockReturnValue(true);
+    const proxy = new ConductorExecutorProxy();
+    const changed = vi.fn();
+    proxy.setCanvasManagementChangedFn(changed);
+
+    const response = await proxy.execute(request({ action: 'delete', canvasId: 'canvas-1' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.deleteCanvas).toHaveBeenCalledWith('canvas-1');
+    expect(mocks.setExtension).toHaveBeenCalledWith(
+      'session-1',
+      'conductor_canvas_id',
+      null,
+    );
+    expect(changed).toHaveBeenCalledWith({
+      operation: 'delete',
+      sessionId: 'session-1',
+      canvas: firstCanvas,
+      currentCanvasId: undefined,
+      deletedCanvasId: 'canvas-1',
+    });
+  });
+
+  it('rejects delete of a canvas bound to a different project', async () => {
+    const foreignCanvas = { ...firstCanvas, id: 'canvas-foreign', projectPath: '/proj/B' };
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getExtension.mockReturnValue('canvas-1');
+    mocks.listCanvases.mockReturnValue([firstCanvas, foreignCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'delete', canvasId: 'canvas-foreign' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('CANVAS_NOT_ACCESSIBLE');
+    expect(mocks.deleteCanvas).not.toHaveBeenCalled();
+  });
+
+  it('reports DELETE_FAILED when the database returns no changes', async () => {
+    mocks.deleteCanvas.mockReturnValue(false);
+    const proxy = new ConductorExecutorProxy();
+    const changed = vi.fn();
+    proxy.setCanvasManagementChangedFn(changed);
+
+    const response = await proxy.execute(request({ action: 'delete', canvasId: 'canvas-2' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('DELETE_FAILED');
+    expect(changed).not.toHaveBeenCalled();
+    expect(mocks.setExtension).not.toHaveBeenCalled();
   });
 });
 
