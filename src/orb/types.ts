@@ -75,7 +75,15 @@ export interface OrbAPI {
     y: number;
     displayId: number;
   }) => Promise<{ ok: boolean }>;
-  state: () => Promise<{ state: OrbState }>;
+  state: () => Promise<{
+    state: OrbState;
+    /**
+     * Phase F (Plan session-floater): persisted session messages. The
+     * renderer seeds its `messages` state from this on mount / focus /
+     * poll rescue so the conversation survives reloads and auto-folds.
+     */
+    messages?: Turn[];
+  }>;
   /** 展开 RESULT 卡片：notify 徽标在先，点击球时调用（窗口长到 350x350）。 */
   openResult: () => Promise<{ ok: boolean }>;
   /** 主进程返回指针相对悬浮窗的归一化位置 + 像素偏移 + 绝对距离；窗口未创建时为 null */

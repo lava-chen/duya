@@ -161,7 +161,14 @@ export function registerOrbHandlers(): void {
   );
 
   ipcMain.handle('automation:orb:state', async () => {
-    return { state: getWakeService().getState() };
+    const wake = getWakeService();
+    const session =
+      typeof wake.getSession === 'function' ? wake.getSession() : { messages: [], updatedAt: 0 };
+    // Phase F (Plan session-floater): payload gained `messages` so the
+    // renderer can recover the conversation across reloads. The channel
+    // name is unchanged; only the payload shape grew. Both consumers
+    // (useOrbState mount/focus/poll rescue) read .messages.
+    return { state: wake.getState(), messages: session.messages };
   });
 
   // The model badge / picker in the orb composer: `model` is what the
@@ -235,9 +242,7 @@ export function registerOrbHandlers(): void {
   ipcMain.handle('automation:orb:reset-conversation', async () => {
     const wake = getWakeService();
     try {
-      if (typeof wake.resetConversation === 'function') {
-        wake.resetConversation();
-      }
+      wake.resetConversation();
     } catch (err) {
       logger.warn(
         'orb:reset-conversation failed',

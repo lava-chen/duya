@@ -1336,7 +1336,14 @@ export interface OrbAPI {
     y: number
     displayId: number
   }) => Promise<{ ok: boolean }>
-  state: () => Promise<{ state: string }>
+  state: () => Promise<{ state: string; messages?: Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    text: string;
+    attachments?: string[];
+    createdAt: number;
+    finishedAt?: number;
+  }> }>
   openResult: () => Promise<{ ok: boolean }>
   pointer: () => Promise<{
     dx: number
