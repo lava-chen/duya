@@ -1,4 +1,17 @@
-import { app } from 'electron'
+// `app` is only defined inside the Electron main process. In RUN_AS_NODE
+// child processes (e.g. agent-server), the CLI server and vitest,
+// `require('electron')` either resolves to a path string (dev, where a
+// local node_modules/electron exists) or throws MODULE_NOT_FOUND (packaged:
+// app.asar ships no electron module). Resolve it lazily inside a try/catch so
+// the module-level `getLogger()` calls in boot-config.ts / connection.ts don't
+// crash the packaged agent-server before a logger exists.
+let app: import('electron').App | undefined
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  app = (require('electron') as { app?: import('electron').App }).app
+} catch {
+  app = undefined
+}
 import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'

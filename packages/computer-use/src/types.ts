@@ -15,8 +15,6 @@ export const COMPUTER_USE_ACTIONS = [
   'key',
   'scroll',
   'drag',
-  'window_switch',
-  'list_apps',
   'set_value',
   'wait',
   'zoom',
@@ -33,7 +31,6 @@ export type ComputerUseAction = (typeof COMPUTER_USE_ACTIONS)[number];
  */
 export const CONFIRM_REQUIRED_ACTIONS: ReadonlySet<ComputerUseAction> = new Set([
   'click',
-  'window_switch',
   'drag',
   'set_value',
 ]);

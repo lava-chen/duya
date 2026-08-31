@@ -26,17 +26,17 @@ import type {
 import type { MCPServerConfig } from "@/types";
 import { useSettings } from "@/hooks/useSettings";
 import { useConversationStore } from "@/stores/conversation-store";
-import { ExtensionsTabs, type ExtensionTab } from "./ExtensionsTabs";
-import { PluginsSubPage } from "./PluginsSubPage";
-import { ConnectionsSubPage } from "./ConnectionsSubPage";
+import { PageFrame, PageHeader, PageTabs } from "@/components/ui/page";
+import { InstalledPage, type SkillSummary } from "./InstalledPage";
+
+/** Top-level tabs of the extensions page. */
+export type ExtensionTab = "marketplace" | "installed";
 import { OAuthClientSetupDialog } from "./OAuthClientSetupDialog";
 import { ManagedOAuthConnectDialog } from "./ManagedOAuthConnectDialog";
-import { MCPSubPage } from "./MCPSubPage";
-import { SkillsSubPage, type SkillSummary } from "./SkillsSubPage";
-import { MarketplaceModal } from "./MarketplaceModal";
+import { MarketplacePage } from "./MarketplacePage";
+import { PluginInstallDialog } from "./PluginInstallDialog";
 import { PluginDetailView } from "@/components/settings/capabilities/PluginDetailView";
-import { SettingsSection } from "@/components/settings/ui";
-import { PlugIcon, PlusIcon, ChatCircleIcon, FileIcon } from "@/components/icons";
+import { PlusIcon, ChatCircleIcon, FileIcon } from "@/components/icons";
 import {
   ArrowLeftIcon,
   EyeIcon,
@@ -48,6 +48,8 @@ import {
   WarningIcon,
   ProhibitIcon,
   SpinnerGapIcon,
+  SquaresFourIcon,
+  CubeIcon,
 } from "@/components/icons";
 import { MarkdownRenderer } from "@/components/chat/MarkdownRenderer";
 import { SkillUploadDialog } from "./SkillUploadDialog";
@@ -186,7 +188,7 @@ function SkillDetailPanel({
 
   const securityStatus = useMemo(() => {
     if (!skill.security?.scanned) return null;
-    if (skill.source === "bundled" || skill.source === "builtin-directory") {
+    if (skill.source === "bundled") {
       return { label: t("skills.trustedBuiltin"), variant: "safe" as const };
     }
     if (skill.security.verdict === "dangerous") {
@@ -383,8 +385,8 @@ export function ExtensionsPage() {
   const setActiveThread = useConversationStore((s) => s.setActiveThread);
   const setCurrentView = useConversationStore((s) => s.setCurrentView);
 
-  const [activeTab, setActiveTab] = useState<ExtensionTab>("plugins");
-  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<ExtensionTab>("marketplace");
+  const [installDialogPlugin, setInstallDialogPlugin] = useState<PluginCatalogEntry | null>(null);
   const [detailPluginId, setDetailPluginId] = useState<string | null>(null);
 
   // ── Data state ──
@@ -425,10 +427,8 @@ export function ExtensionsPage() {
     searchByTab,
     setSearchByTab,
   ] = useState<Record<ExtensionTab, string>>({
-    plugins: "",
-    connections: "",
-    mcp: "",
-    skills: "",
+    marketplace: "",
+    installed: "",
   });
 
   const pluginApi = useMemo(() => getPluginAPI(), []);
@@ -700,6 +700,36 @@ export function ExtensionsPage() {
     [appConnectionApi, connectionSetupProvider, handleConnect, reloadConnections, t]
   );
 
+  // Installed-tab connection toggle: on → (re)connect, off → disconnect.
+  const handleConnectionToggle = useCallback(
+    async (connection: AppConnectionStatusDTO, enabled: boolean) => {
+      if (enabled) {
+        const provider = connectionProviders.find((p) => p.id === connection.provider);
+        if (provider) requestConnection(provider);
+        else void handleConnect(connection.provider);
+      } else {
+        await handleDisconnect(connection.id);
+      }
+    },
+    [connectionProviders, handleConnect, handleDisconnect, requestConnection]
+  );
+
+  // Plugin-declared MCP toggles are wired to the owning plugin's enabled
+  // state: enabling/disabling the plugin enables/disables all its MCPs.
+  const handleMcpPluginToggle = useCallback(
+    async (server: MCPPluginDeclaredServerDTO, enabled: boolean) => {
+      const owner = installed.find((p) => p.id === server.pluginId);
+      if (!owner || !pluginApi) return;
+      await runPluginAction(owner.id, () =>
+        enabled
+          ? pluginApi.registry.enable(owner.id)
+          : pluginApi.registry.disable(owner.id)
+      );
+      void reloadMcp();
+    },
+    [installed, pluginApi, reloadMcp, runPluginAction]
+  );
+
   // ── MCP mutations ──
   const mcpServers: MCPServerConfig[] = useMemo(() => {
     const fromSettings = settings.mcpServers ?? [];
@@ -718,19 +748,10 @@ export function ExtensionsPage() {
     mcpInventory?.pluginDeclaredServers ?? [];
 
   const handleMcpToggle = useCallback(
-    async (server: MCPServerConfig) => {
+    async (server: MCPServerConfig, enabled: boolean) => {
       const newServers = mcpServers.map((s) =>
-        s.name === server.name ? { ...s, enabled: !s.enabled } : s
+        s.name === server.name ? { ...s, enabled } : s
       );
-      await save({ mcpServers: newServers });
-      void reloadMcp();
-    },
-    [mcpServers, save, reloadMcp]
-  );
-
-  const handleMcpDelete = useCallback(
-    async (name: string) => {
-      const newServers = mcpServers.filter((s) => s.name !== name);
       await save({ mcpServers: newServers });
       void reloadMcp();
     },
@@ -766,19 +787,23 @@ export function ExtensionsPage() {
   }, [detailPluginId, catalog]);
 
   // ── Counts ──
+  const installedTotal =
+    installed.length +
+    connections.filter((c) => c.status === "connected").length +
+    mcpServers.length +
+    pluginMCPs.length +
+    skills.length;
   const counts: Record<ExtensionTab, number> = {
-    plugins: installed.length,
-    connections: connections.filter((c) => c.status === "connected").length,
-    mcp: mcpServers.length + pluginMCPs.length,
-    skills: skills.length,
+    marketplace: catalog.filter(
+      (c) => c.kind !== "skill" && !installed.some((p) => p.id === c.id)
+    ).length,
+    installed: installedTotal,
   };
 
   const searchPlaceholder = useMemo(() => {
     const map: Record<ExtensionTab, string> = {
-      plugins: "extensions.search.plugins",
-      connections: "extensions.search.connections",
-      mcp: "extensions.search.mcp",
-      skills: "extensions.search.skills",
+      marketplace: "marketplace.search",
+      installed: "extensions.search.plugins",
     };
     return t(map[activeTab] as never);
   }, [activeTab, t]);
@@ -786,56 +811,52 @@ export function ExtensionsPage() {
   // ── Plugin detail inline view ──
   if (detailPlugin) {
     return (
-      <div className="settings-page-content">
-        <div className="settings-content">
-          <PluginDetailView
-            installed={detailPlugin}
-            catalog={detailCatalog}
-            onBack={() => setDetailPluginId(null)}
-            onEnable={() =>
-              void runPluginAction(detailPlugin.id, () =>
-                pluginApi!.registry.enable(detailPlugin.id)
-              )
+      <PageFrame>
+        <PluginDetailView
+          installed={detailPlugin}
+          catalog={detailCatalog}
+          onBack={() => setDetailPluginId(null)}
+          onEnable={() =>
+            void runPluginAction(detailPlugin.id, () =>
+              pluginApi!.registry.enable(detailPlugin.id)
+            )
+          }
+          onDisable={() =>
+            void runPluginAction(detailPlugin.id, () =>
+              pluginApi!.registry.disable(detailPlugin.id)
+            )
+          }
+          onRemove={() =>
+            void runPluginAction(detailPlugin.id, () =>
+              pluginApi!.registry.remove({
+                pluginId: detailPlugin.id,
+                deleteData: false,
+              })
+            )
+          }
+          busy={busyPluginId === detailPlugin.id}
+          onSkillClick={(skill) => {
+            const full = skills.find((s) => s.name === skill.name);
+            if (full) {
+              setDetailPluginId(null);
+              setSelectedSkill(full);
             }
-            onDisable={() =>
-              void runPluginAction(detailPlugin.id, () =>
-                pluginApi!.registry.disable(detailPlugin.id)
-              )
-            }
-            onRemove={() =>
-              void runPluginAction(detailPlugin.id, () =>
-                pluginApi!.registry.remove({
-                  pluginId: detailPlugin.id,
-                  deleteData: false,
-                })
-              )
-            }
-            busy={busyPluginId === detailPlugin.id}
-            onSkillClick={(skill) => {
-              const full = skills.find((s) => s.name === skill.name);
-              if (full) {
-                setDetailPluginId(null);
-                setSelectedSkill(full);
-              }
-            }}
-          />
-        </div>
-      </div>
+          }}
+        />
+      </PageFrame>
     );
   }
 
   // ── Skill detail view ──
   if (selectedSkill) {
     return (
-      <div className="settings-page-content">
-        <div className="settings-content">
-          <SkillDetailPanel
-            skill={selectedSkill}
-            onBack={() => setSelectedSkill(null)}
-            onToggleEnabled={handleToggleSkill}
-          />
-        </div>
-      </div>
+      <PageFrame>
+        <SkillDetailPanel
+          skill={selectedSkill}
+          onBack={() => setSelectedSkill(null)}
+          onToggleEnabled={handleToggleSkill}
+        />
+      </PageFrame>
     );
   }
 
@@ -844,272 +865,225 @@ export function ExtensionsPage() {
     pluginsLoading && connectionsLoading && mcpLoading && skillsLoading;
 
   return (
-    <div className="settings-page-content">
-      <div className="settings-content">
-        {/* Header */}
-        <SettingsSection
-          title={t("settings.extensions" as never)}
-          description={t("settings.extensions.description" as never)}
-          action={
-            <div className="flex items-center gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setMarketplaceOpen(true)}
-              >
-                <PlugIcon size={14} />
-                {t("marketplace.title" as never)}
-              </Button>
-            </div>
-          }
-        >
-
-        {/* Tabs + search + action */}
-        <div className="flex items-center justify-between gap-4 mb-4">
-          <ExtensionsTabs
-            active={activeTab}
-            onChange={setActiveTab}
-            counts={counts}
-          />
-          <div className="flex items-center gap-2">
-            {activeTab === "mcp" && (
-              <Button variant="primary" size="sm" onClick={() => setMarketplaceOpen(true)}>
-                <PlusIcon size={14} />
-                {t("extensions.mcp.addServer")}
-              </Button>
-            )}
-            {activeTab === "connections" && (
-              <Button variant="secondary" size="sm" onClick={() => setMarketplaceOpen(true)}>
-                <PlugIcon size={14} />
-                {t("marketplace.title")}
-              </Button>
-            )}
-            {activeTab === "skills" && (
-              <div className="relative" ref={skillMenuRef}>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => setSkillMenuOpen((prev) => !prev)}
-                >
-                  <PlusIcon size={14} />
-                  {t("extensions.skills.addSkill")}
-                </Button>
-                {skillMenuOpen && (
-                  <div
-                    className="absolute right-0 top-full mt-1 w-56 rounded-[10px] shadow-lg border p-1 z-[100]"
-                    style={{
-                      backgroundColor: "var(--main-bg)",
-                      borderColor: "var(--border)",
-                      boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
-                    }}
-                  >
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        void handleCreatePlugin();
-                        setSkillMenuOpen(false);
-                      }}
-                      className="w-full flex items-center justify-start gap-2.5 px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
-                    >
-                      <span style={{ color: "var(--muted)" }}>
-                        <ChatCircleIcon size={14} />
-                      </span>
-                      <span style={{ color: "var(--foreground)" }}>
-                        {t("extensions.skills.createInChat")}
-                      </span>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setSkillUploadOpen(true);
-                        setSkillMenuOpen(false);
-                      }}
-                      className="w-full flex items-center justify-start gap-2.5 px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
-                    >
-                      <span style={{ color: "var(--muted)" }}>
-                        <FileIcon size={14} />
-                      </span>
-                      <span style={{ color: "var(--foreground)" }}>
-                        {t("extensions.skills.uploadSkill")}
-                      </span>
-                    </Button>
-                  </div>
-                )}
-              </div>
-            )}
+    <PageFrame>
+      <PageHeader
+        title={t("settings.extensions" as never)}
+        subtitle={t("settings.extensions.description" as never)}
+        actions={
+          <>
             {uploadSuccess && (
               <span className="text-xs text-emerald-600">{uploadSuccess}</span>
             )}
-            <div className="w-64">
-              <Input
-                type="search"
-                placeholder={searchPlaceholder}
-                value={searchByTab[activeTab]}
-                onChange={(e) =>
-                  setSearchByTab((prev) => ({
-                    ...prev,
-                    [activeTab]: e.target.value,
-                  }))
-                }
-                size="sm"
-              />
-            </div>
-          </div>
+            {activeTab === "installed" && (
+              <>
+                <div className="w-64">
+                  <Input
+                    type="search"
+                    placeholder={searchPlaceholder}
+                    value={searchByTab.installed}
+                    onChange={(e) =>
+                      setSearchByTab((prev) => ({
+                        ...prev,
+                        installed: e.target.value,
+                      }))
+                    }
+                    size="sm"
+                  />
+                </div>
+                <div className="relative" ref={skillMenuRef}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setSkillMenuOpen((prev) => !prev)}
+                  >
+                    <PlusIcon size={14} />
+                    {t("extensions.skills.addSkill")}
+                  </Button>
+                  {skillMenuOpen && (
+                    <div
+                      className="absolute right-0 top-full mt-1 w-56 rounded-[10px] shadow-lg border p-1 z-[100]"
+                      style={{
+                        backgroundColor: "var(--main-bg)",
+                        borderColor: "var(--border)",
+                        boxShadow: "0 4px 20px rgba(0,0,0,0.5)",
+                      }}
+                    >
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          void handleCreatePlugin();
+                          setSkillMenuOpen(false);
+                        }}
+                        className="w-full flex items-center justify-start gap-2.5 px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
+                      >
+                        <span style={{ color: "var(--muted)" }}>
+                          <ChatCircleIcon size={14} />
+                        </span>
+                        <span style={{ color: "var(--foreground)" }}>
+                          {t("extensions.skills.createInChat")}
+                        </span>
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSkillUploadOpen(true);
+                          setSkillMenuOpen(false);
+                        }}
+                        className="w-full flex items-center justify-start gap-2.5 px-2.5 py-1.5 text-[12.5px] transition-colors rounded-md hover:bg-[var(--surface-hover)]"
+                      >
+                        <span style={{ color: "var(--muted)" }}>
+                          <FileIcon size={14} />
+                        </span>
+                        <span style={{ color: "var(--foreground)" }}>
+                          {t("extensions.skills.uploadSkill")}
+                        </span>
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </>
+        }
+      />
+
+      <PageTabs
+        variant="pill"
+        tabs={[
+          {
+            id: "marketplace",
+            label: (
+              <span className="inline-flex items-center gap-2">
+                <SquaresFourIcon size={16} />
+                {t("extensions.tabs.marketplace")}
+              </span>
+            ),
+            count: counts.marketplace,
+          },
+          {
+            id: "installed",
+            label: (
+              <span className="inline-flex items-center gap-2">
+                <CubeIcon size={16} />
+                {t("extensions.tabs.installed")}
+              </span>
+            ),
+            count: counts.installed,
+          },
+        ]}
+        active={activeTab}
+        onChange={setActiveTab}
+      />
+
+      {/* Error banner */}
+      {(pluginsError || connectionsError || skillsError) && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-4 py-2 text-xs text-amber-600">
+          {pluginsError || connectionsError || skillsError}
         </div>
+      )}
 
-        {/* Error banner */}
-        {(pluginsError || connectionsError || skillsError) && (
-          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/[0.05] px-4 py-2 text-xs text-amber-600">
-            {pluginsError || connectionsError || skillsError}
-          </div>
-        )}
+      {/* Loading state */}
+      {isLoading && (
+        <div className="py-12 text-center text-sm text-muted-foreground">
+          {t("extensions.loading")}
+        </div>
+      )}
 
-        {/* Loading state */}
-        {isLoading && (
-          <div className="py-12 text-center text-sm text-muted-foreground">
-            {t("extensions.loading")}
-          </div>
-        )}
-
-        {/* Sub-pages */}
-        {!isLoading && activeTab === "plugins" && (
-          <PluginsSubPage
-            installed={installed}
-            catalog={catalog}
-            busyPluginId={busyPluginId}
-            searchQuery={searchByTab.plugins}
-            onPluginClick={(id) => setDetailPluginId(id)}
-            onEnable={(id) =>
-              void runPluginAction(id, () => pluginApi!.registry.enable(id))
-            }
-            onDisable={(id) =>
-              void runPluginAction(id, () => pluginApi!.registry.disable(id))
-            }
-            onRemove={(id) =>
-              void runPluginAction(id, () =>
-                pluginApi!.registry.remove({ pluginId: id, deleteData: false })
-              )
-            }
-            onCreatePlugin={handleCreatePlugin}
-          />
-        )}
-
-        {!isLoading && activeTab === "connections" && (
-          <ConnectionsSubPage
-            connections={connections}
-            providers={connectionProviders}
-            busyProvider={busyProvider}
-            searchQuery={searchByTab.connections}
-            onConnect={requestConnection}
-            onConfigure={(provider) => {
-              setConnectionSetupError(null);
-              setConnectionSetupProvider(provider);
-            }}
-            onDisconnect={handleDisconnect}          />
-        )}
-
-        {!isLoading && activeTab === "mcp" && (
-          <MCPSubPage
-            servers={mcpServers}
-            pluginMCPs={pluginMCPs}
-            searchQuery={searchByTab.mcp}
-            onAdd={() => {
-              // MCP add/edit dialog delegation: open marketplace as a
-              // stand-in until the legacy dialog is extracted.
-              setMarketplaceOpen(true);
-            }}
-            onEdit={() => {
-              // Similarly delegated.
-            }}
-            onDelete={(name) => void handleMcpDelete(name)}
-            onToggleEnabled={(server) => void handleMcpToggle(server)}
-          />
-        )}
-
-        {!isLoading && activeTab === "skills" && (
-          <SkillsSubPage
-            skills={skills}
-            searchQuery={searchByTab.skills}
-            onSkillClick={(skill) => {
-              const full = skills.find((s) => s.name === skill.name);
-              if (full) setSelectedSkill(full);
-            }}
-            onToggleEnabled={handleToggleSkill}
-          />
-        )}
-
-        {/* Marketplace modal */}
-        <MarketplaceModal
-          open={marketplaceOpen}
-          onClose={() => setMarketplaceOpen(false)}
+      {/* Marketplace (plugins only, full width) */}
+      {!isLoading && activeTab === "marketplace" && (
+        <MarketplacePage
           installedPlugins={installed}
           busyPluginId={busyPluginId}
-          connections={connections}
-          providers={connectionProviders}
-          onInstall={async (plugin) =>
-            runPluginAction(plugin.id, () =>
-              pluginApi!.registry.install({
-                pluginId: plugin.id,
-                // Plan 455 — disambiguate the same plugin id across
-                // marketplaces; undefined falls back to the first match.
-                marketplace: plugin.marketplace,
-              })
+          onOpenInstall={setInstallDialogPlugin}
+          onOpenDetail={(pluginId) => setDetailPluginId(pluginId)}
+        />
+      )}
+
+      {/* Installed (plugins / connections / MCP / skills, all toggleable) */}
+      {!isLoading && activeTab === "installed" && (
+        <InstalledPage
+          searchQuery={searchByTab.installed}
+          installed={installed}
+          catalog={catalog}
+          busyPluginId={busyPluginId}
+          onPluginClick={(id) => setDetailPluginId(id)}
+          onPluginToggle={(plugin, enabled) =>
+            void runPluginAction(plugin.id, () =>
+              enabled
+                ? pluginApi!.registry.enable(plugin.id)
+                : pluginApi!.registry.disable(plugin.id)
             )
           }
-          onConnectProvider={requestConnection}
-          onConfigureProvider={(provider) => {
-            setConnectionSetupError(null);
-            setConnectionSetupProvider(provider);
-            setMarketplaceOpen(false);
-          }}
-          onDisconnectConnection={handleDisconnect}
+          onPluginRemove={(id) =>
+            void runPluginAction(id, () =>
+              pluginApi!.registry.remove({ pluginId: id, deleteData: false })
+            )
+          }
+          connections={connections}
+          providers={connectionProviders}
           busyProvider={busyProvider}
+          onConnectionToggle={handleConnectionToggle}
+          mcpManual={mcpServers}
+          mcpFromPlugins={pluginMCPs}
+          onMcpToggle={(server, enabled) => void handleMcpToggle(server, enabled)}
+          onMcpPluginToggle={handleMcpPluginToggle}
+          skills={skills}
           onSkillClick={(skill) => {
             const full = skills.find((s) => s.name === skill.name);
-            if (full) {
-              setMarketplaceOpen(false);
-              setDetailPluginId(null);
-              setSelectedSkill(full);
-            }
+            if (full) setSelectedSkill(full);
           }}
+          onSkillToggle={handleToggleSkill}
         />
-        <OAuthClientSetupDialog
-          provider={connectionSetupProvider}
-          busy={busyProvider === connectionSetupProvider?.id}
-          error={connectionSetupError}
-          onClose={() => {
-            if (!busyProvider) setConnectionSetupProvider(null);
-          }}
-          onSave={(values) => void handleConfigureProvider(values)}
-        />
-        <ManagedOAuthConnectDialog
-          provider={managedConnectionProvider}
-          busy={busyProvider === managedConnectionProvider?.id}
-          onClose={() => {
-            if (!busyProvider) setManagedConnectionProvider(null);
-          }}
-          onConfirm={() => {
-            const provider = managedConnectionProvider;
-            if (!provider) return;
-            setManagedConnectionProvider(null);
-            void handleConnect(provider.id);
-          }}
-        />
+      )}
 
-        <SkillUploadDialog
-          isOpen={skillUploadOpen}
-          onClose={() => setSkillUploadOpen(false)}
-          onUploaded={() => {
-            setUploadSuccess(t("extensions.skills.uploadSuccess"));
-            void reloadSkills();
+      {/* Install-and-connect dialog (codex-style flow) */}
+      {installDialogPlugin && (
+        <PluginInstallDialog
+          plugin={installDialogPlugin}
+          providers={connectionProviders}
+          onSuccess={() => {
+            void reloadPlugins();
+            void reloadConnections();
+            void reloadMcp();
           }}
+          onClose={() => setInstallDialogPlugin(null)}
         />
-        </SettingsSection>
-      </div>
-    </div>
+      )}
+      <OAuthClientSetupDialog
+        provider={connectionSetupProvider}
+        busy={busyProvider === connectionSetupProvider?.id}
+        error={connectionSetupError}
+        onClose={() => {
+          if (!busyProvider) setConnectionSetupProvider(null);
+        }}
+        onSave={(values) => void handleConfigureProvider(values)}
+      />
+      <ManagedOAuthConnectDialog
+        provider={managedConnectionProvider}
+        busy={busyProvider === managedConnectionProvider?.id}
+        onClose={() => {
+          if (!busyProvider) setManagedConnectionProvider(null);
+        }}
+        onConfirm={() => {
+          const provider = managedConnectionProvider;
+          if (!provider) return;
+          setManagedConnectionProvider(null);
+          void handleConnect(provider.id);
+        }}
+      />
+
+      <SkillUploadDialog
+        isOpen={skillUploadOpen}
+        onClose={() => setSkillUploadOpen(false)}
+        onUploaded={() => {
+          setUploadSuccess(t("extensions.skills.uploadSuccess"));
+          void reloadSkills();
+        }}
+      />
+    </PageFrame>
   );
 }

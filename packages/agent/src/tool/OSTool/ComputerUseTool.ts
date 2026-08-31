@@ -1,10 +1,11 @@
 /**
- * ComputerUseTool.ts — single tool + 10-action enum (plan 454 §5 Task B).
+ * ComputerUseTool.ts — single tool + 9-action enum (plan 454 §5 Task B).
  *
  * Wires the @duya/computer-use DesktopBackend into the agent tool
  * layer. The tool name is `computer_use`; the schema is a discriminated
- * union over 10 actions (capture / click / type / key / scroll / drag /
- * window_switch / list_apps / set_value / wait).
+ * union over 9 actions (capture / click / type / key / scroll / drag /
+ * set_value / wait / zoom). `window_switch` / `list_apps` were removed
+ * (user decision 2026-08-29) — targeting is pure vision + click.
  *
  * IPC contract:
  *   - All invocations go through the `computer-use:execute` IPC channel.
@@ -27,6 +28,7 @@
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
 import type { ToolExecutor } from '../registry.js';
+import { randomUUID } from 'node:crypto';
 import {
   COMPUTER_USE_TOOL_NAME,
   COMPUTER_USE_ACTIONS,
@@ -36,34 +38,27 @@ import {
 import { computerUseInputSchema } from './schema.js';
 
 /**
- * Tool definition. The LLM-facing description covers all 10 actions
- * via the discriminated union — keeping the description short is
- * critical because the LLM re-reads it every turn.
+ * Tool definition. Codex-skill style description: short imperative
+ * workflow + hard rules. The LLM re-reads this every turn, so it
+ * stays compact — the long-form operating manual lives in the
+ * Computer Use mode system prompt (computer-use-mode.ts).
  */
 export const definition: Tool = {
   name: COMPUTER_USE_TOOL_NAME,
   description:
-    'Drive the host operating system desktop directly. ' +
-    'Pick an `action` to dispatch:\n' +
-    '  - capture: screenshot of the screen (set somMode=true to overlay numbered element indexes)\n' +
-    '  - click: click at element index (preferred) or x/y coords. Set count=double/triple for word/line selection\n' +
-    '  - type: type text into the currently focused field\n' +
-    '  - key: press a single key with optional modifiers (ctrl/alt/shift/meta)\n' +
-    '  - scroll: scroll the mouse wheel (direction + amount 1..100)\n' +
-    '  - drag: drag from one element/coord to another\n' +
-    '  - window_switch: focus a window by title or processName\n' +
-    '  - list_apps: enumerate visible apps\n' +
-    '  - set_value: replace the value in the focused field\n' +
-    '  - wait: sleep ms milliseconds\n' +
-    '  - zoom: capture screen with SOM overlay restricted to a region (x, y, w, h). Use to inspect small UI areas without losing full-screen context.\n\n' +
-    'Best practice:\n' +
-    '  1. capture(somMode=true) — see what the user is looking at\n' +
-    '  2. click(element=N) — target the labeled bbox, not pixel coords\n' +
-    '  3. capture again — verify the action took effect\n\n' +
-    'Password fields and sensitive content are NEVER typed into (refused ' +
-    'by the OSContextBridge safety gate). Destructive actions (click, ' +
-    'window_switch, drag, set_value) require a 3-second user ' +
-    'confirmation timeout in the UI.',
+    'Drive the host OS desktop: screenshot, mouse, keyboard.\n' +
+    'Actions: capture (somMode=true adds numbered SOM markers) | click | type | key | scroll | drag | set_value | wait | zoom (crop a region for close inspection).\n\n' +
+    'Workflow:\n' +
+    '  1. capture(somMode=true) — see the full screen\n' +
+    '  2. zoom(x,y,w,h) — when text/buttons are small; coords it returns are relative to the crop\n' +
+    '  3. click(x,y) — one state-changing step at a time\n' +
+    '  4. capture again — verify the result before the next step\n\n' +
+    'Rules:\n' +
+    '  - x/y are pixels in the LAST image you saw (full screen or zoom crop); the backend maps them to screen space\n' +
+    '  - never guess coordinates from memory — re-capture if the screen may have changed\n' +
+    '  - wait 1-3s after launching apps or opening menus before re-capturing\n' +
+    '  - APP_BLOCKED / REDACTED_FIELD / BLOCKED / USER_REJECTED refusals are policy: stop and tell the user, do not retry variations\n' +
+    '  - clicking, dragging and set_value pop a 3s user confirmation; a timeout cancels the action',
   input_schema: {
     type: 'object',
     properties: {
@@ -115,8 +110,6 @@ export const definition: Tool = {
       w: { type: 'number', description: 'zoom: region width' },
       h: { type: 'number', description: 'zoom: region height' },
       delayMs: { type: 'number', description: 'type/set_value: per-keystroke delay' },
-      title: { type: 'string', description: 'window_switch: window title substring' },
-      processName: { type: 'string', description: 'window_switch: process name substring' },
       timeoutMs: { type: 'number', description: 'max wait for IPC round-trip' },
     },
     required: ['action'],
@@ -176,7 +169,7 @@ export const executor: ToolExecutor = {
     const parsed = computerUseInputSchema.safeParse(input);
     if (!parsed.success) {
       return {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: toolName,
         result: JSON.stringify({
           success: false,
@@ -197,7 +190,7 @@ export const executor: ToolExecutor = {
     // 2. Check IPC availability.
     if (!context?.ipcRequest) {
       return {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: toolName,
         result: JSON.stringify({
           success: false,
@@ -229,7 +222,7 @@ export const executor: ToolExecutor = {
           (response.error?.code as ComputerUseErrorCode | undefined) ??
           ComputerUseErrorCode.UNKNOWN;
         return {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           name: toolName,
           result: JSON.stringify({
             success: false,
@@ -284,7 +277,7 @@ export const executor: ToolExecutor = {
       }
 
       return {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: toolName,
         result: JSON.stringify(envelope),
         images,
@@ -292,7 +285,7 @@ export const executor: ToolExecutor = {
       };
     } catch (err) {
       return {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         name: toolName,
         result: JSON.stringify({
           success: false,

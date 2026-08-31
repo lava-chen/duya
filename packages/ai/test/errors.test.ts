@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { APIErrorType, classifyError, isRetryableError, createLLMAPIError } from '../src/utils/errors.js';
+import {
+  APIErrorType,
+  classifyError,
+  isRetryableError,
+  createLLMAPIError,
+  extractProviderErrorMessage,
+} from '../src/utils/errors.js';
 
 describe('classifyError', () => {
   it('classifies 429 as rate limit', () => {
@@ -16,6 +22,38 @@ describe('classifyError', () => {
     const llmErr = createLLMAPIError(new Error('boom'));
     expect(llmErr.name).toBe('LLMAPIError');
     expect(llmErr.isRetryable).toBe(false);
+  });
+
+  // Plan 462: billing shortfall reuses 429 but must NOT be retried — the
+  // balance only recovers when the user tops up.
+  describe('insufficient balance (Plan 462)', () => {
+    const cases: Array<[string, unknown]> = [
+      [
+        'zhipu GLM JSON-wrapped 429',
+        Object.assign(new Error('429 {"type":"error","error":{"type":"rate_limit_error","code":"1113","message":"[1113][余额不足或无可用资源包,请充值。][20260830103053d5cdf3ab34bf42fc]"}}'), { status: 429 }),
+      ],
+      ['plain Chinese message', new Error('账户余额不足，请充值')],
+      ['english message', new Error('insufficient balance, please recharge')],
+      ['resource pack wording', new Error('no available resource pack')],
+    ];
+
+    for (const [name, err] of cases) {
+      it(`classifies ${name} as non-retryable INSUFFICIENT_BALANCE`, () => {
+        expect(classifyError(err)).toBe(APIErrorType.INSUFFICIENT_BALANCE);
+        expect(isRetryableError(err)).toBe(false);
+      });
+    }
+
+    it('extracts the provider wording from a status-prefixed JSON body', () => {
+      const err = new Error('429 {"type":"error","error":{"type":"rate_limit_error","code":"1113","message":"[1113][余额不足或无可用资源包,请充值。][20260830103053d5cdf3ab34bf42fc]"}}');
+      // Provider wording kept verbatim (half-width comma included) — only the
+      // [code] / [requestId] bracket noise is removed.
+      expect(extractProviderErrorMessage(err)).toBe('余额不足或无可用资源包,请充值。');
+    });
+
+    it('returns undefined when the message has nothing to extract', () => {
+      expect(extractProviderErrorMessage(new Error('rate limited'))).toBeUndefined();
+    });
   });
 
   // Plan 439: status-less transport-level stream deaths must be retryable.

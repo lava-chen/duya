@@ -943,7 +943,10 @@ const { text: mainText, pastedContents, refAttachments } = useMemo(() => {
           {isEditing ? (
             <div
               className="rounded-2xl rounded-tr-sm border overflow-hidden transition-all duration-200"
-              style={{ backgroundColor: 'var(--surface-solid)', borderColor: 'var(--border)', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}
+              /* Plan 471 v11: drop the drop shadow to match the
+                 sidebar popover cleanup — keep only border + fill, same
+                 thin-card feel as the @-mention popover elsewhere. */
+              style={{ backgroundColor: 'var(--command-menu-bg)', borderColor: 'var(--command-menu-border)' }}
             >
               <textarea
                 value={editText}

@@ -22,7 +22,11 @@ import { AgentModeSelector, getProfileIdForMode } from './AgentModeSelector';
 import { listCustomAgents } from '@/lib/agent-profile-ipc';
 import { SessionSelector } from '@/components/home/SessionSelector';
 import { InputDialog } from '@/components/ui/InputDialog';
+import { updateThreadIPC } from '@/lib/ipc-client';
 import type { FileAttachment } from '@/types/message';
+
+/** Composer permission selector mode (Ask / Auto / Bypass), mirrors ChatView. */
+type PermissionModeUi = 'ask' | 'auto' | 'bypass';
 
 interface NewChatViewProps {
   onSendMessage: (
@@ -34,6 +38,9 @@ interface NewChatViewProps {
     mode?: string,
     effort?: string,
     displayContent?: string,
+    conductorMode?: boolean,
+    queuedMailboxId?: string,
+    permissionMode?: 'ask' | 'auto' | 'bypass',
   ) => void;
 }
 
@@ -57,6 +64,9 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
   const [sessionModel, setSessionModel] = useState<string>('');
   const [providerId, setProviderId] = useState<string>('');
   const [agentProfileId, setAgentProfileId] = useState<string | null>(getProfileIdForMode('main'));
+  // Permission mode picked in the composer; persisted to the session row on
+  // creation and passed along on the first send as a per-turn override.
+  const [permissionMode, setPermissionMode] = useState<PermissionModeUi>('auto');
   const [selectedProject, setSelectedProject] = useState<{ workingDirectory: string; projectName: string } | null>(null);
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   // Remember the last-used thinking effort so it carries over to new sessions.
@@ -258,6 +268,9 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
       content: string,
       files?: FileAttachment[],
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+      mode?: string,
+      displayContent?: string,
+      conductorMode?: boolean,
     ) => {
       if (!content.trim() && (files?.length ?? 0) === 0) return;
       if (isSending) return;
@@ -325,6 +338,13 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         });
         if (!thread) return;
 
+        // Persist the composer's permission choice into the session row so
+        // ChatView's selector restores it and later turns keep using it.
+        const permissionProfile = permissionMode === 'bypass' ? 'full_access'
+          : permissionMode === 'ask' ? 'default'
+          : 'auto';
+        updateThreadIPC(thread.id, { permissionProfile }).catch(console.error);
+
         // Draft consumed — clear it now that a real thread exists.
         clearNewChatDraft();
         // Wait for the session switch to fully settle (it force-reloads the
@@ -339,7 +359,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, undefined, effort);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorMode, undefined, permissionMode);
           });
         });
       } catch (error) {
@@ -348,7 +368,7 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
         setIsSending(false);
       }
     },
-    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId, effort],
+    [selectedProject, createThread, setActiveThread, clearNewChatDraft, parseModelName, resolveDefaultModelSync, isSending, agentProfileId, effort, permissionMode],
   );
 
   return (
@@ -372,6 +392,8 @@ export function NewChatView({ onSendMessage }: NewChatViewProps) {
               onModelChange={handleModelChange}
               effort={effort}
               onEffortChange={setEffort}
+              permissionMode={permissionMode}
+              onPermissionModeChange={setPermissionMode}
               placeholder={t('chat.describeWhatToBuild')}
               popoverPlacement="bottom"
               draftMode

@@ -30,6 +30,8 @@ export type AgentToRendererMessage =
   | { type: 'chat:text'; content: string }
   | { type: 'chat:thinking'; content: string }
   | { type: 'chat:tool_use_started'; id: string; name: string; input: unknown }
+  /** Plan 461: incremental tool-call argument fragment (raw JSON slice). */
+  | { type: 'chat:tool_use_delta'; id: string; name: string; delta: string }
   | { type: 'chat:tool_use'; id: string; name: string; input: unknown }
   | { type: 'chat:tool_result'; id: string; result: unknown; error?: string; duration_ms?: number; metadata?: unknown }
   | { type: 'chat:tool_progress'; toolUseId: string; percent: number; stage: string }
@@ -37,7 +39,11 @@ export type AgentToRendererMessage =
   | { type: 'chat:agent_progress'; agentEventType: string; data?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: string; duration?: number; agentId?: string; agentType?: string; agentName?: string; agentDescription?: string; sessionId?: string; agentSessionId?: string }
   | { type: 'chat:permission'; request: PermissionRequestData }
   | { type: 'chat:done'; finalContent?: string }
-  | { type: 'chat:error'; message: string }
+  | { type: 'chat:error'; message: string; code?: string }
+  /** Plan 462: the LLM transport is retrying after a transient failure.
+   *  `message` carries the provider's own wording (e.g. "余额不足，请充值")
+   *  so the UI can explain why it is reconnecting. */
+  | { type: 'chat:retry'; attempt: number; maxAttempts: number; delayMs: number; message?: string; errorType?: string; statusCode?: number }
   | { type: 'chat:status'; message: string }
   | { type: 'chat:init_meta'; streamId?: string; generation?: number }
   | { type: 'chat:db_persisted'; success: boolean; sessionId: string; messageCount: number; reason?: string };

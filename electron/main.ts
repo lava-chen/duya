@@ -4,7 +4,7 @@ import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
 import * as fs from 'fs';
 
-import { registerDbHandlers, registerConductorHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers } from './ipc/index';
+import { registerDbHandlers, registerConductorHandlers, registerSidebarSectionsHandlers, registerMailboxHandlers, registerMemoryListHandlers, registerMemorySystemLogHandlers, registerMemoryRagRebuildHandler, registerMemoryWakeupHandlers, registerComputerUseHandlers } from './ipc/index';
 import { initDatabaseFromBoot, getDatabase, getSqliteCtor } from './db/connection';
 import { initCoreDatabase } from './db/core-connection';
 import { registerAgentHandlers } from './agents/agent-communicator';
@@ -48,11 +48,11 @@ import { registerSkillsHandlers } from './ipc/skills-handlers';
 import { registerFilesHandlers } from './ipc/files-handlers';
 import { registerReferencesHandlers } from './ipc/references-handlers';
 import { registerLoggerHandlers } from './ipc/logger-handlers';
-import { syncBuiltinPlugins } from './plugins/cache/builtin-sync.js';
 import { ensureOfficialMarketplace, syncAllMarketplaces } from './plugins/marketplace/manager';
 import { registerUpdaterHandlers } from './ipc/updater-handlers';
 import { registerAgentServerHandlers } from './ipc/agent-server-handlers';
 import { registerPluginHandlers } from './ipc/plugin-handlers';
+import { reconcilePluginAppDeclarations } from './services/app-connections/declarative/reconcile';
 import { registerAppConnectionHandlers } from './ipc/app-connection-handlers';
 import { registerCapabilityManagementHandlers } from './ipc/capability-management-handlers';
 import { registerTerminalHandlers } from './ipc/terminal-handlers';
@@ -249,6 +249,7 @@ if (gotTheLock) {
       logger.error('Database initialization failed', undefined, { error: dbResult.error }, 'Main');
       registerDbHandlers();
       registerConductorHandlers();
+      registerSidebarSectionsHandlers();
       registerMailboxHandlers();
       registerAgentHandlers();
       registerNetHandlers();
@@ -268,6 +269,7 @@ if (gotTheLock) {
 
     registerDbHandlers();
     registerConductorHandlers();
+    registerSidebarSectionsHandlers();
 
     // Plan 454 follow-up: register the DesktopBackend singleton so
     // electron/ipc/computer-use.ts can dispatch actions. The init
@@ -733,6 +735,16 @@ if (gotTheLock) {
         const url = new URL(request.url);
         let filePath = decodeURIComponent(url.pathname);
 
+        // Windows drive-letter recovery: Chromium normalizes a generated
+        // `duya-file:///C:/...` (three slashes, drive in the pathname) into
+        // `duya-file://c/...` (drive promoted to the URL host, colon dropped)
+        // because the scheme is registered `standard`. When the host is a
+        // single letter, it is the drive — put it back in front of the
+        // pathname so the drive-normalization below can restore `C:\...`.
+        if (process.platform === 'win32' && /^[a-zA-Z]$/.test(url.host || '')) {
+          filePath = `/${url.host}:${filePath}`;
+        }
+
         // Windows absolute paths may arrive as `/e:/...` (drive + colon) or
         // `/e/...` (git-bash/WSL style, drive letter without a colon). Normalize
         // both to `e:/...` so `readFile` resolves from the drive root. Genuine
@@ -1001,23 +1013,6 @@ registerUpdaterHandlers();
 registerAgentServerHandlers();
 registerDuyaLinkHandlers();
 // ============================================================
-// Step 4.5a: Sync builtin plugins into ~/.duya/plugins/cache/builtin/
-//
-// Idempotent, synchronous, fast (small JSON+MD+YAML assets). Must run
-// before registerPluginHandlers() so the first catalog read sees the
-// synced builtin roots. Failures are non-fatal — the catalog tolerates
-// an empty builtin set.
-// ============================================================
-try {
-  syncBuiltinPlugins();
-} catch (err) {
-  logger.warn(
-    'Builtin plugin sync failed; catalog may be missing builtin entries',
-    { error: err instanceof Error ? err.message : String(err) },
-    'Main',
-  );
-}
-// ============================================================
 // Step 4.5b: Seed + sync plugin marketplaces (Plan 455).
 //
 // Seeding is synchronous and offline — it only writes the default
@@ -1047,6 +1042,17 @@ try {
 }
 registerPluginHandlers();
 registerAppConnectionHandlers();
+// Plan 460: register connector declarations from enabled plugins'
+// `.app.json` files (idempotent; safe to run before any connection exists).
+try {
+  reconcilePluginAppDeclarations();
+} catch (err) {
+  logger.warn(
+    'Plugin connector declaration reconcile failed (non-fatal)',
+    { error: err instanceof Error ? err.message : String(err) },
+    'Main',
+  );
+}
 registerCapabilityManagementHandlers();
 registerImportHandlers();
 registerBrowserWebviewHandlers();

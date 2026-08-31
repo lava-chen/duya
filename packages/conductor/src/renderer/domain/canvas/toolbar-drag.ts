@@ -23,8 +23,6 @@ export function getCanvasToolDragPayload(toolId: string): CanvasToolDragPayload 
           shape: "rect",
           shapePreset: "filled",
           color: "yellow",
-          bgColor: "#F4B566",
-          borderStyle: { color: "#E98436", width: 1, style: "solid" },
         },
       };
     case "link":

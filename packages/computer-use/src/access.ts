@@ -162,21 +162,44 @@ export function checkAccess(
     };
   }
 
-  // When we have no candidate to test (no foreground app info),
-  // refuse by default — better safe than sorry. The renderer
-  // can still see the agent is operating, but the dispatcher
-  // shouldn't blindly allow actions on unknown apps.
+  // Compute the default-access decision up front so we can fall back
+  // to it when the OS context doesn't have a foreground app to test
+  // against (daemon not running, headless CI, etc.). The previous
+  // implementation refused unconditionally when candidates was empty,
+  // which contradicted the documented "default_access: allow" behavior
+  // in electron/ipc/computer-use.ts::getAccessPolicy and made the
+  // feature unusable in dev / first-run scenarios where the daemon
+  // hadn't been started yet.
+  const defaultAccess: AccessDecision = policy?.default_access ?? 'deny';
+
+  // When we have no candidate to test, fall back to default_access:
+  //   - default_access = "allow"  → permit (user opted into permissive)
+  //   - default_access = "deny"   → refuse (user opted into strict)
+  // This matches the user's mental model: "denied_apps is the only
+  // blocker" when running permissive; "must match allowed_apps" when
+  // running strict.
   if (candidates.length === 0) {
+    if (defaultAccess === 'allow') {
+      return {
+        allowed: true,
+        code: 'ALLOWED_BY_DEFAULT',
+        reason:
+          'No foreground app information available; permitted by ' +
+          'default_access="allow". Set default_access="deny" + ' +
+          'allowed_apps=[...] to require an explicit allow-list.',
+      };
+    }
     return {
       allowed: false,
       code: 'DENIED_BY_NO_APP',
       reason:
-        'No foreground app information available; cannot evaluate access policy. ' +
-        'Set [computer_use] allowed_apps to permit specific apps.',
+        'No foreground app information available; cannot evaluate ' +
+        'access policy. Set [computer_use] default_access="allow" ' +
+        'to permit without per-app checks, or add foreground app ' +
+        'patterns to allowed_apps.',
     };
   }
 
-  const defaultAccess: AccessDecision = policy?.default_access ?? 'deny';
   const allowedHit = firstMatch(policy?.allowed_apps, candidates);
   if (allowedHit !== undefined) {
     return {

@@ -31,6 +31,17 @@ export enum APIErrorType {
 
   // Usage / quota errors
   USAGE_LIMIT = 'usage_limit',
+  /**
+   * Account has no money / no resource pack left (Plan 462).
+   *
+   * Providers frequently reuse HTTP 429 for this even though it is not a
+   * transient rate limit — e.g. Zhipu GLM returns
+   * `429 {"error":{"code":"1113","message":"[1113][余额不足或无可用资源包,请充值。]"}}`.
+   * Retrying never helps: the balance only changes when the user pays. Keeping
+   * it distinct from USAGE_LIMIT lets the UI render the provider's own wording
+   * ("请充值") instead of a generic "usage limit reached".
+   */
+  INSUFFICIENT_BALANCE = 'insufficient_balance',
   PROVIDER_SAFETY_FILTER = 'provider_safety_filter',
 
   // Other
@@ -135,6 +146,122 @@ const TRANSPORT_STREAM_ERROR_PATTERNS = [
   'stream ended without finish_reason',                    // openai-completions premature-end guard
   'ended before message_stop',                             // anthropic-protocol premature end
 ];
+
+/**
+ * Billing-shortfall markers (Plan 462).
+ *
+ * Several Chinese providers (Zhipu GLM, Moonshot, DashScope…) answer with
+ * HTTP 429 when the account is out of money or out of resource packs. A 429
+ * is normally a transient rate limit, so without these markers the retry loop
+ * burns all attempts on an error that can only be fixed by paying.
+ *
+ * Matched case-insensitively against the raw error message (which includes
+ * the response body), so both JSON-wrapped and plain-text forms are covered.
+ */
+const BILLING_SHORTFALL_PATTERNS = [
+  '余额不足',
+  '无可用资源包',
+  '可用额度不足',
+  '账户余额',
+  '请充值',
+  '欠费',
+  'insufficient balance',
+  'insufficient_balance',
+  'balance is not enough',
+  'balance not enough',
+  'out of balance',
+  'no available resource pack',
+  'no available quota',
+  'payment required',
+  'prepaid balance',
+];
+
+/**
+ * Strip the `[code]` / `[requestId]` noise providers wrap around the real
+ * message, e.g.
+ * `[1113][余额不足或无可用资源包,请充值。][20260830103053d5cdf3ab34bf42fc]`
+ * → `余额不足或无可用资源包，请充值。`
+ */
+function stripBracketNoise(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed.startsWith('[')) return trimmed;
+
+  const groups = [...trimmed.matchAll(/\[([^\]]*)\]/g)].map((m) => m[1].trim());
+  if (groups.length === 0) return trimmed;
+
+  // Drop pure numeric error codes and hex-ish request/trace ids; keep the
+  // first remaining group — that is the human-readable sentence.
+  const meaningful = groups.filter(
+    (g) => g.length > 0 && !/^\d+$/.test(g) && !/^[0-9a-f]{16,}$/i.test(g),
+  );
+  if (meaningful.length === 0) return trimmed;
+  return meaningful[0].replace(/[，,]\s*$/, '').trim();
+}
+
+/**
+ * Extract the provider's own human-readable error message.
+ *
+ * Provider SDKs usually stringify the whole HTTP failure into
+ * `error.message`, e.g.:
+ *
+ *   429 {"type":"error","error":{"code":"1113","message":"[1113][余额不足…]"}}
+ *
+ * Showing that verbatim is unreadable. This walks past the status-code prefix,
+ * parses the JSON body, and drills into the conventional message fields, so
+ * callers can surface just `余额不足或无可用资源包，请充值。`.
+ *
+ * Returns `undefined` when nothing better than the raw message can be found.
+ */
+export function extractProviderErrorMessage(error: unknown): string | undefined {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : undefined;
+  if (!raw) return undefined;
+
+  let current = raw.trim();
+  for (let depth = 0; depth < 4; depth++) {
+    // Strip a leading HTTP status prefix ("429 ") and any JSON wrapper.
+    const body = current.replace(/^\d{3}\s+/, '');
+    if (!body.startsWith('{')) break;
+
+    let parsed: {
+      error?: { message?: string; msg?: string };
+      data?: { message?: string };
+      message?: string;
+      msg?: string;
+    };
+    try {
+      parsed = JSON.parse(body) as typeof parsed;
+    } catch {
+      break;
+    }
+
+    const next =
+      parsed.error?.message ??
+      parsed.error?.msg ??
+      parsed.message ??
+      parsed.data?.message ??
+      parsed.msg;
+    if (!next || next.trim() === current) break;
+    current = next.trim();
+  }
+
+  if (current === raw.trim()) return undefined;
+
+  const cleaned = stripBracketNoise(current);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+/**
+ * True when the message says the account is out of money / resource packs.
+ */
+export function isBillingShortfallMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return BILLING_SHORTFALL_PATTERNS.some((pattern) => lower.includes(pattern));
+}
 
 /**
  * Extract error code from error object
@@ -260,6 +387,13 @@ export function classifyError(error: unknown): APIErrorType {
       return APIErrorType.DNS_ERROR;
     }
     return APIErrorType.CONNECTION_ERROR;
+  }
+
+  // Billing shortfall (Plan 462). Checked BEFORE the status-code switch:
+  // providers reuse 429/402/403 for "out of money", and a 429 would
+  // otherwise be classified as a transient rate limit and retried 10 times.
+  if (error instanceof Error && isBillingShortfallMessage(error.message)) {
+    return APIErrorType.INSUFFICIENT_BALANCE;
   }
 
   // Check for usage / quota limit errors in message
@@ -391,6 +525,12 @@ export function isRetryableError(error: unknown): boolean {
     return false;
   }
 
+  // Out of money / out of resource packs (Plan 462). Retrying only burns the
+  // user's time — the balance never recovers on its own.
+  if (type === APIErrorType.INSUFFICIENT_BALANCE) {
+    return false;
+  }
+
   // Provider safety filters are never retryable — the same input will
   // trigger the same filter again, so retrying just wastes time and
   // confuses the user.
@@ -473,6 +613,13 @@ export function formatErrorForDisplay(error: unknown): string {
       return 'Rate limit exceeded. Please wait a moment before trying again.';
     case APIErrorType.USAGE_LIMIT:
       return 'Usage limit reached. Please switch to a different model or wait for the quota to reset.';
+    case APIErrorType.INSUFFICIENT_BALANCE:
+      // Plan 462: show what the provider actually said ("余额不足，请充值")
+      // rather than a generic sentence — the user needs to know to top up.
+      return (
+        extractProviderErrorMessage(llmError.rawError ?? error) ??
+        'Account balance is insufficient. Please top up your provider account.'
+      );
     case APIErrorType.SERVER_OVERLOAD:
       return 'Server is overloaded. Please try again in a few moments.';
     case APIErrorType.AUTH_ERROR:
@@ -504,6 +651,8 @@ export function createErrorEvent(error: unknown): SSEEvent {
     code = 'rate_limit_error';
   } else if (llmError.type === APIErrorType.USAGE_LIMIT) {
     code = 'usage_limit_exceeded';
+  } else if (llmError.type === APIErrorType.INSUFFICIENT_BALANCE) {
+    code = 'insufficient_balance';
   } else if (llmError.type === APIErrorType.PROVIDER_SAFETY_FILTER) {
     code = 'provider_safety_filter';
   }
@@ -521,16 +670,36 @@ export function createErrorEvent(error: unknown): SSEEvent {
 }
 
 /**
- * Create SSE retry event for UI display
+ * Create SSE retry event for UI display.
+ *
+ * Plan 462: the notice carries the provider's own reason so the UI can render
+ * e.g. `余额不足或无可用资源包，请充值。（重新连接 1/10）` instead of an opaque
+ * "Retrying... (1/10)".
+ *
+ * `data` holds only the reason (or the legacy English fallback) — the
+ * attempt counter stays in `metadata` so each surface (Electron renderer,
+ * CLI) can compose its own localized suffix instead of inheriting a
+ * hard-coded one from this low-level package.
  */
-export function createRetryEvent(attempt: number, maxAttempts: number, delayMs: number): SSEEvent {
+export function createRetryEvent(
+  attempt: number,
+  maxAttempts: number,
+  delayMs: number,
+  reason?: string,
+  errorType?: string,
+  statusCode?: number,
+): SSEEvent {
+  const retryReason = reason?.trim();
   return {
     type: 'system',
-    data: `Retrying... (${attempt}/${maxAttempts})`,
+    data: retryReason || `Retrying... (${attempt}/${maxAttempts})`,
     metadata: {
       retryAttempt: attempt,
       maxAttempts,
       retryDelayMs: delayMs,
+      retryReason,
+      errorType,
+      statusCode,
     },
   } as SSEEvent;
 }

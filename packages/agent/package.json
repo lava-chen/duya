@@ -28,7 +28,7 @@
     }
   },
   "scripts": {
-    "clean": "node -e \"const fs=require('node:fs'); fs.rmSync('dist',{recursive:true,force:true}); fs.rmSync('tsconfig.tsbuildinfo',{force:true})\"",
+    "clean": "node -e \"require('fs').rmSync('tsconfig.tsbuildinfo',{force:true})\"",
     "build": "npm run clean && tsc --incremental",
     "dev": "tsc --watch",
     "typecheck": "tsc --noEmit",

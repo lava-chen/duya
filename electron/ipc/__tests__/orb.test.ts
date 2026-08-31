@@ -14,12 +14,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   ipcMain: {
     handle: vi.fn(),
+    on: vi.fn(),
   },
   wakeService: {
     setState: vi.fn(),
     getState: vi.fn(() => 'DORMANT' as const),
     setPosition: vi.fn(),
     collapse: vi.fn(),
+    markWakelessTurnActive: vi.fn(),
+    clearWakelessTurnActive: vi.fn(),
   },
   BrowserWindow: vi.fn(),
   app: { isPackaged: false },
@@ -45,7 +48,17 @@ vi.mock('electron', () => ({
 
 vi.mock('../../services/wake', () => ({
   getWakeService: () => mocks.wakeService,
+  // No-op: the real one dynamically imports the agent dist bundle, which
+  // unit tests don't load. Handlers only need it to be callable.
+  armOSContextBridge: () => {},
   OrbState: undefined,
+}));
+
+vi.mock('../../services/orb-wakeless-chat', () => ({
+  startWakelessChat: vi.fn(async () => ({
+    accepted: true,
+    sessionId: 'wakeless-00000000-0000-4000-8000-000000000000',
+  })),
 }));
 
 import {
@@ -213,15 +226,41 @@ describe('sendOrb* helpers', () => {
     });
   });
 
-  it('sendOrbResult routes to the orb window', () => {
+  it('sendOrbResult routes to the orb window in an active state', () => {
     const send = vi.fn();
     withWindow({ isDestroyed: () => false, webContents: { send } });
+    mocks.wakeService.getState.mockReturnValue('INPUT' as never);
     sendOrbResult({ turnId: 't1', text: 'done', finishedAt: '2026-01-01' });
     expect(send).toHaveBeenCalledWith('automation:orb:show-result', {
       turnId: 't1',
       text: 'done',
       finishedAt: '2026-01-01',
     });
+  });
+
+  it('sendOrbResult badges the ball while DORMANT (notify-result, no card)', () => {
+    const send = vi.fn();
+    withWindow({ isDestroyed: () => false, webContents: { send } });
+    mocks.wakeService.getState.mockReturnValue('DORMANT' as never);
+    sendOrbResult({ turnId: 't1', text: 'done', finishedAt: '2026-01-01' });
+    expect(send).toHaveBeenCalledWith('automation:orb:notify-result', {
+      turnId: 't1',
+      text: 'done',
+      finishedAt: '2026-01-01',
+    });
+    expect(send).not.toHaveBeenCalledWith(
+      'automation:orb:show-result',
+      expect.anything(),
+    );
+  });
+
+  it('open-result handler grows the window to RESULT', async () => {
+    const handler = mocks.ipcMain.handle.mock.calls.find(
+      (c) => c[0] === 'automation:orb:open-result',
+    )?.[1] as (() => Promise<unknown>) | undefined;
+    expect(handler).toBeDefined();
+    await expect(handler!()).resolves.toEqual({ ok: true });
+    expect(mocks.wakeService.setState).toHaveBeenCalledWith('RESULT');
   });
 
   it('sendOrbHide routes to the orb window', () => {

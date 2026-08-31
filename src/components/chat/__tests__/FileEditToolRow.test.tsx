@@ -89,6 +89,7 @@ describe('FileEditToolRow', () => {
         old_string: 'a\n',
         new_string: 'b\n',
       },
+      result: 'Successfully edited src/styles/styles.css\n\nChanged:\na\n\nTo:\nb\n',
     };
     render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
     expect(screen.getByText('Edited')).toBeTruthy();
@@ -105,6 +106,7 @@ describe('FileEditToolRow', () => {
       id: 't2',
       name: 'write',
       input: { file_path: 'src/new.ts', content: 'a\nb\nc\n' },
+      result: JSON.stringify({ file_path: 'src/new.ts', content: 'a\nb\nc\n' }),
     };
     render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
     expect(screen.getByText('Created')).toBeTruthy();
@@ -125,6 +127,23 @@ describe('FileEditToolRow', () => {
     // Expect at least one "+" or "-" to be present in the row.
     const html = document.body.innerHTML;
     expect(/[+\-]\d+/.test(html)).toBe(true);
+  });
+
+  it('auto-opens a live "writing" preview while the model is still streaming content (Plan 461)', () => {
+    const tool: ToolAction = {
+      id: 't13',
+      name: 'write',
+      input: {
+        file_path: 'src/app.ts',
+        content: 'import x from "y";\nconst a = 1;\nconst b = 2;\n', // partial content, no result yet
+      },
+    };
+    render(i18n({ children: <ToolActionsGroup tools={[tool]} flat /> }));
+    // The streaming preview header shows the live line count + writing verb.
+    expect(screen.getByText(/^3 lines$/)).toBeTruthy();
+    expect(screen.getByText(/Writing…/)).toBeTruthy();
+    // The streamed content is rendered as the additions preview.
+    expect(screen.getByText('const b = 2;')).toBeTruthy();
   });
 
   it('clicking the filename dispatches the file preview panel for source-code files', () => {

@@ -4,6 +4,7 @@ import {
   SquaresFourIcon,
 } from '@/components/icons';
 import { Button } from '@/components/ui/Button';
+import { EmptyState } from '@/components/ui/page';
 import { useTranslation } from '@/hooks/useTranslation';
 
 interface AutomationEmptyStateProps {
@@ -19,46 +20,42 @@ export function AutomationEmptyState({
 }: AutomationEmptyStateProps) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center p-8">
-      <ClockIcon size={48} className="mb-4 opacity-20" style={{ color: 'var(--muted)' }} />
+    <EmptyState
+      icon={<ClockIcon size={48} />}
+      title={t('automation.emptyTitle')}
+      description={t('automation.emptyDesc')}
+      action={
+        <div className="flex items-center gap-2 flex-wrap justify-center">
+          <Button
+            variant="primary"
+            size="md"
+            className="whitespace-nowrap"
+            onClick={onManualCreate}
+          >
+            <PlusIcon size={16} />
+            {t('automation.newAutomation')}
+          </Button>
 
-      <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text)' }}>
-        {t('automation.emptyTitle')}
-      </h2>
-      <p className="text-xs mb-6" style={{ color: 'var(--muted)' }}>
-        {t('automation.emptyDesc')}
-      </p>
+          <Button
+            variant="secondary"
+            size="md"
+            className="whitespace-nowrap"
+            onClick={onChatCreate}
+          >
+            通过对话创建
+          </Button>
 
-      <div className="flex items-center gap-2">
-        <Button
-          variant="primary"
-          size="md"
-          className="whitespace-nowrap"
-          onClick={onManualCreate}
-        >
-          <PlusIcon size={16} />
-          {t('automation.newAutomation')}
-        </Button>
-
-        <Button
-          variant="secondary"
-          size="md"
-          className="whitespace-nowrap"
-          onClick={onChatCreate}
-        >
-          通过对话创建
-        </Button>
-
-        <Button
-          variant="secondary"
-          size="md"
-          className="whitespace-nowrap"
-          onClick={onViewTemplates}
-        >
-          <SquaresFourIcon size={16} />
-          {t('automation.templates')}
-        </Button>
-      </div>
-    </div>
+          <Button
+            variant="secondary"
+            size="md"
+            className="whitespace-nowrap"
+            onClick={onViewTemplates}
+          >
+            <SquaresFourIcon size={16} />
+            {t('automation.templates')}
+          </Button>
+        </div>
+      }
+    />
   );
 }

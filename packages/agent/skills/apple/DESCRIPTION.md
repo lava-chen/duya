@@ -1,3 +1,3 @@
 ---
-description: Apple/macOS-specific skills — iMessage, Reminders, Notes, FindMy, and macOS automation. These skills only load on macOS systems.
+description: Apple ecosystem integration — Notes, Reminders, Find My, and iMessage. All bundled under the "apple" skill. Platform: macOS only (requires iCloud).
 ---

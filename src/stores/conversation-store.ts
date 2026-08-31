@@ -70,7 +70,7 @@ export type ProjectSortBy = 'priority' | 'lastActivity' | 'manual';
 export type ProjectGroupBy = 'byProject' | 'singleList';
 
 // View types for state-driven UI
-export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor';
+export type ViewType = 'home' | 'chat' | 'settings' | 'skills' | 'bridge' | 'automation' | 'agents' | 'conductor' | 'extensions';
 // Plan 205: sub-views inside the `providers` settings tab.
 // `provider-picker` lists the preset cards; `provider-edit` shows
 // the inline edit form for the chosen preset (create) or existing
@@ -259,6 +259,56 @@ function notifyThreadsChanged() {
   }
 }
 
+/**
+ * Window size used to bucket message timestamps for equality. Two user
+ * messages sent within the same window that share role + content are
+ * treated as the same logical message (id-independent). Smaller than a
+ * second so sub-second SSE timing skew never produces a false miss;
+ * larger than a second so a legitimate retry by the user seconds later
+ * is preserved as a separate entry.
+ */
+export const OPTIMISTIC_DEDUPE_WINDOW_MS = 5_000;
+
+/**
+ * Pure helper for `loadThreadMessages`'s streaming-session merge branch.
+ *
+ * Returns the merged list (DB rows + any local-only optimistic user
+ * message) plus counts for diagnostics. The DB rows win when an
+ * optimistic entry matches by (role, content, timestamp-window); the
+ * optimistic copy is dropped so the UI never renders the same user
+ * message twice (regression bug: optimistic UUIDs never match the
+ * DB-assigned UUID, so a pure id-diff let duplicates through).
+ *
+ * Assistant, system, and tool blocks are kept untouched — their
+ * dedupe lives in stream-session-manager.registerLoadedMessages.
+ *
+ * Exported for unit testing; see conversation-store.mergeInFlight.test.ts.
+ */
+export function mergeInFlightOptimisticMessages(
+  persisted: Message[],
+  local: Message[],
+): { merged: Message[]; droppedOptimistic: number; keptOptimistic: number } {
+  const bucketKey = (m: Message) => {
+    const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
+    return `${m.role}|${typeof m.content === 'string' ? m.content : 'blocks'}|${Math.round(ts / OPTIMISTIC_DEDUPE_WINDOW_MS)}`;
+  };
+  const persistedKeys = new Set(persisted.map(bucketKey));
+  const merged = [...persisted];
+  let droppedOptimistic = 0;
+  let keptOptimistic = 0;
+  for (const m of local) {
+    const isOptimisticUser =
+      m.metadata?.optimistic === true && m.role === 'user';
+    if (isOptimisticUser && persistedKeys.has(bucketKey(m))) {
+      droppedOptimistic++;
+      continue;
+    }
+    if (isOptimisticUser) keptOptimistic++;
+    merged.push(m);
+  }
+  return { merged, droppedOptimistic, keptOptimistic };
+}
+
 function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
   return messages.map((m) => ({
     id: m.id,
@@ -321,10 +371,16 @@ export const useConversationStore = create<ConversationState>()(
         set({ currentView: view, isNewChatDrafting: false });
       },
       setSettingsTab: (tab) => {
+        // Legacy ids (plugins/skills/mcp) used to funnel into the extensions
+        // page, and `extensions` itself was a settings tab before it was
+        // promoted to a top-level view. None of them are settings tabs any
+        // more, so map them to the default tab — otherwise a stale caller
+        // (or restored persisted state) lands on a pane that renders nothing.
         const legacy: Record<string, SettingsTab> = {
-          plugins: 'extensions',
-          skills: 'extensions',
-          mcp: 'extensions',
+          plugins: 'general',
+          skills: 'general',
+          mcp: 'general',
+          extensions: 'general',
         };
         set({ settingsTab: legacy[tab] ?? tab });
       },
@@ -336,7 +392,11 @@ export const useConversationStore = create<ConversationState>()(
         // Don't overwrite a still-valid snapshot if the user re-enters settings
         // from somewhere else (e.g. a settings link inside another view).
         if (currentView === 'settings') return;
-        set({ previousView: currentView, currentView: 'settings' });
+        // Leaving the lazy new-chat composer must exit draft mode (same as
+        // setCurrentView), otherwise App keeps rendering NewChatView over the
+        // settings page. The unsent draft content is kept and restored when
+        // the user clicks "new chat" again.
+        set({ previousView: currentView, currentView: 'settings', isNewChatDrafting: false });
       },
       exitSettings: () => {
         const { previousView, activeThreadId } = get();
@@ -558,12 +618,28 @@ export const useConversationStore = create<ConversationState>()(
             // the agent is still working): merge back any local in-flight
             // messages (the optimistic user message) not yet in the DB so a
             // session switch doesn't wipe them from the UI.
+            //
+            // Dedupe is by (role, content, timestamp-window) rather than by id:
+            // optimistic user messages carry a client-generated UUID
+            // (App.tsx crypto.randomUUID()), but the Agent worker may
+            // re-assign a different UUID on persistence, so an id-only
+            // diff would let the same optimistic+DB pair slip through
+            // and render the user message twice. Only user-role optimistic
+            // entries are eligible for dedupe; assistant/tool blocks are
+            // handled by registerLoadedMessages below.
             if (isStreaming && currentMessages.length > 0) {
-              const dbIds = new Set(messages.map((m) => m.id));
-              const inFlight = currentMessages.filter((m) => !dbIds.has(m.id));
-              if (inFlight.length > 0) {
-                messages = [...messages, ...inFlight];
-                console.log(`[Store] Merged ${inFlight.length} in-flight message(s) for STREAMING session: ${threadId.slice(0, 8)}`);
+              const { merged, droppedOptimistic, keptOptimistic } =
+                mergeInFlightOptimisticMessages(messages, currentMessages);
+              messages = merged;
+              if (keptOptimistic > 0) {
+                console.log(
+                  `[Store] Kept ${keptOptimistic} optimistic in-flight user message(s) for STREAMING session: ${threadId.slice(0, 8)}`,
+                );
+              }
+              if (droppedOptimistic > 0) {
+                console.log(
+                  `[Store] Dropped ${droppedOptimistic} duplicate optimistic user message(s) already in DB: ${threadId.slice(0, 8)}`,
+                );
               }
             }
             const threadData = data.thread;

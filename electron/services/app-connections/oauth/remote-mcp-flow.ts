@@ -216,7 +216,10 @@ export async function startRemoteMcpAuthorization(
     path: config.redirectPath,
     expectedState: csrfState,
     timeoutMs: deps.timeoutMs,
-    host: 'localhost',
+    // Omit `host` so the advertised redirect URI uses the same 127.0.0.1
+    // literal the server binds. Advertising `localhost` here made the browser
+    // resolve the callback independently of the bound socket, which refused
+    // the connection on dual-stack hosts and stranded the authorization.
   });
   const authProvider = new VaultOAuthProvider(
     deps.vault,

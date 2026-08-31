@@ -136,25 +136,6 @@ const dragShape = z
     },
   );
 
-const windowSwitchShape = z
-  .object({
-    action: z.literal('window_switch'),
-    title: z.string().min(1).max(256).optional(),
-    processName: z.string().min(1).max(256).optional(),
-    timeoutMs,
-  })
-  .strict()
-  .refine((v) => v.title !== undefined || v.processName !== undefined, {
-    message: 'window_switch requires `title` or `processName`',
-  });
-
-const listAppsShape = z
-  .object({
-    action: z.literal('list_apps'),
-    timeoutMs,
-  })
-  .strict();
-
 const setValueShape = z
   .object({
     action: z.literal('set_value'),
@@ -208,8 +189,6 @@ export const computerUseInputSchema = z.discriminatedUnion(
     keyShape,
     scrollShape,
     dragShape,
-    windowSwitchShape,
-    listAppsShape,
     setValueShape,
     waitShape,
     zoomShape,

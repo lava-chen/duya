@@ -23,17 +23,7 @@ export function useOrbDraggable({ enabled }: UseOrbDraggableOpts) {
     [enabled],
   );
 
-  // Track drag end to persist position via IPC
-  const onMouseUp = useCallback(() => {
-    if (!enabled) return;
-    // Get current position from screen API if needed; for now main process
-    // tracks position via Electron's move events.
-    const api = window.electronAPI?.orb;
-    api?.getPosition?.().then((pos) => {
-      // Just a sync — main already has the position from Electron events
-      void pos;
-    });
-  }, [enabled]);
-
-  return { onMouseDown, onMouseUp };
+  // Position persistence is handled by the main process via Electron's
+  // own window move events — no renderer-side bookkeeping needed.
+  return { onMouseDown };
 }

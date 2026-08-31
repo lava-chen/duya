@@ -10,6 +10,7 @@ import { WelcomeView } from "@/components/home/WelcomeView";
 import { SkillsView } from "@/components/skills/SkillsView";
 import { ChannelsView } from "@/components/bridge/ChannelsView";
 import { AutomationView } from "@/components/automation/AutomationView";
+import { ExtensionsPage } from "@/components/extensions/ExtensionsPage";
 import { ConductorView } from "@duya/conductor/renderer/components/ConductorView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { AppShell } from "@/components/layout/app-shell";
@@ -342,6 +343,12 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         displayContent,
         timestamp: now,
         attachments: files,
+        // Renderer-only flag (never persisted). conversation-store dedupes
+        // optimistic user messages against DB rows by (role, content,
+        // timestamp-window); without this flag, a forced reload during a
+        // streaming turn would render the user message twice because the
+        // optimistic UUID never matches the DB-assigned one.
+        metadata: { optimistic: true },
       };
       console.log('[App] handleSendMessage:', {
         contentLength: content.length,
@@ -477,6 +484,7 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
           {currentView === 'automation' && <AutomationView />}
           {currentView === 'conductor' && <ConductorView />}
           {currentView === 'settings' && <SettingsView />}
+          {currentView === 'extensions' && <ExtensionsPage />}
         </>
       );
     }
@@ -495,6 +503,8 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
         return <ConductorView />;
       case 'settings':
         return <SettingsView />;
+      case 'extensions':
+        return <ExtensionsPage />;
       default:
         return <WelcomeView onSelectThread={setActiveThread} onSendMessage={handleSendMessage} />;
     }

@@ -43,6 +43,7 @@ export function FileAttachmentCard({
   if (isImage && hasThumbnail) {
     return (
       <div
+        data-attachment-id={id}
         className={`group relative rounded-2xl overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
         style={{ width, height: width, ...cardBorderStyle }}
         onClick={onClick}
@@ -77,6 +78,7 @@ export function FileAttachmentCard({
   if (isPdf && hasThumbnail) {
     return (
       <div
+        data-attachment-id={id}
         className={`group relative rounded-2xl overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
         style={{ width, height: width, ...cardBorderStyle }}
         onClick={onClick}
@@ -121,6 +123,7 @@ export function FileAttachmentCard({
   // All other files (DOC, DOCX, YML, EXE, etc.): square layout with name + ext badge
   return (
     <div
+      data-attachment-id={id}
       className={`group relative flex flex-col justify-between rounded-2xl overflow-hidden flex-shrink-0 ${isClickable ? 'cursor-pointer hover:border-accent/50 hover:shadow-sm transition-all' : ''}`}
       style={{ width, height: width, backgroundColor: 'var(--bg-canvas)', ...cardBorderStyle }}
       onClick={onClick}

@@ -18,6 +18,7 @@ import { toLLMProvider } from '../../config/provider-types.js';
 import { getDatabase } from '../../ipc/db-handlers.js';
 import { killProcessTree } from '../../lib/process-cleanup.js';
 import { getPerformanceMonitor } from '../../services/performance-monitor.js';
+import { hideComputerUseOverlayForSession } from '../../services/computer-use-overlay.js';
 
 import {
   calculateMaxConcurrent,
@@ -308,6 +309,10 @@ export class AgentProcessPool {
           this.running.delete(sessionId);
           this.busySessions.delete(sessionId);
           this.providerReinitLock.delete(sessionId);
+
+          // Agent is gone — drop the computer-use control indicator if
+          // it was showing for this session (user request 2026-08-29).
+          hideComputerUseOverlayForSession(sessionId);
 
           if (!isCrash) {
             this.pendingMessages.delete(sessionId);

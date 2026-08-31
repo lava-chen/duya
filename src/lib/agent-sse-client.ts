@@ -338,6 +338,16 @@ export class AgentSSEClient {
           input: eventObj.input,
         });
         break;
+      // Plan 461: incremental tool-call argument fragment. `delta` is a raw
+      // JSON slice — the session manager accumulates it per tool_use id so
+      // rows can render partial arguments while they are still streaming.
+      case 'tool_use_delta':
+        this.dispatch('tool_use_delta', {
+          id: eventObj.id as string,
+          name: eventObj.name as string,
+          delta: (eventObj.delta as string) || '',
+        });
+        break;
       case 'tool_use':
         this.dispatch('tool_use', {
           id: eventObj.id as string,

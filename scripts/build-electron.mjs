@@ -1,6 +1,10 @@
 import { build } from 'esbuild';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM has no __dirname — derive the script directory from import.meta.url.
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 async function buildElectron() {
   // Clean dist-electron/ before every build to prevent stale artifacts
@@ -19,6 +23,17 @@ async function buildElectron() {
       'electron',
       'better-sqlite3',
       'node-pty',
+      // nut.js + its native libnut binding - the JS is plain require()
+      // but `bindings("libnut")` walks the call stack to locate the
+      // .node file relative to the calling module. Bundling breaks
+      // that lookup because the caller's __filename collapses into
+      // dist-electron/main.js. Keep them external so require() lands
+      // on the real package and bindings finds build/Release/libnut.node.
+      '@nut-tree-fork/nut-js',
+      '@nut-tree-fork/libnut',
+      '@nut-tree-fork/libnut-win32',
+      '@nut-tree-fork/libnut-linux',
+      '@nut-tree-fork/libnut-darwin',
       // Playwright dynamic requires that esbuild cannot resolve
       'chromium-bidi/lib/cjs/bidiMapper/BidiMapper',
       'chromium-bidi/lib/cjs/cdp/CdpConnection',
@@ -28,7 +43,10 @@ async function buildElectron() {
     alias: {
       // Resolve workspace plugin-core from this checkout (worktree-safe);
       // node_modules junctions would otherwise pin the primary checkout.
-      '@duya/plugin-core': path.resolve(__dirname, '../packages/plugin-core/src'),
+      // Points at the package ROOT so both the bare entry
+      // (@duya/plugin-core → src/index.ts via package.json "main") and
+      // subpath imports (@duya/plugin-core/src/...) resolve correctly.
+      '@duya/plugin-core': path.resolve(scriptDir, '../packages/plugin-core'),
     },
     // The agent bundle (and WorkerPool.ts in packages/agent) reads
     // `import.meta.url` and falls back to `__dirname` when bundled as CJS

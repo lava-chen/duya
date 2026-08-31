@@ -100,6 +100,10 @@
 
 > **落地记录（2026-08-29，Phase A/B）**
 > - 文件名定为 `.app.json`（codex `core-plugins/src/loader.rs:67` 实证，OQ1 关闭）。
+> - **schema 兼容 marketplace**：`E:\Projects\duya-marketplace` 官方插件全部使用 codex
+>   name-keyed 形态（`{ apps: { <name>: { id } } }`）——`apps` 字段改为
+>   array ∪ name-keyed map 双形态（name-keyed 归一化为引用声明，map key 作为 `name`），
+>   11 条引用全部命中内置 connector，compat 测试固化（app-schema-marketplace-compat）。
 > - brand 用 string 字面量可直接赋值的实现验证：TS 对 `string & {__brand}` 交叉类型
 >   拒绝普通 string（TS2322/TS2345），字面量需经 `asAppConnectorId`；测试字面量全部收窄。
 > - 解析修复（worktree 自洽）：root/electron tsconfig 增 `@duya/plugin-core` paths、

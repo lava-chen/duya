@@ -69,7 +69,20 @@ todo"), decompose it by content, not by tool: the todo portion becomes
 workspace-mode elements, the architecture portion becomes one
 deliverable-mode `widget/dynamic`, placed side by side in their
 respective zones (Section 2).
- 
+
+**Draw a new diagram on a fresh canvas.** A brand-new, self-contained
+diagram — a new architecture map, flowchart, timeline, roadmap, or
+comparison graphic — should usually get its **own canvas**, not be piled
+onto the current project canvas. Call `canvas_manage({ action: "create" })`
+first and give the new canvas a concise, purpose-based name (e.g.
+"订单状态机图"), then draw the diagram there. This keeps the project
+canvas's reference zone from accumulating hard-to-navigate finished
+graphics and lets the user open each diagram on its own surface. Only
+draw a new diagram on the current canvas when the user explicitly asks
+for it there, or when it directly extends a diagram already on that
+canvas. Link the new canvas back from the project canvas with a
+`native/link` card (linkType='canvas') so the structure stays navigable.
+
 **When in doubt**: requests that start with "画一个 / 讲解 / 展示 /
 说明" (draw / explain / show / illustrate) are asking for a finished
 graphic — default to deliverable mode. Requests that start with

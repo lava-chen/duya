@@ -17,6 +17,8 @@
  * so test code can construct isolated instances directly.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import { getDatabase } from '../../db/connection.js';
 import { getLogger, LogComponent } from '../../logging/logger';
 import { ConnectionStore } from './connection-store.js';
@@ -222,7 +224,7 @@ export class AppConnectionService {
     // descriptors surface after reload. Reuse any existing wecom connection id.
     const existing = this.store.listByProvider(WECOM_PROVIDER)[0];
     const conn: AppConnection = {
-      id: existing?.id ?? `wecom-${crypto.randomUUID().slice(0, 8)}`,
+      id: existing?.id ?? `wecom-${randomUUID().slice(0, 8)}`,
       provider: WECOM_PROVIDER,
       accountLabel: `WeCom enterprise ${corpid}`,
       accountId: corpid,

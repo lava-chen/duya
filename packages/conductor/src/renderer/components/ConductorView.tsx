@@ -10,14 +10,18 @@ import {
 } from "./CanvasPresentationModeToggle";
 import { CanvasErrorBoundary } from "./CanvasErrorBoundary";
 import { CanvasSelector } from "./CanvasSelector";
+import { CanvasLibraryView } from "./CanvasLibraryView";
 import { useConductorStore } from "..//stores/conductor-store";
-import { listCanvases, createCanvas, getSnapshot, executeAction } from "..//ipc/conductor-ipc";
+import { listCanvases, listCanvasGroups, createCanvas, getSnapshot, executeAction } from "..//ipc/conductor-ipc";
 import { registerAllElements } from "../elements";
 import "../widgets";
 import { RefinePanel } from "..//refine/RefinePanel";
 import { useCanvasCaptureRequest } from "../hooks/useCanvasCaptureRequest";
 import { useCanvasManagement } from "../hooks/useCanvasManagement";
 import { useTranslation } from "@/hooks/useTranslation";
+import { Button } from "@/components/ui/Button";
+import { PageFrame, PageHeader } from "@/components/ui/page";
+import { ArrowLeftIcon } from "@/components/icons";
 import type { CanvasPosition } from "..//types/conductor";
 
 export function ConductorView() {
@@ -26,6 +30,7 @@ export function ConductorView() {
     canvases,
     activeCanvasId,
     setCanvases,
+    setCanvasGroups,
     addCanvas,
     setActiveCanvas,
     setSnapshot,
@@ -41,6 +46,22 @@ export function ConductorView() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [presentationMode, setPresentationMode] = useState<CanvasPresentationMode>("infinite");
+
+  // Asset library home vs canvas editor. The Conductor main view opens on
+  // the Notion-style multi-canvas library; clicking a card opens its editor.
+  const [libraryOpen, setLibraryOpen] = useState(true);
+
+  const openCanvas = useCallback(
+    async (canvasId: string) => {
+      disconnectBridge();
+      setActiveCanvas(canvasId);
+      const snap = await getSnapshot(canvasId);
+      if (snap) setSnapshot(snap);
+      connectBridge(canvasId);
+      setLibraryOpen(false);
+    },
+    [disconnectBridge, setActiveCanvas, setSnapshot, connectBridge]
+  );
 
   useEffect(() => {
     registerAllElements();
@@ -69,33 +90,14 @@ export function ConductorView() {
 
     async function load() {
       try {
-        const list = await listCanvases();
+        const [list, groups] = await Promise.all([listCanvases(), listCanvasGroups()]);
         if (cancelled) return;
 
         setCanvases(list);
+        setCanvasGroups(groups);
 
-        // Always pick a canvas and reload its snapshot. Resuming from
-        // store state without reloading leaves elements empty until
-        // manual refresh.
-        const desiredId =
-          (activeCanvasId && list.find((c) => c.id === activeCanvasId)?.id) ||
-          list[0]?.id;
-
-        if (desiredId) {
-          setActiveCanvas(desiredId);
-          const snap = await getSnapshot(desiredId);
-          if (snap && !cancelled) setSnapshot(snap);
-          connectBridge(desiredId);
-        } else {
-          const canvas = await createCanvas("Workbench");
-          if (!cancelled) {
-            setCanvases([canvas]);
-            setActiveCanvas(canvas.id);
-            connectBridge(canvas.id);
-            const snap = await getSnapshot(canvas.id);
-            if (snap) setSnapshot(snap);
-          }
-        }
+        // The main view opens on the multi-canvas library home. The user
+        // picks a canvas from there; we do NOT auto-open an editor here.
       } catch (error) {
         setUiError(`Load canvases failed: ${error instanceof Error ? error.message : "unknown error"}`);
       } finally {
@@ -148,19 +150,42 @@ export function ConductorView() {
     );
   }
 
-  return (
-    <div data-testid="conductor-main-view" className="h-full w-full overflow-hidden bg-[var(--main-bg)]">
-      <div className="relative h-full">
-        {/* Header with Canvas Selector */}
-        <div className="absolute top-0 left-0 right-0 z-40 flex items-center justify-between px-4 py-2">
-          <CanvasSelector />
-          {import.meta.env.DEV && (
-            <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
-          )}
-        </div>
+  if (libraryOpen) {
+    return (
+      <PageFrame maxWidth={1280} testId="conductor-main-view">
+        <PageHeader
+          title={t("conductor.title")}
+          subtitle={t("conductor.subtitle")}
+        />
+        <CanvasLibraryView onOpenCanvas={openCanvas} />
+      </PageFrame>
+    );
+  }
 
+  return (
+    <div data-testid="conductor-main-view" className="h-full w-full flex flex-col overflow-hidden bg-[var(--main-bg)]">
+      {/* Unified editor header — solid bar consistent with other main pages */}
+      <div className="flex items-center justify-between gap-3 shrink-0 px-4 py-2 border-b border-border">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLibraryOpen(true)}
+            aria-label={t("conductor.backToLibrary")}
+          >
+            <ArrowLeftIcon size={15} />
+            {t("conductor.backToLibrary")}
+          </Button>
+          <CanvasSelector />
+        </div>
+        {import.meta.env.DEV && (
+          <CanvasPresentationModeToggle value={presentationMode} onChange={setPresentationMode} />
+        )}
+      </div>
+
+      <div className="relative flex-1 min-h-0">
         {uiError && (
-          <div className="absolute left-1/2 top-12 -translate-x-1/2 z-40 w-[min(720px,80vw)] rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-xs text-[var(--error)] flex items-center justify-between gap-2 shadow-lg">
+          <div className="absolute left-1/2 top-2 -translate-x-1/2 z-40 w-[min(720px,80vw)] rounded-md border border-[var(--error)]/40 bg-[var(--error-soft)] px-3 py-2 text-xs text-[var(--error)] flex items-center justify-between gap-2 shadow-lg">
             <span className="truncate">{uiError}</span>
             <button
               type="button"

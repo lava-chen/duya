@@ -1,13 +1,11 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useConversationStore, type Thread } from "@/stores/conversation-store";
-import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, CheckIcon, CaretDownIcon, CaretRightIcon, PinIcon, PinFilledIcon } from "@/components/icons";
+import { ArchiveIcon, DotsThreeIcon, CopyIcon, NotePencilIcon, CircleNotchIcon, PinIcon, PinFilledIcon } from "@/components/icons";
 import { subscribeToPhase } from "@/lib/stream-session-manager";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { StreamPhase } from "@/types/message";
-import { useSubAgentProgress, type SubAgentRowInfo } from "@/hooks/useSubAgentProgress";
-import { colorForAgent } from "@/lib/agent-color";
 import type { TranslationKey } from "@/i18n";
 import { Button } from "@/components/ui/Button";
 
@@ -16,7 +14,6 @@ type TFunc = (key: TranslationKey, params?: Record<string, string | number>) => 
 interface ThreadListItemProps {
   thread: Thread;
   isActive: boolean;
-  childrenThreads?: Thread[];
 }
 
 const ACTIVE_PHASES: StreamPhase[] = ["starting", "streaming", "awaiting_permission", "persisting"];
@@ -36,17 +33,9 @@ function formatTimeAgo(t: TFunc, timestamp: number): string {
   return `${weeks}w`;
 }
 
-function getThreadDisplayTitle(t: TFunc, thread: Thread): string {
-  if (thread.agentType !== "sub-agent") {
-    return thread.title || t('thread.newThread');
-  }
-  const rawTitle = thread.agentName || thread.title || t('thread.subAgent');
-  return rawTitle.replace(/^Sub:\s*/i, "");
-}
-
-export function ThreadListItem({ thread, isActive, childrenThreads = [] }: ThreadListItemProps) {
+export function ThreadListItem({ thread, isActive }: ThreadListItemProps) {
   const { t } = useTranslation();
-  const { setActiveThread, deleteThread, updateThreadTitle, expandedThreads, toggleThreadExpanded, setThreadPinned } = useConversationStore();
+  const { setActiveThread, deleteThread, updateThreadTitle, setThreadPinned } = useConversationStore();
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
   const [isRenaming, setIsRenaming] = useState(false);
@@ -55,30 +44,7 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const subAgents = useSubAgentProgress(thread.id);
-  const displayTitle = getThreadDisplayTitle(t, thread);
-
-  const hasChildren = childrenThreads.length > 0;
-
-  // Auto-collapse children only on initial load, not after user interaction
-  const [userToggled, setUserToggled] = useState(false);
-
-  // Auto-collapse children if all sub-agents are completed and last activity was > 5 minutes ago
-  const shouldAutoCollapse = useMemo(() => {
-    // If user has manually toggled, respect their choice
-    if (userToggled) return false;
-    if (!hasChildren || childrenThreads.length === 0) return false;
-    const now = Date.now();
-    const fiveMinutes = 5 * 60 * 1000;
-    // Check if all children are sub-agents and their parent thread hasn't been updated recently
-    const allCompleted = childrenThreads.every((child) => {
-      // If child has no running indicator, consider it completed
-      return child.updatedAt < now - fiveMinutes;
-    });
-    return allCompleted && thread.updatedAt < now - fiveMinutes;
-  }, [hasChildren, childrenThreads, thread.updatedAt, userToggled]);
-
-  const isExpanded = expandedThreads.has(thread.id) && !shouldAutoCollapse;
+  const displayTitle = thread.title || t('thread.newThread');
 
   // Subscribe to stream phase changes to show running indicator
   useEffect(() => {
@@ -191,10 +157,10 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
   return (
     <>
       <div
-        className={`thread-item${isActive ? " active" : ""}${thread.agentType === 'sub-agent' ? " sub-agent" : ""}${hasChildren ? " has-children" : ""}`}
+        className={`thread-item${isActive ? " active" : ""}`}
         onClick={handleClick}
         onContextMenu={handleContextMenu}
-        title={thread.agentType === "sub-agent" ? t('thread.agentTitle', { name: displayTitle }) : thread.title}
+        title={thread.title}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -204,22 +170,6 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           }
         }}
       >
-        {/* Expand/collapse button for parent threads with children - shown on hover */}
-        {hasChildren && (
-          <button
-            type="button"
-            className="thread-item-expand-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              setUserToggled(true);
-              toggleThreadExpanded(thread.id);
-            }}
-            aria-label={isExpanded ? t('common.collapse') : t('project.expandAll')}
-          >
-            {isExpanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
-          </button>
-        )}
-
         {isRenaming ? (
           <input
             ref={inputRef}
@@ -235,26 +185,16 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
             onClick={(e) => e.stopPropagation()}
           />
         ) : (
-          <>
-            {thread.agentType === 'sub-agent' && thread.agentName && (
-              <span className="sub-agent-dot" style={{ color: colorForAgent(thread.agentName) }}>●</span>
-            )}
-            {thread.agentType === "sub-agent" && (
-              <span className="thread-item-agent-label">{t('thread.agentLabel')}</span>
-            )}
-            <span className="thread-item-title">{displayTitle}</span>
-          </>
+          <span className="thread-item-title">{displayTitle}</span>
         )}
 
-        {/* Default content (time / running / badges / pinned) stays in flow so
-            the title width stays stable. The pin + menu buttons are a sibling
-            overlay positioned against the row itself; on hover the default
-            content fades out and the buttons fade in over the same area. */}
+        {/* Default content (time / running / pinned) stays in flow so the title
+            width stays stable. The pin + menu buttons are a sibling overlay
+            positioned against the row itself; on hover the default content
+            fades out and the buttons fade in over the same area. */}
         <div className="thread-item-actions">
           <div className="thread-item-actions-default">
-            {subAgents.length > 0 ? (
-              <SubAgentBadges agents={subAgents} isRunning={isRunning} />
-            ) : isRunning ? (
+            {isRunning ? (
               <span className="thread-item-running-indicator" title={t('thread.running')}>
                 <CircleNotchIcon size={14} stroke={2.5} className="animate-spin" />
               </span>
@@ -296,18 +236,6 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
           </button>
         </div>
       </div>
-
-      {/* Render child sub-agent threads */}
-      {hasChildren && isExpanded && (
-        <div className="thread-item-children">
-          {childrenThreads.map((child) => (
-            <ChildThreadListItem
-              key={child.id}
-              thread={child}
-            />
-          ))}
-        </div>
-      )}
 
       {/* Dropdown Menu */}
       {showMenu && (
@@ -360,45 +288,5 @@ export function ThreadListItem({ thread, isActive, childrenThreads = [] }: Threa
         </div>
       )}
     </>
-  );
-}
-
-// Child thread item wrapper that gets active state from store
-function ChildThreadListItem({ thread }: { thread: Thread }) {
-  const { activeThreadId } = useConversationStore();
-  return (
-    <ThreadListItem
-      thread={thread}
-      isActive={thread.id === activeThreadId}
-    />
-  );
-}
-
-interface SubAgentBadgesProps {
-  agents: SubAgentRowInfo[];
-  isRunning: boolean;
-}
-
-function SubAgentBadges({ agents, isRunning }: SubAgentBadgesProps) {
-  const displayAgent = agents[0];
-  const runningAgents = agents.filter((a) => a.status === 'running');
-  const hasCompleted = agents.some((a) => a.status === 'completed');
-
-  if (!displayAgent) return null;
-
-  return (
-    <div className="thread-item-sub-agent-badges">
-      <span
-        className="thread-item-sub-agent-name"
-        style={{ color: displayAgent.color }}
-      >
-        {displayAgent.name}
-      </span>
-      {isRunning || runningAgents.length > 0 ? (
-        <CircleNotchIcon size={12} stroke={2.5} className="animate-spin text-muted-foreground" />
-      ) : hasCompleted ? (
-        <CheckIcon size={12} stroke={2.5} className="text-green-500" />
-      ) : null}
-    </div>
   );
 }

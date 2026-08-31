@@ -21,6 +21,7 @@ import { getCommunicationSection } from '../general/sections/communication.js'
 import { getFinalAnswerSection } from '../general/sections/finalAnswer.js'
 import { getTasksSection } from '../general/sections/tasks.js'
 import { getDestructiveActionsSection } from '../general/sections/destructiveActions.js'
+import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 import { getToolsSection } from '../general/sections/tools.js'
 import { getSkillUsageSection } from '../general/sections/skillUsage.js'
 import { getProjectSection } from '../general/sections/project.js'
@@ -51,6 +52,7 @@ export const gatewayConfig: PromptSystemConfig = {
     { name: 'system', compute: getSystemSection },
     { name: 'tasks', compute: getTasksSection },
     { name: 'destructiveActions', compute: getDestructiveActionsSection },
+    { name: 'configProtection', compute: getConfigProtectionSection },
     { name: 'tools', compute: getToolsSection },
     {
       name: 'skillUsage',

@@ -27,6 +27,7 @@ import { getFinalAnswerSection } from '../general/sections/finalAnswer.js'
 import { getSystemSection } from '../general/sections/system.js'
 import { getTasksSection } from '../general/sections/tasks.js'
 import { getDestructiveActionsSection } from '../general/sections/destructiveActions.js'
+import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 import { getToolsSection } from '../general/sections/tools.js'
 import { getSkillUsageSection } from '../general/sections/skillUsage.js'
 import { getProjectSection } from '../general/sections/project.js'
@@ -56,6 +57,7 @@ export const generalConfig: PromptSystemConfig = {
     { name: 'system', compute: getSystemSection },
     { name: 'tasks', compute: getTasksSection },
     { name: 'destructiveActions', compute: getDestructiveActionsSection },
+    { name: 'configProtection', compute: getConfigProtectionSection },
     { name: 'tools', compute: getToolsSection },
     {
       name: 'skillUsage',

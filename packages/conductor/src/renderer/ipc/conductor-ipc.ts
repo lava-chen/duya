@@ -1,4 +1,4 @@
-import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "..//types/conductor";
+import type { ConductorCanvas, ConductorCanvasGroup, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot } from "..//types/conductor";
 import type { ConnectorEndpoint, LinkSnapshotMode } from "..//types/canvas-node";
 
 export interface UploadedAsset {
@@ -26,11 +26,23 @@ function getConductorAPI() {
     createCanvas: (data: { name: string; description?: string; projectPath?: string | null }): Promise<ConductorCanvas> =>
       conductor.createCanvas(data),
 
-    updateCanvas: (id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }): Promise<ConductorCanvas | null> =>
+    updateCanvas: (id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }): Promise<ConductorCanvas | null> =>
       conductor.updateCanvas(id, data),
 
     deleteCanvas: (id: string): Promise<boolean> =>
       conductor.deleteCanvas(id),
+
+    listCanvasGroups: (projectPath?: string | null): Promise<ConductorCanvasGroup[]> =>
+      conductor.listCanvasGroups(projectPath) as Promise<ConductorCanvasGroup[]>,
+
+    createCanvasGroup: (data: { name: string; projectPath?: string | null }): Promise<ConductorCanvasGroup> =>
+      conductor.createCanvasGroup(data) as Promise<ConductorCanvasGroup>,
+
+    updateCanvasGroup: (id: string, data: { name?: string; sortOrder?: number }): Promise<ConductorCanvasGroup | null> =>
+      conductor.updateCanvasGroup(id, data) as Promise<ConductorCanvasGroup | null>,
+
+    deleteCanvasGroup: (id: string): Promise<boolean> =>
+      conductor.deleteCanvasGroup(id),
 
     snapshot: (canvasId: string): Promise<ConductorSnapshot | null> =>
       conductor.snapshot(canvasId),
@@ -79,10 +91,34 @@ export async function createCanvas(
   return api.createCanvas({ name, description, projectPath });
 }
 
-export async function updateCanvas(id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }): Promise<ConductorCanvas | null> {
+export async function updateCanvas(id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }): Promise<ConductorCanvas | null> {
   const api = getConductorAPI();
   if (!api) return null;
   return api.updateCanvas(id, data);
+}
+
+export async function listCanvasGroups(projectPath?: string | null): Promise<ConductorCanvasGroup[]> {
+  const api = getConductorAPI();
+  if (!api) return [];
+  return api.listCanvasGroups(projectPath);
+}
+
+export async function createCanvasGroup(data: { name: string; projectPath?: string | null }): Promise<ConductorCanvasGroup> {
+  const api = getConductorAPI();
+  if (!api) throw new Error("IPC not available");
+  return api.createCanvasGroup(data);
+}
+
+export async function updateCanvasGroup(id: string, data: { name?: string; sortOrder?: number }): Promise<ConductorCanvasGroup | null> {
+  const api = getConductorAPI();
+  if (!api) return null;
+  return api.updateCanvasGroup(id, data);
+}
+
+export async function deleteCanvasGroup(id: string): Promise<boolean> {
+  const api = getConductorAPI();
+  if (!api) return false;
+  return api.deleteCanvasGroup(id);
 }
 
 export async function deleteCanvas(id: string): Promise<boolean> {
@@ -249,4 +285,4 @@ export async function captureLinkSnapshot(
   return api.captureLinkSnapshot({ canvasId, elementId, url, mode });
 }
 
-export { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot };
+export { ConductorCanvas, ConductorCanvasGroup, ConductorWidget, ConductorSnapshot, ConductorActionRequest, CanvasElement, ConductorV2Snapshot };

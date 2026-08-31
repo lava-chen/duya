@@ -158,8 +158,10 @@ function GitHubIcon({ size = 24 }: IconProps) {
 }
 
 // Plan 455: the connector catalog is open — plugin-declared ids have no
-// bundled brand icon yet, and the renderer falls back to null (the UI's
-// monogram path covers them).
+// bundled brand SVG. Returning null used to leave an EMPTY icon box at every
+// call site (marketplace connector cards, connection rows, the @-mention
+// list), because none of them fall through to a monogram on their own. The
+// component now renders a tinted monogram itself.
 const REGISTRY: Partial<Record<string, (props: IconProps) => React.ReactElement>> = {
   google: GoogleIcon,
   slack: SlackIcon,
@@ -176,10 +178,39 @@ const REGISTRY: Partial<Record<string, (props: IconProps) => React.ReactElement>
 
 export interface ConnectorIconProps extends IconProps {
   provider: ProviderId;
+  /** Fallback letter from the provider DTO (e.g. `'G'` for Google). */
+  monogram?: string;
+  /** Fallback source when `monogram` is absent; its first letter is used. */
+  label?: string;
 }
 
-export function ConnectorIcon({ provider, size = 24 }: ConnectorIconProps) {
+export function ConnectorIcon({
+  provider,
+  size = 24,
+  monogram,
+  label,
+}: ConnectorIconProps) {
   const Cmp = REGISTRY[provider];
-  if (!Cmp) return null;
-  return <Cmp size={size} />;
+  if (Cmp) return <Cmp size={size} />;
+
+  // No bundled brand glyph: render a tinted monogram so the surrounding icon
+  // box is never empty.
+  const source = monogram?.trim() || label?.trim() || String(provider).trim();
+  const letter = source.charAt(0).toUpperCase();
+  if (!letter) return null;
+  return (
+    <span
+      aria-hidden="true"
+      className="flex select-none items-center justify-center font-semibold"
+      style={{
+        width: size,
+        height: size,
+        fontSize: Math.max(9, Math.round(size * 0.5)),
+        lineHeight: 1,
+        color: "var(--accent)",
+      }}
+    >
+      {letter}
+    </span>
+  );
 }

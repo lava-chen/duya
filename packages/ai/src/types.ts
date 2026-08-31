@@ -273,6 +273,12 @@ export interface AgentProgressEvent {
 export type SSEEvent =
   | { type: 'text'; data: string }
   | { type: 'tool_use_started'; data: ToolUse }
+  /** Plan 461: incremental tool-call argument fragment. `delta` is a raw
+   *  JSON slice (not a complete object) — consumers must accumulate by
+   *  `id` and parse leniently. Never persisted; it exists only so the UI
+   *  can render a tool call's arguments while the model is still
+   *  producing them (Codex/pi TUI parity). */
+  | { type: 'tool_use_delta'; data: { id: string; name: string; delta: string } }
   | { type: 'tool_use'; data: ToolUse }
   | { type: 'tool_result'; data: ToolResult }
   | { type: 'tool_progress'; data: { toolName: string; elapsedSeconds: number } }
@@ -284,7 +290,12 @@ export type SSEEvent =
   | { type: 'turn_start'; data: { turnCount: number } }
   | { type: 'permission_request'; data: PermissionRequestEvent }
   | { type: 'agent_progress'; data: AgentProgressEvent }
-  | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number; diagnostic?: ParameterDiagnostic } }
+  /**
+   * `retryReason` / `errorType` / `statusCode` are Plan 462 additions: the
+   * retry notice carries the provider's own wording so the UI can explain
+   * *why* it is reconnecting instead of showing a bare counter.
+   */
+  | { type: 'system'; data: string; metadata?: { retryAttempt?: number; maxAttempts?: number; retryDelayMs?: number; retryReason?: string; errorType?: string; statusCode?: number; diagnostic?: ParameterDiagnostic } }
   | { type: 'text_delta'; data: string }
   | { type: 'thinking_delta'; data: string }
   | { type: 'mode_changed'; data: { mode: string; source: 'agent' | 'user'; reason?: string } }

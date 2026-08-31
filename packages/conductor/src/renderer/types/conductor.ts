@@ -144,6 +144,21 @@ export interface ConductorCanvas {
   updatedAt: number;
   /** Project path bound to this canvas (unique per project). Null for ad-hoc canvases. */
   projectPath?: string | null;
+  /** User-starred canvas. Surfaced first / filterable in the asset library. */
+  isFavorite: boolean;
+  /** Group/collection id this canvas belongs to (null = ungrouped). */
+  groupId: string | null;
+  /** Free-form tags for filtering in the asset library. */
+  tags: string[];
+}
+
+export interface ConductorCanvasGroup {
+  id: string;
+  name: string;
+  sortOrder: number;
+  projectPath: string | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ConductorWidget {
@@ -223,6 +238,10 @@ export interface DbConductorCanvas {
   sort_order: number;
   created_at: number;
   updated_at: number;
+  project_path?: string | null;
+  is_favorite?: number;
+  group_id?: string | null;
+  tags?: string;
 }
 
 export interface DbConductorWidget {
@@ -358,7 +377,21 @@ export function canvasFromDb(row: DbConductorCanvas): ConductorCanvas {
     sortOrder: row.sort_order,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    projectPath: (row as any).project_path ?? null,
+    isFavorite: (row as any).is_favorite === 1,
+    groupId: (row as any).group_id ?? null,
+    tags: safeParseTags((row as any).tags),
   };
+}
+
+function safeParseTags(value: unknown): string[] {
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((t) => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
 }
 
 export function widgetFromDb(row: DbConductorWidget): ConductorWidget {

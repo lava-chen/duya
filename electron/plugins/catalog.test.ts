@@ -2,10 +2,11 @@
 // Plan: plugin-config-simplification — tests for the disk-reading catalog.
 //
 // Self-contained tests using temp fixture plugins. No dependency on the
-// real builtin plugin source tree (plugins were moved to duya-marketplace).
+// real plugin source tree (plugins come from the duya-marketplace repo —
+// plan 455).
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -137,18 +138,6 @@ afterAll(() => {
   if (state.tempRoot) rmSync(state.tempRoot, { recursive: true, force: true });
 });
 
-// Mock builtin-sync to return the fixture roots
-vi.mock('./cache/builtin-sync', () => ({
-  listBuiltinCacheRoots: () => state.fixtureRoots,
-  getBuiltinCacheRoot: () => state.tempRoot,
-  syncBuiltinPlugins: () => state.fixtureRoots,
-  listBuiltinCachePlugins: () => state.fixtureRoots.map((root) => ({
-    id: `com.duya.${FIXTURE_PLUGINS.find((p) => root.endsWith(p.name))?.name ?? 'unknown'}`,
-    name: FIXTURE_PLUGINS.find((p) => root.endsWith(p.name))?.name ?? 'unknown',
-    root,
-  })),
-}));
-
 // ----------------------------------------------------------------------------
 // deriveCapabilityCounts — on-disk derivation
 // ----------------------------------------------------------------------------
@@ -202,94 +191,16 @@ describe('deriveCapabilityCounts — derive from disk', () => {
 });
 
 // ----------------------------------------------------------------------------
-// getPluginCatalog — disk-reading scanner
+// getPluginCatalog — disk-reading scanner (marketplace source)
 // ----------------------------------------------------------------------------
 
-describe('getPluginCatalog — builtin entries from disk', () => {
-  beforeAll(() => {
-    expect(state.fixtureRoots.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('includes all fixture builtin plugins', async () => {
+describe('getPluginCatalog — smoke', () => {
+  it('returns a catalog without duplicate ids', async () => {
     const { getPluginCatalog } = await import('./catalog.js');
     const catalog = getPluginCatalog();
-    const builtinEntries = catalog.filter((e) => e.source === 'bundled' && e.kind !== 'skill');
-
-    const ids = builtinEntries.map((e) => e.id).sort();
-    expect(ids).toEqual(['com.duya.test-data', 'com.duya.test-research']);
-  });
-
-  it('every builtin entry is official-trust with builtinCacheDir', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
-    const builtinEntries = catalog.filter((e) => e.source === 'bundled' && e.kind !== 'skill');
-
-    for (const entry of builtinEntries) {
-      expect(entry.trustLevel).toBe('official');
-      expect(entry.builtinCacheDir).toBeDefined();
-      expect(existsSync(entry.builtinCacheDir!)).toBe(true);
-    }
-  });
-
-  it('no duplicate ids in the catalog', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
+    expect(Array.isArray(catalog)).toBe(true);
     const ids = catalog.map((e) => e.id);
     const unique = new Set(ids);
     expect(unique.size).toBe(ids.length);
-  });
-
-  it('derives category from interface.category for each builtin entry', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
-    const byId = new Map(catalog.map((e) => [e.id, e]));
-
-    expect(byId.get('com.duya.test-research')?.category).toBe('research');
-    expect(byId.get('com.duya.test-data')?.category).toBe('data');
-  });
-
-  it('derives capability counts from disk for each builtin entry', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
-    const byId = new Map(catalog.map((e) => [e.id, e]));
-
-    const research = byId.get('com.duya.test-research');
-    expect(research?.capabilityCounts).toEqual({
-      skills: 2, mcpServers: 1, cli: 0, ui: 0, hooks: 0, workflows: 1,
-    });
-
-    const data = byId.get('com.duya.test-data');
-    expect(data?.capabilityCounts).toEqual({
-      skills: 3, mcpServers: 1, cli: 0, ui: 0, hooks: 0, workflows: 0,
-    });
-  });
-
-  it('resolves setup fields from the minimal plugin.json', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
-    const byId = new Map(catalog.map((e) => [e.id, e]));
-
-    const data = byId.get('com.duya.test-data');
-    expect(data?.manifest.setup).toEqual([
-      expect.objectContaining({
-        id: 'connectionString',
-        type: 'secret',
-        required: true,
-      }),
-    ]);
-
-    const research = byId.get('com.duya.test-research');
-    expect(research?.manifest.setup).toBeUndefined();
-  });
-
-  it('resolves MCP server config from mcp/servers.json', async () => {
-    const { getPluginCatalog } = await import('./catalog.js');
-    const catalog = getPluginCatalog();
-    const byId = new Map(catalog.map((e) => [e.id, e]));
-
-    const research = byId.get('com.duya.test-research');
-    const server = research?.manifest.capabilities.mcpServers?.[0];
-    expect(server?.name).toBe('test-research-mcp');
-    expect(server?.command).toBe('node');
   });
 });

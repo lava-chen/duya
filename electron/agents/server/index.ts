@@ -259,6 +259,16 @@ const handleRequest = createHandleRequest(deps, workerDbRequests, activeConnecti
 
 const server = http.createServer(handleRequest);
 
+// SSE 长连接保活：关闭 Node 默认 120s 套接字空闲超时，避免长思考期间模型
+// 出现 >120s 的静默间隙（服务端算完才批量吐 thinking）时，Node 直接销毁 SSE
+// 套接字，表现为 agent 进程"自动断掉"（现象："Agent stream disconnected
+// before completion"）。该服务仅对外提供 HTTP+SSE，关闭空闲超时是安全的。
+server.timeout = 0;
+// keepAliveTimeout / headersTimeout 仅作用于两次请求之间的 keep-alive 空闲，
+// 设为略高于常见反代 60s 下限，避免频繁重建连接。
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 server.listen(PORT, HOST, () => {
   const addr = server.address();
   if (addr && typeof addr === 'object') {
@@ -276,6 +286,18 @@ function gracefulShutdown(): void {
   checkpointBatcher.stop();
   workerManager.stopIdleReaper();
   workerManager.killAll();
+
+  // server.timeout = 0（SSE 保活）移除了 Node 的隐式套接字回收器，挂死的
+  // SSE 连接会一直占着 server.close()，使其回调永不触发。这里显式销毁所有
+  // 活动连接；下面的 5s 强制退出仍保留作为最终兜底。
+  for (const conn of activeConnections) {
+    try {
+      conn.destroy();
+    } catch {
+      // 套接字已关闭，忽略
+    }
+  }
+  activeConnections.clear();
 
   server.close(() => {
     logger.info('HTTP server closed, exiting');

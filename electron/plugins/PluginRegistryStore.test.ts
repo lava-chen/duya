@@ -131,7 +131,7 @@ describe('PluginRegistryStore (ConfigStore-backed)', () => {
     expect(store.removePlugin('com.duya.missing')).toBeNull();
   });
 
-  it('parses a legacy key with no marketplace as builtin', () => {
+  it('parses a legacy key with no marketplace as official', () => {
     const cfg = new ConfigStore({
       configPath: path.join(dir, 'config.toml'),
       secretsPath: path.join(dir, 'secrets.json'),
@@ -140,6 +140,6 @@ describe('PluginRegistryStore (ConfigStore-backed)', () => {
     _setConfigStoreForTest(cfg);
 
     const registry = store.readRegistry();
-    expect(registry.plugins[0]).toMatchObject({ id: 'legacy-plugin', marketplace: 'builtin', enabled: true });
+    expect(registry.plugins[0]).toMatchObject({ id: 'legacy-plugin', marketplace: 'official', enabled: true });
   });
 });

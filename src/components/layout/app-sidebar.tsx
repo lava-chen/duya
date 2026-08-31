@@ -32,8 +32,6 @@ import {
   CaretRightIcon,
   CaretDownIcon,
   CheckIcon,
-  CornersInIcon,
-  CornersOutIcon,
   NotePencilIcon,
   CircleNotchIcon,
 } from "@/components/icons";
@@ -41,53 +39,27 @@ import { useConversationStore, type Thread, type ProjectGroup, type ViewType, ty
 import { NewThreadDropdown } from "./sidebar/NewThreadDropdown";
 import { ProjectGroupItem } from "./sidebar/ProjectGroupItem";
 import { ThreadListItem } from "./sidebar/ThreadListItem";
+import { SidebarSectionItem, type SectionKind } from "./sidebar/SidebarSectionItem";
+import { bucketThreadsByKind, SYSTEM_SECTIONS } from "./sidebar/section-system";
+import { useSidebarSectionsStore } from "@/stores/sidebar-sections-store";
 import { useTranslation } from "@/hooks/useTranslation";
 import { Button } from "@/components/ui/Button";
 import { useSettings } from "@/hooks/useSettings";
 import { useOptionalPanel } from "@/hooks/usePanel";
-import { InputDialog } from "@/components/ui/InputDialog";
+import { CreateProjectDialog } from "@/components/ui/CreateProjectDialog";
 
 type ThemeMode = "light" | "dark";
 
 // Type-safe label keys
-type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor';
-
-const CHILD_THREAD_DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
-
-function getChildThreadDisplayKey(thread: Thread): string {
-  const displayName = thread.agentName || thread.title.replace(/^Sub:\s*/i, "");
-  return `${thread.parentId || ""}:${thread.agentType || ""}:${displayName.trim().toLowerCase()}`;
-}
-
-function addChildThread(childrenMap: Map<string, Thread[]>, thread: Thread): void {
-  if (!thread.parentId) return;
-
-  const siblings = childrenMap.get(thread.parentId) ?? [];
-  const threadKey = getChildThreadDisplayKey(thread);
-  const duplicateIndex = siblings.findIndex((existing) => {
-    if (getChildThreadDisplayKey(existing) !== threadKey) return false;
-    return Math.abs(existing.createdAt - thread.createdAt) <= CHILD_THREAD_DUPLICATE_WINDOW_MS;
-  });
-
-  if (duplicateIndex >= 0) {
-    if (thread.updatedAt >= siblings[duplicateIndex].updatedAt) {
-      siblings[duplicateIndex] = thread;
-    }
-  } else {
-    siblings.push(thread);
-  }
-
-  childrenMap.set(thread.parentId, siblings);
-}
-
-function isOrphanSubAgentThread(thread: Thread): boolean {
-  return thread.agentType === "sub-agent" && !thread.parentId;
-}
+type NavLabelKey = 'nav.channels' | 'nav.automation' | 'nav.conductor' | 'nav.extensions';
 
 const mainNavItems: { view: ViewType; labelKey: NavLabelKey; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
   { view: 'conductor', labelKey: 'nav.conductor', icon: ChalkboardIcon },
   { view: 'bridge', labelKey: 'nav.channels', icon: ChannelIcon },
   { view: 'automation', labelKey: 'nav.automation', icon: ClockCounterClockwiseIcon },
+  // Extensions (plugins / marketplace / app connections) is a top-level
+  // surface, not a settings sub-page — it is browsed as often as channels.
+  { view: 'extensions', labelKey: 'nav.extensions', icon: PlugIcon },
 ];
 
 const settingsNavGroups: {
@@ -114,13 +86,6 @@ const settingsNavGroups: {
       { id: 'memory', labelKey: 'settings.memory', icon: BrainIcon },
       { id: 'browser', labelKey: 'settings.browser', icon: ChromeIcon },
       { id: 'channels', labelKey: 'settings.channels', icon: ChannelIcon },
-    ],
-  },
-  {
-    id: 'extensions',
-    labelKey: 'settings.group.extensions',
-    items: [
-      { id: 'extensions', labelKey: 'settings.extensions', icon: PlugIcon },
     ],
   },
   {
@@ -152,10 +117,22 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     const { t } = useTranslation();
     const { settings, loading, error, save } = useSettings();
     const [isLoading, setIsLoading] = useState(true);
-    const [isInputDialogOpen, setIsInputDialogOpen] = useState(false);
-    const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
-    const CRON_THREAD_LIMIT = 5;
-    const [cronVisibleCount, setCronVisibleCount] = useState(CRON_THREAD_LIMIT);
+    // Plan 471 v7: replaced the old `isNameProjectDialogOpen` + name-only
+    // dialog with `CreateProjectDialog` (project name + optional folder).
+    const [isCreateProjectDialogOpen, setIsCreateProjectDialogOpen] = useState(false);
+    // Plan 471 v8: in "在一个列表中" (singleList) mode the flat session
+    // list reveals incrementally (20 at a time — user preference, bigger
+    // batch than the 5-per-project-group because it spans ALL projects
+    // and would take too many clicks at 5). Kept in renderer state;
+    // resets when the user toggles the view mode or a section collapse.
+    const FLAT_LIST_THRESHOLD = 20;
+    const [flatListVisibleCount, setFlatListVisibleCount] = useState(FLAT_LIST_THRESHOLD);
+    // Plan 471: cap how many cron / etc. system sessions render in the
+    // sidebar at once. The automation page owns the full history; the
+    // sidebar just needs a quick "what's recent?" overview. Picking 8 →
+    // fits under most viewports without forcing the user to scroll past
+    // hundreds of stale runs.
+    const CRON_SIDEBAR_VISIBLE = 8;
 
     const {
       threads,
@@ -170,8 +147,6 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       enterSettings,
       exitSettings,
       collapsedProjects,
-      collapseAllProjects,
-      expandAllProjects,
       toggleProjectExpanded,
       projectSortBy,
       setProjectSortBy,
@@ -181,6 +156,44 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     } = useConversationStore();
     const panel = useOptionalPanel();
     const openOrActivatePage = panel?.openOrActivatePage ?? (() => {});
+
+    // Plan 471: user-defined sidebar sections (loaded from SQLite). The store
+    // is the renderer-side mirror of `sidebar_sections` + `sidebar_section_projects`.
+    // The mirror is rebuilt from the IPC on mount; until hydration completes
+    // we leave the lists empty (no flicker, no phantom entries).
+    const {
+      sections: userSections,
+      sectionProjects,
+      hydrated: sectionsHydrated,
+      loadFromDatabase: loadUserSectionsFromDb,
+      toggleSectionCollapsed: toggleUserSectionCollapsed,
+    } = useSidebarSectionsStore();
+    // In-memory collapse for system sections (cron / gateway / wakeup /
+    // pinned / uncategorized). User-defined sections persist via SQLite;
+    // system sections live only in renderer state because their shape is
+    // fixed (you can't rename or delete `__system__:cron`).
+    const [collapsedSystemSections, setCollapsedSystemSections] = useState<Set<string>>(
+      () => {
+        // Default-collapse system sections with high cardinality (cron can
+        // easily reach hundreds of runs; gateway and wakeup are similarly
+        // noisy). The user can open them on demand. Pinned stays expanded
+        // because it is bounded by user choice. The project section starts
+        // open so the user sees their work without an extra click.
+        const initialCollapsed = new Set<string>();
+        initialCollapsed.add('__system__:cron');
+        initialCollapsed.add('__system__:gateway');
+        initialCollapsed.add('__system__:wakeup');
+        return initialCollapsed;
+      },
+    );
+    const toggleSystemSectionCollapsed = useCallback((id: string) => {
+      setCollapsedSystemSections((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+    }, []);
 
     const systemDark = useMemo(
       () =>
@@ -219,8 +232,12 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
     useEffect(() => {
       if (isHydrated) {
         loadFromDatabase().finally(() => setIsLoading(false));
+        // Plan 471: parallel-load user-defined sections. Independent from
+        // the conversations store — sections render even when threads are
+        // empty (you can build the structure first, sessions later).
+        void loadUserSectionsFromDb();
       }
-    }, [isHydrated, loadFromDatabase]);
+    }, [isHydrated, loadFromDatabase, loadUserSectionsFromDb]);
 
     // Apply resolved theme to <html> and keep localStorage in sync as a boot-time hint.
     useEffect(() => {
@@ -267,37 +284,19 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       void save({ theme: resolvedTheme === "dark" ? "light" : "dark" });
     };
 
-    const handleCreateProjectFromPath = useCallback(async (workingDirectory: string) => {
-      if (workingDirectory.trim()) {
-        const projectName = workingDirectory.trim().split(/[\\/]/).pop() || "Untitled";
-        const thread = await createThread({ workingDirectory: workingDirectory.trim(), projectName });
-        if (thread) {
-          setCurrentView('chat');
-        }
-      }
-    }, [createThread, setCurrentView]);
-
     const handleOpenExistingFolder = async () => {
-      try {
-        if (window.electronAPI?.dialog?.openFolder) {
-          const result = await window.electronAPI.dialog.openFolder({
-            title: t('project.selectNewProjectFolder'),
-          });
-
-          if (!result.canceled && result.filePaths.length > 0) {
-            const workingDirectory = result.filePaths[0];
-            handleCreateProjectFromPath(workingDirectory);
-          }
-        } else {
-          setIsInputDialogOpen(true);
-        }
-      } catch (error) {
-        console.error("[AppSidebar] Failed to open existing folder:", error);
-      }
+      // Plan 471 v7: the "open existing folder" entry point now also
+      // goes through the unified create-project dialog, so the user can
+      // pre-name the project before/after picking the folder. Direct
+      // folder-only flow is gone (was redundant once the dialog
+      // accepts a folder).
+      setIsCreateProjectDialogOpen(true);
     };
 
     const handleNewBlankProject = () => {
-      setIsNameProjectDialogOpen(true);
+      // Plan 471 v7: the "项目" + button opens the unified create-project
+      // dialog. Name + optional folder, both editable inside one window.
+      setIsCreateProjectDialogOpen(true);
     };
 
     const handleNewNoProjectThread = useCallback(async () => {
@@ -308,128 +307,272 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       }
     }, [createThread, setCurrentView, setActiveThread]);
 
-    const handleCreateNamedProject = async (projectName: string) => {
-      setIsNameProjectDialogOpen(false);
-      if (!projectName.trim()) return;
+    /**
+     * Plan 471 v7: single submit path for the create-project dialog.
+     * Branches on whether the user picked a folder or only typed a name:
+     *  - folder set → use that path; pass the typed name as the project
+     *    label (fall back to the folder's basename if the field is empty).
+     *  - folder empty → call `app.createProjectFolder(name)` to spawn a
+     *    new empty directory and create a thread tied to it.
+     */
+    const handleCreateProjectConfirm = async (input: { name: string; workingDirectory: string | null }) => {
+      setIsCreateProjectDialogOpen(false);
+      const projectName = input.name.trim();
+      if (!projectName) return;
       try {
+        if (input.workingDirectory) {
+          // Folder picked — the project IS that folder.
+          const thread = await createThread({
+            workingDirectory: input.workingDirectory,
+            projectName,
+          });
+          if (thread) setCurrentView('chat');
+          return;
+        }
         if (window.electronAPI?.app?.createProjectFolder) {
-          const result = await window.electronAPI.app.createProjectFolder(projectName.trim());
+          const result = await window.electronAPI.app.createProjectFolder(projectName);
           if (result.success && result.path) {
-            const thread = await createThread({ workingDirectory: result.path, projectName: projectName.trim() });
-            if (thread) {
-              setCurrentView('chat');
-            }
+            const thread = await createThread({ workingDirectory: result.path, projectName });
+            if (thread) setCurrentView('chat');
           } else {
-            console.error("[AppSidebar] Failed to create project folder:", result.error);
+            console.error('[AppSidebar] Failed to create project folder:', result.error);
           }
         }
       } catch (error) {
-        console.error("[AppSidebar] Failed to create blank project:", error);
+        console.error('[AppSidebar] Failed to create project:', error);
       }
     };
 
-    // Group threads by project (only main threads, sub-agents are nested under parents)
-    const { projectGroups, noProjectThreads, flatThreads, pinnedThreads, cronThreads, threadChildren } = useMemo(() => {
-      const groups = new Map<string, Thread[]>();
-      const childrenMap = new Map<string, Thread[]>();
-      const mainThreads: Thread[] = [];
-      // Plan 331 Phase 4: pinned threads are pulled out of the normal
-      // project/no-project groupings and rendered in a dedicated section
-      // at the top of the sidebar. They still participate in `threadChildren`
-      // so sub-agent nesting works the same as unpinned threads.
-      const pinned: Thread[] = [];
-      const cronThreads: Thread[] = [];
-
-      for (const thread of threads) {
-        // Sub-agent sessions without a parent are malformed/orphaned. Do not
-        // render them as top-level project chats; otherwise the sidebar shows
-        // agent children that do not belong to any visible session.
-        if (isOrphanSubAgentThread(thread)) {
-          continue;
-        }
-
-        // Sub-agent threads are nested under their parent, not shown independently
-        if (thread.parentId) {
-          addChildThread(childrenMap, thread);
-          continue;
-        }
-
-        // Pinned threads are routed to the pinned section regardless of their
-        // working directory — the whole point of pinning is to escape the
-        // project grouping and stay visible at the top.
-        if (thread.pinned === 1) {
-          pinned.push(thread);
-          continue;
-        }
-
-        // Cron sessions get their own sidebar group (id prefix `cron:`).
-        if (thread.id.startsWith('cron:')) {
-          cronThreads.push(thread);
-          continue;
-        }
-
-        mainThreads.push(thread);
-        // Empty working_directory (legacy) OR the shared no-project workspace
-        // both route into the flat "无项目" list.
-        const key = (!thread.workingDirectory || thread.workingDirectory === noProjectWorkspace)
-          ? "__no_project__"
-          : thread.workingDirectory;
-        if (!groups.has(key)) {
-          groups.set(key, []);
-        }
-        groups.get(key)!.push(thread);
-      }
-
-      const noProjectThreads = groups.get("__no_project__") || [];
-      groups.delete("__no_project__");
-
-      const sortThreads = (items: Thread[]) => {
-        return [...items].sort((a, b) => {
+    // Plan 471: derive the unified sidebar structure from `threads[]` and
+    // the user-sections store. The structure is an ordered array of section
+    // descriptors; each descriptor can host either project groups (`kind:
+    // project`) or raw threads (system kinds: cron / gateway / wakeup /
+    // pinned). One pass, one derived value, no render branches.
+    //
+    // A project's working directory is mapped to a user section via
+    // `findSectionForProject`; projects with no mapping land in the
+    // synthetic "__uncategorized__" section so they remain visible.
+    const sidebarStructure = useMemo(() => {
+      const sortThreads = (items: Thread[]) =>
+        [...items].sort((a, b) => {
           if (projectSortBy === 'priority') return b.createdAt - a.createdAt;
           if (projectSortBy === 'lastActivity') return b.updatedAt - a.updatedAt;
           return a.title.localeCompare(b.title);
         });
-      };
 
-      const projectGroups: ProjectGroup[] = Array.from(groups.entries())
-        .map(([wd, groupThreads]) => {
-          const lastActivity = Math.max(...groupThreads.map((t) => t.updatedAt));
-          const createdAt = Math.min(...groupThreads.map((t) => t.createdAt));
-          return {
-            workingDirectory: wd,
-            projectName: groupThreads[0]?.projectName || wd.split(/[\\/]/).pop() || "Unknown",
-            threadCount: groupThreads.length,
-            lastActivity,
-            createdAt,
-            isExpanded: !collapsedProjects.has(wd),
-          };
-        })
-        .sort((a, b) => {
+      // Bucket threads by kind. Sub-agents are dropped in `bucketThreadsByKind`.
+      const buckets = bucketThreadsByKind(threads);
+      const cronThreads = sortThreads(buckets.cron);
+      const gatewayThreads = sortThreads(buckets.gateway);
+      const wakeupThreads = sortThreads(buckets.wakeup);
+      const pinnedThreads = sortThreads(buckets.pinned);
+      const projectThreads = sortThreads(buckets.project_ungrouped);
+
+      // Build a lookup: workingDirectory → assigned user section id.
+      const workingDirToSection = new Map<string, string>();
+      for (const sp of sectionProjects) {
+        workingDirToSection.set(sp.workingDirectory, sp.sectionId);
+      }
+
+      // Group project threads by workingDirectory, then split: assigned and
+      // unassigned (uncategorized). The noProjectWorkspace path is just
+      // another "unassigned workingDirectory" with a synthetic key.
+      const groupsAssignedByWorkingDir = new Map<string, Thread[]>();
+      const noProjectThreads: Thread[] = [];
+      for (const thread of projectThreads) {
+        const wd = thread.workingDirectory ?? "";
+        const isUnassignedKey = !wd || wd === noProjectWorkspace;
+        const key = isUnassignedKey ? "__no_project__" : wd;
+        if (isUnassignedKey) {
+          noProjectThreads.push(thread);
+          continue;
+        }
+        if (!groupsAssignedByWorkingDir.has(key)) {
+          groupsAssignedByWorkingDir.set(key, []);
+        }
+        groupsAssignedByWorkingDir.get(key)!.push(thread);
+      }
+      noProjectThreads.sort((a, b) => b.updatedAt - a.updatedAt);
+
+      // Map workingDirectory → ProjectGroup
+      const allProjectGroups: Map<string, ProjectGroup> = new Map();
+      for (const [wd, groupThreads] of groupsAssignedByWorkingDir.entries()) {
+        const lastActivity = Math.max(...groupThreads.map((t) => t.updatedAt));
+        const createdAt = Math.min(...groupThreads.map((t) => t.createdAt));
+        allProjectGroups.set(wd, {
+          workingDirectory: wd,
+          projectName: groupThreads[0]?.projectName || wd.split(/[\\/]/).pop() || "Unknown",
+          threadCount: groupThreads.length,
+          lastActivity,
+          createdAt,
+          isExpanded: !collapsedProjects.has(wd),
+        });
+      }
+
+      // Build user-defined sections: for each user section, pick the
+      // project groups whose workingDirectory is mapped to that section.
+      const userSectionDescriptors = userSections.map((us) => {
+        const sortedWds = sectionProjects
+          .filter((sp) => sp.sectionId === us.id)
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((sp) => sp.workingDirectory);
+        const groups: ProjectGroup[] = [];
+        for (const wd of sortedWds) {
+          const g = allProjectGroups.get(wd);
+          if (g) groups.push(g);
+        }
+        // Synthetic empty placeholder so the section still renders the
+        // header — a brand new section should still let the user
+        // drag/drop projects in via the right-click menu.
+        return {
+          id: us.id,
+          kind: 'user' as SectionKind,
+          name: us.name,
+          collapsed: us.collapsed,
+          items: groups,
+          isUserSection: true,
+          sortable: true,
+        };
+      });
+
+      // Unassigned project groups (workingDirectory not mapped to any
+      // user section) → group into "__uncategorized__".
+      const assignedWds = new Set(
+        sectionProjects.map((sp) => sp.workingDirectory),
+      );
+      const unassignedGroups: ProjectGroup[] = [];
+      for (const [wd, group] of allProjectGroups.entries()) {
+        if (!assignedWds.has(wd)) {
+          unassignedGroups.push(group);
+        }
+      }
+
+      // Sort system section items by `projectSortBy` (for project group, only
+      // the array of groups matters; for system kinds, the threads inside).
+      const sortGroups = (groups: ProjectGroup[]) =>
+        [...groups].sort((a, b) => {
           if (projectSortBy === 'priority') return b.createdAt - a.createdAt;
           if (projectSortBy === 'lastActivity') return b.lastActivity - a.lastActivity;
           return a.projectName.localeCompare(b.projectName);
         });
 
-      return {
-        projectGroups,
-        noProjectThreads: sortThreads(noProjectThreads),
-        flatThreads: sortThreads(mainThreads),
-        pinnedThreads: sortThreads(pinned),
-        cronThreads: sortThreads(cronThreads),
-        threadChildren: childrenMap,
-      };
-    }, [threads, projectSortBy, collapsedProjects, noProjectWorkspace]);
+      /**
+       * Plan 471 v5: discriminate section items at the data layer so the
+       * render never has to "guess" between ProjectGroup and Thread.
+       *
+       * The previous shape used an `items: unknown[]` array and checked
+       * `'workingDirectory' in entry` to pick a renderer — but `Thread`
+       * ALSO has `workingDirectory` (the legacy field), so every cron /
+       * gateway / wakeup session was incorrectly dispatched to
+       * ProjectGroupItem, which then rendered only the folder icon (no
+       * title, no actions). The discriminated union below eliminates the
+       * ambiguity: only `project` items carry `group`, only `thread`
+       * items carry `thread`, and the renderer matches on the tag.
+       */
+      type SectionProjectItem = { itemKind: 'project'; group: ProjectGroup };
+      type SectionThreadItem = { itemKind: 'thread'; thread: Thread };
+      type SectionItem = SectionProjectItem | SectionThreadItem;
+      const projectItems = (groups: ProjectGroup[]): SectionProjectItem[] =>
+        sortGroups(groups).map((group) => ({ itemKind: 'project' as const, group }));
+      const threadItems = (threads: Thread[]): SectionThreadItem[] =>
+        threads.map((thread) => ({ itemKind: 'thread' as const, thread }));
 
+      // The order: user sections (by sortOrder) → "项目" (system default
+      // group for unassigned projects) → cron → gateway → wakeup →
+      // pinned. Cron / gateway / wakeup are folded by default (see
+      // collapsedSystemSections initial state) so the sidebar stays calm.
+      //
+      // Note: there is no separate "未分组" section. Unassigned projects
+      // land in the "项目" group; users drag them up into a user section
+      // via the right-click menu. CRON_SIDEBAR_VISIBLE caps high-cardinality
+      // runs so one hot cron job doesn't flood the sidebar.
+      //
+      // `projectGroupBy === 'singleList'` (⋯ menu → 在一个列表中): the
+      // "项目" section renders as one flat session list (all main-agent
+      // sessions by the chosen sort, no project grouping) and user
+      // sections are hidden because the whole point of single-list mode
+      // is to suppress the project hierarchy.
+      const isSingleList = projectGroupBy === 'singleList';
+      const projectSectionItems: SectionItem[] = isSingleList
+        // Plan 471 v8: singleList reveals sessions 5 at a time (mirrors
+        // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD behavior). When the
+        // user has collapsed the section or switched back to byProject we
+        // reset the reveal counter in the onToggle handler below.
+        ? threadItems(projectThreads.slice(0, flatListVisibleCount))
+        : projectItems(unassignedGroups);
+      const projectSectionExtra: SectionThreadItem[] = isSingleList
+        ? []
+        : threadItems(noProjectThreads);
+      // Number of sessions still hidden behind the "查看全部" reveal button
+      // in singleList mode (only meaningful there).
+      const flatListHiddenCount = isSingleList
+        ? Math.max(0, projectThreads.length - flatListVisibleCount)
+        : 0;
+      return [
+        ...(isSingleList ? [] : userSectionDescriptors.map((us) => ({
+          ...us,
+          items: projectItems(us.items as ProjectGroup[]),
+        }))),
+        {
+          id: '__system__:project',
+          kind: 'project' as SectionKind,
+          name: '__PROJECT_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:project'),
+          items: projectSectionItems,
+          extraNoProjectThreads: projectSectionExtra,
+          flatListHiddenCount,
+        },
+        {
+          id: '__system__:cron',
+          kind: 'cron' as SectionKind,
+          name: '__CRON_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:cron'),
+          items: threadItems(cronThreads.slice(0, CRON_SIDEBAR_VISIBLE)),
+          hiddenCount: Math.max(0, cronThreads.length - CRON_SIDEBAR_VISIBLE),
+        },
+        {
+          id: '__system__:gateway',
+          kind: 'gateway' as SectionKind,
+          name: '__GATEWAY_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:gateway'),
+          items: threadItems(gatewayThreads),
+        },
+        {
+          id: '__system__:wakeup',
+          kind: 'wakeup' as SectionKind,
+          name: '__WAKEUP_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:wakeup'),
+          items: threadItems(wakeupThreads),
+        },
+        {
+          id: '__system__:pinned',
+          kind: 'pinned' as SectionKind,
+          name: '__PINNED_SECTION__',
+          collapsed: collapsedSystemSections.has('__system__:pinned'),
+          items: threadItems(pinnedThreads),
+        },
+      ];
+    }, [threads, projectSortBy, projectGroupBy, collapsedProjects, noProjectWorkspace, userSections, sectionProjects, collapsedSystemSections, flatListVisibleCount]);
+
+    // Plan 471: "all collapsed" controls the ↕ toggle in the sidebar header.
+    // Treat every section (user or system) as collapsed only when there is
+    // at least one section AND every one is collapsed. Used to flip the
+    // ↕ button between "全部收起" and "全部展开".
     const allCollapsed = useMemo(
-      () => projectGroups.length > 0 && projectGroups.every((p) => collapsedProjects.has(p.workingDirectory)),
-      [projectGroups, collapsedProjects]
+      () =>
+        sidebarStructure.length > 0 &&
+        sidebarStructure.every((s) => s.collapsed === true),
+      [sidebarStructure],
     );
 
-    // Cron group mirrors ProjectGroupItem: reveal sessions incrementally (5 at
-    // a time) so expanding never jumps straight from 5 to the full list.
-    const hasMoreCronThreads = cronThreads.length > cronVisibleCount;
-    const cronRevealCount = Math.min(CRON_THREAD_LIMIT, cronThreads.length - cronVisibleCount);
-    const cronVisibleThreads = cronThreads.slice(0, cronVisibleCount);
+    // Plan 471 v8: leaving singleList mode (back to 按项目) resets the flat
+    // list reveal counter so the next time the user switches to 在一个列表中
+    // it starts from the first batch again.
+    useEffect(() => {
+      if (projectGroupBy !== 'singleList') {
+        setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
+      }
+    }, [projectGroupBy]);
 
     // Handle settings tab change
     const handleSettingsTabChange = (tabId: SettingsTab) => {
@@ -518,173 +661,207 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           })}
         </nav>
 
-        {(flatThreads.length > 0 || pinnedThreads.length > 0 || cronThreads.length > 0) && (
-          <SidebarProjectHeader
-            onNewBlankProject={handleNewBlankProject}
-            onUseExistingFolder={handleOpenExistingFolder}
-            onCollapseAll={collapseAllProjects}
-            onExpandAll={expandAllProjects}
-            allCollapsed={allCollapsed}
-            projectSortBy={projectSortBy}
-            onProjectSortBy={setProjectSortBy}
-            projectGroupBy={projectGroupBy}
-            onProjectGroupBy={setProjectGroupBy}
-          />
-        )}
-
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
-          {/* Plan 331 Phase 4: pinned threads surface at the very top of the
-              sidebar, above project groups and the no-project list. Shown in
-              both `byProject` and `singleList` modes. */}
-          {pinnedThreads.length > 0 && (
-            <>
-              <div className="sidebar-section-label">{t('thread.pinnedSection')}</div>
-              <div className="thread-list">
-                {pinnedThreads.map((thread) => (
-                  <ThreadListItem
-                    key={thread.id}
-                    thread={thread}
-                    isActive={thread.id === activeThreadId}
-                    childrenThreads={threadChildren.get(thread.id) || []}
+          {/* Plan 471: every top-level sidebar group is a section header that
+              can be toggled open/closed. The order is:
+                user sections (by sortOrder)
+                "项目" (system default — uncategorized projects)
+                "定时任务" (cron)  — id starts with `cron:` (capped to 8 most recent)
+                "网关" (gateway)    — id starts with `gw-`
+                "唤醒" (wakeup)    — id starts with `wakeless-`
+                "置顶" (pinned)    — thread.pinned === 1
+              Each section renders its own body and has a chevron toggle in
+              the header. The "项目" section also gets trailing action
+              buttons (collapse-all / sort / new project) via ProjectActions.
+          */}
+          {sidebarStructure.map((section) => {
+            const isUser = section.kind === 'user';
+            // Plan 471 v5: items are already discriminated at the data
+            // layer (`{ itemKind: 'project', group } | { itemKind: 'thread', thread }`).
+            // No more guessing — render dispatches off the `itemKind` tag.
+            const items = (section as { items: Array<{ itemKind: 'project'; group: ProjectGroup } | { itemKind: 'thread'; thread: Thread }> }).items ?? [];
+            const extraNoProjectThreads = ((section as { extraNoProjectThreads?: Array<{ thread: Thread }> }).extraNoProjectThreads ?? [])
+              .map((entry) => entry.thread);
+            const sectionLabelKey = (() => {
+              switch (section.id) {
+                case '__system__:cron':
+                  return 'sidebar.section.cron';
+                case '__system__:gateway':
+                  return 'sidebar.section.gateway';
+                case '__system__:wakeup':
+                  return 'sidebar.section.wakeup';
+                case '__system__:pinned':
+                  return 'sidebar.section.pinned';
+                case '__system__:project':
+                  return 'sidebar.section.project';
+                default:
+                  return null;
+              }
+            })();
+            const sectionName = sectionLabelKey
+              ? t(sectionLabelKey as never)
+              : section.name;
+            // Empty sections are hidden except: user sections always show (so users
+            // can right-click to delete or add), and the project section
+            // always shows (so the user has a place for new projects). The
+            // pinned system section is hidden when empty.
+            const isEmpty = items.length === 0 && extraNoProjectThreads.length === 0;
+            if (isEmpty) {
+              if (!isUser && section.id !== '__system__:project' && section.id !== '__system__:_always-show-empty') {
+                return null;
+              }
+            }
+            // Pinned system section: only show if there is at least one entry.
+            if (section.id === '__system__:pinned' && items.length === 0) {
+              return null;
+            }
+            const sectionItemProps = {
+              id: section.id,
+              name: sectionName,
+              kind: section.kind,
+              collapsed: section.collapsed,
+              onToggleCollapsed: isUser
+                ? () => { void toggleUserSectionCollapsed(section.id); }
+                : () => {
+                    // Plan 471 v8: collapsing the "项目" section resets the
+                    // singleList reveal counter so reopening shows the first
+                    // batch again (same behavior as ProjectGroupItem).
+                    if (section.id === '__system__:project') {
+                      setFlatListVisibleCount(FLAT_LIST_THRESHOLD);
+                    }
+                    toggleSystemSectionCollapsed(section.id);
+                  },
+              tone: section.id === '__system__:project' ? 'soft' as const : 'bold' as const,
+            };
+            // The "项目" section gets a trailing "⋯ +" action group — matching
+            // Codex's header pattern. The "⋯" opens a popup menu with
+            // layout (按项目 / 在一个列表中) and sort (优先级 / 最近更新 /
+            // 手动排序) options; the "+" creates a new blank project.
+            const isProjectSection = section.id === '__system__:project';
+            return (
+              <SidebarSectionItem
+                key={section.id}
+                {...sectionItemProps}
+                trailing={isProjectSection ? (
+                  <ProjectSectionActions
+                    onNewBlankProject={handleNewBlankProject}
+                    projectSortBy={projectSortBy}
+                    onProjectSortBy={setProjectSortBy}
+                    projectGroupBy={projectGroupBy}
+                    onProjectGroupBy={setProjectGroupBy}
                   />
-                ))}
-              </div>
-            </>
-          )}
-
-          {cronThreads.length > 0 && (
-            <div className="project-group-item">
-              <div
-                className="project-group-header"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  toggleProjectExpanded('__cron__');
-                  // Re-opening the group always starts from the base limit
-                  // instead of continuing the previous reveal count.
-                  setCronVisibleCount(CRON_THREAD_LIMIT);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    toggleProjectExpanded('__cron__');
-                    setCronVisibleCount(CRON_THREAD_LIMIT);
-                  }
-                }}
+                ) : undefined}
               >
-                {collapsedProjects.has('__cron__') ? (
-                  <CaretRightIcon size={12} />
-                ) : (
-                  <CaretDownIcon size={12} />
-                )}
-                <span className="project-group-name">{t('thread.cronSection')}</span>
-              </div>
-              {!collapsedProjects.has('__cron__') && (
-                <div className="project-group-threads">
-                  {cronVisibleThreads.map((thread) => (
+                {items.map((entry) => {
+                  if (entry.itemKind === 'project') {
+                    const project = entry.group;
+                    const projectThreads = threads.filter(
+                      (t) => t.workingDirectory === project.workingDirectory
+                        && t.agentType !== 'sub-agent'
+                        && t.pinned !== 1
+                        && !t.id.startsWith('cron:')
+                        && !t.id.startsWith('gw-')
+                        && !t.id.startsWith('wakeless-'),
+                    );
+                    return (
+                      <ProjectGroupItem
+                        key={project.workingDirectory}
+                        project={project}
+                        threads={projectThreads}
+                        activeThreadId={activeThreadId}
+                      />
+                    );
+                  }
+                  return (
                     <ThreadListItem
-                      key={thread.id}
-                      thread={thread}
-                      isActive={thread.id === activeThreadId}
-                      childrenThreads={threadChildren.get(thread.id) || []}
+                      key={entry.thread.id}
+                      thread={entry.thread}
+                      isActive={entry.thread.id === activeThreadId}
                     />
-                  ))}
-                  {hasMoreCronThreads && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="project-group-expand-all justify-start"
-                      onClick={() => setCronVisibleCount((c) => c + CRON_THREAD_LIMIT)}
-                    >
-                      <CaretRightIcon size={10} />
-                      <span>{t('common.showAll', { count: cronRevealCount })}</span>
-                    </Button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {projectGroupBy === 'byProject' && projectGroups.length > 0 && (
-            <div className="project-list">
-              {projectGroups.map((project) => {
-                const projectThreads = threads.filter(
-                  (t) => t.workingDirectory === project.workingDirectory && !t.parentId && !isOrphanSubAgentThread(t) && t.pinned !== 1 && !t.id.startsWith('cron:')
-                );
-                return (
-                  <ProjectGroupItem
-                    key={project.workingDirectory}
-                    project={project}
-                    threads={projectThreads}
-                    activeThreadId={activeThreadId}
-                    threadChildren={threadChildren}
-                  />
-                );
-              })}
-            </div>
-          )}
-
-          {projectGroupBy === 'singleList' && flatThreads.length > 0 && (
-            <div className="thread-list flat-thread-list">
-              {flatThreads.map((thread) => (
-                <ThreadListItem
-                  key={thread.id}
-                  thread={thread}
-                  isActive={thread.id === activeThreadId}
-                  childrenThreads={threadChildren.get(thread.id) || []}
-                />
-              ))}
-            </div>
-          )}
-
-          {projectGroupBy === 'byProject' && noProjectThreads.length > 0 && (
-            <>
-              <div className="sidebar-section-label">{t('common.noProject')}</div>
-              <div className="thread-list">
-                {noProjectThreads.map((thread) => (
+                  );
+                })}
+                {extraNoProjectThreads.map((thread) => (
                   <ThreadListItem
                     key={thread.id}
                     thread={thread}
                     isActive={thread.id === activeThreadId}
-                    childrenThreads={threadChildren.get(thread.id) || []}
                   />
                 ))}
-              </div>
-            </>
-          )}
+                {(() => {
+                  // "View all N more" link — for cron (routes to the
+                  // Automation page for full history) and for the flat
+                  // singleList session list (reveals 5 more inline, mirroring
+                  // ProjectGroupItem's THREAD_COLLAPSE_THRESHOLD reveal).
+                  const cronHidden = (section as { hiddenCount?: number }).hiddenCount;
+                  if (cronHidden) {
+                    return (
+                      <button
+                        type="button"
+                        className="sidebar-section-view-all"
+                        onClick={() => setCurrentView('automation')}
+                      >
+                        <CaretRightIcon size={10} />
+                        <span>{t('common.showAll', { count: cronHidden })}</span>
+                      </button>
+                    );
+                  }
+                  const flatHidden = (section as { flatListHiddenCount?: number }).flatListHiddenCount;
+                  if (flatHidden) {
+                    const reveal = Math.min(FLAT_LIST_THRESHOLD, flatHidden);
+                    return (
+                      <button
+                        type="button"
+                        className="sidebar-section-view-all"
+                        onClick={() => setFlatListVisibleCount((c) => c + FLAT_LIST_THRESHOLD)}
+                      >
+                        <CaretRightIcon size={10} />
+                        <span>{t('common.showAll', { count: reveal })}</span>
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
+              </SidebarSectionItem>
+            );
+          })}
 
-          {flatThreads.length === 0 && pinnedThreads.length === 0 && (
-            <div className="empty-state">
-              <p>{t('common.noProjectsYet')}</p>
-              <div className="flex flex-col gap-2 mt-3">
-                <button
-                  type="button"
-                  className="empty-state-action"
-                  onClick={handleNewBlankProject}
-                >
-                  <FileIcon size={16} />
-                  <span>{t('project.newBlankProject')}</span>
-                </button>
-                <button
-                  type="button"
-                  className="empty-state-action"
-                  onClick={handleOpenExistingFolder}
-                >
-                  <FolderOpenIcon size={16} />
-                  <span>{t('project.useExistingFolder')}</span>
-                </button>
-                <button
-                  type="button"
-                  className="empty-state-action"
-                  onClick={handleNewNoProjectThread}
-                >
-                  <NotePencilIcon size={16} />
-                  <span>{t('project.newNoProjectSession')}</span>
-                </button>
+          {sidebarStructure.every((s) => {
+            const items = (s as { items?: unknown[] }).items ?? [];
+            return items.length === 0
+              && ((s as { extraNoProjectThreads?: Thread[] }).extraNoProjectThreads ?? []).length === 0;
+          })
+            && userSections.length === 0
+            && (
+              <div className="empty-state">
+                <p>{t('common.noProjectsYet')}</p>
+                <div className="flex flex-col gap-2 mt-3">
+                  <button
+                    type="button"
+                    className="empty-state-action"
+                    onClick={handleNewBlankProject}
+                  >
+                    <FileIcon size={16} />
+                    <span>{t('project.newBlankProject')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="empty-state-action"
+                    onClick={handleOpenExistingFolder}
+                  >
+                    <FolderOpenIcon size={16} />
+                    <span>{t('project.useExistingFolder')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="empty-state-action"
+                    onClick={handleNewNoProjectThread}
+                  >
+                    <NotePencilIcon size={16} />
+                    <span>{t('project.newNoProjectSession')}</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
         </div>
 
         <div className="sidebar-bottom">
@@ -713,64 +890,43 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
           </button>
         </div>
 
-        <InputDialog
-          isOpen={isInputDialogOpen}
-          title={t('project.enterFolderPath')}
-          placeholder={
-            // Show a platform-appropriate path example so macOS/Linux users
-            // are not shown a Windows C:\ path. Falls back to the i18n string
-            // when the platform is unknown.
-            window.electronAPI?.versions?.platform === 'darwin'
-              ? t('project.folderPathPlaceholderMac')
-              : window.electronAPI?.versions?.platform === 'linux'
-                ? t('project.folderPathPlaceholderLinux')
-                : t('project.folderPathPlaceholder')
-          }
-          onConfirm={(value) => {
-            setIsInputDialogOpen(false);
-            handleCreateProjectFromPath(value);
-          }}
-          onCancel={() => setIsInputDialogOpen(false)}
-        />
-
-        <InputDialog
-          isOpen={isNameProjectDialogOpen}
-          title={t('project.nameProject')}
-          description={t('project.nameProjectDescription')}
-          placeholder={t('project.nameProjectPlaceholder')}
-          onConfirm={(value) => {
-            handleCreateNamedProject(value);
-          }}
-          onCancel={() => setIsNameProjectDialogOpen(false)}
+        <CreateProjectDialog
+          isOpen={isCreateProjectDialogOpen}
+          onCancel={() => setIsCreateProjectDialogOpen(false)}
+          onConfirm={handleCreateProjectConfirm}
         />
       </aside>
     );
   }
 );
 
-interface SidebarProjectHeaderProps {
+interface ProjectSectionActionsProps {
   onNewBlankProject: () => void;
-  onUseExistingFolder: () => void;
-  onCollapseAll: () => void;
-  onExpandAll: () => void;
-  allCollapsed: boolean;
   projectSortBy: ProjectSortBy;
   onProjectSortBy: (sortBy: ProjectSortBy) => void;
   projectGroupBy: ProjectGroupBy;
   onProjectGroupBy: (groupBy: ProjectGroupBy) => void;
 }
 
-function SidebarProjectHeader({
+/**
+ * Plan 471: the "项目" section header's trailing "⋯ +" action group.
+ *
+ * The "⋯" opens a popup menu with two option groups:
+ *   - 整理 (organize): 按项目 / 在一个列表中  — project layout toggle
+ *   - 排序方式 (sortBy): 优先级 / 最近更新 / 手动排序
+ *
+ * The "+" creates a new blank project. This is the same control surface
+ * the old `SidebarProjectHeader` exposed, but relocated into the section
+ * header's trailing slot so the header itself stays a plain
+ * "name + caret + [⋯ +]" row that matches the Codex reference.
+ */
+function ProjectSectionActions({
   onNewBlankProject,
-  onUseExistingFolder,
-  onCollapseAll,
-  onExpandAll,
-  allCollapsed,
   projectSortBy,
   onProjectSortBy,
   projectGroupBy,
   onProjectGroupBy,
-}: SidebarProjectHeaderProps) {
+}: ProjectSectionActionsProps) {
   const { t } = useTranslation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -791,113 +947,88 @@ function SidebarProjectHeader({
     setIsMenuOpen(false);
   };
 
-  const handleToggleAll = () => {
-    if (allCollapsed) {
-      onExpandAll();
-    } else {
-      onCollapseAll();
-    }
-  };
-
   const menuPosition = useMemo(() => {
     if (!menuButtonRef.current) return { top: 0, left: 0 };
     const rect = menuButtonRef.current.getBoundingClientRect();
     return {
       top: rect.bottom + 6,
-      left: rect.right - 160,
+      left: rect.right - 168,
     };
   }, [isMenuOpen]);
 
   return (
-    <div className="sidebar-section-header">
-      <span className="sidebar-section-label">{t('common.projects')}</span>
-      <div className="relative flex items-center gap-1" ref={menuRef}>
-        <button
-          type="button"
-          className="sidebar-section-action"
-          onClick={handleToggleAll}
-          title={allCollapsed ? t('project.expandAll') : t('project.collapseAll')}
-        >
-          {allCollapsed ? <CornersOutIcon size={14} stroke={1.5} /> : <CornersInIcon size={14} stroke={1.5} />}
-        </button>
-        <button
-          type="button"
-          className="sidebar-section-action"
-          ref={menuButtonRef}
-          onClick={() => setIsMenuOpen((prev) => !prev)}
-          title={t('common.more')}
-        >
-          <DotsThreeIcon size={16} />
-        </button>
-        <button
-          type="button"
-          className="sidebar-section-action"
-          onClick={onUseExistingFolder}
-          title={t('project.useExistingFolder')}
-        >
-          <FolderOpenIcon size={14} />
-        </button>
-        <button
-          type="button"
-          className="sidebar-section-action"
-          onClick={onNewBlankProject}
-          title={t('project.newProject')}
-        >
-          <NotePencilIcon size={14} />
-        </button>
+    <div className="relative flex items-center gap-1" ref={menuRef}>
+      <button
+        type="button"
+        className="sidebar-section-action"
+        ref={menuButtonRef}
+        onClick={() => setIsMenuOpen((prev) => !prev)}
+        title={t('common.more')}
+        aria-expanded={isMenuOpen}
+      >
+        <DotsThreeIcon size={16} />
+      </button>
+      <button
+        type="button"
+        className="sidebar-section-action"
+        onClick={onNewBlankProject}
+        title={t('project.newProject')}
+        aria-label={t('project.newProject')}
+      >
+        <PlusIcon size={14} />
+      </button>
 
-        {isMenuOpen && (
-          <div className="sidebar-project-menu" style={menuPosition}>
-            <div className="sidebar-project-menu-section">
-              <span className="sidebar-project-menu-section-title">{t('project.organize')}</span>
-              <button
-                type="button"
-                className="sidebar-project-menu-item"
-                onClick={() => { onProjectGroupBy('byProject'); closeMenu(); }}
-              >
-                {projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-                <span>{t('project.byProject')}</span>
-              </button>
-              <button
-                type="button"
-                className="sidebar-project-menu-item"
-                onClick={() => { onProjectGroupBy('singleList'); closeMenu(); }}
-              >
-                {projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-                <span>{t('project.inOneList')}</span>
-              </button>
-            </div>
-            <div className="sidebar-project-menu-divider" />
-            <div className="sidebar-project-menu-section">
-              <span className="sidebar-project-menu-section-title">{t('project.sortBy')}</span>
-              <button
-                type="button"
-                className="sidebar-project-menu-item"
-                onClick={() => { onProjectSortBy('priority'); closeMenu(); }}
-              >
-                {projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-                <span>{t('project.priority')}</span>
-              </button>
-              <button
-                type="button"
-                className="sidebar-project-menu-item"
-                onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
-              >
-                {projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-                <span>{t('project.lastUpdated')}</span>
-              </button>
-              <button
-                type="button"
-                className="sidebar-project-menu-item"
-                onClick={() => { onProjectSortBy('manual'); closeMenu(); }}
-              >
-                {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
-                <span>{t('project.manualSort')}</span>
-              </button>
-            </div>
+      {isMenuOpen && (
+        <div className="sidebar-project-menu" style={menuPosition}>
+          <div className="sidebar-project-menu-section">
+            <span className="sidebar-project-menu-section-title">{t('project.organize')}</span>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => { onProjectGroupBy('byProject'); closeMenu(); }}
+            >
+              {projectGroupBy === 'byProject' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+              <span>{t('project.byProject')}</span>
+            </button>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => { onProjectGroupBy('singleList'); closeMenu(); }}
+            >
+              {projectGroupBy === 'singleList' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+              <span>{t('project.inOneList')}</span>
+            </button>
           </div>
-        )}
-      </div>
+          <div className="sidebar-project-menu-divider" />
+          <div className="sidebar-project-menu-section">
+            <span className="sidebar-project-menu-section-title">{t('project.sortBy')}</span>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => { onProjectSortBy('priority'); closeMenu(); }}
+            >
+              {projectSortBy === 'priority' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+              <span>{t('project.priority')}</span>
+            </button>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => { onProjectSortBy('lastActivity'); closeMenu(); }}
+            >
+              {projectSortBy === 'lastActivity' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+              <span>{t('project.lastUpdated')}</span>
+            </button>
+            <button
+              type="button"
+              className="sidebar-project-menu-item"
+              onClick={() => { onProjectSortBy('manual'); closeMenu(); }}
+            >
+              {projectSortBy === 'manual' ? <CheckIcon size={12} /> : <span className="sidebar-project-menu-check" />}
+              <span>{t('project.manualSort')}</span>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

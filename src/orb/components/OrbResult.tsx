@@ -9,24 +9,27 @@
  * focusedEntity.redacted=true 时 main 进程拒绝。
  */
 import { useEffect, useRef, useState } from 'react';
+import { BloubOrb, type OrbMoment } from '../bot/BloubOrb';
 import type { ResultContent } from '../types';
 
 interface OrbResultProps {
   result: ResultContent | null;
+  /** 瞬时动画（长任务完成 burst），随卡片挂载播放一次。 */
+  moment?: OrbMoment | null;
   onInsertTab: () => Promise<void>;
 }
 
-export function OrbResult({ result, onInsertTab }: OrbResultProps) {
+export function OrbResult({ result, moment = null, onInsertTab }: OrbResultProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [inserting, setInserting] = useState(false);
   const [insertError, setInsertError] = useState<string | null>(null);
 
-  // Auto-scroll to bottom as markdown streams in
+  // Auto-scroll to bottom as the stream accumulates
   useEffect(() => {
     if (bodyRef.current) {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
     }
-  }, [result?.html]);
+  }, [result?.rawText]);
 
   const handleInsertTab = async () => {
     setInserting(true);
@@ -44,8 +47,8 @@ export function OrbResult({ result, onInsertTab }: OrbResultProps) {
     <div className="orb-result orb-no-drag" role="dialog" aria-label="Duya 结果">
       <div className="orb-result-body" ref={bodyRef}>
         {result?.title && <h2>{result.title}</h2>}
-        {result?.html ? (
-          <div dangerouslySetInnerHTML={{ __html: result.html }} />
+        {result?.rawText ? (
+          <div className="orb-result-text">{result.rawText}</div>
         ) : (
           <p style={{ color: 'var(--orb-fg-muted)' }}>等待结果...</p>
         )}
@@ -57,9 +60,11 @@ export function OrbResult({ result, onInsertTab }: OrbResultProps) {
       </div>
 
       <div className="orb-result-toolbar">
+        {/* 迷你小怪物：随卡片挂载把 moment（burst）播完，之后安静呼吸。 */}
+        <BloubOrb size={26} moment={moment} fps={30} />
         <button
           className="orb-result-action"
-          onClick={() => window.electronAPI?.orb?.hide()}
+          onClick={() => window.electronAPI?.orb?.collapse()}
           aria-label="关闭 (Esc)"
         >
           Esc

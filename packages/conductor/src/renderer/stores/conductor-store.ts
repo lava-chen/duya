@@ -1,7 +1,7 @@
 import { create } from "zustand";
-import type { ConductorCanvas, ConductorWidget, ConductorSnapshot, ConductorAction, Actor, CanvasElement, CanvasPosition } from "..//types/conductor";
+import type { ConductorCanvas, ConductorCanvasGroup, ConductorWidget, ConductorSnapshot, ConductorAction, Actor, CanvasElement, CanvasPosition } from "..//types/conductor";
 import { ConductorBridge } from "..//ipc/conductor-bridge";
-import { undoAction, redoAction, executeAction } from "..//ipc/conductor-ipc";
+import { undoAction, redoAction, executeAction, updateCanvas, createCanvasGroup, updateCanvasGroup, deleteCanvasGroup } from "..//ipc/conductor-ipc";
 import { getConductorHostOrNull, type ModelOption, type ConductorModelInfo } from "..//host";
 import { widgetToElementAdapter } from "..//ipc/widget-element-adapter";
 import { CanvasSpatialIndex } from "../domain/canvas/spatialIndex";
@@ -101,6 +101,14 @@ interface ConductorState {
   activeCanvasId: string | null;
   widgets: ConductorWidget[];
   elements: CanvasElement[];
+  /**
+   * Records who caused the most recent elements-array mutation. The canvas
+   * auto-fit effect reads this so it re-fits ONLY after the agent adds or
+   * removes elements (a freshly generated scene settling into view) — never
+   * after the user works with canvas tools, which would otherwise yank their
+   * carefully-framed zoom/pan out from under them.
+   */
+  lastElementMutationActor: Actor | null;
   snapshot: ConductorSnapshot | null;
   editMode: boolean;
   canUndo: boolean;
@@ -182,6 +190,22 @@ interface ConductorState {
   updateCanvas: (canvas: ConductorCanvas) => void;
   setActiveCanvas: (canvasId: string) => void;
 
+  // Canvas asset library (Notion-style)
+  canvasGroups: ConductorCanvasGroup[];
+  setCanvasGroups: (groups: ConductorCanvasGroup[]) => void;
+  canvasView: "gallery" | "table";
+  setCanvasView: (view: "gallery" | "table") => void;
+  canvasSort: { field: "name" | "createdAt" | "updatedAt" | "manual"; dir: "asc" | "desc" };
+  setCanvasSort: (sort: { field: "name" | "createdAt" | "updatedAt" | "manual"; dir: "asc" | "desc" }) => void;
+  canvasFilter: { favoritesOnly: boolean; groupId: string | null; tag: string | null; search: string };
+  setCanvasFilter: (patch: Partial<{ favoritesOnly: boolean; groupId: string | null; tag: string | null; search: string }>) => void;
+  toggleFavorite: (canvasId: string) => Promise<void>;
+  setCanvasGroup: (canvasId: string, groupId: string | null) => Promise<void>;
+  setCanvasTags: (canvasId: string, tags: string[]) => Promise<void>;
+  createGroup: (name: string) => Promise<ConductorCanvasGroup | null>;
+  renameGroup: (groupId: string, name: string) => Promise<void>;
+  deleteGroup: (groupId: string) => Promise<void>;
+
   // Snapshot / widget hydration
   setSnapshot: (snapshot: ConductorSnapshot) => void;
   setWidgets: (widgets: ConductorWidget[]) => void;
@@ -241,6 +265,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   activeCanvasId: null,
   widgets: [],
   elements: [],
+  lastElementMutationActor: null,
   snapshot: null,
   editMode: true,
   canUndo: false,
@@ -294,6 +319,104 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
 
   setActiveCanvas: (canvasId) => set({ activeCanvasId: canvasId }),
 
+  canvasGroups: [],
+  setCanvasGroups: (groups) => set({ canvasGroups: groups }),
+
+  canvasView: "gallery",
+  setCanvasView: (view) => set({ canvasView: view }),
+
+  canvasSort: { field: "updatedAt", dir: "desc" },
+  setCanvasSort: (sort) => set({ canvasSort: sort }),
+
+  canvasFilter: { favoritesOnly: false, groupId: null, tag: null, search: "" },
+  setCanvasFilter: (patch) =>
+    set((state) => ({ canvasFilter: { ...state.canvasFilter, ...patch } })),
+
+  toggleFavorite: async (canvasId) => {
+    const canvas = get().canvases.find((c) => c.id === canvasId);
+    if (!canvas) return;
+    const next = !canvas.isFavorite;
+    try {
+      const updated = await updateCanvas(canvasId, { isFavorite: next });
+      if (updated) {
+        set((state) => ({
+          canvases: state.canvases.map((c) => (c.id === canvasId ? updated : c)),
+        }));
+      }
+    } catch {
+      // IPC failure — leave optimistic local state unchanged
+    }
+  },
+
+  setCanvasGroup: async (canvasId, groupId) => {
+    try {
+      const updated = await updateCanvas(canvasId, { groupId });
+      if (updated) {
+        set((state) => ({
+          canvases: state.canvases.map((c) => (c.id === canvasId ? updated : c)),
+        }));
+      }
+    } catch {
+      /* IPC failure */
+    }
+  },
+
+  setCanvasTags: async (canvasId, tags) => {
+    try {
+      const updated = await updateCanvas(canvasId, { tags });
+      if (updated) {
+        set((state) => ({
+          canvases: state.canvases.map((c) => (c.id === canvasId ? updated : c)),
+        }));
+      }
+    } catch {
+      /* IPC failure */
+    }
+  },
+
+  createGroup: async (name) => {
+    if (!name.trim()) return null;
+    try {
+      const group = await createCanvasGroup({ name: name.trim() });
+      set((state) => ({ canvasGroups: [...state.canvasGroups, group] }));
+      return group;
+    } catch {
+      return null;
+    }
+  },
+
+  renameGroup: async (groupId, name) => {
+    if (!name.trim()) return;
+    try {
+      const updated = await updateCanvasGroup(groupId, { name: name.trim() });
+      if (updated) {
+        set((state) => ({
+          canvasGroups: state.canvasGroups.map((g) => (g.id === groupId ? updated : g)),
+        }));
+      }
+    } catch {
+      /* IPC failure */
+    }
+  },
+
+  deleteGroup: async (groupId) => {
+    try {
+      const ok = await deleteCanvasGroup(groupId);
+      if (ok) {
+        set((state) => ({
+          canvasGroups: state.canvasGroups.filter((g) => g.id !== groupId),
+          // Clear the filter if it pointed at the deleted group
+          canvasFilter:
+            state.canvasFilter.groupId === groupId
+              ? { ...state.canvasFilter, groupId: null }
+              : state.canvasFilter,
+        }));
+      }
+    } catch {
+      /* IPC failure */
+    }
+  },
+
   setSnapshot: (snapshot) => {
     const elements = (snapshot as any).elements ?? [];
     set({
@@ -330,6 +453,10 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
   addElement: (element) => {
     const normalized = normalizeElement(element);
     set((state) => ({ elements: [...state.elements, normalized] }));
+    // User-local creation (canvas tools draw elements directly). Marking it
+    // as a user mutation prevents the canvas auto-fit effect from resetting
+    // the user's zoom/pan when they add an element themselves.
+    set({ lastElementMutationActor: "user" });
     canvasSpatialIndex.upsert(normalized);
   },
 
@@ -411,6 +538,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
+            lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
           });
           canvasSpatialIndex.upsert(normalized);
         }
@@ -517,6 +645,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
+            lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
           });
           for (const el of freshNormalized) {
             canvasSpatialIndex.upsert(el);
@@ -547,6 +676,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
             canRedo: false,
             uiStatus: "idle",
             syncStatusText: "",
+            lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
           });
           canvasSpatialIndex.upsert(normalized);
           // Auto-focus on agent-created elements so the user can see
@@ -571,6 +701,7 @@ export const useConductorStore = create<ConductorState>((set, get) => ({
           canRedo: false,
           uiStatus: "idle",
           syncStatusText: "",
+          lastElementMutationActor: patch.actor === "agent" ? "agent" : "user",
         });
         return;
       }

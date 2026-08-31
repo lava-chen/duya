@@ -20,7 +20,7 @@
 
 export type PluginTrustLevel = 'official' | 'verified' | 'local' | 'untrusted';
 export type PluginHealth = 'ready' | 'disabled' | 'needs_setup' | 'failed' | 'unknown';
-export type PluginOrigin = 'bundled' | 'marketplace' | 'local' | 'builtin-directory' | 'development' | 'unknown';
+export type PluginOrigin = 'bundled' | 'marketplace' | 'local' | 'development' | 'unknown';
 
 export interface PluginCapabilityCounts {
   skills: number;

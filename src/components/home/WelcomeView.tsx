@@ -14,7 +14,7 @@ import type { FileAttachment } from "@/types/message";
 
 interface WelcomeViewProps {
   onSelectThread: (threadId: string) => void;
-  onSendMessage?: (content: string, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string) => void;
+  onSendMessage?: (content: string, model?: string, files?: FileAttachment[], agentProfileId?: string | null, outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null, mode?: string, effort?: string, displayContent?: string, conductorMode?: boolean) => void;
 }
 
 export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps) {
@@ -151,6 +151,9 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
       content: string,
       files?: FileAttachment[],
       outputStyleConfig?: { name: string; prompt: string; keepCodingInstructions?: boolean } | null,
+      mode?: string,
+      displayContent?: string,
+      conductorMode?: boolean,
     ) => {
       if (!selectedProject) return;
 
@@ -193,7 +196,7 @@ export function WelcomeView({ onSelectThread, onSendMessage }: WelcomeViewProps)
           // Double rAF ensures the ChatView mount effects (subscribeSession, etc.) have fired
           requestAnimationFrame(() => {
             const send = onSendMessageRef.current;
-            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, undefined, effort);
+            send?.(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorMode);
           });
         });
       }

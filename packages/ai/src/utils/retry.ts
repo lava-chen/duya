@@ -22,6 +22,7 @@ import {
   isAbortError,
   formatErrorForDisplay,
   createRetryEvent,
+  extractProviderErrorMessage,
 } from './errors.js';
 
 /**
@@ -163,12 +164,16 @@ export async function* withRetry<T extends SSEEvent>(
 
       for await (const event of generator) {
         // Mark that we've yielded content so we don't retry later.
-        // Content events are: text, tool_use, tool_use_started.
+        // Content events are: text, tool_use, tool_use_started and the
+        // plan-461 argument fragments (tool_use_delta) — a delta already
+        // handed partial arguments to the consumer, so replaying the
+        // stream would duplicate them.
         // (thinking/retry/system events are not "content" in this sense.)
         if (
           event.type === 'text' ||
           event.type === 'tool_use' ||
-          event.type === 'tool_use_started'
+          event.type === 'tool_use_started' ||
+          event.type === 'tool_use_delta'
         ) {
           hasYieldedContent = true;
         }
@@ -253,8 +258,18 @@ export async function* withRetry<T extends SSEEvent>(
 
       state.totalWaitMs += delayMs;
 
-      // Notify UI about retry
-      const retryEvent = createRetryEvent(state.attempt, fullConfig.maxRetries, delayMs);
+      // Notify UI about retry. Plan 462: pass the provider's own wording so
+      // the UI can show e.g. "余额不足或无可用资源包，请充值。（重新连接 1/10）"
+      // instead of an opaque counter.
+      const retryReason = extractProviderErrorMessage(llmError) ?? llmError.message;
+      const retryEvent = createRetryEvent(
+        state.attempt,
+        fullConfig.maxRetries,
+        delayMs,
+        retryReason,
+        llmError.type,
+        llmError.statusCode,
+      );
       yield retryEvent;
 
       if (fullConfig.onRetry) {

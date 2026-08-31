@@ -17,6 +17,7 @@ import { getProjectContinuitySection } from '../sections/projectContinuity.js'
 import { getVisualVerificationSection } from '../sections/dynamic/visualVerification.js'
 import { getRecentSessionsSection } from '../sections/dynamic/recentSessionsSection.js'
 import { getProjectInstructionsSection } from '../general/sections/project.js'
+import { getConfigProtectionSection } from '../general/sections/configProtection.js'
 
 // Research-specific sections
 import { resolveResearchIntent } from '../research/intentRouter.js'
@@ -32,6 +33,7 @@ export const researchConfig: PromptSystemConfig = {
   staticSections: [
     { name: 'projectContinuity', compute: getProjectContinuitySection },
     { name: 'projectInstructions', compute: getProjectInstructionsSection },
+    { name: 'configProtection', compute: getConfigProtectionSection },
     // Research-specific sections — bypass profile gating (always render).
     { name: 'researchProfile', compute: getResearchProfileSection, bypassProfile: true },
     { name: 'taskIntent', compute: getTaskIntentPromptSection, bypassProfile: true },

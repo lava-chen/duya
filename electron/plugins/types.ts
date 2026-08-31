@@ -182,6 +182,7 @@ export type PluginCategory = 'productivity' | 'development' | 'research' | 'data
  */
 export interface PluginInterface {
   displayName?: string;
+  shortDescription?: string;
   longDescription?: string;
   category?: PluginCategory;
   brandColor?: string;
@@ -191,6 +192,11 @@ export interface PluginInterface {
    * The catalog resolves this to a `duya-file://` URL the renderer can load.
    */
   icon?: string;
+  /**
+   * codex parity (doc 17.2): up to 3 example prompts shown as "try asking"
+   * suggestions. Parsed by `parseInterfaceBlock` (each <= 128 chars).
+   */
+  defaultPrompt?: string[];
 }
 
 // NOTE: mirrors zod schema in src/lib/plugin-types.ts — kept as the
@@ -221,6 +227,14 @@ export interface PluginCatalogEntry {
   trustLevel: PluginTrustLevel;
   manifest: PluginManifest;
   /**
+   * Resolved `duya-file://` icon URL from the manifest `interface.icon`
+   * (renderer `PluginCatalogEntry` carries the same field). Undefined when
+   * the plugin declares no icon or the file is missing on disk.
+   */
+  icon?: string;
+  /** Manifest author (renderer `PluginCatalogEntry` carries the same field). */
+  author?: { name: string; url?: string };
+  /**
    * Distinguishes a standalone skill marketplace entry (`'skill'`) from a
    * regular plugin entry (`'plugin'`, the default). Skill entries are
    * sourced from `packages/agent/skills/` and install only a single
@@ -237,16 +251,6 @@ export interface PluginCatalogEntry {
    */
   skillSourceDir?: string;
   /**
-   * Plan: plugin-config-simplification — absolute path to the builtin
-   * plugin's cache root (`~/.duya/plugins/cache/builtin/<id>/<version>/`).
-   * Set by the catalog scanner for `source: 'bundled'` entries so
-   * `PluginManager.installFromCatalog` can copy the on-disk
-   * `.duya-plugin/plugin.json` + capability assets directly, instead of
-   * synthesising an inline manifest. Undefined for marketplace/local/skill
-   * entries.
-   */
-  builtinCacheDir?: string;
-  /**
    * Plan 455 — marketplace attribution for `source: 'marketplace'` entries.
    * Matches the ConfigStore `[marketplaces.<name>]` key and the registry
    * composite key suffix (`<pluginId>@<marketplace>`).
@@ -262,6 +266,15 @@ export interface PluginCatalogEntry {
   installPolicy?: 'not_available' | 'available' | 'installed_by_default';
   /** Plan 455 — catalog-declared authentication policy (codex 17.3.1 parity). */
   authPolicy?: 'on_install' | 'on_use';
+  /**
+   * Short/long marketing copy from the manifest `interface` block. The
+   * renderer displays `shortDescription` on marketplace cards and falls
+   * back to `description`.
+   */
+  shortDescription?: string;
+  longDescription?: string;
+  /** "Try asking" prompts (manifest `interface.defaultPrompt`, max 3). */
+  usageExamples?: Array<{ prompt: string }>;
   capabilityCounts?: {
     skills: number;
     mcpServers: number;
@@ -296,6 +309,12 @@ export interface PluginRegistryEntry {
   grantedPermissions: PluginPermissionRequest[];
   setupState: PluginSetupState;
   health: PluginRuntimeHealth;
+  /**
+   * Resolved `duya-file://` icon URL, derived at read time from the catalog
+   * entry by `hydrateViewItem` (never persisted — config stores only
+   * `enabled`).
+   */
+  icon?: string;
   lastError?: {
     message: string;
     at: string;

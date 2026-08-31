@@ -119,11 +119,12 @@ export function useSlashCommands(opts: {
   closePopover: () => void;
   sessionId?: string;
   /**
-   * Plan 450: connected app-connection providers surfaced as @-mention
-   * items in the context popover. Selected items insert `@<providerId> `,
-   * which the stream-session-manager extracts back to `mentionedProviders`.
+   * Installed plugins surfaced as @-mention items in the context popover
+   * (one row per plugin). Selected items insert `@<pluginId> `, which the
+   * stream-session-manager rewrites to `[@Name](plugin://id)` and merges
+   * into `mentionedProviders`/`mentionedPlugins` on submit.
    */
-  connectorItems?: PopoverItem[];
+  pluginItems?: PopoverItem[];
 }): UseSlashCommandsReturn {
   const {
     textareaRef,
@@ -139,7 +140,7 @@ export function useSlashCommands(opts: {
     setTriggerPos,
     closePopover,
     sessionId,
-    connectorItems,
+    pluginItems,
   } = opts;
 
   const { t, locale } = useTranslation();
@@ -352,20 +353,20 @@ export function useSlashCommands(opts: {
     };
   }, [locale]);
 
-  // Static "add context" items — attachment + modes + connectors, shown for
+  // Static "add context" items — attachment + modes + plugins, shown for
   // `@` and when the plus button is pressed. All static (no async fetch
   // needed). Plan 452 Phase A: the MCP entry moved out — server toggles live
   // in Settings only, and MCP tools are Direct-exposed (no @-activation).
   const contextItems = useMemo<PopoverItem[]>(
-    // Plan 450: connector items right after addFilesItem so connected apps
-    // sit at the top of the `@` popover (mirroring codex's layout where
-    // app mentions are the first thing users see after attachments).
-    () => [addFilesItem, ...(connectorItems ?? []), ...modeItems],
-    [addFilesItem, connectorItems, modeItems],
+    // Installed plugins sit right after the attachments row so the most
+    // relevant capabilities are the first thing users see in the `@` popover
+    // (codex parity: plugin mentions lead the list).
+    () => [addFilesItem, ...(pluginItems ?? []), ...modeItems],
+    [addFilesItem, pluginItems, modeItems],
   );
 
   // Plan 450 follow-up: when `contextItems` changes (e.g. the MessageInput's
-  // async connector fetch completes and updates `connectorItems`) AND the
+  // async plugin fetch completes and updates `pluginItems`) AND the
   // `@` popover is currently open, push the latest items into the popover.
   // Without this, handleInputChange's initial setPopoverItems(contextItems)
   // freezes the (empty) snapshot at trigger time and the popover never

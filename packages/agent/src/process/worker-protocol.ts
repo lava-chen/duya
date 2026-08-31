@@ -68,6 +68,15 @@ export interface ChatStartCommand {
     displayContent?: string;
     /** Plan 450 Phase H: `/skill-name` mentioned this run (see ChatOptions). */
     mentionedSkills?: string[];
+    /** Plugins @-mentioned this run — structured capability summaries (see ChatOptions). */
+    mentionedPlugins?: Array<{
+      pluginId: string;
+      name: string;
+      description?: string;
+      appConnections: string[];
+      mcpServers: string[];
+      skillNames: string[];
+    }>;
     parsedDocs?: Array<{
       filename: string;
       charCount: number;
@@ -238,6 +247,20 @@ export interface SubagentToolUseStartedEvent {
   id: string;
   name: string;
   input: unknown;
+}
+
+/**
+ * Plan 461: incremental tool-call argument fragment. `delta` is a raw JSON
+ * slice of the tool's argument object — not a complete document. Consumers
+ * accumulate per `id` and parse leniently to render partial arguments while
+ * the model is still producing them.
+ */
+export interface SubagentToolUseDeltaEvent {
+  type: 'chat:tool_use_delta';
+  sessionId: string;
+  id: string;
+  name: string;
+  delta: string;
 }
 
 export interface SubagentToolResultEvent {
@@ -520,6 +543,7 @@ export type WorkerEvent =
   | AgentTextEvent
   | AgentThinkingEvent
   | SubagentToolUseStartedEvent
+  | SubagentToolUseDeltaEvent
   | SubagentToolUseEvent
   | SubagentToolResultEvent
   | SubagentToolProgressEvent

@@ -71,6 +71,8 @@ export interface SharpAdapter {
 export interface SharpPipeline {
   /** Resize. Width/height in px. */
   resize(opts: { width?: number; height?: number; fit?: 'cover' | 'contain' | 'fill' | 'inside' | 'outside' }): SharpPipeline;
+  /** Extract a rectangular region (sharp.extract). left/top are pixel offsets into the source. */
+  extract(region: { left: number; top: number; width: number; height: number }): SharpPipeline;
   /** Composite another image on top of this one. */
   composite(images: Array<{ input: Buffer; top?: number; left?: number }>): SharpPipeline;
   /** Encode to PNG. */
@@ -206,20 +208,64 @@ export class ElectronDesktopBackend implements DesktopBackend {
         });
       }
       // When a region is set, only number elements that fall within
-      // the rectangle. The full capture is still returned (so the
-      // model can see context), but the overlay highlights a
-      // specific UI area.
-      if (region && elements.length > 0) {
-        elements = elements.filter(
-          (el) =>
-            el.bbox.x + el.bbox.w >= region.x &&
-            el.bbox.x <= region.x + region.w &&
-            el.bbox.y + el.bbox.h >= region.y &&
-            el.bbox.y <= region.y + region.h,
-        );
+      // the rectangle AND crop the rendered image to that rectangle.
+      // Before this change, zoom returned the full-screen capture
+      // unchanged and only filtered which SOM numbers were drawn -
+      // the model could see the overlay markers but could not
+      // actually inspect the region at higher detail.
+      if (region && (region.w ?? 0) > 0 && (region.h ?? 0) > 0) {
+        if (elements.length > 0) {
+          elements = elements.filter(
+            (el) =>
+              el.bbox.x + el.bbox.w >= region.x &&
+              el.bbox.x <= region.x + region.w &&
+              el.bbox.y + el.bbox.h >= region.y &&
+              el.bbox.y <= region.y + region.h,
+          );
+        }
       }
       if (this.opts.renderOverlay && elements.length > 0) {
         renderedBuffer = await this.opts.renderOverlay(nativeBuffer, elements);
+      }
+    }
+
+    // Crop the final buffer to the requested region. Element bbox
+    // coordinates are re-based so SOM numbers refer to the cropped
+    // image, which matches the bboxes the capture pipeline emits
+    // for full-screen captures.
+    if (region && (region.w ?? 0) > 0 && (region.h ?? 0) > 0) {
+      const safeW = Math.min(region.w, nativeSize.width - region.x);
+      const safeH = Math.min(region.h, nativeSize.height - region.y);
+      if (safeW > 0 && safeH > 0) {
+        const cropped = await this.opts.sharp(renderedBuffer)
+          .extract({
+            left: Math.max(0, region.x),
+            top: Math.max(0, region.y),
+            width: safeW,
+            height: safeH,
+          })
+          .png()
+          .toBuffer();
+        renderedBuffer = cropped;
+        const dx = -Math.max(0, region.x);
+        const dy = -Math.max(0, region.y);
+        elements = elements.map((el) => ({
+          ...el,
+          bbox: {
+            x: el.bbox.x + dx,
+            y: el.bbox.y + dy,
+            w: el.bbox.w,
+            h: el.bbox.h,
+          },
+        }));
+        return {
+          base64: renderedBuffer.toString('base64'),
+          width: safeW,
+          height: safeH,
+          elements,
+          displayId,
+          capturedAt: new Date().toISOString(),
+        };
       }
     }
 
@@ -437,12 +483,19 @@ export class ElectronDesktopBackend implements DesktopBackend {
     return null;
   }
 
-  private toNutButton(button: 'left' | 'right' | 'middle'): 'LEFT' | 'RIGHT' | 'MIDDLE' {
-    return button === 'right'
-      ? 'RIGHT'
-      : button === 'middle'
-        ? 'MIDDLE'
-        : 'LEFT';
+  private toNutButton(button: 'left' | 'right' | 'middle'): number {
+    // nut.js's MouseAction.buttonLookup(btn) expects the numeric value
+    // from the @nut-tree-fork/shared Button enum (LEFT=0, MIDDLE=1,
+    // RIGHT=2). Returning the string name here caused libnut's native
+    // mouseClick to throw "A string was expected" because Map.get on the
+    // numeric-keyed ButtonLookupMap returned undefined.
+    const upper = button.toUpperCase() as 'LEFT' | 'RIGHT' | 'MIDDLE';
+    const map = this.opts.nut.Button;
+    if (map && typeof map === 'object' && typeof map[upper] === 'number') {
+      return map[upper] as number;
+    }
+    // Fallback: numeric enum positions are LEFT=0, MIDDLE=1, RIGHT=2.
+    return upper === 'RIGHT' ? 2 : upper === 'MIDDLE' ? 1 : 0;
   }
 
   private toNutDirection(direction: 'up' | 'down' | 'left' | 'right'): 'UP' | 'DOWN' | 'LEFT' | 'RIGHT' {

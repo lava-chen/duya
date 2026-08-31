@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { getLogger, LogComponent } from '../logging/logger';
-import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths } from './catalog';
+import { getPluginCatalog, getPluginCatalogEntry, getLocalPluginPaths, resolveIconUrl } from './catalog';
 import { listCapabilityKinds, readPluginManifest } from './manifest';
 import { PluginRegistryStore } from './PluginRegistryStore';
 import { PluginSetupStore } from './PluginSetupStore';
@@ -132,7 +132,7 @@ export class PluginManager {
    *
    *  - `name`/`version`/`source`/`trustLevel`  -> marketplace catalog entry
    *  - `marketplace`/`autoUpdate`              -> derived from entry key / default
-   *  - `installPath`                           -> entry, else catalog `builtinCacheDir`, else resolved installed symlink
+   *  - `installPath`                           -> entry, else resolved installed symlink
    *  - `dataPath`                              -> `plugins-data/<id>` (derived from store layout)
    *  - `grantedPermissions`                    -> catalog manifest permissions
    *  - `setupState`                            -> recomputed from manifest + setup store (SQLite `plugin_setup_values`)
@@ -159,12 +159,11 @@ export class PluginManager {
     const source = catalogEntry?.source ?? entry.source ?? 'local';
     const trustLevel = catalogEntry?.trustLevel ?? entry.trustLevel ?? 'local';
     const scope = entry.scope ?? 'user';
-    const marketplace = entry.marketplace || catalogEntry?.source || 'builtin';
+    const marketplace = entry.marketplace || catalogEntry?.source || 'official';
     const autoUpdate = entry.autoUpdate ?? false;
 
     const installPath =
       entry.installPath ||
-      catalogEntry?.builtinCacheDir ||
       resolveInstalledSymlink(entry.id) ||
       '';
     const dataPath = entry.dataPath || path.join(this.store.getPaths().dataDir, entry.id);
@@ -191,6 +190,14 @@ export class PluginManager {
       scope,
       marketplace,
       autoUpdate,
+      // Resolved duya-file:// icon from the catalog entry (plan 455
+      // follow-up) — installed lists can render the brand icon. When the
+      // catalog is unavailable, fall back to reading the manifest interface.
+      icon:
+        catalogEntry?.icon ??
+        (manifest?.interface?.icon && installPath
+          ? resolveIconUrl(manifest, installPath)
+          : undefined),
       installPath,
       dataPath,
       grantedPermissions,
@@ -347,8 +354,7 @@ export class PluginManager {
       );
 
       const version = resolvePluginVersion('', catalogEntry.manifest);
-      const marketplaceName = catalogEntry.marketplace
-        ?? (catalogEntry.source === 'bundled' ? 'builtin' : catalogEntry.source);
+      const marketplaceName = catalogEntry.marketplace ?? catalogEntry.source;
       const cacheDir = ensurePluginCacheDir(marketplaceName, pluginId, version);
 
       const { installedDir, dataDir, stagingDir } = this.store.getPaths();
@@ -374,22 +380,16 @@ export class PluginManager {
           fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
         }
       } else {
-        // Plan: plugin-config-simplification — builtin plugins are synced
-        // to `~/.duya/plugins/cache/builtin/<id>/<version>/` at startup,
-        // and the catalog sets `builtinCacheDir` to that cache root. Copy
-        // the entire directory (`.duya-plugin/plugin.json` + all capability
-        // assets) so the install is a faithful mirror of the source tree.
-        // No inline manifest is synthesised — disk is the single source.
-        if (catalogEntry.builtinCacheDir && fs.existsSync(catalogEntry.builtinCacheDir)) {
-          copyDirectoryRecursive(catalogEntry.builtinCacheDir, stagingPath);
-        } else {
-          this.logger.warn('Builtin plugin cache dir missing; falling back to manifest-only install', {
-            pluginId: catalogEntry.id,
-            builtinCacheDir: catalogEntry.builtinCacheDir,
-          }, LogComponent.Main);
-          const manifestPath = path.join(stagingPath, 'plugin.json');
-          fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
-        }
+        // Manifest-only fallback: no marketplace/local source directory
+        // resolves for this entry (e.g. a stale catalog row). The install
+        // proceeds with a synthetic plugin.json so the registry stays
+        // consistent with what the user asked for.
+        this.logger.warn('No plugin source directory found; installing manifest only', {
+          pluginId: catalogEntry.id,
+          source: catalogEntry.source,
+        }, LogComponent.Main);
+        const manifestPath = path.join(stagingPath, 'plugin.json');
+        fs.writeFileSync(manifestPath, JSON.stringify(catalogEntry.manifest, null, 2), 'utf8');
 
         // Skill marketplace entries ship a single skill directory alongside
         // the synthetic plugin.json. Copy the bundled skill source into

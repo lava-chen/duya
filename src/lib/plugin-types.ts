@@ -242,6 +242,24 @@ export const PluginPublisherSchema = z.object({
 
 export type PluginPublisher = z.infer<typeof PluginPublisherSchema>;
 
+/**
+ * Manifest `interface` block — market-facing metadata (plan 455 follow-up).
+ * Mirrors the main-process `PluginInterface` subset the renderer consumes
+ * (the icon URL itself is resolved main-side; only the declared relative
+ * path and copy cross IPC inside the manifest).
+ */
+export const PluginInterfaceMetadataSchema = z.object({
+  displayName: z.string().optional(),
+  shortDescription: z.string().optional(),
+  longDescription: z.string().optional(),
+  category: z.string().optional(),
+  brandColor: z.string().optional(),
+  icon: z.string().optional(),
+  defaultPrompt: z.array(z.string()).optional(),
+});
+
+export type PluginInterfaceMetadata = z.infer<typeof PluginInterfaceMetadataSchema>;
+
 const PluginManifestV1Schema = z.object({
   schemaVersion: z.literal('duya.plugin.v1'),
   id: z.string().min(1),
@@ -268,6 +286,7 @@ const PluginManifestV2Schema = z.object({
   components: PluginComponentsSchema,
   permissionPolicy: PermissionPolicySchema.optional(),
   publisher: PluginPublisherSchema.optional(),
+  interface: PluginInterfaceMetadataSchema.optional(),
   /**
    * Agent Plugins 1.0.0 — client-specific manifest data keyed by
    * reverse-domain namespace. Passed through without runtime semantics.

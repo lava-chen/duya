@@ -63,63 +63,10 @@ Thumbs.db
 # Coverage
 coverage/
 
-# Testing
-*.test.ts
-*.test.tsx
-*.spec.ts
-*.spec.tsx
-!src/lib/message-input-logic.spec.ts
-!src/lib/chat-file-links.test.ts
-!src/lib/html-to-plain-text.test.ts
-!src/components/chat/RichTextInput.test.tsx
-!src/components/chat/__tests__/MessageInputPaste.test.tsx
-!src/components/chat/NextStepSuggestions.test.tsx
-!src/hooks/__tests__/useNextStepSuggestions.test.tsx
-!src/hooks/__tests__/useStreamingActions.test.ts
-!src/hooks/useSubAgentProgress.test.ts
-!src/hooks/__tests__/usePanel.test.ts
-!src/lib/stream-session-manager.test.ts
-!src/components/chat/tools/rows/SubAgentToolRow.test.tsx
-!src/components/layout/TaskDrawer.test.tsx
-!src/components/layout/panels/code-review-diff.test.ts
-!src/components/chat/SlashCommandPopover.test.tsx
-!packages/conductor/src/renderer/components/native/__tests__/native-element-capabilities.test.ts
-!packages/conductor/src/renderer/components/native/editing/__tests__/useElementEditSession.test.tsx
-!packages/conductor/src/renderer/hooks/__tests__/useCanvasCaptureRequest.test.ts
-!packages/conductor/src/renderer/refine/__tests__/region-fit.test.ts
-!packages/agent/src/memory-rollout/wakeup.test.ts
-!src/components/chat/SubAgentPanel.test.tsx
-!src/components/chat/__tests__/FileEditToolRow.test.tsx
-!src/components/chat/__tests__/ContextUsageRing.test.tsx
-!src/components/chat/CompactSummary.test.tsx
-# Tier-1 LM Studio capability plumbing tests (Plan 437-style helpers).
-!src/components/providers/__tests__/ModelCapabilityBadges.test.tsx
-!src/components/providers/__tests__/ProviderEditView.test.tsx
-!src/lib/providers/models/__tests__/ModelSyncService.test.ts
-# Tier-2 reasoning-effort options / isLoaded plumbing.
-!packages/ai/test/getEffortOptionsForCapability.test.ts
-# Untrack unit-test source for these packages.
-!packages/agent/tests/**/*.test.ts
-!packages/agent/tests/**/*.test.tsx
-!packages/agent/tests/**/*.spec.ts
-!packages/agent/tests/**/*.spec.tsx
-!packages/agent/src/**/__tests__/*.test.ts
-!packages/agent/src/**/__tests__/*.test.tsx
-!packages/computer-use/src/**/__tests__/*.test.ts
-!packages/plugin-core/tests/**/*.test.ts
-!packages/plugin-core/tests/**/*.test.tsx
-!packages/plugin-core/tests/**/*.spec.ts
-!packages/plugin-core/tests/**/*.spec.tsx
-!packages/ai/test/**/*.test.ts
-!packages/ai/test/**/*.test.tsx
-!electron/**/*.test.ts
-# E2E specs (Playwright) live in e2e/ and MUST be tracked — they are
-# integration tests, not scratch. Without this exception the broad
-# *.spec.ts rule above silently strips them from version control.
-!e2e/**/*.spec.ts
-!e2e/**/*.spec.tsx
-!e2e/**/*.test.ts
-!e2e/**/*.test.tsx
+# Unit tests are tracked like any other source (colocated *.test.ts /
+# *.spec.ts, e2e/*.spec.ts). No ignore rules for them: the previous
+# blanket *.test.ts rule silently dropped every new test file unless it
+# was individually negated below.
 
 # Project specific
 ui-screenshot-*.png
@@ -143,6 +90,7 @@ scripts/_probe-*.mjs
 scripts/_probe-*.js
 scripts/_scratch-*.mjs
 scripts/_scratch-*.js
+scripts/probe-*.cjs
 test-results/
 
 # Docs (keep only product-specs and release-notes)
@@ -212,3 +160,13 @@ output/
 # Local ABI prebuilt artifacts + stash patch archives (machine-specific)
 prebuilds/
 .stash-archive/
+
+# Voice / desktop probe artifacts (debug scratch, never commit)
+voice-mic-*.ps1
+voice-mic-probe.wav
+voice-mic-probes/
+probe-desktop-capture*.png
+.tmp-activate-wechat.ps1
+
+# WorkBuddy project data (local memory, not source)
+.workbuddy/

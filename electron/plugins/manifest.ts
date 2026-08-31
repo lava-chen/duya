@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import type { PluginCapabilityKind, PluginInterface, PluginManifest } from './types';
 import { discoverAllCapabilities } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
+import { parseAppDeclarationFile } from '../../packages/plugin-core/src/connectors/app-schema.js';
 
 // ----------------------------------------------------------------------------
 // Shared low-level helpers
@@ -147,13 +148,29 @@ function readPermissionsPolicy(pluginRoot: string): {
 }
 
 /**
- * Read the connection ids declared in `apps/connections.json` without
- * re-validating the provider (the app-connection manifest parser in
- * `electron/services/app-connections` owns provider validation and the
- * `SUPPORTED_PROVIDERS` list — Plan 312). Here we only need the id list
- * for the `components.appConnections` capability summary.
+ * Read the connection ids a plugin declares, for the
+ * `components.appConnections` capability summary. Provider validation and
+ * the builtin connector catalog live in `electron/services/app-connections`
+ * (Plan 312) — here we only need the id list.
+ *
+ * Two sources, in priority order (plan 455-open-connector-registry D3):
+ *  1. `<pluginRoot>/.app.json` — parsed by the shared app-schema
+ *     (`parseAppDeclarationFile`, lenient: malformed files return [] here)
+ *  2. `apps/connections.json` — legacy layout, kept for old plugin packages
  */
 function readAppConnectionIds(pluginRoot: string): string[] {
+  const appJsonPath = path.join(pluginRoot, '.app.json');
+  if (fs.existsSync(appJsonPath)) {
+    try {
+      const parsed = parseAppDeclarationFile(fs.readFileSync(appJsonPath, 'utf8'));
+      if (parsed.ok) {
+        return parsed.apps.map((app) => app.id);
+      }
+    } catch {
+      return [];
+    }
+  }
+
   const connsPath = path.join(pluginRoot, 'apps', 'connections.json');
   if (!fs.existsSync(connsPath)) return [];
   try {
@@ -211,6 +228,8 @@ function parseInterfaceBlock(raw: unknown): PluginInterface | undefined {
   const block: PluginInterface = {};
   const displayName = asOptionalString(raw.displayName);
   if (displayName) block.displayName = displayName;
+  const shortDescription = asOptionalString(raw.shortDescription);
+  if (shortDescription) block.shortDescription = shortDescription;
   const longDescription = asOptionalString(raw.longDescription);
   if (longDescription) block.longDescription = longDescription;
   const category = asOptionalString(raw.category);
@@ -221,6 +240,13 @@ function parseInterfaceBlock(raw: unknown): PluginInterface | undefined {
   if (icon) block.icon = icon;
   if (Array.isArray(raw.screenshots)) {
     block.screenshots = raw.screenshots.filter((s): s is string => typeof s === 'string');
+  }
+  // codex parity (doc 17.2): up to 3 example prompts, each <= 128 chars.
+  if (Array.isArray(raw.defaultPrompt)) {
+    const prompts = raw.defaultPrompt
+      .filter((p): p is string => typeof p === 'string' && p.trim().length > 0 && p.length <= 128)
+      .slice(0, 3);
+    if (prompts.length > 0) block.defaultPrompt = prompts;
   }
   return Object.keys(block).length > 0 ? block : undefined;
 }

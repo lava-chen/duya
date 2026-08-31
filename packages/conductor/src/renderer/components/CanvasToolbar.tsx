@@ -69,8 +69,6 @@ function diagramShapeConfig(shape: DiagramShape): Record<string, unknown> {
     shape,
     shapePreset: "filled",
     color: "yellow",
-    bgColor: "#F4B566",
-    borderStyle: { color: "#E98436", width: 1, style: "solid" },
   };
 }
 

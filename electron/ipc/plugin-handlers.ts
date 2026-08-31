@@ -26,6 +26,11 @@ import {
   type MarketplaceSyncOutcome,
 } from '../plugins/marketplace/manager';
 import { notifyMcpConfigChanged } from '../services/mcp-write-reload';
+import {
+  reconcilePluginAppDeclarations,
+  reconcilePluginAppDeclarationsFor,
+  unregisterPluginAppDeclarations,
+} from '../services/app-connections/declarative/reconcile';
 import { getAgentServerUrl } from '../services/agent-server-url';
 import {
   getPluginErrorMessage,
@@ -42,7 +47,6 @@ import type {
 } from '../../src/lib/plugin-types';
 import type { PluginError } from '../../packages/plugin-core/src/types';
 // Plan 311 — workflow template discovery & summary projection.
-import { listBuiltinCachePlugins } from '../plugins/cache/builtin-sync.js';
 import { discoverWorkflows, discoverSkills } from '../../packages/plugin-core/src/plugins/loader/capability-discovery.js';
 import {
   toWorkflowSummary,
@@ -81,27 +85,15 @@ function handleResult<T>(result: { success: true; data: T } | { success: false; 
 /**
  * Plan 311 — Resolve the on-disk directory to scan for workflow templates.
  *
- * Installed plugins copy their files to a cache dir (`installPath`), but
- * bundled plugins are staged from the builtin cache
- * (`~/.duya/plugins/cache/builtin/<id>/<version>/`). This helper tries
- * `installPath` first, then falls back to matching the plugin id against
- * the builtin cache entries (read via `listBuiltinCachePlugins`).
+ * Installed plugins copy their files to a cache dir (`installPath`); the
+ * scan uses that copy directly.
  *
  * Returns `undefined` when no directory with a `workflows/` subfolder can
  * be resolved — callers treat that as "no workflows".
  */
-function resolvePluginDiscoveryDir(pluginId: string, installPath?: string): string | undefined {
-  // 1. Install path (cache copy). Works for local / marketplace plugins and
-  //    bundled plugins whose install staging includes the workflows dir.
+function resolvePluginDiscoveryDir(_pluginId: string, installPath?: string): string | undefined {
   if (installPath && existsSync(join(installPath, 'workflows'))) {
     return installPath;
-  }
-
-  // 2. Builtin plugins: match by id against the builtin cache entries.
-  for (const candidate of listBuiltinCachePlugins()) {
-    if (candidate.id === pluginId && existsSync(join(candidate.root, 'workflows'))) {
-      return candidate.root;
-    }
   }
 
   return undefined;
@@ -240,6 +232,8 @@ export function registerPluginHandlers(): void {
       const result = await manager.installFromCatalog(payload.pluginId, undefined, false, payload.marketplace);
       if (result.success) {
         notifyMcpConfigChanged();
+        // Plan 460: bring the plugin's `.app.json` connector declarations online.
+        reconcilePluginAppDeclarationsFor(payload.pluginId);
       }
       return handleResult(result);
     } catch (err) {
@@ -317,6 +311,7 @@ export function registerPluginHandlers(): void {
       const result = await manager.installFromPath(payload.pluginPath, payload.scope as 'user' | undefined, payload.autoUpdate ?? false);
       if (result.success) {
         notifyMcpConfigChanged();
+        reconcilePluginAppDeclarationsFor(result.data?.id ?? '');
       }
       return handleResult(result);
     } catch (err) {
@@ -332,6 +327,7 @@ export function registerPluginHandlers(): void {
       const result = await manager.setEnabled(pluginId, true);
       if (result.success) {
         notifyMcpConfigChanged();
+        reconcilePluginAppDeclarationsFor(pluginId);
       }
       return handleResult(result);
     } catch (err) {
@@ -347,6 +343,7 @@ export function registerPluginHandlers(): void {
       const result = await manager.setEnabled(pluginId, false);
       if (result.success) {
         notifyMcpConfigChanged();
+        unregisterPluginAppDeclarations(pluginId);
       }
       return handleResult(result);
     } catch (err) {
@@ -362,6 +359,7 @@ export function registerPluginHandlers(): void {
       const result = await manager.remove(payload.pluginId, payload.deleteData ?? false);
       if (result.success) {
         notifyMcpConfigChanged();
+        unregisterPluginAppDeclarations(payload.pluginId);
       }
       return handleResult(result);
     } catch (err) {

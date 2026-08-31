@@ -18,7 +18,7 @@
  */
 
 /** Typed mention target. `id` is the scheme-qualified target key without the scheme. */
-export type MentionTargetKind = 'app' | 'skill' | 'file' | 'mcp';
+export type MentionTargetKind = 'app' | 'skill' | 'file' | 'mcp' | 'plugin';
 
 export interface MentionTarget {
   kind: MentionTargetKind;
@@ -26,6 +26,19 @@ export interface MentionTarget {
   id: string;
   /** Human-readable display label (e.g. `Notion`). */
   label: string;
+}
+
+/** Structured plugin mention from the renderer (@ popover lists plugins). */
+export interface PluginMention {
+  pluginId: string;
+  name: string;
+  description?: string;
+  /** App connector ids the plugin declares (`.app.json` / `apps/connections.json`). */
+  appConnections: string[];
+  /** MCP server names the plugin contributes. */
+  mcpServers: string[];
+  /** Skill names the plugin contributes (from its `skills/` directory). */
+  skillNames: string[];
 }
 
 /** A transient context block injected for the turn that mentioned a target. */
@@ -214,4 +227,60 @@ export async function collectSkillInjections(
     });
   }
   return injections;
+}
+
+/**
+ * Build the per-turn plugin-activation injection for @-mentioned plugins.
+ *
+ * Codex parity (`core/src/plugins/render.rs` `render_explicit_plugin_instructions`):
+ * a plugin mention is NOT a tool registration — it is a hint block that tells
+ * the model which of the plugin's capabilities (apps, MCP servers, skills)
+ * are usable this turn. App tools are activated through `mentionedProviders`
+ * (exposure promotion, wired renderer-side); MCP tools are already
+ * Direct-exposed in the tool list; skills are invoked via `/name` or the
+ * Skill tool. Declared-but-unconnected apps are labelled honestly so the
+ * model can point the user at re-authorization instead of hallucinating.
+ */
+export function collectPluginInjections(
+  mentions: readonly PluginMention[],
+  descriptors: readonly AppToolSummary[],
+): TurnInjection | null {
+  const valid = mentions.filter(
+    (m) => m && typeof m.pluginId === 'string' && m.pluginId.length > 0,
+  );
+  if (valid.length === 0) return null;
+
+  const byProvider = new Map(descriptors.map((d) => [d.provider, d]));
+
+  const lines = valid.map((m) => {
+    const name = m.name || m.pluginId;
+    const detail: string[] = [];
+    if (m.appConnections.length > 0) {
+      const ready = m.appConnections.filter((id) => byProvider.has(id));
+      const notReady = m.appConnections.filter((id) => !byProvider.has(id));
+      if (ready.length > 0) {
+        detail.push(`apps available this session: ${ready.map((id) => `\`${id}\``).join(', ')}`);
+      }
+      if (notReady.length > 0) {
+        detail.push(`apps not connected/authorized: ${notReady.map((id) => `\`${id}\``).join(', ')}`);
+      }
+    }
+    if (m.mcpServers.length > 0) {
+      detail.push(`MCP servers: ${m.mcpServers.map((s) => `\`${s}\``).join(', ')}`);
+    }
+    if (m.skillNames.length > 0) {
+      detail.push(`skills (invoke via /name or the Skill tool): ${m.skillNames.map((s) => `\`${s}\``).join(', ')}`);
+    }
+    const detailText = detail.length > 0 ? ` (${detail.join('; ')})` : '';
+    return `- [${name}](plugin://${m.pluginId}): ${detailText || 'no callable capabilities exposed this run'}`;
+  });
+
+  return {
+    envelope: 'plugin-activation',
+    body: [
+      'The user explicitly mentioned these plugins in their message. Prefer the capabilities associated with them for this turn:',
+      ...lines,
+      'Plugins are not invoked directly — use their underlying app tools, MCP tools, or skills to help solve the task.',
+    ].join('\n'),
+  };
 }

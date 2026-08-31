@@ -149,14 +149,12 @@ describe('computerUseInputSchema', () => {
     expect(r.success).toBe(true);
   });
 
-  it('window_switch requires title or processName', () => {
-    const r = computerUseInputSchema.safeParse({ action: 'window_switch' });
-    expect(r.success).toBe(false);
-    const r2 = computerUseInputSchema.safeParse({
-      action: 'window_switch',
-      title: 'foo',
-    });
-    expect(r2.success).toBe(true);
+  it('rejects removed window_switch / list_apps actions', () => {
+    // Removed 2026-08-29: targeting is pure vision + click.
+    expect(
+      computerUseInputSchema.safeParse({ action: 'window_switch', title: 'x' }).success,
+    ).toBe(false);
+    expect(computerUseInputSchema.safeParse({ action: 'list_apps' }).success).toBe(false);
   });
 });
 
@@ -174,10 +172,6 @@ function minimalValidInput(action: string): Record<string, unknown> {
       return { action: 'scroll', direction: 'down', amount: 3 };
     case 'drag':
       return { action: 'drag', fromX: 0, fromY: 0, toX: 1, toY: 1 };
-    case 'window_switch':
-      return { action: 'window_switch', title: 'x' };
-    case 'list_apps':
-      return { action: 'list_apps' };
     case 'set_value':
       return { action: 'set_value', value: 'v' };
     case 'wait':

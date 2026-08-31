@@ -1,6 +1,6 @@
 /**
  * AttachmentBar.test.tsx - failing-baseline tests for the unified attachment
- * renderer introduced by Plan 220.
+ * renderer (Plan 220) plus the unified-square visual (Plan 472).
  *
  * @vitest-environment jsdom
  */
@@ -98,7 +98,7 @@ function fileTreeAttachment(id: string): FileAttachment {
   };
 }
 
-describe('AttachmentBar (Plan 220 Phase 0 baseline)', () => {
+describe('AttachmentBar (Plan 220 Phase 0 + Plan 472 unified visual)', () => {
   it('renders nothing when attachments array is empty', () => {
     const { container } = render(
       <AttachmentBar attachments={[]} mode="input" onRemove={() => {}} />,
@@ -123,17 +123,67 @@ describe('AttachmentBar (Plan 220 Phase 0 baseline)', () => {
       />,
     );
 
-    // 4 of the 5 kinds render through the chip card with
-    // `data-attachment-id`. The image kind goes through FileAttachmentCard
-    // and uses a different DOM path (no `data-attachment-id` on the wrapper).
-    for (const att of attachments.filter((a) => a.kind !== 'image')) {
+    // Plan 472: all 5 kinds now expose a `data-attachment-id` wrapper
+    // (the image kind picks it up via FileAttachmentCard, the rest via
+    // ReferenceSquareCard / BrowserScreenshotCard).
+    for (const att of attachments) {
       expect(
         container.querySelector(`[data-attachment-id="${att.id}"]`),
       ).toBeInTheDocument();
     }
-    // The image kind is rendered through FileAttachmentCard. Verify it
-    // appears in the attachment-bar wrapper by counting children.
-    expect(container.querySelectorAll('[data-attachment-id]').length).toBe(4);
+    expect(container.querySelectorAll('[data-attachment-id]').length).toBe(5);
+  });
+
+  // Plan 472: image + pasted-text share one flex-wrap row, not two
+  // stacked tracks as before the merge.
+  it('places image and pasted-text cards inside one shared flex-wrap row', () => {
+    const attachments: FileAttachment[] = [
+      pastedAttachment('p1', 'preview one'),
+      imageAttachment('i1'),
+      pastedAttachment('p2', 'preview two'),
+    ];
+
+    const { container } = render(
+      <AttachmentBar
+        attachments={attachments}
+        mode="input"
+        onRemove={() => {}}
+      />,
+    );
+
+    const wrappers = container.querySelectorAll('[data-attachment-id]');
+    expect(wrappers).toHaveLength(3);
+    const parent = wrappers[0].parentElement;
+    expect(parent).not.toBeNull();
+    expect(parent).toHaveClass('flex', 'flex-wrap', 'gap-2', 'mb-2');
+    // Every attachment wrapper shares the same flex-wrap parent
+    for (const w of Array.from(wrappers)) {
+      expect(w.parentElement).toBe(parent);
+    }
+  });
+
+  // Plan 472: input-array order is preserved on the unified row.
+  it('renders mixed attachments in their input-array order', () => {
+    const ordered: FileAttachment[] = [
+      imageAttachment('i1'),
+      pastedAttachment('p1', 'a'),
+      terminalAttachment('t1'),
+      fileTreeAttachment('f1'),
+      browserElementAttachment('b1'),
+    ];
+
+    const { container } = render(
+      <AttachmentBar
+        attachments={ordered}
+        mode="input"
+        onRemove={() => {}}
+      />,
+    );
+
+    const ids = Array.from(container.querySelectorAll('[data-attachment-id]')).map(
+      (el) => el.getAttribute('data-attachment-id'),
+    );
+    expect(ids).toEqual(['i1', 'p1', 't1', 'f1', 'b1']);
   });
 
   it('input mode exposes an X button on each card', () => {
@@ -194,7 +244,11 @@ describe('AttachmentBar (Plan 220 Phase 0 baseline)', () => {
     );
 
     expect(container.querySelectorAll('.browser-screenshot-attachment-card')).toHaveLength(1);
-    expect(container.querySelectorAll('.pasted-content-attachment')).toHaveLength(0);
+    // Plan 472: the chip selector (`pasted-content-attachment`) is replaced
+    // by `reference-attachment-card`. The browser-ref here is a screenshot
+    // so it stays inside the browser-screenshot track, never
+    // ReferenceSquareCard.
+    expect(container.querySelectorAll('.reference-attachment-card')).toHaveLength(0);
     expect(container.querySelectorAll('[data-attachment-id="ref1"]')).toHaveLength(1);
     expect(screen.queryByAltText('shot.png')).not.toBeInTheDocument();
   });

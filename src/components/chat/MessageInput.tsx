@@ -13,6 +13,7 @@ import { ArrowUpIcon,
   HandIcon,
   ShieldCheckIcon,
   ShieldWarningIcon,
+  PlugIcon,
 } from '@/components/icons';
 import { Select } from 'antd';
 import type { CliBadge, PopoverItem, PopoverMode } from '@/types/slash-command';
@@ -63,8 +64,8 @@ import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import type { Task } from '@duya/agent';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
-import { getAppConnectionAPI } from '@/lib/app-connection-ipc';
-import { ConnectorIcon } from '@/components/extensions/connector-icons';
+import { getPluginAPI } from '@/lib/plugin-ipc';
+import { normalizeManifestComponents } from '@/lib/plugin-types';
 
 function getEditableCursorPosition(element: HTMLElement | null, fallback: number): number {
   if (!element) return fallback;
@@ -79,6 +80,35 @@ function getEditableCursorPosition(element: HTMLElement | null, fallback: number
   preRange.selectNodeContents(element);
   preRange.setEnd(range.endContainer, range.endOffset);
   return preRange.toString().length;
+}
+
+/**
+ * Plugin brand icon for the @ popover. Uses the resolved `duya-file://` icon
+ * URL when the plugin declares one; falls back to the generic plug icon when
+ * absent or when the image fails to load (mirrors TileIcon in InstalledPage).
+ */
+function PluginPopoverIcon({
+  iconUrl,
+  size = 14,
+  className,
+}: {
+  iconUrl?: string;
+  size?: number;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!iconUrl || failed) return <PlugIcon size={size} className={className} />;
+  return (
+    <img
+      src={iconUrl}
+      width={size}
+      height={size}
+      className={className}
+      alt=""
+      style={{ objectFit: 'contain', borderRadius: 4 }}
+      onError={() => setFailed(true)}
+    />
+  );
 }
 
 interface MessageInputProps {
@@ -608,71 +638,94 @@ export function MessageInput({
     ? filterItems(popoverItems, popoverFilter)
     : popoverItems;
 
-  // Plan 450: build @-popover items for currently-connected app providers.
-  // Each item uses `value = providerId` so the file-mention insert path
-  // writes `@<providerId> ` into the textarea; the stream-session-manager
-  // extracts those tokens back to provider ids on submit.
-  const [connectorItems, setConnectorItems] = useState<PopoverItem[]>([]);
+  // Build @-popover items for INSTALLED PLUGINS (one row per plugin, not per
+  // connector). Each item uses `value = pluginId` so the file-mention insert
+  // path writes `@<pluginId> ` into the textarea; on submit the
+  // stream-session-manager rewrites that token to `[@Name](plugin://id)` and
+  // merges the plugin's connected app connectors into `mentionedProviders`
+  // (existing app-tool injection + connector-activation reminder).
+  const [pluginItems, setPluginItems] = useState<PopoverItem[]>([]);
 
-  // Plan 450: refresh the @ connector list on mount, on sessionId change,
-  // and every time the user opens the `@` context popover (typed or via
-  // plus button). Covers the case where a provider was connected in
-  // Settings *after* the chat tab mounted — useEffect-[] alone left the
-  // list permanently empty in that scenario.
-  const refreshConnectorItems = useCallback(async () => {
-    const api = getAppConnectionAPI();
+  // Refresh the @ plugin list on mount, on sessionId change, and every time
+  // the user opens the `@` context popover (typed or via plus button). Covers
+  // the case where a plugin was installed in Settings *after* the chat tab
+  // mounted — useEffect-[] alone left the list permanently empty.
+  const refreshPluginItems = useCallback(async () => {
+    const api = getPluginAPI();
     if (!api) {
-      setConnectorItems([]);
+      setPluginItems([]);
       return;
     }
     try {
-      const [list, providers] = await Promise.all([api.list(), api.providers()]);
-      const byId = new Map((providers.data ?? []).map((p) => [p.id, p]));
-      const items: PopoverItem[] = (list.data ?? [])
-        .filter((c) => c.status === 'connected' && byId.has(c.provider))
-        .sort((a, b) =>
-          (byId.get(a.provider)?.label ?? '').localeCompare(
-            byId.get(b.provider)?.label ?? '',
-          ),
-        )
-        .map((c) => {
-          const p = byId.get(c.provider)!;
-          const IconCmp = ({ size = 16 }: { size?: number }) => (
-            <ConnectorIcon provider={p.id as unknown as Parameters<typeof ConnectorIcon>[0]['provider']} size={size} />
-          );
-          return {
-            label: p.label,
-            value: p.id,
-            description: c.accountLabel || p.description,
-            icon: IconCmp as unknown as PopoverItem['icon'],
-            // Plan 450: the `apps` group is consumed by SlashCommandPopover
-            // under context mode; using the existing `settings` group here
-            // would put the items into the Settings section, which is only
-            // rendered in skill (`/`) mode. See SlashCommandPopover render
-            // branch for the context popover.
-            group: 'apps' as const,
-            category: 'context' as const,
-            source: 'plugin' as const,
-            installedSource: 'agents' as const,
-          } satisfies PopoverItem;
+      const res = await api.registry.list();
+      const items: PopoverItem[] = (res.data ?? [])
+        .filter((p) => p.enabled !== false)
+        .sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id))
+        .flatMap((p) => {
+          // Per-plugin tolerance: a plugin whose manifest fails to normalize
+          // (e.g. absent/corrupt across IPC) degrades to a bare entry instead
+          // of throwing and blanking the whole list.
+          const iconOf = (({ size = 16, className }: { size?: number; className?: string }) => (
+            <PluginPopoverIcon iconUrl={p.icon} size={size} className={className} />
+          )) as unknown as PopoverItem['icon'];
+          try {
+            const comps = p.manifest
+              ? normalizeManifestComponents(p.manifest)
+              : undefined;
+            const labels: string[] = [];
+            if (comps && comps.skills.length > 0) labels.push(`${comps.skills.length} skill${comps.skills.length > 1 ? 's' : ''}`);
+            if (comps && comps.mcpServers.length > 0) labels.push(`${comps.mcpServers.length} MCP server${comps.mcpServers.length > 1 ? 's' : ''}`);
+            if (comps && comps.appConnections.length > 0) labels.push(`${comps.appConnections.length} app${comps.appConnections.length > 1 ? 's' : ''}`);
+            const capability = labels.join(' · ');
+            const description = capability
+              ? p.description
+                ? `${capability} — ${p.description}`
+                : capability
+              : p.description || undefined;
+            return [{
+              label: p.name || p.id,
+              value: p.id,
+              description,
+              icon: iconOf,
+              // Plan 450: the `apps` group is consumed by SlashCommandPopover
+              // under context mode (rendered as the "Plugins" section).
+              group: 'apps' as const,
+              category: 'context' as const,
+              source: 'plugin' as const,
+              installedSource: 'agents' as const,
+            } satisfies PopoverItem];
+          } catch {
+            return [{
+              label: p.name || p.id,
+              value: p.id,
+              description: p.description || undefined,
+              icon: iconOf,
+              group: 'apps' as const,
+              category: 'context' as const,
+              source: 'plugin' as const,
+              installedSource: 'agents' as const,
+            } satisfies PopoverItem];
+          }
         });
-      setConnectorItems(items);
-    } catch {
-      setConnectorItems([]);
+      setPluginItems(items);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[MessageInput] refreshPluginItems failed:', err);
+      setPluginItems([]);
     }
   }, []);
 
   useEffect(() => {
-    void refreshConnectorItems();
-  }, [refreshConnectorItems, sessionId, popoverMode]);
+    void refreshPluginItems();
+  }, [refreshPluginItems, sessionId, popoverMode]);
 
   useEffect(() => {
     const onFocus = () => {
-      void refreshConnectorItems();
+      void refreshPluginItems();
     };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
-  }, [refreshConnectorItems]);
+  }, [refreshPluginItems]);
 
   const {
     insertItem,
@@ -692,7 +745,7 @@ export function MessageInput({
     setTriggerPos,
     closePopover,
     sessionId,
-    connectorItems,
+    pluginItems,
   });
 
   // Per-session Focus display mode — toggled from the slash popover.
@@ -1927,7 +1980,7 @@ export function MessageInput({
 
         <div
           className={`message-input-surface relative z-[1] rounded-3xl p-2 transition-shadow ${isDraggingOver ? 'message-input-drop-active' : ''} ${planModeActive ? 'message-input-plan-mode-active' : ''}`}
-          style={{ backgroundColor: 'var(--surface)', boxShadow: planModeActive
+          style={{ backgroundColor: 'var(--composer-bg)', boxShadow: planModeActive
             ? 'inset 0 0 0 1px var(--accent), 0 0 0 1px rgba(125, 180, 255, 0.35), 0 0 14px rgba(125, 180, 255, 0.45)'
             : 'inset 0 0 0 1px var(--border-color)' }}
           onDragEnter={handleDragEnter}

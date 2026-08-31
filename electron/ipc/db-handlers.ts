@@ -18,6 +18,10 @@ import { setBrowserMaxTabs } from '../services/browser/daemon';
 import {
   createCanvas as createConductorCanvas,
   getMaxZIndex,
+  listCanvasGroups,
+  createCanvasGroup,
+  updateCanvasGroup,
+  deleteCanvasGroup,
 } from '../db/queries/conductors';
 import { getChannelManager } from '../messaging/port-manager';
 import { updateDatabasePath, readBootConfig } from '../config/boot-config';
@@ -56,6 +60,11 @@ import { getCoreStores } from '../db/core-connection';
 import { restoreFilesForEvents } from '../services/file-snapshot-restore';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import { CapabilityDao } from '../services/providers/capability-dao';
+import {
+  SidebarSectionsStore,
+  type SidebarSectionCreateInput,
+  type SidebarSectionPatch,
+} from '../db/core/sidebar-sections-store';
 import {
   aggregateUsageFromFacts,
   extractSessionFacts,
@@ -1233,7 +1242,7 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle('db:agentProfile:create', (_event, data: Record<string, unknown>) => {
     const now = Date.now();
-    const id = (data.id as string) || crypto.randomUUID();
+    const id = (data.id as string) || randomUUID();
     const database = getDb();
     database.prepare(`
       INSERT INTO agent_profiles (
@@ -1411,6 +1420,9 @@ export function registerConductorHandlers(): void {
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       projectPath: r.project_path ?? null,
+      isFavorite: r.is_favorite === 1,
+      groupId: r.group_id ?? null,
+      tags: JSON.parse(r.tags ?? '[]'),
     }));
   });
 
@@ -1428,6 +1440,9 @@ export function registerConductorHandlers(): void {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       projectPath: row.project_path ?? null,
+      isFavorite: row.is_favorite === 1,
+      groupId: row.group_id ?? null,
+      tags: JSON.parse(row.tags ?? '[]'),
     };
   });
 
@@ -1442,10 +1457,13 @@ export function registerConductorHandlers(): void {
       createdAt: canvas.createdAt,
       updatedAt: canvas.updatedAt,
       projectPath: canvas.projectPath,
+      isFavorite: canvas.isFavorite,
+      groupId: canvas.groupId,
+      tags: canvas.tags,
     };
   });
 
-  ipcMain.handle('conductor:canvas:update', (_event, id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number }) => {
+  ipcMain.handle('conductor:canvas:update', (_event, id: string, data: { name?: string; description?: string | null; layoutConfig?: Record<string, unknown>; sortOrder?: number; isFavorite?: boolean; groupId?: string | null; tags?: string[] }) => {
     const d = getDb();
     const now = Date.now();
     const fields: string[] = ['updated_at = ?'];
@@ -1467,6 +1485,18 @@ export function registerConductorHandlers(): void {
       fields.push('sort_order = ?');
       values.push(data.sortOrder);
     }
+    if (data.isFavorite !== undefined) {
+      fields.push('is_favorite = ?');
+      values.push(data.isFavorite ? 1 : 0);
+    }
+    if (data.groupId !== undefined) {
+      fields.push('group_id = ?');
+      values.push(data.groupId);
+    }
+    if (data.tags !== undefined) {
+      fields.push('tags = ?');
+      values.push(JSON.stringify(data.tags));
+    }
 
     values.push(id);
     d.prepare(`UPDATE conductor_canvases SET ${fields.join(', ')} WHERE id = ?`).run(...values);
@@ -1482,6 +1512,9 @@ export function registerConductorHandlers(): void {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       projectPath: row.project_path ?? null,
+      isFavorite: row.is_favorite === 1,
+      groupId: row.group_id ?? null,
+      tags: JSON.parse(row.tags ?? '[]'),
     };
   });
 
@@ -1489,6 +1522,24 @@ export function registerConductorHandlers(): void {
     const d = getDb();
     const result = d.prepare('DELETE FROM conductor_canvases WHERE id = ?').run(id);
     return result.changes > 0;
+  });
+
+  // --- Canvas group (asset library collection) handlers ---
+
+  ipcMain.handle('conductor:canvas:group:list', (_event, projectPath?: string | null) => {
+    return listCanvasGroups(projectPath);
+  });
+
+  ipcMain.handle('conductor:canvas:group:create', (_event, data: { name: string; projectPath?: string | null }) => {
+    return createCanvasGroup(data);
+  });
+
+  ipcMain.handle('conductor:canvas:group:update', (_event, id: string, data: { name?: string; sortOrder?: number }) => {
+    return updateCanvasGroup(id, data);
+  });
+
+  ipcMain.handle('conductor:canvas:group:delete', (_event, id: string) => {
+    return deleteCanvasGroup(id);
   });
 
   ipcMain.handle('conductor:snapshot', (_event, canvasId: string) => {
@@ -1562,6 +1613,9 @@ export function registerConductorHandlers(): void {
         createdAt: canvas.created_at,
         updatedAt: canvas.updated_at,
         projectPath: canvas.project_path ?? null,
+        isFavorite: canvas.is_favorite === 1,
+        groupId: canvas.group_id ?? null,
+        tags: JSON.parse(canvas.tags ?? '[]'),
       },
       elements,
       widgets: widgetRows.map((w: any) => ({
@@ -2444,6 +2498,87 @@ export function registerConductorHandlers(): void {
   );
 
   dbLogger.info('Conductor handlers registered', undefined, LogComponent.DB);
+}
+
+// ============================================================
+// Sidebar Sections IPC Handlers (Plan 471)
+// ============================================================
+//
+// User-defined section metadata for the sidebar. Each section wraps a
+// list of projects (`workingDirectory`) at the same level as the
+// built-in system sections (cron, gateway, wakeup, …). Sessions
+// themselves are NOT moved across sessions — this only changes the
+// sidebar render group.
+
+export function registerSidebarSectionsHandlers(): void {
+  if (!getDatabase()) return;
+
+  let store: SidebarSectionsStore | null = null;
+  try {
+    const db = getDb();
+    store = new SidebarSectionsStore(db);
+  } catch (error) {
+    dbLogger.warn(
+      'SidebarSectionsStore unavailable — section IPC will no-op',
+      { error: error instanceof Error ? error.message : String(error) },
+      LogComponent.DB,
+    );
+    return;
+  }
+
+  const sectionsStore: SidebarSectionsStore = store;
+
+  ipcMain.handle('sidebar-sections:list', () => {
+    const sections = sectionsStore.listSections();
+    const projects = sectionsStore.listSectionProjects();
+    return { sections, projects };
+  });
+
+  ipcMain.handle('sidebar-sections:create', (_event, input: SidebarSectionCreateInput) => {
+    return sectionsStore.createSection(input);
+  });
+
+  ipcMain.handle(
+    'sidebar-sections:update',
+    (_event, id: string, patch: SidebarSectionPatch) => {
+      return sectionsStore.updateSection(id, patch);
+    },
+  );
+
+  ipcMain.handle('sidebar-sections:remove', (_event, id: string) => {
+    return sectionsStore.deleteSection(id);
+  });
+
+  ipcMain.handle(
+    'sidebar-sections:assignProject',
+    (_event, sectionId: string, workingDirectory: string) => {
+      return sectionsStore.assignProject(sectionId, workingDirectory);
+    },
+  );
+
+  ipcMain.handle('sidebar-sections:unassignProject', (_event, workingDirectory: string) => {
+    return sectionsStore.unassignProject(workingDirectory);
+  });
+
+  ipcMain.handle('sidebar-sections:reorder', (_event, orderedIds: string[]) => {
+    return sectionsStore.reorderSections(orderedIds);
+  });
+
+  ipcMain.handle(
+    'sidebar-sections:reorderProjects',
+    (_event, sectionId: string, orderedDirs: string[]) => {
+      return sectionsStore.reorderProjectsInSection(sectionId, orderedDirs);
+    },
+  );
+
+  ipcMain.handle(
+    'sidebar-sections:findSectionForProject',
+    (_event, workingDirectory: string) => {
+      return sectionsStore.findSectionForProject(workingDirectory);
+    },
+  );
+
+  dbLogger.info('Sidebar sections handlers registered', undefined, LogComponent.DB);
 }
 
 // ============================================================
