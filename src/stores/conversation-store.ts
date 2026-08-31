@@ -270,6 +270,22 @@ function notifyThreadsChanged() {
 export const OPTIMISTIC_DEDUPE_WINDOW_MS = 5_000;
 
 /**
+ * Stable identity for the optimistic-dedupe bucket: (role, content
+ * shape, time-window). Two user messages that land in the same bucket
+ * are the same logical send — the renderer and the agent worker may
+ * have given them different UUIDs (renderer-side optimistic vs.
+ * DB-assigned), but the user only typed once.
+ *
+ * Exported so both `mergeInFlightOptimisticMessages` (post-DB-load
+ * merge) and `addMessage` (write-time dedupe) can share one definition
+ * and never drift.
+ */
+export function optimisticBucketKey(m: Pick<Message, 'role' | 'content' | 'timestamp'>): string {
+  const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
+  return `${m.role}|${typeof m.content === 'string' ? m.content : 'blocks'}|${Math.round(ts / OPTIMISTIC_DEDUPE_WINDOW_MS)}`;
+}
+
+/**
  * Pure helper for `loadThreadMessages`'s streaming-session merge branch.
  *
  * Returns the merged list (DB rows + any local-only optimistic user
@@ -288,18 +304,14 @@ export function mergeInFlightOptimisticMessages(
   persisted: Message[],
   local: Message[],
 ): { merged: Message[]; droppedOptimistic: number; keptOptimistic: number } {
-  const bucketKey = (m: Message) => {
-    const ts = typeof m.timestamp === 'number' ? m.timestamp : 0;
-    return `${m.role}|${typeof m.content === 'string' ? m.content : 'blocks'}|${Math.round(ts / OPTIMISTIC_DEDUPE_WINDOW_MS)}`;
-  };
-  const persistedKeys = new Set(persisted.map(bucketKey));
+  const persistedKeys = new Set(persisted.map(optimisticBucketKey));
   const merged = [...persisted];
   let droppedOptimistic = 0;
   let keptOptimistic = 0;
   for (const m of local) {
     const isOptimisticUser =
       m.metadata?.optimistic === true && m.role === 'user';
-    if (isOptimisticUser && persistedKeys.has(bucketKey(m))) {
+    if (isOptimisticUser && persistedKeys.has(optimisticBucketKey(m))) {
       droppedOptimistic++;
       continue;
     }
@@ -307,6 +319,27 @@ export function mergeInFlightOptimisticMessages(
     merged.push(m);
   }
   return { merged, droppedOptimistic, keptOptimistic };
+}
+
+/**
+ * Pure write-time guard used by `addMessage`: returns true when
+ * `candidate` should be dropped because `existing` already contains an
+ * optimistic user message in the same content window. Mirrors the
+ * dedupe rule used by `mergeInFlightOptimisticMessages` (DB rows win)
+ * so both layers agree on what counts as "the same send".
+ *
+ * Non-user candidates and candidates without `metadata.optimistic` are
+ * always considered unique (caller still wants to write them).
+ */
+export function isDuplicateOptimisticUser(
+  existing: ReadonlyArray<Message>,
+  candidate: Message,
+): boolean {
+  if (candidate.role !== 'user' || candidate.metadata?.optimistic !== true) return false;
+  const newKey = optimisticBucketKey(candidate);
+  return existing.some(
+    (m) => m.role === 'user' && m.metadata?.optimistic === true && optimisticBucketKey(m) === newKey,
+  );
 }
 
 function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
@@ -675,6 +708,23 @@ export const useConversationStore = create<ConversationState>()(
       addMessage: (threadId, message, options) => {
         let shouldUpdateTitle = false;
         let titlePreview = '';
+
+        // Plan 4XX: write-time dedupe for optimistic user messages.
+        //
+        // `addMessage` is unconditional append — every send, every retry
+        // callback, every hook re-fire pushes another row into
+        // `messages[threadId]`. The downstream merge branch in
+        // `loadThreadMessages` only runs when a caller passes `{ force:
+        // true }` AND the session is mid-stream; for a normal renderer-
+        // initiated run, neither is true while the agent is still
+        // working, so duplicates stacked in local state survive until
+        // the run ends (where the user can see them render 7+ times in
+        // a row). Bail out at write time using the same bucket that the
+        // post-DB-load merge uses, so both layers can never disagree.
+        if (isDuplicateOptimisticUser(get().messages[threadId] ?? [], message)) {
+          console.log(`[Store] addMessage dropped duplicate optimistic user message: ${threadId.slice(0, 8)}`);
+          return;
+        }
 
         set((state) => {
           const threadMessages = state.messages[threadId] ?? [];
