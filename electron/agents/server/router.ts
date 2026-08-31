@@ -812,10 +812,12 @@ function handlePostChatSSE(
           // still come after done. Title generation is a separate async LLM
           // call in the worker that is not awaited before `chat:done`, so it
           // can legitimately take longer than a few seconds. Give it a
-          // generous, configurable window (default 15s) before force-closing
-          // the SSE connection; otherwise the client never receives the title.
+          // configurable window (default 5s — shortened to shrink the
+          // window where a missing `event: done` chunk flips a completed
+          // turn into the false-positive `Stream ended unexpectedly` banner)
+          // before force-closing the SSE connection.
           const titleTimeoutMs = parseInt(
-            process.env.DUYA_TITLE_GENERATED_TIMEOUT_MS || '15000',
+            process.env.DUYA_TITLE_GENERATED_TIMEOUT_MS || '5000',
             10,
           );
           setTimeout(() => {

@@ -1672,14 +1672,37 @@ class StreamSessionManager {
           if (this.isCurrentStream(sessionId, streamId)) {
             const s2 = this.sessions.get(sessionId);
             if (s2 && s2.phase !== 'completed' && s2.phase !== 'aborted' && s2.phase !== 'error') {
-              console.warn('[stream-session-manager] SSE stream ended without done, transitioning to error');
-              s2.phase = 'error';
-              s2.error = 'Stream ended unexpectedly';
-              s2.completedAt = Date.now();
-              this.notifyListeners(sessionId);
-              this.notifyPhaseListeners(sessionId, s2.phase);
-              this.notifyErrorListeners(sessionId, s2.error);
-              this.notifyCompletedAtListeners(sessionId, s2.completedAt);
+              // Plan 467 fallback: even when no `done` event made it through,
+              // a successful `db_persisted` ack proves the worker's journal
+              // committed the turn to the DB. Treat that as a completed turn
+              // instead of an error — otherwise a late chunk loss on the
+              // terminal `event: done` frame (Electron IPC, server keep-alive,
+              // packaged renderer buffers) flips an otherwise-completed turn
+              // into the false-positive `Stream ended unexpectedly` banner.
+              if (s2.dbPersisted?.success) {
+                console.warn('[stream-session-manager] SSE stream ended without done but db persisted OK — treating as completed', {
+                  sessionId,
+                  messageCount: s2.dbPersisted.messageCount,
+                });
+                s2.phase = 'completed';
+                s2.completedAt = Date.now();
+                this.flushPendingText(sessionId, streamId);
+                this.notifyPhaseListeners(sessionId, s2.phase);
+                this.notifyCompletedAtListeners(sessionId, s2.completedAt);
+                this.notifyListeners(sessionId);
+                this.clearIdleTimeout(sessionId);
+                this.autoStartQueuedStream(sessionId);
+                this.startPendingBackgroundResume(sessionId);
+              } else {
+                console.warn('[stream-session-manager] SSE stream ended without done, transitioning to error');
+                s2.phase = 'error';
+                s2.error = 'Stream ended unexpectedly';
+                s2.completedAt = Date.now();
+                this.notifyListeners(sessionId);
+                this.notifyPhaseListeners(sessionId, s2.phase);
+                this.notifyErrorListeners(sessionId, s2.error);
+                this.notifyCompletedAtListeners(sessionId, s2.completedAt);
+              }
             } else if (s2) {
               console.log('[stream-session-manager] SSE stream ended but session already in phase:', s2.phase);
             }
