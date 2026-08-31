@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@/types/message';
 import {
   mergeInFlightOptimisticMessages,
+  isDuplicateOptimisticUser,
+  optimisticBucketKey,
   OPTIMISTIC_DEDUPE_WINDOW_MS,
 } from '../conversation-store';
 
@@ -163,5 +165,152 @@ describe('mergeInFlightOptimisticMessages', () => {
     ];
     const { merged } = mergeInFlightOptimisticMessages(persisted, local);
     expect(merged).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isDuplicateOptimisticUser — write-time guard used by `addMessage`.
+//
+// Regression target: 7 copies of the same user message in the chat
+// transcript. `addMessage` is unconditional append, so rapid sends /
+// retry re-fires / hook re-fires stacked N optimistic rows in local state.
+// The merge branch in `loadThreadMessages` only runs on force:true
+// reloads, which never fire for a normal renderer-initiated stream —
+// so duplicates accumulated until the run ended (visible to the user
+// the whole time). These tests pin the rule `addMessage` now enforces.
+// ---------------------------------------------------------------------------
+
+describe('isDuplicateOptimisticUser', () => {
+  it('flags two optimistic user messages in the same content window as duplicates', () => {
+    const ts = 1_700_000_000_000;
+    const existing: Message[] = [
+      userMsg('opt-1', '我希可以有待续的文件输出', ts, { optimistic: true }),
+    ];
+    const candidate = userMsg('opt-2', '我希可以有待续的文件输出', ts + 1_000, {
+      optimistic: true,
+    });
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(true);
+  });
+
+  it('keeps distinct content even within the same window', () => {
+    const ts = 1_700_000_000_000;
+    const existing: Message[] = [
+      userMsg('opt-1', '第一条', ts, { optimistic: true }),
+    ];
+    const candidate = userMsg('opt-2', '第二条', ts + 1_000, {
+      optimistic: true,
+    });
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+
+  it('keeps identical content sent outside the dedupe window', () => {
+    // The window is 5s — 12s apart lands in a different bucket.
+    const base = 1_700_000_000_000;
+    const existing: Message[] = [
+      userMsg('opt-1', 'same content', base, { optimistic: true }),
+    ];
+    const candidate = userMsg('opt-2', 'same content', base + 12_000, {
+      optimistic: true,
+    });
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+
+  it('does not treat an non- optimistic candidate as a duplicate even if it matches', () => {
+    // A persisted user message re-entering local state (e.g. SSE re-emit
+    // of an existing DB row) is not eligible — the optimistic flag is
+    // what marks an entry as "this might collide with a future DB row".
+    const ts = 1_700_000_000_000;
+    const existing: Message[] = [
+      userMsg('opt-1', 'text', ts, { optimistic: true }),
+    ];
+    const candidate: Message = {
+      id: 're-emit',
+      role: 'user',
+      content: 'text',
+      timestamp: ts,
+      // no optimistic flag — must always be accepted
+    };
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+
+  it('does not treat assistant candidates as duplicates', () => {
+    // Assistant messages are deduped by stream-session-manager, not here.
+    const ts = 1_700_000_000_000;
+    const existing: Message[] = [
+      assistantMsg('opt-asst', 'reply', ts),
+    ];
+    const candidate: Message = {
+      id: 'opt-asst-2',
+      role: 'assistant',
+      content: 'reply',
+      timestamp: ts,
+      metadata: { optimistic: true },
+    };
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+
+  it('does not let non-optimistic existing entries block an optimistic write', () => {
+    // A persisted user message already in local state must not block a
+    // fresh optimistic send. Otherwise the first real send would lock
+    // out every subsequent attempt with identical content.
+    const ts = 1_700_000_000_000;
+    const existing: Message[] = [
+      userMsg('db-row', 'text', ts), // no optimistic flag
+    ];
+    const candidate = userMsg('opt-1', 'text', ts + 500, {
+      optimistic: true,
+    });
+    expect(isDuplicateOptimisticUser(existing, candidate)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// optimisticBucketKey — exported separately so both the write-time guard
+// (isDuplicateOptimisticUser) and the post-DB-load merge share one
+// definition. A drift between the two would let one layer drop a row
+// the other layer keeps.
+// ---------------------------------------------------------------------------
+
+describe('optimisticBucketKey', () => {
+  it('collapses sub-second timestamp skew into the same bucket', () => {
+    const a = userMsg('a', 'same', 1_700_000_000_000, { optimistic: true });
+    const b = userMsg('b', 'same', 1_700_000_000_500, { optimistic: true });
+    expect(optimisticBucketKey(a)).toBe(optimisticBucketKey(b));
+  });
+
+  it('separates timestamps outside the window', () => {
+    const base = 1_700_000_000_000;
+    expect(optimisticBucketKey(userMsg('a', 'same', base))).not.toBe(
+      optimisticBucketKey(userMsg('b', 'same', base + OPTIMISTIC_DEDUPE_WINDOW_MS + 1)),
+    );
+  });
+
+  it('uses the literal content for strings and a fixed marker for block content', () => {
+    // The bucket key intentionally distinguishes string-content user
+    // messages from block-content user messages. Two block-shaped
+    // copies of the same text collapse to "blocks" so any pair of
+    // block-form local rows dedupe against each other; a string-form
+    // copy of identical text gets its own key because that is what
+    // a plain user-typed send actually looks like in local state.
+    const ts = 1_700_000_000_000;
+    const stringForm = userMsg('a', 'text', ts);
+    const blockForm: Message = {
+      id: 'b',
+      role: 'user',
+      content: [{ type: 'text', text: 'text' }],
+      timestamp: ts,
+    };
+    const otherBlock: Message = {
+      id: 'c',
+      role: 'user',
+      content: [{ type: 'text', text: 'totally different payload' }],
+      timestamp: ts,
+    };
+
+    expect(optimisticBucketKey(stringForm)).toBe('user|text|340000000');
+    expect(optimisticBucketKey(blockForm)).toBe('user|blocks|340000000');
+    // All block-content user messages share the same bucket — we never
+    // look inside the blocks to dedupe, only outside the content shape.
+    expect(optimisticBucketKey(blockForm)).toBe(optimisticBucketKey(otherBlock));
   });
 });
