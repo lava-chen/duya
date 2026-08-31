@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
     collapse: vi.fn(),
     markWakelessTurnActive: vi.fn(),
     clearWakelessTurnActive: vi.fn(),
+    resetConversation: vi.fn(),
+    getSession: vi.fn(() => ({ messages: [], updatedAt: 0 })),
   },
   BrowserWindow: vi.fn(),
   app: { isPackaged: false },
@@ -174,11 +176,18 @@ describe('automation:orb:set-position', () => {
 });
 
 describe('automation:orb:state', () => {
-  it('returns the current state from wake service', async () => {
+  it('returns the current state + persisted messages from wake service', async () => {
     mocks.wakeService.getState.mockReturnValueOnce('INPUT' as never);
+    mocks.wakeService.getSession.mockReturnValueOnce({
+      messages: [{ id: 't1', role: 'user', text: 'hi', createdAt: 1 }],
+      updatedAt: 1,
+    } as never);
     const h = handlers().get('automation:orb:state')!;
     const result = await h({});
-    expect(result).toEqual({ state: 'INPUT' });
+    expect(result).toEqual({
+      state: 'INPUT',
+      messages: [{ id: 't1', role: 'user', text: 'hi', createdAt: 1 }],
+    });
   });
 });
 

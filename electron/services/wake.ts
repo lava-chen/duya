@@ -110,20 +110,18 @@ export interface WakeService {
   __setForTest(replacement: WakeService | null): void;
   /**
    * Phase F (Plan session-floater): explicit new-chat reset that clears
-   * the persisted session in configStore. Optional in Phase A so the IPC
-   * handler can guard with `typeof === 'function'`; mandatory after
-   * Phase F lands.
+   * the persisted session in configStore.
    */
-  resetConversation?(): void;
+  resetConversation(): void;
   /**
    * Persisted session envelope — Phase F. The orb renderer keeps its
    * own canonical `messages[]` for fast render; main holds this durable
    * copy so the conversation survives both the 60s auto-fold and a full
    * app restart. Capped at 50 turns; oldest dropped on overflow.
    */
-  appendTurn?(turn: SessionTurn): void;
-  getSession?(): SessionStore;
-  loadSession?(): void;
+  appendTurn(turn: SessionTurn): void;
+  getSession(): SessionStore;
+  loadSession(): void;
 }
 
 /**
