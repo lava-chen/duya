@@ -103,6 +103,13 @@ export interface WakeService {
   onStateChange(listener: (state: OrbState) => void): () => void;
   /** Test-only: replace singleton. */
   __setForTest(replacement: WakeService | null): void;
+  /**
+   * Phase F (Plan session-floater): explicit new-chat reset that clears
+   * the persisted session in configStore. Optional in Phase A so the IPC
+   * handler can guard with `typeof === 'function'`; mandatory after
+   * Phase F lands.
+   */
+  resetConversation?(): void;
 }
 
 class WakeServiceImpl implements WakeService {

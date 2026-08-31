@@ -1372,6 +1372,17 @@ export interface OrbAPI {
     }) => void,
   ) => () => void
   onHide: (callback: () => void) => () => void
+  /** Hotkey 唤醒推送的自动注入上下文。Phase A 桥接,Phase D 由 wake 端填充。 */
+  onShowInputWithContext: (
+    callback: (payload: {
+      screenshotBase64: string | null
+      contextText: string
+      foreground: { pid: number; exeName: string; title: string } | null
+      redacted: boolean
+    }) => void,
+  ) => () => void
+  /** 显式重置会话：清空 messages,orb 窗口与 state 不变。 */
+  resetConversation: () => Promise<{ ok: boolean }>
 }
 
 // Callback registry for sync events
@@ -2493,6 +2504,34 @@ const electronAPI: ElectronAPI = {
       return () =>
         ipcRenderer.removeListener('automation:orb:hide', handler);
     },
+    onShowInputWithContext: (
+      callback: (payload: {
+        screenshotBase64: string | null
+        contextText: string
+        foreground: { pid: number; exeName: string; title: string } | null
+        redacted: boolean
+      }) => void,
+    ) => {
+      const handler = (
+        _e: Electron.IpcRendererEvent,
+        payload: {
+          screenshotBase64: string | null
+          contextText: string
+          foreground: { pid: number; exeName: string; title: string } | null
+          redacted: boolean
+        },
+      ) => callback(payload);
+      ipcRenderer.on('automation:orb:show-input-with-context', handler);
+      return () =>
+        ipcRenderer.removeListener(
+          'automation:orb:show-input-with-context',
+          handler,
+        );
+    },
+    resetConversation: () =>
+      ipcRenderer.invoke(
+        'automation:orb:reset-conversation',
+      ) as Promise<{ ok: boolean }>,
   },
 }
 
