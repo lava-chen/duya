@@ -28,6 +28,7 @@ import { existsSync } from 'node:fs';
 
 import { getConfigStore } from '../config/store-instance.js';
 import { getLogger, LogComponent } from '../logging/logger.js';
+import { buildWakeAutoContext } from './orb-wakeless-chat.js';
 
 /** Component tag for structured logs. */
 const logger = getLogger();
@@ -256,6 +257,18 @@ class WakeServiceImpl implements WakeService {
       // elsewhere, so jumping the orb to the cursor was visually jarring.
       this.setState('INPUT');
       this.sendOrb('automation:orb:show-input');
+      // Phase D (Plan session-floater): also push the auto-injection
+      // envelope (screenshot + os-context preamble + cursor location).
+      // Best-effort, never blocks the wake — `null` from
+      // buildWakeAutoContext means the bridge is disabled and the user
+      // gets a clean empty input.
+      void buildWakeAutoContext()
+        .then((ctx) => {
+          if (ctx) this.sendOrb('automation:orb:show-input-with-context', ctx);
+        })
+        .catch(() => {
+          // best-effort: keep the wake responsive even if capture throws
+        });
       win.show();
       win.focus();
       return;
@@ -266,6 +279,9 @@ class WakeServiceImpl implements WakeService {
         // Resend: a renderer that missed the original event (reload mid-
         // session) would otherwise stay a ball forever in an INPUT-sized
         // window. transition('INPUT') is idempotent on the renderer side.
+        // Phase D: do NOT re-inject context — the first wake already
+        // populated pendingText/pendingAttachments; a second press would
+        // clobber the user's edits.
         this.sendOrb('automation:orb:show-input');
       }
       if (this.orbWindow.isMinimized()) this.orbWindow.restore();
