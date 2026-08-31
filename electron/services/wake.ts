@@ -247,10 +247,10 @@ class WakeServiceImpl implements WakeService {
     // Already DORMANT → trigger show-input.
     if (this.state === 'DORMANT') {
       const win = this.ensureOrb();
-      // Park the orb in front of the user rather than wherever it was last
-      // left: the hotkey is global, so the user may be on another app,
-      // another display, or another corner of this one.
-      this.setState('INPUT', this.anchorPoint());
+      // The orb stays at its last drag position (`this.position`); no more
+      // snap-to-cursor. The hotkey is global and the user is often working
+      // elsewhere, so jumping the orb to the cursor was visually jarring.
+      this.setState('INPUT');
       this.sendOrb('automation:orb:show-input');
       win.show();
       win.focus();
@@ -370,10 +370,10 @@ class WakeServiceImpl implements WakeService {
    * Internal: change state and broadcast to listeners + UI.
    * Used by IPC handlers in `electron/ipc/orb.ts`.
    */
-  setState(next: OrbState, centre?: { x: number; y: number }): void {
+  setState(next: OrbState): void {
     if (next === this.state) return;
     this.state = next;
-    this.applyBounds(next, centre);
+    this.applyBounds(next);
     for (const listener of this.emitter.listeners('state')) {
       try {
         (listener as (s: OrbState) => void)(next);
@@ -381,33 +381,6 @@ class WakeServiceImpl implements WakeService {
         // swallow
       }
     }
-  }
-
-  /**
-   * Where the user is working. The cursor wins: it is the only focus signal
-   * that survives another application holding the keyboard, which is exactly
-   * the case the global hotkey exists for. Falls back to the focused window's
-   * centre, then to the orb's own parked position.
-   */
-  private anchorPoint(): { x: number; y: number } {
-    try {
-      const cursor = screen.getCursorScreenPoint();
-      if (Number.isFinite(cursor.x) && Number.isFinite(cursor.y)) {
-        return { x: cursor.x, y: cursor.y };
-      }
-    } catch {
-      // screen unavailable (headless, or called before app ready)
-    }
-    try {
-      const focused = BrowserWindow.getFocusedWindow();
-      if (focused && !focused.isDestroyed()) {
-        const b = focused.getBounds();
-        return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-      }
-    } catch {
-      // fall through
-    }
-    return { x: this.position.x, y: this.position.y };
   }
 
   private ensureOrb(): BrowserWindow {
@@ -492,18 +465,16 @@ class WakeServiceImpl implements WakeService {
     return win;
   }
 
-  private applyBounds(state: OrbState, centre?: { x: number; y: number }): void {
+  private applyBounds(state: OrbState): void {
     if (!this.orbWindow || this.orbWindow.isDestroyed()) return;
     const spec = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
-    const bounds = centre
-      ? this.boundsNear(centre, state)
-      : {
-          // Snap to the parked position unless the state declares its own x/y.
-          x: spec.x !== 0 ? spec.x : this.position.x,
-          y: spec.y !== 0 ? spec.y : this.position.y,
-          width: spec.width,
-          height: spec.height,
-        };
+    const bounds = {
+      // Snap to the parked position unless the state declares its own x/y.
+      x: spec.x !== 0 ? spec.x : this.position.x,
+      y: spec.y !== 0 ? spec.y : this.position.y,
+      width: spec.width,
+      height: spec.height,
+    };
     // Remember where we landed so the following states (LOADING → RESULT →
     // DORMANT) keep the orb in one place instead of snapping back.
     this.position = { ...this.position, x: bounds.x, y: bounds.y };
@@ -517,47 +488,6 @@ class WakeServiceImpl implements WakeService {
     } finally {
       win.setResizable(false);
     }
-  }
-
-  /**
-   * Bounds for `state` centred on `centre`, clamped to the work area of the
-   * display it lands on. Clamping matters on the edges and with multiple
-   * monitors, where an unclamped centre would push the box off-screen or
-   * straddle two displays.
-   */
-  private boundsNear(
-    centre: { x: number; y: number },
-    state: OrbState,
-  ): OrbBounds {
-    const bounds = this.opts.bounds?.[state] ?? DEFAULT_BOUNDS[state];
-    let area: Electron.Rectangle | undefined;
-    try {
-      area = screen.getDisplayNearestPoint(centre).workArea;
-    } catch {
-      area = undefined;
-    }
-    const clamp = (v: number, min: number, max: number) =>
-      Math.min(Math.max(v, min), max);
-    const x = area
-      ? clamp(
-          centre.x - bounds.width / 2,
-          area.x,
-          Math.max(area.x, area.x + area.width - bounds.width),
-        )
-      : centre.x - bounds.width / 2;
-    const y = area
-      ? clamp(
-          centre.y - bounds.height / 2,
-          area.y,
-          Math.max(area.y, area.y + area.height - bounds.height),
-        )
-      : centre.y - bounds.height / 2;
-    return {
-      x: Math.round(x),
-      y: Math.round(y),
-      width: bounds.width,
-      height: bounds.height,
-    };
   }
 }
 
