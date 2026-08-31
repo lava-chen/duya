@@ -70,11 +70,14 @@ export interface WakeOptions {
 
 const DEFAULT_BOUNDS: Record<OrbState, OrbBounds> = {
   DORMANT: { x: 0, y: 0, width: 50, height: 50 },
-  INPUT: { x: 0, y: 0, width: 320, height: 160 },
-  // Wide enough to hold the ball plus the "thinking / 用 tool" progress
-  // bubble INSIDE the window — at 50x50 the bubble was clipped by the OS.
-  LOADING: { x: 0, y: 0, width: 220, height: 60 },
-  RESULT: { x: 0, y: 0, width: 350, height: 350 },
+  // Phase C (Plan session-floater): a single session-card size for
+  // INPUT/LOADING/RESULT — the renderer swaps content inside the window
+  // rather than resizing on every state change. Removes the per-state
+  // resize flash and lets applyBounds short-circuit when bounds are
+  // unchanged.
+  INPUT: { x: 0, y: 0, width: 360, height: 520 },
+  LOADING: { x: 0, y: 0, width: 360, height: 520 },
+  RESULT: { x: 0, y: 0, width: 360, height: 520 },
 };
 
 let _wake: WakeService | null = null;
@@ -503,6 +506,19 @@ class WakeServiceImpl implements WakeService {
       width: spec.width,
       height: spec.height,
     };
+    // Skip the call when the window is already at these bounds — every
+    // chunk hit would otherwise toggle resizable:false → true → false and
+    // flash the border on Windows. Now that INPUT/LOADING/RESULT share
+    // 360x520 this short-circuit saves most transitions.
+    const current = this.orbWindow.getBounds();
+    if (
+      current.x === bounds.x &&
+      current.y === bounds.y &&
+      current.width === bounds.width &&
+      current.height === bounds.height
+    ) {
+      return;
+    }
     // Remember where we landed so the following states (LOADING → RESULT →
     // DORMANT) keep the orb in one place instead of snapping back.
     this.position = { ...this.position, x: bounds.x, y: bounds.y };
