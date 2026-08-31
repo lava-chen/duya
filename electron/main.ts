@@ -506,6 +506,13 @@ if (gotTheLock) {
         } else {
           wake.setPosition(defaultOrbPosition());
         }
+        // Phase F (Plan session-floater): restore the persisted session
+        // envelope so a reload (or just reopening the orb) shows the
+        // previous conversation. Best-effort; missing/corrupt entries
+        // fall back to an empty session inside wake.loadSession().
+        if (typeof wake.loadSession === 'function') {
+          wake.loadSession();
+        }
         // Wire orb IPC handlers + accessor for `main → orb` sends.
         registerOrbHandlers();
         setOrbWindowAccessor(() => wake.getOrbWindow());

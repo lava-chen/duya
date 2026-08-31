@@ -115,6 +115,36 @@ export interface WakeService {
    * Phase F lands.
    */
   resetConversation?(): void;
+  /**
+   * Persisted session envelope — Phase F. The orb renderer keeps its
+   * own canonical `messages[]` for fast render; main holds this durable
+   * copy so the conversation survives both the 60s auto-fold and a full
+   * app restart. Capped at 50 turns; oldest dropped on overflow.
+   */
+  appendTurn?(turn: SessionTurn): void;
+  getSession?(): SessionStore;
+  loadSession?(): void;
+}
+
+/**
+ * Shape of the `wake.session` value in configStore. Single field on
+ * purpose: rolling out a multi-session history later is a Phase G+
+ * follow-up that won't have to redefine the persistence envelope.
+   */
+export interface SessionStore {
+  messages: SessionTurn[];
+  updatedAt: number;
+}
+
+/** A turn persisted across folds / restarts. Mirrors the renderer-side
+ *  Turn shape but is JSON-serializable for configStore round-trip. */
+export interface SessionTurn {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  attachments?: string[];
+  createdAt: number;
+  finishedAt?: number;
 }
 
 class WakeServiceImpl implements WakeService {
@@ -139,6 +169,9 @@ class WakeServiceImpl implements WakeService {
   private emitter = new EventEmitter();
   private position: OrbPosition = { x: 100, y: 100, displayId: 0 };
   private registeredShortcut: string | null = null;
+  /** Max turns persisted to the session envelope; oldest silently dropped. */
+  private static readonly SESSION_MAX_TURNS = 50;
+  private session: SessionStore = { messages: [], updatedAt: 0 };
   private readonly opts: Required<Pick<WakeOptions,
     'defaultShortcut' | 'doubleTap' | 'doubleTapWindowMs'>> &
     Pick<WakeOptions, 'orbDevUrl' | 'orbResourcesPath' | 'bounds'>;
@@ -299,6 +332,62 @@ class WakeServiceImpl implements WakeService {
     // turn runs to completion on the agent server and only surfaces later
     // as a notify badge — wasted tokens and a pinned worker slot.
     void this.cancelWakelessTurn();
+  }
+
+  // ── Phase F: persisted session envelope ──────────────────────────────
+  // The orb renderer keeps a canonical `messages[]` for fast render; this
+  // service holds the durable copy in configStore so the conversation
+  // survives the 60s auto-fold and a full app restart. The renderer asks
+  // for the latest copy via the extended automation:orb:state payload
+  // (see electron/ipc/orb.ts).
+
+  resetConversation(): void {
+    this.session = { messages: [], updatedAt: Date.now() };
+    this.persistSession();
+  }
+
+  appendTurn(turn: SessionTurn): void {
+    this.session = {
+      messages: [...this.session.messages, turn].slice(
+        -WakeServiceImpl.SESSION_MAX_TURNS,
+      ),
+      updatedAt: Date.now(),
+    };
+    this.persistSession();
+  }
+
+  getSession(): SessionStore {
+    return {
+      messages: [...this.session.messages],
+      updatedAt: this.session.updatedAt,
+    };
+  }
+
+  loadSession(): void {
+    try {
+      const raw = getConfigStore().getByPath('wake.session');
+      if (raw && typeof raw === 'object' && Array.isArray((raw as SessionStore).messages)) {
+        this.session = raw as SessionStore;
+      }
+    } catch (err) {
+      logger.warn(
+        'Wake: failed to load persisted session',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.Orb,
+      );
+    }
+  }
+
+  private persistSession(): void {
+    try {
+      getConfigStore().set('wake.session', this.session);
+    } catch (err) {
+      logger.warn(
+        'Wake: failed to persist session',
+        { error: err instanceof Error ? err.message : String(err) },
+        LogComponent.Orb,
+      );
+    }
   }
 
   /** Mark a wakeless turn as in-flight: suppress blur-collapse until the turn

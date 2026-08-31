@@ -188,12 +188,18 @@ export function useOrbState(): UseOrbStateReturn {
     // this renderer mounts (first wake, or a reload mid-session). Any IPC
     // sent before these listeners existed is gone, so ask instead — but only
     // move off DORMANT, never yank the user out of a state they just entered.
+    // Phase F: also seed `messages` from the persisted session so a reload
+    // mid-conversation restores the visible stream.
     void api
       .state?.()
       .then((res) => {
         const next = res?.state as OrbState | undefined;
         if (!next) return;
         setState((current) => (current === 'DORMANT' ? next : current));
+        if (Array.isArray(res?.messages)) {
+          const persisted = res.messages as Turn[];
+          setMessages((prev) => (prev.length === 0 ? persisted : prev));
+        }
       })
       .catch(() => {
         // main unavailable — stay DORMANT
@@ -318,6 +324,10 @@ export function useOrbState(): UseOrbStateReturn {
           const next = res?.state as OrbState | undefined;
           if (!next) return;
           setState((current) => (current === 'DORMANT' ? next : current));
+          if (Array.isArray(res?.messages)) {
+            const persisted = res.messages as Turn[];
+            setMessages((prev) => (prev.length === 0 ? persisted : prev));
+          }
         })
         .catch(() => {
           // main unavailable — keep current state
@@ -351,6 +361,12 @@ export function useOrbState(): UseOrbStateReturn {
           const next = res?.state as OrbState | undefined;
           if (next && next !== 'DORMANT') {
             setState((current) => (current === 'DORMANT' ? next : current));
+          }
+          // Phase F: also catch a messages list arriving via polling (a
+          // peer session that was being written while we were reloading).
+          if (Array.isArray(res?.messages)) {
+            const persisted = res.messages as Turn[];
+            setMessages((prev) => (prev.length === 0 ? persisted : prev));
           }
         })
         .catch(() => {
