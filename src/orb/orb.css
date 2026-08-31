@@ -524,11 +524,11 @@ body {
   white-space: nowrap;
 }
 
-/* ─ ─ RESULT: OrbResult ───────────────────────────────────────────────────── */
+/* ─ ─ SESSION (Phase B): OrbSessionCard ──────────────────────────────────── */
 
-.orb-result {
-  width: var(--orb-result-width);
-  height: var(--orb-result-height);
+.orb-session {
+  width: var(--orb-input-width);
+  height: var(--orb-input-height);
   background: var(--orb-bg-glass);
   backdrop-filter: var(--orb-blur);
   -webkit-backdrop-filter: var(--orb-blur);
@@ -540,74 +540,214 @@ body {
   overflow: hidden;
 }
 
-.orb-result-body {
-  flex: 1;
-  padding: 16px 20px;
-  overflow-y: auto;
-  font-size: var(--orb-font-size-result);
-  line-height: 1.6;
-  color: var(--orb-fg);
-  user-select: text;
-}
-
-.orb-result-text {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.orb-result-body h1,
-.orb-result-body h2,
-.orb-result-body h3 {
-  margin-top: 0.6em;
-  margin-bottom: 0.3em;
-  font-weight: var(--orb-font-weight-medium);
-}
-
-.orb-result-body h1 {
-  font-size: 18px;
-}
-
-.orb-result-body h2 {
-  font-size: 16px;
-}
-
-.orb-result-body p {
-  margin-bottom: 0.6em;
-}
-
-.orb-result-toolbar {
+.orb-session-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  border-top: 1px solid var(--orb-border);
-  background: var(--orb-bg);
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--orb-border);
+  -webkit-app-region: drag;
 }
 
-.orb-result-action {
-  padding: 6px 12px;
-  border-radius: 6px;
-  font-size: 12px;
+.orb-session-header-title {
+  font-size: 13px;
   font-weight: var(--orb-font-weight-medium);
   color: var(--orb-fg);
-  transition: background var(--orb-transition-fast);
+  letter-spacing: 0.02em;
+}
+
+.orb-session-header-actions {
+  display: flex;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.orb-session-header-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--orb-fg-muted);
+  cursor: pointer;
+  transition: background var(--orb-transition-fast),
+    color var(--orb-transition-fast);
+}
+
+.orb-session-header-btn:hover:not(:disabled) {
+  background: var(--orb-accent-soft);
+  color: var(--orb-fg);
+}
+
+.orb-session-header-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.orb-session-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: var(--orb-font-size-result);
+  line-height: 1.55;
+  user-select: text;
+}
+
+.orb-session-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+}
+
+.orb-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 86%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  word-break: break-word;
+}
+
+.orb-message--user {
+  align-self: flex-end;
+  background: var(--orb-accent-soft);
+  color: var(--orb-fg);
+}
+
+.orb-message--assistant {
+  align-self: flex-start;
+  background: var(--orb-bg);
+  border: 1px solid var(--orb-border);
+  color: var(--orb-fg);
+}
+
+.orb-message-text {
+  white-space: pre-wrap;
+  font-size: 13px;
+}
+
+.orb-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.orb-message-attachment-img {
+  max-width: 120px;
+  max-height: 80px;
+  border-radius: 6px;
+  border: 1px solid var(--orb-border);
+  object-fit: cover;
+}
+
+.orb-message-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.orb-message-insert {
+  background: var(--orb-accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: var(--orb-font-weight-medium);
+  cursor: pointer;
+  transition: opacity var(--orb-transition-fast);
+}
+
+.orb-message-insert:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.orb-message-insert:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.orb-stream-typing {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.orb-result-action:hover {
+.orb-stream-typing-label {
+  color: var(--orb-fg-muted);
+  font-size: 12px;
+  margin-right: 4px;
+}
+
+.orb-stream-typing-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--orb-fg-muted);
+  animation: orb-typing-bounce 1.2s infinite ease-in-out;
+}
+
+.orb-stream-typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.orb-stream-typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes orb-typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.orb-session-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--orb-border);
+  background: var(--orb-bg);
+}
+
+.orb-session-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 8px;
   background: var(--orb-accent-soft);
+  color: var(--orb-fg);
+  font-size: 12px;
 }
 
-.orb-result-action--primary {
-  background: var(--orb-accent);
-  color: #fff;
-}
-
-.orb-result-action--primary:hover {
-  opacity: 0.9;
-  background: var(--orb-accent);
+.orb-session-banner button {
+  background: transparent;
+  border: none;
+  color: var(--orb-fg-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
 }
 
 /* ─ ─ State transitions ───────────────────────────────────────────────────── */
@@ -661,15 +801,15 @@ body {
 }
 
 /* Scrollbar — minimal */
-.orb-result-body::-webkit-scrollbar {
+.orb-session-stream::-webkit-scrollbar {
   width: 6px;
 }
 
-.orb-result-body::-webkit-scrollbar-track {
+.orb-session-stream::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.orb-result-body::-webkit-scrollbar-thumb {
+.orb-session-stream::-webkit-scrollbar-thumb {
   background: var(--orb-border);
   border-radius: 3px;
 }

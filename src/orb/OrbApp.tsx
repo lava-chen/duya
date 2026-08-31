@@ -7,22 +7,22 @@
  *   - LOADING → RESULT   : stream completes, main calls `orb.showResult()`
  *   - *       → DORMANT  : Esc / close / cancel
  *
- * Window bounds change on state transition (50x50 / 280x100 / 50x50 / 350x350).
- * Window positioning is handled by main process via setBounds().
+ * Phase B (Plan session-floater): INPUT/LOADING/RESULT now render the
+ * same chat-style `OrbSessionCard` (header + message stream + input
+ * row) inside the 360x520 window. DORMANT still uses `OrbBall` (the
+ * 50x50 floating anchor). The legacy `OrbInput`/`OrbResult` pair was
+ * deleted — all their input-row behaviour moved into OrbSessionCard.
  *
- * Plan 453 Task F.
+ * Plan 453 Task F + Plan session-floater Phase B.
  */
-import { useEffect, useRef, useState, useCallback, type ReactElement } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { OrbMoment } from './bot/BloubOrb';
 import type { StateId } from './bot/states';
 import { OrbBall } from './components/OrbBall';
-import { OrbBallLoading } from './components/OrbBallLoading';
-import { OrbInput } from './components/OrbInput';
-import { OrbResult } from './components/OrbResult';
+import { OrbSessionCard } from './components/OrbSessionCard';
 import { useOrbState } from './hooks/useOrbState';
 import { useOrbDraggable } from './hooks/useOrbDraggable';
 import { useAutoCollapse } from './hooks/useAutoCollapse';
-import type { OrbState } from './types';
 
 /** LOADING 超过这个时长，RESULT 到达时播一次 burst 庆祝。 */
 const LONG_TASK_MS = 10_000;
@@ -36,13 +36,20 @@ export function OrbApp() {
   const {
     state,
     progress,
-    result,
     notified,
     cardSeq,
+    messages,
+    pendingText,
+    setPendingText,
+    pendingAttachments,
+    setPendingAttachments,
+    autoInjectBanner,
+    setAutoInjectBanner,
     submit,
     openResult,
     insertTab,
     hide,
+    resetConversation,
   } = useOrbState();
 
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -149,13 +156,22 @@ export function OrbApp() {
     void window.electronAPI?.orb?.showInput();
   }, [notified, openResult]);
 
-  const handleInsertTab = useCallback(async () => {
-    if (!result) return;
-    await insertTab(result.rawText);
-    void hide();
-  }, [insertTab, hide, result]);
+  // Phase B header actions.
+  const handleNewChat = useCallback(async () => {
+    await resetConversation();
+  }, [resetConversation]);
 
-  const renderCurrent = (): ReactElement => {
+  const handleCopyLast = useCallback(async () => {
+    // The actual clipboard write happens inside OrbSessionCard so the
+    // nav button can pick the latest assistant text; here we just need
+    // a hook the session card can invoke after writing.
+  }, []);
+
+  const handleClose = useCallback(async () => {
+    await hide();
+  }, [hide]);
+
+  const renderCurrent = () => {
     if (isCollapsed && state !== 'DORMANT') {
       // Force the ball visually while preserving the underlying state
       // (so resuming activity restores the right element).
@@ -167,15 +183,33 @@ export function OrbApp() {
         />
       );
     }
-    return renderByState(state, {
-      progress,
-      result,
-      moment,
-      onDragMouseDown,
-      onBallActivate: handleBallActivate,
-      onSubmit: handleSubmit,
-      onInsertTab: handleInsertTab,
-    });
+    if (state === 'DORMANT') {
+      return (
+        <OrbBall
+          onMouseDown={onDragMouseDown}
+          onActivate={handleBallActivate}
+          moment={moment}
+        />
+      );
+    }
+    return (
+      <OrbSessionCard
+        messages={messages}
+        state={state}
+        progress={progress}
+        pendingText={pendingText}
+        setPendingText={setPendingText}
+        pendingAttachments={pendingAttachments}
+        setPendingAttachments={setPendingAttachments}
+        autoInjectBanner={autoInjectBanner}
+        setAutoInjectBanner={setAutoInjectBanner}
+        onSubmit={handleSubmit}
+        onNewChat={handleNewChat}
+        onCopyLast={handleCopyLast}
+        onClose={handleClose}
+        onInsertTab={insertTab}
+      />
+    );
   };
 
   return (
@@ -186,49 +220,4 @@ export function OrbApp() {
       </div>
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-interface RenderArgs {
-  progress: import('./types').ProgressInfo;
-  result: import('./types').ResultContent | null;
-  moment: OrbMoment | null;
-  onDragMouseDown: (e: React.MouseEvent) => void;
-  onBallActivate: () => void;
-  onSubmit: (text: string, attachments?: string[]) => Promise<void>;
-  onInsertTab: () => Promise<void>;
-}
-
-function renderByState(state: OrbState, args: RenderArgs): ReactElement {
-  switch (state) {
-    case 'DORMANT':
-      return (
-        <OrbBall
-          onMouseDown={args.onDragMouseDown}
-          onActivate={args.onBallActivate}
-          moment={args.moment}
-        />
-      );
-    case 'INPUT':
-      return <OrbInput onSubmit={args.onSubmit} />;
-    case 'LOADING':
-      return (
-        <OrbBallLoading
-          progress={args.progress}
-          onMouseDown={args.onDragMouseDown}
-          moment={args.moment}
-        />
-      );
-    case 'RESULT':
-      return (
-        <OrbResult
-          result={args.result}
-          moment={args.moment}
-          onInsertTab={args.onInsertTab}
-        />
-      );
-  }
 }
