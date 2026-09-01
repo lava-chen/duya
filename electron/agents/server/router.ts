@@ -161,6 +161,10 @@ function normalizeWorkerEvent(event: Record<string, unknown>): Record<string, un
       type: 'status',
       data: { message: event.status || event.message },
     };
+    } else if (msgType === 'compact:start' || msgType === 'compact:done' || msgType === 'compact:error') {
+    // Forward compact lifecycle events from DuyaAgent's auto-compaction so the
+    // renderer can show a compressing indicator.
+    sseEvent = { type: msgType, data: event };
   } else if (msgType === 'chat:mode_changed') {
     // Plan 224 follow-up: agent runtime mode switched (EnterPlanMode /
     // ExitPlanMode / SwitchMode tool). Forward mode + source so the renderer

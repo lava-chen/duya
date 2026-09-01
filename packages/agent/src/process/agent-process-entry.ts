@@ -1687,6 +1687,14 @@ function convertSSEToAgentMessage(event: { type: string; data?: unknown }): Reco
     // converter runs; nothing to forward to the SSE client.
     case 'result':
       return null;
+    // Compact events (from DuyaAgent auto-compaction in streamChat).
+    // Routed as-is so the renderer can show a compressing indicator.
+    case 'compact:start':
+      return { type: 'compact:start' };
+    case 'compact:done':
+      return { type: 'compact:done', ...(event.data as object) };
+    case 'compact:error':
+      return { type: 'compact:error', ...(event.data as object) };
     default:
         warn('[Agent-Process] Unknown SSE event type:', event.type);
         return null;

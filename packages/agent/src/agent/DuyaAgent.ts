@@ -785,7 +785,7 @@ export class duyaAgent {
         yield {
           type: 'error',
           data: `Unknown mode: ${requestedMode}`,
-        } as SSEEvent;
+        } as unknown as SSEEvent;
         return;
       }
       // Modifier-paradigm mode (plan-task) or conductor-only — fall
@@ -1379,6 +1379,7 @@ export class duyaAgent {
       // Proactive context compaction before each LLM call
       if (this.compactionController.shouldCompact()) {
         logger.info(`[Agent] Turn ${turnCount}: Proactive compaction triggered`);
+        yield { type: 'compact:start' } as unknown as SSEEvent;
         try {
           const compactEntry = await this.compactionController.compactProactive({ trigger: 'auto' });
           if (compactEntry) {
@@ -1393,10 +1394,19 @@ export class duyaAgent {
             const reProjected = this._projectModelMessages(systemPromptContent, { injectHookContexts: true });
             systemPromptContent = reProjected.systemPromptContent;
             messages = reProjected.messages;
+            yield {
+              type: 'compact:done',
+              data: {
+                strategy: compactEntry.strategy,
+                tokensRemoved: compactEntry.tokensBefore,
+                tokensRetained: compactEntry.tokensAfter ?? 0,
+              },
+            } as unknown as SSEEvent;
           }
         } catch (compactError) {
           const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
+          yield { type: 'compact:error', data: { message: compactErrorMsg } } as unknown as SSEEvent;
           // Continue anyway — let the API call fail if truly over limit
         }
       }
@@ -1516,13 +1526,6 @@ export class duyaAgent {
           });
         } catch (error) {
           logger.warn('[Agent] System prompt observer failed; continuing without observer', { error });
-        }
-
-        // Kick off the background prefire summary pass (pass 1) while the main
-        // turn streams. Fire-and-forget: failures are ignored, and the cached
-        // result seeds pass 2 when compaction later triggers.
-        if (this.compactionController.shouldPrefire()) {
-          this.compactionController.prefire().catch(() => {});
         }
 
         // Plan 439: wrap the raw LLM stream with turn-level replay. A
@@ -2045,9 +2048,8 @@ export class duyaAgent {
             if (toolResultMessageCount > 0) {
               const projectionForOverflow =
                 this.compactionController.projectInputMessages();
-              this.compactionManager.updateContextTokens(projectionForOverflow);
               if (
-                this.compactionManager.effectiveTotalTokensForOverflowCheck() >
+                this.compactionManager.getContextTokens(projectionForOverflow) >
                 contextWindow
               ) {
                 try {
@@ -2152,10 +2154,6 @@ export class duyaAgent {
             const observedPrompt = resultPromptVolume(roundResultUsage);
             if (observedPrompt > 0) {
               this.compactionManager.setObservedPromptTokens(observedPrompt);
-              // Grok-aligned 5-state suppression: a healthy LLM 200 with
-              // valid usage clears TURN/STICKY/UNTIL_SUCCESS. AUTH survives
-              // — it needs a token refresh, not a 200.
-              this.compactionManager.onLlmSuccess();
             }
             yield event;
           }
@@ -3222,7 +3220,7 @@ export class duyaAgent {
       yield {
         type: 'error',
         data: `Mode "${mod.id}" has no orchestrator`,
-      } as SSEEvent;
+      } as unknown as SSEEvent;
       return;
     }
 
@@ -3234,7 +3232,7 @@ export class duyaAgent {
       yield {
         type: 'error',
         data: `${mod.id} mode error: ${message}`,
-      } as SSEEvent;
+      } as unknown as SSEEvent;
     }
   }
 
@@ -3786,8 +3784,7 @@ export class duyaAgent {
    * 获取当前上下文统计信息
    */
   getContextStats() {
-    this.compactionManager.updateContextTokens(this.messages);
-    return this.compactionManager.getStats();
+    return this.compactionManager.getStats(this.messages);
   }
 
   /**
