@@ -84,7 +84,7 @@ export function resolveScanRoots(
  * Whether a relative path under a scan root is excluded from the index.
  * `isMemoryRoot` tightens the rules for the curated memory tree: generated
  * projections (MEMORY.md, summary.md, per-directory index.md), the
- * memory-config dir, rollout summaries, and tmp residue are not user
+ * memory-config dir and tmp residue are not user
  * memory and never enter the index. User-authored extension files
  * (`extensions/ad_hoc/**`) are indexed.
  */
@@ -96,7 +96,7 @@ export function isExcluded(relPath: string, isMemoryRoot: boolean): boolean {
   if (!isMemoryRoot) return false;
   const base = segs[0] ?? norm;
   if (base === 'MEMORY.md' || base === 'summary.md' || base === 'stage1_policy.md') return true;
-  if (base === 'rollout_summaries' || base === 'memory-config' || base === '.git') return true;
+  if (base === 'memory-config' || base === '.git') return true;
   // Per-directory index projections (global/areas/index.md etc.).
   if (norm.endsWith('/index.md') || norm === 'index.md') return true;
   return false;
