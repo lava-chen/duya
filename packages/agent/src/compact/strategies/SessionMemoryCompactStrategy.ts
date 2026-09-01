@@ -16,7 +16,6 @@
  */
 
 import type { CompactOptions, CompactionResult, CompactionStats, CompactionStrategy, Message } from '../types.js'
-import { COMPACTION_THRESHOLDS } from '../types.js'
 import { estimateMessagesTokens } from '../tokenBudget.js'
 import { adjustSliceBoundary } from '../compact.js'
 import { sanitizeCompactedHistory } from '../historySanitize.js'
@@ -328,28 +327,6 @@ export class SessionMemoryCompactStrategy implements CompactionStrategy {
       previousSummary: config.previousSummary,
       accumulatedFileOps: config.accumulatedFileOps ?? createFileOps(),
     }
-  }
-
-  /**
-   * Update the previous summary for iterative compaction
-   */
-  setPreviousSummary(summary: string): void {
-    this.config.previousSummary = summary
-  }
-
-  /**
-   * Get accumulated file operations
-   */
-  getAccumulatedFileOps(): FileOperations {
-    return this.config.accumulatedFileOps ?? createFileOps()
-  }
-
-  /**
-   * Check if compaction should be triggered
-   * Threshold: 85% of max tokens
-   */
-  shouldCompact(stats: CompactionStats): boolean {
-    return stats.totalTokens > stats.maxTokens * COMPACTION_THRESHOLDS.SESSION_MEMORY
   }
 
   /**
@@ -679,44 +656,6 @@ Continue the conversation from where it left off without asking the user any fur
     }
   }
 
-  /**
-   * Get file operations from the most recent compaction (for external use)
-   */
-  getFileOperations(): FileChangeRecord[] {
-    const fileOps = this.getAccumulatedFileOps()
-    const { readFiles, modifiedFiles } = computeFileLists(fileOps)
-
-    const result: FileChangeRecord[] = []
-
-    for (const filePath of readFiles) {
-      result.push({
-        filePath,
-        operation: 'read',
-        timestamp: Date.now(),
-      })
-    }
-
-    for (const filePath of modifiedFiles) {
-      result.push({
-        filePath,
-        operation: 'edit',
-        timestamp: Date.now(),
-      })
-    }
-
-    return result
-  }
-
-  /**
-   * Get statistics about the last compaction
-   */
-  getLastCompactionStats(): {
-    messagesCompressed: number
-    fileOperations: number
-    toolCalls: number
-  } | null {
-    return null
-  }
 }
 
 /**

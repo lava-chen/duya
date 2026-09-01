@@ -42,12 +42,7 @@ export interface CompactionManagerLike {
     messages: Message[],
     options?: Record<string, unknown>,
   ): Promise<EnhancedCompactionResult>;
-  updateContextTokens(messages: Message[]): void;
-  shouldCompact(): boolean;
-  /** Whether a background prefire summary pass should run (usage above lead). */
-  shouldPrefire(messages: Message[]): boolean;
-  /** Background two-pass prefix summary; fire-and-forget (returns '' on failure). */
-  prefire(messages: Message[]): Promise<string>;
+  shouldCompact(messages: readonly Message[]): boolean;
 }
 
 export interface MessageCompactionControllerOptions {
@@ -186,28 +181,7 @@ export class MessageCompactionController {
    */
   shouldCompact(): boolean {
     const messages = this.projectInputMessages();
-    this.compactionManager.updateContextTokens(messages);
-    return this.compactionManager.shouldCompact();
-  }
-
-  /**
-   * Whether a background prefire summary pass should run now. Uses the same
-   * timeline projection as compaction so the prefire cache stays consistent
-   * with what the next compaction pass will see.
-   */
-  shouldPrefire(): boolean {
-    const messages = this.projectInputMessages();
-    this.compactionManager.updateContextTokens(messages);
-    return this.compactionManager.shouldPrefire(messages);
-  }
-
-  /**
-   * Background two-pass prefix summary. Fire-and-forget: the returned promise
-   * resolves to '' when unavailable, and callers should not await it.
-   */
-  prefire(): Promise<string> {
-    const messages = this.projectInputMessages();
-    return this.compactionManager.prefire(messages);
+    return this.compactionManager.shouldCompact(messages);
   }
 
   /**
@@ -220,7 +194,6 @@ export class MessageCompactionController {
     options?: CompactProactiveOptions,
   ): Promise<CompactionEntry | null> {
     const inputMessages = this.projectInputMessages();
-    this.compactionManager.updateContextTokens(inputMessages);
     const result = await this.compactionManager.compact(
       inputMessages,
       options as Record<string, unknown> | undefined,
