@@ -28,6 +28,7 @@ import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useContextUsageStore } from '@/stores/context-usage-store';
+import { useCompactionStore, selectCompactionForSession } from '@/stores/compaction-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
 import { useBusyMessageModeValue } from '@/stores/busy-message-mode-store';
 import { useShallow } from 'zustand/react/shallow';
@@ -188,7 +189,11 @@ export function ChatView({
   }, [saveSettings, settings.defaultThinkingEffort]);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
-  const [compactionStatus, setCompactionStatus] = useState<'idle' | 'compacting' | 'done' | 'error'>('idle');
+  // Live auto-compaction phase pushed by the worker (auto compaction only).
+  // Manual /compact still drives a local 'compacting' state via setIsCompacting.
+  // The 'done'/'error' divider comes from this store so it persists across both
+  // auto and manual paths through the same UI surface.
+  const compactionState = useCompactionStore(selectCompactionForSession(sessionId));
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [gitBaseline, setGitBaseline] = useState<UseGitStatusResult | null>(null);
   // Tracks whether a baseline has been captured for the current round.
@@ -1191,11 +1196,15 @@ export function ChatView({
     if (!sessionId) return;
     const compactStartedAt = Date.now();
     setIsCompacting(true);
-    setCompactionStatus('compacting');
+    useCompactionStore.getState().setCompacting(sessionId);
     compactContext(sessionId, {
       onDone: (result) => {
         setIsCompacting(false);
-        setCompactionStatus('done');
+        useCompactionStore.getState().setDone(sessionId, {
+          strategy: result.strategy ?? 'session_memory',
+          tokensRemoved: result.tokenReduction ?? 0,
+          tokensRetained: 0,
+        });
         // The worker broadcasts a fresh post-compaction token_usage before
         // compact:done, so a snapshot stamped during this compaction is the
         // authoritative new context size — keep it. Only fall back to
@@ -1225,13 +1234,13 @@ export function ChatView({
         setCompressionNotification(`${removedMsg}${tokenMsg}.`);
         loadThreadMessages(sessionId);
         // Clear the "done" divider after a short delay so it doesn't linger
-        setTimeout(() => setCompactionStatus('idle'), 4000);
+        setTimeout(() => useCompactionStore.getState().clear(sessionId), 4000);
       },
       onError: (error) => {
         setIsCompacting(false);
-        setCompactionStatus('error');
+        useCompactionStore.getState().setError(sessionId, error);
         setCompressionNotification(`Compression failed: ${error}`);
-        setTimeout(() => setCompactionStatus('idle'), 5000);
+        setTimeout(() => useCompactionStore.getState().clear(sessionId), 5000);
       },
     });
   }, [sessionId, loadThreadMessages]);
@@ -1450,7 +1459,7 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onEditSend={handleEditSend}
-              compactionStatus={compactionStatus}
+              compactionStatus={compactionState.phase}
               nextStepSuggestions={nextStepSuggestions}
               onNextStepSelect={handleNextStepSelect}
             />

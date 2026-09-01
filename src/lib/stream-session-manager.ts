@@ -25,6 +25,7 @@ import { interruptChat } from './agent-sse-client';
 import { getConfigValue } from './config-port-bus';
 import { useConversationStore } from '@/stores/conversation-store';
 import { applyWorkerUsageSnapshot, type WorkerUsageSnapshot } from '@/stores/context-usage-store';
+import { useCompactionStore } from '@/stores/compaction-store';
 
 // Provider config interface
 interface ProviderConfig {
@@ -1652,6 +1653,28 @@ class StreamSessionManager {
           // Live context-usage snapshot pushed by the worker during streaming.
           applyWorkerUsageSnapshot(sessionId, event.data as WorkerUsageSnapshot);
           break;
+
+        case 'compact:start':
+          // Auto-compaction just fired mid-turn. Mirror into the compaction
+          // store so the renderer's MessageList can swap in a spinner.
+          useCompactionStore.getState().setCompacting(sessionId);
+          break;
+
+        case 'compact:done': {
+          const data = event.data as { strategy?: string; tokensRemoved?: number; tokensRetained?: number } | undefined;
+          useCompactionStore.getState().setDone(sessionId, {
+            strategy: data?.strategy ?? 'session_memory',
+            tokensRemoved: data?.tokensRemoved ?? 0,
+            tokensRetained: data?.tokensRetained ?? 0,
+          });
+          break;
+        }
+
+        case 'compact:error': {
+          const data = event.data as { message?: string } | undefined;
+          useCompactionStore.getState().setError(sessionId, data?.message ?? 'Unknown error');
+          break;
+        }
 
         case 'done':
           this.handleDoneEvent(sessionId, streamId, event.data as { reason?: string } | undefined);
