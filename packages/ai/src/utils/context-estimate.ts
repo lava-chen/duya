@@ -75,10 +75,11 @@ const CJK_REGEX =
 const CJK_CHARS_PER_TOKEN = 2.5;
 const ASCII_CHARS_PER_TOKEN = 4;
 
-/** Vision-encoded floor per image block. Providers charge images on a
- *  separate visual budget (~1.6K tokens on Anthropic); we cannot know the
- *  resolution, so charge a conservative floor instead of dropping them. */
-export const IMAGE_TOKEN_FLOOR = 700;
+/** Vision-encoded floor per image block. Pi parity (4800 chars / 4 = 1200);
+ *  Anthropic documents ~1.6K tokens for moderate-resolution images, so a
+ *  1200 floor matches the real cost closely. Lower floors under-estimate
+ *  image-heavy sessions and cause premature compaction. */
+export const IMAGE_TOKEN_FLOOR = 1200;
 
 // ──────────────────────────────────────────────────────────────────────────
 // Text extraction (block-aware)
@@ -226,11 +227,20 @@ function isUsableAnchor(
   if (!usage) return undefined;
   const underReported = isUnderReportedUsage(usage);
   const { prompt, output } = normalizePromptTokens(usage);
-  const total = prompt + output;
+  // Provider-reported total_tokens (OpenAI-compatible gateways) is the most
+  // authoritative anchor when present, but only trust it when it's larger than
+  // the cache-normalized prompt — gateways that omit cache from total_tokens
+  // would otherwise silently under-count the anchor and miss compaction.
+  let total: number;
+  if (typeof usage.total_tokens === 'number' && usage.total_tokens > 0) {
+    total = Math.max(usage.total_tokens, prompt + output);
+  } else {
+    total = prompt + output;
+  }
   // All-zero usage renders as an empty ring; cache-only requests (input=0,
   // large hits) are meaningful and survive via normalizePromptTokens.
-  if (total <= 0 && !(prompt > 0)) return undefined;
-  return { value: prompt + output, underReported };
+  if (total <= 0) return undefined;
+  return { value: total, underReported };
 }
 
 /**
