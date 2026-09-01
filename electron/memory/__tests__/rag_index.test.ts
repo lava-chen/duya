@@ -70,12 +70,12 @@ describe('resolveScanRoots', () => {
 });
 
 describe('isExcluded', () => {
-  it('excludes git, tmp, and memory-generated projections under the memory root', () => {
+  it('excludes git, tmp, and memory-generated projections (but indexes rollout_summaries)', () => {
     expect(isExcluded('MEMORY.md', true)).toBe(true);
     expect(isExcluded('summary.md', true)).toBe(true);
     expect(isExcluded('global/areas/index.md', true)).toBe(true);
     expect(isExcluded('stage1_policy.md', true)).toBe(true);
-    expect(isExcluded('rollout_summaries/2026-x.md', true)).toBe(true);
+    expect(isExcluded('rollout_summaries/2026-x.md', true)).toBe(false);
     expect(isExcluded('memory-config/layout.json', true)).toBe(true);
     expect(isExcluded('.git/HEAD', true)).toBe(true);
     expect(isExcluded('notes.md.tmp', true)).toBe(true);
