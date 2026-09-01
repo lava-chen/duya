@@ -60,7 +60,7 @@ describe('CompactionManager', () => {
 
   describe('shouldCompact', () => {
     it('should return false when context is empty', () => {
-      expect(manager.shouldCompact()).toBe(false);
+      expect(manager.shouldCompact([])).toBe(false);
     });
   });
 
@@ -167,10 +167,8 @@ describe('CompactionManager', () => {
     });
 
     it('shouldPrefire returns false above the compaction threshold', () => {
-      // Force usage into the compact band by setting a large token count.
-      manager.updateContextTokens(manyMessages(12));
-      // Overwrite the computed count so the ratio lands above SESSION_MEMORY.
-      (manager as unknown as { contextTokens: number }).contextTokens = 90000;
+      // Force usage into the compact band via observedPromptTokens anchor.
+      manager.setObservedPromptTokens(90000);
       expect(manager.shouldPrefire(manyMessages(12))).toBe(false);
     });
 
@@ -179,7 +177,7 @@ describe('CompactionManager', () => {
       const summarizer = vi.fn(async () => longSummary);
       manager.setSummarizer(summarizer);
       const messages = manyMessages(12);
-      (manager as unknown as { contextTokens: number }).contextTokens = 70000;
+      manager.setObservedPromptTokens(70000);
       expect(manager.shouldPrefire(messages)).toBe(true);
       const summary = await manager.prefire(messages);
       expect(summary).toBe(longSummary.trim());
@@ -189,7 +187,7 @@ describe('CompactionManager', () => {
 
     it('prefire returns empty string when no summarizer is set', async () => {
       const messages = manyMessages(12);
-      (manager as unknown as { contextTokens: number }).contextTokens = 70000;
+      manager.setObservedPromptTokens(70000);
       expect(await manager.prefire(messages)).toBe('');
     });
 
