@@ -52,7 +52,7 @@ import {
   getCommandQueueLength,
 } from '../queue/index.js';
 import type { QueuedCommand } from '../queue/index.js';
-import { generateSessionTitle, shouldRegenerateTitle } from '../session/title-generator.js';
+import { generateSessionTitle } from '../session/title-generator.js';
 import { getSteeringConfig } from '../hooks/config.js';
 import { classifyError, APIErrorType, computeContextEstimate, normalizePromptTokens } from '@duya/ai';
 import type { PromptProfile } from '../prompts/modes/types.js';
@@ -2889,21 +2889,19 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       });
     }
 
-    // Background title generation: generate if never generated before (no message limit)
+    // Background title generation: only in first 3 rounds, never regenerate after
     const hasGeneratedTitle = titleGeneratedBySession.has(msg.sessionId);
-    const previousTitle = titleGeneratedBySession.get(msg.sessionId) ?? null;
     // Count user messages to determine conversation rounds (not total messages)
     const userMessageCount = agentMessages.filter((m: Message) => m.role === 'user').length;
     const assistantMessageCount = agentMessages.filter((m: Message) => m.role === 'assistant').length;
-    // Only generate if: (1) never generated before, AND (2) at least 1 complete round (1 user + 1 assistant)
-    const isFirstGeneration = !hasGeneratedTitle && userMessageCount >= 1 && assistantMessageCount >= 1;
-    // Topic drift: regenerate if the conversation has shifted away from the original title
-    const shouldRegenerate = hasGeneratedTitle
-      && userMessageCount >= 3
-      && shouldRegenerateTitle(msg.sessionId, agentMessages, previousTitle);
-    const shouldGenerate = isFirstGeneration || shouldRegenerate;
+    // Only generate if: (1) never generated before, AND (2) in first 3 rounds, AND (3) at least 1 complete round
+    // After round 3, title is locked and never updated
+    const shouldGenerate = !hasGeneratedTitle
+      && userMessageCount >= 1
+      && userMessageCount <= 3
+      && assistantMessageCount >= 1;
 
-    log(`[Agent-Process] Title generation check: hasGenerated=${hasGeneratedTitle}, userMsg=${userMessageCount}, assistantMsg=${assistantMessageCount}, isFirstGeneration=${isFirstGeneration}, shouldRegenerate=${shouldRegenerate}, shouldGenerate=${shouldGenerate}`);
+    log(`[Agent-Process] Title generation check: hasGenerated=${hasGeneratedTitle}, userMsg=${userMessageCount}, assistantMsg=${assistantMessageCount}, shouldGenerate=${shouldGenerate}`);
     log(`[Agent-Process] Title generation config: ${titleGenerationModelConfig ? JSON.stringify({provider: titleGenerationModelConfig.provider, model: titleGenerationModelConfig.model}) : 'null'}`);
     log(`[Agent-Process] Agent LLM client available: ${!!agent.llmClient}`);
     if (agent.llmClient) {
