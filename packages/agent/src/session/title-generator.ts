@@ -16,8 +16,6 @@ const MAX_INPUT_LENGTH = 300;
 const TITLE_MAX_LENGTH = 50; // Allow 5-15 Chinese chars or 5-15 English words
 const TITLE_MIN_LENGTH = 4;
 const TITLE_TIMEOUT_MS = 10000; // 10s timeout, generous for slow models
-const KEYWORD_OVERLAP_THRESHOLD = 0.4;
-const DRIFT_CHECK_MIN_MESSAGES = 3;
 
 /**
  * Per-session title generation state
@@ -31,57 +29,6 @@ interface TitleState {
  * Track title state per session (replaces global boolean)
  */
 const titleStateBySession = new Map<string, TitleState>();
-
-/**
- * Check if the session title should be regenerated due to topic drift.
- */
-export function shouldRegenerateTitle(
-  sessionId: string,
-  currentMessages: readonly Message[],
-  previousTitle: string | null | undefined
-): boolean {
-  // Never generated before
-  if (!previousTitle) {
-    return false;
-  }
-
-  // Get recent user messages (last 3)
-  const recentUserMsgs = currentMessages
-    .filter((m) => m.role === 'user')
-    .slice(-DRIFT_CHECK_MIN_MESSAGES);
-
-  if (recentUserMsgs.length < 2) {
-    return false;
-  }
-
-  // Extract keywords from text (Chinese: continuous chars >= 2, English: words >= 2)
-  const extractKeywords = (text: string): Set<string> => {
-    const matches = text.match(/[\u4e00-\u9fa5]{2,}|[a-zA-Z]{2,}/g) || [];
-    return new Set(matches.map((w) => w.toLowerCase()));
-  };
-
-  const titleKeywords = extractKeywords(previousTitle);
-  if (titleKeywords.size === 0) {
-    return false;
-  }
-
-  const recentKeywords = new Set<string>();
-  for (const msg of recentUserMsgs) {
-    const text = extractTextFromMessage(msg);
-    extractKeywords(text).forEach((k) => recentKeywords.add(k));
-  }
-
-  // Calculate overlap ratio
-  const overlap = [...titleKeywords].filter((k) => recentKeywords.has(k)).length;
-  const ratio = overlap / titleKeywords.size;
-
-  if (ratio < KEYWORD_OVERLAP_THRESHOLD) {
-    console.log(`[TitleGenerator] Topic drift detected: overlap=${ratio.toFixed(2)}, threshold=${KEYWORD_OVERLAP_THRESHOLD}`);
-    return true;
-  }
-
-  return false;
-}
 
 /**
  * Check if the first user message is meaningful enough to generate a title.
@@ -139,8 +86,8 @@ function looksLikeTitleArtifact(text: string): boolean {
   // English reasoning openers
   if (/^(?:i\s+(?:should|need|will|'ll|am)|let me|the user|user wants|user needs|finally[,\s]|so[,\s]|this is|based on|according to|to generate|now i)\b/.test(lower)) return true;
 
-  // Chinese reasoning openers
-  if (/^(?:我应该|我需要|让我|用户想|用户需要|根据|结合|首先|然后|最后|这个|这是|分析一下|总结一下)/.test(trimmed)) return true;
+  // Chinese reasoning openers (enhanced)
+  if (/^(?:我应该|我需要|让我|用户想|用户需要|根据|结合|首先|其次|然后|最后|这个|这是|分析一下|总结一下|我觉得|我认为|可能是|也许是|应该是|因为|所以|因此)/.test(trimmed)) return true;
 
   // Prompt instruction paraphrase — words that appear in TITLE_SYSTEM_PROMPT
   // and would never appear in a real title.
@@ -155,6 +102,24 @@ function looksLikeTitleArtifact(text: string): boolean {
 
   // Meta phrasing about title generation itself
   if (/\b(?:should be|make it|needs to be|characters in|words in|title should|title is|title for)\b/.test(lower)) return true;
+
+  // JSON artifact pattern — if text contains "title": (with colon), it's likely from thinking content
+  if (/:\s*"title"/.test(text)) return true;
+
+  // Uncertainty markers indicate reasoning, not a definitive title
+  if (/^(?:可能是|也许是|应该是|可能|也许|估计|大概)/.test(trimmed)) return true;
+
+  // Question in the title — real titles are usually statements, not questions
+  if (trimmed.includes('?') || trimmed.includes('？')) return true;
+
+  // Ellipsis or trailing dots indicate incomplete thought
+  if (/\.{3,}$/.test(trimmed) || /……+$/.test(trimmed)) return true;
+
+  // Parenthetical explanations indicate reasoning
+  if (/[（(][^）)]*[是因为|由于|因此|所以|这个|那]/u.test(text)) return true;
+
+  // Starts with lowercase (real titles usually start with uppercase or Chinese)
+  if (/^[a-z]/.test(trimmed) && !/^[a-z][a-z]+$/.test(trimmed)) return true;
 
   return false;
 }
@@ -538,35 +503,34 @@ export async function generateSessionTitle(
 
       clearTimeout(timeoutId);
 
-      // Try to parse JSON from text, then from thinking content
+      // Try to parse JSON from text only (never from thinking content directly)
+      // Thinking content is only used as a last resort in Strategy 4 below
       let cleanedTitle: string | null = null;
-      for (const source of [title, thinkingContent]) {
-        if (cleanedTitle) break;
-        if (!source) continue;
+      if (title.trim()) {
         try {
-          // Strategy 1: field-level extraction (robust against extra text / nested braces)
-          const fieldMatch = source.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-          console.log(`[TitleGenerator] Field match attempt: source=${source === title ? 'text' : 'thinking'}, matched=${!!fieldMatch}`);
+          // Strategy 1: field-level extraction from text channel only
+          const fieldMatch = title.match(/"title"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+          console.log(`[TitleGenerator] Field match attempt: source=text, matched=${!!fieldMatch}`);
           if (fieldMatch) {
             const extracted = fieldMatch[1]!.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
             cleanedTitle = validateTitle(extracted);
-            console.log(`[TitleGenerator] Field extracted from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
+            console.log(`[TitleGenerator] Field extracted from text, title="${cleanedTitle}"`);
           }
-          // Strategy 2: fallback to full JSON parse
+          // Strategy 2: fallback to full JSON parse from text channel only
           if (!cleanedTitle) {
-            const jsonMatch = source.match(/\{[^}]*\}/s);
+            const jsonMatch = title.match(/\{[^}]*\}/s);
             if (jsonMatch) {
               const parsed = JSON.parse(jsonMatch[0]!);
               if (parsed.title && typeof parsed.title === 'string') {
                 cleanedTitle = validateTitle(parsed.title);
-                console.log(`[TitleGenerator] JSON parsed from ${source === title ? 'text' : 'thinking'}, title="${cleanedTitle}"`);
+                console.log(`[TitleGenerator] JSON parsed from text, title="${cleanedTitle}"`);
               } else {
                 console.log(`[TitleGenerator] JSON matched but no valid title field: keys=${Object.keys(parsed)}`);
               }
             }
           }
         } catch (e) {
-          console.log(`[TitleGenerator] JSON parse failed for ${source === title ? 'text' : 'thinking'}: ${e instanceof Error ? e.message : String(e)}, content_len=${source.length}`);
+          console.log(`[TitleGenerator] JSON parse failed for text: ${e instanceof Error ? e.message : String(e)}, content_len=${title.length}`);
         }
       }
 
@@ -598,19 +562,22 @@ export async function generateSessionTitle(
           }
         }
 
-        // Strategy 4: If text is empty but thinking has content, try last meaningful line
-        if (!cleanedTitle && thinkingContent.trim()) {
+        // Strategy 4: Only if text is completely empty and thinking has content
+        // This is a last resort - thinking content is NOT used if text channel has any content
+        if (!cleanedTitle && !title.trim() && thinkingContent.trim()) {
           const lines = thinkingContent.trim().split(/[\n\r]/);
           // Find the last non-empty, non-reasoning line
           for (let i = lines.length - 1; i >= 0; i--) {
             const line = lines[i]!.trim();
             // Skip reasoning markers and very short lines
             if (!line || line.length < 4) continue;
-            // Skip lines that look like reasoning (Chinese + English openers)
-            if (/^(让我|我需要|我应该|这个|这是|用户|根据|结合|首先|然后|最后)/.test(line)) continue;
+            // Skip lines that look like reasoning (use enhanced patterns from looksLikeTitleArtifact)
+            if (/^(?:让我|我需要|我应该|这个|这是|用户|根据|结合|首先|其次|然后|最后|我觉得|我认为|可能是|也许是|应该是)/.test(line)) continue;
             if (/^(?:i\s+(?:should|need|will|am)|let me|the user|user wants|finally|so|this is|based on|according to)\b/i.test(line)) continue;
             // Skip lines with reasoning punctuation
             if (line.endsWith('，') || line.endsWith('。') || line.endsWith('的')) continue;
+            // Skip lines with uncertainty markers
+            if (/^(?:可能是|也许是|应该是|可能|也许|估计|大概)/.test(line)) continue;
             if (line.length >= 4 && line.length <= 60 && !looksLikeTitleArtifact(line)) {
               cleanedTitle = validateTitle(line);
               if (cleanedTitle) {
