@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { markdownComponents, MarkdownBaseDirectoryContext } from './markdownComponents';
 import { useTranslation } from '@/hooks/useTranslation';
+import { preprocessUnclosedConstructs } from '@/lib/unclosed-constructs';
 
 /**
  * Preprocess markdown text to fix bold syntax issues that the strict
@@ -320,10 +321,12 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   showFrontmatterCard = false,
   baseDirectory,
 }) => {
-  const processed = preprocessBareImageLinks(
-    preprocessMarkdownImagePaths(
-      preprocessBareMathExpressions(
-        preprocessMarkdownBold(preprocessMarkdownHeadings(children))
+  const processed = preprocessUnclosedConstructs(
+    preprocessBareImageLinks(
+      preprocessMarkdownImagePaths(
+        preprocessBareMathExpressions(
+          preprocessMarkdownBold(preprocessMarkdownHeadings(children))
+        )
       )
     )
   );
