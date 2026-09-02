@@ -374,6 +374,26 @@ module.exports = async function afterPack(context) {
     console.warn('[afterPack] playwright-core not found in project node_modules, skipping...');
   }
 
+  // Step 4.5: verify playwright actually landed on disk. esbuild marked
+  // these packages external, so without them on disk the agent bundle
+  // throws ERR_MODULE_NOT_FOUND the first time a tool tries to launch
+  // a browser. We treat a missing copy as a FATAL packaging error rather
+  // than a warning because shipping without browser tooling silently
+  // breaks Computer Use / canvas capture features at runtime.
+  const verifyPlaywright = (pkg) => {
+    const target = path.join(agentBundleNodeModules, pkg);
+    if (!fs.existsSync(target) || !fs.existsSync(path.join(target, 'package.json'))) {
+      throw new Error(
+        `[afterPack] FATAL: ${pkg} missing from ${target} after copy step. ` +
+        'The agent bundle requires this package at runtime but esbuild marked it external. ' +
+        'Check that node_modules/' + pkg + ' exists in the project root.'
+      );
+    }
+    console.log(`[afterPack] ${pkg} verified at ${target}`);
+  };
+  verifyPlaywright('playwright');
+  verifyPlaywright('playwright-core');
+
   // Step 5: Document parser payload is OPTIONAL as of plan 106.
   // The main path uses NodeFileParser (in-process) — no sidecar needed.
   // The Python sidecar remains available as an opt-in fallback for
