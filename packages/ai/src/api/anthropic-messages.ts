@@ -38,7 +38,7 @@ import { resolveProviderBlockOutbound, summarizeProviderBlock } from './degrade.
 import { getDeferredToolNames, splitDeferredTools } from '../utils/deferred-tools.js';
 import { emitSSE } from './emit-sse.js';
 import { collectDiagnostics } from '../utils/simple-options.js';
-import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem } from '../utils/prompt-caching.js';
+import { checkCacheEligibility, applyCacheControl, applyCacheControlToSystem, applyCacheControlToTools } from '../utils/prompt-caching.js';
 import { sortToolsByName } from '../utils/tool-order.js';
 import { isToolSchemaMismatchError } from '../utils/errors.js';
 import { parseJsonWithRepair } from '../utils/json-repair.js';
@@ -75,6 +75,52 @@ const MINIMAX_HIGHSPEED_MAX_TOKENS = 196_608;
 // 2013 invalid-parameters error. It avoids retrying an already-invalid payload
 // with the largest possible output reservation.
 const MINIMAX_RECOVERY_MAX_TOKENS = 8_192;
+
+/**
+ * Detectors for bare (untagged) thinking content that MiniMax M2.5 sometimes
+ * emits in the text channel instead of a proper thinking block.
+ *
+ * Conservative: only trigger on very specific patterns that are unlikely to
+ * be legitimate direct-answer text. False positives would cause valid answers
+ * to be hidden in the thinking channel, which is worse than the leak.
+ */
+const BARE_THINKING_PREFIXES = [
+  'let me',          // "Let me analyze..."
+  'i need to',       // "I need to think about..."
+  'i\'m thinking',   // "I'm thinking..."
+  'first,',          // "First, let me..."
+  'first i',         // "First I should..."
+  'to start',        // "To start, I..."
+  'let\'s see',     // "Let's see..."
+  'hmm',             // "Hmm, let me..."
+  'well,',           // "Well, I need to..."
+  'actually,',       // "Actually, let me..."
+  'so,',             // "So, I need to..."
+  'okay,',           // "Okay, first..."
+];
+
+/**
+ * Returns true if `text` looks like bare (untagged) thinking content.
+ * Used as a fallback when MiniMax sends reasoning without <thinking> tags.
+ */
+function looksLikeBareThinkingContent(text: string): boolean {
+  const trimmed = text.trimStart().toLowerCase();
+  if (trimmed.length < 4 || trimmed.length > 512) return false;
+  // Must match a known thinking prefix and be at the start of a potential answer
+  // (not in the middle of a sentence).
+  for (const prefix of BARE_THINKING_PREFIXES) {
+    if (trimmed.startsWith(prefix)) {
+      // Additional guard: ensure the next char after the prefix is whitespace
+      // or punctuation (not a letter continuing the word), which would indicate
+      // false positive like "Let me" inside "Let me know" (direct answer).
+      const afterPrefix = trimmed[prefix.length];
+      if (afterPrefix === undefined || /[\s,.?!:;"'\-()]/.test(afterPrefix)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 // =============================================================================
 // Tool ID sanitization
@@ -1170,8 +1216,27 @@ export function parseAnthropicEvent(
             events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: thinking, partial: assistantMsg });
           }
           if (text) {
-            ensureTextBlock().text += text;
-            events.push({ type: 'text_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+            // Fallback: detect bare thinking content (MiniMax M2.5 sometimes
+            // emits reasoning without any tags in the text channel). Only reroute
+            // if no thinking has been detected yet AND the text looks like
+            // internal reasoning rather than a direct answer.
+            if (
+              !thinking &&
+              assistantMsg.content.filter(b => b.type === 'thinking').length === 0 &&
+              looksLikeBareThinkingContent(text)
+            ) {
+              ensureThinkingBlock().thinking += text;
+              events.push({ type: 'thinking_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+              console.warn(
+                '[duya-ai] [MiniMax] Detected bare thinking content in text channel ' +
+                  '(no tags, pattern matched). This is a MiniMax API bug — consider ' +
+                  'disabling thinking (effort=off) to avoid this issue.',
+                { textPreview: text.slice(0, 80) },
+              );
+            } else {
+              ensureTextBlock().text += text;
+              events.push({ type: 'text_delta', contentIndex: state.currentBlockIdx, delta: text, partial: assistantMsg });
+            }
           }
           return events.length > 0 ? events : { type: 'start', partial: assistantMsg };
         }
@@ -1759,6 +1824,22 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         ? getDeferredToolNames(textified)
         : undefined;
 
+      // Plan 480 P0.1: tool-level cache breakpoint. The `tools` param is the
+      // longest stable public prefix of every request (same registry snapshot
+      // + sortToolsByName → byte-identical across turns), so marking its final
+      // tool makes the whole tool surface cache-resident. Only native
+      // Anthropic surfaces accept cache_control on tool definitions — MiniMax
+      // and other compat endpoints resolve to nativeLayout=false — and a
+      // transport that omits tools ('none') has nothing to mark. The messages
+      // budget in applyCacheControl reserves a slot when this is active so the
+      // request total stays system(1) + tools(1) + messages(≤2) ≤ 4.
+      const toolsPresent = (chatOptions?.tools?.length ?? 0) > 0;
+      const toolsCacheBreakpoint =
+        cacheEligibility.eligible &&
+        cacheEligibility.nativeLayout &&
+        toolsPresent &&
+        transport !== 'none';
+
       // 3. Convert to Anthropic MessageParam[] format.
       let anthropicMessages = toAnthropicMessages(textified, model, false, deferredNames);
 
@@ -1769,6 +1850,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           cacheEligibility,
           'short',
           options.baseURL,
+          { toolsBreakpoint: toolsCacheBreakpoint },
         ) as MessageParam[];
       }
 
@@ -1851,6 +1933,14 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         tools,
         deferredNames ?? new Set(),
       );
+      // Plan 480 P0.1: when the native Anthropic surface supports it, mark the
+      // final tool with a cache breakpoint. sortToolsByName above already
+      // established the deterministic byte order, so the marker lands on a
+      // stable position across turns (unless the toolset itself changed).
+      const toolsForRequest =
+        toolsCacheBreakpoint && requestTools.length > 0
+          ? applyCacheControlToTools(requestTools, cacheEligibility, 'short', options.baseURL)
+          : requestTools;
 
       const baseSystemPrompt = chatOptions?.systemPrompt || '';
       // Plan 418 L2: tell the model tools are unavailable so it does not ask
@@ -1889,7 +1979,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
         temperature: chatOptions?.temperature ?? 1,
         system: systemForRequest,
         messages: anthropicMessages,
-        tools: requestTools.length ? requestTools : undefined,
+        tools: requestTools.length ? toolsForRequest : undefined,
         ...(thinking ? { thinking } : {}),
         stream: true,
       };
@@ -1982,7 +2072,7 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           temperature: chatOptions?.temperature ?? 1,
           system: systemForRequest,
           messages: anthropicMessages,
-          tools: requestTools.length ? requestTools : undefined,
+          tools: requestTools.length ? toolsForRequest : undefined,
           stream: true,
         };
         // A second failure is thrown to the caller.
@@ -2034,6 +2124,19 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
 
       // Flush any remaining think-tag buffer (e.g. <think>/<thinking>/<mm:think>)
       // from MiniMax text deltas so trailing reasoning or text is not lost.
+      //
+      // MiniMax-M3 leaks a bare `</think>` into the text stream before the answer
+      // starts (vLLM issue #45687), which causes the SAME content to appear in
+      // both the thinking_delta and text_delta event channels:
+      //
+      //   text_delta chunk: "</think>The answer is 42"
+      //   → parser: thinking="The answer is 42", text="The answer is 42"
+      //   → thinking_delta yields "The answer is 42" (answer leaked into thinking channel!)
+      //   → text_delta yields "The answer is 42" (correct)
+      //
+      // When the flushed thinking and text are IDENTICAL it means a closing tag
+      // was interleaved with answer text in a single chunk — suppress the
+      // thinking yield to avoid rendering the answer twice (thinking + text).
       if (state.thinkParser) {
         const { thinking, text } = state.thinkParser.flush();
         if (thinking) {
@@ -2043,7 +2146,17 @@ export function createAnthropicClient(options: AIClientOptions): AIClient {
           } else {
             assistantMsg.content.push({ type: 'thinking', thinking, thinkingSignature: '' });
           }
-          yield { type: 'thinking', data: thinking };
+          // Suppress thinking yield when it duplicates text — clear sign of the
+          // M3 closing-tag-leak bug. Real reasoning is never identical to text.
+          if (thinking !== text) {
+            yield { type: 'thinking', data: thinking };
+          } else {
+            console.warn(
+              '[duya-ai] [MiniMax-M3] Suppressed thinking event identical to text ' +
+                '(closing-tag leak detected). This is a MiniMax API bug.',
+              { thinkingLength: thinking.length, textLength: text.length },
+            );
+          }
         }
         if (text) {
           const block = assistantMsg.content[state.currentBlockIdx];
