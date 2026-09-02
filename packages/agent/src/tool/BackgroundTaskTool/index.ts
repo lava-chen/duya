@@ -1,6 +1,10 @@
 /**
- * Background task polling tools (aligned to Grok's `get_task_output` /
- * `kill_task` / `wait_tasks`).
+ * Background task tools — read-only status snapshot + kill.
+ *
+ * Deliberately NO blocking wait tool (duya previously mirrored grok_build's
+ * legacy `wait_tasks` / `get_task_output(timeout_ms>0)`; those were removed
+ * because background tasks auto-deliver a terminal <task-notification> that
+ * wakes the parent — a wait tool just invites dead polling).
  */
 
 export {
@@ -9,8 +13,7 @@ export {
   GET_TASK_OUTPUT_TOOL_NAME,
   isTerminalStatus,
   formatTaskOutput,
-  DEFAULT_WAIT_TIMEOUT_MS,
-  MAX_MULTI_WAIT_IDS,
+  MAX_MULTI_TASK_IDS,
   DEFAULT_TOOL_OUTPUT_BYTES,
 } from './GetTaskOutputTool.js';
 export {
@@ -18,8 +21,3 @@ export {
   killTaskTool,
   KILL_TASK_TOOL_NAME,
 } from './KillTaskTool.js';
-export {
-  WaitTasksTool,
-  waitTasksTool,
-  WAIT_TASKS_TOOL_NAME,
-} from './WaitTasksTool.js';

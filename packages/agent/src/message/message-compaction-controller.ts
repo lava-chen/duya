@@ -31,6 +31,7 @@ import {
   type MessageTimelineEntry,
 } from './message-framework.js';
 import { projectModelMessages } from './message-projectors.js';
+import { isBranchedMessage } from './threads.js';
 
 /**
  * Structural subset of the real `CompactionManager` that the controller relies on.
@@ -231,9 +232,15 @@ export class MessageCompactionController {
 
     // Latest checkpoint projection (previous summary + retained messages).
     const projection = this.timeline.buildContext();
+    // Plan 486 §2.4: branched (thread) messages are excluded from the real
+    // compaction input. They never enter the model projection the strategy
+    // sees, so they must also never be listed as compacted — otherwise
+    // `onCompacted` would supersede their durable rows and `getThread` would
+    // lose them after a compaction.
     const realInputAgentMessages: readonly AgentMessage[] =
       projection.messages.filter(
         (m) =>
+          !isBranchedMessage(m) &&
           m.role !== 'compaction_summary' &&
           typeof m.id === 'string' &&
           realMessageIds.has(m.id),

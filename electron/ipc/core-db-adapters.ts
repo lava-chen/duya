@@ -78,6 +78,10 @@ export interface MessageRow {
   tool_signature: string | null;
   text_signature: string | null;
   created_at: number;
+  /** Plan 486: thread/fork reference id (mirrors message metadata threadMeta). */
+  reply_to_id?: string | null;
+  /** Plan 486: true when the row belongs to a thread's branched layer. */
+  branched?: boolean | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -272,9 +276,11 @@ interface IpcMessageDTO {
 /**
  * Metadata keys persisted into the rollout payload (plan 429 #3 rewind
  * linkage). `preImageSha`/`filePath` come from Edit/Write; `fileSnapshots`
- * from ApplyPatch's multi-file semantics.
+ * from ApplyPatch's multi-file semantics. `threadMeta` (plan 486) carries the
+ * replyToId/branched fork markers so a branched message stays durable and
+ * `getThread` can be served after a reload.
  */
-const PERSISTED_METADATA_KEYS = ['preImageSha', 'filePath', 'fileSnapshots'] as const;
+const PERSISTED_METADATA_KEYS = ['preImageSha', 'filePath', 'fileSnapshots', 'threadMeta'] as const;
 
 /**
  * Construct a NewEvent from an IPC message DTO.
@@ -477,6 +483,12 @@ function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
     ? (typeof rawTokenUsage === 'string' ? rawTokenUsage : JSON.stringify(rawTokenUsage))
     : null;
 
+  // Plan 486: thread/fork markers are surfaced as flat row columns so both the
+  // renderer transcript and the agent reload path can rebuild thread metadata.
+  const threadMeta = metadata?.threadMeta as
+    | { replyToId?: string; branched?: boolean }
+    | undefined;
+
   return {
     id: msg.id ?? event.id,
     session_id: event.sessionId,
@@ -502,6 +514,8 @@ function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
     thinking_signature: thinkingSignature,
     tool_signature: toolSignature,
     text_signature: textSignature,
+    reply_to_id: threadMeta?.replyToId ?? null,
+    branched: threadMeta?.branched === true ? true : null,
   };
 }
 

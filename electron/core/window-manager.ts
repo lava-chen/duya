@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, dialog, MessageChannelMain } from 'electron'
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
 import { isDev, isPreviewMode, isTestMode } from './bootstrap';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getChannelManager } from '../messaging/port-manager';
@@ -161,6 +162,31 @@ export async function createWindow(): Promise<void> {
       height: 44,
     };
   }
+
+  // Native window backdrop so the chrome can follow the desktop wallpaper in
+  // real time (never a hardcoded color):
+  //   - Windows 11 → Mica: OS paints a wallpaper-tinted material behind the
+  //     window. No frosted blur — the "translucent, not matte" look.
+  //   - macOS      → vibrancy 'under-window': the system material samples the
+  //     desktop wallpaper behind the window, same visual intent as Mica.
+  //   - Anything else keeps the opaque CSS fallback (pastel gradient).
+  // The renderer learns which material is active through the
+  // `--duya-backdrop` argv flag (read synchronously in the preload) and
+  // switches the chrome surfaces to glass in globals.css.
+  let windowBackdrop = '';
+  if (process.platform === 'darwin') {
+    windowOptions.vibrancy = 'under-window';
+    windowOptions.visualEffectState = 'active';
+    windowBackdrop = 'vibrancy';
+  } else if (process.platform === 'win32') {
+    // Windows 11 starts at NT build 22000. Windows 10 returns 10240-19045.
+    const build = Number(os.release().split('.')[2] ?? '0');
+    if (build >= 22000) {
+      windowOptions.backgroundMaterial = 'mica';
+      windowBackdrop = 'mica';
+    }
+  }
+  windowOptions.webPreferences!.additionalArguments = [`--duya-backdrop=${windowBackdrop}`];
 
   mainWindow = new BrowserWindow(windowOptions);
 

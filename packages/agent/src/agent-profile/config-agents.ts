@@ -34,8 +34,9 @@ const TOOL_PROFILE_MAP: Record<string, { allow: string[]; deny: string[] }> = {
   research: { allow: ['file:read*', 'search:*', 'browser:*'], deny: ['file:write*', 'file:edit*', 'exec:*'] },
 };
 
-/** Config root: ~/.duya (or test-namespaced dir under DUYA_TEST). */
-function resolveConfigRoot(): string {
+/** Config root: ~/.duya (or test-namespaced dir under DUYA_TEST). Exported so
+ *  sibling readers (bot profile.json, Plan 485 P2.2) resolve the same root. */
+export function resolveConfigRoot(): string {
   const base = path.join(os.homedir(), '.duya');
   if (process.env.DUYA_TEST === '1') {
     const ns = process.env.DUYA_TEST_NAMESPACE;

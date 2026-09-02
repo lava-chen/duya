@@ -397,6 +397,18 @@ export interface DuyaConfig {
   agents: Record<string, CustomAgentConfig>;
   /** [performance] — low-power mode switch (plan 426 Phase 3). */
   performance: PerformanceConfig;
+
+  /**
+   * [wake] — Agent Wake Bus (plan 476) preferences.
+   * idleDispatch: who resumes an idle session when a background
+   * notification lands — 'renderer' (current behaviour) or 'main' (new
+   * main-process path, needed for CLI/headless). Default 'renderer'.
+   */
+  wake: WakeConfig;
+}
+
+export interface WakeConfig {
+  idleDispatch?: 'renderer' | 'main'
 }
 
 export const DEFAULT_CONFIG: DuyaConfig = {
@@ -547,6 +559,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   personalities: {},
   agents: {},
   performance: { lowPower: 'auto' },
+  wake: { idleDispatch: 'renderer' },
   steering: {
     todo_gate: true,
     anti_dead_loop: { enabled: true, nudge_at: 8, hard_nudge_at: 12, hard_stop_at: 16 },

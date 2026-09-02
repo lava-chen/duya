@@ -114,17 +114,50 @@ function computeFileEditStats(tool: ToolAction): FileEditStats {
 /**
  * Parse edit tool result to get old and new content.
  * Returns `{ filePath, oldContent, newContent }` or null on parse failure.
+ *
+ * EditTool returns formats like:
+ *   "Successfully edited {file}: N block(s) changed.\n\n-{old} +{new}"
+ * or the older "Changed:\n...\nTo:\n..." format.
  */
 function parseEditResult(result: string): { filePath: string; oldContent: string; newContent: string } | null {
   try {
-    // Parse format: "Successfully edited {file_path}\n\nChanged:\n{old_string}\n\nTo:\n{new_string}"
+    // Try "Changed:\n...\nTo:\n..." format first
     const changedMatch = result.match(/Changed:\n([\s\S]+?)\n\nTo:\n([\s\S]+)$/);
     if (changedMatch) {
       const filePathMatch = result.match(/Successfully edited (.+)\n/);
       const filePath = filePathMatch ? filePathMatch[1] : 'unknown';
-      const oldContent = changedMatch[1];
-      const newContent = changedMatch[2];
-      return { filePath, oldContent, newContent };
+      return { filePath, oldContent: changedMatch[1], newContent: changedMatch[2] };
+    }
+
+    // Parse EditTool's actual output format:
+    // "Successfully edited {file}: N block(s) changed.\n\n-{line} +{line} ..."
+    const filePathMatch = result.match(/Successfully edited (.+?):/);
+    if (filePathMatch) {
+      const filePath = filePathMatch[1];
+      // Extract all lines that start with - or + (the actual diff)
+      const diffSection = result.match(/\n\n([\s\S]+)$/)?.[1] ?? '';
+      const lines = diffSection.split('\n');
+      const removedLines: string[] = [];
+      const addedLines: string[] = [];
+
+      for (const line of lines) {
+        // Match lines like "-  5 const old = 'value';" or "+  5 const new = 'value';"
+        const minusMatch = line.match(/^-\s*\d*\s*(.*)$/);
+        const plusMatch = line.match(/^\+\s*\d*\s*(.*)$/);
+        if (minusMatch && minusMatch[1].trim() !== '...') {
+          removedLines.push(minusMatch[1]);
+        } else if (plusMatch && plusMatch[1].trim() !== '...') {
+          addedLines.push(plusMatch[1]);
+        }
+      }
+
+      if (removedLines.length > 0 || addedLines.length > 0) {
+        return {
+          filePath,
+          oldContent: removedLines.join('\n'),
+          newContent: addedLines.join('\n'),
+        };
+      }
     }
 
     // Try JSON format

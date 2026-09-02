@@ -53,6 +53,7 @@ import {
 } from '../db/index';
 import type { DbInitResult, DatabaseStats } from '../db/index';
 import { emitMailApplied, emitMailCreated, emitMailEdited, emitMailCancelled } from '../messaging/mailbox-broadcaster';
+import { maybeDispatchIdleWake } from '../wake/idle-dispatcher';
 import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUploadProjectAsset } from '../conductor/asset-service';
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
@@ -131,6 +132,34 @@ function getDb(): NonNullable<ReturnType<typeof getDatabase>> {
 }
 
 /**
+ * Realpath the deepest *existing* ancestor of `targetPath`, then re-append
+ * the remaining (not-yet-existing) tail. Unlike a plain realpathSync this
+ * works when the leaf does not exist yet (e.g. a DB file about to be
+ * created), and it resolves any symlinked directory chain above the leaf
+ * so callers can compare against a symlink-free root.
+ */
+function realPathThroughExistingAncestors(targetPath: string): string {
+  let existing = targetPath;
+  const tail: string[] = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    tail.unshift(path.basename(existing));
+    existing = parent;
+  }
+  try {
+    return path.join(fs.realpathSync(existing), ...tail);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+/** True when `candidate` equals `dir` or lives strictly underneath it. */
+function isPathInside(candidate: string, dir: string): boolean {
+  return candidate === dir || candidate.startsWith(dir + path.sep);
+}
+
+/**
  * Allocate the next z-index for a newly created element. Later-created
  * elements stack above earlier ones. Connectors start at 10 so relationship
  * lines sit above the default node layer.
@@ -153,7 +182,22 @@ export function registerDbHandlers(): void {
   ipcMain.handle('db:relocateDatabase', async (_event, newDir: string) => {
     const database = getDb();
     const currentPath = database.name;
+    if (!newDir || typeof newDir !== 'string') {
+      return { success: false, error: 'Invalid destination directory' };
+    }
     const newDbPath = path.join(newDir, 'duya-main.db');
+
+    // plan 413 (path-safety): the DB holds all chats + stored
+    // credentials, so the destination must stay inside the user's real
+    // home directory. Reject writes to /etc, /var, system dirs, or any
+    // path that resolves outside app.getPath('home'). Symlinked parents
+    // cannot redirect the write either — the deepest existing ancestor
+    // is realpath'd before the containment check.
+    const realHome = realPathThroughExistingAncestors(app.getPath('home'));
+    const realDest = realPathThroughExistingAncestors(newDbPath);
+    if (!isPathInside(realDest, realHome)) {
+      return { success: false, error: 'Relocate destination must be inside the user home directory' };
+    }
 
     if (newDbPath === currentPath) {
       return { success: false, error: 'Same path as current' };
@@ -2732,6 +2776,14 @@ export function registerMailboxHandlers(): void {
     });
     const row = coreMailboxToIpcRow(item);
     emitMailCreated(row);
+    // Plan 476 P0-B/P2.1: give the main process its own idle-wake path for
+    // background notifications (CLI/headless no longer depend on the
+    // renderer to resume an idle session). Gate is `wake.idleDispatch`;
+    // busy sessions park the wake until `lock:release` (P0-A mirror +
+    // wake-dispatcher queue); taskId dedupes (P0-D).
+    if (row.kind === 'background_notification' && row.sessionId) {
+      void maybeDispatchIdleWake(row as unknown as Parameters<typeof maybeDispatchIdleWake>[0]).catch(() => {});
+    }
     return row;
   });
 

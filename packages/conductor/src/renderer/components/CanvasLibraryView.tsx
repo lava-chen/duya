@@ -8,18 +8,15 @@ import { InputDialog } from "@/components/ui/InputDialog";
 import { Button } from "@/components/ui/Button";
 import { IconButton } from "@/components/ui/IconButton";
 import { Input } from "@/components/ui/Input";
+import { PageTabs } from "@/components/ui/page";
 import { cn } from "@/lib/utils";
 import {
   StarIcon,
   PlusIcon,
-  PencilIcon,
-  TrashIcon,
   ChevronDownIcon,
   ChevronUpIcon,
-  DotsThreeIcon,
   GridFourIcon,
   TableIcon,
-  FolderIcon,
   CheckIcon,
 } from "@/components/icons";
 
@@ -118,7 +115,6 @@ export function CanvasLibraryView({
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [renameGroupId, setRenameGroupId] = useState<string | null>(null);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  const [groupMenuId, setGroupMenuId] = useState<string | null>(null);
   // Multi-select across cards/rows. Powers the bulk action bar and the
   // checkbox overlay on each card. Persists across filters and view
   // switches so a user can build up a selection, then act.
@@ -151,7 +147,6 @@ export function CanvasLibraryView({
   useEffect(() => {
     const close = () => {
       setSortMenuOpen(false);
-      setGroupMenuId(null);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -248,7 +243,6 @@ export function CanvasLibraryView({
 
   const handleDeleteGroup = async (groupId: string) => {
     await deleteGroup(groupId);
-    setGroupMenuId(null);
   };
 
   // Bulk-action derivations. "allFav" drives whether the bulk button
@@ -266,6 +260,18 @@ export function CanvasLibraryView({
     }
   };
 
+  // Current active filter ID: "all" | "favorites" | groupId
+  const activeFilterId =
+    canvasFilter.favoritesOnly
+      ? "favorites"
+      : canvasFilter.groupId ?? "all";
+
+  const handleFilterChange = (id: string) => {
+    if (id === "all") setCanvasFilter({ groupId: null, favoritesOnly: false });
+    else if (id === "favorites") setCanvasFilter({ favoritesOnly: true, groupId: null });
+    else setCanvasFilter({ groupId: id, favoritesOnly: false });
+  };
+
   const SORT_OPTIONS: Array<{ field: SortField; label: string }> = [
     { field: "updatedAt", label: "最近更新" },
     { field: "createdAt", label: "创建时间" },
@@ -273,109 +279,40 @@ export function CanvasLibraryView({
     { field: "manual", label: "手动" },
   ];
 
-  const railItem = (
-    label: string,
-    active: boolean,
-    onClick: () => void,
-    count?: number,
-  ) => (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-sm transition-colors",
-        active ? "text-accent bg-[var(--surface-hover)]" : "text-foreground hover:bg-[var(--surface-hover)]",
-      )}
-    >
-      <span className="truncate">{label}</span>
-      {count !== undefined && (
-        <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
-      )}
-    </button>
-  );
+  // Tabs: 全部画布 | ★ 收藏 | [each group] | +新建分组
+  const tabs = [
+    { id: "all", label: "全部画布", count: canvases.length },
+    { id: "favorites", label: "★ 收藏", count: canvases.filter((c) => c.isFavorite).length },
+    ...canvasGroups.map((g) => ({
+      id: g.id,
+      label: g.name,
+      count: canvases.filter((c) => c.groupId === g.id).length,
+    })),
+  ];
 
   return (
     <div className="flex flex-1 min-h-0" style={{ color: "var(--text)" }}>
-      {/* Left rail: groups + filters */}
-      <div className="w-40 shrink-0 h-full overflow-y-auto py-2 px-1.5 border-r border-border">
-        {railItem("全部画布", !canvasFilter.groupId && !canvasFilter.favoritesOnly, () =>
-          setCanvasFilter({ groupId: null, favoritesOnly: false }), canvases.length)}
-        {railItem("★ 收藏", canvasFilter.favoritesOnly, () =>
-          setCanvasFilter({ favoritesOnly: true, groupId: null }),
-          canvases.filter((c) => c.isFavorite).length)}
-
-        <div className="flex items-center justify-between px-2 mt-4 mb-1">
-          <span className="flex items-center gap-1 text-xs font-medium text-muted-foreground">
-            <FolderIcon size={13} />
-            分组
-          </span>
+      {/* Main: tab bar + toolbar + content */}
+      <div className="flex-1 min-w-0 h-full flex flex-col">
+        {/* Tab bar — horizontal PageTabs, same as Automation/Extensions */}
+        <div className="flex items-center border-b border-border px-3">
+          <PageTabs
+            tabs={tabs}
+            active={activeFilterId}
+            onChange={handleFilterChange}
+          />
           <IconButton
             size="sm"
             variant="ghost"
             aria-label="新建分组"
             onClick={() => setNewGroupOpen(true)}
+            className="ml-auto shrink-0"
           >
             <PlusIcon size={14} />
           </IconButton>
         </div>
 
-        {canvasGroups.map((g) => {
-          const active = canvasFilter.groupId === g.id;
-          return (
-            <div
-              key={g.id}
-              className="relative group"
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              {railItem(
-                g.name,
-                active,
-                () => setCanvasFilter({ groupId: g.id, favoritesOnly: false }),
-                canvases.filter((c) => c.groupId === g.id).length,
-              )}
-              <IconButton
-                size="sm"
-                variant="ghost"
-                aria-label="分组操作"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setGroupMenuId(groupMenuId === g.id ? null : g.id);
-                }}
-                className="absolute right-0.5 top-0.5 opacity-0 group-hover:opacity-100"
-              >
-                <DotsThreeIcon size={14} />
-              </IconButton>
-              {groupMenuId === g.id && (
-                <div
-                  className="absolute right-0 top-7 z-50 rounded-lg border border-border bg-[var(--surface)] shadow-lg py-1 w-28"
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRenameGroupId(g.id);
-                      setGroupMenuId(null);
-                    }}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-foreground hover:bg-[var(--surface-hover)]"
-                  >
-                    <PencilIcon size={13} /> 重命名
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteGroup(g.id)}
-                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-xs text-error hover:bg-error/10"
-                  >
-                    <TrashIcon size={13} /> 删除
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Main: toolbar + view */}
-      <div className="flex-1 min-w-0 h-full flex flex-col">
+        {/* Toolbar row */}
         <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
           <div className="flex-1 min-w-0">
             <Input

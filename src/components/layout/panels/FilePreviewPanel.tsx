@@ -439,9 +439,10 @@ export function FilePreviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
 
   const loadPreview = useCallback(async () => {
     // Standalone mode (in-chat click to a file outside the workspace)
-    // is allowed to ship without a workingDirectory — the IPC skips its
-    // project-root check. Project-scoped opens keep the existing
-    // invariant that both fields are required.
+    // is allowed to ship without a workingDirectory — the IPC anchors
+    // the read to the user home directory instead of the project root.
+    // Project-scoped opens keep the existing invariant that both fields
+    // are required.
     if (!filePath) return;
     if (!propStandalone && !workingDirectory) return;
     setLoading(true);

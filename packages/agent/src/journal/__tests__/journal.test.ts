@@ -247,4 +247,23 @@ describe('Journal token_usage serialization (plan 444 ring fix)', () => {
     const dto = recordedAppends[0].messages[0] as { token_usage?: string };
     expect(dto.token_usage).toBeUndefined();
   });
+
+  it('plan 486: carries threadMeta on the journal emit so branches stay durable', () => {
+    const journal = new Journal({ sessionId: 'sess-1' });
+    journal.userMsgAdded(
+      userMsg({
+        id: 'fork-1',
+        metadata: { threadMeta: { replyToId: 'root-1', branched: true } },
+      } as Partial<Message> as Message),
+      'turn-1',
+    );
+    journal.userMsgAdded(userMsg({ id: 'plain-1' }), 'turn-1');
+
+    const forkDto = recordedAppends[0].messages[0] as { metadata?: Record<string, unknown> };
+    expect(forkDto.metadata).toEqual({
+      threadMeta: { replyToId: 'root-1', branched: true },
+    });
+    const plainDto = recordedAppends[1].messages[0] as { metadata?: Record<string, unknown> };
+    expect(plainDto.metadata).toBeUndefined();
+  });
 });

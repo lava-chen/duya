@@ -178,6 +178,26 @@ describe('AutomationScheduler', () => {
     await expect(scheduler.runCronNow('nope')).rejects.toThrow('cron not found');
   });
 
+  it('runCronNow rejects a bot-bound cron (P2.3a stub — awaits 477 resident sessions)', async () => {
+    const cron = scheduler.createCron(makeInput({ agent: 'weekly-reporter' }));
+    await expect(scheduler.runCronNow(cron.id)).rejects.toThrow(/bound to agent "weekly-reporter"/);
+    // No throwaway cron session row, no execution.
+    expect(mocks.createCronSessionRow).not.toHaveBeenCalled();
+    expect(mocks.runCronInSession).not.toHaveBeenCalled();
+  });
+
+  it('tick claims the fire of a due bot-bound cron without executing it (P2.3a stub)', async () => {
+    const cron = scheduler.createCron(makeInput({ agent: 'disk-saver', schedule: { kind: 'every', every: '1m' } }));
+    // Force the job to be due (fresh jobs are now+1m).
+    store.markRunResult(cron.id, { lastRunAt: Date.now() - 5 * 60_000, error: null, retryCount: 0 });
+    await scheduler.tick();
+    await scheduler.tick(); // second pass — must NOT re-fire
+    expect(mocks.runCronInSession).not.toHaveBeenCalled();
+    const read = new CronFileStore(path.join(dir, 'cronjob.toml')).getCron(cron.id)!;
+    expect(read.lastRunAt).toBeGreaterThan(0);
+    expect(read.lastError).toContain('P2.3b');
+  });
+
   it('records last_error and pauses the job after retries are exhausted', async () => {
     const cron = scheduler.createCron(makeInput({ maxRetries: 1 }));
     mocks.runCronInSession.mockRejectedValue(new Error('boom'));

@@ -44,6 +44,15 @@ try {
   // webUtils unavailable — renderer uses File.path fallback
 }
 
+// Which native window backdrop the main process created the window with
+// ('' | 'mica' | 'vibrancy'). Passed down via webPreferences.additionalArguments
+// so the preload can expose it synchronously — no async IPC round-trip, no
+// first-paint flash. The index.html boot script turns it into
+// `<html data-backdrop=...>` and globals.css switches chrome surfaces to glass.
+const duyaBackdropArg = process.argv.find((a) => a.startsWith('--duya-backdrop='));
+export const windowBackdrop: '' | 'mica' | 'vibrancy' =
+  (duyaBackdropArg?.split('=')[1] as '' | 'mica' | 'vibrancy') ?? '';
+
 // Preload script initialized
 
 export interface AgentAPI {
@@ -524,7 +533,10 @@ export interface FileTreeNode {
 }
 
 export interface FilesAPI {
-  browse: (dirPath: string, maxDepth?: number) => Promise<{ success: boolean; error?: string; tree: FileTreeNode[] }>
+  // plan 413: rootPath is the project workspace directory; the main
+  // process rejects any target that is not inside it.
+  browse: (dirPath: string, rootPath: string, maxDepth?: number) =>
+    Promise<{ success: boolean; error?: string; tree: FileTreeNode[] }>
   preview: (
     targetPath: string,
     rootPath: string,
@@ -544,8 +556,10 @@ export interface FilesAPI {
     truncated?: boolean
     tooLarge?: boolean
   }>
-  delete: (targetPath: string) => Promise<{ success: boolean; error?: string }>
-  rename: (targetPath: string, newName: string) => Promise<{ success: boolean; error?: string; newPath?: string }>
+  delete: (targetPath: string, rootPath: string) =>
+    Promise<{ success: boolean; error?: string }>
+  rename: (targetPath: string, newName: string, rootPath: string) =>
+    Promise<{ success: boolean; error?: string; newPath?: string }>
 }
 
 export interface ReferenceEntry {
@@ -1021,6 +1035,12 @@ export interface ElectronAPI {
       localeCountryCode: string | null
       timezone: string
     }>
+    /** Native window backdrop the main process created the window with
+     *  ('' | 'mica' | 'vibrancy'). '' means an opaque CSS fallback is used. */
+    windowBackdrop: '' | 'mica' | 'vibrancy'
+    /** Keep nativeTheme (Mica / vibrancy material, menus, dialogs) in sync
+     *  with duya's own light/dark theme. */
+    setNativeThemeSource: (mode: 'light' | 'dark' | 'system') => Promise<void>
   }
   agent: AgentAPI
   projects: {
@@ -1704,6 +1724,9 @@ const electronAPI: ElectronAPI = {
   },
   system: {
     getLocation: () => ipcRenderer.invoke('system:get-location'),
+    windowBackdrop,
+    setNativeThemeSource: (mode: 'light' | 'dark' | 'system') =>
+      ipcRenderer.invoke('native-theme:set-source', mode),
   },
   agent: {
     streamChat: (prompt, options) => ipcRenderer.invoke('agent:stream', { prompt, options }),
@@ -2085,11 +2108,17 @@ const electronAPI: ElectronAPI = {
     uploadSkill: (filePath: string) => ipcRenderer.invoke('skills:uploadSkill', filePath),
   },
   files: {
-    browse: (dirPath: string, maxDepth?: number) => ipcRenderer.invoke('files:browse', dirPath, maxDepth),
+    // plan 413: every file operation takes a rootPath anchor and
+    // the main process rejects any target outside that anchor. The
+    // caller is responsible for passing the project workspace dir.
+    browse: (dirPath: string, rootPath: string, maxDepth?: number) =>
+      ipcRenderer.invoke('files:browse', dirPath, rootPath, maxDepth),
     preview: (targetPath: string, rootPath: string, options?: { standalone?: boolean }) =>
       ipcRenderer.invoke('files:preview', targetPath, rootPath, options),
-    delete: (targetPath: string) => ipcRenderer.invoke('files:delete', targetPath),
-    rename: (targetPath: string, newName: string) => ipcRenderer.invoke('files:rename', targetPath, newName),
+    delete: (targetPath: string, rootPath: string) =>
+      ipcRenderer.invoke('files:delete', targetPath, rootPath),
+    rename: (targetPath: string, newName: string, rootPath: string) =>
+      ipcRenderer.invoke('files:rename', targetPath, newName, rootPath),
   },
   git: {
     status: (cwd: string) => ipcRenderer.invoke('git:status', cwd),

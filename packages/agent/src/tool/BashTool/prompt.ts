@@ -39,58 +39,6 @@ function getBackgroundUsageNote(): string | null {
 }
 
 // ============================================================
-// Git Instructions
-// ============================================================
-
-function getGitCommitInstructions(): string {
-  return `# Committing changes with git
-
-Only create commits when explicitly requested by the user. If unclear, ask first. When the user asks you to create a commit, follow these steps carefully:
-
-You can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance.
-
-**Git Safety Protocol:**
-- NEVER update the git config
-- NEVER run destructive git commands (push --force, reset --hard, checkout --, restore --, clean -f, branch -D) unless the user explicitly requests these actions
-- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
-- NEVER run force push to main/master, warn the user if they request it
-- **CRITICAL: Always create NEW commits rather than amending** - when a pre-commit hook fails, the commit did NOT happen, so --amend would modify the PREVIOUS commit which may result in destroying work
-- When staging files, prefer adding specific files by name rather than using "git add -A" or "git add ." which can accidentally include sensitive files (.env, credentials) or large binaries
-- NEVER commit changes unless the user explicitly asks you to
-
-1. Run the following bash commands in parallel:
-   - \`git status\` to see all untracked files (never use -uall flag)
-   - \`git diff\` to see both staged and unstaged changes
-   - \`git log\` to see recent commit messages for style reference
-
-2. Analyze all staged changes and draft a commit message:
-   - Summarize the nature of the changes (new feature, enhancement, bug fix, refactoring, test, docs, etc.)
-   - Ensure the message accurately reflects the changes and their purpose
-   - Draft a concise (1-2 sentences) commit message that focuses on "why" not "what"
-   - Do not commit files that likely contain secrets (.env, credentials.json, etc.)
-
-3. Run the following commands in parallel:
-   - Add relevant untracked files to staging area
-   - Create the commit with a message via HEREDOC for proper formatting
-
-4. Run \`git status\` after the commit to verify success
-
-**Example commit format:**
-\`\`\`bash
-git commit -m "$(cat <<'EOF'
-   Add user authentication feature
-
-   Implement JWT-based auth with refresh token rotation.
-   EOF
-)"
-\`\`\`
-
-**Important:**
-- NEVER run additional commands to read or explore code beyond git commands
-- Do not push to the remote unless the user explicitly asks
-- If there are no changes to commit, do not create an empty commit`
-}
-
 function getGitPRInstructions(): string {
   return `# Creating pull requests
 
@@ -256,8 +204,6 @@ export function getBashPrompt(): string {
     '',
     '# Command Safety',
     ...prependBullets(dangerWarningItems),
-    '',
-    getGitCommitInstructions(),
     '',
     getGitPRInstructions(),
   ].join('\n')
