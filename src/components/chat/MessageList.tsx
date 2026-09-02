@@ -25,7 +25,7 @@ interface MessageListProps {
   error?: string | null;
   sessionId: string;
   onEditSend?: (messageId: string, text: string) => void;
-  compactionStatus?: 'idle' | 'compacting' | 'done' | 'error';
+  compactionStatus?: 'idle' | 'compacting' | 'done' | 'error' | 'degraded';
   /** Predicted follow-up prompts shown as cards at the end of the stream. */
   nextStepSuggestions?: string[];
   onNextStepSelect?: (value: string) => void;
@@ -447,6 +447,17 @@ function buildNavigatorItems(groupedMessages: GroupedMessage[]): MessageNavigato
   return items;
 }
 
+/**
+ * Phase-grouping constants.
+ * - MAX_VISIBLE_DOTS: cap on how many nav dots render (each is 28×8px + 3px margin ≈ 39px tall).
+ *   20 dots ≈ 780px of rail — enough to cover most sessions without overflow.
+ * - RAIL_VISIBILITY_WINDOW: fraction of items near the active message that are always shown
+ *   (even when capped). Set to 0.3 so the 30% of items around the active turn are never
+ *   hidden behind the "expand" indicator.
+ */
+const MAX_VISIBLE_DOTS = 20;
+const RAIL_VISIBILITY_WINDOW = 0.3;
+
 function ChatMessageNavigator({
   items,
   activeMessageId,
@@ -458,39 +469,92 @@ function ChatMessageNavigator({
 }) {
   if (items.length <= 3) return null;
 
+  // Determine which indices to render when capped.
+  const total = items.length;
+  const capped = total > MAX_VISIBLE_DOTS;
+  const windowSize = Math.max(2, Math.floor(total * RAIL_VISIBILITY_WINDOW));
+
+  let visibleIndices: number[];
+  if (!capped) {
+    visibleIndices = items.map((_, i) => i);
+  } else {
+    // Find the active item's position.
+    const activeIndex = activeMessageId
+      ? items.findIndex((item) => item.targetMessageId === activeMessageId)
+      : -1;
+
+    if (activeIndex === -1) {
+      // No active item: show first, last, and evenly spread in between.
+      const step = Math.ceil(total / MAX_VISIBLE_DOTS);
+      visibleIndices = [];
+      for (let i = 0; i < total; i += step) visibleIndices.push(i);
+      // Always include the last item if not already included.
+      if (visibleIndices[visibleIndices.length - 1] !== total - 1) {
+        visibleIndices.push(total - 1);
+      }
+    } else {
+      // Always show items around the active one (within windowSize).
+      const nearActive = new Set<number>();
+      for (
+        let i = Math.max(0, activeIndex - windowSize);
+        i <= Math.min(total - 1, activeIndex + windowSize);
+        i++
+      ) {
+        nearActive.add(i);
+      }
+      // Fill remaining slots with evenly-spread indices from the non-near regions.
+      const remainingSlots = MAX_VISIBLE_DOTS - nearActive.size;
+      const nonNearIndices = items
+        .map((_, i) => i)
+        .filter((i) => !nearActive.has(i));
+      const step = Math.max(1, Math.ceil(nonNearIndices.length / remainingSlots));
+      const farIndices: number[] = [];
+      for (let i = 0; i < nonNearIndices.length; i += step) {
+        farIndices.push(nonNearIndices[i]);
+      }
+      // Merge and sort: nearActive + farIndices (evenly spread from edges).
+      const allVisible = [...nearActive, ...farIndices].sort((a, b) => a - b);
+      visibleIndices = allVisible;
+    }
+  }
+
   return (
     <nav className="chat-message-navigator" aria-label="Message navigation">
-      {items.map((item, index) => (
-        <Button
-          key={item.id}
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={`chat-message-navigator-dot ${item.targetMessageId === activeMessageId ? 'active' : ''}`}
-          onClick={() => onJump(item.targetMessageId)}
-          aria-label={`Jump to message ${index + 1}`}
-        >
-          <span className="chat-message-navigator-mark" aria-hidden="true" />
-          <span className="chat-message-navigator-card">
-            <span className="chat-message-navigator-title">{item.userPreview}</span>
-            <span className="chat-message-navigator-text">{item.assistantPreview}</span>
-            {item.files.length > 0 && (
-              <span className="chat-message-navigator-files">
-                {item.files.map(file => (
-                  <span key={file} className="chat-message-navigator-file" title={file}>
-                    {fileNameFromPathForNav(file)}
-                  </span>
-                ))}
-                {item.hiddenFileCount > 0 && (
-                  <span className="chat-message-navigator-file chat-message-navigator-file-more">
-                    +{item.hiddenFileCount}
-                  </span>
-                )}
-              </span>
-            )}
-          </span>
-        </Button>
-      ))}
+      {items.map((item, index) => {
+        const isVisible = visibleIndices.includes(index);
+        if (!isVisible) return null;
+        return (
+          <Button
+            key={item.id}
+            type="button"
+            variant="ghost"
+            size="sm"
+            className={`chat-message-navigator-dot ${item.targetMessageId === activeMessageId ? 'active' : ''}`}
+            onClick={() => onJump(item.targetMessageId)}
+            aria-label={`Jump to message ${index + 1}`}
+          >
+            <span className="chat-message-navigator-mark" aria-hidden="true" />
+            <span className="chat-message-navigator-card">
+              <span className="chat-message-navigator-title">{item.userPreview}</span>
+              <span className="chat-message-navigator-text">{item.assistantPreview}</span>
+              {item.files.length > 0 && (
+                <span className="chat-message-navigator-files">
+                  {item.files.map((file) => (
+                    <span key={file} className="chat-message-navigator-file" title={file}>
+                      {fileNameFromPathForNav(file)}
+                    </span>
+                  ))}
+                  {item.hiddenFileCount > 0 && (
+                    <span className="chat-message-navigator-file chat-message-navigator-file-more">
+                      +{item.hiddenFileCount}
+                    </span>
+                  )}
+                </span>
+              )}
+            </span>
+          </Button>
+        );
+      })}
     </nav>
   );
 }
@@ -519,6 +583,8 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   const hasScrolledOnMountRef = useRef(false);
   const rowHeightsRef = useRef(new Map<string, number>());
   const lastActiveNavUpdateRef = useRef(0);
+  // Ref to always access the latest scrollToBottom without causing useLayoutEffect re-runs
+  const scrollToBottomRef = useRef<() => void>(() => {});
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [activeMessageId, setActiveMessageId] = useState<string | null>(null);
   // Per-session Focus display mode (slash popover toggle).
@@ -840,21 +906,28 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
     autoScrollRef.current = true;
   }, []);
 
+  // Keep ref in sync so useLayoutEffect below always calls the latest
+  useEffect(() => {
+    scrollToBottomRef.current = scrollToBottom;
+  }, [scrollToBottom]);
+
   // Scroll to bottom when messages are first loaded (after session switch or initial load)
-  // Use useLayoutEffect to run after DOM mutations but before paint
+  // Runs once on mount and when messages array becomes non-empty.
+  // Uses scrollToBottomRef to avoid re-creating the effect when scrollToBottom changes.
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     // Only scroll when we have messages and haven't scrolled yet for this session
     if (messages.length > 0 && !hasScrolledOnMountRef.current) {
-      // Scroll immediately without animation to prevent visible scrolling
-      scrollToBottom();
       hasScrolledOnMountRef.current = true;
+      // Scroll immediately without animation to prevent visible scrolling
+      container.scrollTop = container.scrollHeight;
+      autoScrollRef.current = true;
       // Show content after scroll is done — layout is correct now
       setIsInitialLoading(false);
     }
-  }, [messages.length, sessionId, scrollToBottom]);
+  }, [messages.length]);
 
   useImperativeHandle(ref, () => ({
     scrollToBottom,
@@ -873,20 +946,23 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
       return;
     }
 
-    // New user message detected — scroll it to viewport (nearest edge, not forced top)
+    // New user message detected — only scroll if user is NOT at bottom.
+    // When autoScrollRef is true the user already sees the bottom; the new
+    // message arrives in-place without any scroll. When false the user has
+    // scrolled away and should NOT be yanked back.
     if (messages.length > prevMessagesLengthRef.current) {
       const lastMsg = messages[messages.length - 1];
       if (lastMsg.role === 'user' && userMessageIdRef.current !== lastMsg.id) {
         userMessageIdRef.current = lastMsg.id;
-        requestAnimationFrame(() => {
-          const target = document.getElementById(`message-row-${sessionId}-${lastMsg.id}`);
-          if (target && container.contains(target)) {
-            const el = target;
-            el.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
-          } else {
-            scrollToBottom();
-          }
-        });
+        // Only scroll if user is not already at the bottom.
+        if (!autoScrollRef.current) {
+          requestAnimationFrame(() => {
+            const target = document.getElementById(`message-row-${sessionId}-${lastMsg.id}`);
+            if (target && container.contains(target)) {
+              target.scrollIntoView({ block: 'nearest', behavior: 'instant' as ScrollBehavior });
+            }
+          });
+        }
       } else if (autoScrollRef.current) {
         // Non-user message added — scroll to bottom only if user is already there
         scrollToBottom();
