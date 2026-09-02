@@ -30,6 +30,20 @@ export interface LiveContextUsage {
   totalOutput?: number;
   totalCacheHit?: number;
   totalCacheCreation?: number;
+  /**
+   * Token-calc breakdown pushed by the worker for diagnostic surfaces
+   * (hover-detail / debug panel). Lets the operator see exactly how
+   * `usedTokens` was assembled: which message was the anchor, anchor
+   * tokens vs trailing estimate, how many messages, etc.
+   */
+  debugBreakdown?: {
+    anchorIndex: number | null;
+    anchorMsgId: string | null | undefined;
+    anchorTokens: number;
+    trailingTokens: number;
+    msgs: number;
+    compactedPending: boolean;
+  };
   updatedAt: number;
 }
 
@@ -73,6 +87,7 @@ export interface WorkerUsageSnapshot {
   totalOutput?: number;
   totalCacheHit?: number;
   totalCacheCreation?: number;
+  debugBreakdown?: LiveContextUsage['debugBreakdown'];
 }
 
 /**
@@ -99,5 +114,6 @@ export function applyWorkerUsageSnapshot(
     totalOutput: snapshot.totalOutput,
     totalCacheHit: snapshot.totalCacheHit,
     totalCacheCreation: snapshot.totalCacheCreation,
+    debugBreakdown: snapshot.debugBreakdown,
   });
 }

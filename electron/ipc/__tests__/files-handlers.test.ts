@@ -68,6 +68,12 @@ vi.mock('../../logging/logger', () => ({
 // functions for existsSync/statSync/etc, matching the real module shape.
 vi.mock('fs', () => mocks.fs);
 
+// Mock os.homedir so the standalone preview-mode root-anchor is stable
+// across platforms (CI may not have the developer's real home dir).
+vi.mock('os', () => ({
+  homedir: () => '/home/test',
+}));
+
 async function invokeHandler(
   channel: string,
   event: unknown = {},
@@ -95,31 +101,34 @@ describe('files-handlers', () => {
 
   describe('files:browse', () => {
     it('rejects an empty path with success: false and empty tree', async () => {
-      const result = await invokeHandler('files:browse', {}, '');
+      const result = await invokeHandler('files:browse', {}, '', '');
       expect(result).toEqual({ success: false, error: 'Invalid directory path', tree: [] });
       expect(mocks.fs.existsSync).not.toHaveBeenCalled();
     });
 
     it('rejects a non-string path', async () => {
-      const result = await invokeHandler('files:browse', {}, 123);
+      const result = await invokeHandler('files:browse', {}, 123, 'project');
       expect(result).toEqual({ success: false, error: 'Invalid directory path', tree: [] });
     });
 
     it('returns "Directory does not exist" when existsSync returns false', async () => {
-      mocks.fs.existsSync.mockReturnValue(false);
-      const result = await invokeHandler('files:browse', {}, '/no/such/dir');
+      mocks.fs.existsSync.mockImplementation((p: string) => !p.endsWith('no\\such\\dir'));
+      const result = await invokeHandler('files:browse', {}, '/no/such/dir', '/no');
       expect(result).toEqual({ success: false, error: 'Directory does not exist', tree: [] });
     });
 
     it('returns "Path is not a directory" when statSync says it is a file', async () => {
-      mocks.fs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true });
-      const result = await invokeHandler('files:browse', {}, '/some/file.txt');
+      mocks.fs.statSync.mockImplementation((p: string) => ({
+        isDirectory: () => !String(p).endsWith('file.txt'),
+        isFile: () => String(p).endsWith('file.txt'),
+      }));
+      const result = await invokeHandler('files:browse', {}, '/some/file.txt', '/some');
       expect(result).toEqual({ success: false, error: 'Path is not a directory', tree: [] });
     });
 
     it('returns the empty tree for an empty directory', async () => {
       mocks.fs.readdirSync.mockReturnValue([]);
-      const result = await invokeHandler('files:browse', {}, '/empty');
+      const result = await invokeHandler('files:browse', {}, '/empty', '/empty');
       expect(result).toEqual({ success: true, tree: [] });
     });
 
@@ -130,7 +139,7 @@ describe('files-handlers', () => {
         { name: 'alpha.txt', isDirectory: () => false, isFile: () => true },
         { name: 'aardvark', isDirectory: () => true, isFile: () => false },
       ]);
-      const result = await invokeHandler('files:browse', {}, '/somedir');
+      const result = await invokeHandler('files:browse', {}, '/somedir', '/somedir');
       // Directories first (alphabetical), then files (alphabetical)
       expect(result).toMatchObject({
         success: true,
@@ -152,7 +161,7 @@ describe('files-handlers', () => {
         { name: 'app.log', isDirectory: () => false, isFile: () => true },
         { name: 'README.md', isDirectory: () => false, isFile: () => true },
       ]);
-      const result = await invokeHandler('files:browse', {}, '/somedir');
+      const result = await invokeHandler('files:browse', {}, '/somedir', '/somedir');
       const names = (result as { tree: { name: string }[] }).tree.map((n) => n.name);
       expect(names).toEqual(['src', 'README.md']);
     });
@@ -166,7 +175,7 @@ describe('files-handlers', () => {
         { name: '.env', isDirectory: () => false, isFile: () => true },
         { name: 'src', isDirectory: () => true, isFile: () => false },
       ]);
-      const result = await invokeHandler('files:browse', {}, '/somedir');
+      const result = await invokeHandler('files:browse', {}, '/somedir', '/somedir');
       const names = (result as { tree: { name: string }[] }).tree.map((n) => n.name);
       expect(names).toEqual(['.agents', '.claude', '.duya', 'src']);
     });
@@ -174,36 +183,36 @@ describe('files-handlers', () => {
 
   describe('files:rename', () => {
     it('returns "Invalid path or name" when targetPath is empty', async () => {
-      const result = await invokeHandler('files:rename', {}, '', 'newName');
+      const result = await invokeHandler('files:rename', {}, '', 'newName', '');
       expect(result).toEqual({ success: false, error: 'Invalid path or name' });
     });
 
     it('returns "Invalid path or name" when newName is empty', async () => {
-      const result = await invokeHandler('files:rename', {}, '/some', '');
+      const result = await invokeHandler('files:rename', {}, '/some', '', '/some');
       expect(result).toEqual({ success: false, error: 'Invalid path or name' });
     });
 
     it('returns "Path does not exist" when existsSync returns false', async () => {
-      mocks.fs.existsSync.mockReturnValue(false);
-      const result = await invokeHandler('files:rename', {}, '/missing', 'newName');
+      mocks.fs.existsSync.mockImplementation((p: string) => !p.endsWith('missing'));
+      const result = await invokeHandler('files:rename', {}, '/missing', 'newName', '/');
       expect(result).toEqual({ success: false, error: 'Path does not exist' });
     });
 
     it('returns "A file or folder with that name already exists" on name collision', async () => {
       // existsSync returns true for the source, true for the dest.
       mocks.fs.existsSync.mockReturnValue(true);
-      const result = await invokeHandler('files:rename', {}, '/dir/source', 'dest');
+      const result = await invokeHandler('files:rename', {}, '/dir/source/file.txt', 'dest.txt', '/dir/source');
       expect(result).toEqual({ success: false, error: 'A file or folder with that name already exists' });
       expect(mocks.fs.renameSync).not.toHaveBeenCalled();
     });
 
     it('renames the file and returns newPath on success', async () => {
       // existsSync true for source, false for newPath
-      mocks.fs.existsSync.mockImplementation((p: string) => p.endsWith('source'));
+      mocks.fs.existsSync.mockImplementation((p: string) => !p.endsWith('renamed.txt'));
       mocks.fs.renameSync.mockReturnValue(undefined);
-      const result = await invokeHandler('files:rename', {}, '/dir/source', 'renamed');
+      const result = await invokeHandler('files:rename', {}, '/dir/source/file.txt', 'renamed.txt', '/dir/source');
       expect(result).toMatchObject({ success: true });
-      expect((result as { newPath: string }).newPath).toMatch(/renamed$/);
+      expect((result as { newPath: string }).newPath).toMatch(/renamed\.txt$/);
       expect(mocks.fs.renameSync).toHaveBeenCalled();
     });
   });
@@ -268,10 +277,10 @@ describe('files-handlers', () => {
 
     // Standalone mode (opt-in): the renderer only sets this when the
     // user explicitly clicked an in-chat link to a file outside the
-    // chat workspace. The handler must skip the project-root
-    // existence + isInsideRoot check while still validating that the
-    // target path is a real file.
-    it('standalone mode skips project-root checks for files outside any cwd', async () => {
+    // chat workspace. The handler must still anchor the target inside
+    // the user home dir (os.homedir, mocked to /home/test below) so a
+    // compromised renderer cannot preview host-system files.
+    it('standalone mode anchors inside user home and reads files outside the project', async () => {
       mocks.fs.statSync.mockImplementation((value: string) => ({
         isDirectory: () => false,
         isFile: () => String(value).endsWith('notes.md'),
@@ -286,7 +295,7 @@ describe('files-handlers', () => {
       const result = await invokeHandler(
         'files:preview',
         {},
-        '/elsewhere/notes.md',
+        '/home/test/notes.md',
         '', // empty rootPath is OK in standalone mode
         { standalone: true },
       );
@@ -328,25 +337,25 @@ describe('files-handlers', () => {
 
   describe('files:delete', () => {
     it('rejects empty path with "Invalid path"', async () => {
-      const result = await invokeHandler('files:delete', {}, '');
+      const result = await invokeHandler('files:delete', {}, '', '');
       expect(result).toEqual({ success: false, error: 'Invalid path' });
     });
 
     it('rejects non-string path with "Invalid path"', async () => {
-      const result = await invokeHandler('files:delete', {}, 42);
+      const result = await invokeHandler('files:delete', {}, 42, 'project');
       expect(result).toEqual({ success: false, error: 'Invalid path' });
     });
 
     it('returns "Path does not exist" when existsSync returns false', async () => {
-      mocks.fs.existsSync.mockReturnValue(false);
-      const result = await invokeHandler('files:delete', {}, '/missing');
+      mocks.fs.existsSync.mockImplementation((p: string) => !p.endsWith('missing'));
+      const result = await invokeHandler('files:delete', {}, '/missing', '/');
       expect(result).toEqual({ success: false, error: 'Path does not exist' });
     });
 
     it('calls rmdirSync for a directory and returns success', async () => {
       mocks.fs.statSync.mockReturnValue({ isDirectory: () => true, isFile: () => false });
       mocks.fs.rmdirSync.mockReturnValue(undefined);
-      const result = await invokeHandler('files:delete', {}, '/somedir');
+      const result = await invokeHandler('files:delete', {}, '/somedir', '/');
       expect(result).toEqual({ success: true });
       expect(mocks.fs.rmdirSync).toHaveBeenCalledTimes(1);
       const calledPath = (mocks.fs.rmdirSync.mock.calls[0] as unknown as [string])[0];
@@ -355,9 +364,12 @@ describe('files-handlers', () => {
     });
 
     it('calls unlinkSync for a file and returns success', async () => {
-      mocks.fs.statSync.mockReturnValue({ isDirectory: () => false, isFile: () => true });
+      mocks.fs.statSync.mockImplementation((p: string) => ({
+        isDirectory: () => !String(p).endsWith('somefile.txt'),
+        isFile: () => String(p).endsWith('somefile.txt'),
+      }));
       mocks.fs.unlinkSync.mockReturnValue(undefined);
-      const result = await invokeHandler('files:delete', {}, '/somefile.txt');
+      const result = await invokeHandler('files:delete', {}, '/somefile.txt', '/');
       expect(result).toEqual({ success: true });
       expect(mocks.fs.unlinkSync).toHaveBeenCalledTimes(1);
       const calledPath = (mocks.fs.unlinkSync.mock.calls[0] as unknown as [string])[0];
@@ -370,8 +382,96 @@ describe('files-handlers', () => {
       mocks.fs.rmdirSync.mockImplementation(() => {
         throw new Error('Directory not empty');
       });
-      const result = await invokeHandler('files:delete', {}, '/somedir');
+      const result = await invokeHandler('files:delete', {}, '/somedir', '/');
       expect(result).toEqual({ success: false, error: 'Error: Directory not empty' });
+    });
+  });
+
+  // ----------------------------------------------------------------------
+  // plan 413: rootPath is required and the target must be inside it.
+  // The next block exercises the rejection paths.
+  // ----------------------------------------------------------------------
+  describe('plan 413 path-safety', () => {
+    it('files:browse rejects when rootPath is missing', async () => {
+      const result = await invokeHandler('files:browse', {}, '/somedir', '');
+      expect(result).toEqual({ success: false, error: 'Root path is required', tree: [] });
+    });
+
+    it('files:browse rejects when target is outside the root', async () => {
+      mocks.fs.realpathSync.mockImplementation((value: string) => value);
+      const result = await invokeHandler('files:browse', {}, '/elsewhere/file', '/project');
+      expect(result).toEqual({
+        success: false,
+        error: 'Directory is outside the project root',
+        tree: [],
+      });
+    });
+
+    it('files:delete rejects when rootPath is missing', async () => {
+      const result = await invokeHandler('files:delete', {}, '/project/file.txt', '');
+      expect(result).toEqual({ success: false, error: 'Root path is required' });
+    });
+
+    it('files:delete rejects when target escapes the root via a symlink', async () => {
+      // The renderer-supplied path resolves to a host-system file
+      // through a symlink in the workspace. The root must still look
+      // like a real directory so we get past the root sanity check and
+      // reach the isInsideRoot(realTarget) gate.
+      const norm = (value: string) => String(value).replace(/\\/g, '/');
+      mocks.fs.existsSync.mockReturnValue(true);
+      mocks.fs.statSync.mockImplementation((value: string) => ({
+        isDirectory: () => norm(value).endsWith('/project'),
+        isFile: () => !norm(value).endsWith('/project'),
+      }));
+      mocks.fs.realpathSync.mockImplementation((value: string) => {
+        if (norm(value).endsWith('/project/link')) return '/etc/passwd';
+        return value;
+      });
+      const result = await invokeHandler('files:delete', {}, '/project/link', '/project');
+      expect(result).toEqual({ success: false, error: 'Path is outside the project root' });
+      expect(mocks.fs.unlinkSync).not.toHaveBeenCalled();
+      expect(mocks.fs.rmdirSync).not.toHaveBeenCalled();
+    });
+
+    it('files:rename rejects when newName traverses outside the root', async () => {
+      // newName may contain ../ segments; path.join normalizes the
+      // destination before the containment gate runs, so a rename like
+      // "../../evil" must be rejected before any fs write.
+      const norm = (value: string) => String(value).replace(/\\/g, '/');
+      mocks.fs.existsSync.mockReturnValue(true);
+      mocks.fs.statSync.mockImplementation((value: string) => ({
+        isDirectory: () => norm(value).endsWith('/project'),
+        isFile: () => !norm(value).endsWith('/project'),
+      }));
+      mocks.fs.realpathSync.mockImplementation((value: string) => value);
+      const result = await invokeHandler('files:rename', {}, '/project/file', '../../evil', '/project');
+      expect(result).toEqual({ success: false, error: 'Renamed path would escape the project root' });
+      expect(mocks.fs.renameSync).not.toHaveBeenCalled();
+    });
+
+    it('files:preview standalone rejects targets outside the user home', async () => {
+      // /etc is outside the mocked /home/test home dir. Pretend the
+      // file exists and is a regular file so we get past the
+      // existence check and into the home-anchor check.
+      const norm = (value: string) => String(value).replace(/\\/g, '/');
+      mocks.fs.existsSync.mockReturnValue(true);
+      mocks.fs.statSync.mockImplementation((value: string) => ({
+        isDirectory: () => !norm(value).endsWith('/etc/passwd'),
+        isFile: () => norm(value).endsWith('/etc/passwd'),
+        size: 1,
+        mtimeMs: 0,
+      }));
+      const result = await invokeHandler(
+        'files:preview',
+        {},
+        '/etc/passwd',
+        '',
+        { standalone: true },
+      );
+      expect(result).toEqual({
+        success: false,
+        error: 'Preview path is outside the user home directory',
+      });
     });
   });
 });

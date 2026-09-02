@@ -117,8 +117,23 @@
   --bg-accent-1: transparent;
   --bg-accent-2: transparent;
   --shell-bg: #fefdfb;
-  --sidebar-bg: #fdf8f5;
+  /* Soft pastel aurora — replaces the previous solid warm cream.
+     Gives the sidebar (and app-shell) a translucent, dreamy feel
+     without backdrop-blur (no frosted glass — just soft color blending). */
+  --sidebar-bg: linear-gradient(
+    135deg,
+    #fde0d2 0%,
+    #fef3ea 30%,
+    #eaf1ed 65%,
+    #d4eae2 100%
+  );
   --main-bg: #ffffff;
+  /* Glass overlays used when the window has a native backdrop (Mica /
+     macOS vibrancy). Content surfaces keep a high-opacity white so text
+     stays crisp; chrome (sidebar/titlebar) is more transparent so the
+     wallpaper tint reads through. */
+  --glass-main: rgba(255, 255, 255, 0.82);
+  --glass-chrome: rgba(254, 250, 246, 0.55);
   --surface: rgba(0, 0, 0, 0.03);
   --surface-solid: #f7f7f7;
   --surface-hover: rgba(0, 0, 0, 0.06);
@@ -218,8 +233,17 @@
   --bg-accent-1: transparent;
   --bg-accent-2: transparent;
   --shell-bg: #1e1e1e;
-  --sidebar-bg: #252525;
+  /* Soft pastel aurora (dark) — warm brown fading to dark teal. */
+  --sidebar-bg: linear-gradient(
+    135deg,
+    #2a1f1c 0%,
+    #1e1a18 50%,
+    #182022 100%
+  );
   --main-bg: #1e1e1e;
+  /* Glass overlays (dark): see the light-theme twins above. */
+  --glass-main: rgba(30, 30, 30, 0.82);
+  --glass-chrome: rgba(37, 37, 37, 0.55);
   --surface: rgba(255, 255, 255, 0.06);
   --surface-solid: #2c2c2c;
   --surface-hover: rgba(255, 255, 255, 0.1);
@@ -1024,6 +1048,39 @@ a {
   gap: 0.95rem;
   min-height: 0;
   overflow: hidden;
+}
+
+/* Native window backdrop — activated when the main process created the window
+   with Mica (Windows 11) or vibrancy (macOS). The index.html boot script sets
+   `<html data-backdrop="mica|vibrancy">` from the preload-reported flag, and
+   the OS paints a wallpaper-derived tint behind the window. We drop the opaque
+   fallback backgrounds so that tint shows through the chrome, then lay subtle
+   glass scrims (--glass-*) over the surfaces that must stay readable:
+     transparent : .app-shell / .app-main-wrapper / .app-main — the "gaps"
+     --glass-chrome : sidebar, titlebar, status bar — light tint
+     --glass-main   : chat canvas, right panels — high-opacity, crisp text
+   Platforms without a native material (Windows 10, Linux, web) never get the
+   data-backdrop attribute and keep the opaque --sidebar-bg fallback gradient. */
+html[data-backdrop] {
+  background: transparent;
+}
+html[data-backdrop] body {
+  background-color: transparent;
+  background-image: none;
+}
+html[data-backdrop] .app-shell,
+html[data-backdrop] .app-main-wrapper,
+html[data-backdrop] .app-main {
+  background: transparent;
+}
+html[data-backdrop] .titlebar-drag-region,
+html[data-backdrop] .app-sidebar,
+html[data-backdrop] .app-status-bar {
+  background: var(--glass-chrome);
+}
+html[data-backdrop] .app-main-inner,
+html[data-backdrop] .sidebar-panel-inner {
+  background: var(--glass-main);
 }
 
 .sidebar-logo {

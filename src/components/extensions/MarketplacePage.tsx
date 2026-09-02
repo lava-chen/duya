@@ -7,7 +7,7 @@
 // under the "Installed" tab or behind the collapsed source manager, so this
 // page stays a single, dense plugin grid that fills the available width.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
@@ -16,6 +16,7 @@ import { getPluginAPI } from "@/lib/plugin-ipc";
 import type { MarketplaceViewDTO } from "@/lib/plugin-ipc";
 import type { PluginCatalogEntry, PluginRegistryEntry } from "@/lib/plugin-types";
 import { MarketplaceRowItem } from "./MarketplaceRowItem";
+import { I18nContext } from "@/components/layout/I18nProvider";
 import { GlobeSimpleIcon } from "@/components/icons";
 
 type MarketSource = "official" | "others";
@@ -246,6 +247,7 @@ function MarketplaceGrid({
   onOpen: (plugin: PluginCatalogEntry) => void;
 }) {
   const { t } = useTranslation();
+  const { locale } = useContext(I18nContext);
   if (plugins.length === 0) {
     return (
       <div className="rounded-[14px] border border-border/40 bg-[var(--surface)] px-4 py-12 text-center">
@@ -261,8 +263,12 @@ function MarketplaceGrid({
           <MarketplaceRowItem
             key={`${plugin.marketplace ?? "local"}:${plugin.id}`}
             icon={<CardIcon plugin={plugin} />}
-            title={plugin.name}
-            description={plugin.shortDescription || plugin.description}
+            title={locale === 'zh' ? (plugin.displayName_zh || plugin.name) : plugin.name}
+            description={
+              locale === 'zh'
+                ? (plugin.shortDescription_zh || plugin.shortDescription || plugin.description_zh || plugin.description)
+                : (plugin.shortDescription || plugin.description)
+            }
             onClick={() => onOpen(plugin)}
             onAdd={() => onOpen(plugin)}
             added={installed}

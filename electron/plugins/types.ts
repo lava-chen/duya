@@ -182,8 +182,11 @@ export type PluginCategory = 'productivity' | 'development' | 'research' | 'data
  */
 export interface PluginInterface {
   displayName?: string;
+  displayName_zh?: string;
   shortDescription?: string;
+  shortDescription_zh?: string;
   longDescription?: string;
+  longDescription_zh?: string;
   category?: PluginCategory;
   brandColor?: string;
   screenshots?: string[];

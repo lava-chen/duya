@@ -367,6 +367,11 @@ export class ConfigStore {
     return this.config;
   }
 
+  /** Directory containing config.toml — the duya root this store persists to. */
+  getConfigDir(): string {
+    return path.dirname(this.configPath);
+  }
+
   getByPath(key: string): unknown {
     return getByPath(this.config, key);
   }

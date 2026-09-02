@@ -24,7 +24,9 @@ export {
   applyCacheControlToSystem,
   stripCacheControl,
   hasCacheControl,
+  applyCacheControlToTools,
   type CacheControl,
   type CacheEligibility,
   type CacheRetention,
+  type CacheBudgetOptions,
 } from '../../utils/prompt-caching.js';

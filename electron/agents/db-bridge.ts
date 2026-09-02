@@ -20,6 +20,7 @@ import { readPluginManifest } from '../plugins/manifest';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
+import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
 import type { NewEvent, AttachmentWithData } from '../db/core';
 import {
@@ -532,7 +533,15 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
     // ==================== Lock actions (core store thin forward) ====================
     case 'lock:acquire': {
       const { locks } = getCoreStores();
-      return locks.acquire(p.sessionId as string, p.lockId as string, p.owner as string, (p.ttlSec as number) || 300);
+      const result = locks.acquire(p.sessionId as string, p.lockId as string, p.owner as string, (p.ttlSec as number) || 300);
+      // Plan 476 P2.5: a user-initiated turn starts here (router marks
+      // wake/automation runs with wakeRun/effort:off and omits userTurn).
+      // Advance the turn epoch so older parked background wakes are
+      // superseded and never interrupt the user's new conversation.
+      if (p.userTurn === true) {
+        advanceUserTurn(p.sessionId as string);
+      }
+      return result;
     }
 
     case 'lock:renew': {
@@ -542,7 +551,13 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
     case 'lock:release': {
       const { locks } = getCoreStores();
-      return locks.release(p.sessionId as string, p.lockId as string);
+      const result = locks.release(p.sessionId as string, p.lockId as string);
+      // Plan 476 P2.1: a released runtime lock means "this session's run
+      // ended" — re-kick the wake dispatcher so background wakes that were
+      // parked behind a user turn can drain now. Harmless when the session
+      // has nothing queued or is still busy.
+      notifySessionIdle(p.sessionId as string);
+      return result;
     }
 
     case 'lock:isLocked': {

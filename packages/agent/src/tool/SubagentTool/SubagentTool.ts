@@ -164,11 +164,10 @@ function extractMessageText(content: unknown): string {
  * work we tell it to keep going; otherwise we tell it to yield the turn and
  * rely on the async completion notification instead of polling.
  *
- * Deliberately does NOT tell the model to block-wait via get_task_output:
- * the terminal <task-notification> (with the final result and the output-file
- * path) is delivered automatically, so waiting would double-receive the
- * result. A get_task_output snapshot (no timeout_ms) is fine for a status
- * check, never for blocking on this task. */
+ * Deliberately does NOT tell the model to wait via get_task_output: the tool
+ * is snapshot-only, and the terminal <task-notification> (with the final
+ * result and the output-file path) is delivered automatically, so waiting
+ * would double-receive the result. */
 function formatSubagentStartedBackground(
   subagentId: string,
   agentType: string,
@@ -184,7 +183,7 @@ function formatSubagentStartedBackground(
     `type: ${agentType}`,
     `description: ${description}`,
     ``,
-    `It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output is for a quick status snapshot (no timeout_ms), never for a blocking wait.`,
+    `It runs independently of this session. When it completes you will be notified automatically with a <task-notification> containing the final result and the output-file path (Read it for the full transcript). Do not wait or poll for it — get_task_output only takes a status/output snapshot; it never blocks. If the task looks stuck, use kill_task.`,
     ``,
     guide,
   ].join('\n');

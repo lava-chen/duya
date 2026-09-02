@@ -9,10 +9,23 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { applyCacheControl, applyCacheControlToSystem } from '../src/utils/prompt-caching.js';
+import {
+  applyCacheControl,
+  applyCacheControlToSystem,
+  applyCacheControlToTools,
+} from '../src/utils/prompt-caching.js';
 
 const ELIGIBLE = { eligible: true, maxBreakpoints: 4, nativeLayout: true };
 const INELIGIBLE = { eligible: false, maxBreakpoints: 4, nativeLayout: true };
+
+/** Anthropic tool-definition shape used in request serialization. */
+function makeTools(count: number): Array<Record<string, unknown>> {
+  return Array.from({ length: count }, (_, i) => ({
+    name: `tool_${i}`,
+    description: `Tool ${i} description`,
+    input_schema: { type: 'object', properties: {} },
+  }));
+}
 
 /** Count every cache_control marker in the messages array (top-level and
  *  content blocks), mirroring how Anthropic counts breakpoints. */
@@ -118,6 +131,82 @@ describe('applyCacheControl (breakpoint budget)', () => {
   it('leaves messages untouched when ineligible', () => {
     const messages = makeMessages(3);
     expect(applyCacheControl(messages, INELIGIBLE, 'short')).toBe(messages);
+  });
+});
+
+describe('applyCacheControl with a reserved tools breakpoint (Plan 480 P0.1)', () => {
+  it('shrinks the messages budget to 2 when a tools breakpoint is reserved', () => {
+    // system(1, external param) + tools(1, reserved) + messages(2) = 4.
+    const messages = makeMessages(6);
+    const result = applyCacheControl(messages, ELIGIBLE, 'short', undefined, {
+      toolsBreakpoint: true,
+    });
+    expect(countBreakpoints(result)).toBeLessThanOrEqual(2);
+    expect(countBreakpoints(result)).toBe(2);
+  });
+
+  it('keeps the default 3-slot messages budget when no tools breakpoint is reserved', () => {
+    const messages = makeMessages(6);
+    const withOpts = applyCacheControl(messages, ELIGIBLE, 'short', undefined, {
+      toolsBreakpoint: false,
+    });
+    const withoutOpts = applyCacheControl(messages, ELIGIBLE, 'short');
+    expect(countBreakpoints(withOpts)).toBe(3);
+    expect(countBreakpoints(withOpts)).toBe(countBreakpoints(withoutOpts));
+  });
+
+  it('reserves a slot even when a system message remains in the array', () => {
+    const messages = [
+      { role: 'system', content: 'sys' },
+      ...makeMessages(6),
+    ];
+    const result = applyCacheControl(messages, ELIGIBLE, 'short', undefined, {
+      toolsBreakpoint: true,
+    });
+    // system in-array(1) + reserved external system slot is NOT double-counted:
+    // the caller marks the system param separately only when it is lifted out.
+    // In this legacy shape the in-array system(1) + tools reservation still
+    // caps messages at 2 → total ≤ 3 in-array markers.
+    expect(countBreakpoints(result)).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('applyCacheControlToTools (Plan 480 P0.1)', () => {
+  it('marks only the final tool definition', () => {
+    const tools = makeTools(4);
+    const result = applyCacheControlToTools(tools, ELIGIBLE, 'short') as Array<
+      Record<string, unknown>
+    >;
+    expect(result.length).toBe(4);
+    expect(result[0].cache_control).toBeUndefined();
+    expect(result[2].cache_control).toBeUndefined();
+    expect(result[3].cache_control).toMatchObject({ type: 'ephemeral' });
+  });
+
+  it('does not mutate the input array', () => {
+    const tools = makeTools(3);
+    applyCacheControlToTools(tools, ELIGIBLE, 'short');
+    expect(tools[2].cache_control).toBeUndefined();
+  });
+
+  it('returns the input untouched when ineligible', () => {
+    const tools = makeTools(3);
+    expect(applyCacheControlToTools(tools, INELIGIBLE, 'short')).toBe(tools);
+  });
+
+  it('returns an empty array untouched', () => {
+    expect(applyCacheControlToTools([], ELIGIBLE, 'short')).toEqual([]);
+  });
+
+  it('applies 1h TTL for long retention on the official Anthropic endpoint', () => {
+    const tools = makeTools(2);
+    const result = applyCacheControlToTools(
+      tools,
+      ELIGIBLE,
+      'long',
+      'https://api.anthropic.com',
+    ) as Array<Record<string, unknown>>;
+    expect(result[1].cache_control).toMatchObject({ type: 'ephemeral', ttl: '1h' });
   });
 });
 

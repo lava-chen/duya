@@ -1,14 +1,20 @@
 /**
- * GetTaskOutputTool — unified polling / waiting entry point (aligned to
- * Grok's `get_task_output`).
+ * GetTaskOutputTool — non-blocking status/output snapshot for background
+ * sub-agent tasks.
  *
- * A single call covers both "fetch a snapshot" and "block until done":
- *   - `timeout_ms` omitted or 0 → return an immediate snapshot.
- *   - `timeout_ms` > 0 → block up to N ms waiting for all tasks to finish.
+ * Explicitly NOT a wait/poll tool: background tasks deliver their terminal
+ * <task-notification> automatically (async completion notification wakes the
+ * parent session), so blocking on a task would double-receive the result and
+ * occupy the turn with dead polling. The only valid use is an immediate
+ * snapshot:
+ *   - completed / failed / killed → inline the final output;
+ *   - still running              → report status and remind the model not to
+ *                                  poll (completion arrives by notification).
  *
- * When a wait-all times out with tasks still running, the result appends a
- * hint that the caller will be notified automatically on completion (Phase 4
- * async completion notification) — so the model should NOT keep polling.
+ * Grok's equivalent is `CheckSubagent`: read-only "how is it doing", never
+ * "wait for it to finish". (Grok 0.18 removed the legacy blocking
+ * `wait_tasks` / `get_task_output(timeout_ms>0)` semantics duya originally
+ * mirrored from grok_build.)
  */
 
 import type { Tool, ToolResult, ToolUseContext } from '../../types.js';
@@ -17,15 +23,10 @@ import type { TaskRecord, TaskStatus } from '../../lifecycle/TaskState.js';
 import { getBackgroundAgentLifecycle } from '../../lifecycle/BackgroundAgentLifecycle.js';
 
 export const GET_TASK_OUTPUT_TOOL_NAME = 'get_task_output';
-export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
-export const MAX_MULTI_WAIT_IDS = 10;
+/** Max task ids accepted in a single snapshot call. */
+export const MAX_MULTI_TASK_IDS = 10;
+/** Inline budget for a completed task's output (keeps context bounded). */
 export const DEFAULT_TOOL_OUTPUT_BYTES = 40_000;
-/**
- * Hard ceiling on a single blocking wait, aligned to Grok `max_wait_block`.
- * Capping is safe because a completed task pings the model (async completion
- * notification), so a truncated wait costs one more poll, not the result.
- */
-export const MAX_WAIT_BLOCK_MS = 10 * 60 * 1000;
 
 export function isTerminalStatus(s: TaskStatus): boolean {
   return s === 'completed' || s === 'failed' || s === 'killed';
@@ -44,21 +45,17 @@ function toResult(
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
  * Format a task's output for prompt consumption. Completed tasks inline
- * their final text content; a wait-all path truncates to
- * `DEFAULT_TOOL_OUTPUT_BYTES` because it occupies model context.
+ * their final text content, truncated to `DEFAULT_TOOL_OUTPUT_BYTES` so a
+ * snapshot of a verbose task can't bloat model context.
  */
-export function formatTaskOutput(rec: TaskRecord, truncate: boolean): string {
+export function formatTaskOutput(rec: TaskRecord): string {
   if (rec.status === 'completed' && rec.result) {
     let out = rec.result.content
       .map((b) => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
       .join('\n');
-    if (truncate && out.length > DEFAULT_TOOL_OUTPUT_BYTES) {
+    if (out.length > DEFAULT_TOOL_OUTPUT_BYTES) {
       out = out.slice(0, DEFAULT_TOOL_OUTPUT_BYTES) + '\n...<truncated>';
     }
     return out;
@@ -75,11 +72,11 @@ interface TaskOutputResult {
 
 export class GetTaskOutputTool implements Tool, ToolExecutor {
   readonly name = GET_TASK_OUTPUT_TOOL_NAME;
-  readonly description = `Fetch the output of one or more background sub-agent tasks, or block until they finish.
+  readonly description = `Fetch the current output or status snapshot of one or more background sub-agent tasks.
 
-- Pass task_ids plus timeout_ms>0 to wait up to that many ms for all tasks to complete.
-- Pass timeout_ms omitted or 0 to take an immediate snapshot of current status.
-- If a wait times out while tasks are still running, you will be notified automatically when they complete — do not keep polling.`;
+- Completed tasks return their output; still-running tasks report their status.
+- Non-blocking: this tool NEVER waits for a task to finish. When a background task completes you will be notified automatically with a <task-notification> containing its result — do not poll or wait for it, do not call this tool repeatedly. Use this only to take a quick look, or to fetch the full output of a task that has already completed.
+- For a running task that looks stuck or looping, use kill_task to terminate it.`;
 
   readonly input_schema = {
     type: 'object',
@@ -88,10 +85,6 @@ export class GetTaskOutputTool implements Tool, ToolExecutor {
         type: 'array',
         items: { type: 'string' },
         description: 'One or more subagent task ids.',
-      },
-      timeout_ms: {
-        type: 'integer',
-        description: '0 or omitted = snapshot now; >0 = block up to N ms waiting for all to finish.',
       },
     },
     required: ['task_ids'],
@@ -102,43 +95,34 @@ export class GetTaskOutputTool implements Tool, ToolExecutor {
   }
 
   async execute(input: Record<string, unknown>, _wd?: string, _context?: ToolUseContext): Promise<ToolResult> {
-    const { task_ids, timeout_ms } = input as { task_ids?: unknown; timeout_ms?: unknown };
+    const { task_ids } = input as { task_ids?: unknown };
     if (!Array.isArray(task_ids) || task_ids.length === 0 || !task_ids.every((t) => typeof t === 'string')) {
       return toResult(this.name, 'task_ids must be a non-empty array of strings.', true);
     }
-    if (task_ids.length > MAX_MULTI_WAIT_IDS) {
-      return toResult(this.name, `task_ids exceeds maximum of ${MAX_MULTI_WAIT_IDS} entries.`, true);
+    if (task_ids.length > MAX_MULTI_TASK_IDS) {
+      return toResult(this.name, `task_ids exceeds maximum of ${MAX_MULTI_TASK_IDS} entries.`, true);
     }
     const ids = task_ids as string[];
-    const requestedWaitMs = typeof timeout_ms === 'number' && timeout_ms > 0 ? timeout_ms : 0;
-    const waitMs = Math.min(requestedWaitMs, MAX_WAIT_BLOCK_MS);
 
     const lifecycle = getBackgroundAgentLifecycle();
-    const results: TaskOutputResult[] = await Promise.all(
-      ids.map(async (id) => {
-        const started = Date.now();
-        let rec = lifecycle.getSnapshot(id);
-        while (waitMs > 0 && rec && !isTerminalStatus(rec.status) && Date.now() - started < waitMs) {
-          await sleep(250);
-          rec = lifecycle.getSnapshot(id);
-        }
-        if (!rec) return { task_id: id, status: 'not_found' as TaskStatus, output: '' };
-        if (waitMs > 0 && !isTerminalStatus(rec.status)) {
-          return {
-            task_id: id,
-            status: rec.status,
-            output: `${rec.status}. You will be notified automatically when the task completes.`,
-          };
-        }
-        return { task_id: id, status: rec.status, output: formatTaskOutput(rec, waitMs > 0) };
-      }),
-    );
+    const results: TaskOutputResult[] = ids.map((id) => {
+      const rec = lifecycle.getSnapshot(id);
+      if (!rec) return { task_id: id, status: 'not_found' as TaskStatus, output: '' };
+      if (!isTerminalStatus(rec.status)) {
+        return {
+          task_id: id,
+          status: rec.status,
+          output: `${rec.status}. You will be notified automatically when this task completes — do not poll for it.`,
+        };
+      }
+      return { task_id: id, status: rec.status, output: formatTaskOutput(rec) };
+    });
 
     const completed = results.filter((r) => isTerminalStatus(r.status)).length;
     return toResult(this.name, {
-      mode: waitMs > 0 ? 'wait_all' : 'snapshot',
+      mode: 'snapshot',
       results,
-      summary: `${completed}/${results.length} tasks completed`,
+      summary: `${completed}/${results.length} tasks in terminal state`,
     });
   }
 }

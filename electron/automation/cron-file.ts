@@ -36,8 +36,26 @@ import {
   parseEveryDuration,
 } from './schedule.js';
 import { resolveAutomationWorkspace } from './workspace.js';
+import { isSafeBotId } from '../config/agent-id';
 
 const DEFAULT_MAX_RETRIES = 3;
+
+/**
+ * Normalize + validate a bot-binding slug (Plan 476 P2.3a). Returns null
+ * for absent/empty input; throws on a syntactically invalid slug so a bad
+ * binding never reaches cronjob.toml.
+ */
+function normalizeAgentBinding(agent: string | null | undefined): string | null {
+  if (agent === undefined || agent === null) return null;
+  const trimmed = agent.trim();
+  if (!trimmed) return null;
+  if (!isSafeBotId(trimmed)) {
+    throw new Error(
+      `agent is not a valid agent slug: ${JSON.stringify(agent)} (expected ^[a-z0-9][a-z0-9-]{0,62}$)`,
+    );
+  }
+  return trimmed;
+}
 
 /**
  * Stable string key for a `CronSchedule`. Normalizes wire-side variants
@@ -81,6 +99,8 @@ export interface CronJobFile {
   schedule: CronSchedule;
   working_directory?: string;
   model?: string;
+  /** Bot binding slug (Plan 476 P2.3a). Absent = standalone cron. */
+  agent?: string;
   concurrency?: ConcurrencyPolicy;
   max_retries?: number;
   last_run_at?: number;
@@ -115,6 +135,13 @@ export function parseCronJobFile(text: string): CronJobFileDoc {
     if (typeof job.name !== 'string' || !job.name.trim()) throw new Error('job.name is required');
     if (typeof job.prompt !== 'string' || !job.prompt.trim()) throw new Error('job.prompt is required');
     assertValidSchedule(job.schedule);
+    // Plan 476 P2.3a: a bot-bound job must name a valid agent slug (485).
+    if (job.agent !== undefined) {
+      if (typeof job.agent !== 'string' || !isSafeBotId(job.agent.trim())) {
+        throw new Error(`job.agent is not a valid agent slug: ${JSON.stringify(job.agent)}`);
+      }
+      job.agent = job.agent.trim();
+    }
     jobs.push(job);
   }
   return { version: 1, jobs };
@@ -191,16 +218,20 @@ export class CronFileStore {
     const prompt = input.prompt.trim();
     const workingDirectory = resolveAutomationWorkspace(input.workingDirectory);
     const fingerprint = scheduleFingerprint(input.schedule);
+    // Plan 476 P2.3a: optional bot binding — validate eagerly so a bad slug
+    // never reaches the file.
+    const agent = normalizeAgentBinding(input.agent);
 
     // Idempotency: a create request that matches an existing job on
-    // (name, schedule, workingDirectory) returns the existing row. This
-    // makes repeated "create in chat" / agent-tool calls collapse into a
-    // single job instead of stacking duplicates in cronjob.toml.
+    // (name, schedule, workingDirectory, agent) returns the existing row.
+    // This makes repeated "create in chat" / agent-tool calls collapse into
+    // a single job instead of stacking duplicates in cronjob.toml.
     const existing = this.doc.jobs.find(
       (j) =>
         j.name === name &&
         resolveAutomationWorkspace(j.working_directory) === workingDirectory &&
-        scheduleFingerprint(j.schedule) === fingerprint,
+        scheduleFingerprint(j.schedule) === fingerprint &&
+        (j.agent ?? null) === agent,
     );
     if (existing) {
       // Bump `updated_at` so a repeated "create" still surfaces as the
@@ -220,6 +251,7 @@ export class CronFileStore {
       schedule: input.schedule,
       working_directory: workingDirectory,
       model: input.model?.trim() || undefined,
+      ...(agent ? { agent } : {}),
       concurrency: input.concurrencyPolicy ?? 'skip',
       max_retries: input.maxRetries ?? DEFAULT_MAX_RETRIES,
       last_run_at: 0,
@@ -290,6 +322,13 @@ export class CronFileStore {
     if (patch.concurrencyPolicy !== undefined) job.concurrency = patch.concurrencyPolicy;
     if (patch.maxRetries !== undefined) job.max_retries = patch.maxRetries;
     if (patch.enabled !== undefined) job.enabled = patch.enabled;
+    if (patch.agent !== undefined) {
+      if (patch.agent === null) {
+        delete job.agent; // clear the bot binding → standalone cron
+      } else {
+        job.agent = normalizeAgentBinding(patch.agent) ?? undefined;
+      }
+    }
     job.updated_at = Date.now();
     this.save();
     return this.jobToCron(job);
@@ -345,6 +384,7 @@ export class CronFileStore {
       lastRunAt: lastRunAt > 0 ? lastRunAt : null,
       lastError: job.last_error ?? null,
       retryCount: job.retry_count ?? 0,
+      agent: job.agent ?? null,
       nextRunAt: computeNextRunAt(job.schedule, nextRunAnchor, now),
       createdAt: job.created_at ?? now,
       updatedAt: job.updated_at ?? now,

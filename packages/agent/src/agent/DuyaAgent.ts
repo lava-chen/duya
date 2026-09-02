@@ -56,6 +56,7 @@ import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import { resolveCacheRetention } from '../config/cache-config.js';
+import { readToolExposureConfig } from '../config/tool-exposure.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/policy.js';
@@ -102,6 +103,11 @@ import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
 import { toolSchemaTool } from '../tool/ToolSchemaTool/ToolSchemaTool.js';
 import { createToolSchemaProviderFromRegistry } from '../tool/ToolSchemaTool/catalogFromRegistry.js';
+import { toolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
+import { createToolInvokeDispatcherFromRegistry } from '../tool/ToolInvokeTool/dispatcherFromRegistry.js';
+import {
+  recordUndeclaredCall,
+} from '../tool/visibility-guard.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
 import {
@@ -130,6 +136,17 @@ import {
   type RuntimeContextAgentMessage,
   type AgentMessage,
 } from '../message/index.js';
+// Plan 486: thread/fork branched-layer helpers
+import {
+  THREAD_METADATA_KEY,
+  applyReplyQuoteContext,
+  collectMessageIds,
+  isBranchedMessage,
+  isReplyMessage,
+  mergeThreadMetadata,
+  messageToQuoteText,
+  resolveReplyMeta,
+} from '../message/threads.js';
 import { MessageCompactionController } from '../message/message-compaction-controller.js';
 import {
   adaptAttachmentContext,
@@ -842,6 +859,44 @@ export class duyaAgent {
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
+    // Plan 480 P2.4: warn-only visibility guard. Snapshot of the tools
+    // declared on the current provider request (filled before each
+    // openLLMStream). Under catalog exposure MCP tools are intentionally
+    // absent from that set — a direct call to one is an undeclared call and
+    // is counted/logged (not blocked yet; see visibility-guard.ts).
+    let declaredToolsForRequest = new Set<string>();
+    const guardEnabled =
+      readToolExposureConfig().exposure === 'catalog';
+    const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
+      if (guardEnabled && !declaredToolsForRequest.has(toolName)) {
+        recordUndeclaredCall(toolName);
+      }
+      return canUseTool(toolName, toolInput);
+    };
+    // Plan 480 P2.2: wire tool_invoke to the registry + permission chain so
+    // the model can execute tools it discovered via tool_schema. The gate
+    // runs on the RESOLVED real tool name — routing through the meta tool can
+    // never bypass the permission policy. ask decisions are not executed (see
+    // dispatcherFromRegistry.ts); deny carries the decision message back.
+    toolInvokeTool.setDispatcher(
+      createToolInvokeDispatcherFromRegistry({
+        registry,
+        workingDirectory: this.workingDirectory,
+        checkPermission: async (toolName, args) => {
+          const decision = await this.hasPermissionsToUseTool(
+            toolName,
+            args,
+            permissionContext,
+          );
+          return {
+            behavior: decision.behavior,
+            ...(decision.behavior === 'deny' || decision.behavior === 'ask'
+              ? { message: (decision as { message?: string }).message }
+              : {}),
+          };
+        },
+      }),
+    );
     const contextWindow =
       this.runtimeConfig?.modelCapabilities?.contextWindow &&
       this.runtimeConfig.modelCapabilities.contextWindow > 0
@@ -1257,6 +1312,18 @@ export class duyaAgent {
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
           } as Message;
+          // Plan 486 §2.1/§2.2: fork/reply creation rule. The target must
+          // exist in this session's timeline (checked against entries already
+          // committed — this message is not yet appended). An unknown target
+          // is silently stripped so a dangling fork is never persisted.
+          const replyMeta = resolveReplyMeta(
+            options?.replyToId,
+            options?.branched,
+            collectMessageIds(this.timeline.snapshot()),
+          );
+          if (replyMeta) {
+            userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
+          }
           this._pushDurable(messages, userMessage);
           runtimePromptMessageId = userMessage.id ?? null;
         } else if (lastMessage) {
@@ -1351,7 +1418,7 @@ export class duyaAgent {
 
       const executor = new StreamingToolExecutor(
         registry,
-        canUseTool,
+        guardedCanUseTool,
         toolUseContext
       );
 
@@ -1557,8 +1624,12 @@ export class duyaAgent {
         // failing the whole turn. The retryable-error classification and
         // attempt budget live in ./stream-retry.ts. Post-`done` failures
         // propagate unchanged via the turnCommitted guard.
-        const openLLMStream = () =>
-          this.llmClient.streamChat(llmMessages, {
+        // Plan 480 P2.4: refresh the declared-tools snapshot before every
+        // provider request (the array changes across rounds as discovered
+        // tools join). The visibility guard reads it during execution.
+        const openLLMStream = () => {
+          declaredToolsForRequest = new Set(tools.map((t) => t.name));
+          return this.llmClient.streamChat(llmMessages, {
             systemPrompt: systemPromptContent,
             tools,
             maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -1567,6 +1638,7 @@ export class duyaAgent {
             effort: options?.effort,
             maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
           });
+        };
         let streamReplayAttempt = 0;
         const streamGenerator = (async function* () {
           while (true) {
@@ -2957,6 +3029,15 @@ export class duyaAgent {
         this.activeMCPRegistry.getAllTools().filter(
           (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
+        // Plan 480 §8.4: under `exposure = "catalog"` MCP tools are absent
+        // from the tools array — the directory must point the model at the
+        // tool_schema/tool_invoke meta pair instead of tool_search.
+        {
+          entryPoint:
+            readToolExposureConfig().exposure === 'catalog'
+              ? 'tool_invoke'
+              : 'tool_search',
+        },
       );
       if (mcpCatalog) {
         systemPromptContent = systemPromptContent
@@ -3823,7 +3904,34 @@ export class duyaAgent {
 
     // Project to model boundary: { system, messages }
     const projection = projectModelMessages(context.messages, { systemSegments });
-    const messages: Message[] = [...projection.messages];
+    let messages: Message[] = [...projection.messages];
+
+    // Plan 486 §2.3: reply quote injection. A main-line user message that
+    // carries a replyToId (quote reply) has the referenced message's text
+    // rendered as `[In reply to <id>: "<quote>"]` ahead of the model request,
+    // mirroring grok system-prompt.ts:48. Branched (thread) messages never
+    // reach this array — projectModelMessages filters them at the model
+    // boundary. applyReplyQuoteContext is idempotent per target, so mid-run
+    // re-projections (compaction / model switch) never double-inject.
+    let hasReplyUser = false;
+    for (const m of messages) {
+      if (m.role === 'user' && isReplyMessage(m)) {
+        hasReplyUser = true;
+        break;
+      }
+    }
+    if (hasReplyUser) {
+      const sourceById = new Map<string, AgentMessage>();
+      for (const entry of snapshot) {
+        if (entry.type === 'message' && typeof entry.message.id === 'string') {
+          sourceById.set(entry.message.id, entry.message);
+        }
+      }
+      messages = applyReplyQuoteContext(
+        messages as readonly AgentMessage[],
+        (id) => messageToQuoteText(sourceById.get(id)),
+      ) as Message[];
+    }
 
     // Context-injection hardening (UserPromptSubmit / SessionStart hook
     // additionalContext): each block is wrapped in `<system-reminder>` and

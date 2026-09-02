@@ -11,6 +11,7 @@ import { CheckpointBatcher } from './checkpoint-batcher';
 import { Logger } from './logger';
 import { toLLMProvider, type ApiProvider } from '../../config/provider-types';
 import { calculateMaxConcurrentWorkers, getWorkerMemoryThreshold } from './worker-limits';
+import { acquireChatLock, releaseChatLock } from './chat-runtime-lock';
 
 /**
  * Detect whether the project has a `.duya/references/` directory.
@@ -308,7 +309,7 @@ async function handlePostChat(
   deps: RouterDeps,
   workerDbRequests: Map<string, ChildProcess>,
 ): Promise<void> {
-  const { sessionManager, workerManager, checkpointBatcher, logger, httpLogger, sessionLogger } = deps;
+  const { sessionManager, workerManager, checkpointBatcher, logger, httpLogger, sessionLogger, dbRequest } = deps;
 
   
   let session = sessionManager.getSession(sessionId);
@@ -348,7 +349,8 @@ async function handlePostChat(
   // M4: Helper to release the STREAMING lock on early-return error paths.
   // After M4, the session is in STREAMING state before the request body is
   // read. If any check rejects the request, we must revert to IDLE so the
-  // session is not permanently stuck.
+  // session is not permanently stuck. Also mirrors the release into
+  // session_runtime_locks (Plan 476 P0-A) so main can observe idleness.
   const revertStreamingLock = (): void => {
     try {
       const s = sessionManager.getSession(sessionId);
@@ -358,7 +360,17 @@ async function handlePostChat(
     } catch {
       // State may have already changed; ignore
     }
+    void releaseChatLock(dbRequest, sessionId).catch(() => {});
   };
+
+  // Plan 476 P0-A: belt-and-braces — release the runtime lock when the
+  // HTTP response fully closes (covers the Non-SSE path and any terminal
+  // path not routed through revertStreamingLock or the SSE close handler).
+  // releaseChatLock is idempotent, so double-release is harmless; the TTL
+  // is the final backstop for a process that dies mid-run.
+  res.on('close', () => {
+    void releaseChatLock(dbRequest, sessionId).catch(() => {});
+  });
 
   let body = '';
   req.on('data', (chunk: Buffer) => {
@@ -560,6 +572,21 @@ async function handlePostChat(
         permissionRules: parsed.options?.permissionRules,
       });
 
+      // Plan 476 P0-A: mirror "this session is running a chat" into
+      // session_runtime_locks so the Electron main process can observe
+      // busy/idle across the process boundary (agent-server is a fork).
+      // Fire-and-forget; the lock carries a TTL and every terminal path
+      // (revertStreamingLock + COMPLETED) releases it.
+      // Plan 476 P2.5: mark user-initiated turns so main can advance the
+      // session turn_epoch (wake/automation requests carry `wakeRun` /
+      // `effort: 'off'` / `wakeless` markers — they never advance).
+      const isUserTurn = !(
+        parsed.options?.wakeRun === true ||
+        parsed.options?.effort === 'off' ||
+        parsed.options?.wakeless === true
+      );
+      void acquireChatLock(dbRequest, sessionId, { userTurn: isUserTurn }).catch(() => {});
+
       const wantsSSE = req.headers.accept?.includes('text/event-stream') ?? false;
 
       // Open the SSE stream and send chat:start immediately instead of
@@ -742,7 +769,7 @@ function handlePostChatSSE(
   child: ChildProcess,
   deps: RouterDeps,
 ): void {
-  const { sessionManager, workerManager, checkpointBatcher, logger, httpLogger } = deps;
+  const { sessionManager, workerManager, checkpointBatcher, logger, httpLogger, dbRequest } = deps;
 
 
   res.writeHead(200, {
@@ -783,6 +810,10 @@ function handlePostChatSSE(
       }
       workerManager.interruptWorker(sessionId, 2000, 'sse-client-disconnect');
     }
+    // Plan 476 P0-A: release the runtime lock on every terminal path
+    // (done, error, or client disconnect all end up closing the request).
+    // Idempotent — no-op when this session never acquired the lock.
+    void releaseChatLock(dbRequest, sessionId).catch(() => {});
   });
 
   // Read events from worker stdout (JSON lines via sendEvent)
@@ -1101,7 +1132,7 @@ function handleDeleteChat(
   res: http.ServerResponse,
   deps: RouterDeps,
 ): void {
-  const { sessionManager, workerManager, httpLogger } = deps;
+  const { sessionManager, workerManager, httpLogger, dbRequest } = deps;
   httpLogger.info('Chat interruption requested', { sessionId });
 
   const session = sessionManager.getSession(sessionId);
@@ -1118,6 +1149,10 @@ function handleDeleteChat(
       });
     }
   }
+
+  // Plan 476 P0-A: explicit interrupt must also release the runtime lock
+  // (the SSE close path may not fire when the client is gone).
+  void releaseChatLock(dbRequest, sessionId).catch(() => {});
 
   const interrupted = workerManager.interruptWorker(sessionId, 2000, 'delete');
   sendJson(res, 200, { ok: true, interrupted });

@@ -29,6 +29,7 @@ import { messageDb } from '../ipc/db-client.js';
 import type { MessageEntry } from '@duya/agent/message';
 import type { Message } from '../message/index.js';
 import { ingestMessage } from '../message/message-factories.js';
+import { THREAD_METADATA_KEY } from '../message/threads.js';
 import type { RolloutEvent } from './types.js';
 
 // Re-export so callers can use the agent-core RolloutEvent union.
@@ -199,6 +200,13 @@ export class Journal {
       dto.token_usage = typeof tokenUsageBlock === 'string' ? tokenUsageBlock : JSON.stringify(tokenUsageBlock);
     } else if (msg.metadata?.token_usage !== undefined) {
       dto.token_usage = msg.metadata.token_usage as string | undefined;
+    }
+    // Plan 486 §3.2: thread/fork metadata rides the journal emit so branched
+    // messages stay fully durable in the rollout. The electron write path
+    // (core-db-adapters PERSISTED_METADATA_KEYS) whitelists the key.
+    const threadMeta = (msg.metadata as Record<string, unknown> | undefined)?.[THREAD_METADATA_KEY];
+    if (threadMeta !== undefined) {
+      dto.metadata = { [THREAD_METADATA_KEY]: threadMeta };
     }
     this.trackPending(
       messageDb

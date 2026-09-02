@@ -66,12 +66,17 @@ export interface ToolVisibilityConstraints {
  */
 export function isToolVisible(
   toolName: string,
-  exposeMode: 'always' | 'discoverable' | 'internal',
+  exposeMode: 'always' | 'catalog' | 'discoverable' | 'internal',
   discovered: ReadonlySet<string>,
   c: ToolVisibilityConstraints,
 ): boolean {
   // 1. Exposure policy
   if (exposeMode === 'internal') return false;
+  // Catalog tools NEVER enter the request's tools array — even when they were
+  // discovered. The model reads their schema via tool_schema and invokes via
+  // tool_invoke (plan 480). discoverable keeps the legacy 241 behavior
+  // (tool_search hit → injected next turn) until that path is retired.
+  if (exposeMode === 'catalog') return false;
   if (exposeMode === 'discoverable' && !discovered.has(toolName)) return false;
 
   // 2. Denylist (caller exact + profile wildcard) — deny wins

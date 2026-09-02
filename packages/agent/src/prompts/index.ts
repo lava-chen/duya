@@ -71,3 +71,16 @@ export { getVisionGuidelinesSection } from './sections/dynamic/visionGuidelines.
 
 // Platform Hints
 export { getPlatformHint, PLATFORM_HINTS } from './platformHints.js'
+
+// Bot prompt layer (Plan 474) — config-driven bot system-prompt sections.
+export { BOT_BASIC_SYSTEM_PROMPT } from './bot/index.js'
+export { BotPromptAssembly, fitToBudget } from './bot/index.js'
+export type { BotPromptContext, BotSectionDef, BotRosterEntry } from './bot/index.js'
+export { createBotPromptAssembly } from './bot/index.js'
+export {
+  registerBotSectionCatalog,
+  BOT_SECTION_CATALOG,
+} from './bot/index.js'
+export { renderBotIdentity } from './bot/index.js'
+export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './bot/index.js'
+export { loadBotPromptContext, isBotAgentProfile } from './bot/index.js'

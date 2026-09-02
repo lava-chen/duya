@@ -11,6 +11,7 @@
 import { ipcMain } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { getLogger, LogComponent } from '../logging/logger';
 
 interface FileTreeNode {
@@ -47,6 +48,7 @@ const TEXT_EXTENSIONS = new Set([
 ]);
 
 function isInsideRoot(targetPath: string, rootPath: string): boolean {
+  if (targetPath === rootPath) return true;
   const relative = path.relative(rootPath, targetPath);
   return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
 }
@@ -146,23 +148,42 @@ function buildFileTree(dirPath: string, baseDir: string, depth: number, maxDepth
 }
 
 export function registerFilesHandlers(): void {
-  ipcMain.handle('files:browse', async (_event, dirPath: string, maxDepth = 4) => {
+  ipcMain.handle('files:browse', async (_event, dirPath: string, rootPath: string, maxDepth = 4) => {
     try {
       if (!dirPath || typeof dirPath !== 'string') {
         return { success: false, error: 'Invalid directory path', tree: [] };
       }
+      // rootPath is required for path-safety (plan 413): every
+      // renderer-supplied dirPath must be anchored inside the user
+      // project workspace, otherwise a compromised renderer could
+      // enumerate the host filesystem by passing a top-level dir.
+      if (!rootPath || typeof rootPath !== 'string') {
+        return { success: false, error: 'Root path is required', tree: [] };
+      }
+      const resolvedRoot = path.resolve(rootPath);
+      if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
+        return { success: false, error: 'Project directory does not exist', tree: [] };
+      }
+      const realRoot = fs.realpathSync(resolvedRoot);
 
       const resolvedPath = path.resolve(dirPath);
       if (!fs.existsSync(resolvedPath)) {
         return { success: false, error: 'Directory does not exist', tree: [] };
       }
-
       const stat = fs.statSync(resolvedPath);
       if (!stat.isDirectory()) {
         return { success: false, error: 'Path is not a directory', tree: [] };
       }
 
-      const tree = buildFileTree(resolvedPath, resolvedPath, 0, maxDepth);
+      // realpathSync resolves any symlinks before the isInsideRoot
+      // comparison so a symlink inside the workspace cannot redirect
+      // the walk to /etc or ~/.ssh.
+      const realTarget = fs.realpathSync(resolvedPath);
+      if (!isInsideRoot(realTarget, realRoot)) {
+        return { success: false, error: 'Directory is outside the project root', tree: [] };
+      }
+
+      const tree = buildFileTree(realTarget, realTarget, 0, maxDepth);
       return { success: true, tree };
     } catch (error) {
       const logger = getLogger();
@@ -170,18 +191,17 @@ export function registerFilesHandlers(): void {
       return { success: false, error: String(error), tree: [] };
     }
   });
-
   ipcMain.handle(
     'files:preview',
     async (_event, targetPath: string, rootPath: string, options?: { standalone?: boolean }) => {
     try {
-      // Standalone mode (opt-in via `options.standalone === true`): the
+      // Standalone mode (opt-in via options.standalone === true): the
       // renderer only sets this when the user explicitly clicked an
-      // in-chat link to a file outside the chat workspace — in that
-      // case we just want the file's content, no project root to
-      // verify against. `rootPath` is allowed to be empty in this mode.
-      // All other paths remain project-scoped and keep the existing
-      // isInsideRoot safety check.
+      // in-chat link to a file outside the chat workspace. To prevent
+      // the renderer from previewing host-system files (e.g. /etc/passwd),
+      // we still gate the target: in standalone mode the real target
+      // must live under os.homedir() (plan 413). Non-standalone mode
+      // keeps the project-root isInsideRoot check.
       const standalone = options?.standalone === true;
 
       if (!targetPath || typeof targetPath !== 'string') {
@@ -198,7 +218,12 @@ export function registerFilesHandlers(): void {
 
       const realTarget = fs.realpathSync(resolvedTarget);
 
-      if (!standalone) {
+      if (standalone) {
+        const homeDir = os.homedir();
+        if (!isInsideRoot(realTarget, homeDir)) {
+          return { success: false, error: 'Preview path is outside the user home directory' };
+        }
+      } else {
         const resolvedRoot = path.resolve(rootPath);
         if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
           return { success: false, error: 'Project directory does not exist' };
@@ -264,22 +289,34 @@ export function registerFilesHandlers(): void {
     }
   });
 
-  ipcMain.handle('files:delete', async (_event, targetPath: string) => {
+  ipcMain.handle('files:delete', async (_event, targetPath: string, rootPath: string) => {
     try {
       if (!targetPath || typeof targetPath !== 'string') {
         return { success: false, error: 'Invalid path' };
       }
+      if (!rootPath || typeof rootPath !== 'string') {
+        return { success: false, error: 'Root path is required' };
+      }
+      const resolvedRoot = path.resolve(rootPath);
+      if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
+        return { success: false, error: 'Project directory does not exist' };
+      }
+      const realRoot = fs.realpathSync(resolvedRoot);
 
       const resolvedPath = path.resolve(targetPath);
       if (!fs.existsSync(resolvedPath)) {
         return { success: false, error: 'Path does not exist' };
       }
+      const realTarget = fs.realpathSync(resolvedPath);
+      if (!isInsideRoot(realTarget, realRoot)) {
+        return { success: false, error: 'Path is outside the project root' };
+      }
 
-      const stat = fs.statSync(resolvedPath);
+      const stat = fs.statSync(realTarget);
       if (stat.isDirectory()) {
-        fs.rmdirSync(resolvedPath, { recursive: true });
+        fs.rmdirSync(realTarget, { recursive: true });
       } else {
-        fs.unlinkSync(resolvedPath);
+        fs.unlinkSync(realTarget);
       }
 
       return { success: true };
@@ -289,26 +326,45 @@ export function registerFilesHandlers(): void {
       return { success: false, error: String(error) };
     }
   });
-
-  ipcMain.handle('files:rename', async (_event, targetPath: string, newName: string) => {
+  ipcMain.handle('files:rename', async (_event, targetPath: string, newName: string, rootPath: string) => {
     try {
       if (!targetPath || typeof targetPath !== 'string' || !newName || typeof newName !== 'string') {
         return { success: false, error: 'Invalid path or name' };
       }
+      if (!rootPath || typeof rootPath !== 'string') {
+        return { success: false, error: 'Root path is required' };
+      }
+      const resolvedRoot = path.resolve(rootPath);
+      if (!fs.existsSync(resolvedRoot) || !fs.statSync(resolvedRoot).isDirectory()) {
+        return { success: false, error: 'Project directory does not exist' };
+      }
+      const realRoot = fs.realpathSync(resolvedRoot);
 
       const resolvedPath = path.resolve(targetPath);
       if (!fs.existsSync(resolvedPath)) {
         return { success: false, error: 'Path does not exist' };
       }
+      const realTarget = fs.realpathSync(resolvedPath);
+      if (!isInsideRoot(realTarget, realRoot)) {
+        return { success: false, error: 'Path is outside the project root' };
+      }
 
-      const parentDir = path.dirname(resolvedPath);
+      const parentDir = path.dirname(realTarget);
       const newPath = path.join(parentDir, newName);
+
+      // The rename destination must also stay inside the same root:
+      // a symlinked parentDir cannot bypass the isInsideRoot test.
+      const realParentDir = fs.realpathSync(parentDir);
+      const realNewPath = path.join(realParentDir, newName);
+      if (!isInsideRoot(realNewPath, realRoot)) {
+        return { success: false, error: 'Renamed path would escape the project root' };
+      }
 
       if (fs.existsSync(newPath)) {
         return { success: false, error: 'A file or folder with that name already exists' };
       }
 
-      fs.renameSync(resolvedPath, newPath);
+      fs.renameSync(realTarget, newPath);
       return { success: true, newPath };
     } catch (error) {
       const logger = getLogger();

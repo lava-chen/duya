@@ -431,8 +431,11 @@ export interface PluginCatalogEntry {
   name: string;
   version: string;
   description: string;
+  description_zh?: string;
   shortDescription?: string;
+  shortDescription_zh?: string;
   longDescription?: string;
+  longDescription_zh?: string;
   author: { name: string; url?: string };
   developer?: string;
   icon?: string;

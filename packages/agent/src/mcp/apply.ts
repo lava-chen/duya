@@ -40,8 +40,9 @@ import type {
 } from '@duya/plugin-core';
 import type { MCPServerConfig, Tool, ToolUseContext } from '../types.js';
 import type { ToolExecutor, ToolMetaInput } from '../tool/registry.js';
-import { readToolExposureConfig } from '../config/tool-exposure.js';
+import { readToolExposureConfig, mcpExposureToExposeMode } from '../config/tool-exposure.js';
 import { downgradeToolSchemaForBudget } from '../tool/spec-budget.js';
+import { buildToolHint } from './tool-hint.js';
 import { MCPManager } from './index.js';
 import { ToolRegistry, MCPRegistryReplaceError } from '../tool/registry.js';
 import {
@@ -551,20 +552,27 @@ async function runApply(opts: ApplyOpts): Promise<MCPApplyResult> {
         return capturedClient.callTool(capturedMcpInfo.toolName, input);
       },
     };
+    // Plan 480 P1.4: per-tool hint derived from the raw schema (argument-name
+    // list with `(required)` markers, same shape as the built-in
+    // `image_generate` hint). This replaces the previous placeholder text so
+    // `tool_search` results and (later) `tool_schema` entries carry a
+    // truthful, one-line summary. Extracted BEFORE the spec budget downgrade
+    // so a truncated schema still yields its original argument list.
+    const hint = buildToolHint(t) || 'No structured arguments';
     preparedEntries.push({
       key: t.internalKey,
       // Plan 452 Phase A: bound the spec — Direct exposure rides every
       // request, so a pathologically large server schema must not.
-      definition: downgradeToolSchemaForBudget(t, 'Input schema from the connected MCP server.').definition,
+      definition: downgradeToolSchemaForBudget(t, hint).definition,
       executor,
       meta: {
-        // Plan 241: MCP tools are part of the user's toolset — expose them
-        // in the default tool list. (Previously 'discoverable', which hid
-        // every MCP tool behind a tool_search round-trip.)
-        // Plan 452 Phase A: `[tools] on_demand_discovery` opts back into
-        // tool_search-only exposure for a lean prompt.
-        exposeMode: readToolExposureConfig().onDemandDiscovery ? 'discoverable' : 'always',
-        inputSchemaSummary: 'Input schema from the connected MCP server.',
+        // Plan 480 §8.4: three-value exposure policy.
+        //   full    → 'always'   (schema rides every request; today's default)
+        //   search  → 'discoverable' (tool_search-only; legacy on_demand)
+        //   catalog → 'catalog'  (schema NEVER in tools array — read via
+        //             tool_schema, invoke via tool_invoke)
+        exposeMode: mcpExposureToExposeMode(readToolExposureConfig().exposure),
+        inputSchemaSummary: hint,
       },
     });
     providerNameToInternalKey.set(t.providerName, t.internalKey);

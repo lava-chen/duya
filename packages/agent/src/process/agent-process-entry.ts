@@ -969,6 +969,17 @@ function messageRowToMessage(
     }
   }
 
+  // Plan 486: restore thread/fork metadata from the flat row columns so a
+  // reloaded session can serve getThread and keep branched messages out of
+  // the main projections.
+  let threadMeta: { replyToId?: string; branched?: boolean } | undefined;
+  if (row.reply_to_id != null || row.branched != null) {
+    threadMeta = {
+      ...(row.reply_to_id != null ? { replyToId: row.reply_to_id } : {}),
+      ...(row.branched != null ? { branched: row.branched === true } : {}),
+    };
+  }
+
   return {
     id: row.id,
     role: row.role,
@@ -991,6 +1002,7 @@ function messageRowToMessage(
     sub_agent_id: row.sub_agent_id || undefined,
     attachments: parsedAttachments,
     tokenUsage,
+    ...(threadMeta ? { metadata: { threadMeta } } : {}),
   };
 }
 

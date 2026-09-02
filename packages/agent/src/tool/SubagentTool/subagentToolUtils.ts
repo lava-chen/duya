@@ -7,7 +7,6 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 import { SUBAGENT_TOOL_NAME, LEGACY_SUBAGENT_TOOL_NAME } from './constants.js'
 import { MESSAGE_SESSION_TOOL_NAME } from '../MessageSessionTool/constants.js'
 import { GET_TASK_OUTPUT_TOOL_NAME } from '../BackgroundTaskTool/GetTaskOutputTool.js'
-import { WAIT_TASKS_TOOL_NAME } from '../BackgroundTaskTool/WaitTasksTool.js'
 import { KILL_TASK_TOOL_NAME } from '../BackgroundTaskTool/KillTaskTool.js'
 
 /**
@@ -22,7 +21,6 @@ export const SUBAGENT_FORBIDDEN_TOOLS: ReadonlySet<string> = new Set([
   LEGACY_SUBAGENT_TOOL_NAME,
   MESSAGE_SESSION_TOOL_NAME,
   GET_TASK_OUTPUT_TOOL_NAME,
-  WAIT_TASKS_TOOL_NAME,
   KILL_TASK_TOOL_NAME,
 ])
 

@@ -122,6 +122,14 @@ export class AutomationScheduler {
   async runCronNow(id: string): Promise<CronRunHandle> {
     const job = this.store.getCron(id);
     if (!job) throw new Error(`cron not found: ${id}`);
+    // Plan 476 P2.3a: agent-bound routines fire into the bot's resident
+    // session (P2.3b, depends on 477 P3.1) — reject manual runs today with
+    // a clear message instead of creating a throwaway cron session.
+    if (job.agent) {
+      throw new Error(
+        `cron "${job.name}" is bound to agent "${job.agent}"; bot-bound automation is not wired yet (Plan 476 P2.3b, awaits plan 477 resident sessions)`,
+      );
+    }
     const runId = randomUUID();
     const sessionId = `cron:${job.id}:${Date.now()}:${runId}`;
 
@@ -169,6 +177,23 @@ export class AutomationScheduler {
     manual: boolean,
     existing?: { runId: string; sessionId: string },
   ): Promise<void> {
+    // Plan 476 P2.3a stub: agent-bound routines land in P2.3b (bot resident
+    // session, depends on 477 P3.1). Claim the fire so the schedule does not
+    // re-fire on every tick, log, and stand down — the job stays enabled and
+    // visibly listed, ready for P2.3b to take over execution.
+    if (job.agent) {
+      this.store.markRunResult(job.id, {
+        lastRunAt: Date.now(),
+        error: 'bot-bound automation pending (Plan 476 P2.3b / 477 resident sessions)',
+        retryCount: 0,
+      });
+      getLogger().warn('Agent-bound cron fire deferred (P2.3a stub)', {
+        cronId: job.id,
+        agent: job.agent,
+      }, LogComponent.Automation);
+      return;
+    }
+
     const runningList = this.running.get(job.id);
 
     // Manually-triggered runs (existing handle) bypass the concurrency policy:

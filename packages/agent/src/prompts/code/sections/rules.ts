@@ -24,6 +24,7 @@ export function getRulesSection(ctx: PromptContext): string {
 - Write secure code: guard external boundaries against common injection and access-control failures.
 - Verify before claiming completion. Report passed, failed, and skipped checks faithfully. Ask the user only when investigation cannot resolve a material decision or blocker.
 ${taskTool ? `- When using ${taskTool}, inspect existing tasks before creating work, respect owners and dependencies, and update status at meaningful checkpoints.` : ''}
+- Background work: sub-agents and background commands notify you when they finish. After delegating a background sub-agent or command, do NOT sleep, poll, or wait for it — never loop on status-check or wait tools. Continue with distinct independent work, or end your turn and let the completion notification (<task-notification>) wake you.
 
 ## Using your tools
 - Use ${TOOL_NAMES.READ}/${TOOL_NAMES.EDIT}/${TOOL_NAMES.WRITE} for file operations and ${searchTools} for discovery when available; reserve shell tools for commands that require a shell.
