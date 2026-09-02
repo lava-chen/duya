@@ -9,6 +9,7 @@ import {
   SettingsCard,
   SettingsToggle,
 } from "@/components/settings/ui";
+import { HostToolPermissionCard } from "./HostToolPermissionCard";
 import { Button } from "@/components/ui/Button";
 
 export function SecuritySection() {
@@ -77,6 +78,11 @@ export function SecuritySection() {
             onCheckedChange={handleSecurityScanToggle}
           />
         </SettingsCard>
+
+        {/* Plan 487: host-level standing permission switch. */}
+        <div className="mt-6">
+          <HostToolPermissionCard />
+        </div>
 
         {isDirty && (
           <div className="mt-4 flex items-center justify-end gap-3">

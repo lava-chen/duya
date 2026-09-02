@@ -32,6 +32,8 @@ import type {
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
+import { createBotPromptAssembly, loadBotPromptContext, isBotAgentProfile } from '../prompts/index.js';
+import type { BotPromptAssembly } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
 import { isNestedAgentsMdEnabled } from '../config/feature-flags.js';
@@ -55,7 +57,7 @@ import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import { resolveCacheRetention } from '../config/cache-config.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
-import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource } from '../permissions/types.js';
+import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/policy.js';
 import { settingsJsonToRules } from '../permissions/rules.js';
 import { permissionRuleValueToString } from '../permissions/rules.js';
@@ -98,6 +100,8 @@ import { ToolRegistry } from '../tool/registry.js';
 import type { ToolExecutor } from '../tool/registry.js';
 import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
+import { toolSchemaTool } from '../tool/ToolSchemaTool/ToolSchemaTool.js';
+import { createToolSchemaProviderFromRegistry } from '../tool/ToolSchemaTool/catalogFromRegistry.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
 import {
@@ -194,6 +198,12 @@ export class duyaAgent {
   private communicationPlatform?: import('../prompts/types.js').CommunicationPlatform; // Communication platform for prompt injection
   private language?: string; // Language preference for agent responses
   private permissionMode: PermissionMode = 'default'; // Permission mode for tool execution
+  /**
+   * Plan 487: host-level standing permission switch. Set from
+   * `options.hostToolPermission` (or the `agent:reinit-provider` IPC payload
+   * in phase 2). Optional — undefined falls back to `'ask'`.
+   */
+  private hostToolPermission?: LocalToolPermission;
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
   private alwaysAllowRules: ToolPermissionRulesBySource = {};
   private alwaysDenyRules: ToolPermissionRulesBySource = {};
@@ -331,6 +341,13 @@ export class duyaAgent {
   private activeAgentProfileId: string | undefined;
   /** When true, skip the first-turn AGENTS.md injection (Plan 408 Phase 2). */
   private readonly omitAgentsMd: boolean = false;
+
+  /**
+   * Plan 474: lazily-created bot prompt assembly (identity/roster/etc.).
+   * Kept per agent instance so the registered section catalog is stable
+   * across streamChat calls; only the rendered output is per-build.
+   */
+  private botAssembly: BotPromptAssembly | null = null;
 
   constructor(options: AgentOptions) {
     // Phase 3: prefer the new `runtimeConfig.apiFormat` when present
@@ -520,6 +537,7 @@ export class duyaAgent {
 
     // Initialize permission system
     this.permissionMode = options.permissionMode || 'default';
+    this.hostToolPermission = options.hostToolPermission;
     this.hasPermissionsToUseTool = createHasPermissionsToUseTool();
 
     // Parse optional user-defined permission rules so allow/deny/ask rules
@@ -813,6 +831,9 @@ export class duyaAgent {
     toolSearchTool.setSearchFn((query, limit) =>
       searchToolsFromRegistry(registry, query, limit),
     );
+    // Plan 480 P2.1: wire tool_schema to the same registry view so the model
+    // can discover MCP tool schemas on demand (catalog / deferred exposure).
+    toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(registry));
 
     // Diagnostic: worker uses console.error for stderr (stdout is JSON-RPC).
     // eslint-disable-next-line no-console
@@ -2139,7 +2160,13 @@ export class duyaAgent {
             // over-budget goal transitions to `budget_limited` (plan 411
             // Phase 2) instead of silently burning tokens.
             const usage = event.data as
-              | { input_tokens?: number; output_tokens?: number; total_tokens?: number }
+              | {
+                  input_tokens?: number
+                  output_tokens?: number
+                  total_tokens?: number
+                  cache_hit_tokens?: number
+                  cache_creation_tokens?: number
+                }
               | undefined;
             const used = usage?.total_tokens ?? usage?.input_tokens ?? 0;
             if (used > 0 && this.modeCoordinator) {
@@ -2152,6 +2179,29 @@ export class duyaAgent {
             // above) so GLM-style per-round cache reporting cannot collapse
             // the anchor mid-turn.
             const observedPrompt = resultPromptVolume(roundResultUsage);
+            // Token-trace: log the per-call delta + the chosen round-max so
+            // a dropped/duplicated cache_read or input_tokens is visible in
+            // the log diff (the previous value is reported alongside the new
+            // candidate so an off-by-one is easy to spot).
+            const candidateVolume = resultPromptVolume(usage);
+            const prevVolume = roundResultUsage ? candidateVolume : 0;
+            logger.tokenTrace('observedPromptTokens', {
+              sessionId: this.sessionId,
+              turnEvent: 'result',
+              observed: observedPrompt,
+              candidate: candidateVolume,
+              prev: prevVolume,
+              keptNew: resultPromptVolume(usage) >= resultPromptVolume(roundResultUsage),
+              usage: usage
+                ? {
+                    input: usage.input_tokens,
+                    output: usage.output_tokens,
+                    cacheRead: usage.cache_hit_tokens,
+                    cacheWrite: usage.cache_creation_tokens,
+                    total: usage.total_tokens,
+                  }
+                : null,
+            });
             if (observedPrompt > 0) {
               this.compactionManager.setObservedPromptTokens(observedPrompt);
             }
@@ -2958,7 +3008,41 @@ export class duyaAgent {
       }
     }
 
+    // Plan 474 §7: append bot prompt-layer sections (identity / roster / …)
+    // when the applied profile is a config-driven bot ([agents.<id>], Plan
+    // 424). Only the registered *sections* are appended — the stable base
+    // already came from the PromptSystem above, so appending the full bot
+    // basic prompt would duplicate platform guidance. Rendered sections
+    // return null when their context fields are absent, keeping this a
+    // no-op for non-bot sessions and for bots with no data yet.
+    if (!options?.disableSystemPrompt && isBotAgentProfile(appliedProfile) && appliedProfile) {
+      try {
+        const botContext = await loadBotPromptContext(appliedProfile.id);
+        const botSections = await this.getBotAssembly().renderSections(botContext);
+        if (botSections) {
+          systemPromptContent = systemPromptContent
+            ? `${systemPromptContent}\n\n${botSections}`
+            : botSections;
+        }
+      } catch (err) {
+        // A bot-section failure must never break the chat system prompt.
+        logger.warn(
+          `[Agent] bot prompt sections skipped: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
     return systemPromptContent;
+  }
+
+  /**
+   * Plan 474: lazily-instantiated bot prompt assembly (stable catalog).
+   */
+  private getBotAssembly(): BotPromptAssembly {
+    if (!this.botAssembly) {
+      this.botAssembly = createBotPromptAssembly();
+    }
+    return this.botAssembly;
   }
 
   /**
@@ -3009,6 +3093,9 @@ export class duyaAgent {
           getToolRiskTier: registry
             ? (toolName: string) => registry.getMeta(toolName)?.riskTier
             : undefined,
+          // Plan 487: host-level standing permission switch (mirrors
+          // `setHostToolPermission`). Undefined → defaults to 'ask'.
+          hostToolPermission: this.hostToolPermission,
         } as ToolPermissionContext,
       }),
       abortController: this.abortController!,
@@ -3165,6 +3252,8 @@ export class duyaAgent {
     toolSearchTool.setSearchFn((query, limit) =>
       searchToolsFromRegistry(toolRegistry, query, limit),
     );
+    // Plan 480 P2.1: same registry view for on-demand schema discovery.
+    toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(toolRegistry));
 
     // Plan 224 Phase 3: if a modifier mode (conductor) is active alongside
     // this orchestrator mode (research), inject the modifier's tools into
@@ -3657,6 +3746,17 @@ export class duyaAgent {
     const validMode = permissionModeFromString(mode);
     this.permissionMode = validMode;
     logger.info(`[Agent] Permission mode set to: ${validMode}`);
+  }
+
+  /**
+   * Plan 487: set the host-level standing permission switch. Called by
+   * the IPC `agent:reinit-provider` handler in phase 2 whenever the user
+   * persists a new value via Settings. Throws on invalid input — callers
+   * must validate against `LOCAL_TOOL_PERMISSIONS` from `@duya/agent`.
+   */
+  setHostToolPermission(value: LocalToolPermission): void {
+    this.hostToolPermission = value;
+    logger.info(`[Agent] Host tool permission set to: ${value}`);
   }
 
   /**

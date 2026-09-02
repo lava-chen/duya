@@ -13,6 +13,12 @@ import type {
   PermissionRule,
   ToolPermissionContext,
   McpToolSource,
+  LocalToolPermission,
+} from './types.js'
+import {
+  DEFAULT_LOCAL_TOOL_PERMISSION,
+  HOST_PERMISSION_GRANTED,
+  HOST_PERMISSION_DENIED,
 } from './types.js'
 import {
   permissionRuleValueFromString,
@@ -486,6 +492,44 @@ export function createHasPermissionsToUseTool(): HasPermissionsFn {
           classifierApprovable: false,
         },
       }
+    }
+
+    // 4.8 Plan 487 — host-level standing permission switch. Runs AFTER
+    // catastrophic (step 4.7) so catastrophic safety boundaries are never
+    // overridden by the host switch, and BEFORE mode bypass (step 5) so
+    // an explicit per-session bypassPermissions / dontAsk still wins
+    // (the user's session-level intent is respected). When the host
+    // switch is set, the session mode is one of `default / acceptEdits
+    // / plan / auto / bubble` — i.e. not explicit bypass — and the host
+    // switch overrides the prompt pipeline.
+    const hostPermission: LocalToolPermission =
+      appState.toolPermissionContext.hostToolPermission ?? DEFAULT_LOCAL_TOOL_PERMISSION;
+    const sessionModeIsExplicitBypass =
+      appState.toolPermissionContext.mode === 'bypassPermissions' ||
+      appState.toolPermissionContext.mode === 'dontAsk';
+    if (!sessionModeIsExplicitBypass) {
+      if (hostPermission === 'always') {
+        return {
+          behavior: 'allow',
+          decisionReason: {
+            type: 'safetyCheck',
+            reason: `${HOST_PERMISSION_GRANTED}: host-level permission switch is set to 'always'; auto-allowed without prompt.`,
+            classifierApprovable: false,
+          },
+        };
+      }
+      if (hostPermission === 'never') {
+        return {
+          behavior: 'deny',
+          message: `Operation denied: host-level permission switch is set to 'never'. All non-internal tools are blocked at the host level. Switch it to 'ask' or 'always' in Settings to allow tool use.`,
+          decisionReason: {
+            type: 'safetyCheck',
+            reason: `${HOST_PERMISSION_DENIED}: host-level permission switch is set to 'never'; auto-denied regardless of session mode.`,
+            classifierApprovable: false,
+          },
+        };
+      }
+      // hostPermission === 'ask' — fall through to step 5 (mode bypass) and beyond.
     }
 
     // 5. Check mode-based permissions. `bypassPermissions` and `dontAsk`

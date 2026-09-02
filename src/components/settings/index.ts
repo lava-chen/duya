@@ -13,6 +13,9 @@ export { MemorySection } from "./MemorySection";
 export { HooksSection } from "./HooksSection";
 export { VoiceSection } from "./VoiceSection";
 export { PerformanceSection } from "./PerformanceSection";
+// Plan 487: host-level standing permission switch.
+export { HostToolPermissionCard, type LocalToolPermission } from "./HostToolPermissionCard";
+
 // Plan 453 Task H: Wake Agent settings card.
 export { WakeAgentSection } from "./WakeAgentSection";
 // Plan 205: `ProviderConnectDialog` is still used by the

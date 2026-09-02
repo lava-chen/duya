@@ -2430,6 +2430,13 @@ const zh: Record<TranslationKey, string> = {
   'extensions.skills.uploading': '上传中…',
 
   'extensions.actionFailed': '操作失败',
+  'settings.hostToolPermission.title': '本地工具权限',
+  'settings.hostToolPermission.description': '宿主级开关,控制所有会话的所有工具调用。',
+  'settings.hostToolPermission.ask': '每次询问',
+  'settings.hostToolPermission.always': '始终允许',
+  'settings.hostToolPermission.never': '始终禁止',
+  'settings.hostToolPermission.warningAlways': '始终允许模式会跳过所有权限确认对话框。灾难性安全边界仍会生效,但其他所有工具调用都会自动执行,请谨慎使用。',
+  'settings.hostToolPermission.noteNever': '始终禁止模式将阻止所有工具调用,不论当前会话的权限模式如何。切换为"每次询问"或"始终允许"以恢复工具使用。',
 };
 
 export default zh;

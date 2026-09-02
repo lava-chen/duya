@@ -37,6 +37,48 @@ export const INTERNAL_PERMISSION_MODES = [
 export const PERMISSION_MODES = INTERNAL_PERMISSION_MODES
 
 // ============================================================================
+// Host-Level Standing Permission (Plan 487)
+// ============================================================================
+
+/**
+ * Host-level persistent tool permission switch (plan 487). Persisted as a
+ * settings KV (`host.localToolPermission`) and injected into every agent
+ * process's `ToolPermissionContext` at boot. Complements the per-session
+ * `PermissionMode`:
+ *
+ *   - `ask`    — every non-internal tool call that would have prompted the
+ *                user continues to prompt (default).
+ *   - `always` — auto-allow, short-circuiting the prompt layer with a
+ *                `safetyCheck` reason tagged `HOST_PERMISSION_GRANTED`.
+ *   - `never`  — auto-deny, short-circuiting the prompt layer with a
+ *                `safetyCheck` reason tagged `HOST_PERMISSION_DENIED`.
+ *
+ * The host switch never overrides (a) `CATASTROPHIC` safety boundaries or
+ * (b) sessions whose mode is an explicit `bypassPermissions` / `dontAsk`
+ * (the user's explicit per-session intent wins). The gate in
+ * `hasPermissionsToUseTool` runs the check between step 4.7 (catastrophic)
+ * and step 5 (mode bypass) so session-level `default/acceptEdits/plan/
+ * auto/bubble` is gated by the host switch while explicit bypass is not.
+ */
+export type LocalToolPermission = 'ask' | 'always' | 'never'
+
+export const LOCAL_TOOL_PERMISSIONS: readonly LocalToolPermission[] = [
+  'ask',
+  'always',
+  'never',
+] as const
+
+export const DEFAULT_LOCAL_TOOL_PERMISSION: LocalToolPermission = 'ask'
+
+/**
+ * Reasons stamped on `decisionReason` when the host switch decides a tool
+ * call. Surfaced in the audit log so the user can trace "why did this
+ * command not prompt / not run".
+ */
+export const HOST_PERMISSION_GRANTED = 'HOST_PERMISSION_GRANTED' as const
+export const HOST_PERMISSION_DENIED = 'HOST_PERMISSION_DENIED' as const
+
+// ============================================================================
 // Permission Behaviors
 // ============================================================================
 
@@ -401,4 +443,12 @@ export type ToolPermissionContext = {
    * The DuyaAgent wires this to `ToolRegistry.getMeta(name)?.riskTier`.
    */
   readonly getToolRiskTier?: (toolName: string) => import('./policy.js').RiskTier | undefined
+
+  /**
+   * Plan 487: host-level persistent tool permission switch. Read from
+   * settings KV at boot and injected once per agent process. Optional so
+   * older agent processes keep working — when undefined, the gate in
+   * `hasPermissionsToUseTool` treats the effective switch as `'ask'`.
+   */
+  readonly hostToolPermission?: LocalToolPermission
 }

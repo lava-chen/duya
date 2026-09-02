@@ -321,6 +321,42 @@ export function registerSettingsHandlers(): void {
     }
   });
 
+  // Plan 487: host-level standing permission switch (3-state: ask/always/never).
+  ipcMain.handle('settings:get-host-tool-permission', async () => {
+    try {
+      return { success: true, value: getHostToolPermission() };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to read host tool permission', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, value: 'ask', error: String(error) };
+    }
+  });
+
+  // Plan 487: persist the new value and trigger agent re-init so the
+  // change applies to running sessions without an app restart.
+  ipcMain.handle('settings:set-host-tool-permission', async (_event, value: 'ask' | 'always' | 'never') => {
+    try {
+      setHostToolPermission(value);
+      const logger = getLogger();
+      logger.info(`Host tool permission set to: ${value}`, undefined, LogComponent.Settings);
+
+      try {
+        await ipcMain.emit('agent:reinit-provider');
+      } catch {
+        logger.warn(
+          'agent:reinit-provider after host permission change failed (will take effect on next session)',
+          undefined,
+          LogComponent.Settings,
+        );
+      }
+      return { success: true, value };
+    } catch (error) {
+      const logger = getLogger();
+      logger.error('Failed to set host tool permission', error instanceof Error ? error : new Error(String(error)), undefined, LogComponent.Settings);
+      return { success: false, error: String(error) };
+    }
+  });
+
   // Live-update browser backend mode on running agents without full re-init
   ipcMain.handle('browser:update-backend-mode', async (_event, mode: 'auto' | 'extension' | 'built-in' | 'human-like') => {
     try {

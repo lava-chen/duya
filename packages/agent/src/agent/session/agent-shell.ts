@@ -23,6 +23,7 @@ import type {
   PermissionMode,
   PermissionRuleSource,
   ToolPermissionContext,
+  LocalToolPermission,
   ToolPermissionRulesBySource,
 } from '../../permissions/types.js';
 import {
@@ -39,6 +40,8 @@ import { logger } from '../../utils/logger.js';
 import { buildAgentIdentityBlock, EMPTY_DISCOVERED } from '../utils/agent-helpers.js';
 import { toolSearchTool } from '../../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../../tool/ToolSearchTool/searchTools.js';
+import { toolSchemaTool } from '../../tool/ToolSchemaTool/ToolSchemaTool.js';
+import { createToolSchemaProviderFromRegistry } from '../../tool/ToolSchemaTool/catalogFromRegistry.js';
 import { collectActiveModes } from '../../modes/apply-modes.js';
 import { modeModifierRegistry } from '../../modes/index.js';
 import type { ModeModifier, ModeModifierContext, OrchestratorDeps, ToolRegistration } from '../../modes/index.js';
@@ -68,6 +71,8 @@ export interface AgentShellContext {
   messages: () => Message[];
   timelineSnapshot: () => readonly MessageTimelineEntry[];
   widgetStyleHistory: WidgetStyleSignature[];
+  /** Plan 487: host-level standing permission switch (mirrors DuyaAgent.hostToolPermission). */
+  hostToolPermission?: LocalToolPermission;
 }
 
 /** Resolve an agent profile by id, logging the outcome. */
@@ -254,6 +259,9 @@ export function buildPermissionContext(
         getToolRiskTier: registry
           ? (toolName: string) => registry.getMeta(toolName)?.riskTier
           : undefined,
+        // Plan 487: host-level standing permission switch (read from
+        // session init payload by AgentShellContext upstream).
+        hostToolPermission: ctx.hostToolPermission,
       } as ToolPermissionContext,
     }),
     abortController: ctx.abortController,
@@ -347,6 +355,8 @@ export async function* dispatchOrchestratorMode(
     : prompt.map((p) => (p.type === 'text' ? p.text : '')).join('\n');
   const toolRegistry = ctx.activeMCPRegistry;
   toolSearchTool.setSearchFn((query, limit) => searchToolsFromRegistry(toolRegistry, query, limit));
+  // Plan 480 P2.1: same registry view for on-demand schema discovery.
+  toolSchemaTool.setProvider(createToolSchemaProviderFromRegistry(toolRegistry));
 
   const orchestratorActiveModes = collectActiveModes(options ?? {});
   const orchestratorResolved = orchestratorActiveModes.length > 0

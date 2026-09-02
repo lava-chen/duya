@@ -2441,6 +2441,13 @@ const en = {
   'extensions.skills.uploading': 'Uploading…',
 
   'extensions.actionFailed': 'Action failed',
+  'settings.hostToolPermission.title': 'Local tool permission',
+  'settings.hostToolPermission.description': 'Host-level switch that gates all tool calls across every session.',
+  'settings.hostToolPermission.ask': 'Ask every time',
+  'settings.hostToolPermission.always': 'Always allow',
+  'settings.hostToolPermission.never': 'Never allow',
+  'settings.hostToolPermission.warningAlways': 'Always-allow mode skips every permission prompt. Catastrophic safety boundaries are still respected, but every other tool call will run without confirmation. Use with care.',
+  'settings.hostToolPermission.noteNever': 'Never-allow mode blocks all tool calls regardless of session permission mode. Switch to "Ask" or "Always" to allow tool use.',
 };
 
 export type TranslationKey = keyof typeof en;
