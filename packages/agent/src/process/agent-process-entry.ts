@@ -27,6 +27,7 @@ import type { MessageRow, AttachmentRow, ParsedDocumentAttachment } from '../ses
 import { getAttachmentsForSession, rehydrateContentWithAttachments } from '../session/db.js';
 import type { Message, MessageContent, MCPServerConfig, Tool, TokenUsage } from '../types.js';
 import type { ProviderRuntimeConfig } from '@duya/ai';
+import { logger } from '../utils/logger.js';
 import {
   messageDb,
   pluginDb,
@@ -37,7 +38,12 @@ import {
 } from '../ipc/db-client.js';
 import { captureTurnReviewBaseline, completeTurnReview, type TurnReviewBaseline } from '../session/turn-review.js';
 
-import { sendMemoryWakeup } from '../memory-rollout/wakeup.js';
+// Note: sendMemoryWakeup is intentionally NOT statically imported here.
+// It pulls the entire memory-rollout + memory-state module graph
+// (writer, extractor, projectionContent, system_log, etc.) into the
+// worker bundle, adding ~1.5 MB of minified code that is only used in
+// fire-and-forget right after `ready`. We lazy-load it inside the init
+// callback instead so cold-start pays nothing for it.
 import {
   enqueue,
   dequeue,
@@ -316,6 +322,29 @@ const emitLiveUsage = (
       : 0) || systemFallbackTokens || 0;
   const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
   const anchored = estimate.anchored && !compactedPending;
+  // Token-trace: emit a structured INFO line so the operator can correlate
+  // input / cache / trailing growth over time. The anchor's raw usage block
+  // is included so an off-by-one (under-report or cache-misaccount) is easy
+  // to spot in a log diff.
+  logger.tokenTrace('emitLiveUsage', {
+    sessionId: targetSessionId,
+    anchor: estimate.anchorIndex,
+    anchorMsgId: estimate.anchorIndex !== null ? msgs[estimate.anchorIndex]?.id : null,
+    anchored,
+    systemPrefix,
+    msgs: msgs.length,
+    result: {
+      used: estimate.usedTokens,
+      anchorTokens: estimate.anchorTokens,
+      trailing: estimate.trailingTokens,
+    },
+    cumulative: {
+      input: liveTotalInput,
+      output: liveTotalOutput,
+      cacheRead: liveTotalCacheHit,
+      cacheCreate: liveTotalCacheCreation,
+    },
+  });
   // Multiple workers share one trace file — prefix every line so interleaved
   // sessions stay attributable.
   ringTrace(
@@ -351,6 +380,18 @@ const emitLiveUsage = (
     totalOutput: liveTotalOutput,
     totalCacheHit: liveTotalCacheHit,
     totalCacheCreation: liveTotalCacheCreation,
+    // Token-calc breakdown for the renderer's debug surface. Lets a developer
+    // see exactly which inputs fed `usedTokens`: anchor index, anchor tokens,
+    // trailing estimate, system prefix. Combined with the cumulative totals
+    // above this is enough to reproduce the estimate off-line.
+    debugBreakdown: {
+      anchorIndex: estimate.anchorIndex,
+      anchorMsgId: estimate.anchorIndex !== null ? msgs[estimate.anchorIndex]?.id : null,
+      anchorTokens: estimate.anchorTokens,
+      trailingTokens: estimate.trailingTokens,
+      msgs: msgs.length,
+      compactedPending,
+    },
   });
 };
 // Track the main model name for multimodal detection
@@ -3470,10 +3511,25 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
           // extraction runs immediately after init (no 60s wait).
           // Gated by DUYA_MEMORY_ENABLED; failures are swallowed.
           if (!initError) {
-            sendMemoryWakeup(
-              (event) => sendToMain(event as unknown as Record<string, unknown>),
-              { sessionId: sessionId ?? undefined },
-            );
+            // Lazy-load: the memory rollout pipeline is heavy and not
+            // needed until after the worker reports ready. Importing it
+            // here (instead of at module top) trims ~1.5 MB off the cold
+            // worker parse. The helper itself is gated by DUYA_MEMORY
+            // *_ENABLED inside wakeup.ts, so failures are swallowed.
+            void import('../memory-rollout/wakeup.js').then(({ sendMemoryWakeup }) => {
+              try {
+                sendMemoryWakeup(
+                  (event) => sendToMain(event as unknown as Record<string, unknown>),
+                  { sessionId: sessionId ?? undefined },
+                );
+              } catch (wakeupErr) {
+                // Wakeup is best-effort; a failure here must not block
+                // init or surface as a chat error.
+                log('[Agent-Process] sendMemoryWakeup failed (ignored):', wakeupErr);
+              }
+            }).catch((importErr) => {
+              log('[Agent-Process] Lazy memory-rollout import failed (ignored):', importErr);
+            });
           }
 
           // Initialize MCP servers asynchronously after sending ready so that slow or hung
@@ -3606,6 +3662,28 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             sendToMain({ type: 'compact:error', sessionId, message: 'Agent not initialized' });
             break;
           }
+          // Backpressure gate: compaction mutates the shared messages timeline
+          // and the llmClient reference. Running it concurrently with an in-
+          // flight turn would race the stream generator. Wait briefly for
+          // the active turn to finish; if it takes too long, surface a busy
+          // error so the renderer can retry.
+          if (chatInProgress || initializing) {
+            const compactBusyStart = Date.now();
+            const COMPACT_BUSY_WAIT_MS = 5_000;
+            log('[Agent-Process] Chat in progress, waiting before compact');
+            while ((chatInProgress || initializing) && Date.now() - compactBusyStart < COMPACT_BUSY_WAIT_MS) {
+              await new Promise((r) => setTimeout(r, 100));
+            }
+            if (chatInProgress || initializing) {
+              sendToMain({
+                type: 'compact:error',
+                sessionId,
+                message: 'Chat turn still in progress after 5s; please retry after the turn completes',
+              });
+              break;
+            }
+          }
+          chatInProgress = true;
           // Plan 422: lazy-load messages if the worker has not yet seen this
           // session via chat:start. The /compact popover button is dispatched
           // independently of chat:start, so without this the worker would call
@@ -3660,6 +3738,11 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             const errorMessage = error instanceof Error ? error.message : String(error);
             log('[Agent-Process] Compaction failed:', errorMessage);
             sendToMain({ type: 'compact:error', sessionId, message: errorMessage });
+          } finally {
+            // Release the gate even on error so subsequent compactions or
+            // chat:start messages can proceed. Without this, a thrown
+            // error would deadlock the worker until process restart.
+            chatInProgress = false;
           }
           break;
         }
