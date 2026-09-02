@@ -4,7 +4,7 @@
 
 // Import AgentDefinition from loadAgentsDir for unified access
 import type { AgentDefinition } from './tool/SubagentTool/loadAgentsDir.js';
-import type { PermissionMode } from './permissions/types.js';
+import type { PermissionMode, LocalToolPermission } from './permissions/types.js';
 
 // Re-export shared types from @duya/ai (spec §6.1).
 // The definitions have been migrated to packages/ai/src/types.ts
@@ -160,6 +160,11 @@ export interface AgentOptions {
   sessionId?: string;
   /** Permission mode for tool execution: 'default', 'bypass', 'dontAsk', 'plan' */
   permissionMode?: PermissionMode;
+  /**
+   * Plan 487: host-level standing permission switch (default 'ask').
+   * Injected from electron main on every agent process spawn / reinit.
+   */
+  hostToolPermission?: LocalToolPermission;
   /** Communication platform type for prompt injection */
   communicationPlatform?: import('./prompts/types.js').CommunicationPlatform;
   /** Skip the first-turn AGENTS.md user-message injection entirely. Used by

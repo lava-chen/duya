@@ -1752,6 +1752,19 @@ const electronAPI: ElectronAPI = {
     }) => ipcRenderer.invoke('settings:set-orb-position', payload),
     setAutoStart: (enabled) => ipcRenderer.invoke('settings:set-auto-start', enabled),
     getAutoStartStatus: () => ipcRenderer.invoke('settings:get-auto-start-status'),
+    // Plan 487: host-level standing permission switch.
+    getHostToolPermission: () =>
+      ipcRenderer.invoke('settings:get-host-tool-permission') as Promise<{
+        success: boolean;
+        value: 'ask' | 'always' | 'never';
+        error?: string;
+      }>,
+    setHostToolPermission: (value: 'ask' | 'always' | 'never') =>
+      ipcRenderer.invoke('settings:set-host-tool-permission', value) as Promise<{
+        success: boolean;
+        value?: 'ask' | 'always' | 'never';
+        error?: string;
+      }>,
     getMcpServers: async () => {
       try {
         const data = await ipcRenderer.invoke('mcp:config:list');
