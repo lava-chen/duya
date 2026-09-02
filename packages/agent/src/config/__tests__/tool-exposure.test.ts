@@ -128,3 +128,35 @@ describe('mcpExposureToExposeMode', () => {
     }
   });
 });
+
+describe('catalog guard level (plan 480 P2.5)', () => {
+  beforeEach(() => {
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'duya-tool-guard-'));
+    delete process.env.DUYA_CATALOG_GUARD;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    delete process.env.DUYA_CATALOG_GUARD;
+  });
+
+  it('defaults to warn', () => {
+    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('warn');
+  });
+
+  it('reads [tools] catalog_guard = "enforce"', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "enforce"\n', 'utf-8');
+    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('enforce');
+  });
+
+  it('ignores invalid guard values (keeps default)', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "block_all"\n', 'utf-8');
+    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('warn');
+  });
+
+  it('env DUYA_CATALOG_GUARD overrides config', () => {
+    fs.writeFileSync(path.join(tmpRoot, 'config.toml'), '[tools]\ncatalog_guard = "warn"\n', 'utf-8');
+    process.env.DUYA_CATALOG_GUARD = 'enforce';
+    expect(readToolExposureConfig(tmpRoot).catalogGuard).toBe('enforce');
+  });
+});
