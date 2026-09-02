@@ -2117,6 +2117,25 @@ calling `create` when the project already has a canvas returns `PROJECT_HAS_CANV
 with the existing canvas id. Callers should `switch` or `rename` instead of
 re-creating.
 
+### Pre-Drawing Canvas Check (prompt)
+
+The Conductor prompt at `packages/agent/src/tool/CanvasConductor/prompt.ts`
+contains a "Pre-Drawing Canvas Check" section that runs as a four-step
+decision tree before the first element tool call in a turn:
+
+1. `canvas_manage get_current` to read the canvas name + description.
+2. `canvas_get_context` or `canvas_list_elements` to inspect the layout
+   (or `canvas_find_empty_space` for the one-call empty-spot shortcut).
+3. Three-way rule: stay / switch / create, with explicit triggers.
+4. One-line user narration that names the canvas so the user sees where
+   new elements will land.
+
+The section is a precondition of the "no overlap" rule that follows it —
+skipping the check makes it impossible to honor overlap avoidance.
+The `switchTo=true` default on `create` is called out explicitly so the
+model understands it does not have to follow up with an extra `switch`
+unless it deliberately passed `switchTo=false`.
+
 ## Background SubAgent lifecycle
 
 - `SubagentTool` returns a launch receipt immediately with `background: true`
