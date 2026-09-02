@@ -2080,10 +2080,10 @@ remains a compact auxiliary component and cannot replace a multi-element scene.
 
 Conductor mode binds a chat session to one current canvas through
 `chat_sessions.conductor_canvas_id`, but the workspace may contain many
-canvases. The `canvas_manage` tool is the canvas-level control surface:
-`get_current`, `list`, `create`, `switch`, and `rename`. Element tools never
-accept a model-provided canvas ID; they resolve the current target from the
-shared `ToolUseContext.canvasTarget` object.
+canvases. The `canvas_manage` tool is the canvas-level control surface with
+six actions: `get_current`, `list`, `create`, `switch`, `rename`, `delete`.
+Element tools never accept a model-provided canvas ID; they resolve the
+current target from the shared `ToolUseContext.canvasTarget` object.
 
 A successful switch has three synchronized effects:
 
@@ -2097,6 +2097,25 @@ A successful switch has three synchronized effects:
 Canvas identity is therefore durable session state, while element state
 remains scoped to the selected canvas. Renderer state is never the sole source
 of truth for Agent target selection.
+
+### Target addressing: `canvasId` or `name`
+
+`switch`, `rename`, and `delete` accept either `canvasId` (stable, audit-friendly)
+or `name` (human-readable). When both are supplied, `canvasId` wins. Name
+resolution is scoped by the session's project path so two projects may each
+have a canvas named `Workbench` without collision. Three error codes cover
+the failure modes:
+
+- `INVALID_INPUT` — neither canvasId nor name provided (and no current canvas
+  bound for `rename` / `delete`).
+- `NOT_FOUND` — no canvas matches the supplied id or name.
+- `AMBIGUOUS_TARGET` — more than one canvas matches the supplied name in scope;
+  the caller must disambiguate with `canvasId`.
+
+`create` is unique: project-bound canvases are 1:1 with a project path, so
+calling `create` when the project already has a canvas returns `PROJECT_HAS_CANVAS`
+with the existing canvas id. Callers should `switch` or `rename` instead of
+re-creating.
 
 ## Background SubAgent lifecycle
 
