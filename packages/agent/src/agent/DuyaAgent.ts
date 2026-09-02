@@ -859,17 +859,26 @@ export class duyaAgent {
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
-    // Plan 480 P2.4: warn-only visibility guard. Snapshot of the tools
-    // declared on the current provider request (filled before each
-    // openLLMStream). Under catalog exposure MCP tools are intentionally
-    // absent from that set — a direct call to one is an undeclared call and
-    // is counted/logged (not blocked yet; see visibility-guard.ts).
+    // Plan 480 P2.4/P2.5: visibility guard. Snapshot of the tools declared on
+    // the current provider request (filled before each openLLMStream). Under
+    // catalog exposure MCP tools are intentionally absent from that set — a
+    // direct call to one is an undeclared call. 'warn' logs/counts it and
+    // lets it run; 'enforce' rejects it with a structured message pointing
+    // the model at tool_schema → tool_invoke (§8.3 gray-scale ladder).
     let declaredToolsForRequest = new Set<string>();
-    const guardEnabled =
-      readToolExposureConfig().exposure === 'catalog';
+    const exposureConfig = readToolExposureConfig();
+    const guardEnabled = exposureConfig.exposure === 'catalog';
+    const guardEnforce = guardEnabled && exposureConfig.catalogGuard === 'enforce';
     const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
       if (guardEnabled && !declaredToolsForRequest.has(toolName)) {
         recordUndeclaredCall(toolName);
+        if (guardEnforce) {
+          return {
+            allowed: false,
+            behavior: 'deny' as const,
+            message: `Tool \`${toolName}\` is not in this request's tool list (catalog exposure). Read its schema with \`tool_schema\` first, then invoke it via \`tool_invoke\`. Direct calls to undeclared tools are rejected.`,
+          };
+        }
       }
       return canUseTool(toolName, toolInput);
     };

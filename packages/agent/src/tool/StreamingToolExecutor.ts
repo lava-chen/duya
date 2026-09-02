@@ -174,6 +174,11 @@ export interface MessageUpdate {
 export interface CanUseToolDecision {
   allowed: boolean
   behavior?: 'allow' | 'ask' | 'deny'
+  /**
+   * Optional denial reason (plan 480 P2.5 visibility guard). Surfaced
+   * verbatim in the tool_use_error when behavior is deny.
+   */
+  message?: string
 }
 
 /**
@@ -1229,10 +1234,14 @@ export class StreamingToolExecutor {
       const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
 
       if (!canUse) {
+        const denyReason =
+          typeof canUseResult !== 'boolean' && canUseResult?.message
+            ? canUseResult.message
+            : `Permission denied: tool ${tool.block.name} cannot be used`;
         messages.push(
           createErrorMessage(
             tool.id,
-            `<tool_use_error>Permission denied: tool ${tool.block.name} cannot be used</tool_use_error>`,
+            `<tool_use_error>${denyReason.replace(/[<\n]/g, ' ')}</tool_use_error>`,
           ),
         )
         this.finalizeTool(tool, messages, undefined, 'Permission denied')

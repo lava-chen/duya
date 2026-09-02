@@ -36,6 +36,9 @@ import { resolveConfigRoot } from '../hooks/config.js';
 
 export type MCPExposureMode = 'full' | 'search' | 'catalog';
 
+/** Catalog-mode visibility guard level (plan 480 §8.3). */
+export type CatalogGuardMode = 'warn' | 'enforce';
+
 /** Map the user-facing policy to the registry ExposeMode used by MCP tools. */
 export function mcpExposureToExposeMode(
   exposure: MCPExposureMode,
@@ -60,9 +63,32 @@ export interface ToolExposureConfig {
    * callers that predate the three-value policy; prefer `exposure`.
    */
   onDemandDiscovery: boolean;
+  /**
+   * Visibility guard level under `exposure = 'catalog'` (plan 480 §8.3):
+   *   'warn'    (default) direct calls to undeclared tools execute but are
+   *             counted/logged (compliance measurement);
+   *   'enforce' direct calls are rejected with a structured message pointing
+   *             the model at tool_schema → tool_invoke (grok's hard harness).
+   * `[tools] catalog_guard = "warn"|"enforce"`; env DUYA_CATALOG_GUARD.
+   */
+  catalogGuard: CatalogGuardMode;
 }
 
-const DEFAULTS: ToolExposureConfig = { exposure: 'full', onDemandDiscovery: false };
+const DEFAULTS: ToolExposureConfig = {
+  exposure: 'full',
+  onDemandDiscovery: false,
+  catalogGuard: 'warn',
+};
+
+const GUARD_VALUES: readonly CatalogGuardMode[] = ['warn', 'enforce'];
+
+function parseGuard(value: unknown): CatalogGuardMode | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  return (GUARD_VALUES as readonly string[]).includes(normalized)
+    ? (normalized as CatalogGuardMode)
+    : undefined;
+}
 
 const EXPOSURE_VALUES: readonly MCPExposureMode[] = ['full', 'search', 'catalog'];
 
@@ -81,7 +107,11 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
     if (fs.existsSync(configPath)) {
       const raw = fs.readFileSync(configPath, 'utf-8');
       const doc = parse(raw) as {
-        tools?: { exposure?: unknown; on_demand_discovery?: unknown };
+        tools?: {
+          exposure?: unknown;
+          on_demand_discovery?: unknown;
+          catalog_guard?: unknown;
+        };
       };
       const toolsSection = doc?.tools;
       if (toolsSection) {
@@ -92,12 +122,19 @@ export function readToolExposureConfig(configRootOverride?: string): ToolExposur
           // Legacy boolean maps to the 'search' policy.
           config.exposure = 'search';
         }
+        const guard = parseGuard(toolsSection.catalog_guard);
+        if (guard !== undefined) config.catalogGuard = guard;
       }
     }
   } catch {
     // Config is optional — keep defaults.
   }
   // Env overrides for tests / headless runs (new key wins over legacy key).
+  const envGuard = process.env.DUYA_CATALOG_GUARD;
+  const envGuardMode =
+    envGuard !== undefined && envGuard !== '' ? parseGuard(envGuard) : undefined;
+  if (envGuardMode !== undefined) config.catalogGuard = envGuardMode;
+
   const envExposure = process.env.DUYA_TOOLS_EXPOSURE;
   const envExposureMode = envExposure !== undefined && envExposure !== ''
     ? parseExposure(envExposure)
