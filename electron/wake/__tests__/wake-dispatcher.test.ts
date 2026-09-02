@@ -14,6 +14,8 @@ import {
   removeQueuedWake,
   advanceUserTurn,
   currentTurnEpoch,
+  enqueueBroadcastWake,
+  enqueueInboundWake,
   _queuedWakeCount,
   type WakeDispatcherDeps,
 } from '../wake-dispatcher'
@@ -254,5 +256,109 @@ describe('wake-dispatcher (P2.1)', () => {
     expect(advanceUserTurn('other')).toBe(1)
     expect(currentTurnEpoch('s1')).toBe(2)
     expect(currentTurnEpoch('other')).toBe(1)
+  })
+})
+
+describe('wake sources (P2.3c inbound / P2.4 broadcast) + lane ordering (P2.2)', () => {
+  let fake: FakeDeps
+
+  beforeEach(() => {
+    _resetWakeDispatcherForTest()
+    fake = { lockedSessions: new Set(), runWakeCalls: [], failingTaskIds: new Set() }
+    _setWakeDispatcherDeps(makeDeps(fake))
+  })
+
+  // ---- P2.4 broadcast ----
+
+  it('enqueues one background wake per target session', async () => {
+    const outcomes = enqueueBroadcastWake({
+      broadcastId: 'b1',
+      text: 'Planned maintenance at 02:00.',
+      targetSessionIds: ['s1', 's2'],
+    })
+    expect(outcomes).toHaveLength(2)
+    await flush()
+    expect(fake.runWakeCalls).toHaveLength(2)
+    expect(fake.runWakeCalls.map((c) => c.sessionId).sort()).toEqual(['s1', 's2'])
+    expect(fake.runWakeCalls[0].prompt).toContain('Planned maintenance')
+    expect(fake.runWakeCalls[0].prompt).toContain('b1')
+  })
+
+  it('clamps broadcast text to 8000 chars', () => {
+    fake.lockedSessions.add('s1')
+    enqueueBroadcastWake({ broadcastId: 'big', text: 'x'.repeat(12_000), targetSessionIds: ['s1'] })
+    const removed = removeQueuedWake('s1', () => true)
+    expect(removed[0].payload.kind).toBe('broadcast')
+    if (removed[0].payload.kind === 'broadcast') {
+      expect(removed[0].payload.text.length).toBe(8000)
+    }
+  })
+
+  it('dedupes a re-sent broadcast to a still-queued session (merge)', () => {
+    fake.lockedSessions.add('s1')
+    const first = enqueueBroadcastWake({ broadcastId: 'b1', text: 'v1', targetSessionIds: ['s1'] })
+    const second = enqueueBroadcastWake({ broadcastId: 'b1', text: 'v2', targetSessionIds: ['s1'] })
+    expect(first[0]).toBe('added')
+    expect(second[0]).toBe('merged')
+    expect(_queuedWakeCount('s1')).toBe(1)
+    const removed = removeQueuedWake('s1', () => true)
+    if (removed[0].payload.kind === 'broadcast') expect(removed[0].payload.text).toBe('v2')
+  })
+
+  // ---- P2.3c connector.inbound (dispatcher layer) ----
+
+  it('enqueues a channel inbound as a background wake', async () => {
+    const outcome = enqueueInboundWake('s1', { envelopeId: 'env-9', text: 'hello from telegram' })
+    expect(outcome).toBe('added')
+    await flush()
+    expect(fake.runWakeCalls).toHaveLength(1)
+    expect(fake.runWakeCalls[0].sessionId).toBe('s1')
+    expect(fake.runWakeCalls[0].prompt).toContain('hello from telegram')
+    expect(fake.runWakeCalls[0].prompt).toContain('env-9')
+  })
+
+  it('merges duplicate inbound envelopes while queued', async () => {
+    fake.lockedSessions.add('s1')
+    enqueueInboundWake('s1', { envelopeId: 'env-1', text: 'hi' })
+    const second = enqueueInboundWake('s1', { envelopeId: 'env-1', text: 'hi again' })
+    expect(second).toBe('merged')
+    expect(_queuedWakeCount('s1')).toBe(1)
+  })
+
+  // ---- P2.2 lane ordering: user lane outranks background inside one drain ----
+
+  it('drains a parked user wake before a parked background wake (lane order)', async () => {
+    fake.lockedSessions.add('s1')
+    enqueueWakeItemForSession('s1', completionItem('bg-task')) // arrives first
+    enqueueWakeItemForSession('s1', {
+      id: 'user:1',
+      source: 'user.message',
+      lane: 'user',
+      agentId: 's1',
+      enqueuedAtMs: Date.now(),
+      payload: { kind: 'user', text: 'what is the status?' },
+    })
+    expect(_queuedWakeCount('s1')).toBe(2)
+
+    fake.lockedSessions.delete('s1')
+    notifySessionIdle('s1')
+    await flush()
+    expect(fake.runWakeCalls).toHaveLength(2)
+    // Strict lane order: the user item runs first even though it arrived second.
+    expect(fake.runWakeCalls[0].prompt).toContain('what is the status?')
+    expect(fake.runWakeCalls[1].prompt).toContain('bg-task')
+  })
+
+  it('runs two same-lane items in FIFO order', async () => {
+    fake.lockedSessions.add('s1')
+    enqueueInboundWake('s1', { envelopeId: 'e1', text: 'first' })
+    enqueueInboundWake('s1', { envelopeId: 'e2', text: 'second' })
+    fake.lockedSessions.delete('s1')
+    notifySessionIdle('s1')
+    await flush()
+    expect(fake.runWakeCalls.map((c) => c.prompt)).toEqual([
+      expect.stringContaining('first'),
+      expect.stringContaining('second'),
+    ])
   })
 })
