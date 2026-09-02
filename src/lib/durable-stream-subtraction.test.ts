@@ -146,4 +146,136 @@ describe('subtractDurableStreamingEvents', () => {
     });
     expect(out).toBe(events);
   });
+
+  it('drops trailing text already finalized in the durable last-assistant message', () => {
+    // Plan 447 known limitation: a finalized text-only assistant block has
+    // no id to anchor a cut, so the trailing text events survived as
+    // duplicates of the durable row. Now: when the trailing text exactly
+    // matches the durable finalAssistantText, drop it.
+    const finalText = '这是一个非常具体的目标。让我帮你拆解这四个方向各自需要验证什么、现状如何、以及接下来怎么做。';
+    const events = [
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      evText(finalText),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(['tu_1']),
+      finalAssistantText: finalText,
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('keeps trailing text that is shorter than the durable final text', () => {
+    // Stream is mid-flight: durable shows the FULL reply, stream only has
+    // a prefix so far. Keep the streaming text so the live row keeps
+    // typing; a future reload will catch up.
+    const durableText = '完成拆分：第一阶段验证消息渲染。';
+    const events = [
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      evText('完成拆分：第一阶段'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(['tu_1']),
+      finalAssistantText: durableText,
+    });
+    expect(out).toEqual([evText('完成拆分：第一阶段')]);
+  });
+
+  it('keeps trailing text that is longer than the durable final text (durability lag)', () => {
+    // The durability layer hasn't replayed the assistant message yet.
+    // Don't second-guess — preserve the streaming text as the live tail.
+    const durableText = '旧版回答';
+    const events = [
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      evText('新版回答，比旧版多了一些内容'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(['tu_1']),
+      finalAssistantText: durableText,
+    });
+    expect(out).toEqual([evText('新版回答，比旧版多了一些内容')]);
+  });
+
+  it('does not drop trailing text when durable has no assistant text', () => {
+    // finalAssistantText === '' means we don't have a reliable snapshot of
+    // the last assistant message's body — leave the live tail alone.
+    const events = [
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      evText('live typing…'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(['tu_1']),
+      finalAssistantText: '',
+    });
+    expect(out).toEqual([evText('live typing…')]);
+  });
+
+  it('drops trailing text and keeps a live tool_use event after it', () => {
+    // Round N finished and got persisted; round N+1 just started with a
+    // new tool_use. The trailing text belongs to round N's durable row;
+    // the tool_use is the new round's live tail.
+    const finalText = '已管理 1 个任务';
+    const events = [
+      evToolUse('tu_1'),
+      evToolResult('tu_1'),
+      evText(finalText),
+      evToolUse('tu_2'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(['tu_1']),
+      toolResultIds: new Set(['tu_1']),
+      finalAssistantText: finalText,
+    });
+    expect(out).toEqual([evToolUse('tu_2')]);
+  });
+});
+
+describe('extractDurableToolIds: finalAssistantText', () => {
+  it('returns "" when no assistant message exists', () => {
+    const ids = extractDurableToolIds([
+      { id: 'u1', role: 'user', content: 'hello', timestamp: 0 },
+    ]);
+    expect(ids.finalAssistantText).toBe('');
+  });
+
+  it('captures the last assistant text blocks joined by \\n\\n', () => {
+    const ids = extractDurableToolIds([
+      { id: 'u1', role: 'user', content: 'hi', timestamp: 0 },
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '第一段' },
+          { type: 'text', text: '第二段' },
+        ],
+        timestamp: 0,
+      },
+    ]);
+    expect(ids.finalAssistantText).toBe('第一段\n\n第二段');
+  });
+
+  it('only keeps the text from the LAST assistant message', () => {
+    const ids = extractDurableToolIds([
+      {
+        id: 'a1',
+        role: 'assistant',
+        content: [{ type: 'text', text: '旧回答' }],
+        timestamp: 0,
+      },
+      {
+        id: 'a2',
+        role: 'assistant',
+        content: [{ type: 'text', text: '新回答' }],
+        timestamp: 1,
+      },
+    ]);
+    expect(ids.finalAssistantText).toBe('新回答');
+  });
 });

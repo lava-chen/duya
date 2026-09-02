@@ -13,6 +13,12 @@
 // both sides). Text/thinking have no ids but always sit inside that prefix,
 // so cutting there removes exactly the finalized rounds and keeps the live
 // tail (unfinalized text/thinking, running tools).
+//
+// Trailing-text fallback: a finalized text-only assistant block (no tool
+// round in the same turn) cannot be cut by id. We additionally compare the
+// concatenated text after the cut against the last durable assistant
+// message's text — if they match exactly, drop the trailing text events
+// too so the same reply doesn't render twice for a frame.
 
 import type { StreamingEvent } from './stream-session-manager';
 import type { Message } from '@/types';
@@ -22,19 +28,31 @@ export interface DurableToolIds {
   toolUseIds: Set<string>;
   /** tool_call ids present in durable tool-result rows. */
   toolResultIds: Set<string>;
+  /**
+   * Concatenated text from the LAST durable assistant message (string
+   * content, or text blocks joined by '\n\n'). Empty when the transcript
+   * has no assistant message yet or its text cannot be reconstructed.
+   * Optional for backwards compatibility — callers that don't need the
+   * trailing-text fallback may omit it.
+   */
+  finalAssistantText?: string;
 }
 
 /**
- * Extract the tool ids already persisted in the store's message rows for a
- * session. Mirrors the extraction in stream-session-manager's
- * `registerLoadedMessages`, but operates on mapped store Messages.
+ * Extract the tool ids and the trailing assistant text already persisted
+ * in the store's message rows for a session. Mirrors the extraction in
+ * stream-session-manager's `registerLoadedMessages`, but operates on
+ * mapped store Messages.
  */
 export function extractDurableToolIds(messages: readonly Message[]): DurableToolIds {
   const toolUseIds = new Set<string>();
   const toolResultIds = new Set<string>();
+  let finalAssistantText = '';
+  let sawAssistant = false;
 
   for (const msg of messages) {
     if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const textParts: string[] = [];
       for (const block of msg.content) {
         if (
           block
@@ -43,7 +61,18 @@ export function extractDurableToolIds(messages: readonly Message[]): DurableTool
           && typeof (block as Record<string, unknown>).id === 'string'
         ) {
           toolUseIds.add((block as Record<string, unknown>).id as string);
+        } else if (
+          block
+          && typeof block === 'object'
+          && block.type === 'text'
+          && typeof (block as Record<string, unknown>).text === 'string'
+        ) {
+          textParts.push(String((block as Record<string, unknown>).text));
         }
+      }
+      if (textParts.length > 0) {
+        finalAssistantText = textParts.join('\n\n');
+        sawAssistant = true;
       }
     } else if (msg.role === 'tool') {
       const toolCallId = msg.parentToolCallId ?? msg.tool_call_id;
@@ -51,9 +80,15 @@ export function extractDurableToolIds(messages: readonly Message[]): DurableTool
         toolResultIds.add(toolCallId);
       }
     }
+    // String content: rare on assistant rows (the IPC parser usually maps
+    // them through arrays); fall through with the previous value.
   }
 
-  return { toolUseIds, toolResultIds };
+  // Drop the text marker if no assistant message carried any reconstructable
+  // text — keeps `finalAssistantText === ''` honest for the comparison.
+  if (!sawAssistant) finalAssistantText = '';
+
+  return { toolUseIds, toolResultIds, finalAssistantText };
 }
 
 /**
@@ -65,7 +100,11 @@ export function subtractDurableStreamingEvents(
   events: readonly StreamingEvent[],
   durable: DurableToolIds,
 ): StreamingEvent[] {
-  if (durable.toolUseIds.size === 0 && durable.toolResultIds.size === 0) {
+  if (
+    durable.toolUseIds.size === 0
+    && durable.toolResultIds.size === 0
+    && !durable.finalAssistantText
+  ) {
     return events as StreamingEvent[];
   }
 
@@ -97,5 +136,25 @@ export function subtractDurableStreamingEvents(
     if (e.type === 'tool_result' && durable.toolResultIds.has(e.toolResult.tool_use_id)) continue;
     out.push(e);
   }
+
+  // Trailing-text fallback: when the durable last-assistant text is fully
+  // captured by the remaining text events after the cut, drop those text
+  // events too so the same reply doesn't render as both a durable row and
+  // a live-stream row for a frame before `isStreaming` flips off.
+  if (durable.finalAssistantText) {
+    const trailingText = concatTrailingText(out);
+    if (trailingText.length > 0 && trailingText === durable.finalAssistantText) {
+      return out.filter((e) => e.type !== 'text');
+    }
+  }
+
   return out;
+}
+
+function concatTrailingText(events: readonly StreamingEvent[]): string {
+  const parts: string[] = [];
+  for (const e of events) {
+    if (e.type === 'text' && e.content) parts.push(e.content);
+  }
+  return parts.join('');
 }
