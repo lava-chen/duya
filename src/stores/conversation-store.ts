@@ -286,17 +286,43 @@ export function optimisticBucketKey(m: Pick<Message, 'role' | 'content' | 'times
 }
 
 /**
+ * True when a local user row and a persisted user row are the same logical
+ * send. Content must match exactly; the timestamps only need to be within
+ * `OPTIMISTIC_DEDUPE_WINDOW_MS` of each other.
+ *
+ * This is a real distance check rather than the bucket-index comparison that
+ * `optimisticBucketKey` performs. Bucketing on `Math.round(ts / WINDOW)` has a
+ * discontinuity at every window edge, so a DB row 1 ms away from its optimistic
+ * twin lands in a *different* bucket whenever the pair straddles a multiple of
+ * the window — and the optimistic copy then survives as a visible duplicate.
+ */
+function isSameLogicalUserSend(a: Message, b: Message): boolean {
+  if (a.role !== 'user' || b.role !== 'user') return false;
+  const ac = typeof a.content === 'string' ? a.content : null;
+  const bc = typeof b.content === 'string' ? b.content : null;
+  // Block-shaped content has no cheap structural identity; fall back to the
+  // shared bucket key so behaviour is unchanged for that rare case.
+  if (ac === null || bc === null) return optimisticBucketKey(a) === optimisticBucketKey(b);
+  if (ac !== bc) return false;
+  const at = typeof a.timestamp === 'number' ? a.timestamp : 0;
+  const bt = typeof b.timestamp === 'number' ? b.timestamp : 0;
+  return Math.abs(at - bt) <= OPTIMISTIC_DEDUPE_WINDOW_MS;
+}
+
+/**
  * Pure helper for `loadThreadMessages`'s streaming-session merge branch.
  *
- * Returns the merged list (DB rows + any local-only optimistic user
- * message) plus counts for diagnostics. The DB rows win when an
- * optimistic entry matches by (role, content, timestamp-window); the
- * optimistic copy is dropped so the UI never renders the same user
- * message twice (regression bug: optimistic UUIDs never match the
- * DB-assigned UUID, so a pure id-diff let duplicates through).
+ * Returns the merged list (DB rows + any user message that is genuinely still
+ * local-only) plus counts for diagnostics. The DB rows always win.
  *
- * Assistant, system, and tool blocks are kept untouched — their
- * dedupe lives in stream-session-manager.registerLoadedMessages.
+ * IMPORTANT — `local` is the WHOLE store transcript (`messages[threadId]`),
+ * not just the in-flight optimistic send. Every row in it that the DB already
+ * has must therefore be dropped, or the merge re-appends the conversation to
+ * itself. Only user rows can legitimately be local-only: `addMessage` has
+ * exactly two call sites (App.tsx send + tool-timeout retry) and both push a
+ * user message, while assistant / tool / system content reaches the store
+ * solely through DB rows and live assistant output renders from
+ * StreamSessionManager's event cache instead of from here.
  *
  * Exported for unit testing; see conversation-store.mergeInFlight.test.ts.
  */
@@ -304,18 +330,21 @@ export function mergeInFlightOptimisticMessages(
   persisted: Message[],
   local: Message[],
 ): { merged: Message[]; droppedOptimistic: number; keptOptimistic: number } {
-  const persistedKeys = new Set(persisted.map(optimisticBucketKey));
+  const persistedUsers = persisted.filter((m) => m.role === 'user');
   const merged = [...persisted];
   let droppedOptimistic = 0;
   let keptOptimistic = 0;
   for (const m of local) {
-    const isOptimisticUser =
-      m.metadata?.optimistic === true && m.role === 'user';
-    if (isOptimisticUser && persistedKeys.has(optimisticBucketKey(m))) {
+    // Non-user local rows are always echoes of rows `persisted` already
+    // contains. Appending them duplicated the entire transcript on every
+    // forced reload of a streaming session, growing by one full copy per
+    // reload until the run ended.
+    if (m.role !== 'user') continue;
+    if (persistedUsers.some((p) => isSameLogicalUserSend(p, m))) {
       droppedOptimistic++;
       continue;
     }
-    if (isOptimisticUser) keptOptimistic++;
+    keptOptimistic++;
     merged.push(m);
   }
   return { merged, droppedOptimistic, keptOptimistic };

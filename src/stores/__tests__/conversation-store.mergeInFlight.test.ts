@@ -79,10 +79,12 @@ describe('mergeInFlightOptimisticMessages', () => {
     expect(keptOptimistic).toBe(1);
   });
 
-  it('keeps a non-optimistic local message even if its id matches a DB row (e.g. SSE re-emit)', () => {
-    // SSE re-emits a known id; it has no optimistic flag and is not a
-    // user message, so the helper must not touch it. This guards the
-    // "only user-role optimistic entries are eligible for dedupe" rule.
+  it('drops a local non-user row the DB already has (regression: whole transcript duplicated)', () => {
+    // `local` is the WHOLE store transcript, so every assistant / tool row in
+    // it is an echo of a row the DB read already returned. The old contract
+    // claimed "assistant dedupe lives in registerLoadedMessages" — but that
+    // function dedupes *streaming events*, never store rows, so nothing
+    // stopped these echoes from stacking up.
     const ts = 1_700_000_000_000;
     const persisted: Message[] = [
       assistantMsg('shared-id', 'text', ts),
@@ -92,9 +94,7 @@ describe('mergeInFlightOptimisticMessages', () => {
     ];
 
     const { merged } = mergeInFlightOptimisticMessages(persisted, local);
-    // Assistant block dedupe lives elsewhere (registerLoadedMessages);
-    // this helper leaves it alone.
-    expect(merged.map((m) => m.id)).toEqual(['shared-id', 'shared-id']);
+    expect(merged.map((m) => m.id)).toEqual(['shared-id']);
   });
 
   it('does not confuse two distinct optimistic user messages sent close together', () => {
@@ -116,26 +116,27 @@ describe('mergeInFlightOptimisticMessages', () => {
     expect(keptOptimistic).toBe(2);
   });
 
-  it('treats timestamps inside the same window as equivalent and outside as distinct', () => {
-    // Boundary check: messages 1s apart with the same content land in
-    // the same bucket (1s < 5s window). 12s apart they are in different
-    // buckets and must NOT be deduped. (8s/9s would still round to the
-    // same bucket index because Math.round rounds .5 up, so we use
-    // 12s/13s to clearly cross the boundary.)
+  it('dedupes user rows by true timestamp distance, not bucket index', () => {
+    // The merge compares |Δt| against the window instead of comparing
+    // Math.round(ts / window) bucket indices. Bucket indices jump at every
+    // window edge, so a DB row 1s from its optimistic twin used to land in a
+    // different bucket (and survive as a duplicate) whenever the pair
+    // straddled a multiple of 5s — which is exactly the pair below.
     expect(OPTIMISTIC_DEDUPE_WINDOW_MS).toBe(5_000);
     const base = 1_700_000_000_000;
-    const inside = userMsg('a', 'same', base, { optimistic: true });
-    const outside = userMsg('b', 'same', base + 12_000, { optimistic: true });
-    const dbInWindow = userMsg('db-1', 'same', base + 1_000);
-    const dbOutOfWindow = userMsg('db-2', 'same', base + 13_000);
 
-    const insideResult = mergeInFlightOptimisticMessages([dbInWindow], [inside]);
-    expect(insideResult.droppedOptimistic).toBe(1);
-    expect(insideResult.keptOptimistic).toBe(0);
+    const straddling = userMsg('a', 'same', base + 12_000, { optimistic: true });
+    const dbStraddling = userMsg('db-1', 'same', base + 13_000); // 1s apart, different bucket
+    const straddlingResult = mergeInFlightOptimisticMessages([dbStraddling], [straddling]);
+    expect(straddlingResult.droppedOptimistic).toBe(1);
+    expect(straddlingResult.keptOptimistic).toBe(0);
 
-    const outsideResult = mergeInFlightOptimisticMessages([dbOutOfWindow], [outside]);
-    expect(outsideResult.droppedOptimistic).toBe(0);
-    expect(outsideResult.keptOptimistic).toBe(1);
+    // Genuinely far apart (> window): a real re-send, must be preserved.
+    const farApart = userMsg('b', 'same', base, { optimistic: true });
+    const dbFarApart = userMsg('db-2', 'same', base + 20_000);
+    const farResult = mergeInFlightOptimisticMessages([dbFarApart], [farApart]);
+    expect(farResult.droppedOptimistic).toBe(0);
+    expect(farResult.keptOptimistic).toBe(1);
   });
 
   it('returns the persisted list untouched when local is empty', () => {
@@ -152,10 +153,10 @@ describe('mergeInFlightOptimisticMessages', () => {
     expect(keptOptimistic).toBe(0);
   });
 
-  it('does not treat non-user optimistic messages as eligible for dedupe', () => {
-    // Future-proofing: even if a non-user message somehow carries the
-    // optimistic flag (it should not, but defensively), it must NOT be
-    // deduped — only user messages go through the content-window logic.
+  it('never carries a non-user local row over, flagged optimistic or not', () => {
+    // Only user rows are ever created locally ahead of the DB. An assistant
+    // row in `local` is by definition an echo of a persisted row, so it must
+    // not be appended even if it somehow carries the optimistic flag.
     const ts = 1_700_000_000_000;
     const persisted: Message[] = [
       assistantMsg('db-asst', 'reply', ts),
@@ -164,7 +165,41 @@ describe('mergeInFlightOptimisticMessages', () => {
       { id: 'opt-asst', role: 'assistant', content: 'reply', timestamp: ts, metadata: { optimistic: true } },
     ];
     const { merged } = mergeInFlightOptimisticMessages(persisted, local);
-    expect(merged).toHaveLength(2);
+    expect(merged.map((m) => m.id)).toEqual(['db-asst']);
+  });
+
+  it('does not duplicate the transcript when local mirrors the DB rows', () => {
+    // The screenshot bug: a forced reload of a streaming session passed the
+    // full store transcript as `local`, and every row was re-appended.
+    const ts = 1_700_000_000_000;
+    const dbRows: Message[] = [
+      userMsg('u1', '我今天给自己的目标就是…', ts),
+      assistantMsg('a1', '这是一个非常具体的目标…', ts + 1_000),
+      { id: 't1', role: 'tool', content: '[completed] todo', timestamp: ts + 2_000 },
+    ];
+    const { merged } = mergeInFlightOptimisticMessages(
+      dbRows,
+      dbRows.map((r) => ({ ...r })),
+    );
+    expect(merged.map((m) => m.id)).toEqual(['u1', 'a1', 't1']);
+  });
+
+  it('stays stable across repeated reloads instead of growing per reload', () => {
+    // Each reload fed the previous (already doubled) array back in as `local`,
+    // so the transcript grew 2N -> 3N -> 4N. The user saw one extra copy of
+    // every message per session switch-back.
+    const ts = 1_700_000_000_000;
+    const dbRows: Message[] = [
+      userMsg('u1', '目标', ts),
+      assistantMsg('a1', '拆解', ts + 1_000),
+    ];
+    let store: Message[] = dbRows.map((r) => ({ ...r }));
+    const counts: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      store = mergeInFlightOptimisticMessages(dbRows, store).merged;
+      counts.push(store.length);
+    }
+    expect(counts).toEqual([2, 2, 2, 2]);
   });
 });
 
