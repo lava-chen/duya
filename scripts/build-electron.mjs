@@ -39,7 +39,12 @@ async function buildElectron() {
       'chromium-bidi/lib/cjs/cdp/CdpConnection',
     ],
     sourcemap: true,
-    minify: false,
+    // Production bundle is minified for cold-start latency. Dev runs
+    // (`npm run electron:dev`) skip this script entirely and run main.ts
+    // via tsx, so the minified CJS here only affects the packaged app —
+    // debug sessions still see unminified stack traces via the .map files.
+    minify: true,
+    treeShaking: true,
     alias: {
       // Resolve workspace plugin-core from this checkout (worktree-safe);
       // node_modules junctions would otherwise pin the primary checkout.
