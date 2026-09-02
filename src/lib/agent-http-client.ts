@@ -104,6 +104,19 @@ export class AgentServerClient {
   private eventHandlers = new Map<string, Set<EventHandler>>();
   private receivedMessageIds = new Map<string, Set<string>>();
 
+  /**
+   * Per-session reconnect attempts. Caps the auto-reconnect budget so a
+   * permanently-dead server does not produce an infinite retry loop in the
+   * renderer; once exhausted, callers receive a `chat:error` and the user
+   * can decide to retry manually.
+   */
+  private static readonly MAX_RECONNECT_ATTEMPTS = 5;
+  private static readonly INITIAL_RECONNECT_DELAY_MS = 500;
+  private static readonly MAX_RECONNECT_DELAY_MS = 8_000;
+  private static readonly RECONNECT_BACKOFF_MULTIPLIER = 2;
+  private reconnectAttempts = new Map<string, number>();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   async getBaseUrl(forceRefresh = false): Promise<string | null> {
     if (!forceRefresh && this.baseUrl) return this.baseUrl;
 
@@ -462,6 +475,14 @@ export class AgentServerClient {
       controller.abort();
       this.abortControllers.delete(sessionId);
     }
+    // Drop any pending reconnect for the cancelled session — the user has
+    // explicitly given up on this stream.
+    const timer = this.reconnectTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.reconnectTimers.delete(sessionId);
+    }
+    this.reconnectAttempts.delete(sessionId);
   }
 
   /**
@@ -561,11 +582,11 @@ export class AgentServerClient {
         console.log('[agent-http-client] Attach cancelled:', sessionId);
       } else {
         console.error('[agent-http-client] Attach stream error:', error);
-        this.emit(sessionId, {
-          type: 'chat:error',
-          sessionId,
-          data: { message: error instanceof Error ? error.message : String(error) },
-        });
+        // Network error during an in-flight attach usually means the Agent
+        // Server crashed or restarted on a new port. Schedule a reconnect
+        // so the renderer keeps tailing the live stream instead of
+        // immediately surfacing chat:error to the user.
+        this.scheduleAttachReconnect(sessionId, lastEventId);
       }
     } finally {
       this.abortControllers.delete(sessionId);
@@ -573,6 +594,58 @@ export class AgentServerClient {
         this.emit(sessionId, { type: 'stream:end', sessionId, data: {} });
       }
     }
+  }
+
+  /**
+   * Schedule an exponential-backoff reconnect for `attachToLiveStream`. The
+   * reconnect stops when either (a) the Agent Server returns a terminal
+   * status (session finished, 409 conflict) — the manager then reads the
+   * persisted transcript — or (b) MAX_RECONNECT_ATTEMPTS is exhausted.
+   */
+  private scheduleAttachReconnect(sessionId: string, lastEventId: number): void {
+    // Cancel any pending reconnect for this session — only the most recent
+    // schedule wins.
+    const existing = this.reconnectTimers.get(sessionId);
+    if (existing) clearTimeout(existing);
+
+    const attempt = (this.reconnectAttempts.get(sessionId) ?? 0) + 1;
+    this.reconnectAttempts.set(sessionId, attempt);
+
+    if (attempt > AgentServerClient.MAX_RECONNECT_ATTEMPTS) {
+      console.warn('[agent-http-client] Attach reconnect budget exhausted, surfacing chat:error', {
+        sessionId,
+        attempt,
+      });
+      this.reconnectAttempts.delete(sessionId);
+      this.emit(sessionId, {
+        type: 'chat:error',
+        sessionId,
+        data: { message: 'Agent Server unavailable after multiple reconnect attempts' },
+      });
+      return;
+    }
+
+    const delay = Math.min(
+      AgentServerClient.INITIAL_RECONNECT_DELAY_MS *
+        Math.pow(AgentServerClient.RECONNECT_BACKOFF_MULTIPLIER, attempt - 1),
+      AgentServerClient.MAX_RECONNECT_DELAY_MS,
+    );
+    console.log('[agent-http-client] Scheduling attach reconnect', { sessionId, attempt, delayMs: delay });
+
+    const timer = setTimeout(async () => {
+      this.reconnectTimers.delete(sessionId);
+      // Force-refresh base URL — Agent Server may have restarted on a new port.
+      this.baseUrl = null;
+      try {
+        await this.attachToLiveStream(sessionId, lastEventId);
+        // Success path: attachToLiveStream will continue tailing. Reset
+        // counter on next success so the next failure starts at attempt 1.
+        this.reconnectAttempts.delete(sessionId);
+      } catch {
+        // attachToLiveStream's own catch path will reschedule.
+      }
+    }, delay);
+    this.reconnectTimers.set(sessionId, timer);
   }
 
   /**
