@@ -621,6 +621,87 @@ const SSE_KEEPALIVE_MS = 15_000;
  *
  * @returns 停止保活的函数（req 关闭时也会自动停止）
  */
+/**
+ * SSE 写入包装器：当渲染端慢（背景标签页、IPC 桥被阻塞）时，未确认的
+ * `res.write` 会让 Node 把数据堆在内部的 send 缓冲区里，最终阻塞 socket。
+ *
+ * 策略：
+ * 1. 调用 `sseWrite(res, chunk)` 时若 `res.write()` 返回 false，标记
+ *    `backpressured = true`，同时暂停 `child.stdout` 与 keep-alive 写入器
+ *    —— 这样 worker 端不会继续产出事件，避免缓冲区无限增长。
+ * 2. 在 `res.once('drain', ...)` 恢复时，重置标志、resume `child.stdout`、
+ *    由调用方在 drain 回调里重新写出未发送的事件。
+ *
+ * 注意：keep-alive 的写入同样受 backpressure 控制，drain 后只需自然恢复
+ * 周期；不需要手动补发注释行（之前丢的就是噪音，丢了无影响）。
+ */
+function createBackpressureController(
+  child: ChildProcess,
+  keepAliveStop: () => void,
+): {
+  isBackpressured: () => boolean;
+  pause: () => void;
+  resume: () => void;
+} {
+  let backpressured = false;
+
+  return {
+    isBackpressured: () => backpressured,
+    pause: () => {
+      if (backpressured) return;
+      backpressured = true;
+      // Pause worker stdout so we stop consuming frames while the renderer
+      // catches up. Worker continues to execute and allocate but the read
+      // side of the duplex pipe is paused, capping the in-memory buffer
+      // around the readable stream's highWaterMark (~16 KiB).
+      try {
+        child.stdout?.pause();
+      } catch {
+        // child.stdout may already be closed
+      }
+      // Halt keep-alive writes while backpressured; they would just queue
+      // up against the same bottleneck and we want to free the buffer.
+      keepAliveStop();
+    },
+    resume: () => {
+      if (!backpressured) return;
+      backpressured = false;
+      try {
+        child.stdout?.resume();
+      } catch {
+        // ignore — close handler will tear down the listener
+      }
+      // Note: caller is responsible for restarting keep-alive if desired.
+      // We don't restart it here because the SSE stream is usually on its
+      // way to close once drain fires for a heavily backpressured client.
+    },
+  };
+}
+
+/**
+ * Drain-aware SSE write. Returns true if the chunk was accepted by the
+ * socket; false if backpressure was applied. The caller MUST track the
+ * returned false and resume processing once `res.once('drain')` fires.
+ */
+function sseWrite(
+  res: http.ServerResponse,
+  chunk: string,
+  bp: { isBackpressured: () => boolean; pause: () => void; resume: () => void },
+  reschedule: () => void,
+): boolean {
+  if (res.writableEnded || res.destroyed) return false;
+  const ok = res.write(chunk);
+  if (!ok) {
+    bp.pause();
+    res.once('drain', () => {
+      bp.resume();
+      reschedule();
+    });
+    return false;
+  }
+  return true;
+}
+
 function startSSEKeepAlive(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -628,20 +709,28 @@ function startSSEKeepAlive(
   // 兜底：即使外层 server.timeout 被改回非零值，本次响应也不受空闲超时影响
   res.setTimeout(0);
 
+  let stopped = false;
+  const stop = (): void => {
+    stopped = true;
+    clearInterval(timer);
+  };
+
   const timer = setInterval(() => {
-    if (res.writableEnded || res.destroyed) {
-      clearInterval(timer);
+    if (stopped || res.writableEnded || res.destroyed) {
+      stop();
       return;
     }
+    // Skip writes while the socket is backpressured — they would just queue
+    // against the same bottleneck. Drain handler will not restart this
+    // timer (the live SSE path usually closes soon after drain), but a
+    // future reschedule() from sseWrite() will re-arm a fresh timer.
     try {
       res.write(': keep-alive\n\n');
     } catch {
-      // 套接字已关闭，停止写入
-      clearInterval(timer);
+      stop();
     }
   }, SSE_KEEPALIVE_MS);
 
-  const stop = (): void => clearInterval(timer);
   req.on('close', stop);
   return stop;
 }
