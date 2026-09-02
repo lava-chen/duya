@@ -31,9 +31,12 @@ interface CanvasManageResult {
 export const definition: Tool = {
   name: TOOL_NAME,
   description:
-    'Manage the session\'s canvas target. Use get_current to identify the bound canvas, list to discover other canvases, ' +
-    'create to make a named canvas, switch to move all later canvas tool calls to another canvas, rename to give a canvas a meaningful name, ' +
-    'and delete to permanently remove a canvas. ' +
+    'Manage the session\'s canvas target. Six actions: ' +
+    'get_current (return the bound canvas), list (discover canvases), ' +
+    'create (make a new canvas; fails with PROJECT_HAS_CANVAS when the project already has one), ' +
+    'switch (move all later canvas tool calls to another canvas, addressable by canvasId or name), ' +
+    'rename (give the current canvas a new name; canvasId is optional, defaults to the current canvas), ' +
+    'and delete (permanently remove a canvas, addressable by canvasId, name, or the current canvas). ' +
     'Switches are durable and also move the visible Conductor panel.',
   input_schema: {
     type: 'object',
@@ -45,11 +48,11 @@ export const definition: Tool = {
       },
       canvasId: {
         type: 'string',
-        description: 'Target canvas ID. Required for switch and delete; optional for rename (defaults to the current canvas).',
+        description: 'Target canvas ID. Required for switch and rename; optional for delete (defaults to the current canvas). When both canvasId and name are supplied, canvasId wins.',
       },
       name: {
         type: 'string',
-        description: 'Canvas name. Required for create and rename.',
+        description: 'For create and rename: the new canvas name. For switch and delete: an alternative way to address the target canvas (will fail with AMBIGUOUS_TARGET if more than one canvas matches).',
       },
       description: {
         type: 'string',
@@ -74,11 +77,6 @@ function errorResult(message: string): ToolResult {
   };
 }
 
-function requireTrimmedString(input: Record<string, unknown>, key: 'canvasId' | 'name'): string | null {
-  const value = input[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
-}
-
 export const executor: ToolExecutor = {
   async execute(
     input: Record<string, unknown>,
@@ -88,8 +86,9 @@ export const executor: ToolExecutor = {
     if (!context) return noContextResult(TOOL_NAME);
 
     const action = input.action as CanvasManageAction;
-    if (!['get_current', 'list', 'create', 'switch', 'rename'].includes(action)) {
-      return errorResult('action must be get_current, list, create, switch, rename, or delete');
+    const CANVAS_MANAGE_ACTIONS = ['get_current', 'list', 'create', 'switch', 'rename', 'delete'] as const;
+    if (!CANVAS_MANAGE_ACTIONS.includes(action as (typeof CANVAS_MANAGE_ACTIONS)[number])) {
+      return errorResult(`action must be one of: ${CANVAS_MANAGE_ACTIONS.join(', ')}`);
     }
 
     let currentCanvasId: string | undefined;
@@ -101,29 +100,69 @@ export const executor: ToolExecutor = {
 
     const payload: Record<string, unknown> = { action, currentCanvasId };
 
-    if (action === 'switch') {
-      const canvasId = requireTrimmedString(input, 'canvasId');
-      if (!canvasId) return errorResult('canvasId is required for switch');
-      payload.canvasId = canvasId;
-    }
+    // Per-action payload assembly — each action declares exactly which
+    // fields it needs (and which are mutually exclusive). The wire
+    // protocol stays the same; this is just type-safe, exhaustive
+    // branching that makes the canvasId-vs-name rules unambiguous.
+    type PayloadKey = 'canvasId' | 'name' | 'description' | 'switchTo';
+    const optionalString = (key: PayloadKey): string | null => {
+      const value = input[key];
+      return typeof value === 'string' && value.trim() ? value.trim() : null;
+    };
 
-    if (action === 'create' || action === 'rename') {
-      const name = requireTrimmedString(input, 'name');
-      if (!name) return errorResult(`name is required for ${action}`);
-      payload.name = name;
-    }
-
-    if (action === 'rename' || action === 'delete') {
-      const canvasId = requireTrimmedString(input, 'canvasId') ?? currentCanvasId;
-      if (!canvasId) return errorResult(`No current canvas is bound; provide canvasId for ${action}`);
-      payload.canvasId = canvasId;
-    }
-
-    if (action === 'create') {
-      if (typeof input.description === 'string' && input.description.trim()) {
-        payload.description = input.description.trim();
+    switch (action) {
+      case 'get_current':
+      case 'list':
+        // Zero-input actions — no extra fields allowed.
+        break;
+      case 'create': {
+        const name = optionalString('name');
+        if (!name) return errorResult('name is required for create');
+        payload.name = name;
+        const description = optionalString('description');
+        if (description) payload.description = description;
+        payload.switchTo = input.switchTo !== false;
+        break;
       }
-      payload.switchTo = input.switchTo !== false;
+      case 'switch': {
+        // Accept either canvasId or name. canvasId wins when both are
+        // present (it's the stable, audit-friendly identifier).
+        const canvasId = optionalString('canvasId');
+        const name = optionalString('name');
+        if (!canvasId && !name) {
+          return errorResult('Provide canvasId or name to identify the target canvas for switch');
+        }
+        if (canvasId) payload.canvasId = canvasId;
+        if (name) payload.name = name;
+        break;
+      }
+      case 'rename': {
+        // `name` is the new name (what the canvas will be renamed to).
+        // Target addressing is canvasId-only: overloading `name` for both
+        // "new label" and "lookup key" makes the LLM prompt confusing.
+        const newName = optionalString('name');
+        if (!newName) return errorResult('name is required for rename (the new canvas name)');
+        const canvasId = optionalString('canvasId') ?? currentCanvasId;
+        if (!canvasId) {
+          return errorResult('No current canvas is bound; provide canvasId to identify the canvas to rename');
+        }
+        payload.canvasId = canvasId;
+        payload.name = newName;
+        break;
+      }
+      case 'delete': {
+        const canvasId = optionalString('canvasId') ?? currentCanvasId;
+        const name = optionalString('name');
+        if (!canvasId && !name) {
+          return errorResult('Provide canvasId or name (or rely on the current canvas) for delete');
+        }
+        if (canvasId) payload.canvasId = canvasId;
+        if (name) payload.name = name;
+        break;
+      }
+      default:
+        // Unreachable: action enum is validated at the top of this fn.
+        return errorResult(`Unhandled action: ${String(action)}`);
     }
 
     const response = await ipcRequest<CanvasManageResult>(context, 'canvas.manage', payload, { retries: 0 });

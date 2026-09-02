@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   listCanvases: vi.fn(),
   listCanvasesForProject: vi.fn(),
   createCanvas: vi.fn(),
+  getCanvasByProjectPath: vi.fn(),
   updateCanvas: vi.fn(),
   deleteCanvas: vi.fn(),
   getSession: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../db/queries/conductors', () => {
     listCanvases: mocks.listCanvases,
     listCanvasesForProject: mocks.listCanvasesForProject,
     createCanvas: mocks.createCanvas,
+    getCanvasByProjectPath: mocks.getCanvasByProjectPath,
     updateCanvas: mocks.updateCanvas,
     deleteCanvas: mocks.deleteCanvas,
     getCanvasSnapshot: mocks.getCanvasSnapshot,
@@ -326,6 +328,137 @@ describe('ConductorExecutorProxy canvas management', () => {
     expect(response.error?.code).toBe('DELETE_FAILED');
     expect(changed).not.toHaveBeenCalled();
     expect(mocks.setExtension).not.toHaveBeenCalled();
+  });
+
+  // ---- PROJECT_HAS_CANVAS guard (plan 233) ----
+
+  it('rejects create when the project already has a canvas bound', async () => {
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getCanvasByProjectPath.mockReturnValue(firstCanvas);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'create', name: 'Duplicate' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('PROJECT_HAS_CANVAS');
+    expect(mocks.createCanvas).not.toHaveBeenCalled();
+  });
+
+  it('allows create when the project has no canvas yet', async () => {
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: '/proj/A' });
+    mocks.getCanvasByProjectPath.mockReturnValue(null);
+    mocks.createCanvas.mockReturnValue({
+      ...firstCanvas,
+      id: 'canvas-new',
+      name: 'Fresh',
+      projectPath: '/proj/A',
+    });
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'create', name: 'Fresh' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.createCanvas).toHaveBeenCalled();
+  });
+
+  it('skips the project-has-canvas check when the session has no working directory', async () => {
+    mocks.getSession.mockReturnValue({ id: 'session-1', workingDirectory: null });
+    mocks.getCanvasByProjectPath.mockReturnValue(firstCanvas); // would block
+    mocks.createCanvas.mockReturnValue({ ...firstCanvas, id: 'canvas-new' });
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'create', name: 'Orphan' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.createCanvas).toHaveBeenCalled();
+  });
+
+  // ---- Name addressing for switch / rename / delete (plan 233) ----
+
+  it('resolves switch by name when canvasId is omitted', async () => {
+    mocks.listCanvases.mockReturnValue([
+      { ...firstCanvas, name: 'Alpha' },
+      { ...secondCanvas, name: 'Beta' },
+    ]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch', name: 'Beta' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.setExtension).toHaveBeenCalledWith('session-1', 'conductor_canvas_id', 'canvas-2');
+  });
+
+  it('prefers canvasId over name when both are supplied', async () => {
+    mocks.updateCanvas.mockReturnValue({ ...firstCanvas, name: 'Renamed' });
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(
+      request({ action: 'rename', canvasId: 'canvas-1', name: 'Renamed' }),
+    );
+
+    expect(response.success).toBe(true);
+    expect(mocks.updateCanvas).toHaveBeenCalledWith('canvas-1', { name: 'Renamed' });
+  });
+
+  it('rejects switch without canvasId or name (no silent no-op fallback)', async () => {
+    mocks.listCanvases.mockReturnValue([firstCanvas, secondCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('INVALID_INPUT');
+    expect(mocks.setExtension).not.toHaveBeenCalled();
+  });
+
+  it('rejects switch by name when the name is ambiguous across canvases', async () => {
+    mocks.listCanvases.mockReturnValue([
+      { ...firstCanvas, name: 'Workbench' },
+      { ...secondCanvas, name: 'Workbench' },
+    ]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch', name: 'Workbench' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('AMBIGUOUS_TARGET');
+    expect(mocks.setExtension).not.toHaveBeenCalled();
+  });
+
+  it('returns NOT_FOUND when name does not match any canvas', async () => {
+    mocks.listCanvases.mockReturnValue([firstCanvas]);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'switch', name: 'Ghost' }));
+
+    expect(response.success).toBe(false);
+    expect(response.error?.code).toBe('NOT_FOUND');
+  });
+
+  it('resolves delete by name when canvasId is omitted and current canvas is also missing', async () => {
+    mocks.listCanvases.mockReturnValue([
+      { ...firstCanvas, name: 'Alpha' },
+      { ...secondCanvas, name: 'Beta' },
+    ]);
+    mocks.getExtension.mockReturnValue(null);
+    mocks.deleteCanvas.mockReturnValue(true);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'delete', name: 'Beta' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.deleteCanvas).toHaveBeenCalledWith('canvas-2');
+  });
+
+  it('lets delete target the current canvas when no canvasId or name is supplied', async () => {
+    mocks.getExtension.mockReturnValue('canvas-1');
+    mocks.deleteCanvas.mockReturnValue(true);
+    const proxy = new ConductorExecutorProxy();
+
+    const response = await proxy.execute(request({ action: 'delete' }));
+
+    expect(response.success).toBe(true);
+    expect(mocks.deleteCanvas).toHaveBeenCalledWith('canvas-1');
   });
 });
 

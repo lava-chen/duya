@@ -18,6 +18,7 @@ import type {
 import {
   createCanvas,
   deleteCanvas,
+  getCanvasByProjectPath,
   listCanvases,
   listCanvasesForProject,
   updateCanvas,
@@ -120,6 +121,87 @@ export class ConductorExecutorProxy {
     return null;
   }
 
+  /**
+   * Resolve a target canvas from `payload.canvasId` or `payload.name`.
+   * Used by switch / rename / delete so the agent can address a canvas
+   * by stable id or by human-readable name without a separate list round.
+   *
+   * Resolution order: canvasId (if present) -> name (if present) ->
+   * currentCanvas (only when the caller allows a fallback).
+   *
+   * Errors: `INVALID_INPUT` (neither id nor name provided),
+   * `NOT_FOUND` (zero matches), `AMBIGUOUS_TARGET` (multiple matches).
+   */
+  private resolveTarget(
+    payload: Record<string, unknown>,
+    sessionProjectPath: string | null,
+    opts: { allowCurrentCanvasFallback?: boolean; currentCanvas?: ConductorCanvas | null } = {},
+  ): { ok: true; canvas: ConductorCanvas } | { ok: false; error: ExecutorRpcResponse } {
+    const rawId = typeof payload.canvasId === 'string' ? payload.canvasId.trim() : '';
+    const rawName = typeof payload.name === 'string' ? payload.name.trim() : '';
+
+    if (!rawId && !rawName) {
+      if (opts.allowCurrentCanvasFallback && opts.currentCanvas) {
+        return { ok: true, canvas: opts.currentCanvas };
+      }
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: { code: 'INVALID_INPUT', message: 'Provide either canvasId or name to identify the target canvas' },
+        },
+      };
+    }
+
+    const allCanvases = listCanvases();
+    if (rawId) {
+      const byId = allCanvases.find((c) => c.id === rawId);
+      if (!byId) {
+        return {
+          ok: false,
+          error: { success: false, error: { code: 'NOT_FOUND', message: `Canvas ${rawId} not found` } },
+        };
+      }
+      return { ok: true, canvas: byId };
+    }
+
+    // Name resolution — scope by the session's project path when set,
+    // mirroring `list`'s behavior, so two projects can each have a
+    // canvas named "Workbench" without collision.
+    const pool = sessionProjectPath
+      ? allCanvases.filter(
+          (c) => c.projectPath === sessionProjectPath || c.projectPath === null || c.projectPath === undefined,
+        )
+      : allCanvases;
+    const matches = pool.filter((c) => c.name === rawName);
+    if (matches.length === 0) {
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: {
+            code: 'NOT_FOUND',
+            message: `No canvas named "${rawName}" in scope. Use canvas_manage action=list to discover canvases.`,
+          },
+        },
+      };
+    }
+    if (matches.length > 1) {
+      const ids = matches.map((c) => c.id).join(', ');
+      return {
+        ok: false,
+        error: {
+          success: false,
+          error: {
+            code: 'AMBIGUOUS_TARGET',
+            message: `Multiple canvases named "${rawName}": ${ids}. Disambiguate by canvasId.`,
+          },
+        },
+      };
+    }
+    return { ok: true, canvas: matches[0] };
+  }
+
   private manageCanvas(request: ExecutorRpcRequest): ExecutorRpcResponse {
     const payload = request.payload;
     const action = payload.action as 'get_current' | 'list' | 'create' | 'switch' | 'rename' | 'delete';
@@ -159,6 +241,23 @@ export class ConductorExecutorProxy {
           error: { code: 'SESSION_NOT_FOUND', message: 'A valid chat session is required to create and switch canvases' },
         };
       }
+      // Project-bound canvases are 1:1 with a project path. The DB layer
+      // (createCanvas) silently returns the existing project canvas when
+      // one already exists; from the agent's perspective that looks like
+      // a successful no-op with the wrong name. Surface it explicitly so
+      // callers can either switch / rename the existing canvas instead.
+      if (sessionProjectPath) {
+        const existing = getCanvasByProjectPath(sessionProjectPath);
+        if (existing) {
+          return {
+            success: false,
+            error: {
+              code: 'PROJECT_HAS_CANVAS',
+              message: `Project ${sessionProjectPath} is already bound to canvas ${existing.id} ("${existing.name}"). Use switch or rename instead of create.`,
+            },
+          };
+        }
+      }
       const canvas = createCanvas({
         name,
         description: payload.description as string | undefined,
@@ -180,11 +279,18 @@ export class ConductorExecutorProxy {
       };
     }
 
-    const canvasId = payload.canvasId as string;
-    const target = listCanvases().find((canvas) => canvas.id === canvasId);
-    if (!target) {
-      return { success: false, error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` } };
-    }
+    // Per-action target resolution. `switch` requires an explicit target
+    // (silently falling back to the current canvas would be a no-op);
+    // `rename` and `delete` keep the historical "default to current" UX
+    // when canvasId is omitted but the action verb is unambiguous.
+    const allowFallback = action === 'rename' || action === 'delete';
+    const resolved = this.resolveTarget(payload, sessionProjectPath, {
+      allowCurrentCanvasFallback: allowFallback,
+      currentCanvas,
+    });
+    if (!resolved.ok) return resolved.error;
+    const target = resolved.canvas;
+    const canvasId = target.id;
 
     if (action === 'switch') {
       if (!this.isCanvasAccessible(target, sessionProjectPath)) {
@@ -239,16 +345,9 @@ export class ConductorExecutorProxy {
     }
 
     if (action === 'delete') {
-      const rawCanvasId = payload.canvasId as string | undefined;
-      const canvasId = typeof rawCanvasId === 'string' && rawCanvasId.trim() ? rawCanvasId.trim() : currentCanvas?.id;
-      if (!canvasId) {
-        return { success: false, error: { code: 'INVALID_INPUT', message: 'canvasId is required for delete' } };
-      }
-      const targetToDelete = listCanvases().find((c) => c.id === canvasId);
-      if (!targetToDelete) {
-        return { success: false, error: { code: 'NOT_FOUND', message: `Canvas ${canvasId} not found` } };
-      }
-      if (!this.isCanvasAccessible(targetToDelete, sessionProjectPath)) {
+      // delete: same target resolution as switch/rename; the resolver
+      // already filled in `target` and `canvasId` for us.
+      if (!this.isCanvasAccessible(target, sessionProjectPath)) {
         return {
           success: false,
           error: {
@@ -257,28 +356,28 @@ export class ConductorExecutorProxy {
           },
         };
       }
-      const deleted = deleteCanvas(canvasId);
+      const deleted = deleteCanvas(target.id);
       if (!deleted) {
-        return { success: false, error: { code: 'DELETE_FAILED', message: `Failed to delete canvas ${canvasId}` } };
+        return { success: false, error: { code: 'DELETE_FAILED', message: `Failed to delete canvas ${target.id}` } };
       }
       // If the deleted canvas was the current canvas, unbind the session.
-      const wasCurrent = currentCanvas?.id === canvasId;
+      const wasCurrent = currentCanvas?.id === target.id;
       if (wasCurrent && request.sessionId) {
         getCoreStores().sessions.setExtension(request.sessionId, 'conductor_canvas_id', null);
       }
       this.canvasManagementChangedFn?.({
         operation: 'delete',
         sessionId: request.sessionId,
-        canvas: targetToDelete,
+        canvas: target,
         currentCanvasId: wasCurrent ? undefined : currentCanvas?.id,
-        deletedCanvasId: canvasId,
+        deletedCanvasId: target.id,
       });
       return {
         success: true,
         result: {
           action,
           deleted: true,
-          canvas: targetToDelete,
+          canvas: target,
           currentCanvas: wasCurrent ? currentCanvas : undefined,
         },
       };
