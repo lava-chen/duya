@@ -266,6 +266,13 @@ let liveTotalInputRaw = 0;     // raw input_tokens (for cost on the uncached por
 let liveTotalOutput = 0;
 let liveTotalCacheHit = 0;
 let liveTotalCacheCreation = 0;
+// Latest API-reported prompt volume (input + cache + output). The result
+// event handler updates this; emitLiveUsage prefers it over the
+// computeContextEstimate(messages) anchor so the ring reflects the most
+// recent call's volume immediately, without waiting for the new assistant
+// message to be pushed to the timeline (which lags the result event by a
+// fraction of a second — long enough for the user to see a wrong value).
+let liveLatestObserved = 0;
 
 /** Single-request usage sub-block persisted inside the turn-cumulative
  *  `token_usage` JSON. The cumulative block sums EVERY LLM call of the turn,
@@ -322,6 +329,31 @@ const emitLiveUsage = (
       : 0) || systemFallbackTokens || 0;
   const estimate = computeContextEstimate(msgs, { systemPrefixTokens: systemPrefix });
   const anchored = estimate.anchored && !compactedPending;
+  // Anchor correction: when a fresh result event has been observed, the
+  // anchor in `messages` still points to the previous call's assistant
+  // (the new one hasn't been pushDurable'd yet). Prefer the latest
+  // observed API volume so the ring reflects reality before the timeline
+  // catches up. Estimate's trailing estimate (≥ 1 new message) is added
+  // on top, matching the previous semantics of anchorTokens + trailing.
+  let usedForRing = estimate.usedTokens ?? 0;
+  let anchorTokensForRing = estimate.anchorTokens;
+  let trailingForRing = estimate.trailingTokens;
+  if (liveLatestObserved > anchorTokensForRing) {
+    // Replace the stale anchor with the fresh observed volume. Trailing
+    // stays the same — the messages after the observed call are still
+    // there and still need to be added.
+    const delta = liveLatestObserved - anchorTokensForRing;
+    usedForRing = liveLatestObserved + trailingForRing;
+    anchorTokensForRing = liveLatestObserved;
+    if (delta > 0) {
+      // sanity log when the correction is non-trivial (>100 tokens)
+      if (delta > 100) {
+        ringTrace(
+          `[${targetSessionId.slice(0, 8)}] anchor-correct: stale=${estimate.anchorTokens} fresh=${liveLatestObserved} delta=+${delta}`,
+        );
+      }
+    }
+  }
   // Token-trace: emit a structured INFO line so the operator can correlate
   // input / cache / trailing growth over time. The anchor's raw usage block
   // is included so an off-by-one (under-report or cache-misaccount) is easy
@@ -348,7 +380,7 @@ const emitLiveUsage = (
   // Multiple workers share one trace file — prefix every line so interleaved
   // sessions stay attributable.
   ringTrace(
-    `[${targetSessionId.slice(0, 8)}] emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${estimate.anchorTokens} trailing=${estimate.trailingTokens} used=${estimate.usedTokens ?? 'null'} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`, 
+    `[${targetSessionId.slice(0, 8)}] emit msgs=${msgs.length} anchored=${anchored} anchorIdx=${estimate.anchorIndex} anchor=${anchorTokensForRing} trailing=${trailingForRing} used=${usedForRing} systemPrefix=${systemPrefix} totalsIn=${liveTotalInput} cacheHit=${liveTotalCacheHit}`,
   );
   // Last-request per-call fields for the stats line: read off the anchor
   // message itself (`usage` in-memory from DuyaAgent, `tokenUsage` persisted).
@@ -366,7 +398,7 @@ const emitLiveUsage = (
     // False → renderer shows "?" instead of a number (no data yet, or
     // post-compaction without a fresh response).
     anchored,
-    usedTokens: estimate.usedTokens ?? 0,
+    usedTokens: usedForRing,
     inputTokens: lastInput,
     outputTokens: lastOutput,
     cacheHitTokens: anchorUsage?.cache_hit_tokens,
@@ -387,8 +419,9 @@ const emitLiveUsage = (
     debugBreakdown: {
       anchorIndex: estimate.anchorIndex,
       anchorMsgId: estimate.anchorIndex !== null ? msgs[estimate.anchorIndex]?.id : null,
-      anchorTokens: estimate.anchorTokens,
-      trailingTokens: estimate.trailingTokens,
+      anchorTokens: anchorTokensForRing,
+      trailingTokens: trailingForRing,
+      observedLatest: liveLatestObserved,
       msgs: msgs.length,
       compactedPending,
     },
@@ -2440,6 +2473,7 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
       liveTotalOutput = seedTotalOutput;
       liveTotalCacheHit = seedTotalCacheHit;
       liveTotalCacheCreation = seedTotalCacheCreation;
+      liveLatestObserved = 0;
       // Plan 443: no context-base restore here. The pure estimator anchors on
       // the persisted usage blocks directly (preferring `last_call`) — same
       // numbers, zero bookkeeping. Post-compaction staleness is handled by
@@ -2656,6 +2690,10 @@ async function handleChatStart(msg: ChatStartMessage): Promise<void> {
           // pure estimator anchors on it directly. Clear the post-compaction
           // pending flag here too.
           compactedPending = false;
+          // Update the latest observed prompt volume so emitLiveUsage can
+          // surface it before the new assistant message lands in the timeline.
+          // Without this the ring flickers (anchor lags by one call).
+          liveLatestObserved = normalizedInput + outputTokens;
           // Accumulate session-cumulative totals for the ring's stats line.
           liveTotalInput += normalizedInput;
           liveTotalInputRaw += rawInput;
@@ -3323,6 +3361,7 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             liveTotalOutput = 0;
             liveTotalCacheHit = 0;
             liveTotalCacheCreation = 0;
+            liveLatestObserved = 0;
           }
           if (agent) {
             log('[Agent-Process] Re-init: destroying existing agent and creating new one');
