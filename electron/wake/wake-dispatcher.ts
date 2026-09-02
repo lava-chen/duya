@@ -158,6 +158,66 @@ export function currentTurnEpoch(sessionId: string): number {
   return turnEpochs.current(sessionId)
 }
 
+/** Broadcast payload clamp (476 §2.3, aligned with background-wakes.ts). */
+export const BROADCAST_MAX_CHARS = 8000
+
+/**
+ * Plan 476 P2.4 — broadcast (internal API, minimal slice). Enqueue one
+ * broadcast wake per target session on the background lane. The text is
+ * clamped to 8000 chars here; dedupe is by `broadcast:<id>` so re-sending
+ * the same broadcast to a session still queued collapses to one item.
+ */
+export function enqueueBroadcastWake(opts: {
+  broadcastId: string
+  text: string
+  targetSessionIds: readonly string[]
+}): Array<'added' | 'merged' | 'deduped'> {
+  const text = opts.text.slice(0, BROADCAST_MAX_CHARS)
+  const now = Date.now()
+  return opts.targetSessionIds.map((sessionId) =>
+    enqueueWakeItemForSession(sessionId, {
+      id: `broadcast:${opts.broadcastId}`,
+      source: 'broadcast',
+      lane: 'background',
+      agentId: sessionId,
+      enqueuedAtMs: now,
+      payload: { kind: 'broadcast', broadcastId: opts.broadcastId, text },
+    }),
+  )
+}
+
+/**
+ * Plan 476 P2.3c — connector.inbound (dispatcher layer). An external
+ * channel message mapped to a session enqueues as a background wake; the
+ * drain launches it when the session is idle. Dedupe by envelope id.
+ *
+ * Note for the gateway wiring (later phase): today's gateway:inbound path
+ * replies to the channel via SSE forwarding that lives inline in
+ * message-bus.ts, so routing it through this queue requires an inbound
+ * executor that keeps that channel reply chain (a hidden runPromptInSession
+ * wake has no SSE channel back). This function + the prompt branch below
+ * are the queue half; the executor injection is the gateway half.
+ */
+export function enqueueInboundWake(
+  sessionId: string,
+  opts: { envelopeId: string; text?: string },
+): 'added' | 'merged' | 'deduped' {
+  const now = Date.now()
+  const text = (opts.text ?? '').trim()
+  return enqueueWakeItemForSession(sessionId, {
+    id: `inbound:${opts.envelopeId}`,
+    source: 'connector.inbound',
+    lane: 'background',
+    agentId: sessionId,
+    enqueuedAtMs: now,
+    payload: {
+      kind: 'inbound',
+      envelopeId: opts.envelopeId,
+      ...(text ? { text: text.slice(0, BROADCAST_MAX_CHARS) } : {}),
+    },
+  })
+}
+
 /**
  * Called by the main process when a session's run finishes (db-bridge
  * `lock:release`). Re-kicks the drain loop so parked background wakes
@@ -269,9 +329,26 @@ function promptForItem(item: WakeItem): string {
         ? `[system] A background task finished${label}:\n${summary}\n\nReview the result above and reply to the user if there is something worth reporting.`
         : `[system] A background task completed (${item.payload.taskId}). Review its result and continue if useful.`
     }
+    case 'broadcast': {
+      const body = (item.payload.text ?? '').trim()
+      return body
+        ? `[system] Admin broadcast (${item.payload.broadcastId}):\n${body}\n\nReview it and act if it concerns you.`
+        : `[system] An admin broadcast (${item.payload.broadcastId}) was sent. Review and act if it concerns you.`
+    }
+    case 'inbound': {
+      const body = (item.payload.text ?? '').trim()
+      return body
+        ? `[system] A message arrived from an external channel (envelope ${item.payload.envelopeId}):\n${body}\n\nRespond to the sender if appropriate.`
+        : `[system] A message arrived from an external channel (envelope ${item.payload.envelopeId}). Respond to the sender if appropriate.`
+    }
+    case 'user': {
+      // A user message parked in the queue (session was busy when it
+      // arrived). Dispatch = run it as the user's turn.
+      return (item.payload.text ?? '').trim() || '[system] Continue with the user request.'
+    }
     default:
-      // Future source kinds (automation/DM/inbound) are wired by later
-      // phases; skipping is safe — the source still persists its own state.
+      // automation (P2.3b) and agent.dm (477) are wired by later phases;
+      // skipping is safe — the source still persists its own state.
       return ''
   }
 }
