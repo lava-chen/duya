@@ -1717,14 +1717,27 @@ class StreamSessionManager {
                 this.autoStartQueuedStream(sessionId);
                 this.startPendingBackgroundResume(sessionId);
               } else {
-                console.warn('[stream-session-manager] SSE stream ended without done, transitioning to error');
-                s2.phase = 'error';
-                s2.error = 'Stream ended unexpectedly';
-                s2.completedAt = Date.now();
-                this.notifyListeners(sessionId);
-                this.notifyPhaseListeners(sessionId, s2.phase);
-                this.notifyErrorListeners(sessionId, s2.error);
-                this.notifyCompletedAtListeners(sessionId, s2.completedAt);
+                // Agent Server may have crashed and restarted; before falling
+                // back to a hard error, give the session a chance to reattach
+                // to a live run that is still in progress on a fresh server
+                // (e.g. the user's prompt is still being streamed by the
+                // worker that survived the server restart). The attach is
+                // best-effort — if it fails we surface the error below.
+                console.warn('[stream-session-manager] SSE stream ended without done, attempting reattach before error transition');
+                this.attemptReattachAfterStreamEnd(sessionId, s2).then((reattached) => {
+                  if (reattached) return;
+                  const s3 = this.sessions.get(sessionId);
+                  if (!s3 || s3.phase === 'completed' || s3.phase === 'aborted' || s3.phase === 'error') {
+                    return;
+                  }
+                  s3.phase = 'error';
+                  s3.error = 'Stream ended unexpectedly';
+                  s3.completedAt = Date.now();
+                  this.notifyListeners(sessionId);
+                  this.notifyPhaseListeners(sessionId, s3.phase);
+                  this.notifyErrorListeners(sessionId, s3.error);
+                  this.notifyCompletedAtListeners(sessionId, s3.completedAt);
+                });
               }
             } else if (s2) {
               console.log('[stream-session-manager] SSE stream ended but session already in phase:', s2.phase);
@@ -1848,6 +1861,61 @@ class StreamSessionManager {
         this.notifyListeners(sessionId);
         this.notifyPhaseListeners(sessionId, s.phase);
       }
+    }
+  }
+
+  /**
+   * Used by the `stream:end` fallback path. Probe the Agent Server's session
+   * status; if the worker is still STREAMING (the server restarted but the
+   * worker survived and kept producing events), attach to the live stream
+   * and resume the same phase machine.
+   *
+   * Returns true when reattachment was kicked off, false when the session
+   * is already terminal on the server (caller should treat the stream end
+   * as the final transition).
+   */
+  private async attemptReattachAfterStreamEnd(
+    sessionId: string,
+    state: ReturnType<typeof this.getOrCreateState>,
+  ): Promise<boolean> {
+    try {
+      const status = await getAgentServerClient().getSessionStatus(sessionId);
+      if (!status || status.status !== 'STREAMING') {
+        return false;
+      }
+      console.log('[stream-session-manager] Reattaching to live stream after stream:end', {
+        sessionId,
+        lastEventId: status.lastEventId,
+      });
+      // Reset generation so any stale chunks from the previous stream id
+      // are ignored by isCurrentStream.
+      state.streamId = crypto.randomUUID();
+      state.currentStreamId = state.streamId;
+      state.phase = 'streaming';
+      state.error = null;
+      state.completedAt = null;
+      this.cleanupMessagePort(sessionId);
+      const cleanup = getAgentServerClient().onEvent(
+        sessionId,
+        this.createStreamEventHandler(sessionId, state.streamId),
+      );
+      this.messagePortCleanup.set(sessionId, cleanup);
+      // Note: do NOT call getAgentServerClient().attachToLiveStream here —
+      // its catch path will reschedule reconnects on its own, but the new
+      // sessionId-scoped reconnect map would interfere with the existing
+      // active stream. Just start tailing the existing stream by reissuing
+      // the GET /chat connection with the last known event id.
+      void getAgentServerClient()
+        .attachToLiveStream(sessionId, status.lastEventId)
+        .catch((err) => {
+          console.warn('[stream-session-manager] reattach after stream:end failed:', err);
+        });
+      this.notifyListeners(sessionId);
+      this.notifyPhaseListeners(sessionId, state.phase);
+      return true;
+    } catch (err) {
+      console.warn('[stream-session-manager] attemptReattachAfterStreamEnd probe failed:', err);
+      return false;
     }
   }
 
