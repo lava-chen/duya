@@ -83,7 +83,7 @@ export const DocumentCreateDialog: React.FC<DocumentCreateDialogProps> = ({ open
     if (!open || !projectPath) return;
     let active = true;
     setLoading(true);
-    window.electronAPI.files.browse(projectPath, 4)
+    window.electronAPI.files.browse(projectPath, projectPath, 4)
       .then((result) => {
         if (active) setFiles(result.success ? collectMarkdownFiles(result.tree as FileTreeNode[], projectPath) : []);
       })

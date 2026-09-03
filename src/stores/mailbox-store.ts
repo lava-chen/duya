@@ -10,6 +10,7 @@
 
 import { create } from 'zustand';
 import { resumeBackgroundTask } from '@/lib/stream-session-manager';
+import { getConfigValue } from '@/lib/config-port-bus';
 
 // =============================================================================
 // Types (mirrors agent_mailbox schema, camelCase for frontend)
@@ -405,11 +406,21 @@ export function initMailboxEventListener(): () => void {
     if (event.type === 'mail:created') {
       const row = dbRowToMailboxRow(event.row);
       if (row.kind === 'background_notification' && row.sessionId) {
-        // Do NOT gate on canSend() here: resumeBackgroundTask already defers to
-        // the terminal phase when the session is mid-run. Gating on canSend()
-        // skipped the call entirely, so the deferral never registered and the
-        // notification sat in the mailbox until the user's next input.
-        void resumeBackgroundTask(row.sessionId);
+        // Plan 476 P0-C: honour `wake.idleDispatch`. When set to 'main',
+        // the main process owns idle wakes (CLI/headless); the renderer must
+        // stand down so one notification is not woken twice. Default
+        // 'renderer' keeps the pre-476 behaviour unchanged.
+        void getConfigValue('wake.idleDispatch')
+          .then((mode) => {
+            if (mode === 'main') return;
+            // Do NOT gate on canSend() here: resumeBackgroundTask already
+            // defers to the terminal phase when the session is mid-run.
+            void resumeBackgroundTask(row.sessionId);
+          })
+          .catch(() => {
+            // Config read failed — fall back to renderer wake (old behaviour).
+            void resumeBackgroundTask(row.sessionId);
+          });
       }
     }
   });

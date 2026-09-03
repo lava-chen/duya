@@ -49,12 +49,16 @@ export interface ToolExecutor {
 }
 
 /**
- * Plan 241: how a tool is exposed to the LLM. `always` (default) =
- * schema is always in the request's tool list; `discoverable` =
- * reachable via `tool_search` but not in the default tool list;
- * `internal` = not exposed to the LLM at all (debug helpers etc.).
+ * How a tool is exposed to the LLM.
+ *   `always` (default) = schema is always in the request's tool list;
+ *   `discoverable` = reachable via `tool_search` but not in the default
+ *   tool list (plan 241; phased out by plan 480 as tools move to catalog);
+ *   `catalog` = NEVER in the request's tool list — schema is read on demand
+ *   via the constant `tool_schema` meta tool and the tool is invoked through
+ *   `tool_invoke` (plan 480 appended-catalog exposure);
+ *   `internal` = not exposed to the LLM at all (debug helpers etc.).
  */
-export type ExposeMode = 'always' | 'discoverable' | 'internal';
+export type ExposeMode = 'always' | 'catalog' | 'discoverable' | 'internal';
 
 /**
  * Plan 241: persisted registration metadata. Forwarded to the

@@ -68,7 +68,10 @@ export function useGitStatus(
         totals,
       });
     } catch {
-      if (enabledRef.current && cwdRef.current === requestCwd) setStatus(EMPTY);
+      // Transient IPC failure: keep the previous status instead of clearing
+      // to EMPTY — resetting here made the file-change pill flicker off for
+      // a polling cycle (plan 308 Phase 2).
+      if (!enabledRef.current || cwdRef.current !== requestCwd) setStatus(EMPTY);
     }
   }, []);
 

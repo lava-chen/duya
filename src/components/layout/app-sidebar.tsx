@@ -247,7 +247,13 @@ export const AppSidebar = forwardRef<HTMLDivElement, AppSidebarProps>(
       } catch {
         // localStorage may be unavailable; the boot script will fall back to system preference.
       }
-    }, [resolvedTheme]);
+      // Keep the native window material (Mica / macOS vibrancy) on the same
+      // light/dark source as duya. duya themes independently of the OS, so
+      // without this a dark UI would sit on a light wallpaper tint.
+      window.electronAPI?.system?.setNativeThemeSource?.(
+        settingsTheme ?? resolvedTheme,
+      );
+    }, [resolvedTheme, settingsTheme]);
 
     // Keep "system" mode live: track OS-level preference changes.
     useEffect(() => {

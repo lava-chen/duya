@@ -30,6 +30,7 @@ import {
   resolveShellExecutionPlan,
 } from '../../utils/shell/intelligence.js';
 import { BASH_DEFAULT_TIMEOUT_MS, BASH_MAX_TIMEOUT_MS } from './constants.js';
+import { buildGitReminder } from './git-reminder.js';
 import { getBashTaskRegistry } from '../../session/bash-task-registry.js';
 import { buildTaskNotificationXml } from '../../lifecycle/buildTaskNotification.js';
 import { sendBackgroundNotification } from '../../lifecycle/mailboxBackgroundNotification.js';
@@ -150,7 +151,7 @@ const DEFAULT_BASH_TOOL_CONFIG: ShellCommandToolConfig = {
     'double quotes ("...") allow variable and backtick expansion; prefer a single one-line command chained with && or ; over multi-line scripts. ' +
     'For commands that emit very long output, pipe through head/grep/sed/tail or redirect to a file instead of dumping everything to the transcript. ' +
     'Do not use bash as a thinking scratchpad or pad with empty echo commands — blank output only wastes turns; reason in your own scratchpad instead. ' +
-    'For long-running commands, set run_in_background=true and you will be notified on completion; use get_task_output with the returned task ID to fetch results, and kill_task to terminate a background task if needed.',
+    'For long-running commands, set run_in_background=true and you will be notified on completion; use get_task_output with the returned task ID for a status/output snapshot (never to block), and kill_task to terminate a background task if needed.',
   providerKind: 'bash',
   commandLabel: 'bash command',
   securityCheck: analyzeCommandSafety,
@@ -405,6 +406,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
             const warningMsg = `[Warning] ${nonCriticalWarnings.map(w => w.message).join('; ')}`;
             resultOutput = `${warningMsg}\n\n${resultOutput}`;
           }
+          const gitReminder = buildGitReminder(command);
+          if (gitReminder) {
+            resultOutput = `${resultOutput}\n\n${gitReminder}`;
+          }
           const { output: boundedResult, fullOutputPath: dockerFullPath } = truncateShellOutput(resultOutput);
 
           return {
@@ -508,6 +513,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
       if (executionPlan.reason) {
         output = `[Shell] ${executionPlan.reason}\n\n${output}`;
       }
+      const gitReminder = buildGitReminder(command);
+      if (gitReminder) {
+        output = `${output}\n\n${gitReminder}`;
+      }
 
       const { output: boundedOutput, fullOutputPath } = truncateShellOutput(output);
       return {
@@ -582,6 +591,10 @@ export class BashTool extends BaseTool implements ToolExecutor {
 
         if (failureAnalysis.hints.length > 0) {
           finalOutput = `${finalOutput}\n\nHints:\n- ${failureAnalysis.hints.join('\n- ')}`;
+        }
+        const gitReminder = buildGitReminder(command);
+        if (gitReminder) {
+          finalOutput = `${finalOutput}\n\n${gitReminder}`;
         }
 
         const { output: boundedError, fullOutputPath: errFullPath } = truncateShellOutput(finalOutput);
@@ -731,7 +744,7 @@ export class BashTool extends BaseTool implements ToolExecutor {
       lines.push(`Background process started (PID: ${pid})`);
       lines.push(`Output file: ${outputFile}`);
       lines.push(`You will be notified automatically when it completes. Do not wait or poll for it.`);
-      lines.push(`Use ${GET_TASK_OUTPUT_TOOL_NAME} only for a quick status snapshot (no timeout_ms).`);
+      lines.push(`Use ${GET_TASK_OUTPUT_TOOL_NAME} only for a quick status/output snapshot; it never blocks.`);
 
       return {
         id: crypto.randomUUID(),

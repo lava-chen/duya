@@ -237,6 +237,21 @@ export interface ChatOptions {
   maxTokens?: number;
   temperature?: number;
   parentMessageId?: string;
+  /**
+   * Plan 486: thread/fork branched-layer reference. When set on a streamChat
+   * user turn, the new user message is marked as a reply to the referenced
+   * message (which must already exist in this session's timeline — an unknown
+   * target is silently stripped, mirroring grok `stripReplyTo`). Combined with
+   * `branched: true` this starts/continues a thread: the message enters the
+   * branched layer and is excluded from the main timeline and main model
+   * context. `branched` without a valid `replyToId` is ignored.
+   */
+  replyToId?: string;
+  /**
+   * Plan 486: true = the reply starts a fork / belongs to a thread's branched
+   * layer. Only meaningful together with `replyToId`.
+   */
+  branched?: boolean;
   /** Maximum number of agent turns (LLM calls) before stopping. Default: 100 */
   maxTurns?: number;
   /**
@@ -673,6 +688,12 @@ export interface ToolUseContextOptions {
   appendSystemPrompt?: string;
   // Session context
   sessionId?: string;
+  /**
+   * Plan 481: the bot identity bound to this run (ChatOptions.agentProfileId).
+   * Tools that act on behalf of the bot's identity (e.g. update_state memory
+   * shards) read it from here; undefined/null for plain user sessions.
+   */
+  agentProfileId?: string | null;
   // Working directory for tool execution (e.g., BashTool)
   workingDirectory?: string;
   // Language preference for agent responses (propagated to sub-agents)

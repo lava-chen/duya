@@ -278,7 +278,7 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
     setLoading(true);
     setError(null);
     try {
-      const result = await window.electronAPI.files.browse(workingDirectory, 4);
+      const result = await window.electronAPI.files.browse(workingDirectory, workingDirectory, 4);
       if (result.success) {
         setTree(result.tree);
       } else {
@@ -356,8 +356,9 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
 
   const handleRenameSubmit = useCallback(
     async (path: string, newName: string) => {
+      if (!workingDirectory) return;
       try {
-        const result = await window.electronAPI.files.rename(resolveTreePath(workingDirectory, path), newName);
+        const result = await window.electronAPI.files.rename(resolveTreePath(workingDirectory, path), newName, workingDirectory);
         if (result.success) {
           await fetchTree();
         }
@@ -378,10 +379,11 @@ export function FileTreePanel({ tab, embedded, embeddedInPreview }: { tab?: Page
 
   const handleDelete = useCallback(
     async (path: string) => {
+      if (!workingDirectory) return;
       const name = path.split(/[/\\]/).pop() || "";
       if (!window.confirm(`Delete "${name}"?`)) return;
       try {
-        const result = await window.electronAPI.files.delete(resolveTreePath(workingDirectory, path));
+        const result = await window.electronAPI.files.delete(resolveTreePath(workingDirectory, path), workingDirectory);
         if (result.success) {
           await fetchTree();
         }

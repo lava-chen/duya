@@ -222,7 +222,69 @@ describe('CronFileStore', () => {
     const cron = s.listCrons()[0];
     expect(cron.id).toBeTruthy();
     // persisted back with the id
+
     expect(fs.readFileSync(file, 'utf-8')).toContain(`id = "${cron.id}"`);
+  });
+});
+
+describe('bot binding (Plan 476 P2.3a: cronjob.toml job.agent)', () => {
+  it('createCron persists an agent slug and reads it back', () => {
+    const cron = store.createCron(makeInput({ agent: 'weekly-reporter' }));
+    expect(cron.agent).toBe('weekly-reporter');
+
+    const store2 = new CronFileStore(file);
+    expect(store2.getCron(cron.id)!.agent).toBe('weekly-reporter');
+    expect(fs.readFileSync(file, 'utf-8')).toContain('agent = "weekly-reporter"');
+  });
+
+  it('defaults agent to null for a standalone cron (no field written)', () => {
+    const cron = store.createCron(makeInput());
+    expect(cron.agent).toBeNull();
+    const raw = fs.readFileSync(file, 'utf-8');
+    expect(raw).not.toContain('agent =');
+  });
+
+  it('rejects an invalid agent slug at create time', () => {
+    expect(() => store.createCron(makeInput({ agent: 'Bad Agent!' }))).toThrow(/not a valid agent slug/);
+    expect(() => store.createCron(makeInput({ agent: 'UPPER' }))).toThrow(/not a valid agent slug/);
+  });
+
+  it('updateCron can bind and unbind an agent', () => {
+    const cron = store.createCron(makeInput());
+    expect(cron.agent).toBeNull();
+
+    const bound = store.updateCron(cron.id, { agent: 'disk-saver' });
+    expect(bound.agent).toBe('disk-saver');
+
+    const unbound = store.updateCron(cron.id, { agent: null });
+    expect(unbound.agent).toBeNull();
+    const raw = fs.readFileSync(file, 'utf-8');
+    expect(raw).not.toContain('agent =');
+  });
+
+  it('idempotency treats agent as part of the match key (same name/schedule/ws, different bot = distinct jobs)', () => {
+    const a = store.createCron(makeInput({ agent: 'bot-a' }));
+    const againA = store.createCron(makeInput({ agent: 'bot-a' }));
+    expect(againA.id).toBe(a.id); // collapsed
+
+    const botB = store.createCron(makeInput({ agent: 'bot-b' }));
+    expect(botB.id).not.toBe(a.id); // different bot → distinct job
+    expect(store.listCrons()).toHaveLength(2);
+  });
+
+  it('parseCronJobFile rejects a hand-written job with an invalid agent', () => {
+    expect(() =>
+      parseCronJobFile(
+        'version = 1\n\n[[jobs]]\nname = "x"\nprompt = "do"\nenabled = true\nagent = "Bad Agent!"\nschedule = { kind = "every", every = "1h" }\n',
+      ),
+    ).toThrow(/job\.agent is not a valid agent slug/);
+  });
+
+  it('parseCronJobFile accepts a valid hand-written agent binding', () => {
+    const doc = parseCronJobFile(
+      'version = 1\n\n[[jobs]]\nname = "x"\nprompt = "do"\nenabled = true\nagent = "morning-digest"\nschedule = { kind = "every", every = "1h" }\n',
+    );
+    expect(doc.jobs[0].agent).toBe('morning-digest');
   });
 });
 

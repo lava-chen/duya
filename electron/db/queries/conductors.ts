@@ -330,68 +330,6 @@ export function deleteCanvasGroup(id: string): boolean {
 }
 
 // ============================================================
-// Canvas Group CRUD (asset library collections)
-// ============================================================
-
-function mapGroupRow(row: any): ConductorCanvasGroup {
-  return {
-    id: row.id,
-    name: row.name,
-    sortOrder: row.sort_order,
-    projectPath: row.project_path ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-export function listCanvasGroups(projectPath?: string | null): ConductorCanvasGroup[] {
-  const rows = projectPath
-    ? (db().prepare(
-        'SELECT * FROM conductor_canvas_groups WHERE project_path = ? OR project_path IS NULL ORDER BY sort_order, created_at DESC'
-      ).all(projectPath) as any[])
-    : (db().prepare(
-        'SELECT * FROM conductor_canvas_groups ORDER BY sort_order, created_at DESC'
-      ).all() as any[]);
-  return rows.map(mapGroupRow);
-}
-
-export function createCanvasGroup(data: { name: string; projectPath?: string | null }): ConductorCanvasGroup {
-  const id = randomUUID();
-  const now = Date.now();
-  db().prepare(
-    'INSERT INTO conductor_canvas_groups (id, name, sort_order, project_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, data.name, 0, data.projectPath ?? null, now, now);
-  return {
-    id,
-    name: data.name,
-    sortOrder: 0,
-    projectPath: data.projectPath ?? null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-export function updateCanvasGroup(id: string, data: { name?: string; sortOrder?: number }): ConductorCanvasGroup | null {
-  const now = Date.now();
-  const fields: string[] = ['updated_at = ?'];
-  const values: unknown[] = [now];
-  if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name); }
-  if (data.sortOrder !== undefined) { fields.push('sort_order = ?'); values.push(data.sortOrder); }
-  values.push(id);
-  db().prepare(`UPDATE conductor_canvas_groups SET ${fields.join(', ')} WHERE id = ?`).run(...values);
-  const row = db().prepare('SELECT * FROM conductor_canvas_groups WHERE id = ?').get(id) as any;
-  return row ? mapGroupRow(row) : null;
-}
-
-export function deleteCanvasGroup(id: string): boolean {
-  const d = db();
-  // Unassign canvases that belonged to this group so they return to "ungrouped".
-  d.prepare('UPDATE conductor_canvases SET group_id = NULL, updated_at = ? WHERE group_id = ?').run(Date.now(), id);
-  const result = d.prepare('DELETE FROM conductor_canvas_groups WHERE id = ?').run(id);
-  return result.changes > 0;
-}
-
-// ============================================================
 // Snapshot
 // ============================================================
 

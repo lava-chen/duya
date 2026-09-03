@@ -155,6 +155,10 @@ export interface MessageRow {
   tool_signature?: string | null;
   text_signature?: string | null;
   created_at: number;
+  /** Plan 486: thread/fork reference id (mirrors message metadata threadMeta). */
+  reply_to_id?: string | null;
+  /** Plan 486: true when the row belongs to a thread's branched layer. */
+  branched?: boolean | null;
 }
 
 /** Session lock row in the database */
@@ -1589,6 +1593,17 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     }
   }
 
+  // Plan 486: restore thread/fork metadata from the flat row columns so a
+  // reloaded session can serve getThread and keep branched messages out of
+  // the main projections. Metadata is added only when the row carries it.
+  let threadMeta: { replyToId?: string; branched?: boolean } | undefined;
+  if (row.reply_to_id != null || row.branched != null) {
+    threadMeta = {
+      ...(row.reply_to_id != null ? { replyToId: row.reply_to_id } : {}),
+      ...(row.branched != null ? { branched: row.branched === true } : {}),
+    };
+  }
+
   return {
     id: row.id,
     role: row.role,
@@ -1613,6 +1628,7 @@ export function messageRowToMessage(row: MessageRow, attachmentMap?: Map<string,
     api: providerState?.api as Message['api'],
     providerId: providerState?.providerId,
     model: providerState?.model,
+    ...(threadMeta ? { metadata: { threadMeta } } : {}),
   };
 }
 

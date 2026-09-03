@@ -312,7 +312,6 @@ export type SSEEvent =
         strategyProposal?: string;
       };
     };
-
 // ─── Message types (superset of packages/agent definitions) ───
 
 export interface Message {

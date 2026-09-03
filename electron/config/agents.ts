@@ -2,9 +2,19 @@
  * Shared config-agents write module (custom agent creation).
  * Mutates ConfigStore `agents` map and persists via the store.
  * Single write path for form (IPC) and CLI (HTTP route).
+ *
+ * Plan 485 §2.4: the FIRST creation of a bot also seeds its runtime
+ * identity file (`agents/<id>/profile.json`) from the config name /
+ * description. Later updates write config.toml only — runtime identity
+ * (which the model may change via update_state, Plan 481) lives in
+ * profile.json and is never overwritten by config saves.
  */
+import fs from 'fs';
 import type { CustomAgentConfig } from './schema.js';
 import { getConfigStore } from './store-instance.js';
+import { isSafeBotId } from './agent-id.js';
+import { getBotProfilePath } from './agent-paths.js';
+import { writeBotProfile } from './bot-profile.js';
 
 export interface AgentUpsertInput {
   name: string;
@@ -30,6 +40,7 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
   }
   const store = getConfigStore();
   const agents = (store.getByPath('agents') ?? {}) as Record<string, CustomAgentConfig>;
+  const isNewAgent = !(id in agents);
   const next: CustomAgentConfig = {
     name: input.name.trim(),
     description: input.description?.trim() || undefined,
@@ -38,10 +49,45 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
     agents_md: input.agents_md?.trim() || undefined,
     tools: input.tools && Object.keys(input.tools).length ? input.tools : undefined,
     plugins: input.plugins && input.plugins.length ? input.plugins : undefined,
+    // Plan 474 P3.2: `[agents.<id>.prompt]` is hand-edited toml config —
+    // the upsert input has no prompt surface, so preserve the existing
+    // table instead of dropping it on re-upsert.
+    prompt: agents[id]?.prompt,
   };
   agents[id] = next;
   store.set('agents', agents);
+  if (isNewAgent) {
+    seedBotProfileIfMissing(id, next, store);
+  }
   return next;
+}
+
+/**
+ * Plan 485 P2.1: on first creation, seed `agents/<id>/profile.json` from
+ * the config entry. Best-effort — a profile write failure must never roll
+ * back the config save. Existing profiles are never overwritten (runtime
+ * identity wins). Ids that fail `isSafeBotId` (e.g. legacy config keys)
+ * skip seeding until a migration tool lands (485 Phase 4).
+ */
+function seedBotProfileIfMissing(
+  id: string,
+  entry: CustomAgentConfig,
+  store: { getConfigDir(): string },
+): void {
+  if (!isSafeBotId(id)) return;
+  try {
+    const profilePath = getBotProfilePath(id, store.getConfigDir());
+    if (fs.existsSync(profilePath)) return;
+    writeBotProfile(profilePath, {
+      name: entry.name || id,
+      title: '',
+      description: entry.description ?? '',
+    });
+  } catch (err) {
+    // Best-effort: logging infra may not be wired in all callers yet.
+    // eslint-disable-next-line no-console
+    console.warn(`[config-agents] failed to seed profile for '${id}':`, err);
+  }
 }
 
 export function deleteConfigAgent(id: string): boolean {

@@ -14,7 +14,7 @@
  *
  * Plan 453 Task F.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
   OrbState,
   ProgressInfo,
@@ -88,8 +88,15 @@ export function useOrbState(): UseOrbStateReturn {
     }
   }, []);
 
+  // Guard against concurrent submits: if one is in-flight, reject the next.
+  // Without this, rapid Enter presses can push duplicate [user, assistant] pairs
+  // before the rejection (or the IPC round-trip) resolves.
+  const submitInFlightRef = useRef(false);
+
   const submit = useCallback(
     async (text: string, attachments?: string[]) => {
+      if (submitInFlightRef.current) return false;
+      submitInFlightRef.current = true;
       // Arm the in-flight guard on the main process BEFORE the local transition
       // unmounts the focused textarea (which can fire a spurious OS blur). This
       // closes the race where a blur delivered during INPUT→LOADING would
@@ -115,6 +122,8 @@ export function useOrbState(): UseOrbStateReturn {
         text: '',
         createdAt: Date.now(),
       };
+      // Track how many pairs we've pushed so rejection always removes the right ones.
+      const pairsPushedRef = { count: 1 };
       setMessages((prev) => [...prev, userTurn, assistantTurn]);
       transition('LOADING');
       setProgress({ label: '思考中', stage: 'thinking' });
@@ -126,7 +135,7 @@ export function useOrbState(): UseOrbStateReturn {
       try {
         const res = await window.electronAPI?.orb?.submit(text, attachments);
         if (!res?.accepted) {
-          // Drop the two optimistic turns we just appended.
+          // Drop exactly the two turns we just appended (count===1).
           setMessages((prev) => prev.slice(0, -2));
           transition('DORMANT');
           return false;
@@ -136,6 +145,8 @@ export function useOrbState(): UseOrbStateReturn {
         setMessages((prev) => prev.slice(0, -2));
         transition('DORMANT');
         return false;
+      } finally {
+        submitInFlightRef.current = false;
       }
     },
     [transition],

@@ -21,8 +21,35 @@ export {
   COMPACTION_CHECKPOINT_MESSAGE_TYPE,
   type ModelMessageProjection,
   type ProjectModelMessagesOptions,
+  type ProjectTranscriptOptions,
   type LegacyCompactionCheckpoint,
 } from './message-projectors.js';
+
+// Thread / fork branched layer (plan 486) — pure functions shared by the
+// agent runtime and (later) the thread UI.
+export {
+  THREAD_METADATA_KEY,
+  readThreadMeta,
+  isBranchedMessage,
+  isReplyMessage,
+  isBranchedEntry,
+  mergeThreadMetadata,
+  toThreadMessageView,
+  indexThreadViews,
+  resolveBranchRoot,
+  threadChainContains,
+  branchThreadDescendants,
+  branchReplyCounts,
+  getThread,
+  validateReplyTarget,
+  resolveReplyMeta,
+  renderReplyQuotePrefix,
+  messageToQuoteText,
+  applyReplyQuoteContext,
+  collectMessageIds,
+  type ThreadMeta,
+  type ThreadMessageView,
+} from './threads.js';
 
 // Persistence-row ingest (Message -> AgentMessage)
 export {

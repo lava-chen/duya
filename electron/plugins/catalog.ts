@@ -304,8 +304,11 @@ function applyInterfaceMetadata(
 ): PluginCatalogEntry {
   const iface = manifest.interface;
   if (!iface) return entry;
+  if (iface.displayName_zh) entry.displayName_zh = iface.displayName_zh;
   if (iface.shortDescription) entry.shortDescription = iface.shortDescription;
+  if (iface.shortDescription_zh) entry.shortDescription_zh = iface.shortDescription_zh;
   if (iface.longDescription) entry.longDescription = iface.longDescription;
+  if (iface.longDescription_zh) entry.longDescription_zh = iface.longDescription_zh;
   if (iface.defaultPrompt?.length) {
     entry.usageExamples = iface.defaultPrompt.map((prompt) => ({ prompt }));
   }

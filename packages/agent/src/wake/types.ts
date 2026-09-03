@@ -1,0 +1,114 @@
+/**
+ * wake/types.ts — Agent Wake Bus shared types (Plan 476 §2.1, §2.3).
+ *
+ * Pure types + small pure helpers only. This module never touches the
+ * runtime (no IPC, no DB): the authoritative WakeQueue loop lives in the
+ * Electron main process (Plan 476 §6.1), while everything here is safe to
+ * unit-test and to import from both the worker and the main process.
+ *
+ * Lane ordering follows grok's run-scheduler: user > agent > background.
+ * A session runs one exclusive run at a time; the head lane decides what
+ * executes next. `turnEpoch` (E3, see overview plan 473 §2.5.1) lets the
+ * runtime tell a superseded turn's tail side-effects (nudge, error
+ * reporting) to stand down.
+ */
+
+/** Three-lane scheduling (grok run-scheduler parity). */
+export type WakeLane = 'user' | 'agent' | 'background'
+
+/**
+ * Wake origin taxonomy — first-phase registry (Plan 476 §2.3). Each source
+ * owns its dedupe key semantics so the queue can collapse duplicates.
+ */
+export type WakeSourceKind =
+  | 'task.completion' // background: subagent/shell finished (dedupe: taskId)
+  | 'automation.fire' // background: cron/event automation (dedupe: jobKey+fireKey)
+  | 'connector.inbound' // background: gateway inbound (dedupe: envelope id)
+  | 'broadcast' // background: admin broadcast (dedupe: broadcast id)
+  | 'agent.dm' // agent: bot→bot message, priority-capable (dedupe: clientMsgId)
+  | 'user.message' // user: direct chat dispatch (dedupe: —)
+
+/** Lane for each source kind (compile-time mirror of 476 §2.3). */
+export const SOURCE_DEFAULT_LANE: Readonly<Record<WakeSourceKind, WakeLane>> = {
+  'task.completion': 'background',
+  'automation.fire': 'background',
+  'connector.inbound': 'background',
+  broadcast: 'background',
+  'agent.dm': 'agent',
+  'user.message': 'user',
+}
+
+/**
+ * Whether this source kind may preempt a non-user run. Only direct user
+ * turns and priority DMs preempt (476 §2.2; grok agent-to-agent-messaging).
+ */
+export function sourceCanPreempt(source: WakeSourceKind): boolean {
+  return source === 'user.message' || source === 'agent.dm'
+}
+
+/** Quiet-work marker: automation wake whose completed items are all quiet. */
+export interface QuietWakeOrigin {
+  automation?: { id: string; name: string }
+}
+
+/**
+ * Source payload — discriminated union. Concrete shapes are filled by each
+ * wiring plan (476 P2, 477 for agent.dm, 482 for external agents); today we
+ * only pin the discriminant + ids that dedupe needs.
+ */
+export type WakePayload =
+  | { kind: 'completion'; taskId: string; title?: string; quiet?: boolean; summary?: string }
+  | { kind: 'automation'; jobKey: string; fireKey: string; name?: string; quiet?: boolean }
+  | { kind: 'inbound'; envelopeId: string; text?: string }
+  | { kind: 'broadcast'; broadcastId: string; text: string }
+  | { kind: 'dm'; clientMsgId: string; fromAgentId: string; text: string; priority?: boolean }
+  | { kind: 'user'; text: string; messageId?: string }
+
+/** Dedupe key of an item (the queue collapses on it). */
+export function wakeDedupeKey(item: WakeItem): string {
+  switch (item.payload.kind) {
+    case 'completion':
+      return `task:${item.payload.taskId}`
+    case 'automation':
+      return `auto:${item.payload.jobKey}:${item.payload.fireKey}`
+    case 'inbound':
+      return `inbound:${item.payload.envelopeId}`
+    case 'broadcast':
+      return `broadcast:${item.payload.broadcastId}`
+    case 'dm':
+      return `dm:${item.payload.clientMsgId}`
+    case 'user':
+      return item.payload.messageId == null
+        ? `user:${item.enqueuedAtMs}`
+        : `user:${item.payload.messageId}`
+  }
+}
+
+/** A single pending wake for one agent/bot. */
+export interface WakeItem {
+  /** Dedupe key (supplied by source via wakeDedupeKey). */
+  id: string
+  source: WakeSourceKind
+  lane: WakeLane
+  agentId: string
+  enqueuedAtMs: number
+  /** E3 turn epoch: assigned by main at dispatch for user/priority lanes. */
+  turnEpoch?: number
+  quietOrigin?: QuietWakeOrigin
+  payload: WakePayload
+  /** True when this item was re-queued after being preempted. */
+  isRedriven?: boolean
+}
+
+/** Priority flag derived from the item (user or priority DM preempts). */
+export function isPreemptingItem(item: WakeItem): boolean {
+  if (item.lane === 'user') return true
+  return item.source === 'agent.dm' && item.payload.kind === 'dm' && item.payload.priority === true
+}
+
+/** Lane rank for strict ordering: user(0) > agent(1) > background(2). */
+export const LANE_RANK: Readonly<Record<WakeLane, number>> = {
+  user: 0,
+  agent: 1,
+  background: 2,
+}

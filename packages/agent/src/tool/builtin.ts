@@ -25,7 +25,6 @@ import { subagentTool } from './SubagentTool/index.js';
 import { todoTool } from './TodoTool/TodoTool.js';
 import { getTaskOutputTool } from './BackgroundTaskTool/index.js';
 import { killTaskTool } from './BackgroundTaskTool/index.js';
-import { waitTasksTool } from './BackgroundTaskTool/index.js';
 import { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 import { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 import { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
@@ -44,6 +43,9 @@ import { moduleTool } from './ModuleTool/ModuleTool.js';
 import { runVisualSelfReview } from './WidgetRenderer/runVisualSelfReview.js';
 import { hasShellFamily } from '../utils/shellDetector.js';
 import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
+import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
+import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
+import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 
 /**
  * BashTool instance
@@ -134,10 +136,10 @@ export function createBuiltinRegistry(
   // Phase 5: Todo tool (aligned to Grok todo_write)
   registry.register(todoTool.toTool(), todoTool, { exposeMode: 'always' });
 
-  // Phase 5: Background sub-agent task polling tools (aligned to Grok).
-  // get_task_output / wait_tasks are read-only; kill_task is a write.
+  // Phase 5: Background sub-agent task tools. get_task_output is a read-only
+  // status/output snapshot (never blocks — completion arrives as an async
+  // <task-notification>); kill_task is a write.
   registry.register(getTaskOutputTool.toTool(), getTaskOutputTool, { exposeMode: 'always', riskTier: 'read' });
-  registry.register(waitTasksTool.toTool(), waitTasksTool, { exposeMode: 'always', riskTier: 'read' });
   registry.register(killTaskTool.toTool(), killTaskTool, { exposeMode: 'always', riskTier: 'write' });
 
   // Plan mode controls are available through tool_search when needed.
@@ -286,6 +288,21 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // registry (including MCP-injected tools).
   registry.register(toolSearchTool.toTool(), toolSearchTool, { exposeMode: 'always' });
 
+  // Plan 480 P2.1: discovery + invocation meta tools. Their names and schemas
+  // are byte-constant; dynamic tools (MCP / plugins / connectors) never enter
+  // the request's tools array — the model reads their schemas via
+  // `tool_schema` and invokes via `tool_invoke`. The catalog provider is
+  // injected per-call by the agent (like toolSearchTool.setSearchFn); the
+  // invocation dispatcher is wired in P2.2 (permission gate) / P3.
+  registry.register(toolSchemaTool.toTool(), toolSchemaTool, { exposeMode: 'always' });
+  registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposeMode: 'always' });
+
+  // Plan 481 T1: update_state — bot memory/state writes through the 479 tier
+  // store (see UpdateStateTool). Discoverable: only bot profiles surface it
+  // (bot-toolset.ts appends it to allowedTools); checkPermissions maps
+  // own=allow / shared=ask per the 481 permission matrix.
+  registry.register(updateStateTool.toTool(), updateStateTool, { exposeMode: 'discoverable' });
+
   return registry;
 }
 
@@ -306,9 +323,8 @@ export type { AgentDefinition, SubagentToolInput, SubagentToolResult } from './S
 
 // Phase 5 tools exports
 export { todoTool, TODO_TOOL_NAME, LEGACY_TODO_WIRE_NAMES } from './TodoTool/TodoTool.js';
-export { getTaskOutputTool, GET_TASK_OUTPUT_TOOL_NAME, DEFAULT_WAIT_TIMEOUT_MS, MAX_MULTI_WAIT_IDS, DEFAULT_TOOL_OUTPUT_BYTES } from './BackgroundTaskTool/GetTaskOutputTool.js';
+export { getTaskOutputTool, GET_TASK_OUTPUT_TOOL_NAME, MAX_MULTI_TASK_IDS, DEFAULT_TOOL_OUTPUT_BYTES } from './BackgroundTaskTool/GetTaskOutputTool.js';
 export { killTaskTool, KILL_TASK_TOOL_NAME } from './BackgroundTaskTool/KillTaskTool.js';
-export { waitTasksTool, WAIT_TASKS_TOOL_NAME } from './BackgroundTaskTool/WaitTasksTool.js';
 export { enterPlanModeTool } from './EnterPlanModeTool/EnterPlanModeTool.js';
 export { exitPlanModeTool } from './ExitPlanModeTool/ExitPlanModeTool.js';
 export { switchModeTool } from './SwitchModeTool/SwitchModeTool.js';
@@ -321,5 +337,7 @@ export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/ind
 // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
 // duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.
 export { duyaCliTool } from './DuyaCliTool/index.js';
+export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool/index.js';
+export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';
 
 

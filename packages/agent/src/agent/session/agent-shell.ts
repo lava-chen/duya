@@ -34,6 +34,7 @@ import {
 } from '../../prompts/index.js';
 import type { PromptSystem } from '../../prompts/index.js';
 import type { ToolRegistry } from '../../tool/registry.js';
+import { readToolExposureConfig } from '../../config/tool-exposure.js';
 import type { AgentDefinition } from '../../tool/SubagentTool/index.js';
 import type { ChatOptions, Message, MessageContent, SSEEvent, Tool, WidgetStyleSignature } from '../../types.js';
 import { logger } from '../../utils/logger.js';
@@ -189,6 +190,14 @@ export async function buildSystemPrompt(
       ctx.activeMCPRegistry.getAllTools().filter(
         (tool) => ctx.activeMCPRegistry.getOwner(tool.name) === 'mcp',
       ),
+      // Plan 480 §8.4: under `exposure = "catalog"` point the model at the
+      // tool_schema/tool_invoke meta pair (tools are not in the tools array).
+      {
+        entryPoint:
+          readToolExposureConfig().exposure === 'catalog'
+            ? 'tool_invoke'
+            : 'tool_search',
+      },
     );
     if (mcpCatalog) {
       systemPromptContent = systemPromptContent ? `${systemPromptContent}\n\n${mcpCatalog}` : mcpCatalog;

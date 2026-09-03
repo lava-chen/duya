@@ -13,6 +13,11 @@ import {
   buildAgentContext,
   cloneValue,
 } from './message-framework.js';
+import {
+  THREAD_METADATA_KEY,
+  isBranchedEntry,
+  isBranchedMessage,
+} from './threads.js';
 
 /**
  * Three explicit output boundaries for {@link AgentMessage}.
@@ -62,6 +67,13 @@ export interface ProjectModelMessagesOptions {
 /**
  * Projects AgentMessages to the provider boundary: a separate system prompt
  * plus a `Message[]` ready for the model.
+ *
+ * Plan 486 §2.2 (model boundary): branched-layer messages (`branched: true`)
+ * are excluded so a fork never pollutes the main model context — this is the
+ * single filter that also keeps the compaction input free of branches. The
+ * thread metadata key is stripped from every surviving message so provider
+ * message content stays clean (reply context is conveyed via the quote prefix
+ * rendered by the caller, not via metadata).
  */
 export function projectModelMessages(
   messages: readonly AgentMessage[],
@@ -69,7 +81,8 @@ export function projectModelMessages(
 ): ModelMessageProjection {
   const providerMessages: Message[] = [];
   for (const message of messages) {
-    providerMessages.push(...toModelBoundary(message));
+    if (isBranchedMessage(message)) continue;
+    providerMessages.push(...toModelBoundary(stripThreadMeta(message)));
   }
   const system = mergeSystemSegments(options.systemSegments);
   return { system, messages: providerMessages };
@@ -101,6 +114,22 @@ export function projectRuntimeContextToProviderMessage(
       source: message.source,
     },
   };
+}
+
+/**
+ * Returns a copy of the message with the thread metadata key removed from its
+ * outer metadata. Messages without the key are returned as-is (no allocation).
+ * The model boundary uses this so `replyToId` / `branched` never leak into the
+ * provider request — reply context reaches the model only via the quote prefix.
+ */
+function stripThreadMeta(message: AgentMessage): AgentMessage {
+  const metadata = (message as { metadata?: Readonly<Record<string, unknown>> }).metadata;
+  if (!metadata || metadata[THREAD_METADATA_KEY] === undefined) return message;
+  const { [THREAD_METADATA_KEY]: _removed, ...rest } = metadata;
+  return {
+    ...(message as object),
+    metadata: Object.keys(rest).length > 0 ? rest : undefined,
+  } as AgentMessage;
 }
 
 /**
@@ -536,6 +565,13 @@ export function getLegacyCompactionCheckpoint(
  * Projects a complete timeline for durable storage. A checkpoint replaces its
  * raw compacted prefix with one marker plus the retained suffix, so a DB reload
  * has enough information to rebuild the same append-only projection.
+ *
+ * Plan 486 §2.4: the main compaction window folds MAIN-line messages only.
+ * Branched (thread) messages that fall inside the folded prefix are ordinary
+ * timeline entries of the branched layer — never part of the main context —
+ * so they are kept after the marker. A reload can then still serve getThread
+ * for the thread, exactly like grok where branches page independently of the
+ * main transcript and are never swallowed by the main compaction window.
  */
 export function projectTimelinePersistenceMessages(
   entries: readonly MessageTimelineEntry[],
@@ -556,8 +592,25 @@ export function projectTimelinePersistenceMessages(
     msg_type: COMPACTION_CHECKPOINT_MESSAGE_TYPE,
     tool_input: JSON.stringify(checkpoint),
   };
+
+  // Branched messages located strictly before the retained suffix (inside the
+  // folded prefix). The prefix is what the main window compressed; its branched
+  // entries survive for the thread layer.
+  const firstKeptIndex = entries.findIndex(
+    (entry) => entry.type === 'message' && entry.message.id === checkpoint.firstKeptMessageId,
+  );
+  const foldedBranched: AgentMessage[] = [];
+  if (firstKeptIndex > 0) {
+    for (const entry of entries.slice(0, firstKeptIndex)) {
+      if (entry.type === 'message' && isBranchedEntry(entry)) {
+        foldedBranched.push(entry.message);
+      }
+    }
+  }
+
   return [
     marker,
+    ...projectPersistenceMessages(foldedBranched),
     ...projectPersistenceMessages(
       projection.messages.filter((message) => message.role !== 'compaction_summary'),
     ),
@@ -569,16 +622,28 @@ export function projectTimelinePersistenceMessages(
 /**
  * Projects the visible subset of AgentMessages to the legacy `Message[]`
  * shape for renderer display. Hidden messages (mailbox, background
- * notifications, etc.) are always excluded. This is independent of
- * `persistence` and `includeInModel`, and it does NOT reuse the provider
- * projector: the transcript owns its own conversion path.
+ * notifications, etc.) are always excluded, as are branched-layer messages
+ * (plan 486 §2.2 transcript boundary) so the MAIN timeline never shows thread
+ * traffic. Pass `includeBranched: true` to project a thread view instead
+ * (the thread opener renders root + descendants through the same projector).
+ * This is independent of `persistence` and `includeInModel`, and it does NOT
+ * reuse the provider projector: the transcript owns its own conversion path.
  */
+export interface ProjectTranscriptOptions {
+  readonly includeBranched?: boolean;
+}
+
 export function projectTranscriptMessages(
   messages: readonly AgentMessage[],
+  options: ProjectTranscriptOptions = {},
 ): Message[] {
+  const includeBranched = options.includeBranched === true;
   const result: Message[] = [];
   for (const message of messages) {
     if ((message as { visibility?: AgentMessageVisibility }).visibility !== 'visible') {
+      continue;
+    }
+    if (!includeBranched && isBranchedMessage(message)) {
       continue;
     }
     const legacy = toBoundaryMessage(message);

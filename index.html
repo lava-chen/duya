@@ -25,6 +25,17 @@
           if (storedFont === "system") {
             document.documentElement.setAttribute("data-font", "system");
           }
+
+          // Native window backdrop (Mica / macOS vibrancy) — reported
+          // synchronously by the preload through additionalArguments.
+          // globals.css then switches the chrome surfaces to glass.
+          var api = window.electronAPI;
+          var backdrop = api && api.system && api.system.windowBackdrop
+            ? api.system.windowBackdrop
+            : "";
+          if (backdrop === "mica" || backdrop === "vibrancy") {
+            document.documentElement.setAttribute("data-backdrop", backdrop);
+          }
         } catch (_) {
           /* ignore */
         }
@@ -118,6 +129,16 @@
       :root[data-theme="dark"] .duya-boot-spinner::after {
         border-bottom-color: rgba(167, 139, 250, 0.28);
         border-left-color: rgba(167, 139, 250, 0.28);
+      }
+
+      /* With a native window backdrop (Mica / vibrancy) the boot splash goes
+         translucent too, so the wallpaper tint shows from the very first paint
+         instead of flashing a solid cream block over the material. */
+      :root[data-backdrop] #duya-boot-splash {
+        background: rgba(254, 250, 246, 0.6);
+      }
+      :root[data-backdrop][data-theme="dark"] #duya-boot-splash {
+        background: rgba(37, 37, 37, 0.62);
       }
     </style>
   </head>
