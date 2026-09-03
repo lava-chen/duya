@@ -117,6 +117,18 @@ process.on('message', (msg: Record<string, unknown>) => {
     }
     return;
   }
+  // Plan 481: route memory-tier:rpc:response back to the worker.
+  if (msg.type === 'memory-tier:rpc:response' && typeof msg.requestId === 'string') {
+    const key = `rpc:${msg.requestId}`;
+    const workerChild = workerDbRequests.get(key);
+    if (workerChild) {
+      workerDbRequests.delete(key);
+      if (!workerChild.killed) {
+        workerChild.send(msg);
+      }
+    }
+    return;
+  }
 });
 
 function dbRequest(action: string, payload: Record<string, unknown>): Promise<unknown> {
