@@ -67,8 +67,8 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [413e-plan-mode-frontend-session](./active/413e-plan-mode-frontend-session.md) | plan-task session 化前端：extensions key + set_plan_mode IPC + store/ChatView/MessageInput + mode-id | P1 | Planning |
 | [420-goal-observability-persistence](./active/420-goal-observability-persistence.md) | Goal 可观测性+持久化：迁移日志 / goal_mode_enabled 标签恢复 / start 立即落盘 + 富事件 + 渲染端 modeState.get | P1 | ✅ 完成（2026-08-12） |
 | [421-goal-ui](./active/421-goal-ui.md) | Goal UI 重设计（对齐 OptionPanel）：GoalStatusChip + GoalStatusPanel + 删旧 GoalStatusCard | P1 | ✅ 完成（2026-08-12） |
-| [422-compaction-strategy-consolidation](./active/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model） | P0 | Implementation |
 | [424-config-driven-custom-agents](./active/424-config-driven-custom-agents.md) | 配置化自定义 Agent：config.toml `[agents.<id>]` 驱动 + 每 agent 独立 workspace/AGENTS.md + model/tools/plugins（对齐 openclaw；取代 420 DB 方向） | P1 | 读侧接线完成（Task 3-7）；创建层落地于 [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) |
+| [486-message-threads](./active/486-message-threads.md) | **消息 thread/fork 分支层**（2026-09-02 新立）：同一 timeline 内分支（replyToId + branched）→ 主投影/转录过滤 + threads 纯函数聚合 + 请求边界 quote 注入 + 压缩不占主窗口 + UI "Start a thread"（483 承接）——非新会话，复用 315 基座 | P1 | Implementation（Phase 1-3 ✅ 2026-09-03；**178 相关单测 0 失败** + agent typecheck 绿；Phase 4/e2e 依赖 483 UI） |
 | [custom-agent-creation](../superpowers/plans/2026-08-14-custom-agent-creation.md) | 自定义 Agent 创建：对话式（内置 skill）+ CLI（`duya agent create/list/delete`）+ 设置页表单三端统一写 `~/.duya/config.toml` `[agents.<id>]` | P1 | ✅ 实现完成（Phase A 读侧 + Phase B 创建层，24 单测通过） |
 | [429-harness-gap-closure](./active/429-harness-gap-closure.md) | 现代 Agent Harness 差距整改：编辑验证闭环 / PreToolUse 阻断 / 文件级 checkpoint-rewind / Windows 沙箱 / 模型故障转移 / 子代理并行 UI（证据核验完成，分项方案已定） | P0（首项）/P1 | Planning |
 | [440-provider-stream-coverage](./active/440-provider-stream-coverage.md) | Provider 流解析覆盖度：refusal 静默空回复修复（P0）+ unknown block 降级不丢弃策略（Anthropic server tools / Responses items，P1）+ encrypted reasoning 回放与 annotations/logprobs 捕获（P2）+ bedrock/vertex/gemini 接入（P3）；audio 明确 won't-fix | P0 | Phase 0-2 ✅（2026-08-23）；P3 由 plan 451 接管 |
@@ -180,6 +180,7 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [65-recap-feature](./active/65-recap-feature.md) | Session Recap — auto show session summary on return | P1 | Planning |
 | [37-subagent-nested-session](./active/37-subagent-nested-session.md) | SubAgent nested-session sidebar display | P1 | Planning |
 | [472-unified-attachment-card-visual](./active/472-unified-attachment-card-visual.md) | Pasted / ref cards merge with image cards in one row; align to 104×104 rounded-2xl square | P2 | In progress |
+| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组（Telegram 式联系人）+ 类 Telegram 聊天视图 + Bot 资料/设置（bot 系列 473-486 之 UI 面） | P1 | Phase 1 基础 ✅（2026-09-03）；Phase 0/2/3 待做 |
 
 ### Infrastructure & Research
 
@@ -207,6 +208,7 @@ Moved here when finished. Each includes original goal, key decisions, and lesson
 
 | Plan | Description | Completed |
 |------|-------------|-----------|
+| [422-compaction-strategy-consolidation](./completed/422-compaction-strategy-consolidation.md) | 压缩**全面对齐 grok**：收敛单一 `session_memory` 策略 + grok 式重建会话（AGENTS.md/last_query/reminder 重注入）+ 9 段 prompt + 健壮性（tool-call 不变式/退化检测/错误分类/两遍 prefire/独立 compact_model）；P3.4 segment 落盘 won't-fix（rollout 441 已覆盖） | 2026-09-03 |
 | [241-on-demand-tool-discovery](./completed/241-on-demand-tool-discovery.md) | `tool_search` meta-entry + schema summary + builtin tiering + dynamic dispatch (3 phases) | — |
 | [317-message-persistence-simplification](./completed/317-message-persistence-simplification.md) | 单一写者 + 单一 append-only `messages` 表 + 稳定边界批量落库；封存 `conversation_entries`；废弃前端写库旁路；统一 IPC 传输 | 2026-08-05 |
 | [327-core-db-state-aggregates](./completed/327-core-db-state-aggregates.md) | core-db 状态聚合：Mailbox（状态机 + apply 矩阵唯一实现）+ stores.ts（TaskStore/PermissionLedger/LockStore 合并）+ mailbox 死代码清理 | 2026-08-07 |
