@@ -49,7 +49,8 @@ import { TaskDrawer } from '@/components/layout/TaskDrawer';
 import { useTaskDrawerOpen } from '@/components/layout/task-drawer-store';
 import { useTaskList } from '@/hooks/useTaskList';
 import { useGitStatus } from '@/hooks/useGitStatus';
-import { getGitStatus } from '@/lib/git-ipc';
+import { getGitStatus, getGitLatestTurnReview } from '@/lib/git-ipc';
+import type { GitTurnReview } from '@/lib/git-ipc';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
 import { useOptionalPanel } from '@/hooks/usePanel';
 import { useConductorStore } from '@duya/conductor/renderer/stores/conductor-store';
@@ -461,11 +462,42 @@ export function ChatView({
     };
   }, [isStreaming, activeThread?.workingDirectory]);
 
+  // Plan 308 Phase 2: once a turn completes, pull the agent-persisted
+  // per-turn review so the pill shows turn-scoped numbers instead of
+  // repo-wide uncommitted totals (which mix in other sessions' changes).
+  const [lastTurnReview, setLastTurnReview] = useState<GitTurnReview | null>(null);
+  const prevStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    const wasStreaming = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+    if (!wasStreaming || isStreaming) return;
+    const cwd = activeThread?.workingDirectory;
+    if (!sessionId || !cwd) return;
+    let cancelled = false;
+    const fetchTurnReview = (allowRetry: boolean) => {
+      void getGitLatestTurnReview(sessionId, cwd).then((result) => {
+        if (cancelled) return;
+        if (result.review) {
+          setLastTurnReview(result.review);
+        } else if (allowRetry) {
+          // persistTurnReview lands before chat:done, but retry once in
+          // case the renderer's streaming flag flipped a beat earlier.
+          window.setTimeout(() => { if (!cancelled) fetchTurnReview(false); }, 1500);
+        }
+      }).catch(() => {
+        // Ignore — live gitStatus stays the fallback source.
+      });
+    };
+    fetchTurnReview(true);
+    return () => { cancelled = true; };
+  }, [isStreaming, sessionId, activeThread?.workingDirectory]);
+
   // Clear baseline when the session changes so the pill from a previous
   // session does not bleed into the new one.
   useEffect(() => {
     setGitBaseline(null);
     baselineCapturedRef.current = false;
+    setLastTurnReview(null);
   }, [sessionId]);
 
   // Derive a stable fingerprint from the file-change list so the pill
@@ -927,15 +959,26 @@ export function ChatView({
         }
         return;
       }
-      // New round: reset the git baseline so the floating pill captures
-      // a fresh snapshot when streaming begins.
+      // New round: reset the git baseline and capture the pre-turn state
+      // immediately — before the agent can write any files — so the
+      // streaming pill doesn't miss the turn's earliest edits.
       setGitBaseline(null);
       baselineCapturedRef.current = false;
+      if (activeThread?.workingDirectory) {
+        void getGitStatus(activeThread.workingDirectory).then((status) => {
+          baselineCapturedRef.current = true;
+          setGitBaseline({
+            isGitRepo: status.isGitRepo,
+            fileChanges: status.fileChanges ?? [],
+            totals: status.totals ?? { additions: 0, removals: 0, fileCount: 0 },
+          });
+        }).catch(() => {});
+      }
       // Parse model format: "[providerName] modelName" to extract pure model name
       const { modelName: actualModel } = parseModelName(sessionModel || '');
       onSendMessage(content, actualModel, files, agentProfileId, outputStyleConfig, mode, effort, displayContent, conductorEnabled, undefined, permissionMode);
     },
-    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode]
+    [agentProfileId, isStreaming, onSendMessage, parseModelName, sendMailbox, sessionId, sessionModel, effort, conductorEnabled, permissionMode, busyMessageMode, activeThread?.workingDirectory]
   );
 
   // Toggle conductor mode for the current session. On enable, resolve the
@@ -1436,6 +1479,7 @@ export function ChatView({
                     onToggleTaskStatus={handleToggleFloatingTask}
                     workingDirectory={activeThread?.workingDirectory ?? null}
                     showFileChanges={showFileChanges}
+                    turnReview={isStreaming ? null : lastTurnReview}
                   />
 
                   {/* Bottom toolbar - outside input box */}
@@ -1555,6 +1599,7 @@ export function ChatView({
                 onToggleTaskStatus={handleToggleFloatingTask}
                 workingDirectory={activeThread?.workingDirectory ?? null}
                 showFileChanges={showFileChanges}
+                turnReview={isStreaming ? null : lastTurnReview}
               />
             )}
 

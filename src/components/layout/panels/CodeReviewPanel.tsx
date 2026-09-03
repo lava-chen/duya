@@ -23,11 +23,14 @@ import {
 import { dispatchAddAttachment } from "@/lib/add-attachment-event";
 import {
   getGitLatestTurnReview,
+  getGitTurnHistory,
+  getGitTurnDetail,
   getGitReviewScoped,
   getGitCommits,
   type GitReviewFile,
   type GitReviewResult,
   type GitTurnReview,
+  type GitTurnHistoryEntry,
   type ReviewScopeParams,
   type GitCommitInfo,
 } from "@/lib/git-ipc";
@@ -56,6 +59,16 @@ const SCOPE_LABELS: Record<ReviewScope, string> = {
   staged:      "已暂存 (HEAD → 索引)",
   commit:      "提交对比",
 };
+
+/** Relative-time label for a persisted turn (history dropdown). */
+function formatTurnAge(capturedAt: number): string {
+  const minutes = Math.max(0, Math.floor((Date.now() - capturedAt) / 60_000));
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
 
 const EMPTY_REVIEW: GitReviewResult = { isGitRepo: false, files: [] };
 
@@ -290,6 +303,9 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
   const [review, setReview] = useState<GitReviewResult>(EMPTY_REVIEW);
   const [scope, setScope] = useState<ReviewScope>(() => sessionId ? "latest-turn" : "uncommitted");
   const [turnReview, setTurnReview] = useState<GitTurnReview | null>(null);
+  // Plan 308 Phase 2: persisted turn list for the history selector.
+  const [turns, setTurns] = useState<GitTurnHistoryEntry[]>([]);
+  const [selectedTurnId, setSelectedTurnId] = useState("");
   const [commitFrom, setCommitFrom] = useState("");
   const [commitTo, setCommitTo] = useState("");
   const [commits, setCommits] = useState<GitCommitInfo[]>([]);
@@ -325,12 +341,19 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
           setError("当前会话没有项目目录。");
           return;
         }
-        const next = await getGitLatestTurnReview(sessionId, workingDirectory);
-        if (next.error) setError(next.error);
-        const stored = next.review ?? null;
+        // Plan 308 Phase 2: load the session's turn list for the history
+        // selector alongside the latest review.
+        const [latest, history] = await Promise.all([
+          getGitLatestTurnReview(sessionId, workingDirectory),
+          getGitTurnHistory(sessionId, workingDirectory, 50),
+        ]);
+        if (history.turns) setTurns(history.turns);
+        if (latest.error) setError(latest.error);
+        const stored = latest.review ?? null;
         setTurnReview(stored);
+        setSelectedTurnId(stored?.id ?? "");
         setReview({
-          isGitRepo: next.isGitRepo,
+          isGitRepo: latest.isGitRepo,
           branch: stored ? "上一轮对话" : undefined,
           baseRef: stored ? "开始 → 结束" : undefined,
           files: stored?.files ?? [],
@@ -408,6 +431,38 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
     setDiffLoading(false);
   }, [scope, turnReview, review.patch, review.binary, review.truncated]);
 
+  // Plan 308 Phase 2: picking an older turn from the history dropdown
+  // swaps in that turn's persisted review. refresh() already applied the
+  // matching review, so the id guard skips that redundant path.
+  useEffect(() => {
+    if (scope !== "latest-turn" || !selectedTurnId || !workingDirectory) return;
+    if (turnReview?.id === selectedTurnId) return;
+    let cancelled = false;
+    setDiffLoading(true);
+    void getGitTurnDetail(workingDirectory, selectedTurnId).then((detail) => {
+      if (cancelled) return;
+      if (detail.error) setError(detail.error);
+      const stored = detail.review ?? null;
+      setTurnReview(stored);
+      setReview({
+        isGitRepo: detail.isGitRepo,
+        branch: stored ? "历史轮次" : undefined,
+        baseRef: stored ? "开始 → 结束" : undefined,
+        files: stored?.files ?? [],
+        totals: stored?.totals,
+      });
+    }).catch(() => {
+      if (!cancelled) {
+        setError("无法读取该轮变更。");
+        setDiffLoading(false);
+      }
+    });
+    return () => { cancelled = true; };
+    // turnReview is read only as an applied-already guard; it must not
+    // retrigger the fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTurnId, scope, workingDirectory]);
+
   const filePatches = useMemo(() => parseReviewPatch(patch), [patch]);
   const selectedFile = files.find((file) => file.path === selectedPath) ?? null;
   const filteredFiles = useMemo(
@@ -466,6 +521,22 @@ export function CodeReviewPanel({ tab }: { tab: PageTab; embedded: boolean }) {
               <option key={key} value={key}>{SCOPE_LABELS[key]}</option>
             ))}
           </select>
+          {scope === "latest-turn" && turns.length > 0 && (
+            <select
+              className="code-review-scope-select"
+              value={selectedTurnId}
+              onChange={(e) => setSelectedTurnId(e.target.value)}
+              aria-label="选择轮次"
+            >
+              {turns.map((turn, index) => (
+                <option key={turn.id} value={turn.id}>
+                  {index === 0
+                    ? `最近一轮 · +${turn.additions} −${turn.removals}`
+                    : `${formatTurnAge(turn.capturedAt)} · +${turn.additions} −${turn.removals} · ${turn.fileCount} 文件`}
+                </option>
+              ))}
+            </select>
+          )}
           {scope === "commit" && (
             <div className="code-review-scope-commit-pickers">
               <select
