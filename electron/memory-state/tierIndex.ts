@@ -31,7 +31,7 @@ import {
   type MemoryTier,
   type TierEntryKind,
   type MergedTierRecall,
-} from './tierConflicts';
+} from '../../packages/agent/src/memory-state/tierConflicts';
 
 export type { MemoryTier, TierEntryKind, MergedTierRecall };
 
