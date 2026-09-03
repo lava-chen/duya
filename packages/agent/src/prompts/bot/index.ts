@@ -18,6 +18,9 @@ export type {
   BotRosterEntry,
   BotSnapshotKey,
   BotRenderOptions,
+  BotPromptConfig,
+  BotPromptSectionsFilter,
+  BotPromptIdentityConfig,
 } from './framework.js'
 export {
   computeBotContentHash,

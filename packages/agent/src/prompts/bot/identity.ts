@@ -30,6 +30,7 @@ export function renderBotIdentity(ctx: BotPromptContext): string | null {
   if (name) lines.push(`You are **${name}** — a persistent bot inside the Duya desktop app, not a one-shot session.`)
   if (agentId) lines.push(`Your stable agent id is \`${agentId}\`. Other agents and automations refer to you by this id.`)
   if (ctx.botDescription) lines.push(`Your role: ${ctx.botDescription}.`)
+  if (ctx.voice) lines.push(`Your voice: ${ctx.voice}.`)
   lines.push('')
   lines.push('You may run in the background when a task or scheduled automation wakes you. In every reply you give, act as this bot — consistent, in-character, and focused on the user you are serving.')
   return lines.join('\n')

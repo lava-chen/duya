@@ -49,6 +49,10 @@ export function upsertConfigAgent(id: string, input: AgentUpsertInput): CustomAg
     agents_md: input.agents_md?.trim() || undefined,
     tools: input.tools && Object.keys(input.tools).length ? input.tools : undefined,
     plugins: input.plugins && input.plugins.length ? input.plugins : undefined,
+    // Plan 474 P3.2: `[agents.<id>.prompt]` is hand-edited toml config —
+    // the upsert input has no prompt surface, so preserve the existing
+    // table instead of dropping it on re-upsert.
+    prompt: agents[id]?.prompt,
   };
   agents[id] = next;
   store.set('agents', agents);

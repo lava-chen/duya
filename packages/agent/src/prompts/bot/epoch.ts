@@ -76,6 +76,8 @@ export function computeBotContentHash(ctx: BotPromptContext): string {
     ['timezone', safeStable(ctx.timezone ?? null)],
     ['communicationPlatform', safeStable(ctx.communicationPlatform ?? null)],
     ['workingDirectory', safeStable(ctx.workingDirectory ?? null)],
+    ['voice', safeStable(ctx.voice ?? null)],
+    ['promptConfig', safeStable(ctx.promptConfig ?? null)],
     ['agentDirectory', safeStable(roster)],
     ['channels', safeStable(ctx.channels ?? null)],
     ['memory', safeStable(ctx.memory ?? null)],

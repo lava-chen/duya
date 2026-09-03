@@ -33,6 +33,32 @@ export interface BotRosterEntry {
   description?: string
 }
 
+/** Plan 474 §2.4 — section gating from `[agents.<id>.prompt.sections]`. */
+export interface BotPromptSectionsFilter {
+  /** Whitelist: when non-empty, only these registered sections render. */
+  enable?: string[]
+  /** Blacklist: these sections never render; wins over enable. */
+  disable?: string[]
+}
+
+/**
+ * Plan 474 §2.4 — structured prompt persona from
+ * `[agents.<id>.prompt.identity]`. name/description override the config
+ * registry fallback for prompt rendering only (runtime profile.json still
+ * wins, Plan 485 P2.2); voice has no other source.
+ */
+export interface BotPromptIdentityConfig {
+  name?: string
+  description?: string
+  voice?: string
+}
+
+/** Plan 474 §2.4 — `[agents.<id>.prompt]` as seen by the prompt layer. */
+export interface BotPromptConfig {
+  sections?: BotPromptSectionsFilter
+  identity?: BotPromptIdentityConfig
+}
+
 /**
  * Minimal context handed to bot sections. Deliberately lean and optional:
  * fields become non-optional once their data source exists (channels from
@@ -68,6 +94,10 @@ export interface BotPromptContext {
   automations?: unknown
   /** @deprecated reserved — MCP server list (MCP section). */
   mcpServers?: unknown
+  /** Voice/tone hint from `[agents.<id>.prompt.identity].voice` (Plan 474 P3.2). */
+  voice?: string
+  /** Structured prompt config from `[agents.<id>.prompt]` (Plan 474 P3.2). */
+  promptConfig?: BotPromptConfig
 }
 
 /** A registered, ordered bot prompt section. */
@@ -185,7 +215,16 @@ export class BotPromptAssembly {
   ): Promise<string> {
     const parts: string[] = []
     if (opts.includeBasic) parts.push(this.basicPrompt)
+    // Plan 474 §2.4: `[agents.<id>.prompt.sections]` gating — disable wins
+    // over enable; a non-empty enable is a whitelist; names matching no
+    // registered section are ignored (forward compatible). The filter is
+    // part of the context, hence of the content hash: toggling it
+    // invalidates the frozen snapshot like any content change.
+    const enable = ctx.promptConfig?.sections?.enable
+    const disable = ctx.promptConfig?.sections?.disable
     for (const name of this.order) {
+      if (disable?.includes(name)) continue
+      if (enable !== undefined && enable.length > 0 && !enable.includes(name)) continue
       const def = this.sections.get(name)
       if (!def) continue
       const content = await this.renderSection(def, ctx, opts.snapshot)
