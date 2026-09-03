@@ -46,7 +46,9 @@ export {
   BOT_COMMS_RULES_SECTION,
   BOT_SPOTLIGHT_SECTION,
   BOT_USER_IDENTITY_SECTION,
-  BOT_MEMORY_SECTION,
+  BOT_MEMORY_OWN_DEF,
+  BOT_MEMORY_USER_DEF,
+  BOT_MEMORY_PROJECT_DEF,
   BOT_AUTOMATIONS_SECTION,
   BOT_CHANNELS_SECTION,
   BOT_ROSTER_SECTION,
@@ -55,7 +57,30 @@ export {
 } from './catalog.js'
 export { renderBotIdentity } from './identity.js'
 export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './roster.js'
-export { loadBotPromptContext, isBotAgentProfile } from './loader.js'
+export { loadBotPromptContext, isBotAgentProfile, loadBotMemoryContext } from './loader.js'
+export type { TierMemoryEntry, BotMemoryContext } from './memory/types.js'
+export {
+  renderMemoryOwn,
+  renderMemoryUser,
+  renderMemoryProject,
+  dedupeTier,
+  normalizeKey,
+  MEMORY_OWN_MAX_ENTRIES,
+  MEMORY_USER_PROFILE_MAX_ENTRIES,
+  MEMORY_USER_RECENT_MAX_ENTRIES,
+  MEMORY_PROJECT_CAP,
+} from './memory/render.js'
+export {
+  readOwnTierEntries,
+  readUserTierEntries,
+  readProjectTierEntries,
+  readJoinedProjects,
+} from './memory/tierReader.js'
+export {
+  BOT_MEMORY_OWN_SECTION,
+  BOT_MEMORY_USER_SECTION,
+  BOT_MEMORY_PROJECT_SECTION,
+} from './memory/sections.js'
 
 /** Create a bot prompt assembly preloaded with the placeholder catalog. */
 export { createBotPromptAssembly } from './factory.js'

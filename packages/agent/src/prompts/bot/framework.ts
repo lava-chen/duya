@@ -22,6 +22,7 @@
 
 import { BOT_BASIC_SYSTEM_PROMPT } from './basicPrompt.js'
 import { botSectionCacheKey } from './epoch.js'
+import type { BotMemoryContext } from './memory/types.js'
 
 /** One row of the bot roster (agent directory). */
 export interface BotRosterEntry {
@@ -88,8 +89,8 @@ export interface BotPromptContext {
    */
   /** @deprecated reserved — 476 channel snapshot (Channels section). */
   channels?: unknown
-  /** @deprecated reserved — 479 tiered memory (Memory section). */
-  memory?: unknown
+  /** Plan 479 tiered memory (memoryOwn/memoryUser/memoryProject sections). */
+  memory?: BotMemoryContext
   /** @deprecated reserved — 476/409 automations (Automations section). */
   automations?: unknown
   /** @deprecated reserved — MCP server list (MCP section). */
