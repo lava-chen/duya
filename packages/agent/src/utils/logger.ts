@@ -234,6 +234,34 @@ class AgentLogger {
     this.write(this.createLogEntry('DEBUG', message, { component, context }));
   }
 
+  /**
+   * Token-accounting trace. Emits at INFO so the operator can see exactly
+   * which inputs fed each estimator output and how the value grew between
+   * calls. Tag every token-counting site with a stable `label` so multiple
+   * log runs can be diffed (e.g. `'computeContextEstimate'`).
+   */
+  tokenTrace(
+    label: string,
+    payload: {
+      sessionId?: string
+      anchor?: string | number | null
+      usage?: Record<string, number | undefined> | null
+      result?: Record<string, number | null | undefined>
+      trailing?: number
+      [k: string]: unknown
+    },
+  ): void {
+    if (!this.shouldLog('INFO')) return;
+    const ctx: LogContext = {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === undefined) continue;
+      ctx[k] = v;
+    }
+    this.write(
+      this.createLogEntry('INFO', `[token:${label}]`, { component: 'TokenCalc', context: ctx }),
+    );
+  }
+
   log(message: string, context?: LogContext, component?: string): void {
     if (!this.shouldLog('INFO')) return;
     this.write(this.createLogEntry('INFO', message, { component, context }));

@@ -1042,3 +1042,106 @@ describe('tokenUsage survives the legacy→timeline→legacy round-trip (plan 44
     expect(estimate.usedTokens!).toBeGreaterThan(0);
   });
 });
+
+// ─── Plan 486: branched-layer projection rules ──────────────────────────
+
+function branchedUser(id: string, content = 'branch body'): AgentMessage {
+  const message = nativeUser(id, content);
+  message.metadata = { threadMeta: { replyToId: 'root-1', branched: true } };
+  return message;
+}
+
+function replyUser(id: string, content = 'reply body'): AgentMessage {
+  const message = nativeUser(id, content);
+  message.metadata = { threadMeta: { replyToId: 'root-1' } };
+  return message;
+}
+
+describe('plan 486 — branched-layer projection', () => {
+  it('model projection excludes branched messages entirely', () => {
+    const messages = [
+      nativeUser('root-1', 'main question'),
+      nativeAssistant('asst-1', 'main answer'),
+      branchedUser('fork-1', 'side question'),
+      branchedUser('fork-2', 'side answer'),
+    ];
+    const { messages: model } = projectModelMessages(messages);
+    expect(model.map((m) => m.id)).toEqual(['root-1', 'asst-1']);
+  });
+
+  it('model projection strips thread metadata from main-line replies', () => {
+    const messages = [nativeUser('root-1', 'q'), replyUser('reply-1')];
+    const { messages: model } = projectModelMessages(messages);
+    const reply = model.find((m) => m.id === 'reply-1');
+    expect(reply).toBeDefined();
+    expect((reply as { metadata?: unknown }).metadata?.threadMeta).toBeUndefined();
+    // content untouched (quote prefix is the caller's concern)
+    expect((reply as { content: string }).content).toBe('reply body');
+  });
+
+  it('model projection leaves ordinary sessions byte-identical', () => {
+    const messages = [
+      nativeUser('u1', 'hi'),
+      nativeAssistant('a1', 'hello', { tokenUsage }),
+      nativeToolResult('t1', 'tc1'),
+    ];
+    const before = projectModelMessages(messages);
+    expect(before.messages.map((m) => m.id)).toEqual(['u1', 'a1', 't1']);
+  });
+
+  it('transcript projection hides branched messages on the main line', () => {
+    const messages = [
+      nativeUser('root-1', 'main question'),
+      branchedUser('fork-1'),
+    ];
+    const transcript = projectTranscriptMessages(messages);
+    expect(transcript.map((m) => m.id)).toEqual(['root-1']);
+  });
+
+  it('transcript projection keeps branches when includeBranched is set (thread view)', () => {
+    const messages = [
+      nativeUser('root-1', 'main question'),
+      branchedUser('fork-1'),
+    ];
+    const transcript = projectTranscriptMessages(messages, { includeBranched: true });
+    expect(transcript.map((m) => m.id)).toEqual(['root-1', 'fork-1']);
+  });
+
+  it('transcript projection preserves thread metadata for reply badges', () => {
+    const messages = [replyUser('reply-1')];
+    const transcript = projectTranscriptMessages(messages);
+    const row = transcript.find((m) => m.id === 'reply-1');
+    expect(row).toBeDefined();
+    expect((row as { metadata?: Record<string, unknown> }).metadata?.['threadMeta']).toEqual({
+      replyToId: 'root-1',
+    });
+  });
+
+  it('persistence projections keep branched messages (durable, getThread-readable)', () => {
+    const messages = [
+      nativeUser('root-1', 'main question'),
+      branchedUser('fork-1'),
+    ];
+    const persisted = projectPersistenceMessages(messages);
+    expect(persisted.map((m) => m.id)).toEqual(['root-1', 'fork-1']);
+
+    const timelineEntries = messages.map((m, i) => ({
+      type: 'message' as const,
+      id: `evt-${i}`,
+      parentId: null,
+      createdAt,
+      message: m,
+    }));
+    const timelinePersisted = projectTimelinePersistenceMessages(timelineEntries);
+    expect(timelinePersisted.map((m) => m.id).sort()).toEqual(['fork-1', 'root-1']);
+  });
+
+  it('persisted branched rows survive ingest round-trip with metadata intact', () => {
+    const fork = branchedUser('fork-1');
+    const persisted = projectPersistenceMessages([fork]);
+    const row = persisted[0]!;
+    expect(row.metadata?.['threadMeta']).toEqual({ replyToId: 'root-1', branched: true });
+    const reingested = ingestMessage(row, { index: 0 });
+    expect(reingested.metadata?.['threadMeta']).toEqual({ replyToId: 'root-1', branched: true });
+  });
+});

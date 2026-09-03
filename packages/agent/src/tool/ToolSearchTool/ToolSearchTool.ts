@@ -7,9 +7,7 @@ export const TOOL_SEARCH_RESULT_MARKER = '<!-- duya-tool-search-result -->';
 export const DESCRIPTION = `Search available tools by name, description, keyword, or category.
 Use when you need a tool for a specific operation but don't see it listed in this turn.
 
-Each result states what the tool does and may include a concise input summary. A discovered tool
-is added to the next model turn with its complete schema and any usage guide. This searches tools,
-not skills: use the Skills catalog and the Skill tool to load a skill.`;
+Each result states what the tool does and may include a concise input summary. How a discovered tool becomes callable depends on the exposure policy: in the default (direct) policy it is added to the next model turn with its complete schema; under catalog exposure it stays out of the tool list — call \`tool_schema\` to read its schema (MCP servers by name, built-ins under the \`builtin\` namespace), then invoke it with \`tool_invoke\`. This searches tools, not skills: use the Skills catalog and the Skill tool to load a skill.`;
 
 export class ToolSearchTool implements Tool, ToolExecutor {
   readonly name = TOOL_SEARCH_NAME;

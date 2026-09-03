@@ -77,6 +77,24 @@ export interface GitLatestTurnReviewResult {
   error?: string;
 }
 
+// ── Turn history (plan 308 Phase 2) ──────────────────────────────
+
+/** Summary of one persisted turn review (no patch/files payload). */
+export interface GitTurnHistoryEntry {
+  id: string;
+  turnId: string;
+  additions: number;
+  removals: number;
+  fileCount: number;
+  capturedAt: number;
+}
+
+export interface GitTurnHistoryResult {
+  isGitRepo: boolean;
+  turns?: GitTurnHistoryEntry[];
+  error?: string;
+}
+
 // ── Scoped review (plan 227) ──────────────────────────────────────
 
 export type ReviewScopeType = 'uncommitted' | 'unstaged' | 'staged' | 'commit';
@@ -104,6 +122,10 @@ export interface GitAPI {
   reviewDiff: (cwd: string, filePath: string) => Promise<GitReviewDiffResult>;
   reviewFullDiff: (cwd: string) => Promise<GitReviewFullDiffResult>;
   reviewLatestTurn: (sessionId: string, cwd: string) => Promise<GitLatestTurnReviewResult>;
+  /** Summaries of the session's persisted turn reviews, newest first. */
+  reviewTurnHistory: (sessionId: string, cwd: string, limit?: number) => Promise<GitTurnHistoryResult>;
+  /** Load one persisted turn review by its row id (see reviewTurnHistory). */
+  reviewTurnDetail: (cwd: string, reviewId: string) => Promise<GitLatestTurnReviewResult>;
   /** Unified scoped review: unstaged / staged / uncommitted / commit. */
   reviewScoped: (cwd: string, scope: ReviewScopeParams) => Promise<GitReviewResult>;
   reviewScopedDiff: (cwd: string, scope: ReviewScopeParams, filePath: string) => Promise<GitReviewDiffResult>;

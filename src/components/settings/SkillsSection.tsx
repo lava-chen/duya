@@ -262,10 +262,10 @@ function SkillDetailModal({
 
     const loadFiles = async () => {
       const win = window as unknown as {
-        electronAPI?: { files?: { browse: (dir: string) => Promise<{ success: boolean; tree: SkillFileNode[] }> } };
+        electronAPI?: { files?: { browse: (dir: string, root: string) => Promise<{ success: boolean; tree: SkillFileNode[] }> } };
       };
       if (!win.electronAPI?.files?.browse) return;
-      const result = await win.electronAPI.files.browse(skillRoot);
+      const result = await win.electronAPI.files.browse(skillRoot, skillRoot);
       if (result.success) {
         setFileTree(result.tree);
       }

@@ -61,6 +61,7 @@ import { VoiceButton } from './VoiceButton';
 import { applyDictation } from '@/lib/voice/dictation';
 import { InlineTaskRow } from './InlineTaskRow';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
+import type { GitTurnReview } from '@/lib/git-ipc';
 import type { Task } from '@duya/agent';
 import type { Message } from '@/types/message';
 import { IconButton } from '@/components/ui/IconButton';
@@ -205,6 +206,8 @@ interface MessageInputProps {
   onToggleTaskStatus?: (task: Task) => void;
   workingDirectory?: string | null;
   showFileChanges?: boolean;
+  /** Plan 308 Phase 2: persisted review of the last completed turn. */
+  turnReview?: GitTurnReview | null;
 }
 
 interface EffortOption {
@@ -422,6 +425,7 @@ export function MessageInput({
   onToggleTaskStatus,
   workingDirectory,
   showFileChanges,
+  turnReview,
 }: MessageInputProps) {
   const { t } = useTranslation();
   const [inputValue, setInputValue] = useState('');
@@ -2013,13 +2017,15 @@ export function MessageInput({
           {/* Plan 416: in-input task progress row above the textarea.
               Renders nothing when there are no tasks and no git
               changes, so the input box stays compact. */}
-          {tasks && gitStatus && onToggleTaskStatus && (
+          {(tasks || turnReview) && gitStatus && onToggleTaskStatus && (
             <InlineTaskRow
-              tasks={tasks}
+              tasks={tasks ?? []}
               gitStatus={gitStatus}
               onToggleStatus={onToggleTaskStatus}
               workingDirectory={workingDirectory ?? null}
               showFileChanges={showFileChanges ?? true}
+              turnReview={turnReview ?? null}
+              sessionId={sessionId}
             />
           )}
 

@@ -384,6 +384,10 @@ export const IconTextWrap = wrapIcon(TablerIconTextWrap);
 export const PlayIcon = wrapIcon(IconPlayerPlay);
 export const PencilSimpleIcon = wrapIcon(IconPencil);
 export const WarningCircleIcon = wrapIcon(TablerIconAlertCircle);
+// AlertIcon alias — used by settings permission cards (host tool permission
+// warning / note footers). Circle variant reads neutral in both amber
+// caution and muted-info contexts.
+export const AlertIcon = wrapIcon(TablerIconAlertCircle);
 export const GitDiffIcon = wrapIcon(TablerIconGitCompare);
 export const ArrowClockwiseIcon = wrapIcon(TablerIconRefresh);
 export const SlidersHorizontalIcon = wrapIcon(IconAdjustmentsHorizontal);

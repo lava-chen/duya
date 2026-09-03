@@ -115,6 +115,10 @@ export const LogComponent = {
   Files: 'Files',
   DocumentParser: 'DocumentParser',
   Voice: 'Voice',
+
+  // Token accounting — emits at INFO so we can trace context growth
+  // and cache accounting without grepping the file. Use debug to disable.
+  TokenCalc: 'TokenCalc',
 } as const
 
 export type LogComponentName = (typeof LogComponent)[keyof typeof LogComponent]
@@ -554,6 +558,37 @@ class Logger extends EventEmitter {
       this.error(`${label} failed`, error as Error, { duration }, component)
       throw error
     }
+  }
+
+  /**
+   * Token-calculation trace. Emits at INFO so the operator can see exactly
+   * which inputs fed each estimator output and how the value grew between
+   * calls. Tag every token-counting site with a stable `label` so multiple
+   * log runs can be diffed (e.g. `'computeContextEstimate'`).
+   */
+  tokenTrace(
+    label: string,
+    payload: {
+      sessionId?: string
+      /** Anchor index / message id this estimate attached to, when applicable. */
+      anchor?: string | number | null
+      /** Raw usage block from the provider (input / output / cache / total). */
+      usage?: Record<string, number | undefined> | null
+      /** Result returned by the estimator (used / anchor / trailing). */
+      result?: Record<string, number | null | undefined>
+      /** Trailing messages that were char-estimated beyond the anchor. */
+      trailing?: number
+      /** Free-form extra fields (model, model window, total budget). */
+      [k: string]: unknown
+    },
+  ): void {
+    if (!this.shouldLog('INFO') || !this.shouldSample()) return
+    const ctx: LogContext = {}
+    for (const [k, v] of Object.entries(payload)) {
+      if (v === undefined) continue
+      ctx[k] = v as LogContextValue
+    }
+    this.write(this.createLogEntry('INFO', `[token:${label}]`, { component: LogComponent.TokenCalc, context: ctx }))
   }
 
   // Configuration

@@ -11,7 +11,7 @@
  * - Recent folders
  */
 
-import { ipcMain, BrowserWindow, dialog, shell, Notification, app } from 'electron';
+import { ipcMain, BrowserWindow, dialog, shell, Notification, app, nativeTheme } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import { homedir } from 'os';
@@ -42,6 +42,15 @@ const DEFAULT_VISION_SETTINGS: VisionSettings = {
 };
 
 export function registerSystemHandlers(): void {
+  // Keep the OS-side material (Mica on Windows 11, vibrancy on macOS) in sync
+  // with duya's own light/dark theme. duya themes independently of the OS, so
+  // when the user picks "dark" while Windows is in light mode we force the
+  // native backdrop dark too — otherwise a dark UI would sit on a light Mica.
+  ipcMain.handle('native-theme:set-source', (_event, mode: 'light' | 'dark' | 'system') => {
+    nativeTheme.themeSource =
+      mode === 'light' || mode === 'dark' || mode === 'system' ? mode : 'system';
+  });
+
   // Public predicate — kept exported for unit tests.
   // Duya's open-external policy is intentionally strict: only standard
   // http(s) URLs are forwarded to the OS. file://, javascript:, smb://, and

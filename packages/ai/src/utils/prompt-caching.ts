@@ -38,13 +38,16 @@ export interface CacheEligibility {
 export type CacheRetention = 'short' | 'long' | 'none'
 
 /**
+ * Messages-side breakpoint cap for the system_and_3 strategy.
+ *
  * Anthropic caps explicit `cache_control` breakpoints at 4 per request
  * (`maxBreakpoints`). The `system` param breakpoint is applied separately via
  * `applyCacheControlToSystem` — `toAnthropicMessages` lifts the system message
  * out of the messages array, so `applyCacheControl`'s own system branch never
- * fires for that caller. Without reserving a slot here, system(1) + last-4
- * messages = 5 breakpoints, which the API rejects with "at most 4 cache
- * breakpoints". This is the "3" in the system_and_3 strategy: system + 3.
+ * fires for that caller. The effective messages budget is derived from
+ * `maxBreakpoints - reserved` (see `applyCacheControl`), and this constant is
+ * kept as a hard ceiling so messages never consume more than 3 slots no matter
+ * how future endpoints scale `maxBreakpoints`.
  */
 const MESSAGE_BREAKPOINT_BUDGET = 3
 
@@ -271,28 +274,48 @@ function applyCacheMarkerToMessage(
 }
 
 /**
+ * Options controlling how `applyCacheControl` divides the 4-slot breakpoint
+ * budget. Plan 480 P0.1: the `tools` param is the longest stable public prefix
+ * of every request (same registry snapshot + `sortToolsByName` → byte-identical
+ * across turns), so reserving one slot for a tool-level breakpoint keeps that
+ * prefix cache-resident without pushing the request past Anthropic's limit.
+ */
+export interface CacheBudgetOptions {
+  /**
+   * Reserve one of `maxBreakpoints` for a tool-level cache_control marker on
+   * the final tool definition (applied by `applyCacheControlToTools`). When
+   * true, the messages-side budget shrinks by one so the total stays at
+   * system(1) + tools(1) + messages(≤2) ≤ 4.
+   */
+  toolsBreakpoint?: boolean;
+}
+
+/**
  * Apply cache control markers using the system_and_3 strategy.
  *
  * Places up to 4 cache_control breakpoints:
- * 1. System prompt (stable across all turns)
- * 2-4. Last 3 non-system messages (rolling window)
+ * 1. System prompt (stable across all turns) — marked separately via
+ *    `applyCacheControlToSystem` since `toAnthropicMessages` lifts system out
+ *    of the messages array.
+ * 2-4. Last N non-system messages (rolling window).
  *
- * The messages-side budget is capped at `MESSAGE_BREAKPOINT_BUDGET` (3):
- * the `system` param breakpoint is applied separately via
- * `applyCacheControlToSystem` since `toAnthropicMessages` lifts system out of
- * the messages array. system(1) + messages(3) = 4 ≤ Anthropic's limit.
+ * The messages-side budget is `maxBreakpoints` minus reserved slots (system: 1,
+ * optional tools: 1 per `options.toolsBreakpoint`), so the total request never
+ * exceeds Anthropic's "at most 4 cache breakpoints" limit.
  *
  * @param messages - Array of messages to apply caching to
  * @param eligibility - Cache eligibility from checkCacheEligibility
  * @param cacheRetention - Cache retention policy
  * @param baseUrl - Optional base URL for TTL eligibility
+ * @param options - Optional budget division (reserve a tools breakpoint)
  * @returns Deep copy of messages with cache_control markers injected
  */
 export function applyCacheControl(
   messages: unknown[],
   eligibility: CacheEligibility,
   cacheRetention: CacheRetention = 'short',
-  baseUrl?: string
+  baseUrl?: string,
+  options?: CacheBudgetOptions
 ): unknown[] {
   if (!eligibility.eligible || eligibility.maxBreakpoints === 0 || cacheRetention === 'none') {
     return messages
@@ -313,12 +336,16 @@ export function applyCacheControl(
     breakpointsUsed++
   }
 
-  // 2. Apply to last N non-system messages. Cap at the system_and_3 budget so
-  //    the separately-marked `system` param (applyCacheControlToSystem) does
-  //    not push the total past maxBreakpoints.
+  // 2. Apply to the last N non-system messages. The budget reserves one slot
+  //    for the separately-marked `system` param (applyCacheControlToSystem)
+  //    and, when requested, one more for a tool-level breakpoint
+  //    (applyCacheControlToTools) — keeping the total ≤ maxBreakpoints.
+  const reservedSlots = 1 + (options?.toolsBreakpoint === true ? 1 : 0)
+  const messagesBudget = Math.max(0, eligibility.maxBreakpoints - reservedSlots)
   const remaining = Math.min(
     eligibility.maxBreakpoints - breakpointsUsed,
     MESSAGE_BREAKPOINT_BUDGET,
+    messagesBudget,
   )
   const nonSystemIndices: number[] = []
 
@@ -386,6 +413,53 @@ export function applyCacheControlToSystem(
   }
 
   return systemPrompt;
+}
+
+/**
+ * Apply a cache_control marker to the final tool definition of a request's
+ * `tools` param (Anthropic-native surfaces only).
+ *
+ * Plan 480 P0.1: tool definitions are the longest stable public prefix of
+ * every request — they are re-serialized byte-identically across turns (same
+ * registry snapshot + `sortToolsByName`) until the toolset actually changes.
+ * Anthropic's `Tool` type supports `cache_control` ("create a cache control
+ * breakpoint at this content block"), so marking the *last* tool makes the
+ * whole tools array cache-resident under a system-level breakpoint.
+ *
+ * Callers must reserve the breakpoint slot in `applyCacheControl` via
+ * `CacheBudgetOptions.toolsBreakpoint` so the request total stays ≤ 4.
+ *
+ * @param tools - Serialized tool definitions (`{ name, description, input_schema }`).
+ * @param eligibility - Cache eligibility from checkCacheEligibility.
+ * @param cacheRetention - Cache retention policy.
+ * @param baseUrl - Optional base URL for TTL eligibility.
+ * @returns Deep copy of tools with a cache_control marker on the last element
+ *          (returns the input untouched when ineligible or empty).
+ */
+export function applyCacheControlToTools<T>(
+  tools: T[],
+  eligibility: CacheEligibility,
+  cacheRetention: CacheRetention = 'short',
+  baseUrl?: string
+): T[] {
+  if (!eligibility.eligible || eligibility.maxBreakpoints === 0 || cacheRetention === 'none') {
+    return tools;
+  }
+  if (!Array.isArray(tools) || tools.length === 0) {
+    return tools;
+  }
+
+  const cacheControl = resolveCacheControl(cacheRetention, baseUrl);
+  if (!cacheControl) {
+    return tools;
+  }
+
+  const result = structuredClone(tools) as Array<Record<string, unknown>>;
+  const last = result[result.length - 1];
+  if (last && typeof last === 'object' && last !== null) {
+    last.cache_control = cacheControl;
+  }
+  return result as T[];
 }
 
 /**

@@ -9,12 +9,16 @@ import type { PageTab } from "./registry";
 const mocks = vi.hoisted(() => ({
   getGitReviewScoped: vi.fn(),
   getGitLatestTurnReview: vi.fn(),
+  getGitTurnHistory: vi.fn(),
+  getGitTurnDetail: vi.fn(),
   getGitCommits: vi.fn(),
 }));
 
 vi.mock("@/lib/git-ipc", () => ({
   getGitReviewScoped: mocks.getGitReviewScoped,
   getGitLatestTurnReview: mocks.getGitLatestTurnReview,
+  getGitTurnHistory: mocks.getGitTurnHistory,
+  getGitTurnDetail: mocks.getGitTurnDetail,
   getGitCommits: mocks.getGitCommits,
 }));
 
@@ -89,6 +93,9 @@ function latestTurnTab(): PageTab {
 describe("CodeReviewPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: no persisted turns — keeps the history dropdown hidden
+    // unless a test opts in.
+    mocks.getGitTurnHistory.mockResolvedValue({ isGitRepo: true, turns: [] });
   });
 
   it("shows non-git-repo error when workspace is not a git repository", async () => {
@@ -216,6 +223,67 @@ describe("CodeReviewPanel", () => {
 
     const error = await screen.findByText("Failed to load turn review data");
     expect(error).toBeTruthy();
+  });
+
+  it("lists prior turns and swaps in the selected turn's detail", async () => {
+    const user = userEvent.setup();
+    const now = Date.now();
+    mocks.getGitTurnHistory.mockResolvedValue({
+      isGitRepo: true,
+      turns: [
+        { id: "row-latest", turnId: "turn-2", additions: 3, removals: 1, fileCount: 1, capturedAt: now },
+        { id: "row-old", turnId: "turn-1", additions: 9, removals: 0, fileCount: 2, capturedAt: now - 3_600_000 },
+      ],
+    });
+    mocks.getGitLatestTurnReview.mockResolvedValue({
+      isGitRepo: true,
+      review: {
+        id: "row-latest",
+        sessionId: "session-1",
+        turnId: "turn-2",
+        workingDirectory: "/test/workspace",
+        files: [
+          { path: "src/turn-file.ts", status: "modified", additions: 3, removals: 1, oldPath: undefined },
+        ],
+        totals: { additions: 3, removals: 1, fileCount: 1 },
+        patch: SAMPLE_PATCH,
+        binary: false,
+        truncated: false,
+        capturedAt: now,
+      },
+    });
+    mocks.getGitTurnDetail.mockResolvedValue({
+      isGitRepo: true,
+      review: {
+        id: "row-old",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        workingDirectory: "/test/workspace",
+        files: [
+          { path: "src/old-turn-file.ts", status: "modified", additions: 9, removals: 0, oldPath: undefined },
+        ],
+        totals: { additions: 9, removals: 0, fileCount: 1 },
+        patch: SAMPLE_PATCH,
+        binary: false,
+        truncated: false,
+        capturedAt: now - 3_600_000,
+      },
+    });
+
+    render(<CodeReviewPanel tab={latestTurnTab()} embedded />);
+
+    expect(await screen.findByText("src/turn-file.ts")).toBeTruthy();
+
+    // History dropdown shows both persisted turns; picking the older one
+    // loads its detail and replaces the diff.
+    const turnSelect = screen.getByLabelText("选择轮次");
+    await user.selectOptions(turnSelect, "row-old");
+
+    await waitFor(() => {
+      expect(mocks.getGitTurnDetail).toHaveBeenCalledWith("/test/workspace", "row-old");
+    });
+    expect(await screen.findByText("src/old-turn-file.ts")).toBeTruthy();
+    expect(screen.queryByText("src/turn-file.ts")).not.toBeTruthy();
   });
 
   it("switches scope between latest-turn and workspace via the scope select", async () => {

@@ -9,6 +9,7 @@ import { getDatabasePath } from '../db/connection';
 import type { ConductorExecutorProxy, ExecutorRpcRequest } from '../conductor/executor-proxy';
 import { getConnectorService } from '../services/app-connections/connector-service';
 import { dispatchComputerUseAction } from '../ipc/computer-use';
+import { handleMemoryTierRpc } from '../memory-state/tier-rpc';
 
 let agentServerPort: number | null = null;
 let agentServerProcess: ChildProcess | null = null;
@@ -288,6 +289,50 @@ export function spawnAgentServer(): Promise<number> {
             if (child.killed) return;
             child.send({
               type: 'computer-use:execute:response',
+              requestId: msg.requestId,
+              success: false,
+              error: {
+                code: 'IPC_EXCEPTION',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            });
+          });
+        return;
+      }
+
+      // Plan 481: route memory-tier:rpc to the memory tier writer (electron/
+      // memory-state). The bot's update_state tool calls arrive here; the
+      // main process owns the canonical memory files and the tier index DB.
+      if (msg.type === 'memory-tier:rpc' && typeof msg.requestId === 'string') {
+        const action = typeof msg.action === 'string' ? msg.action : null;
+        const payload = (msg.payload as Record<string, unknown> | undefined) ?? {};
+        const sessionId = typeof msg.sessionId === 'string' ? msg.sessionId : undefined;
+        if (!action) {
+          if (!child.killed) {
+            child.send({
+              type: 'memory-tier:rpc:response',
+              requestId: msg.requestId,
+              success: false,
+              error: { code: 'SCHEMA_INVALID', message: 'missing action in memory-tier:rpc payload' },
+            });
+          }
+          return;
+        }
+        void handleMemoryTierRpc({ action, payload, sessionId })
+          .then((result) => {
+            if (child.killed) return;
+            child.send({
+              type: 'memory-tier:rpc:response',
+              requestId: msg.requestId,
+              success: result.success,
+              data: result.success ? result.outcome : undefined,
+              error: result.success ? undefined : result.error,
+            });
+          })
+          .catch((err) => {
+            if (child.killed) return;
+            child.send({
+              type: 'memory-tier:rpc:response',
               requestId: msg.requestId,
               success: false,
               error: {

@@ -59,7 +59,7 @@ describe('memory-state migration runner', () => {
       name: string;
       sha256: string;
     }>;
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(9);
     expect(rows[0].version).toBe(1);
     expect(rows[0].name).toBe('init_control_plane');
     expect(rows[0].sha256).toBe(migration0001.sha256);
@@ -78,6 +78,8 @@ describe('memory-state migration runner', () => {
     expect(rows[6].name).toBe('curation_runs');
     expect(rows[7].version).toBe(9);
     expect(rows[7].name).toBe('drop_legacy_phase2');
+    expect(rows[8].version).toBe(10);
+    expect(rows[8].name).toBe('memory_tier_index');
 
     // Schema tables exist.
     const tables = db
@@ -101,13 +103,13 @@ describe('memory-state migration runner', () => {
     runMigrations(db);
 
     const rowsBefore = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsBefore.n).toBe(8);
+    expect(rowsBefore.n).toBe(9);
 
     // Re-run; should not throw, not insert a duplicate, not re-exec migration.
     runMigrations(db);
 
     const rowsAfter = db.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rowsAfter.n).toBe(8);
+    expect(rowsAfter.n).toBe(9);
 
     db.close();
   });
@@ -124,7 +126,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(8);
+    expect(rows.n).toBe(9);
 
     dbA.close();
     dbB.close();
@@ -178,7 +180,7 @@ describe('memory-state migration runner', () => {
     runMigrations(dbB);
 
     const rows = dbB.prepare('SELECT COUNT(*) AS n FROM memory_schema').get() as { n: number };
-    expect(rows.n).toBe(8);
+    expect(rows.n).toBe(9);
 
     // Schema is intact — tables still queryable.
     const projectCount = dbB.prepare('SELECT COUNT(*) AS n FROM projects').get() as { n: number };
@@ -302,8 +304,8 @@ describe('memory-state migration runner', () => {
     db.close();
   });
 
-  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007, 0008 and 0009 in order', () => {
-    expect(MIGRATIONS).toHaveLength(8);
+  it('MIGRATIONS registry includes migrations 0001, 0002, 0003, 0005, 0006, 0007, 0008, 0009 and 0010 in order', () => {
+    expect(MIGRATIONS).toHaveLength(9);
     expect(MIGRATIONS[0].version).toBe(1);
     expect(MIGRATIONS[0].name).toBe('init_control_plane');
     expect(MIGRATIONS[0].sha256).toBe(migration0001.sha256);
@@ -322,6 +324,8 @@ describe('memory-state migration runner', () => {
     expect(MIGRATIONS[6].name).toBe('curation_runs');
     expect(MIGRATIONS[7].version).toBe(9);
     expect(MIGRATIONS[7].name).toBe('drop_legacy_phase2');
+    expect(MIGRATIONS[8].version).toBe(10);
+    expect(MIGRATIONS[8].name).toBe('memory_tier_index');
   });
 
   it('migration sha256 values are stable (deterministic from SQL body)', () => {
@@ -453,6 +457,61 @@ describe('memory-state migration runner', () => {
     expect(tableNames).not.toContain('phase2_runs');
     // memory_usage_events is kept for telemetry.
     expect(tableNames).toContain('memory_usage_events');
+
+    db.close();
+  });
+
+  it('13. migration 0010 creates memory_tier_index with tier/kind CHECKs and shard-unique index', () => {
+    const db = openRawDb(dbPath);
+    runMigrations(db);
+
+    const versions = MIGRATIONS.map((m) => m.version);
+    const idx9 = versions.indexOf(9);
+    const idx10 = versions.indexOf(10);
+    expect(idx10).toBeGreaterThan(idx9);
+
+    // Table exists with the full column contract.
+    const cols = db.prepare('PRAGMA table_info(memory_tier_index)').all() as Array<{ name: string }>;
+    const colNames = cols.map((c) => c.name);
+    for (const col of [
+      'entry_id', 'tier', 'agent_profile_id', 'project_id', 'kind',
+      'dedupe_key', 'file_path', 'content_hash', 'created_at', 'updated_at',
+    ]) {
+      expect(colNames).toContain(col);
+    }
+
+    // Valid insert across all three tiers.
+    const insert = db.prepare(
+      `INSERT INTO memory_tier_index
+         (entry_id, tier, agent_profile_id, project_id, kind, dedupe_key, file_path, content_hash, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    insert.run('e1', 'agent', 'botA', '', 'profile', 'pref:style', 'agents/botA/memory/profile.md', 'h', 1, 1);
+    insert.run('e2', 'user', '', '', 'note', 'person:alice', 'memory/entities/alice.md', 'h', 1, 1);
+    insert.run('e3', 'project', 'botA', 'p1', 'note', 'proj:fact', 'memory/projects/p1/fact.md', 'h', 1, 1);
+
+    // CHECK tier rejects unknown values.
+    expect(() => insert.run('e4', 'team', '', '', 'note', 'k', 'x.md', 'h', 1, 1)).toThrow(/CHECK/);
+    // CHECK kind rejects unknown values.
+    expect(() => insert.run('e4', 'user', '', '', 'memo', 'k', 'x.md', 'h', 1, 1)).toThrow(/CHECK/);
+    // CHECK dedupe_key enforces lowercase normalization.
+    expect(() => insert.run('e4', 'user', '', '', 'note', 'Person: Alice', 'x.md', 'h', 1, 1)).toThrow(/CHECK/);
+    // UNIQUE file_path rejects a second row for the same file.
+    expect(() => insert.run('e4', 'user', '', '', 'note', 'other:key', 'memory/entities/alice.md', 'h', 1, 1)).toThrow(/UNIQUE/);
+    // UNIQUE (tier, agent_profile_id, project_id, dedupe_key) rejects same-key rows in one shard.
+    expect(() => insert.run('e4', 'user', '', '', 'note', 'person:alice', 'memory/entities/alice2.md', 'h', 1, 1)).toThrow(/UNIQUE/);
+    // Same key is fine in a different shard.
+    expect(() => insert.run('e5', 'user', 'botB', '', 'note', 'person:alice', 'memory/entities/alice-b.md', 'h', 1, 1)).not.toThrow();
+
+    // Indexes exist.
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='memory_tier_index' ORDER BY name")
+      .all() as Array<{ name: string }>;
+    const indexNames = indexes.map((i) => i.name);
+    expect(indexNames).toContain('idx_memory_tier_file');
+    expect(indexNames).toContain('idx_memory_tier_shard_dedupe');
+    expect(indexNames).toContain('idx_memory_tier_tier');
+    expect(indexNames).toContain('idx_memory_tier_shard');
 
     db.close();
   });

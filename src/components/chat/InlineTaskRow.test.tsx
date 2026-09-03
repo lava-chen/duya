@@ -7,6 +7,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { InlineTaskRow } from './InlineTaskRow';
+import type { GitTurnReview } from '@/lib/git-ipc';
 
 const mockGitStatus = {
   isGitRepo: false,
@@ -15,6 +16,25 @@ const mockGitStatus = {
 };
 
 const mockOpenOrActivatePage = vi.fn();
+
+function makeTurnReview(overrides: Partial<GitTurnReview> = {}): GitTurnReview {
+  return {
+    id: 'row-1',
+    sessionId: 'session-1',
+    turnId: 'turn-1',
+    workingDirectory: '/workspace/project',
+    files: [
+      { path: 'src/a.ts', status: 'modified', additions: 30, removals: 2 },
+      { path: 'src/new.ts', status: 'untracked', additions: 10, removals: 0 },
+    ],
+    totals: { additions: 40, removals: 2, fileCount: 2 },
+    patch: 'diff --git',
+    binary: false,
+    truncated: false,
+    capturedAt: 1_000,
+    ...overrides,
+  };
+}
 
 vi.mock('@/components/icons', () => ({
   CheckIcon: ({ size }: { size?: number }) => <span data-testid="check-icon" style={{ fontSize: size }} />,
@@ -232,6 +252,69 @@ describe('InlineTaskRow', () => {
     expect(mockOpenOrActivatePage).toHaveBeenCalledWith('review', {
       workingDirectory: '/workspace/project',
     });
+  });
+
+  it('shows the persisted turn review numbers when available', () => {
+    const gitStatus = {
+      isGitRepo: true,
+      fileChanges: [{ path: 'README.md', additions: 5, removals: 1 }],
+      totals: { additions: 5, removals: 1, fileCount: 1 },
+    };
+    render(
+      <InlineTaskRow
+        tasks={[]}
+        gitStatus={gitStatus}
+        onToggleStatus={onToggleStatus}
+        workingDirectory="/workspace/project"
+        turnReview={makeTurnReview()}
+      />
+    );
+
+    // Turn-scoped numbers win over the repo-wide live status.
+    expect(screen.getByText('2 个文件已更改')).toBeInTheDocument();
+    expect(screen.getByText('+40')).toBeInTheDocument();
+    expect(screen.getByText('-2')).toBeInTheDocument();
+    expect(screen.queryByText('+5')).not.toBeInTheDocument();
+  });
+
+  it('opens the review panel with the session id when turn stats are shown', () => {
+    render(
+      <InlineTaskRow
+        tasks={[]}
+        gitStatus={mockGitStatus}
+        onToggleStatus={onToggleStatus}
+        workingDirectory="/workspace/project"
+        turnReview={makeTurnReview()}
+        sessionId="session-1"
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '打开代码审查' }));
+
+    expect(mockOpenOrActivatePage).toHaveBeenCalledWith('review', {
+      workingDirectory: '/workspace/project',
+      sessionId: 'session-1',
+    });
+  });
+
+  it('ignores the turn review while live streaming is active', () => {
+    // ChatView passes turnReview=null during streaming; the live gate
+    // (showFileChanges) decides visibility again.
+    const gitStatus = {
+      isGitRepo: true,
+      fileChanges: [{ path: 'README.md', additions: 5, removals: 1 }],
+      totals: { additions: 5, removals: 1, fileCount: 1 },
+    };
+    render(
+      <InlineTaskRow
+        tasks={[]}
+        gitStatus={gitStatus}
+        onToggleStatus={onToggleStatus}
+        workingDirectory="/workspace/project"
+        turnReview={null}
+      />
+    );
+    expect(screen.getByText('1 个文件已更改')).toBeInTheDocument();
   });
 
   it('hides the git segment when showFileChanges is false', () => {

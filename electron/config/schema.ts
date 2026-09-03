@@ -138,6 +138,30 @@ export interface CustomAgentToolsConfig {
   deny?: string[];
 }
 
+/** Plan 474 §2.4: structured prompt persona — overrides the registry
+ *  fallback for prompt rendering only (runtime profile.json still wins). */
+export interface CustomAgentPromptIdentityConfig {
+  name?: string;
+  description?: string;
+  /** How the bot speaks (tone/style hint rendered by the botIdentity section). */
+  voice?: string;
+}
+
+/** Plan 474 §2.4: section gating. Unknown section names are ignored
+ *  (forward compatible with sections landing via 476/479/481). */
+export interface CustomAgentPromptSectionsConfig {
+  /** Whitelist: when non-empty, only these registered sections render. */
+  enable?: string[];
+  /** Blacklist: these sections never render; wins over enable. */
+  disable?: string[];
+}
+
+/** Plan 474 §2.4: `[agents.<id>.prompt]` table (bot system-prompt config). */
+export interface CustomAgentPromptConfig {
+  sections?: CustomAgentPromptSectionsConfig;
+  identity?: CustomAgentPromptIdentityConfig;
+}
+
 export interface CustomAgentConfig {
   /** Display name (falls back to the map key). */
   name?: string;
@@ -153,6 +177,8 @@ export interface CustomAgentConfig {
   tools?: CustomAgentToolsConfig;
   /** Plugin / mcp references enabled for this agent (e.g. 'mcp:github'). */
   plugins?: string[];
+  /** Bot system-prompt section config (Plan 474 P3.2). Preserved as-is on upsert. */
+  prompt?: CustomAgentPromptConfig;
 }
 
 /**
@@ -397,6 +423,18 @@ export interface DuyaConfig {
   agents: Record<string, CustomAgentConfig>;
   /** [performance] — low-power mode switch (plan 426 Phase 3). */
   performance: PerformanceConfig;
+
+  /**
+   * [wake] — Agent Wake Bus (plan 476) preferences.
+   * idleDispatch: who resumes an idle session when a background
+   * notification lands — 'renderer' (current behaviour) or 'main' (new
+   * main-process path, needed for CLI/headless). Default 'renderer'.
+   */
+  wake: WakeConfig;
+}
+
+export interface WakeConfig {
+  idleDispatch?: 'renderer' | 'main'
 }
 
 export const DEFAULT_CONFIG: DuyaConfig = {
@@ -547,6 +585,7 @@ export const DEFAULT_CONFIG: DuyaConfig = {
   personalities: {},
   agents: {},
   performance: { lowPower: 'auto' },
+  wake: { idleDispatch: 'renderer' },
   steering: {
     todo_gate: true,
     anti_dead_loop: { enabled: true, nudge_at: 8, hard_nudge_at: 12, hard_stop_at: 16 },

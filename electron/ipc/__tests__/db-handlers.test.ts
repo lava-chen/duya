@@ -856,4 +856,26 @@ describe('db-handlers (core store thin forward)', () => {
       expect(created.prompt_profile).toBeNull();
     });
   });
+
+  // ==================== plan 413 db:relocateDatabase path-safety ====================
+  // The DB holds all chats + credentials, so the relocate destination
+  // must stay inside the user home directory. Only the rejection paths
+  // are exercised here (no real file is ever created): '/etc' can never
+  // be under the mocked home dir '/tmp'.
+  describe('db:relocateDatabase (plan 413 path-safety)', () => {
+    it('rejects destinations outside the user home directory', async () => {
+      vi.mocked(getDatabase).mockReturnValue({ name: '/tmp/origin.db' } as never);
+      const result = await invokeHandler('db:relocateDatabase', {}, '/etc');
+      expect(result).toEqual({
+        success: false,
+        error: 'Relocate destination must be inside the user home directory',
+      });
+    });
+
+    it('rejects a non-string destination', async () => {
+      vi.mocked(getDatabase).mockReturnValue({ name: '/tmp/origin.db' } as never);
+      const result = await invokeHandler('db:relocateDatabase', {}, 42);
+      expect(result).toEqual({ success: false, error: 'Invalid destination directory' });
+    });
+  });
 });

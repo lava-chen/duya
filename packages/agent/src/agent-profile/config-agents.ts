@@ -9,11 +9,36 @@ import * as path from 'path';
 import { readFile } from 'fs/promises';
 import { parse as parseToml } from '@iarna/toml';
 import type { AgentProfile } from './types.js';
+import { applyBotToolset } from './bot-toolset.js';
 
 export interface CustomAgentToolsConfig {
   profile?: string;
   allow?: string[];
   deny?: string[];
+}
+
+/** Plan 474 §2.4: structured prompt persona — overrides the registry
+ *  fallback for prompt rendering only (runtime profile.json still wins). */
+export interface CustomAgentPromptIdentityConfig {
+  name?: string;
+  description?: string;
+  /** How the bot speaks (tone/style hint rendered by the botIdentity section). */
+  voice?: string;
+}
+
+/** Plan 474 §2.4: section gating. Unknown section names are ignored
+ *  (forward compatible with sections landing via 476/479/481). */
+export interface CustomAgentPromptSectionsConfig {
+  /** Whitelist: when non-empty, only these registered sections render. */
+  enable?: string[];
+  /** Blacklist: these sections never render; wins over enable. */
+  disable?: string[];
+}
+
+/** Plan 474 §2.4: `[agents.<id>.prompt]` table. */
+export interface CustomAgentPromptConfig {
+  sections?: CustomAgentPromptSectionsConfig;
+  identity?: CustomAgentPromptIdentityConfig;
 }
 
 export interface CustomAgentConfig {
@@ -24,6 +49,8 @@ export interface CustomAgentConfig {
   agents_md?: string;
   tools?: CustomAgentToolsConfig;
   plugins?: string[];
+  /** Bot system-prompt section config (Plan 474 P3.2). */
+  prompt?: CustomAgentPromptConfig;
 }
 
 /** Base tool profiles -> allow/deny pattern lists (subset of legacy tool_profiles). */
@@ -34,8 +61,9 @@ const TOOL_PROFILE_MAP: Record<string, { allow: string[]; deny: string[] }> = {
   research: { allow: ['file:read*', 'search:*', 'browser:*'], deny: ['file:write*', 'file:edit*', 'exec:*'] },
 };
 
-/** Config root: ~/.duya (or test-namespaced dir under DUYA_TEST). */
-function resolveConfigRoot(): string {
+/** Config root: ~/.duya (or test-namespaced dir under DUYA_TEST). Exported so
+ *  sibling readers (bot profile.json, Plan 485 P2.2) resolve the same root. */
+export function resolveConfigRoot(): string {
   const base = path.join(os.homedir(), '.duya');
   if (process.env.DUYA_TEST === '1') {
     const ns = process.env.DUYA_TEST_NAMESPACE;
@@ -83,16 +111,17 @@ export async function toAgentProfile(id: string, entry: CustomAgentConfig): Prom
   const allow = tools.allow && tools.allow.length ? tools.allow : base.allow;
   const deny = [...base.deny, ...(tools.deny ?? [])];
 
+  // Plan 481 P1.2: every bot profile gets the bot collaboration toolset on
+  // top of its base profile (no-op for '*' allowlists). Explicit denies in
+  // [agents.<id>.tools] still win downstream — ToolFilter applies after.
   let globalInstructions: string | undefined;
-  if (resolved.agents_md) {
     try {
-      globalInstructions = await readFile(resolved.agents_md, 'utf8');
+      globalInstructions = resolved.agents_md ? await readFile(resolved.agents_md, 'utf8') : undefined;
     } catch {
       // missing file is fine — no agent global instructions
     }
-  }
 
-  return {
+  const profile: AgentProfile = {
     id,
     name: entry.name || id,
     description: entry.description,
@@ -107,4 +136,5 @@ export async function toAgentProfile(id: string, entry: CustomAgentConfig): Prom
     createdAt: 0,
     updatedAt: 0,
   };
+  return applyBotToolset(profile);
 }

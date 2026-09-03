@@ -62,3 +62,33 @@ export {
   readMessagesForFingerprint,
   type MessageForHash,
 } from './sourceFingerprint';
+
+// Plan 479 Phase 1 — bot memory tier index (query index over the file manifest)
+export {
+  normalizeDedupeKey,
+  computeTierEntryId,
+  upsertTierEntry,
+  listTierEntries,
+  listTierShards,
+  getTierEntryByPath,
+  removeTierEntryByPath,
+  mergedTierRecall,
+  rebuildTierIndexFromFiles,
+  type TierIndexRow,
+  type UpsertTierEntryInput,
+  type TierQueryFilter,
+  type TierShardSummary,
+  type TierRebuildReport,
+  type UpsertOutcome,
+} from './tierIndex';
+export {
+  newestWins,
+  resolveShardConflicts,
+  dedupeAcrossShards,
+  mergeTierRecall,
+  type MemoryTier,
+  type TierEntryKind,
+  type ConflictAccessors,
+  type CrossShardDedupeResult,
+  type MergeTierRecallInput,
+} from './tierConflicts';

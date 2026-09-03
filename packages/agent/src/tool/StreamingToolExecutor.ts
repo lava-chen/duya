@@ -174,6 +174,11 @@ export interface MessageUpdate {
 export interface CanUseToolDecision {
   allowed: boolean
   behavior?: 'allow' | 'ask' | 'deny'
+  /**
+   * Optional denial reason (plan 480 P2.5 visibility guard). Surfaced
+   * verbatim in the tool_use_error when behavior is deny.
+   */
+  message?: string
 }
 
 /**
@@ -1041,7 +1046,7 @@ export class StreamingToolExecutor {
 
       if (result.success) {
         const content = result.backgrounded
-          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- You will be notified automatically when it completes — do not wait or poll for it. Use get_task_output only for a quick status snapshot (no timeout_ms).`
+          ? `${result.result}\n\nBackground task info:\n- Task ID: ${tool.id}\n- PID: ${result.pid}\n- Output file: ${result.outputFile || 'N/A'}\n- You will be notified automatically when it completes — do not wait or poll for it. Use get_task_output only for a quick status/output snapshot; it never blocks.`
           : [
               executionPlan?.reason ? `[Shell] ${executionPlan.reason}` : undefined,
               typeof result.result === 'string'
@@ -1229,10 +1234,14 @@ export class StreamingToolExecutor {
       const canUseBehavior = typeof canUseResult === 'boolean' ? undefined : canUseResult.behavior
 
       if (!canUse) {
+        const denyReason =
+          typeof canUseResult !== 'boolean' && canUseResult?.message
+            ? canUseResult.message
+            : `Permission denied: tool ${tool.block.name} cannot be used`;
         messages.push(
           createErrorMessage(
             tool.id,
-            `<tool_use_error>Permission denied: tool ${tool.block.name} cannot be used</tool_use_error>`,
+            `<tool_use_error>${denyReason.replace(/[<\n]/g, ' ')}</tool_use_error>`,
           ),
         )
         this.finalizeTool(tool, messages, undefined, 'Permission denied')

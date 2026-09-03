@@ -32,7 +32,18 @@ import type {
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
-import { createBotPromptAssembly, loadBotPromptContext, isBotAgentProfile } from '../prompts/index.js';
+import {
+  createBotPromptAssembly,
+  loadBotPromptContext,
+  isBotAgentProfile,
+  computeBotContentHash,
+  countTimelineCompactions,
+  buildProfileUpdateEnvelope,
+  detectProfileUpdate,
+  isProfileUpdateFolded,
+  mergeProfileUpdate,
+  type ProfileBaseline,
+} from '../prompts/index.js';
 import type { BotPromptAssembly } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
@@ -56,6 +67,7 @@ import type { CanUseToolFn } from '../tool/StreamingToolExecutor.js';
 import type { WidgetStyleSignature, CanvasFreshnessState } from '../types.js';
 import { createHasPermissionsToUseTool } from '../permissions/permissions.js';
 import { resolveCacheRetention } from '../config/cache-config.js';
+import { readToolExposureConfig } from '../config/tool-exposure.js';
 import type { ToolPermissionCheckContext } from '../permissions/permissions.js';
 import type { ToolPermissionContext, PermissionMode, ToolPermissionRulesBySource, AdditionalWorkingDirectory, PermissionRuleSource, LocalToolPermission } from '../permissions/types.js';
 import { permissionModeFromString } from '../permissions/policy.js';
@@ -102,6 +114,11 @@ import { toolSearchTool } from '../tool/ToolSearchTool/ToolSearchTool.js';
 import { searchToolsFromRegistry } from '../tool/ToolSearchTool/searchTools.js';
 import { toolSchemaTool } from '../tool/ToolSchemaTool/ToolSchemaTool.js';
 import { createToolSchemaProviderFromRegistry } from '../tool/ToolSchemaTool/catalogFromRegistry.js';
+import { toolInvokeTool } from '../tool/ToolInvokeTool/ToolInvokeTool.js';
+import { createToolInvokeDispatcherFromRegistry } from '../tool/ToolInvokeTool/dispatcherFromRegistry.js';
+import {
+  recordUndeclaredCall,
+} from '../tool/visibility-guard.js';
 
 // Plan 453 Task C: contextual-user-fragment injection channel.
 import {
@@ -130,6 +147,19 @@ import {
   type RuntimeContextAgentMessage,
   type AgentMessage,
 } from '../message/index.js';
+import { AgentMessageFactory } from '../message/message-factories.js';
+// Plan 486: thread/fork branched-layer helpers
+import {
+  THREAD_METADATA_KEY,
+  applyReplyQuoteContext,
+  collectMessageIds,
+  isBranchedMessage,
+  mergeThreadMetadata,
+  messageToQuoteText,
+  readThreadMeta,
+  resolveReplyMeta,
+  withoutThreadMetadata,
+} from '../message/threads.js';
 import { MessageCompactionController } from '../message/message-compaction-controller.js';
 import {
   adaptAttachmentContext,
@@ -628,6 +658,9 @@ export class duyaAgent {
     // through. Reset on every streamChat so a follow-up turn gets a fresh
     // value rather than the previous turn's leftover.
     this.currentTurnId = options?.turnId ?? null;
+    // Plan 486: reset the fork-turn marker every streamChat call (see the
+    // field doc for semantics).
+    this.forkTurn = null;
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
@@ -842,6 +875,53 @@ export class duyaAgent {
     console.error(`[Agent-Process] canvas tools: ${tools.filter(t => t.name.startsWith('canvas_')).map(t => t.name).join(', ') || '(none)'}`);
     let systemPromptContent = await this._buildSystemPrompt(tools, options, appliedProfile);
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
+    // Plan 480 P2.4/P2.5: visibility guard. Snapshot of the tools declared on
+    // the current provider request (filled before each openLLMStream). Under
+    // catalog exposure MCP tools are intentionally absent from that set — a
+    // direct call to one is an undeclared call. 'warn' logs/counts it and
+    // lets it run; 'enforce' rejects it with a structured message pointing
+    // the model at tool_schema → tool_invoke (§8.3 gray-scale ladder).
+    let declaredToolsForRequest = new Set<string>();
+    const exposureConfig = readToolExposureConfig();
+    const guardEnabled = exposureConfig.exposure === 'catalog';
+    const guardEnforce = guardEnabled && exposureConfig.catalogGuard === 'enforce';
+    const guardedCanUseTool: typeof canUseTool = async (toolName, toolInput) => {
+      if (guardEnabled && !declaredToolsForRequest.has(toolName)) {
+        recordUndeclaredCall(toolName);
+        if (guardEnforce) {
+          return {
+            allowed: false,
+            behavior: 'deny' as const,
+            message: `Tool \`${toolName}\` is not in this request's tool list (catalog exposure). Read its schema with \`tool_schema\` first, then invoke it via \`tool_invoke\`. Direct calls to undeclared tools are rejected.`,
+          };
+        }
+      }
+      return canUseTool(toolName, toolInput);
+    };
+    // Plan 480 P2.2: wire tool_invoke to the registry + permission chain so
+    // the model can execute tools it discovered via tool_schema. The gate
+    // runs on the RESOLVED real tool name — routing through the meta tool can
+    // never bypass the permission policy. ask decisions are not executed (see
+    // dispatcherFromRegistry.ts); deny carries the decision message back.
+    toolInvokeTool.setDispatcher(
+      createToolInvokeDispatcherFromRegistry({
+        registry,
+        workingDirectory: this.workingDirectory,
+        checkPermission: async (toolName, args) => {
+          const decision = await this.hasPermissionsToUseTool(
+            toolName,
+            args,
+            permissionContext,
+          );
+          return {
+            behavior: decision.behavior,
+            ...(decision.behavior === 'deny' || decision.behavior === 'ask'
+              ? { message: (decision as { message?: string }).message }
+              : {}),
+          };
+        },
+      }),
+    );
     const contextWindow =
       this.runtimeConfig?.modelCapabilities?.contextWindow &&
       this.runtimeConfig.modelCapabilities.contextWindow > 0
@@ -1142,7 +1222,12 @@ export class duyaAgent {
       // Discoverable tools are excluded from the base list by
       // _resolveTools; this loop merges them in once discovered,
       // respecting the same deny/allow constraints.
-      if (discoveredTools.size > 0) {
+      // Plan 480 P4: under `exposure = "catalog"` NO tool is ever merged
+      // into the request this way — the tools array stays byte-constant and
+      // dynamic tools (MCP + discoverable built-ins) are reached exclusively
+      // through tool_schema (builtin namespace) + tool_invoke.
+      const catalogExposure = exposureConfig.exposure === 'catalog';
+      if (!catalogExposure && discoveredTools.size > 0) {
         const visible = new Set(tools.map((t) => t.name));
         let added = 0;
         for (const name of discoveredTools) {
@@ -1196,7 +1281,11 @@ export class duyaAgent {
       // an always-exposed tool receives. If its executor also provides a
       // usage guide (BrowserTool.getPrompt, for example), append that guide
       // to this turn's system prompt as well.
-      const discoveredPrompts = getDiscoveredToolPrompts(registry, discoveredTools);
+      // Plan 480 P4: catalog exposure appends no on-demand guides — dynamic
+      // tools are discovered via tool_schema instead.
+      const discoveredPrompts = !catalogExposure
+        ? getDiscoveredToolPrompts(registry, discoveredTools)
+        : [];
       if (discoveredPrompts.length > 0) {
         discoveredToolPromptSuffix = [
           '',
@@ -1257,6 +1346,28 @@ export class duyaAgent {
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
           } as Message;
+          // Plan 486 §2.1/§2.2: fork/reply creation rule. The target must
+          // exist in this session's timeline (checked against entries already
+          // committed — this message is not yet appended). An unknown target
+          // is silently stripped so a dangling fork is never persisted.
+          const replyMeta = resolveReplyMeta(
+            options?.replyToId,
+            options?.branched,
+            collectMessageIds(this.timeline.snapshot()),
+          );
+          if (replyMeta) {
+            userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
+            // Plan 486 §2.3: a branched fork opens an active fork turn — every
+            // message this turn produces is tagged branched (see _pushDurable).
+            // Quote replies (no branched) stay on the main line and leave the
+            // marker null.
+            if (replyMeta.branched === true && userMessage.id) {
+              this.forkTurn = {
+                replyToId: replyMeta.replyToId ?? userMessage.id,
+                userId: userMessage.id,
+              };
+            }
+          }
           this._pushDurable(messages, userMessage);
           runtimePromptMessageId = userMessage.id ?? null;
         } else if (lastMessage) {
@@ -1297,6 +1408,8 @@ export class duyaAgent {
           authStyle: this.authStyle,
           provider: this.provider,
           sessionId: this.sessionId, // Pass sessionId for task persistence
+          // Plan 481: bot identity for identity-bound tools (update_state).
+          agentProfileId: options?.agentProfileId ?? null,
           workingDirectory: this.workingDirectory, // Pass working directory for tool execution
           language: this.language, // Propagate language preference to sub-agents
           agentDefinitions: {
@@ -1351,7 +1464,7 @@ export class duyaAgent {
 
       const executor = new StreamingToolExecutor(
         registry,
-        canUseTool,
+        guardedCanUseTool,
         toolUseContext
       );
 
@@ -1507,6 +1620,15 @@ export class duyaAgent {
             : messages
         );
 
+        // Plan 486 §2.3: render the reply/fork quote context and keep the
+        // provider payload clean. This runs at the per-request boundary where
+        // the current turn's user message is present: historical messages
+        // arrive already stripped by projectModelMessages, so only messages
+        // carrying a live replyToId (this turn's quote reply or fork) get the
+        // `[In reply to <id>: "<quote>"]` prefix. Thread metadata is then
+        // removed from every message so it never leaks into the request body.
+        this._applyProviderThreadBoundary(llmMessages);
+
         // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
         // not injected as a first-turn user message.
 
@@ -1557,8 +1679,12 @@ export class duyaAgent {
         // failing the whole turn. The retryable-error classification and
         // attempt budget live in ./stream-retry.ts. Post-`done` failures
         // propagate unchanged via the turnCommitted guard.
-        const openLLMStream = () =>
-          this.llmClient.streamChat(llmMessages, {
+        // Plan 480 P2.4: refresh the declared-tools snapshot before every
+        // provider request (the array changes across rounds as discovered
+        // tools join). The visibility guard reads it during execution.
+        const openLLMStream = () => {
+          declaredToolsForRequest = new Set(tools.map((t) => t.name));
+          return this.llmClient.streamChat(llmMessages, {
             systemPrompt: systemPromptContent,
             tools,
             maxTokens: options?.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -1567,6 +1693,7 @@ export class duyaAgent {
             effort: options?.effort,
             maxOutputTokens: this.runtimeConfig?.modelCapabilities?.maxOutputTokens,
           });
+        };
         let streamReplayAttempt = 0;
         const streamGenerator = (async function* () {
           while (true) {
@@ -2606,6 +2733,17 @@ export class duyaAgent {
   private currentTurnId: string | null = null;
 
   /**
+   * Plan 486: active fork (thread) turn. Set when the current streamChat turn
+   * is a branched fork submission (`replyToId` + `branched`). Every non-user
+   * durable message produced during this turn is tagged branched against the
+   * fork's user message, so the whole exchange belongs to the branched layer:
+   * it never appears in the main transcript or any later main projection.
+   * Quote replies (replyToId without branched) leave this null — they stay on
+   * the main line. Reset at the top of every streamChat call.
+   */
+  private forkTurn: { replyToId: string; userId: string } | null = null;
+
+  /**
    * Push a durable message to both the working array and the timeline.
    * Transient messages (mailbox, background notifications) should use
    * `messages.push()` directly — they are filtered out by persistableMessages
@@ -2617,6 +2755,17 @@ export class duyaAgent {
    * results each get their own deterministic id via `Journal`.
    */
   private _pushDurable(messages: Message[], message: Message): void {
+    // Plan 486: during an active fork turn every assistant/tool message that
+    // closes a boundary is tagged branched against the fork's user message, so
+    // the whole exchange stays on the thread layer (never in the main
+    // transcript or later main projections). The fork's own user message is
+    // tagged at construction; anything already branched is left untouched.
+    if (message.role !== 'user' && this.forkTurn && !isBranchedMessage(message)) {
+      message.metadata = mergeThreadMetadata(message.metadata, {
+        replyToId: this.forkTurn.userId,
+        branched: true,
+      });
+    }
     messages.push(message);
     this._appendMessageToTimeline(message);
     if (this.journal && message.id) {
@@ -2957,6 +3106,15 @@ export class duyaAgent {
         this.activeMCPRegistry.getAllTools().filter(
           (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
+        // Plan 480 §8.4: under `exposure = "catalog"` MCP tools are absent
+        // from the tools array — the directory must point the model at the
+        // tool_schema/tool_invoke meta pair instead of tool_search.
+        {
+          entryPoint:
+            readToolExposureConfig().exposure === 'catalog'
+              ? 'tool_invoke'
+              : 'tool_search',
+        },
       );
       if (mcpCatalog) {
         systemPromptContent = systemPromptContent
@@ -3018,7 +3176,26 @@ export class duyaAgent {
     if (!options?.disableSystemPrompt && isBotAgentProfile(appliedProfile) && appliedProfile) {
       try {
         const botContext = await loadBotPromptContext(appliedProfile.id);
-        const botSections = await this.getBotAssembly().renderSections(botContext);
+        // Plan 474 §2.3/P1.2: dual-key frozen snapshot — a content hash over
+        // the bot context (profile/roster/reserved slots) plus the compaction
+        // epoch (compaction-entry count). Same keys reuse the cached
+        // per-section render verbatim; either key changing re-renders.
+        const summaryEpoch = countTimelineCompactions(this.timeline.snapshot());
+        const botSections = await this.getBotAssembly().renderSections(botContext, {
+          snapshot: {
+            botId: appliedProfile.id,
+            contentHash: computeBotContentHash(botContext),
+            summaryEpoch,
+          },
+        });
+        // Plan 474 §2.2/P3.1: identity change announcement + compaction
+        // folding. (1) When the current identity differs from what the
+        // model was last told, append a hidden profile-update envelope.
+        // (2) When a compaction persisted since the last turn, fold the
+        // announced baseline: the identity section now renders the merged
+        // view (profile.json is re-read every turn), so the history
+        // envelope no longer needs to survive compaction.
+        this._syncBotProfileBaseline(appliedProfile.id, botContext, summaryEpoch);
         if (botSections) {
           systemPromptContent = systemPromptContent
             ? `${systemPromptContent}\n\n${botSections}`
@@ -3033,6 +3210,79 @@ export class duyaAgent {
     }
 
     return systemPromptContent;
+  }
+
+  /**
+   * Bot profile baseline (Plan 474 §2.2/P3.1): the identity the model has
+   * last been told about, per bot id. Seeded lazily from the first context
+   * load so an already-running session does not announce a "change" from a
+   * cold undefined baseline.
+   */
+  private botProfileBaselines = new Map<
+    string,
+    { baseline: ProfileBaseline; summaryEpoch: number }
+  >();
+
+  private _syncBotProfileBaseline(
+    botId: string,
+    ctx: { botName?: string; botDescription?: string },
+    summaryEpoch: number,
+  ): void {
+    try {
+      const state = this.botProfileBaselines.get(botId);
+      if (!state) {
+        // First sight this session: adopt the current identity silently.
+        this.botProfileBaselines.set(botId, {
+          baseline: { name: ctx.botName, description: ctx.botDescription },
+          summaryEpoch,
+        });
+        return;
+      }
+
+      // Compaction folding (§2.2): summaryEpoch advanced → the newest
+      // announced update is folded into the baseline; no re-announcement —
+      // the identity section re-rendered this turn already carries the
+      // merged view (profile.json is re-read every turn).
+      const baseline =
+        summaryEpoch > state.summaryEpoch
+          ? { ...state.baseline, foldedUntil: undefined }
+          : state.baseline;
+
+      const update = detectProfileUpdate(
+        baseline,
+        { name: ctx.botName, description: ctx.botDescription },
+      );
+      if (update && !isProfileUpdateFolded(baseline, update)) {
+        const envelope = buildProfileUpdateEnvelope(update);
+        const message = new AgentMessageFactory().createRuntimeContextMessage({
+          source: 'custom',
+          content: envelope,
+          visibility: 'hidden',
+          metadata: {
+            botProfileUpdate: true,
+            changedAt: update.changedAt,
+          },
+        });
+        const appended = this._appendRuntimeContextToTimeline(
+          message as unknown as RuntimeContextAgentMessage,
+        );
+        if (appended) {
+          logger.info(
+            `[Agent] bot profile update announced (id=${botId}, changedAt=${update.changedAt})`,
+          );
+        }
+      }
+
+      this.botProfileBaselines.set(botId, {
+        baseline: mergeProfileUpdate(baseline, update),
+        summaryEpoch,
+      });
+    } catch (err) {
+      // Envelope bookkeeping must never break the system prompt build.
+      logger.warn(
+        `[Agent] bot profile baseline sync skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -3825,6 +4075,12 @@ export class duyaAgent {
     const projection = projectModelMessages(context.messages, { systemSegments });
     const messages: Message[] = [...projection.messages];
 
+    // Plan 486: reply quote injection happens at the per-request provider
+    // boundary (see `_renderReplyQuoteForProviderRequest` next to the LLM
+    // call), where the current turn's user message is already on the array.
+    // projectModelMessages above already filtered branched messages and
+    // stripped thread metadata, so historical reply markers never leak.
+
     // Context-injection hardening (UserPromptSubmit / SessionStart hook
     // additionalContext): each block is wrapped in `<system-reminder>` and
     // tagged source='custom', exactly matching the loop-hook injection
@@ -3878,6 +4134,53 @@ export class duyaAgent {
     );
 
     return { systemPromptContent: merged, messages };
+  }
+
+  /**
+   * Plan 486 §2.3: apply the provider thread boundary to a request message
+   * array in place, at the per-request LLM call site:
+   *  1. Prefix user messages that carry a live `replyToId` (this turn's quote
+   *     reply or fork) with `[In reply to <id>: "<quote>"]`, rendered from the
+   *     referenced timeline message (grok system-prompt.ts:48 parity).
+   *     Historical messages arrive here already stripped by projectModelMessages,
+   *     so only the current turn's message can match; the prefix render is
+   *     idempotent per target so re-projections never double-inject.
+   *  2. Strip thread metadata from every message so `replyToId` / `branched`
+   *     never leak into the provider request body.
+   */
+  private _applyProviderThreadBoundary(messages: Message[]): void {
+    if (messages.length === 0) return;
+    let sourceById: Map<string, AgentMessage> | null = null;
+    const lookupQuoteText = (id: string): string => {
+      if (!sourceById) {
+        sourceById = new Map<string, AgentMessage>();
+        for (const entry of this.timeline.snapshot()) {
+          if (entry.type === 'message' && typeof entry.message.id === 'string') {
+            sourceById.set(entry.message.id, entry.message);
+          }
+        }
+      }
+      return messageToQuoteText(sourceById.get(id));
+    };
+
+    let hasReplyUser = false;
+    for (const m of messages) {
+      if (m.role === 'user' && readThreadMeta(m)?.replyToId) {
+        hasReplyUser = true;
+        break;
+      }
+    }
+    const projected = hasReplyUser
+      ? applyReplyQuoteContext(messages as readonly AgentMessage[], lookupQuoteText)
+      : messages;
+
+    for (let i = 0; i < messages.length; i += 1) {
+      const source = (projected as readonly AgentMessage[])[i] ?? messages[i];
+      const cleaned = withoutThreadMetadata(source);
+      if (cleaned !== messages[i]) {
+        messages[i] = cleaned as Message;
+      }
+    }
   }
 
   /**
@@ -3950,6 +4253,14 @@ export class duyaAgent {
     // appended by the controller is reflected automatically.
     this.sessionInfo.messageCount = this.messages.length;
     this.sessionInfo.updatedAt = Date.now();
+
+    // Plan 475 P4.6 follow-up: emit the same compaction notification the
+    // proactive path uses (streamChat) so the worker's `onMessagesCompacted`
+    // wiring appends a `rebase` journal event for manual /compact too.
+    // Without this, compacted-away messages were never superseded in the
+    // rollout and a reload resurrected the full pre-compaction history
+    // alongside the summary (ghost history).
+    this.onMessagesCompacted?.(this.messages.length);
 
     return {
       strategy: compactEntry.strategy,

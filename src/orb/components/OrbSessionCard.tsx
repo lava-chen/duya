@@ -313,18 +313,26 @@ function SessionStream({
       </div>
     );
   }
+  // Deduplicate by id: use index as fallback key when ids collide.
+  // A Collided id means the same turn was appended twice (e.g. concurrent
+  // submits + rejection rollback), which React would otherwise silently drop.
+  const seenIds = new Set<string>();
   return (
     <div className="orb-session-stream" ref={streamRef} aria-live="polite">
-      {messages.map((m, i) => (
-        <MessageBubble
-          key={m.id}
-          turn={m}
-          isLast={i === messages.length - 1}
-          isLoadingLast={isLoadingStream && i === messages.length - 1}
-          onInsertTab={onInsertTab}
-          progressLabel={progress.label}
-        />
-      ))}
+      {messages.map((m, i) => {
+        const key = seenIds.has(m.id) ? `idx-${i}` : m.id;
+        seenIds.add(m.id);
+        return (
+          <MessageBubble
+            key={key}
+            turn={m}
+            isLast={i === messages.length - 1}
+            isLoadingLast={isLoadingStream && i === messages.length - 1}
+            onInsertTab={onInsertTab}
+            progressLabel={progress.label}
+          />
+        );
+      })}
     </div>
   );
 }
