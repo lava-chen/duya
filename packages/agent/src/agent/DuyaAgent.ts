@@ -1206,7 +1206,12 @@ export class duyaAgent {
       // Discoverable tools are excluded from the base list by
       // _resolveTools; this loop merges them in once discovered,
       // respecting the same deny/allow constraints.
-      if (discoveredTools.size > 0) {
+      // Plan 480 P4: under `exposure = "catalog"` NO tool is ever merged
+      // into the request this way — the tools array stays byte-constant and
+      // dynamic tools (MCP + discoverable built-ins) are reached exclusively
+      // through tool_schema (builtin namespace) + tool_invoke.
+      const catalogExposure = exposureConfig.exposure === 'catalog';
+      if (!catalogExposure && discoveredTools.size > 0) {
         const visible = new Set(tools.map((t) => t.name));
         let added = 0;
         for (const name of discoveredTools) {
@@ -1260,7 +1265,11 @@ export class duyaAgent {
       // an always-exposed tool receives. If its executor also provides a
       // usage guide (BrowserTool.getPrompt, for example), append that guide
       // to this turn's system prompt as well.
-      const discoveredPrompts = getDiscoveredToolPrompts(registry, discoveredTools);
+      // Plan 480 P4: catalog exposure appends no on-demand guides — dynamic
+      // tools are discovered via tool_schema instead.
+      const discoveredPrompts = !catalogExposure
+        ? getDiscoveredToolPrompts(registry, discoveredTools)
+        : [];
       if (discoveredPrompts.length > 0) {
         discoveredToolPromptSuffix = [
           '',
