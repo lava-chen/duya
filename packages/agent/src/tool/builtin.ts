@@ -45,6 +45,7 @@ import { hasShellFamily } from '../utils/shellDetector.js';
 import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
 import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
 import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
+import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
 
 /**
  * BashTool instance
@@ -296,6 +297,12 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   registry.register(toolSchemaTool.toTool(), toolSchemaTool, { exposeMode: 'always' });
   registry.register(toolInvokeTool.toTool(), toolInvokeTool, { exposeMode: 'always' });
 
+  // Plan 481 T1: update_state — bot memory/state writes through the 479 tier
+  // store (see UpdateStateTool). Discoverable: only bot profiles surface it
+  // (bot-toolset.ts appends it to allowedTools); checkPermissions maps
+  // own=allow / shared=ask per the 481 permission matrix.
+  registry.register(updateStateTool.toTool(), updateStateTool, { exposeMode: 'discoverable' });
+
   return registry;
 }
 
@@ -330,5 +337,7 @@ export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/ind
 // cronTool removed in plan 99 — use `duya_cli` (command: 'cron') instead.
 // duyaConfigTool removed in plan 102 — use `duya_cli` (argv: 'config …' / 'mcp …') instead.
 export { duyaCliTool } from './DuyaCliTool/index.js';
+export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool/index.js';
+export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';
 
 

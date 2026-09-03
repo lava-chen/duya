@@ -9,6 +9,7 @@ import * as path from 'path';
 import { readFile } from 'fs/promises';
 import { parse as parseToml } from '@iarna/toml';
 import type { AgentProfile } from './types.js';
+import { applyBotToolset } from './bot-toolset.js';
 
 export interface CustomAgentToolsConfig {
   profile?: string;
@@ -110,16 +111,17 @@ export async function toAgentProfile(id: string, entry: CustomAgentConfig): Prom
   const allow = tools.allow && tools.allow.length ? tools.allow : base.allow;
   const deny = [...base.deny, ...(tools.deny ?? [])];
 
+  // Plan 481 P1.2: every bot profile gets the bot collaboration toolset on
+  // top of its base profile (no-op for '*' allowlists). Explicit denies in
+  // [agents.<id>.tools] still win downstream — ToolFilter applies after.
   let globalInstructions: string | undefined;
-  if (resolved.agents_md) {
     try {
-      globalInstructions = await readFile(resolved.agents_md, 'utf8');
+      globalInstructions = resolved.agents_md ? await readFile(resolved.agents_md, 'utf8') : undefined;
     } catch {
       // missing file is fine — no agent global instructions
     }
-  }
 
-  return {
+  const profile: AgentProfile = {
     id,
     name: entry.name || id,
     description: entry.description,
@@ -134,4 +136,5 @@ export async function toAgentProfile(id: string, entry: CustomAgentConfig): Prom
     createdAt: 0,
     updatedAt: 0,
   };
+  return applyBotToolset(profile);
 }

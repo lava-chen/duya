@@ -688,6 +688,12 @@ export interface ToolUseContextOptions {
   appendSystemPrompt?: string;
   // Session context
   sessionId?: string;
+  /**
+   * Plan 481: the bot identity bound to this run (ChatOptions.agentProfileId).
+   * Tools that act on behalf of the bot's identity (e.g. update_state memory
+   * shards) read it from here; undefined/null for plain user sessions.
+   */
+  agentProfileId?: string | null;
   // Working directory for tool execution (e.g., BashTool)
   workingDirectory?: string;
   // Language preference for agent responses (propagated to sub-agents)
