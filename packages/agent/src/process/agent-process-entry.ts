@@ -3769,13 +3769,15 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
               customInstructions: compactMsg.customInstructions,
             });
             log('[Agent-Process] Compaction complete:', result);
-            const currentMessages = agent.getMessages();
-            // After compaction, agent holds a reduced/summarized set.
-            // Append all current messages; INSERT OR IGNORE handles dedup
-            // for messages already in DB. Update existingMessageCount.
-            await appendMessages(sessionId!, currentMessages);
-            existingMessageCount = currentMessages.length;
-            log(`[Agent-Process] Compaction: appended messages, new count=${existingMessageCount}`);
+            // Plan 475 P4.6 follow-up: persistence is owned by the
+            // `onMessagesCompacted` wiring, which emits an append-only
+            // `rebase` journal event (supersedes compacted-away messages,
+            // carries the summary + survivors). The legacy appendMessages-
+            // of-all call that used to live here is gone — it never
+            // superseded anything, so a reload resurrected the full
+            // pre-compaction history next to the summary (ghost history).
+            existingMessageCount = agent.getMessages().length;
+            log(`[Agent-Process] Compaction: rebase emitted, new count=${existingMessageCount}`);
             // Broadcast BEFORE compact:done: retained anchors describe the
             // pre-compact prompt, so mark pending and emit an unanchored
             // frame — the ring shows "?" until the next turn's first `result`

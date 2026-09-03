@@ -32,7 +32,13 @@ import type {
 } from '../types.js';
 import { asSystemPrompt, DEFAULT_PROMPT_PROFILE, getPromptProfileForAgentProfile, PromptsRegistry, resolvePromptSystemName } from '../prompts/index.js';
 import type { PromptSystem } from '../prompts/index.js';
-import { createBotPromptAssembly, loadBotPromptContext, isBotAgentProfile } from '../prompts/index.js';
+import {
+  createBotPromptAssembly,
+  loadBotPromptContext,
+  isBotAgentProfile,
+  computeBotContentHash,
+  countTimelineCompactions,
+} from '../prompts/index.js';
 import type { BotPromptAssembly } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
 import { extractTriggerPaths } from '../agentsmd/nested-loader.js';
@@ -142,10 +148,11 @@ import {
   applyReplyQuoteContext,
   collectMessageIds,
   isBranchedMessage,
-  isReplyMessage,
   mergeThreadMetadata,
   messageToQuoteText,
+  readThreadMeta,
   resolveReplyMeta,
+  withoutThreadMetadata,
 } from '../message/threads.js';
 import { MessageCompactionController } from '../message/message-compaction-controller.js';
 import {
@@ -645,6 +652,9 @@ export class duyaAgent {
     // through. Reset on every streamChat so a follow-up turn gets a fresh
     // value rather than the previous turn's leftover.
     this.currentTurnId = options?.turnId ?? null;
+    // Plan 486: reset the fork-turn marker every streamChat call (see the
+    // field doc for semantics).
+    this.forkTurn = null;
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
@@ -1341,6 +1351,16 @@ export class duyaAgent {
           );
           if (replyMeta) {
             userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
+            // Plan 486 §2.3: a branched fork opens an active fork turn — every
+            // message this turn produces is tagged branched (see _pushDurable).
+            // Quote replies (no branched) stay on the main line and leave the
+            // marker null.
+            if (replyMeta.branched === true && userMessage.id) {
+              this.forkTurn = {
+                replyToId: replyMeta.replyToId ?? userMessage.id,
+                userId: userMessage.id,
+              };
+            }
           }
           this._pushDurable(messages, userMessage);
           runtimePromptMessageId = userMessage.id ?? null;
@@ -1591,6 +1611,15 @@ export class duyaAgent {
               ))
             : messages
         );
+
+        // Plan 486 §2.3: render the reply/fork quote context and keep the
+        // provider payload clean. This runs at the per-request boundary where
+        // the current turn's user message is present: historical messages
+        // arrive already stripped by projectModelMessages, so only messages
+        // carrying a live replyToId (this turn's quote reply or fork) get the
+        // `[In reply to <id>: "<quote>"]` prefix. Thread metadata is then
+        // removed from every message so it never leaks into the request body.
+        this._applyProviderThreadBoundary(llmMessages);
 
         // AGENTS.md is now carried in the system prompt (Plan 408 Phase 5),
         // not injected as a first-turn user message.
@@ -2696,6 +2725,17 @@ export class duyaAgent {
   private currentTurnId: string | null = null;
 
   /**
+   * Plan 486: active fork (thread) turn. Set when the current streamChat turn
+   * is a branched fork submission (`replyToId` + `branched`). Every non-user
+   * durable message produced during this turn is tagged branched against the
+   * fork's user message, so the whole exchange belongs to the branched layer:
+   * it never appears in the main transcript or any later main projection.
+   * Quote replies (replyToId without branched) leave this null — they stay on
+   * the main line. Reset at the top of every streamChat call.
+   */
+  private forkTurn: { replyToId: string; userId: string } | null = null;
+
+  /**
    * Push a durable message to both the working array and the timeline.
    * Transient messages (mailbox, background notifications) should use
    * `messages.push()` directly — they are filtered out by persistableMessages
@@ -2707,6 +2747,17 @@ export class duyaAgent {
    * results each get their own deterministic id via `Journal`.
    */
   private _pushDurable(messages: Message[], message: Message): void {
+    // Plan 486: during an active fork turn every assistant/tool message that
+    // closes a boundary is tagged branched against the fork's user message, so
+    // the whole exchange stays on the thread layer (never in the main
+    // transcript or later main projections). The fork's own user message is
+    // tagged at construction; anything already branched is left untouched.
+    if (message.role !== 'user' && this.forkTurn && !isBranchedMessage(message)) {
+      message.metadata = mergeThreadMetadata(message.metadata, {
+        replyToId: this.forkTurn.userId,
+        branched: true,
+      });
+    }
     messages.push(message);
     this._appendMessageToTimeline(message);
     if (this.journal && message.id) {
@@ -3117,7 +3168,17 @@ export class duyaAgent {
     if (!options?.disableSystemPrompt && isBotAgentProfile(appliedProfile) && appliedProfile) {
       try {
         const botContext = await loadBotPromptContext(appliedProfile.id);
-        const botSections = await this.getBotAssembly().renderSections(botContext);
+        // Plan 474 §2.3/P1.2: dual-key frozen snapshot — a content hash over
+        // the bot context (profile/roster/reserved slots) plus the compaction
+        // epoch (compaction-entry count). Same keys reuse the cached
+        // per-section render verbatim; either key changing re-renders.
+        const botSections = await this.getBotAssembly().renderSections(botContext, {
+          snapshot: {
+            botId: appliedProfile.id,
+            contentHash: computeBotContentHash(botContext),
+            summaryEpoch: countTimelineCompactions(this.timeline.snapshot()),
+          },
+        });
         if (botSections) {
           systemPromptContent = systemPromptContent
             ? `${systemPromptContent}\n\n${botSections}`
@@ -3922,34 +3983,13 @@ export class duyaAgent {
 
     // Project to model boundary: { system, messages }
     const projection = projectModelMessages(context.messages, { systemSegments });
-    let messages: Message[] = [...projection.messages];
+    const messages: Message[] = [...projection.messages];
 
-    // Plan 486 §2.3: reply quote injection. A main-line user message that
-    // carries a replyToId (quote reply) has the referenced message's text
-    // rendered as `[In reply to <id>: "<quote>"]` ahead of the model request,
-    // mirroring grok system-prompt.ts:48. Branched (thread) messages never
-    // reach this array — projectModelMessages filters them at the model
-    // boundary. applyReplyQuoteContext is idempotent per target, so mid-run
-    // re-projections (compaction / model switch) never double-inject.
-    let hasReplyUser = false;
-    for (const m of messages) {
-      if (m.role === 'user' && isReplyMessage(m)) {
-        hasReplyUser = true;
-        break;
-      }
-    }
-    if (hasReplyUser) {
-      const sourceById = new Map<string, AgentMessage>();
-      for (const entry of snapshot) {
-        if (entry.type === 'message' && typeof entry.message.id === 'string') {
-          sourceById.set(entry.message.id, entry.message);
-        }
-      }
-      messages = applyReplyQuoteContext(
-        messages as readonly AgentMessage[],
-        (id) => messageToQuoteText(sourceById.get(id)),
-      ) as Message[];
-    }
+    // Plan 486: reply quote injection happens at the per-request provider
+    // boundary (see `_renderReplyQuoteForProviderRequest` next to the LLM
+    // call), where the current turn's user message is already on the array.
+    // projectModelMessages above already filtered branched messages and
+    // stripped thread metadata, so historical reply markers never leak.
 
     // Context-injection hardening (UserPromptSubmit / SessionStart hook
     // additionalContext): each block is wrapped in `<system-reminder>` and
@@ -4004,6 +4044,53 @@ export class duyaAgent {
     );
 
     return { systemPromptContent: merged, messages };
+  }
+
+  /**
+   * Plan 486 §2.3: apply the provider thread boundary to a request message
+   * array in place, at the per-request LLM call site:
+   *  1. Prefix user messages that carry a live `replyToId` (this turn's quote
+   *     reply or fork) with `[In reply to <id>: "<quote>"]`, rendered from the
+   *     referenced timeline message (grok system-prompt.ts:48 parity).
+   *     Historical messages arrive here already stripped by projectModelMessages,
+   *     so only the current turn's message can match; the prefix render is
+   *     idempotent per target so re-projections never double-inject.
+   *  2. Strip thread metadata from every message so `replyToId` / `branched`
+   *     never leak into the provider request body.
+   */
+  private _applyProviderThreadBoundary(messages: Message[]): void {
+    if (messages.length === 0) return;
+    let sourceById: Map<string, AgentMessage> | null = null;
+    const lookupQuoteText = (id: string): string => {
+      if (!sourceById) {
+        sourceById = new Map<string, AgentMessage>();
+        for (const entry of this.timeline.snapshot()) {
+          if (entry.type === 'message' && typeof entry.message.id === 'string') {
+            sourceById.set(entry.message.id, entry.message);
+          }
+        }
+      }
+      return messageToQuoteText(sourceById.get(id));
+    };
+
+    let hasReplyUser = false;
+    for (const m of messages) {
+      if (m.role === 'user' && readThreadMeta(m)?.replyToId) {
+        hasReplyUser = true;
+        break;
+      }
+    }
+    const projected = hasReplyUser
+      ? applyReplyQuoteContext(messages as readonly AgentMessage[], lookupQuoteText)
+      : messages;
+
+    for (let i = 0; i < messages.length; i += 1) {
+      const source = (projected as readonly AgentMessage[])[i] ?? messages[i];
+      const cleaned = withoutThreadMetadata(source);
+      if (cleaned !== messages[i]) {
+        messages[i] = cleaned as Message;
+      }
+    }
   }
 
   /**
@@ -4076,6 +4163,14 @@ export class duyaAgent {
     // appended by the controller is reflected automatically.
     this.sessionInfo.messageCount = this.messages.length;
     this.sessionInfo.updatedAt = Date.now();
+
+    // Plan 475 P4.6 follow-up: emit the same compaction notification the
+    // proactive path uses (streamChat) so the worker's `onMessagesCompacted`
+    // wiring appends a `rebase` journal event for manual /compact too.
+    // Without this, compacted-away messages were never superseded in the
+    // rollout and a reload resurrected the full pre-compaction history
+    // alongside the summary (ghost history).
+    this.onMessagesCompacted?.(this.messages.length);
 
     return {
       strategy: compactEntry.strategy,
