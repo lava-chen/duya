@@ -15,12 +15,13 @@
  *
  * Sections are deliberately *not* tied to the legacy PromptSystem section
  * enum: bot sections live in a self-contained, keyed space (474 §6.1) so
- * they can later adopt the dual-key epoch cache
- * (`bot:<id>:<contentHash>:<summaryEpoch>:<section>`) without polluting
- * the global static cache.
+ * they use their own dual-key epoch cache
+ * (`bot:<id>:<contentHash>:<summaryEpoch>:<section>`, epoch.ts) without
+ * polluting the global static cache.
  */
 
 import { BOT_BASIC_SYSTEM_PROMPT } from './basicPrompt.js'
+import { botSectionCacheKey } from './epoch.js'
 
 /** One row of the bot roster (agent directory). */
 export interface BotRosterEntry {
@@ -96,10 +97,38 @@ export function fitToBudget(text: string, budget: number): { text: string; trunc
   return { text: chars.slice(0, budget).join(''), truncated: true }
 }
 
+/**
+ * Dual-key epoch identifying one frozen-snapshot generation (P1.2).
+ * See epoch.ts for how the two keys are produced.
+ */
+export interface BotSnapshotKey {
+  /** Stable bot id (config.toml `[agents.<id>]` map key). */
+  botId: string
+  /** Content hash over the bot-relevant context (computeBotContentHash). */
+  contentHash: string
+  /** Compaction epoch: number of compaction entries in the timeline. */
+  summaryEpoch: number
+}
+
+/** Optional render modifiers. */
+export interface BotRenderOptions {
+  /**
+   * When provided, each section's rendered output is cached under its
+   * dual-key epoch and reused verbatim until either key changes (frozen
+   * snapshot, Plan 474 §2.3). Omit to always recompute.
+   */
+  snapshot?: BotSnapshotKey
+}
+
+/** Upper bound on cached section snapshots (FIFO eviction). */
+const SNAPSHOT_CACHE_MAX_ENTRIES = 256
+
 /** Single ordered assembly of bot sections. */
 export class BotPromptAssembly {
   private readonly sections = new Map<string, BotSectionDef>()
   private order: string[] = []
+  /** Frozen per-section renders, keyed by `bot:<id>:<hash>:<epoch>:<section>`. */
+  private readonly snapshotCache = new Map<string, string | null>()
 
   constructor(private readonly basicPrompt: string = BOT_BASIC_SYSTEM_PROMPT) {}
 
@@ -131,8 +160,8 @@ export class BotPromptAssembly {
    * each registered section in registration order. Sections returning null
    * are omitted. Per-section budgets are applied when declared.
    */
-  async render(ctx: BotPromptContext): Promise<string> {
-    return this.assemble(ctx, { includeBasic: true })
+  async render(ctx: BotPromptContext, options?: BotRenderOptions): Promise<string> {
+    return this.assemble(ctx, { includeBasic: true, snapshot: options?.snapshot })
   }
 
   /**
@@ -141,30 +170,77 @@ export class BotPromptAssembly {
    * PromptSystem) and only wants the bot-specific tail injected — appending
    * the full `render()` output there would duplicate platform guidance.
    */
-  async renderSections(ctx: BotPromptContext): Promise<string> {
-    return this.assemble(ctx, { includeBasic: false })
+  async renderSections(ctx: BotPromptContext, options?: BotRenderOptions): Promise<string> {
+    return this.assemble(ctx, { includeBasic: false, snapshot: options?.snapshot })
   }
 
-  private async assemble(ctx: BotPromptContext, opts: { includeBasic: boolean }): Promise<string> {
+  /** Drop all frozen section snapshots (e.g. tests, forced invalidation). */
+  clearSnapshotCache(): void {
+    this.snapshotCache.clear()
+  }
+
+  private async assemble(
+    ctx: BotPromptContext,
+    opts: { includeBasic: boolean; snapshot?: BotSnapshotKey },
+  ): Promise<string> {
     const parts: string[] = []
     if (opts.includeBasic) parts.push(this.basicPrompt)
     for (const name of this.order) {
       const def = this.sections.get(name)
       if (!def) continue
-      let content: string | null
-      try {
-        content = await def.compute(ctx)
-      } catch (err) {
-        // A failing section must never break the whole prompt.
-        content = null
-      }
-      if (content === null || content === undefined || content === '') continue
-      if (def.budgetChars !== undefined) {
-        const fitted = fitToBudget(content, def.budgetChars)
-        if (fitted.truncated) content = `${fitted.text}\n…`
-      }
+      const content = await this.renderSection(def, ctx, opts.snapshot)
+      if (!content) continue
       parts.push(content)
     }
     return parts.join('\n\n')
+  }
+
+  /**
+   * Render one section, honoring the frozen snapshot when a dual-key epoch
+   * is provided: a cache hit returns the stored render verbatim; a miss
+   * computes, applies the budget, and stores the result (including a
+   * legit `null` "omitted" verdict, so sections cannot pop in mid-epoch).
+   * Failures are neither cached nor fatal — they retry on the next render.
+   */
+  private async renderSection(
+    def: BotSectionDef,
+    ctx: BotPromptContext,
+    snapshot: BotSnapshotKey | undefined,
+  ): Promise<string | null> {
+    const cacheKey = snapshot
+      ? botSectionCacheKey(snapshot.botId, snapshot.contentHash, snapshot.summaryEpoch, def.name)
+      : undefined
+    if (cacheKey !== undefined && this.snapshotCache.has(cacheKey)) {
+      return this.snapshotCache.get(cacheKey) ?? null
+    }
+
+    let raw: string | null | undefined
+    let failed = false
+    try {
+      raw = await def.compute(ctx)
+    } catch (err) {
+      // A failing section must never break the whole prompt.
+      failed = true
+    }
+    if (failed) return null
+
+    let content: string | null = raw ?? null
+    if (content !== null && def.budgetChars !== undefined) {
+      const fitted = fitToBudget(content, def.budgetChars)
+      if (fitted.truncated) content = `${fitted.text}\n…`
+    }
+    if (cacheKey !== undefined) this.storeSnapshot(cacheKey, content)
+    return content
+  }
+
+  private storeSnapshot(key: string, value: string | null): void {
+    // Re-insert to refresh FIFO recency, then evict the oldest entries.
+    this.snapshotCache.delete(key)
+    this.snapshotCache.set(key, value)
+    while (this.snapshotCache.size > SNAPSHOT_CACHE_MAX_ENTRIES) {
+      const oldest = this.snapshotCache.keys().next().value
+      if (oldest === undefined) break
+      this.snapshotCache.delete(oldest)
+    }
   }
 }

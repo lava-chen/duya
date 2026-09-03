@@ -75,7 +75,18 @@ export { getPlatformHint, PLATFORM_HINTS } from './platformHints.js'
 // Bot prompt layer (Plan 474) — config-driven bot system-prompt sections.
 export { BOT_BASIC_SYSTEM_PROMPT } from './bot/index.js'
 export { BotPromptAssembly, fitToBudget } from './bot/index.js'
-export type { BotPromptContext, BotSectionDef, BotRosterEntry } from './bot/index.js'
+export type {
+  BotPromptContext,
+  BotSectionDef,
+  BotRosterEntry,
+  BotSnapshotKey,
+  BotRenderOptions,
+} from './bot/index.js'
+export {
+  computeBotContentHash,
+  botSectionCacheKey,
+  countTimelineCompactions,
+} from './bot/index.js'
 export { createBotPromptAssembly } from './bot/index.js'
 export {
   registerBotSectionCatalog,
