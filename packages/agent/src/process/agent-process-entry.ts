@@ -738,11 +738,51 @@ function computerUseIpcRequest<T = unknown>(
   });
 }
 
+// Plan 481: IPC request for the memory-tier bridge (update_state tool).
+//
+// Routes `memory-tier:rpc` messages to the main process, where the
+// memory tier writer (electron/memory-state) owns the canonical memory
+// files and the memory-state.db tier index. The agent process never
+// touches the memory file tree directly.
+function memoryTierIpcRequest<T = unknown>(
+  _channel: string,
+  payload: unknown,
+  options?: { timeout?: number }
+): Promise<{ success: boolean; data?: T; error?: { code: string; message: string } }> {
+  return new Promise((resolve, reject) => {
+    const requestId = crypto.randomUUID();
+    const timeout = options?.timeout || 15000;
+
+    const timeoutHandle = setTimeout(() => {
+      if (pendingIpcRequests.has(requestId)) {
+        pendingIpcRequests.delete(requestId);
+        resolve({ success: false, error: { code: 'TIMEOUT', message: `memory-tier IPC request timeout after ${timeout}ms` } });
+      }
+    }, timeout);
+
+    pendingIpcRequests.set(requestId, {
+      resolve: (v) => resolve(v as { success: boolean; data?: T; error?: { code: string; message: string } }),
+      reject: (e) => reject(e),
+      timeoutHandle,
+    });
+
+    const outerPayload = payload as { action?: string; payload?: unknown; sessionId?: string } | undefined;
+    sendToMain({
+      type: 'memory-tier:rpc',
+      requestId,
+      action: outerPayload?.action,
+      payload: outerPayload?.payload,
+      sessionId: outerPayload?.sessionId,
+    });
+  });
+}
+
 /**
  * Unified tool IPC dispatcher: routes based on the `channel` argument.
  * - `'conductor:executor:rpc'` → conductorIpcRequest (canvas tools)
  * - `'appConnection:invoke'`    → appConnectionIpcRequest (connector tools)
  * - `'computer-use:execute'`    → computerUseIpcRequest (plan 454)
+ * - `'memory-tier:rpc'`         → memoryTierIpcRequest (plan 481)
  *
  * Plan 312: always injected into the ToolUseContext so App Connection
  * tools work without conductor mode being active.
@@ -763,6 +803,9 @@ function toolIpcRequest<T = unknown>(
   }
   if (channel === 'computer-use:execute') {
     return computerUseIpcRequest<T>(channel, payload, options);
+  }
+  if (channel === 'memory-tier:rpc') {
+    return memoryTierIpcRequest<T>(channel, payload, options);
   }
   return conductorIpcRequest<T>(channel, payload, options);
 }
@@ -4043,6 +4086,30 @@ async function handleCommand(msg: WorkerCommand): Promise<void> {
             }
           } else {
             warn('[Agent-Process] No pending computer-use IPC request found for requestId:', requestId);
+          }
+          break;
+        }
+        // Plan 481: memory-tier bridge response (update_state tool).
+        case 'memory-tier:rpc:response': {
+          const { requestId, success, data, error } = msg as unknown as {
+            requestId: string;
+            success: boolean;
+            data?: unknown;
+            error?: { code: string; message: string };
+          };
+          const pending = pendingIpcRequests.get(requestId);
+          if (pending) {
+            if (pending.timeoutHandle) {
+              clearTimeout(pending.timeoutHandle);
+            }
+            pendingIpcRequests.delete(requestId);
+            if (success) {
+              pending.resolve({ success: true, data });
+            } else {
+              pending.resolve({ success: false, error: error || { code: 'UNKNOWN', message: 'Unknown error' } });
+            }
+          } else {
+            warn('[Agent-Process] No pending memory-tier IPC request found for requestId:', requestId);
           }
           break;
         }
