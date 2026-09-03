@@ -108,7 +108,13 @@ CompactionManager 读取顺序：session 覆盖 → bot 覆盖 → 全局。
 > **A4 决策记录（2026-09-03）：won't-fix**。grok 的问题是 checkpoint 携带压缩前 tokenDetails 并被复用为当前上下文大小；duya 无此路径：① `CompactionEntry.tokensBefore/tokensAfter` 在压缩时**新鲜计算**（`estimateMessagesTokens(inputMessages)`，message-compaction-controller.ts:303），非沿用旧 checkpoint；② API 锚点 `observedPromptTokens` 在压缩成功后立即 `clearObservedPromptTokens()`（CompactionManager.ts:377），旧锚点不污染压缩后阈值判定；③ 这两个计数的全部消费方均为日志/UI 统计（DuyaAgent.ts:1506/1521/2196/2451/4153），不参与 `shouldCompact` 预算判定（实时投影估算）。压缩后"必重新测量"语义由锚点清零 + 实时估算天然保证。
 >
 > **A5 决策记录（2026-09-03）：skip**。duya 无 grok 的 ask-question 工具对等物（工具目录无 ask-question/AskQuestion；forkSubagent 中的匹配为子代理 fork 语义，非用户回执机制），无回执可保留。
-- [ ] **P4.6** checkpoint↔transcript 事务边界核对（2026-09-02 完整性审计并入：C13）——对齐 grok `turn-settle.ts` 的 prepare→abort→commit（append 失败抛 `TranscriptAppendAfterCheckpointError`，杜绝"checkpoint 已存但 UI 无消息"）。duya 侧核对 441 journal 与 CompactionEntry 落盘的先后与失败语义：压缩 checkpoint 提交与消息持久化是否在同一事务边界内、失败如何回滚。**预期结论是 duya 的 441 事件 journal 已覆盖消息层**——本任务做核对 + 写决策记录（won't-fix 或补 abort 语义），不默认新做一套。
+- [x] **P4.6** checkpoint↔transcript 事务边界核对（2026-09-02 完整性审计并入：C13）——对齐 grok `turn-settle.ts` 的 prepare→abort→commit（append 失败抛 `TranscriptAppendAfterCheckpointError`，杜绝"checkpoint 已存但 UI 无消息"）。duya 侧核对 441 journal 与 CompactionEntry 落盘的先后与失败语义：压缩 checkpoint 提交与消息持久化是否在同一事务边界内、失败如何回滚。**预期结论是 duya 的 441 事件 journal 已覆盖消息层**——本任务做核对 + 写决策记录（won't-fix 或补 abort 语义），不默认新做一套。
+
+> **P4.6 决策记录（2026-09-03）：abort 语义 won't-fix；发现 1 个既有缺口转交跟进。**
+>
+> **核对结论**：duya 不存在 grok `turn-settle.ts` 的"checkpoint 提交 vs transcript append"两阶段边界，该失败模式**结构上不可能**：① 压缩的持久化是**单个 rebase 事件**（`Journal.appendRebase`，`supersededUpToSeq: null` + `newMessages = [compaction_summary, ...retained]`，agent-process-entry.ts:1478），supersession 与存活消息在同一 payload；② `MessageLog.appendBatch` 对同一 batch 的 index 行做**单事务** INSERT OR IGNORE（electron/db/core/message-log.ts:179-186）；③ 重放按 seq 顺序走 `applyRebases`（message-log.ts:1070）投影，无跨事务部分提交态。崩溃窗口退化为良性：rebase 未发出 → 重放得压缩前完整历史（无损，下次压缩自愈）；rollout 行已写但 index 失败 → 行不可见（文件/索引非同事务，message-log.ts:19 已注释），仅浪费字节；index 提交后 → durable。④ `onCompacted` 的 DB 行 superseded 写时标记在 duya 未接线（`CompactionStore.setOnMessagesCompacted` 无调用方）——supersession 完全在读侧投影，写侧 append-only 无需回滚。
+>
+> **既有缺口（非 475 引入）**：手动 `/compact` 路径（agent-process-entry.ts:3765-3772，`agent.compact()` 不触发 `onMessagesCompacted`，DuyaAgent.ts:4121-4156）仍走 legacy `appendMessages`-of-all（Plan 441 头注释已声明 deprecated），**不发 rebase** → 被压缩消息在 rollout 中永不被 supersede，重载后幽灵历史复活（旧消息与 summary 行并存）。修法 = 手动路径同样走 `journal.appendRebase`（与 proactive 路径对齐），小改动 + 单测，建议独立 commit 跟进。
 
 ### 验收
 - [ ] bot 会话压缩后首轮回复仍能正确自述身份、列出可通讯对象与例行任务（人工 e2e）。
