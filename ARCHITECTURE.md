@@ -102,7 +102,7 @@ Managed via `boot.json`. Core tables:
 
 - `sessions` - Session metadata
 - `message_index` - Chat message index (FTS5 indexed)
-- `memory_entries` / `memory_evidence` / `memory_schema` - Memory RAG storage
+- `memory_schema` - Memory RAG storage bookkeeping (`memory_entries` / `memory_evidence` were dropped by memory-state migration 0009)
 - `settings` - User configuration
 - `tasks` - Task state
 - `permission_requests` - Permission requests
@@ -124,6 +124,12 @@ workspace/
 ```
 
 `message_index` table references these files.
+
+### Memory State DB (Plan 479)
+
+Separate SQLite file (`memory-state.db`, next to `duya-main.db` in the same boot.json directory), managed by `electron/memory-state/`. Holds the memory control plane: projects / rollout catalog (0001), leases + stage1 outputs (0002-0003), curation runs / publications (0008), and the bot memory tier index (0010).
+
+`memory_tier_index` (migration 0010, Plan 479 Phase 1) is a rebuildable query index over the file-manifest memory tree — the files remain the source of truth. Tiers: `agent` (own, `~/.duya/agents/<agentId>/memory/`), `user` (shared, `~/.duya/memory/`), `project` (`~/.duya/memory/projects/`). `entry_id` = sha256 of tier+writer+project+dedupe_key; shard-unique index enforces one entry per (tier, writer, project, key). Conflict rules live in `electron/memory-state/tierConflicts.ts`: newest-wins within a shard, earliest-via across shards, tier precedence agent > project > user. Store API in `electron/memory-state/tierIndex.ts` (`upsertTierEntry`, `listTierEntries`, `mergedTierRecall`, `rebuildTierIndexFromFiles` with dry-run).
 
 ## @duya/ai - Multi-Protocol LLM Adapter
 

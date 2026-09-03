@@ -8,6 +8,7 @@ import { migration0006 } from './0006_people_areas.sql';
 import { migration0007 } from './0007_lifecycle_scope.sql';
 import { migration0008 } from './0008_curation_runs.sql';
 import { migration0009 } from './0009_drop_legacy_phase2.sql';
+import { migration0010 } from './0010_memory_tier_index.sql';
 import { getLogger, LogComponent } from '../../logging/logger';
 
 export interface Migration {
@@ -28,8 +29,9 @@ export interface Migration {
  *   - 0007 (Lifecycle/Scope) — lifecycle columns + expanded kind/scope/status
  *   - 0008 (Phase 2 redesign) — curation_runs / curation_run_inputs / curation_publications + stage1 policy columns
  *   - 0009 (Plan 406 Phase D) — drop legacy memory_entries / memory_evidence / phase2_runs
+ *   - 0010 (Plan 479 Phase 1) — memory_tier_index (bot memory isolation query index)
  */
-export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009];
+export const MIGRATIONS: Migration[] = [migration0001, migration0002, migration0003, migration0005, migration0006, migration0007, migration0008, migration0009, migration0010];
 
 function computeSha256(sql: string): string {
   return crypto.createHash('sha256').update(sql).digest('hex');
