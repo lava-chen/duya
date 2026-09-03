@@ -46,6 +46,7 @@ import { toolSearchTool } from './ToolSearchTool/ToolSearchTool.js';
 import { toolSchemaTool } from './ToolSchemaTool/ToolSchemaTool.js';
 import { toolInvokeTool } from './ToolInvokeTool/ToolInvokeTool.js';
 import { updateStateTool } from './UpdateStateTool/UpdateStateTool.js';
+import { sendMessageTool } from './SendMessageTool/index.js';
 
 /**
  * BashTool instance
@@ -303,6 +304,14 @@ You can load multiple: \`["mockup", "chart"]\` for a dashboard with charts. This
   // own=allow / shared=ask per the 481 permission matrix.
   registry.register(updateStateTool.toTool(), updateStateTool, { exposeMode: 'discoverable' });
 
+  // Plan 483 P2: SendMessage — bot proactive message delivery to the UI.
+  // Based on grok-bot SendMessage semantics: this is the ONLY way for a bot to
+  // communicate with the user. Plain assistant text is invisible.
+  // Discoverable: only bot profiles surface it (bot-toolset.ts appends it to
+  // allowedTools). The message is saved to DB and pushed to the renderer via
+  // SSE broadcast in the message:append handler.
+  registry.register(sendMessageTool.toTool(), sendMessageTool, { exposeMode: 'discoverable' });
+
   return registry;
 }
 
@@ -339,5 +348,6 @@ export { messageSessionTool, MessageSessionTool } from './MessageSessionTool/ind
 export { duyaCliTool } from './DuyaCliTool/index.js';
 export { updateStateTool, UpdateStateTool, setMemoryTierBridge } from './UpdateStateTool/index.js';
 export { UPDATE_STATE_TOOL_NAME } from './UpdateStateTool/index.js';
+export { sendMessageTool, SendMessageTool, SEND_MESSAGE_TOOL_NAME } from './SendMessageTool/index.js';
 
 

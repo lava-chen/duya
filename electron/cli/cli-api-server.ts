@@ -119,6 +119,7 @@ import {
   handleChannelTest,
   handleChannelSendTest,
   handleChannelSend,
+  handleChannelDisconnect,
 } from './handlers/extra.js';
 import {
   handleCronEnable,
@@ -678,6 +679,13 @@ function route(req: http.IncomingMessage, res: http.ServerResponse): void {
   if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'send') {
     const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
     void handleChannelSend(req, res, correlationId);
+    return;
+  }
+
+  // 488 P2.3: POST /v1/channels/disconnect
+  if (req.method === 'POST' && parts.length === 3 && parts[0] === 'v1' && parts[1] === 'channels' && parts[2] === 'disconnect') {
+    const correlationId = (req.headers['x-correlation-id'] as string | undefined) || undefined;
+    void handleChannelDisconnect(req, res, correlationId);
     return;
   }
 

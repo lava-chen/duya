@@ -23,6 +23,7 @@
 import { BOT_BASIC_SYSTEM_PROMPT } from './basicPrompt.js'
 import { botSectionCacheKey } from './epoch.js'
 import type { BotMemoryContext } from './memory/types.js'
+import type { ChannelSnapshot } from '../../channels/types.js'
 
 /** One row of the bot roster (agent directory). */
 export interface BotRosterEntry {
@@ -87,8 +88,8 @@ export interface BotPromptContext {
    * Runtime data slots the framework does not interpret yet; owning plans
    * narrow their types when they implement the corresponding sections.
    */
-  /** @deprecated reserved — 476 channel snapshot (Channels section). */
-  channels?: unknown
+  /** Connected external channels (Discord/Slack) for this bot (Plan 488 P2.4). */
+  channels?: ChannelSnapshot[]
   /** Plan 479 tiered memory (memoryOwn/memoryUser/memoryProject sections). */
   memory?: BotMemoryContext
   /** @deprecated reserved — 476/409 automations (Automations section). */

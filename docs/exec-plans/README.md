@@ -131,6 +131,29 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [38-mcp-marketplace-install](./active/38-mcp-marketplace-install.md) | MCP marketplace & one-click install | P1 | 待开始 |
 | [226-mcp-security-layer-hardening](./active/226-mcp-security-layer-hardening.md) | MCP security hardening — env allowlist + secret sanitization + prompt-injection scan + rate limiter | P1 | Phase 1-2 ✅, 2.5 deferred |
 
+### Bot Series（Grok Bot 机制移植：473 总纲 + 子 plan 474–488）
+
+> 目标：把 grok-bot 的 bot 机制系统性移植进 duya——人格提示词层 / 唤醒总线 / DM / 群聊 / 记忆隔离 / 工具集 / 可靠性 / 存储布局 / thread 分支 / channel 接入。
+
+| Plan | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [473-grok-bot-framework-overview](./active/473-grok-bot-framework-overview.md) | 总纲：Grok Bot 机制移植框架（五层通讯 / 唤醒体系 / bot 提示词层 / 压缩纪元） | P0 | Planning |
+| [474-bot-system-prompt-sections](./active/474-bot-system-prompt-sections.md) | bot 系统提示词层（人格 section + 身份信封 + 预算 + 冻结快照） | P0 | Implementation |
+| [475-bot-compaction-increment](./active/475-bot-compaction-increment.md) | 压缩增量：422 收口 + bot 场景重注入 + 压缩后处理链 | P1 | Planning |
+| [476-agent-wake-bus](./active/476-agent-wake-bus.md) | 唤醒总线：三车道 + wake 来源注册表 + pending 持久化/rearm + 抢占/redrive | P0 | Implementation |
+| [477-agent-dm-messaging](./active/477-agent-dm-messaging.md) | bot→bot DM：envelope + SendToAgent 工具 + 防回环 + per-bot 常驻绑定 | P0 | Planning |
+| [478-shared-rooms-group-chat](./active/478-shared-rooms-group-chat.md) | 群聊：group 模型 + 轮次编排 + @mention + 群 transcript | P1 | Planning |
+| [479-bot-memory-isolation-tiers](./active/479-bot-memory-isolation-tiers.md) | 记忆隔离层：Grok 式三层（Own/User/Project）+ 冻结快照 | P0 | Planning |
+| [480-appended-tool-schema-catalog](./active/480-appended-tool-schema-catalog.md) | 追加式 Tool Schema 目录：tools 数组恒定 + stable sorting catalog 侧信道 | P1 | Planning |
+| [481-bot-toolset-unified-foundation](./active/481-bot-toolset-unified-foundation.md) | 工具集统一建档：update_state / SendToAgent / PostToRoom / tool_schema / tool_invoke | P0 | Planning |
+| [482-external-agent-invocation](./active/482-external-agent-invocation.md) | 调用外部 agent（Claude Code / Codex） | P1 | Planning |
+| [483-multi-bot-chat-ui](./active/483-multi-bot-chat-ui.md) | 多 Bot 聊天 UI：侧栏 Bots 分组 + 类 Telegram 联系人聊天 + Bot 资料卡 | P1 | Planning |
+| [484-bot-reliability-ack-and-resume](./active/484-bot-reliability-ack-and-resume.md) | 可靠性兜底：ack 义务投递确认 + run 级中断续跑/升级恢复 | P0 | Planning |
+| [485-bot-storage-layout](./active/485-bot-storage-layout.md) | 存储布局：config.toml 声明层 + agents/<id>/ 身份目录 + profile.json | P0 | Phase 1-2 ✅ |
+| [486-message-threads](./active/486-message-threads.md) | 消息 thread/fork 分支层：replyToId + branched + thread 聚合读 | P1 | Planning |
+| [487-host-persistent-tool-permission](./active/487-host-persistent-tool-permission.md) | Host 持久化工具权限 | P1 | Planning |
+| [488-bot-channel-integration](./active/488-bot-channel-integration.md) | Bot Channel 接入：外部消息平台绑定（Discord/Slack）+ `[inbound]` 唤醒 + 出站发送 | P1 | Planning |
+
 ### CLI / Cron
 
 | Plan | Description | Priority | Status |

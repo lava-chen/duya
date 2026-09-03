@@ -272,6 +272,7 @@ export type GatewayToMainMessage =
   | { type: 'gateway:ready' }
   | { type: 'gateway:init:complete'; success: boolean; error?: string; adapters?: AdapterStatus[] }
   | { type: 'gateway:inbound'; sessionId: string; prompt: string; platform: PlatformType; platformMsgId: string; platformChatId: string; options?: Record<string, unknown> }
+  | { type: 'gateway:reaction'; sessionId: string; platform: PlatformType; platformChatId: string; platformMsgId: string; emoji: string; userId: string }
   | { type: 'gateway:permission_resolve'; permissionId: string; decision: 'allow' | 'allow_once' | 'deny' }
   | { type: 'gateway:interrupt'; sessionId: string }
   | { type: 'gateway:command'; command: string; args: string[]; sessionId?: string; platform: PlatformType; platformChatId: string; options?: Record<string, unknown> }

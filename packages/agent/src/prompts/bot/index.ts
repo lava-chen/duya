@@ -57,6 +57,7 @@ export {
 } from './catalog.js'
 export { renderBotIdentity } from './identity.js'
 export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './roster.js'
+export { renderBotChannels } from './channels.js'
 export { loadBotPromptContext, isBotAgentProfile, loadBotMemoryContext } from './loader.js'
 export type { TierMemoryEntry, BotMemoryContext } from './memory/types.js'
 export {

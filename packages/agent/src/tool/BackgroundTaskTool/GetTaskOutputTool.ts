@@ -27,6 +27,8 @@ export const GET_TASK_OUTPUT_TOOL_NAME = 'get_task_output';
 export const MAX_MULTI_TASK_IDS = 10;
 /** Inline budget for a completed task's output (keeps context bounded). */
 export const DEFAULT_TOOL_OUTPUT_BYTES = 40_000;
+/** Default timeout (ms) used by WaitTasksTool when caller doesn't pass one. */
+export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 
 export function isTerminalStatus(s: TaskStatus): boolean {
   return s === 'completed' || s === 'failed' || s === 'killed';

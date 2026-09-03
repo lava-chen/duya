@@ -1065,8 +1065,60 @@ class FeishuAdapterWrapper implements PlatformAdapter {
         onAudioMessage: async () => {},
         onPostMessage: async () => {},
         onCardAction: async () => {},
-        onReactionAdded: async () => {},
-        onReactionRemoved: async () => {},
+        onReactionAdded: async (messageId: string, emojiType: string, userId: string, chatId: string) => {
+          // 488 P3.2: forward reaction to main process via IPC
+          const ipc = (this as unknown as { getIpcClient?: () => { send: (msg: object) => void; request: (channel: string, data: object) => Promise<unknown> } }).getIpcClient?.();
+          if (ipc) {
+            // Query session mapping from DB (same approach as gateway-manager.getSessionId)
+            let sessionId: string | null = null;
+            try {
+              const result = await ipc.request('db:request', {
+                action: 'gateway_user:getMapping',
+                platform: 'feishu',
+                chatId,
+              }) as { sessionId?: string } | null;
+              sessionId = result?.sessionId ?? null;
+            } catch {
+              // fall through to null
+            }
+            ipc.send({
+              type: 'gateway:reaction',
+              sessionId: sessionId ?? userId,
+              platform: 'feishu' as const,
+              platformChatId: chatId,
+              platformMsgId: messageId,
+              emoji: emojiType,
+              userId,
+            });
+          }
+        },
+        onReactionRemoved: async (messageId: string, emojiType: string, userId: string, chatId: string) => {
+          // 488 P3.2: forward reaction removal to main process (treated same as addition for now)
+          const ipc = (this as unknown as { getIpcClient?: () => { send: (msg: object) => void; request: (channel: string, data: object) => Promise<unknown> } }).getIpcClient?.();
+          if (ipc) {
+            let sessionId: string | null = null;
+            try {
+              const result = await ipc.request('db:request', {
+                action: 'gateway_user:getMapping',
+                platform: 'feishu',
+                chatId,
+              }) as { sessionId?: string } | null;
+              sessionId = result?.sessionId ?? null;
+            } catch {
+              // fall through to null
+            }
+            ipc.send({
+              type: 'gateway:reaction',
+              sessionId: sessionId ?? userId,
+              platform: 'feishu' as const,
+              platformChatId: chatId,
+              platformMsgId: messageId,
+              emoji: emojiType,
+              userId,
+              removed: true,
+            });
+          }
+        },
         onMemberAdded: async () => {},
         onMemberRemoved: async () => {},
         onMessageRecalled: async () => {},

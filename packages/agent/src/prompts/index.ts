@@ -107,4 +107,5 @@ export {
 } from './bot/index.js'
 export { renderBotIdentity } from './bot/index.js'
 export { renderBotRoster, BOT_ROSTER_MAX_ENTRIES } from './bot/index.js'
+export { renderBotChannels } from './bot/index.js'
 export { loadBotPromptContext, isBotAgentProfile } from './bot/index.js'

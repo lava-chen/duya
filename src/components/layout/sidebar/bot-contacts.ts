@@ -55,6 +55,10 @@ export interface BotContact {
   boundThreadId: string | null;
   /** Latest activity of the bound session (0 when unbound). */
   lastActivity: number;
+  /** Plan 483 P2: pinned to the top of the Bots section (ordered by `sidebar.botPinnedIds`). */
+  isPinned?: boolean;
+  /** Plan 483 P2: hidden from the sidebar (still configured; restorable). */
+  isHidden?: boolean;
 }
 
 /**
@@ -126,6 +130,48 @@ export function buildBotContacts(
   }
   contacts.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   return contacts;
+}
+
+/**
+ * Plan 483 P2: split contacts into the three sidebar lists and stamp the
+ * `isPinned` / `isHidden` flags onto each entry (new object per contact;
+ * the input array is untouched).
+ *
+ *  - `pinned`   — order follows `pinnedIds` (the persisted `sidebar.botPinnedIds`
+ *                 array), which doubles as the drag-to-reorder store.
+ *  - `unpinned` — every visible bot not in `pinnedIds`, name-sorted.
+ *  - `hidden`   — bots in `hiddenIds`; rendered only in the "restore" view.
+ */
+export interface BotPartition {
+  pinned: BotContact[];
+  unpinned: BotContact[];
+  hidden: BotContact[];
+}
+
+export function partitionBotContacts(
+  contacts: BotContact[],
+  pinnedIds: readonly string[],
+  hiddenIds: readonly string[] = [],
+): BotPartition {
+  const hiddenSet = new Set(hiddenIds);
+  const hidden: BotContact[] = [];
+  const visible: BotContact[] = [];
+  for (const contact of contacts) {
+    if (hiddenSet.has(contact.agentId)) {
+      hidden.push({ ...contact, isHidden: true, isPinned: false });
+    } else {
+      visible.push({ ...contact, isHidden: false });
+    }
+  }
+  const pinned: BotContact[] = [];
+  for (const id of pinnedIds) {
+    const index = visible.findIndex((c) => c.agentId === id);
+    if (index < 0) continue;
+    pinned.push({ ...visible[index], isPinned: true, isHidden: false });
+    visible.splice(index, 1);
+  }
+  const unpinned = visible.map((c) => ({ ...c, isPinned: false }));
+  return { pinned, unpinned, hidden };
 }
 
 /** Avatar fallback label: first grapheme of the display name, uppercased. */

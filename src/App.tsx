@@ -21,6 +21,7 @@ import { ensureSession, startStream, stopStream, subscribeSession, getSnapshot, 
 import { useSettings } from "@/hooks/useSettings";
 import { ConductorHostProvider } from "@/conductor-host-provider";
 import type { Message, StreamPhase, FileAttachment } from "@/types/message";
+import type { Message as IpcMessage } from "@/lib/ipc-client";
 import { stripPastedContentMarkers } from "@/lib/message-content-parser";
 import { interruptChat } from "@/lib/agent-sse-client";
 
@@ -239,6 +240,53 @@ function AppShellInner({ onReady }: { onReady?: () => void } = {}) {
       return unsubscribe;
     }
   }, [setActiveThread]);
+
+  // Handle new messages from bots (Plan 483 P2: send_to_ui tool)
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onMessageNew) return;
+    const unsubscribe = api.onMessageNew((data) => {
+      const { sessionId, messages: ipcMessages } = data;
+      if (!ipcMessages || ipcMessages.length === 0) return;
+
+      // Only add messages if this session is the active thread
+      const activeThreadId = useConversationStore.getState().activeThreadId;
+      if (sessionId !== activeThreadId) return;
+
+      // Convert IPC messages to store Message format (same as mapIpcMessagesToStore)
+      const storeMessages: Message[] = (ipcMessages as IpcMessage[]).map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        displayContent: m.displayContent ?? undefined,
+        name: m.name ?? undefined,
+        tool_call_id: m.toolCallId ?? undefined,
+        timestamp: m.createdAt,
+        tokenUsage: m.tokenUsage
+          ? (typeof m.tokenUsage === 'string'
+              ? JSON.parse(m.tokenUsage)
+              : m.tokenUsage)
+          : undefined,
+        msgType: (m.msgType || undefined) as Message['msgType'],
+        thinking: m.thinking ?? undefined,
+        toolName: m.toolName ?? undefined,
+        toolInput: m.toolInput ?? undefined,
+        parentToolCallId: m.parentToolCallId ?? undefined,
+        vizSpec: m.vizSpec ?? undefined,
+        status: m.status ?? undefined,
+        seqIndex: m.seqIndex ?? undefined,
+        durationMs: m.durationMs ?? undefined,
+        subAgentId: m.subAgentId ?? undefined,
+        attachments: m.attachments ?? undefined,
+      }));
+
+      // Add each message to the store
+      for (const msg of storeMessages) {
+        useConversationStore.getState().addMessage(sessionId, msg);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   // Handle OS notification action buttons (Open / Reply for completed
   // messages; Allow / Deny for permission requests). The hook in

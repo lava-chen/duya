@@ -23,7 +23,7 @@
 
 import type { AgentProfile } from './types.js';
 
-export const BOT_TOOLSET: readonly string[] = ['send_to_agent', 'update_state'];
+export const BOT_TOOLSET: readonly string[] = ['send_to_agent', 'update_state', 'SendMessage'];
 
 /**
  * Append the bot toolset to a profile's allowlist (idempotent). An existing
