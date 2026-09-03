@@ -29,6 +29,8 @@ import type {
   GitReviewFullDiffResult,
   GitTurnReview,
   GitLatestTurnReviewResult,
+  GitTurnHistoryEntry,
+  GitTurnHistoryResult,
   ReviewScopeParams,
   GitCommitInfo,
   GitListCommitsResult,
@@ -306,53 +308,114 @@ function parseStoredTurnFiles(value: unknown): GitReviewFile[] | null {
   return files;
 }
 
-function readLatestTurnReview(sessionId: string, cwd: string): GitLatestTurnReviewResult {
-  const db = getDatabase();
-  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
-  // Plan 328: chat_turn_reviews no longer joins chat_sessions (FK dropped in
-  // migration 47). working_directory is stored on chat_turn_reviews directly.
-  const row = db.prepare(`
-    SELECT id, session_id, turn_id, working_directory, files_json,
-           patch, additions, removals, truncated, binary, captured_at
-    FROM chat_turn_reviews
-    WHERE session_id = ? AND working_directory = ?
-    ORDER BY captured_at DESC
-    LIMIT 1
-  `).get(sessionId, cwd) as {
-    id: string;
-    session_id: string;
-    turn_id: string;
-    working_directory: string;
-    files_json: string;
-    patch: string;
-    additions: number;
-    removals: number;
-    truncated: number;
-    binary: number;
-    captured_at: number;
-  } | undefined;
-  if (!row) return { isGitRepo: true };
+interface TurnReviewRow {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  working_directory: string;
+  files_json: string;
+  patch: string;
+  additions: number;
+  removals: number;
+  truncated: number;
+  binary: number;
+  captured_at: number;
+}
+
+const TURN_REVIEW_COLUMNS = 'id, session_id, turn_id, working_directory, files_json, patch, additions, removals, truncated, binary, captured_at';
+
+function rowToTurnReview(row: TurnReviewRow): GitTurnReview | null {
   try {
     const files = parseStoredTurnFiles(JSON.parse(row.files_json));
-    if (!files) return { isGitRepo: true, error: 'Stored review history is invalid.' };
+    if (!files) return null;
     return {
-      isGitRepo: true,
-      review: {
-        id: row.id,
-        sessionId: row.session_id,
-        turnId: row.turn_id,
-        workingDirectory: row.working_directory,
-        files,
-        totals: { additions: row.additions, removals: row.removals, fileCount: files.length },
-        patch: row.patch,
-        truncated: row.truncated === 1,
-        binary: row.binary === 1,
-        capturedAt: row.captured_at,
-      },
+      id: row.id,
+      sessionId: row.session_id,
+      turnId: row.turn_id,
+      workingDirectory: row.working_directory,
+      files,
+      totals: { additions: row.additions, removals: row.removals, fileCount: files.length },
+      patch: row.patch,
+      truncated: row.truncated === 1,
+      binary: row.binary === 1,
+      capturedAt: row.captured_at,
     };
   } catch {
-    return { isGitRepo: true, error: 'Stored review history is invalid.' };
+    return null;
   }
+}
+
+function readLatestTurnReview(sessionId: string): GitLatestTurnReviewResult {
+  const db = getDatabase();
+  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  // Plan 308 Phase 2: match by session_id only. Filtering on the stored
+  // working_directory with exact string equality silently returned no rows
+  // whenever the agent cwd and the renderer cwd drifted in separators or
+  // case on Windows. session_id is unique per session and indexed for this
+  // lookup (idx_chat_turn_reviews_latest).
+  const row = db.prepare(`
+    SELECT ${TURN_REVIEW_COLUMNS}
+    FROM chat_turn_reviews
+    WHERE session_id = ?
+    ORDER BY captured_at DESC
+    LIMIT 1
+  `).get(sessionId) as TurnReviewRow | undefined;
+  if (!row) return { isGitRepo: true };
+  const review = rowToTurnReview(row);
+  if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
+  return { isGitRepo: true, review };
+}
+
+function readTurnHistory(sessionId: string, limit: number): GitTurnHistoryResult {
+  const db = getDatabase();
+  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const rows = db.prepare(`
+    SELECT id, turn_id, files_json, additions, removals, captured_at
+    FROM chat_turn_reviews
+    WHERE session_id = ?
+    ORDER BY captured_at DESC
+    LIMIT ?
+  `).all(sessionId, limit) as Array<{
+    id: string;
+    turn_id: string;
+    files_json: string;
+    additions: number;
+    removals: number;
+    captured_at: number;
+  }>;
+  const turns: GitTurnHistoryEntry[] = [];
+  for (const row of rows) {
+    let fileCount = 0;
+    try {
+      const parsed: unknown = JSON.parse(row.files_json);
+      if (Array.isArray(parsed)) fileCount = parsed.length;
+    } catch {
+      // Unreadable payload — still list the turn with a zero count.
+    }
+    turns.push({
+      id: row.id,
+      turnId: row.turn_id,
+      additions: row.additions,
+      removals: row.removals,
+      fileCount,
+      capturedAt: row.captured_at,
+    });
+  }
+  return { isGitRepo: true, turns };
+}
+
+function readTurnDetail(reviewId: string): GitLatestTurnReviewResult {
+  const db = getDatabase();
+  if (!db) return { isGitRepo: true, error: 'Review history is unavailable.' };
+  const row = db.prepare(`
+    SELECT ${TURN_REVIEW_COLUMNS}
+    FROM chat_turn_reviews
+    WHERE id = ?
+  `).get(reviewId) as TurnReviewRow | undefined;
+  if (!row) return { isGitRepo: true };
+  const review = rowToTurnReview(row);
+  if (!review) return { isGitRepo: true, error: 'Stored review history is invalid.' };
+  return { isGitRepo: true, review };
 }
 
 // ── Scoped review helpers (plan 227) ──────────────────────────────
@@ -456,6 +519,20 @@ export function registerGitHandlers(): void {
       const stdout = stdoutOf(runGit(cwd, GIT_DIFF_ARGS));
       if (stdout === null) return { isGitRepo: false };
       const fileChanges = parseNumstat(stdout);
+      // `git diff` misses untracked files; merge them in from porcelain so
+      // a turn that only creates new files still surfaces (plan 308 Phase 2).
+      const porcelain = stdoutOf(runGit(cwd, GIT_REVIEW_STATUS_ARGS));
+      if (porcelain !== null) {
+        const known = new Set(fileChanges.map((change) => change.path));
+        for (const entry of parsePorcelainStatus(porcelain)) {
+          if (entry.status !== 'untracked' || known.has(entry.path)) continue;
+          fileChanges.push({
+            path: entry.path,
+            additions: countFileLines(path.join(cwd, entry.path)),
+            removals: 0,
+          });
+        }
+      }
       return { isGitRepo: true, fileChanges, totals: computeTotals(fileChanges) };
     } catch {
       return { isGitRepo: false };
@@ -515,7 +592,43 @@ export function registerGitHandlers(): void {
       return { isGitRepo: false };
     }
     try {
-      return readLatestTurnReview(sessionId, cwd);
+      return readLatestTurnReview(sessionId);
+    } catch {
+      return { isGitRepo: true, error: 'Unable to load review history.' };
+    }
+  });
+
+  ipcMain.handle('git:review-turn-history', async (_event, sessionId: unknown, cwd: unknown, limit: unknown): Promise<GitTurnHistoryResult> => {
+    if (
+      typeof sessionId !== 'string'
+      || sessionId.length === 0
+      || typeof cwd !== 'string'
+      || cwd.length === 0
+      || !isGitRepoDir(cwd)
+    ) {
+      return { isGitRepo: false };
+    }
+    const capped = typeof limit === 'number' && limit > 0 && limit <= 200 ? Math.floor(limit) : 50;
+    try {
+      return readTurnHistory(sessionId, capped);
+    } catch {
+      return { isGitRepo: true, error: 'Unable to load review history.' };
+    }
+  });
+
+  ipcMain.handle('git:review-turn-detail', async (_event, cwd: unknown, reviewId: unknown): Promise<GitLatestTurnReviewResult> => {
+    if (
+      typeof reviewId !== 'string'
+      || reviewId.length === 0
+      || reviewId.length > 128
+      || typeof cwd !== 'string'
+      || cwd.length === 0
+      || !isGitRepoDir(cwd)
+    ) {
+      return { isGitRepo: false };
+    }
+    try {
+      return readTurnDetail(reviewId);
     } catch {
       return { isGitRepo: true, error: 'Unable to load review history.' };
     }

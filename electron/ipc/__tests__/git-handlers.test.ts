@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
   const fsState = {
     existsSync: vi.fn(() => true),
     realpathSync: vi.fn((value: string) => value),
+    readFileSync: vi.fn(() => ''),
   };
   const spawnState = {
     spawnSync: vi.fn<() => SpawnSyncReturns<string>>(),
@@ -83,10 +84,29 @@ const NUMSTAT_FIXTURE = [
   '7\t2\tpackage.json',
 ].join('\n');
 
+const STATUS_UNTRACKED_FIXTURE = [
+  '?? src/created.ts',
+  '',
+].join('\0');
+
+function spawnResult(stdout: string, status: number | null = 0): SpawnSyncReturns<string> {
+  return {
+    pid: 1,
+    output: [],
+    stdout,
+    stderr: '',
+    status,
+    signal: null,
+    error: undefined,
+  } as SpawnSyncReturns<string>;
+}
+
 describe('git:status', () => {
   beforeEach(() => {
     mocks.fs.existsSync.mockReset();
     mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
     mocks.spawn.spawnSync.mockReset();
     mocks.captured.handle.clear();
     registerGitHandlers();
@@ -111,16 +131,14 @@ describe('git:status', () => {
   });
 
   it('returns parsed fileChanges + totals on happy path', async () => {
-    mocks.spawn.spawnSync.mockReturnValueOnce({
-      pid: 1,
-      output: [],
-      stdout: NUMSTAT_FIXTURE,
-      stderr: '',
-      status: 0,
-      signal: null,
-      error: undefined,
-    } as SpawnSyncReturns<string>);
-    const result = await invokeHandler('git:status', {}, '/tmp/repo');
+    mocks.spawn.spawnSync
+      .mockReturnValueOnce(spawnResult(NUMSTAT_FIXTURE))
+      .mockReturnValueOnce(spawnResult(''));
+    const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
+      isGitRepo: boolean;
+      fileChanges?: Array<{ path: string; additions: number; removals: number }>;
+      totals?: { additions: number; removals: number; fileCount: number };
+    };
 
     expect(result.isGitRepo).toBe(true);
     expect(result.fileChanges).toEqual([
@@ -152,17 +170,38 @@ describe('git:status', () => {
     expect(result).toEqual({ isGitRepo: false });
   });
 
+  it('merges untracked files from porcelain into the status result', async () => {
+    mocks.fs.readFileSync.mockReturnValue('a\nb\nc');
+    mocks.spawn.spawnSync
+      .mockReturnValueOnce(spawnResult(NUMSTAT_FIXTURE))
+      .mockReturnValueOnce(spawnResult(STATUS_UNTRACKED_FIXTURE));
+    const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
+      isGitRepo: boolean;
+      fileChanges?: Array<{ path: string; additions: number; removals: number }>;
+      totals?: { additions: number; removals: number; fileCount: number };
+    };
+    expect(result.isGitRepo).toBe(true);
+    // `git diff HEAD` misses untracked paths; the porcelain pass adds them
+    // with a line count (plan 308 Phase 2).
+    expect(result.fileChanges).toEqual([
+      { path: 'README.md', additions: 12, removals: 3 },
+      { path: 'src/foo.ts', additions: 5, removals: 0 },
+      { path: 'logo.png', additions: 0, removals: 0 },
+      { path: 'package.json', additions: 7, removals: 2 },
+      { path: 'src/created.ts', additions: 3, removals: 0 },
+    ]);
+    expect(result.totals).toEqual({ additions: 27, removals: 5, fileCount: 5 });
+  });
+
   it('returns empty changes when stdout is empty', async () => {
-    mocks.spawn.spawnSync.mockReturnValueOnce({
-      pid: 1,
-      output: [],
-      stdout: '',
-      stderr: '',
-      status: 0,
-      signal: null,
-      error: undefined,
-    } as SpawnSyncReturns<string>);
-    const result = await invokeHandler('git:status', {}, '/tmp/repo');
+    mocks.spawn.spawnSync
+      .mockReturnValueOnce(spawnResult(''))
+      .mockReturnValueOnce(spawnResult(''));
+    const result = await invokeHandler('git:status', {}, '/tmp/repo') as {
+      isGitRepo: boolean;
+      fileChanges?: unknown[];
+      totals?: { additions: number; removals: number; fileCount: number };
+    };
     expect(result.isGitRepo).toBe(true);
     expect(result.fileChanges).toEqual([]);
     expect(result.totals).toEqual({ additions: 0, removals: 0, fileCount: 0 });
@@ -183,22 +222,12 @@ const REVIEW_NUMSTAT_FIXTURE = [
   '',
 ].join('\n');
 
-function spawnResult(stdout: string, status: number | null = 0): SpawnSyncReturns<string> {
-  return {
-    pid: 1,
-    output: [],
-    stdout,
-    stderr: '',
-    status,
-    signal: null,
-    error: undefined,
-  } as SpawnSyncReturns<string>;
-}
-
 describe('git:review', () => {
   beforeEach(() => {
     mocks.fs.existsSync.mockReset();
     mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
     mocks.spawn.spawnSync.mockReset();
     mocks.captured.handle.clear();
     registerGitHandlers();
@@ -310,6 +339,8 @@ describe('git:review-latest-turn', () => {
   beforeEach(() => {
     mocks.fs.existsSync.mockReset();
     mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
     mocks.db.getDatabase.mockReset();
     mocks.db.getDatabase.mockReturnValue(null);
     mocks.captured.handle.clear();
@@ -325,6 +356,156 @@ describe('git:review-latest-turn', () => {
     await expect(invokeHandler('git:review-latest-turn', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
       isGitRepo: true,
       error: 'Review history is unavailable.',
+    });
+  });
+
+  it('matches the latest turn by session id only, tolerating cwd drift', async () => {
+    // Plan 308 Phase 2: the stored working_directory no longer needs to
+    // equal the caller's cwd string (Windows separator / case drift).
+    mocks.db.getDatabase.mockReturnValue({
+      prepare: vi.fn(() => ({
+        get: vi.fn(() => ({
+          id: 'row-1',
+          session_id: 'session-1',
+          turn_id: 'turn-1',
+          working_directory: 'E:\\repo',
+          files_json: JSON.stringify([{ path: 'a.ts', status: 'modified', additions: 1, removals: 0 }]),
+          patch: 'diff',
+          additions: 1,
+          removals: 0,
+          truncated: 0,
+          binary: 0,
+          captured_at: 100,
+        })),
+      })),
+    });
+    await expect(invokeHandler('git:review-latest-turn', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
+      isGitRepo: true,
+      review: {
+        id: 'row-1',
+        sessionId: 'session-1',
+        turnId: 'turn-1',
+        workingDirectory: 'E:\\repo',
+        files: [{ path: 'a.ts', status: 'modified', additions: 1, removals: 0 }],
+        totals: { additions: 1, removals: 0, fileCount: 1 },
+        patch: 'diff',
+        truncated: false,
+        binary: false,
+        capturedAt: 100,
+      },
+    });
+  });
+});
+
+describe('git:review-turn-history', () => {
+  beforeEach(() => {
+    mocks.fs.existsSync.mockReset();
+    mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
+    mocks.db.getDatabase.mockReset();
+    mocks.db.getDatabase.mockReturnValue(null);
+    mocks.captured.handle.clear();
+    registerGitHandlers();
+  });
+
+  it('rejects an invalid session or workspace', async () => {
+    await expect(invokeHandler('git:review-turn-history', {}, '', '/tmp/repo')).resolves.toEqual({ isGitRepo: false });
+    await expect(invokeHandler('git:review-turn-history', {}, 'session-1', '')).resolves.toEqual({ isGitRepo: false });
+  });
+
+  it('reports history unavailable when the main database is not ready', async () => {
+    await expect(invokeHandler('git:review-turn-history', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
+      isGitRepo: true,
+      error: 'Review history is unavailable.',
+    });
+  });
+
+  it('summarizes persisted turns with a file count per entry', async () => {
+    mocks.db.getDatabase.mockReturnValue({
+      prepare: vi.fn(() => ({
+        all: vi.fn(() => [
+          {
+            id: 'row-2',
+            turn_id: 'turn-2',
+            files_json: JSON.stringify([
+              { path: 'a.ts', status: 'modified', additions: 2, removals: 1 },
+              { path: 'b.ts', status: 'added', additions: 5, removals: 0 },
+            ]),
+            additions: 7,
+            removals: 1,
+            captured_at: 200,
+          },
+          {
+            id: 'row-1',
+            turn_id: 'turn-1',
+            files_json: 'not-json',
+            additions: 1,
+            removals: 0,
+            captured_at: 100,
+          },
+        ]),
+      })),
+    });
+    await expect(invokeHandler('git:review-turn-history', {}, 'session-1', '/tmp/repo')).resolves.toEqual({
+      isGitRepo: true,
+      turns: [
+        { id: 'row-2', turnId: 'turn-2', additions: 7, removals: 1, fileCount: 2, capturedAt: 200 },
+        { id: 'row-1', turnId: 'turn-1', additions: 1, removals: 0, fileCount: 0, capturedAt: 100 },
+      ],
+    });
+  });
+});
+
+describe('git:review-turn-detail', () => {
+  beforeEach(() => {
+    mocks.fs.existsSync.mockReset();
+    mocks.fs.existsSync.mockReturnValue(true);
+    mocks.fs.readFileSync.mockReset();
+    mocks.fs.readFileSync.mockReturnValue('');
+    mocks.db.getDatabase.mockReset();
+    mocks.db.getDatabase.mockReturnValue(null);
+    mocks.captured.handle.clear();
+    registerGitHandlers();
+  });
+
+  it('rejects an invalid review id', async () => {
+    await expect(invokeHandler('git:review-turn-detail', {}, '/tmp/repo', '')).resolves.toEqual({ isGitRepo: false });
+    await expect(invokeHandler('git:review-turn-detail', {}, '/tmp/repo', 'x'.repeat(200))).resolves.toEqual({ isGitRepo: false });
+  });
+
+  it('returns one stored turn review by row id', async () => {
+    mocks.db.getDatabase.mockReturnValue({
+      prepare: vi.fn(() => ({
+        get: vi.fn(() => ({
+          id: 'row-9',
+          session_id: 'session-1',
+          turn_id: 'turn-9',
+          working_directory: '/tmp/repo',
+          files_json: JSON.stringify([{ path: 'b.ts', status: 'added', additions: 5, removals: 0 }]),
+          patch: 'diff --git',
+          additions: 5,
+          removals: 0,
+          truncated: 0,
+          binary: 0,
+          captured_at: 300,
+        })),
+      })),
+    });
+    await expect(invokeHandler('git:review-turn-detail', {}, '/tmp/repo', 'row-9')).resolves.toEqual({
+      isGitRepo: true,
+      review: {
+        id: 'row-9',
+        sessionId: 'session-1',
+        turnId: 'turn-9',
+        workingDirectory: '/tmp/repo',
+        files: [{ path: 'b.ts', status: 'added', additions: 5, removals: 0 }],
+        totals: { additions: 5, removals: 0, fileCount: 1 },
+        patch: 'diff --git',
+        truncated: false,
+        binary: false,
+        capturedAt: 300,
+      },
     });
   });
 });

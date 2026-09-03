@@ -79,6 +79,23 @@ export interface GitLatestTurnReviewResult {
   error?: string;
 }
 
+// ── Turn history (plan 308 Phase 2) ──────────────────────────────
+
+export interface GitTurnHistoryEntry {
+  id: string;
+  turnId: string;
+  additions: number;
+  removals: number;
+  fileCount: number;
+  capturedAt: number;
+}
+
+export interface GitTurnHistoryResult {
+  isGitRepo: boolean;
+  turns?: GitTurnHistoryEntry[];
+  error?: string;
+}
+
 export async function getGitStatus(cwd: string): Promise<GitStatusResult> {
   // Default to `isGitRepo: false` when the bridge isn't present so
   // tests / non-electron renderers don't blow up.
@@ -99,6 +116,14 @@ export async function getGitReviewFullDiff(cwd: string): Promise<GitReviewFullDi
 
 export async function getGitLatestTurnReview(sessionId: string, cwd: string): Promise<GitLatestTurnReviewResult> {
   return window.electronAPI?.git?.reviewLatestTurn(sessionId, cwd) ?? { isGitRepo: false };
+}
+
+export async function getGitTurnHistory(sessionId: string, cwd: string, limit?: number): Promise<GitTurnHistoryResult> {
+  return window.electronAPI?.git?.reviewTurnHistory(sessionId, cwd, limit) ?? { isGitRepo: false };
+}
+
+export async function getGitTurnDetail(cwd: string, reviewId: string): Promise<GitLatestTurnReviewResult> {
+  return window.electronAPI?.git?.reviewTurnDetail(cwd, reviewId) ?? { isGitRepo: false };
 }
 
 // ── Scoped review (plan 227) ──────────────────────────────────────

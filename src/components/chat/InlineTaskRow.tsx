@@ -22,6 +22,7 @@ import {
   GitBranchIcon,
 } from '@/components/icons';
 import type { UseGitStatusResult } from '@/hooks/useGitStatus';
+import type { GitTurnReview } from '@/lib/git-ipc';
 import { useOptionalPanel } from '@/hooks/usePanel';
 
 export interface InlineTaskRowProps {
@@ -35,6 +36,14 @@ export interface InlineTaskRowProps {
    * turn.
    */
   showFileChanges?: boolean;
+  /**
+   * Plan 308 Phase 2: persisted review of the last completed turn. When
+   * present it wins over the live repo-wide git status — its numbers are
+   * scoped to that turn instead of the whole working tree.
+   */
+  turnReview?: GitTurnReview | null;
+  /** Session id, so the review panel can open directly on the turn scope. */
+  sessionId?: string;
 }
 
 const statusIcons: Record<TaskStatus, React.ReactNode> = {
@@ -49,15 +58,22 @@ export function InlineTaskRow({
   onToggleStatus,
   workingDirectory,
   showFileChanges = true,
+  turnReview,
+  sessionId,
 }: InlineTaskRowProps) {
   const [expanded, setExpanded] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const panel = useOptionalPanel();
-  const fileCount = gitStatus.totals.fileCount;
   const hasTasks = tasks.length > 0;
-  const hasFiles = fileCount > 0 && showFileChanges;
-  const hasContent = hasTasks || hasFiles;
+  // Plan 308 Phase 2: the persisted turn review is authoritative once
+  // available; live gitStatus (repo-wide vs HEAD) is the in-stream and
+  // fallback source.
+  const turnFiles = turnReview?.files ?? [];
+  const hasTurn = turnFiles.length > 0;
+  const fileCount = hasTurn ? turnFiles.length : gitStatus.totals.fileCount;
+  const hasFiles = !hasTurn && fileCount > 0 && showFileChanges;
+  const hasContent = hasTasks || hasTurn || hasFiles;
 
   // Close popover on outside mousedown or Escape.
   useEffect(() => {
@@ -98,9 +114,13 @@ export function InlineTaskRow({
   const progressText = `(${completed}/${tasks.length})`;
 
   const handleGitClick = () => {
-    if (workingDirectory) {
-      panel?.openOrActivatePage('review', { workingDirectory });
-    }
+    if (!workingDirectory) return;
+    // With persisted turn stats the panel can open directly on that turn;
+    // while streaming (live numbers) stay on the repo-wide workspace view.
+    panel?.openOrActivatePage(
+      'review',
+      hasTurn ? { workingDirectory, sessionId } : { workingDirectory },
+    );
   };
 
   return (
@@ -134,7 +154,7 @@ export function InlineTaskRow({
             </span>
           </button>
         )}
-        {hasFiles && (
+        {(hasTurn || hasFiles) && (
           <>
             {hasTasks && <span className="inline-task-row-divider" />}
             <button
@@ -150,10 +170,10 @@ export function InlineTaskRow({
               </span>
               <span className="inline-task-row-git-changes">
                 <span className="text-green-500">
-                  +{gitStatus.totals.additions}
+                  +{hasTurn ? turnReview?.totals.additions ?? 0 : gitStatus.totals.additions}
                 </span>
                 <span className="text-red-500">
-                  -{gitStatus.totals.removals}
+                  -{hasTurn ? turnReview?.totals.removals ?? 0 : gitStatus.totals.removals}
                 </span>
               </span>
             </button>
