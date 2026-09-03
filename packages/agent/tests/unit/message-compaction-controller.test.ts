@@ -656,9 +656,140 @@ describe('MessageCompactionController', () => {
     })
   })
 
-});
+  describe('plan 475 P2.1 — postSummarySections hook', () => {
+    function buildCompactableTimeline(): MessageTimeline {
+      const timeline = new MessageTimeline();
+      timeline.appendMessage(messageEntry('e-u1', user('u1', 'first')));
+      timeline.appendMessage(messageEntry('e-a1', assistant('a1', 'first reply')));
+      timeline.appendMessage(messageEntry('e-u2', user('u2', 'kept')));
+      timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'kept reply')));
+      return timeline;
+    }
 
-// ─── Plan 486: branched (thread) messages never enter the compaction window ──
+    it('appends hook sections to entry.reinjectedSystemMessages after legacy content', async () => {
+      const timeline = new MessageTimeline();
+      const AGENTS_MD = '<agents_md>conventions</agents_md>';
+      timeline.appendMessage(messageEntry('e-legacy-1', legacySystem('legacy-1', AGENTS_MD)));
+      timeline.appendMessage(messageEntry('e-u1', user('u1', 'first')));
+      timeline.appendMessage(messageEntry('e-a1', assistant('a1', 'reply')));
+      timeline.appendMessage(messageEntry('e-u2', user('u2', 'kept')));
+      timeline.appendMessage(messageEntry('e-a2', assistant('a2', 'kept reply')));
+
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      );
+      const controller = new MessageCompactionController({
+        timeline,
+        compactionManager: manager,
+        idGenerator: () => nextId('compaction'),
+        clock: () => CREATED_AT,
+        postSummarySections: () => [
+          '<bot_pending_wakes>2 pending DMs</bot_pending_wakes>',
+          '<automation_reminder>daily-standup cron</automation_reminder>',
+        ],
+      });
+
+      const entry = (await controller.compactProactive())!;
+      const reinjected = entry.reinjectedSystemMessages ?? [];
+      expect(reinjected).toContain(AGENTS_MD);
+      expect(reinjected).toContain('<bot_pending_wakes>2 pending DMs</bot_pending_wakes>');
+      expect(reinjected).toContain('<automation_reminder>daily-standup cron</automation_reminder>');
+      // Hook sections come after the legacy system content.
+      expect(reinjected.indexOf('<bot_pending_wakes>2 pending DMs</bot_pending_wakes>'))
+        .toBeGreaterThan(reinjected.indexOf(AGENTS_MD));
+    });
+
+    it('supports async hooks (bot context loaders are async)', async () => {
+      const timeline = buildCompactableTimeline();
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      );
+      const controller = new MessageCompactionController({
+        timeline,
+        compactionManager: manager,
+        idGenerator: () => nextId('compaction'),
+        clock: () => CREATED_AT,
+        postSummarySections: async () => ['<bot_section>async-loaded</bot_section>'],
+      });
+
+      const entry = (await controller.compactProactive())!;
+      expect(entry.reinjectedSystemMessages).toContain('<bot_section>async-loaded</bot_section>');
+    });
+
+    it('normal session (no hook) keeps 422 behaviour — regression', async () => {
+      const timeline = buildCompactableTimeline();
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      );
+      const controller = createController(timeline, manager);
+
+      const entry = (await controller.compactProactive())!;
+      // No legacy_system and no reinjector content → no reinjected field.
+      expect(entry.reinjectedSystemMessages).toBeUndefined();
+    });
+
+    it('hook returning empty array is a no-op', async () => {
+      const timeline = buildCompactableTimeline();
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      );
+      const controller = new MessageCompactionController({
+        timeline,
+        compactionManager: manager,
+        idGenerator: () => nextId('compaction'),
+        clock: () => CREATED_AT,
+        postSummarySections: () => [],
+      });
+
+      const entry = (await controller.compactProactive())!;
+      expect(entry.reinjectedSystemMessages).toBeUndefined();
+    });
+
+    it('hook failure is isolated — compaction succeeds without the sections', async () => {
+      const timeline = buildCompactableTimeline();
+      const manager = createFakeManager((input) =>
+        buildStrategyResult(input, 2, 'Summary.', 'session_memory'),
+      );
+      const controller = new MessageCompactionController({
+        timeline,
+        compactionManager: manager,
+        idGenerator: () => nextId('compaction'),
+        clock: () => CREATED_AT,
+        postSummarySections: () => {
+          throw new Error('bot context loader exploded');
+        },
+      });
+
+      const entry = await controller.compactProactive();
+      expect(entry).not.toBeNull();
+      expect(entry!.summary).toBe('Summary.');
+      expect(entry!.reinjectedSystemMessages).toBeUndefined();
+    });
+
+    it('hook is not invoked when the strategy produces no compaction', async () => {
+      const timeline = buildCompactableTimeline();
+      const manager = createFakeManager((input) => ({
+        messages: [...input],
+        tokensRemoved: 0,
+        tokensRetained: 50,
+        strategy: 'micro',
+      }));
+      const hook = vi.fn(() => [] as string[]);
+      const controller = new MessageCompactionController({
+        timeline,
+        compactionManager: manager,
+        idGenerator: () => nextId('compaction'),
+        clock: () => CREATED_AT,
+        postSummarySections: hook,
+      });
+
+      const entry = await controller.compactProactive();
+      expect(entry).toBeNull();
+      expect(hook).not.toHaveBeenCalled();
+    });
+  });
+
+});
 
 function branchedUser(id: string, replyToId: string): AgentMessage {
   return {
