@@ -308,6 +308,38 @@ git tag --list 'v<X>*'
 git ls-remote --tags origin refs/tags/v<X>
 ```
 
+## GitHub CLI (gh)
+
+Use [gh](https://cli.github.com/) for GitHub-specific operations. It uses the
+GitHub API and is more reliable than raw git in certain network conditions
+(e.g., in China accessing GitHub via HTTPS).
+
+### Key Commands
+
+```bash
+# Sync branches (preferred over git fetch when network is unstable)
+gh repo sync                          # sync all branches
+gh repo sync -b <branch>              # sync specific branch
+gh repo sync --force                  # force sync to remote state
+
+# PR operations
+gh pr create --base <target> --head <source>  # create PR
+gh pr merge <pr-number> --merge        # merge PR
+gh pr view <pr-number> --json state    # check PR status
+
+# Release verification
+gh release view <tag>                  # verify release exists
+```
+
+### When to Use gh
+
+- **Network issues**: Use `gh repo sync` when `git fetch`/`git pull` to GitHub
+  fails or times out — it uses GitHub API instead of git protocol
+- **PR workflow**: Use `gh pr create` and `gh pr merge` instead of manual git
+  push + browser PR creation
+- **Release verification**: Use `gh release view <tag>` to confirm releases
+  were actually created (git tag push ≠ GitHub Release created)
+
 ## Code
 
 - TS strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.

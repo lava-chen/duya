@@ -1,4 +1,17 @@
 import { app, BrowserWindow, ipcMain, protocol, session } from 'electron';
+// Force synchronous evaluation of bootstrap module's top-level statements
+// (`yd = !e1.app.isPackaged`, `xj = process.env.DUYA_TEST === '1'`, etc.) BEFORE
+// any other module's lazy factory runs. Without this, esbuild's `ye(() => {...})`
+// wrappers defer bootstrap.ts's `require('electron').app` until first export access;
+// modules like messaging/index (S0e) invoke their own factories (`uee()` for
+// document-parser) before reaching `bj()` for bootstrap, and document-parser's
+// factory body dereferences bootstrap's `yd` — crashing with
+// `Cannot read properties of undefined (reading 'isPackaged')`.
+// Use CJS `require` so esbuild emits a synchronous `require(...)` call at the
+// top of the bundle instead of a lazy ESM import. bootstrap's top level is
+// idempotent (const assignments only).
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+void require('./core/bootstrap');
 import { randomUUID } from 'crypto';
 import { platform as getPlatform, tmpdir, homedir } from 'os';
 import * as path from 'path';
@@ -92,7 +105,19 @@ setupDevMode();
 setupTestMode();
 initGlobalErrorHandlers();
 
-const gotTheLock = acquireSingleInstanceLock();
+// Inline acquireSingleInstanceLock to avoid esbuild's lazy module-init issue:
+// when bootstrap.ts is bundled, its module-level statements (including
+// `require('electron').app`) are deferred into `bj = ye(() => { ... })`
+// which only fires on first export access. Calling the bootstrap export
+// here would dereference a not-yet-initialized `app` and crash with
+// `Cannot read properties of undefined (reading 'isPackaged')`. Using
+// main.ts's own `app` import skips that deferral because main.ts's top
+// level is the bundle entry and executes synchronously.
+const gotTheLock = process.env.DUYA_TEST === '1'
+  ? (logger.info('Test mode: skipping single-instance lock', undefined, LogComponent.Main), true)
+  : app.requestSingleInstanceLock()
+  ? true
+  : (app.quit(), false);
 
 // Register the `duya-file://` custom scheme as privileged BEFORE the app is
 // ready. The renderer can only load it as a subresource (e.g. an `<img>` src

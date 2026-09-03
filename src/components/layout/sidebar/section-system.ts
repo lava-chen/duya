@@ -14,7 +14,7 @@
 
 import type { Thread } from '@/stores/conversation-store';
 
-export type SystemSectionKind = 'project' | 'cron' | 'gateway' | 'wakeup' | 'pinned';
+export type SystemSectionKind = 'project' | 'cron' | 'gateway' | 'wakeup' | 'pinned' | 'bot' | 'room';
 
 export interface SystemSectionDescriptor {
   /** Reserved id for system sections. Always starts with `__system__:`. */
@@ -68,6 +68,13 @@ export const SYSTEM_SECTIONS: SystemSectionDescriptor[] = [
     collapsible: true,
     builtin: true,
   },
+  {
+    id: '__system__:bots',
+    kind: 'bot',
+    labelKey: 'sidebar.section.bots',
+    collapsible: true,
+    builtin: true,
+  },
 ];
 
 /** ID prefix used for every session kind. Treated as opaque tokens. */
@@ -75,6 +82,8 @@ export const SESSION_KIND_PREFIXES = {
   cron: 'cron:',
   gateway: 'gw-',
   wakeup: 'wakeless-',
+  bot: 'bot:',
+  room: 'room:',
 } as const;
 
 /**
@@ -92,6 +101,11 @@ export function detectThreadKind(thread: Thread): SystemSectionKind | null {
   if (thread.id.startsWith(SESSION_KIND_PREFIXES.cron)) return 'cron';
   if (thread.id.startsWith(SESSION_KIND_PREFIXES.gateway)) return 'gateway';
   if (thread.id.startsWith(SESSION_KIND_PREFIXES.wakeup)) return 'wakeup';
+  // Bot-bound persistent sessions (`bot:<agentId>:<sessionId>`, or the
+  // bare `bot:<agentId>` placeholder) and room threads (`room:<roomId>`)
+  // group under their own sidebar sections, never the project tree.
+  if (thread.id.startsWith(SESSION_KIND_PREFIXES.bot)) return 'bot';
+  if (thread.id.startsWith(SESSION_KIND_PREFIXES.room)) return 'room';
   // Main-agent threads: caller must group by workingDirectory.
   return null;
 }
@@ -107,12 +121,16 @@ export function bucketThreadsByKind(threads: Thread[]): {
   gateway: Thread[];
   wakeup: Thread[];
   pinned: Thread[];
+  bot: Thread[];
+  room: Thread[];
   project_ungrouped: Thread[];
 } {
   const cron: Thread[] = [];
   const gateway: Thread[] = [];
   const wakeup: Thread[] = [];
   const pinned: Thread[] = [];
+  const bot: Thread[] = [];
+  const room: Thread[] = [];
   const project_ungrouped: Thread[] = [];
 
   for (const thread of threads) {
@@ -121,10 +139,12 @@ export function bucketThreadsByKind(threads: Thread[]): {
     else if (kind === 'gateway') gateway.push(thread);
     else if (kind === 'wakeup') wakeup.push(thread);
     else if (kind === 'pinned') pinned.push(thread);
+    else if (kind === 'bot') bot.push(thread);
+    else if (kind === 'room') room.push(thread);
     else project_ungrouped.push(thread);
   }
 
-  return { cron, gateway, wakeup, pinned, project_ungrouped };
+  return { cron, gateway, wakeup, pinned, bot, room, project_ungrouped };
 }
 
 /** Lookup a system section descriptor by id. Returns undefined if not a

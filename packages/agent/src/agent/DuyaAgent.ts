@@ -1,7 +1,5 @@
-/**
- * duyaAgent - AI Agent 核心类
- * 提供流式对话、工具调用、会话管理能力
- *
+﻿/**
+ * duyaAgent - AI Agent 鏍稿績绫? * 鎻愪緵娴佸紡瀵硅瘽銆佸伐鍏疯皟鐢ㄣ€佷細璇濈鐞嗚兘鍔? *
  * Implementation home for the `duyaAgent` class. The public surface
  * (type re-exports, supporting utilities) lives in `src/index.ts`,
  * which re-exports `duyaAgent` from this file. Pure helpers
@@ -158,7 +156,6 @@ import {
   messageToQuoteText,
   readThreadMeta,
   resolveReplyMeta,
-  withoutThreadMetadata,
 } from '../message/threads.js';
 import { MessageCompactionController } from '../message/message-compaction-controller.js';
 import {
@@ -185,8 +182,7 @@ import {
 import { VisualAnalysisService } from './visual-analysis.js';
 
 /**
- * duyaAgent 类
- */
+ * duyaAgent 绫? */
 export class duyaAgent {
   private llmClient: AIClient;
   /** Dedicated compaction client when a `compact_model` is configured. */
@@ -231,7 +227,7 @@ export class duyaAgent {
   /**
    * Plan 487: host-level standing permission switch. Set from
    * `options.hostToolPermission` (or the `agent:reinit-provider` IPC payload
-   * in phase 2). Optional — undefined falls back to `'ask'`.
+   * in phase 2). Optional 鈥?undefined falls back to `'ask'`.
    */
   private hostToolPermission?: LocalToolPermission;
   private hasPermissionsToUseTool: ReturnType<typeof createHasPermissionsToUseTool>;
@@ -263,15 +259,15 @@ export class duyaAgent {
    */
   private widgetStyleHistory: WidgetStyleSignature[] = [];
   /**
-   * Plan 430 — additionalContext lines from the UserPromptSubmit hook
+   * Plan 430 鈥?additionalContext lines from the UserPromptSubmit hook
    * (the DUYA memory-RAG hook among them). Captured once per `streamChat`
    * call right after the hook dispatch runs, then drained into the first
    * `_projectModelMessages` projection so the model sees the memory block
    * on its first turn instead of having to wait for an async + asyncRewake
    * notification to land at the next checkpoint (which never injected it
-   * into the conversation model-side — the pre-plan-430 wire just logged
+   * into the conversation model-side 鈥?the pre-plan-430 wire just logged
    * the contexts and threw them away). Source-tagged `custom`, hidden
-   * visibility (model-only, no transcript card) — same shape as loop-hook
+   * visibility (model-only, no transcript card) 鈥?same shape as loop-hook
    * steering nudges so it goes through the same provider projection.
    *
    * Cleared after the first injection so re-projections within one
@@ -323,7 +319,7 @@ export class duyaAgent {
   /**
    * Estimated tokens of the system prompt + tool definitions of the last
    * LLM request (excluding message history). Used by the live context
-   * ring's no-usage fallback — mirrors pi's estimateContextTokens prefix
+   * ring's no-usage fallback 鈥?mirrors pi's estimateContextTokens prefix
    * accounting, which adds systemPrompt + tools when no usage block exists.
    */
   private lastSystemContextTokensEstimate = 0;
@@ -425,8 +421,7 @@ export class duyaAgent {
     }
 
     // Build extended options including @duya/ai fields from runtimeConfig.
-    // apiFormat/providerId/modelCompat flow: ProviderRuntimeAdapter →
-    // runtimeConfig → DuyaAgent → createAIClient → @duya/ai createAIClient.
+    // apiFormat/providerId/modelCompat flow: ProviderRuntimeAdapter 鈫?    // runtimeConfig 鈫?DuyaAgent 鈫?createAIClient 鈫?@duya/ai createAIClient.
     const llmClientOptions: AIClientOptions = {
       apiKey: options.apiKey,
       baseURL,
@@ -435,7 +430,7 @@ export class duyaAgent {
       apiFormat: options.runtimeConfig?.apiFormat ?? (provider === 'ollama' ? 'ollama' : provider === 'anthropic' ? 'anthropic' : 'openai-chat'),
       providerId: options.runtimeConfig?.providerId ?? provider,
       modelCapabilities: options.runtimeConfig?.modelCompat,
-      // Prompt-cache retention per provider (anthropic/vertex → 1h TTL on
+      // Prompt-cache retention per provider (anthropic/vertex 鈫?1h TTL on
       // their native endpoints; everything else falls back to 'short').
       cacheRetention: resolveCacheRetention(provider),
     };
@@ -538,8 +533,8 @@ export class duyaAgent {
     // Wire a memory-flush sink: after each compaction, persist the summary to
     // the DUYA sessions root (alongside rollout files, mirroring Codex's
     // `~/.codex/sessions/` layout) so important context survives the history
-    // drop — without polluting the memory store with raw compaction byproducts.
-    // Best-effort — gated by the same memory enable flag used by the wakeup
+    // drop 鈥?without polluting the memory store with raw compaction byproducts.
+    // Best-effort 鈥?gated by the same memory enable flag used by the wakeup
     // helper, and failures are swallowed (they never break compaction).
     this.compactionManager.setMemoryFlushFn(async (summary: string) => {
       if (!isMemoryEnabled()) return
@@ -548,7 +543,7 @@ export class duyaAgent {
       const sessionsRoot = this.sessionsRootPath()
       if (!sessionsRoot) return
       // Bucket by UTC day so the file sits in `sessions/<YYYY>/<MM>/<DD>/`
-      // next to that day's rollout files — matches MessageLog.resolvePath's
+      // next to that day's rollout files 鈥?matches MessageLog.resolvePath's
       // UTC date-bucketing convention.
       const now = new Date()
       const yyyy = String(now.getUTCFullYear()).padStart(4, '0')
@@ -616,7 +611,7 @@ export class duyaAgent {
   }
   set model(value: string) {
     this._model = value;
-    // Model id is read by _buildSystemPrompt → promptSystem.buildContext({ modelId: this.model })
+    // Model id is read by _buildSystemPrompt 鈫?promptSystem.buildContext({ modelId: this.model })
     // on every turn, so no separate prompt-manager sync is needed here.
   }
 
@@ -664,7 +659,7 @@ export class duyaAgent {
     logger.info(`[Agent] streamChat started, sessionId=${this.sessionId}, model=${this._model}, provider=${this.provider}, turnId=${this.currentTurnId ?? 'null'}`);
 
     // Plan 426 follow-up: configured [hooks] events dispatched outside the
-    // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / …).
+    // loop bus (SessionStart / UserPromptSubmit / PreToolUse / Stop / 鈥?.
     // One runner per streamChat call; config is read fresh so edits
     // hot-reload on the next run. Fail-open: a throwing/failing hook never
     // breaks the run (each dispatch is individually wrapped below).
@@ -709,7 +704,7 @@ export class duyaAgent {
 
     // Plan 437: helper that runs one hook event and yields any
     // `hook_invoked` agent_progress events the runner emitted during the
-    // dispatch. Async-generator-as-helper — `yield*` forwards every
+    // dispatch. Async-generator-as-helper 鈥?`yield*` forwards every
     // inner yield, and the returned value becomes the value of the
     // `yield*` expression. Replaces the duplicated try/await/catch
     // blocks at every call site.
@@ -733,12 +728,11 @@ export class duyaAgent {
       }
     };
 
-    // UserPromptSubmit — the user's raw prompt entered the run.
+    // UserPromptSubmit 鈥?the user's raw prompt entered the run.
     // Plan 430: the returned additionalContext lines are stashed on the
     // agent and pumped into the first `_projectModelMessages` projection as
     // `<system-reminder>` runtime_context messages (`source: 'custom'`).
-    // Without this, the memory-RAG hook output is logged and discarded —
-    // the model never sees the retrieved memories on its first turn.
+    // Without this, the memory-RAG hook output is logged and discarded 鈥?    // the model never sees the retrieved memories on its first turn.
     const submitCtx = yield* dispatchHooks(
       'UserPromptSubmit',
       { session_id: this.sessionId ?? '', cwd: this.workingDirectory ?? '', hook_event_name: 'UserPromptSubmit', prompt: promptText },
@@ -748,10 +742,10 @@ export class duyaAgent {
       // Fresh run: previous run's delivered blocks must not leak into this
       // one's restore set.
       this.promptContextBlocks = [];
-      logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) — queued for first-turn injection`);
+      logger.info(`[Hooks] UserPromptSubmit produced ${submitCtx.contexts.length} context line(s) 鈥?queued for first-turn injection`);
     }
 
-    // SessionStart — fired once per run (covers orchestrator modes too,
+    // SessionStart 鈥?fired once per run (covers orchestrator modes too,
     // since this sits ahead of the mode dispatch below).
     const startCtx = yield* dispatchHooks(
       'SessionStart',
@@ -760,7 +754,7 @@ export class duyaAgent {
     if (startCtx && startCtx.contexts.length > 0) {
       logger.info(`[Hooks] SessionStart produced ${startCtx.contexts.length} context line(s)`);
       // Context-injection hardening: SessionStart contexts used to be logged
-      // and discarded — fatal for memory-RAG hooks that do their retrieval
+      // and discarded 鈥?fatal for memory-RAG hooks that do their retrieval
       // exactly once per session. Route them through the same transient
       // `promptContexts` rail as UserPromptSubmit, wrapped in a provenance
       // envelope so the model can attribute the block.
@@ -771,7 +765,7 @@ export class duyaAgent {
       }
     }
 
-    // Plan 450 Phase G: connector-activation reminder — the user @-mentioned
+    // Plan 450 Phase G: connector-activation reminder 鈥?the user @-mentioned
     // apps in the composer. Codex parity: a mention changes tool exposure,
     // not the prompt's capability text; this one-shot reminder only tells the
     // model the user explicitly named these apps and to prefer their tools.
@@ -785,7 +779,7 @@ export class duyaAgent {
       }
     }
 
-    // Plan 450 Phase H: `/skill-name` mentions — inject the SKILL.md body as
+    // Plan 450 Phase H: `/skill-name` mentions 鈥?inject the SKILL.md body as
     // a `<skill>` fragment this turn (codex UserInput::Skill parity), so the
     // model executes the skill immediately instead of having to notice the
     // catalog entry and load it with a read round-trip. Resolution happens
@@ -832,14 +826,14 @@ export class duyaAgent {
         return;
       }
       if (!mod && !options?.conductorMode) {
-        // Unknown mode — no registry entry and no conductor flag.
+        // Unknown mode 鈥?no registry entry and no conductor flag.
         yield {
           type: 'error',
           data: `Unknown mode: ${requestedMode}`,
         } as unknown as SSEEvent;
         return;
       }
-      // Modifier-paradigm mode (plan-task) or conductor-only — fall
+      // Modifier-paradigm mode (plan-task) or conductor-only 鈥?fall
       // through to the normal agent loop; `applyModes` below composes
       // the mode overlay onto the profile-resolved base.
     }
@@ -849,7 +843,7 @@ export class duyaAgent {
     // message selection are factored into private helpers (Phase F1 of
     // Plan 211). The system-message extraction block below remains inline
     // because it mutates `messages`, `systemPromptContent`, and
-    // `this.messages` together — a single bridge between helper output
+    // `this.messages` together 鈥?a single bridge between helper output
     // and the main loop.
 
     const { tools: baseTools, registry, agentDefinitions, constraints } = await this._resolveTools(options, appliedProfile);
@@ -859,7 +853,7 @@ export class duyaAgent {
     // every tool currently registered (including MCP-injected ones).
     // The single ToolSearchTool instance is shared across the agent
     // process; the most recently set registry wins (acceptable for the
-    // sequential streamChat model — concurrent streams would need a
+    // sequential streamChat model 鈥?concurrent streams would need a
     // per-call registry override, planned for Phase 2).
     toolSearchTool.setSearchFn((query, limit) =>
       searchToolsFromRegistry(registry, query, limit),
@@ -877,10 +871,10 @@ export class duyaAgent {
     const { permissionContext, canUseTool } = this._buildPermissionContext(registry);
     // Plan 480 P2.4/P2.5: visibility guard. Snapshot of the tools declared on
     // the current provider request (filled before each openLLMStream). Under
-    // catalog exposure MCP tools are intentionally absent from that set — a
+    // catalog exposure MCP tools are intentionally absent from that set 鈥?a
     // direct call to one is an undeclared call. 'warn' logs/counts it and
     // lets it run; 'enforce' rejects it with a structured message pointing
-    // the model at tool_schema → tool_invoke (§8.3 gray-scale ladder).
+    // the model at tool_schema 鈫?tool_invoke (搂8.3 gray-scale ladder).
     let declaredToolsForRequest = new Set<string>();
     const exposureConfig = readToolExposureConfig();
     const guardEnabled = exposureConfig.exposure === 'catalog';
@@ -900,7 +894,7 @@ export class duyaAgent {
     };
     // Plan 480 P2.2: wire tool_invoke to the registry + permission chain so
     // the model can execute tools it discovered via tool_schema. The gate
-    // runs on the RESOLVED real tool name — routing through the meta tool can
+    // runs on the RESOLVED real tool name 鈥?routing through the meta tool can
     // never bypass the permission policy. ask decisions are not executed (see
     // dispatcherFromRegistry.ts); deny carries the decision message back.
     toolInvokeTool.setDispatcher(
@@ -937,7 +931,7 @@ export class duyaAgent {
     // budget change it was waiting for.
     //
     // First streamChat (`_lastSeenModel` undefined) is treated as the
-    // baseline — no model-switch compaction, just record what we saw so
+    // baseline 鈥?no model-switch compaction, just record what we saw so
     // the *next* streamChat can detect drift.
     if (this._lastSeenModel !== undefined) {
       const previousContextWindow = this.compactionManager.getMaxTokens();
@@ -1048,7 +1042,7 @@ export class duyaAgent {
         `[Agent] streamChat: Applied ${this.resolvedModes.modes.length} mode modifier(s): ${this.resolvedModes.modes.map((m) => m.id).join(', ')}`,
       );
     } else {
-      // No active modes — clear stored state so per-turn refresh is a no-op.
+      // No active modes 鈥?clear stored state so per-turn refresh is a no-op.
       this.resolvedModes = undefined;
       this.modeCtx = undefined;
       this.baseSystemPromptWithoutModes = undefined;
@@ -1058,14 +1052,14 @@ export class duyaAgent {
     // session-level mode with a tracker is active. Rebuilt per streamChat
     // call (same lifecycle as modeCtx); the trackers themselves are engine
     // singletons that survive across calls, so state persists between turns.
-    // Scope the coordinator to THIS turn's active tracker ids — otherwise a
+    // Scope the coordinator to THIS turn's active tracker ids 鈥?otherwise a
     // dormant tracker (e.g. planModeTracker while only goal mode is on)
     // would be auto-activated and injected by the coordinator (plan 411
     // follow-up: goal mode must not wake plan mode).
     //
     // Also include trackers the AGENT activated this session via tool
-    // (EnterPlanModeTool → `activate_from_tool`), not just the frontend's
-    // `options.mode` — otherwise a tool-entered plan mode would be invisible
+    // (EnterPlanModeTool 鈫?`activate_from_tool`), not just the frontend's
+    // `options.mode` 鈥?otherwise a tool-entered plan mode would be invisible
     // to the coordinator and its write-gate/reminders never fire (grok:
     // tracker state is authoritative; the prompt mode reconciles to it).
     const activeTrackerIds = new Set<string>(
@@ -1084,19 +1078,18 @@ export class duyaAgent {
         : undefined;
 
     // Plan 413c: restore persisted tracker state for this session before any
-    // per-turn reminder injection (crash/restart recovery). Best-effort —
-    // restoreTracker swallows DB/IPC failures and leaves the tracker initial.
+    // per-turn reminder injection (crash/restart recovery). Best-effort 鈥?    // restoreTracker swallows DB/IPC failures and leaves the tracker initial.
     if (this.modeCoordinator) {
       await this.modeCoordinator.restore();
     }
 
     let turnCount = 0;
-    // Per-run agentic-turn cap. Absent → uncapped (pi-aligned design):
+    // Per-run agentic-turn cap. Absent 鈫?uncapped (pi-aligned design):
     // the loop runs until the LLM naturally produces a tool-free turn,
     // hits a token/context limit (`stopReason: 'length'`), the caller
     // aborts, or a tool batch returns `terminate: true`. Upper-layer
     // harnesses (CLI, renderer config) can still set a value here as an
-    // opt-in safety net — there is no implicit fallback. Plan 426 keeps
+    // opt-in safety net 鈥?there is no implicit fallback. Plan 426 keeps
     // engine invariants in the loop (dead-loop guard, mailboxes) but
     // intentionally does not enforce a default turn limit.
     const maxTurns = options?.maxTurns;
@@ -1104,8 +1097,8 @@ export class duyaAgent {
 
     // Anti-dead-loop guard (per streamChat call). Tracks consecutive identical
     // tool calls so the loop can steer or stop instead of spinning forever.
-    // Progression: soft nudge (deadLoopNudgeAt) → stronger "change approach"
-    // nudge (deadLoopHardNudgeAt) → hard stop (deadLoopHardStopAt). The
+    // Progression: soft nudge (deadLoopNudgeAt) 鈫?stronger "change approach"
+    // nudge (deadLoopHardNudgeAt) 鈫?hard stop (deadLoopHardStopAt). The
     // counting and the hard stop are engine invariants (plan 426); the
     // soft/hard nudge *texts* live in the builtin dead-loop loop hook.
     const deadLoop = options?.antiDeadLoop ?? {};
@@ -1119,8 +1112,8 @@ export class duyaAgent {
 
     // Loop-hook bus (plan 426): per-run event spine carrying the steering
     // policies that used to be inline blocks below (todo gate, premature
-    // stop, tool intent, dead-loop nudges). Engine invariants — mailbox
-    // checkpoints, max-turns stop, dead-loop hard stop — stay in this loop
+    // stop, tool intent, dead-loop nudges). Engine invariants 鈥?mailbox
+    // checkpoints, max-turns stop, dead-loop hard stop 鈥?stay in this loop
     // and are never delegated.
     const loopHooks = new LoopHookBus();
     for (const registration of createBuiltinLoopHooks({
@@ -1136,7 +1129,7 @@ export class duyaAgent {
     })) {
       loopHooks.register(registration);
     }
-    // Plan 426 Phase 3: the mode coordinator rides the bus — per-turn
+    // Plan 426 Phase 3: the mode coordinator rides the bus 鈥?per-turn
     // reminders via PreTurn (priority 5), round-end transitions + snapshot
     // persistence via PreFinalize (priority 5, ahead of builtin vetoes).
     // Its dedicated call sites below are gone; the WHEN is now owned here.
@@ -1208,13 +1201,13 @@ export class duyaAgent {
       // Grok-aligned 5-state suppression: clear SUPPRESS_TURN at the start
       // of every turn so a transient `other` failure on the previous turn
       // does not bleed into the next one. STICKY/UNTIL_SUCCESS/AUTH are
-      // preserved — their clear triggers are event-based, not turn-based.
+      // preserved 鈥?their clear triggers are event-based, not turn-based.
       this.compactionManager.onTurnStart();
       const turnStartTime = Date.now();
       // Tool calls the assistant emits this turn; handed to the PostToolUse
       // dispatch so configured hooks can match on tool names (plan 426 Phase 4).
       const turnToolCalls: Array<{ name: string; input: unknown }> = [];
-      // tool_use id → tool name, so a failing tool result can be attributed
+      // tool_use id 鈫?tool name, so a failing tool result can be attributed
       // to its hook matcher (PostToolUseFailure).
       const turnToolCallIds = new Map<string, string>();
 
@@ -1223,7 +1216,7 @@ export class duyaAgent {
       // _resolveTools; this loop merges them in once discovered,
       // respecting the same deny/allow constraints.
       // Plan 480 P4: under `exposure = "catalog"` NO tool is ever merged
-      // into the request this way — the tools array stays byte-constant and
+      // into the request this way 鈥?the tools array stays byte-constant and
       // dynamic tools (MCP + discoverable built-ins) are reached exclusively
       // through tool_schema (builtin namespace) + tool_invoke.
       const catalogExposure = exposureConfig.exposure === 'catalog';
@@ -1281,7 +1274,7 @@ export class duyaAgent {
       // an always-exposed tool receives. If its executor also provides a
       // usage guide (BrowserTool.getPrompt, for example), append that guide
       // to this turn's system prompt as well.
-      // Plan 480 P4: catalog exposure appends no on-demand guides — dynamic
+      // Plan 480 P4: catalog exposure appends no on-demand guides 鈥?dynamic
       // tools are discovered via tool_schema instead.
       const discoveredPrompts = !catalogExposure
         ? getDiscoveredToolPrompts(registry, discoveredTools)
@@ -1346,9 +1339,9 @@ export class duyaAgent {
             seq_index: seqIndex,
             attachments: (options as ChatOptions & { attachments?: Message['attachments'] })?.attachments,
           } as Message;
-          // Plan 486 §2.1/§2.2: fork/reply creation rule. The target must
+          // Plan 486 搂2.1/搂2.2: fork/reply creation rule. The target must
           // exist in this session's timeline (checked against entries already
-          // committed — this message is not yet appended). An unknown target
+          // committed 鈥?this message is not yet appended). An unknown target
           // is silently stripped so a dangling fork is never persisted.
           const replyMeta = resolveReplyMeta(
             options?.replyToId,
@@ -1357,7 +1350,7 @@ export class duyaAgent {
           );
           if (replyMeta) {
             userMessage.metadata = mergeThreadMetadata(userMessage.metadata, replyMeta);
-            // Plan 486 §2.3: a branched fork opens an active fork turn — every
+            // Plan 486 搂2.3: a branched fork opens an active fork turn 鈥?every
             // message this turn produces is tagged branched (see _pushDurable).
             // Quote replies (no branched) stay on the main line and leave the
             // marker null.
@@ -1480,8 +1473,7 @@ export class duyaAgent {
       let doneEventHandled = false;
       // Per-call usage from this round's `result` event (always yielded
       // immediately before `done`). Attached to the pushed assistant message
-      // (pi parity) so context estimation can anchor on real API numbers —
-      // see computeContextEstimate in @duya/ai.
+      // (pi parity) so context estimation can anchor on real API numbers 鈥?      // see computeContextEstimate in @duya/ai.
       // NOTE: keep the LARGEST-prompt result of the turn, not the latest.
       // Some gateways (GLM-style cache reporting) report a near-fresh prefix
       // (input_tokens=0, tiny cache hit) on individual rounds, which made the
@@ -1541,7 +1533,7 @@ export class duyaAgent {
           const compactErrorMsg = compactError instanceof Error ? compactError.message : String(compactError);
           logger.error(`[Agent] Turn ${turnCount}: Proactive compaction failed: ${compactErrorMsg}`);
           yield { type: 'compact:error', data: { message: compactErrorMsg } } as unknown as SSEEvent;
-          // Continue anyway — let the API call fail if truly over limit
+          // Continue anyway 鈥?let the API call fail if truly over limit
         }
       }
 
@@ -1572,7 +1564,7 @@ export class duyaAgent {
 
       // Plan 426 Phase 3: PreTurn dispatch, deliberately located AFTER the
       // mailbox checkpoint so mode turn reminders (mode-coordinator hook,
-      // priority 5) stay more recent than mailbox guidance — the same
+      // priority 5) stay more recent than mailbox guidance 鈥?the same
       // ordering the pre-bus inline calls produced. The hook flushes
       // buffered mid-turn activations first, then injects per-turn mode
       // reminders; other PreTurn consumers see the same position.
@@ -1620,7 +1612,7 @@ export class duyaAgent {
             : messages
         );
 
-        // Plan 486 §2.3: render the reply/fork quote context and keep the
+        // Plan 486 搂2.3: render the reply/fork quote context and keep the
         // provider payload clean. This runs at the per-request boundary where
         // the current turn's user message is present: historical messages
         // arrive already stripped by projectModelMessages, so only messages
@@ -1638,7 +1630,7 @@ export class duyaAgent {
         await this._injectRuntimeContext(llmMessages, options, deferredContexts);
 
         // Plan 453 Task C: append OSContext as a contextual user fragment on
-        // every turn. The bridge is the integration seam — tests can swap
+        // every turn. The bridge is the integration seam 鈥?tests can swap
         // it via __setBridgeForTest. The fragment is ephemeral (lives only
         // on `llmMessages`; never lands in the durable timeline).
         injectOSContextFragment(llmMessages, runtimePromptMessageId);
@@ -1674,7 +1666,7 @@ export class duyaAgent {
         // Plan 439: wrap the raw LLM stream with turn-level replay. A
         // transport death (undici `terminated`, OpenRouter upstream drop,
         // idle timeout) BEFORE the stream's `done` event leaves no durable
-        // state — deltas live only in the local accumulators below — so the
+        // state 鈥?deltas live only in the local accumulators below 鈥?so the
         // partial attempt is discarded and retried from scratch instead of
         // failing the whole turn. The retryable-error classification and
         // attempt budget live in ./stream-retry.ts. Post-`done` failures
@@ -1734,8 +1726,7 @@ export class duyaAgent {
               lastToolCallSignature = null;
               consecutiveToolName = null;
               // Surface the replay through the same channel as the
-              // transport-layer retry (`system` + metadata.retryAttempt →
-              // worker boundary emits a chat:retry chip). Plan 462: carry the
+              // transport-layer retry (`system` + metadata.retryAttempt 鈫?              // worker boundary emits a chat:retry chip). Plan 462: carry the
               // provider wording so the chip says *why* it is reconnecting.
               yield createRetryEvent(
                 streamReplayAttempt,
@@ -1763,12 +1754,12 @@ export class duyaAgent {
           } else if (event.type === 'tool_use_delta') {
             // Plan 461: incremental tool-call argument fragment. Purely
             // cosmetic on this side (the authoritative input arrives with
-            // `tool_use`), so forward it untouched — the renderer uses it
+            // `tool_use`), so forward it untouched 鈥?the renderer uses it
             // to render file edits while the model is still writing them.
             yield event;
 
           } else if (event.type === 'tool_use') {
-            // Plan 426 follow-up: PreToolUse — notification before the tool
+            // Plan 426 follow-up: PreToolUse 鈥?notification before the tool
             // is dispatched to its executor. Runs to completion (blocking),
             // fail-open; matchers filter on the tool name.
             const preCtx = yield* dispatchHooks(
@@ -1788,7 +1779,7 @@ export class duyaAgent {
                 `[Hooks] PreToolUse ${event.data.name} produced ${preCtx.contexts.length} context line(s)`,
               );
               // Context-injection hardening: PreToolUse is advisory, not a
-              // decision point — its contexts are injected as an enveloped
+              // decision point 鈥?its contexts are injected as an enveloped
               // reminder keyed per tool so repeated firings replace the
               // previous block instead of stacking. Fail-open by contract.
               const advisory = preCtx.contexts
@@ -1908,7 +1899,7 @@ export class duyaAgent {
                 // Attach BOTH field names: `usage` is the pi-style in-memory
                 // convention read by computeContextEstimate's anchor scan,
                 // `tokenUsage` is the duya projection field listed in
-                // LEGACY_KNOWN_KEYS — without it ingestMessage strips the
+                // LEGACY_KNOWN_KEYS 鈥?without it ingestMessage strips the
                 // block from the timeline and the context ring shows "?"
                 // forever (plan 443 regression, fixed in plan 444).
                 const usageBlock = {
@@ -2031,7 +2022,7 @@ export class duyaAgent {
                     },
                   };
 
-                  // Plan 426 follow-up: PostToolUseFailure — fired when a
+                  // Plan 426 follow-up: PostToolUseFailure 鈥?fired when a
                   // tool result is an error (fail-open; matchers filter on
                   // the failed tool's name).
                   if (toolResultError) {
@@ -2056,7 +2047,7 @@ export class duyaAgent {
                   // SwitchMode), parse the new runtime mode out of the
                   // JSON result and emit a `mode_changed` SSE event so
                   // the renderer can sync the input-box chip + glow.
-                  // Skip on error — failed switches leave the mode unchanged.
+                  // Skip on error 鈥?failed switches leave the mode unchanged.
                   const modeSwitchToolName = modeSwitchToolIds.get(toolResultId);
                   if (modeSwitchToolName && !toolResultError) {
                     let nextMode: AgentRuntimeMode | undefined;
@@ -2074,7 +2065,7 @@ export class duyaAgent {
                         nextMode = planMode ? 'plan' : 'general';
                       }
                     } catch {
-                      // Malformed JSON result — leave nextMode undefined.
+                      // Malformed JSON result 鈥?leave nextMode undefined.
                     }
                     if (nextMode) {
                       yield {
@@ -2100,8 +2091,7 @@ export class duyaAgent {
             // discovered tool names to the next turn's tool list.
             //
             // We re-scan `messages` from the end rather than threading
-            // a separate collector through `getRemainingResults` —
-            // simpler and avoids changing the executor's public surface.
+            // a separate collector through `getRemainingResults` 鈥?            // simpler and avoids changing the executor's public surface.
             // The cost is O(N) over the new tool_result batch, which
             // is small (typically 1-3 per turn).
             if (toolResultMessageCount > 0) {
@@ -2170,7 +2160,7 @@ export class duyaAgent {
                     }
                   }
                 } catch (err) {
-                  // Nested memory is advisory — never fail the turn on it.
+                  // Nested memory is advisory 鈥?never fail the turn on it.
                   logger.warn(
                     `Nested AGENTS.md collection failed: ${err instanceof Error ? err.message : String(err)}`,
                     undefined,
@@ -2188,7 +2178,7 @@ export class duyaAgent {
             // Grok-aligned preflight overflow check
             // (`check_preflight_overflow`, grok `turn.rs:2711`). After tool
             // results are committed, see whether the projected context has
-            // *exceeded* the window — a single tool call can blow past the
+            // *exceeded* the window 鈥?a single tool call can blow past the
             // 78% threshold by itself, and waiting for the next turn's
             // `shouldCompact()` check risks a `context_length_exceeded`
             // round-trip. Compacting here is cheaper than retrying the
@@ -2264,7 +2254,7 @@ export class duyaAgent {
             }
             // Capture the signature emitted at content_block_stop (empty data).
             // This is required by Anthropic to continue the thinking chain
-            // across turns — without it the next request 400s with
+            // across turns 鈥?without it the next request 400s with
             // "The content[].thinking in the thinking mode must be passed back to the API."
             if (event.signature) {
               thinkingSignature = event.signature;
@@ -2339,12 +2329,12 @@ export class duyaAgent {
         logger.debug(`[Agent] Turn ${turnCount}: LLM stream ended, total events=${llmEventCount}`);
 
         // Per-run turn cap (only fires when the caller passed an explicit
-        // `maxTurns`). `maxTurns === undefined` means uncapped — matches
+        // `maxTurns`). `maxTurns === undefined` means uncapped 鈥?matches
         // pi's design where `shouldStopAfterTurn` is the only stop hook and
         // defaults to undefined. We mirror that: no `?? N` fallback here.
         // A natural completion falls through to the `!needsFollowUp` branch.
         if (maxTurns !== undefined && turnCount >= maxTurns && needsFollowUp) {
-          // No wrap-up nudge — the caller opted into a hard ceiling, so we
+          // No wrap-up nudge 鈥?the caller opted into a hard ceiling, so we
           // honour it. Refresh sessionInfo counters BEFORE yielding.
           this._commitMessages();
           yield { type: 'done', reason: 'max_turns' };
@@ -2375,13 +2365,13 @@ export class duyaAgent {
           // Plan 426 Phase 3: round-end mode transitions + snapshot
           // persistence (plan deferred exit, goal worker rounds, research
           // auto-converge) now run inside the mode-coordinator PreFinalize
-          // hook (priority 5) — dispatched ahead of the builtin vetoes
+          // hook (priority 5) 鈥?dispatched ahead of the builtin vetoes
           // below, and re-fired on every natural stop exactly like the
           // pre-bus inline call did.
 
-          // Plan 426: PreFinalize dispatch — the veto-capable steering point.
+          // Plan 426: PreFinalize dispatch 鈥?the veto-capable steering point.
           // The model ended its turn naturally; the bus consults the builtin
-          // policies (goal premature-stop → tool-intent → todo gate, in that
+          // policies (goal premature-stop 鈫?tool-intent 鈫?todo gate, in that
           // fixed priority order) before the run is allowed to finalize. A
           // block_finalize veto injects a transient <system-reminder>
           // directive and continues the loop. Hook failures already degraded
@@ -2398,13 +2388,13 @@ export class duyaAgent {
             continue;
           }
 
-          // Plan 426: PostTurn dispatch — run-boundary observation point
+          // Plan 426: PostTurn dispatch 鈥?run-boundary observation point
           // before the final answer is committed.
           for (const effect of await loopHooks.dispatch('PostTurn', buildHookCtx())) {
             applyLoopHookEffect(messages, effect, seqIndex);
           }
 
-          // Plan 426 Phase 3: mode lifecycle — run onExit hooks for
+          // Plan 426 Phase 3: mode lifecycle 鈥?run onExit hooks for
           // kind:'message' modes at the run boundary (fail-open; a failing
           // exit hook never blocks the final answer).
           if (this.resolvedModes && this.modeCtx) {
@@ -2421,7 +2411,7 @@ export class duyaAgent {
           // so API route can retrieve the final state
           this._commitMessages();
 
-          // Plan 426 follow-up: SessionEnd — fired on the natural run
+          // Plan 426 follow-up: SessionEnd 鈥?fired on the natural run
           // completion boundary (fail-open; never blocks the final answer).
           yield* dispatchHooks('SessionEnd', {
             session_id: this.sessionId ?? '',
@@ -2539,8 +2529,7 @@ export class duyaAgent {
           }
           yield { type: 'done', reason: 'aborted' };
         } else {
-          // Plan 462: surface the provider's own wording (e.g. "余额不足，
-          // 请充值") with a machine `code`, instead of the raw SDK string
+          // Plan 462: surface the provider's own wording (e.g. "浣欓涓嶈冻锛?          // 璇峰厖鍊?) with a machine `code`, instead of the raw SDK string
           // (`429 {"type":"error","error":{...}}`) that ends up in the banner.
           const llmError = createLLMAPIError(error);
           const providerMessage = extractProviderErrorMessage(llmError) ?? llmError.message;
@@ -2570,7 +2559,7 @@ export class duyaAgent {
     // Refresh sessionInfo counters BEFORE yielding done event
     this._commitMessages();
 
-    // Plan 426 follow-up: Stop + SessionEnd — the run is being torn down
+    // Plan 426 follow-up: Stop + SessionEnd 鈥?the run is being torn down
     // (user interrupt). Fail-open: a broken hook never blocks the done
     // event.
     yield* dispatchHooks('Stop', {
@@ -2618,7 +2607,7 @@ export class duyaAgent {
 
   /**
    * Refresh sessionInfo counters from the timeline. `this.messages` is a
-   * timeline-derived getter, so no array assignment happens here — the
+   * timeline-derived getter, so no array assignment happens here 鈥?the
    * timeline is the single source of truth for the durable projection.
    */
   private _commitMessages(): void {
@@ -2629,7 +2618,7 @@ export class duyaAgent {
   /**
    * Append a message to the timeline if not already present. O(1) via
    * syncedMessageIds set. Called at every durable message creation site
-   * so the timeline is always current — no batch reverse sync needed.
+   * so the timeline is always current 鈥?no batch reverse sync needed.
    */
   private _appendMessageToTimeline(message: Message): void {
     if (!message.id || this.syncedMessageIds.has(message.id)) return;
@@ -2720,7 +2709,7 @@ export class duyaAgent {
    * `journal.*` every completed timeline boundary without holding a
    * construction-time dependency on the persistence module.
    *
-   * If unset, `_pushDurable` silently skips journal emits — the in-memory
+   * If unset, `_pushDurable` silently skips journal emits 鈥?the in-memory
    * timeline still updates, so unit tests that don't exercise persistence
    * stay green.
    */
@@ -2738,7 +2727,7 @@ export class duyaAgent {
    * durable message produced during this turn is tagged branched against the
    * fork's user message, so the whole exchange belongs to the branched layer:
    * it never appears in the main transcript or any later main projection.
-   * Quote replies (replyToId without branched) leave this null — they stay on
+   * Quote replies (replyToId without branched) leave this null 鈥?they stay on
    * the main line. Reset at the top of every streamChat call.
    */
   private forkTurn: { replyToId: string; userId: string } | null = null;
@@ -2746,7 +2735,7 @@ export class duyaAgent {
   /**
    * Push a durable message to both the working array and the timeline.
    * Transient messages (mailbox, background notifications) should use
-   * `messages.push()` directly — they are filtered out by persistableMessages
+   * `messages.push()` directly 鈥?they are filtered out by persistableMessages
    * and never reach the timeline.
    *
    * Plan 441: when a `journal` is wired, also fire the appropriate event
@@ -2869,7 +2858,7 @@ export class duyaAgent {
    * Returns `undefined` when no profile id was supplied, the profile is
    * missing, or the service has not been initialized. Profile-driven mode
    * selection (e.g. `promptSystem: 'research'`) is intentionally not
-   * resolved here — callers handle profile -> mode mapping.
+   * resolved here 鈥?callers handle profile -> mode mapping.
    */
   private async _resolveAgentProfile(options?: ChatOptions): Promise<AgentProfile | undefined> {
     if (!options?.agentProfileId) {
@@ -2904,9 +2893,9 @@ export class duyaAgent {
    * Build the tool list for this turn.
    *
    * Three layers of filtering are applied in order:
-   *   0. `options.allowedTools` — caller-supplied hard allowlist (most restrictive)
-   *   1. `options.disabledTools` — caller-supplied hard denylist
-   *   2. `appliedProfile.allowedTools/disallowedTools` — agent profile policy
+   *   0. `options.allowedTools` 鈥?caller-supplied hard allowlist (most restrictive)
+   *   1. `options.disabledTools` 鈥?caller-supplied hard denylist
+   *   2. `appliedProfile.allowedTools/disallowedTools` 鈥?agent profile policy
    *
    * Returns the filtered `tools` array along with the underlying
    * `registry` and the loaded `agentDefinitions`, because the main
@@ -2952,7 +2941,7 @@ export class duyaAgent {
         logger.warn(`[Agent] Failed to merge App Connection tools: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // Plan 450/452: connector tools stay `discoverable` by default — the
+    // Plan 450/452: connector tools stay `discoverable` by default 鈥?the
     // user's model is "@ to activate": without a mention the tools are only
     // reachable via tool_search (the persistent Apps system section keeps
     // the model aware they exist). @-mentioned providers' tools are promoted
@@ -3024,7 +3013,7 @@ export class duyaAgent {
 
     // Agent definitions (sub-agents) are loaded separately for the SubagentTool
     // to register as `task` calls. They are not part of the `tools` array
-    // returned to the LLM — they live behind the tool's own validation.
+    // returned to the LLM 鈥?they live behind the tool's own validation.
     logger.info(`[Agent] streamChat: Loading agent definitions...`);
     // Dynamic import breaks the load-time cycle through
     // `tool/SubagentTool/runAgent.ts:15` (`import { duyaAgent }`). See Plan 211
@@ -3040,7 +3029,7 @@ export class duyaAgent {
    * Build the final system prompt string for this turn.
    *
    * The composition order is:
-   *   1. Profile-driven identity block (highest precedence — must lead)
+   *   1. Profile-driven identity block (highest precedence 鈥?must lead)
    *   2. Caller-supplied `systemPromptPrefix`
    *   3. Resolved prompt system (general/research), honoring:
    *      - `disableSystemPrompt` (empty)
@@ -3049,7 +3038,7 @@ export class duyaAgent {
    *   4. Output style injection (handled inside the prompt system context)
    *
    * Note: conversation-derived system messages (compaction summaries, etc.)
-   * are merged in *after* this helper returns — see the inline block in
+   * are merged in *after* this helper returns 鈥?see the inline block in
    * `streamChat` that reads `this.messages` post-init.
    */
   private async _buildSystemPrompt(
@@ -3106,8 +3095,8 @@ export class duyaAgent {
         this.activeMCPRegistry.getAllTools().filter(
           (tool) => this.activeMCPRegistry.getOwner(tool.name) === 'mcp',
         ),
-        // Plan 480 §8.4: under `exposure = "catalog"` MCP tools are absent
-        // from the tools array — the directory must point the model at the
+        // Plan 480 搂8.4: under `exposure = "catalog"` MCP tools are absent
+        // from the tools array 鈥?the directory must point the model at the
         // tool_schema/tool_invoke meta pair instead of tool_search.
         {
           entryPoint:
@@ -3122,7 +3111,7 @@ export class duyaAgent {
           : mcpCatalog;
       }
 
-      // Plan 450 Phase G: persistent "Apps (Connectors)" section — codex's
+      // Plan 450 Phase G: persistent "Apps (Connectors)" section 鈥?codex's
       // developer-role apps_instructions parity. Rendered whenever any app
       // connection has tool descriptors, so the model knows the mention
       // syntax and can trigger apps implicitly, not only on turns where the
@@ -3152,7 +3141,7 @@ export class duyaAgent {
     // prepending `buildConductorPrompt(widgetStyleHistory)`, and the
     // per-turn refresh loop re-evaluates it against the latest
     // `widgetStyleHistory`. `_buildSystemPrompt` now returns the base
-    // prompt only — no mode-specific overlays.
+    // prompt only 鈥?no mode-specific overlays.
 
     // Plan 408 Phase 5: AGENTS.md lives in the system field so it sits on
     // the system-prefix cache breakpoint (Phase 4). Read-only sub-agents
@@ -3166,9 +3155,9 @@ export class duyaAgent {
       }
     }
 
-    // Plan 474 §7: append bot prompt-layer sections (identity / roster / …)
+    // Plan 474 搂7: append bot prompt-layer sections (identity / roster / 鈥?
     // when the applied profile is a config-driven bot ([agents.<id>], Plan
-    // 424). Only the registered *sections* are appended — the stable base
+    // 424). Only the registered *sections* are appended 鈥?the stable base
     // already came from the PromptSystem above, so appending the full bot
     // basic prompt would duplicate platform guidance. Rendered sections
     // return null when their context fields are absent, keeping this a
@@ -3176,7 +3165,7 @@ export class duyaAgent {
     if (!options?.disableSystemPrompt && isBotAgentProfile(appliedProfile) && appliedProfile) {
       try {
         const botContext = await loadBotPromptContext(appliedProfile.id);
-        // Plan 474 §2.3/P1.2: dual-key frozen snapshot — a content hash over
+        // Plan 474 搂2.3/P1.2: dual-key frozen snapshot 鈥?a content hash over
         // the bot context (profile/roster/reserved slots) plus the compaction
         // epoch (compaction-entry count). Same keys reuse the cached
         // per-section render verbatim; either key changing re-renders.
@@ -3188,7 +3177,7 @@ export class duyaAgent {
             summaryEpoch,
           },
         });
-        // Plan 474 §2.2/P3.1: identity change announcement + compaction
+        // Plan 474 搂2.2/P3.1: identity change announcement + compaction
         // folding. (1) When the current identity differs from what the
         // model was last told, append a hidden profile-update envelope.
         // (2) When a compaction persisted since the last turn, fold the
@@ -3213,7 +3202,7 @@ export class duyaAgent {
   }
 
   /**
-   * Bot profile baseline (Plan 474 §2.2/P3.1): the identity the model has
+   * Bot profile baseline (Plan 474 搂2.2/P3.1): the identity the model has
    * last been told about, per bot id. Seeded lazily from the first context
    * load so an already-running session does not announce a "change" from a
    * cold undefined baseline.
@@ -3239,9 +3228,8 @@ export class duyaAgent {
         return;
       }
 
-      // Compaction folding (§2.2): summaryEpoch advanced → the newest
-      // announced update is folded into the baseline; no re-announcement —
-      // the identity section re-rendered this turn already carries the
+      // Compaction folding (搂2.2): summaryEpoch advanced 鈫?the newest
+      // announced update is folded into the baseline; no re-announcement 鈥?      // the identity section re-rendered this turn already carries the
       // merged view (profile.json is re-read every turn).
       const baseline =
         summaryEpoch > state.summaryEpoch
@@ -3344,7 +3332,7 @@ export class duyaAgent {
             ? (toolName: string) => registry.getMeta(toolName)?.riskTier
             : undefined,
           // Plan 487: host-level standing permission switch (mirrors
-          // `setHostToolPermission`). Undefined → defaults to 'ask'.
+          // `setHostToolPermission`). Undefined 鈫?defaults to 'ask'.
           hostToolPermission: this.hostToolPermission,
         } as ToolPermissionContext,
       }),
@@ -3438,11 +3426,14 @@ export class duyaAgent {
       const ctx = adaptAttachmentContext(prepared);
       if (ctx) {
         // Append as a durable timeline entry (hidden runtime_context).
-        // `_appendRuntimeContextToTimeline` skips when the same attachment IDs
-        // are already present, so reloads don't duplicate.
-        this._appendRuntimeContextToTimeline(ctx);
-        const projected = projectRuntimeContextToProviderMessage(ctx);
-        if (projected) llmMessages.push(projected);
+        // `_appendRuntimeContextToTimeline` returns false when the same attachment IDs
+        // are already present, so we must also skip the llmMessages push to avoid
+        // duplicating the projected context across turns.
+        const appended = this._appendRuntimeContextToTimeline(ctx);
+        if (appended) {
+          const projected = projectRuntimeContextToProviderMessage(ctx);
+          if (projected) llmMessages.push(projected);
+        }
       }
     }
 
@@ -3475,8 +3466,7 @@ export class duyaAgent {
    * Orchestrator modes (e.g. research) take over the entire stream with
    * their own multi-stage logic. They receive {@link OrchestratorDeps}
    * (llmClient, toolRegistry, sessionId, etc.) and are responsible for
-   * building their own LLM calls, tool execution, and persistence —
-   * they do NOT run through the agent tool loop.
+   * building their own LLM calls, tool execution, and persistence 鈥?   * they do NOT run through the agent tool loop.
    *
    * Tool registry construction is shared with the legacy path so that
    * plugin/MCP tools remain available to orchestrator modes that
@@ -3509,7 +3499,7 @@ export class duyaAgent {
     // this orchestrator mode (research), inject the modifier's tools into
     // the orchestrator's registry so the orchestrator can call them. The
     // orchestrator manages its own prompt/loop, so we only apply the tool
-    // injection — not prompt prefixes or hooks.
+    // injection 鈥?not prompt prefixes or hooks.
     const orchestratorActiveModes = collectActiveModes(options ?? {});
     const orchestratorResolved = orchestratorActiveModes.length > 0
       ? modeModifierRegistry.resolve(orchestratorActiveModes)
@@ -3553,7 +3543,7 @@ export class duyaAgent {
 
     const orchestrator = mod.orchestrator;
     if (!orchestrator) {
-      // Defensive — caller already checked mod.orchestrator before invoking
+      // Defensive 鈥?caller already checked mod.orchestrator before invoking
       // _dispatchOrchestratorMode, but TypeScript can't narrow across the
       // method boundary.
       yield {
@@ -3578,7 +3568,7 @@ export class duyaAgent {
   // === end streamChat helpers ===========================================
 
   /**
-   * 中断当前对话
+   * 涓柇褰撳墠瀵硅瘽
    */
   interrupt(): void {
     if (this.abortController) {
@@ -3587,7 +3577,7 @@ export class duyaAgent {
   }
 
   /**
-   * 获取消息历史 (legacy interface)
+   * 鑾峰彇娑堟伅鍘嗗彶 (legacy interface)
    * Returns the durable, persistence-ready legacy Message[] shape that the
    * desktop renderer expects. Hidden runtime context is excluded.
    */
@@ -3612,7 +3602,7 @@ export class duyaAgent {
       throw new Error('Side question cannot be empty');
     }
 
-    // Build a system prompt with no tools — side questions never call tools.
+    // Build a system prompt with no tools 鈥?side questions never call tools.
     const profile = await this._resolveAgentProfile({});
     const systemPromptBase = await this._buildSystemPrompt([], {}, profile);
 
@@ -3738,7 +3728,7 @@ export class duyaAgent {
     this.timeline = new MessageTimeline();
     this.syncedMessageIds = new Set();
     // Keep the compaction controller's timeline reference in sync with the
-    // new (empty) instance — see `setMessages` for the rationale.
+    // new (empty) instance 鈥?see `setMessages` for the rationale.
     this.compactionController.setTimeline(this.timeline);
     this.sessionInfo.updatedAt = Date.now();
   }
@@ -3750,7 +3740,7 @@ export class duyaAgent {
   /**
    * Plan 314: Block first chat:start until MCP tools are registered
    * into the catalog, or until `timeoutMs` elapses (whichever is
-   * first). On timeout the chat proceeds without MCP tools — better
+   * first). On timeout the chat proceeds without MCP tools 鈥?better
    * a degraded turn than a hung UI. Subsequent calls after the
    * promise has already resolved return immediately.
    */
@@ -3771,7 +3761,7 @@ export class duyaAgent {
 
   /**
    * Plan 314: Called by agent-process-entry after
-   * `applyMCPConfiguration` completes — success OR failure. Failure
+   * `applyMCPConfiguration` completes 鈥?success OR failure. Failure
    * still resolves the gate so first chat is not permanently blocked.
    * Idempotent: subsequent calls are no-ops.
    */
@@ -3801,8 +3791,7 @@ export class duyaAgent {
    * Plan 314: Initialize the long-lived ToolCatalog by registering
    * all builtin tools once at agent init, before the first
    * `streamChat`. MCP tools are added later via
-   * `applyMCPConfiguration` → `setActiveMCPRuntime` →
-   * `replaceByOwner('mcp', ...)`.
+   * `applyMCPConfiguration` 鈫?`setActiveMCPRuntime` 鈫?   * `replaceByOwner('mcp', ...)`.
    *
    * Replaces the per-turn `createBuiltinRegistry()` call that
    * previously ran inside `_resolveTools`. Builtin tools use
@@ -3848,8 +3837,7 @@ export class duyaAgent {
    * This is the seed `usedNames` set for the providerName
    * allocator in PHASE B1: the next apply must never collide with
    * builtin / mode-specific non-MCP tool names. It intentionally
-   * does NOT include currently active MCP provider names —
-   * full-replace removes them before computing the next state, and
+   * does NOT include currently active MCP provider names 鈥?   * full-replace removes them before computing the next state, and
    * including them would cause collision-suffix drift on every
    * repeated reload.
    */
@@ -3920,7 +3908,7 @@ export class duyaAgent {
       this.activeMCPRuntimeSnapshot = install.snapshot;
     } catch (err) {
       // Roll back the partial install. `replaceByOwner` is
-      // atomic — it never leaves the registry in a partial
+      // atomic 鈥?it never leaves the registry in a partial
       // state. The catch only covers failures during our
       // post-replace field updates, which require no further
       // rollback of the registry itself.
@@ -3950,7 +3938,7 @@ export class duyaAgent {
   }
 
   /**
-   * Build a name → executor map for the current MCP tools, so sub-agents that
+   * Build a name 鈫?executor map for the current MCP tools, so sub-agents that
    * opt in via `mcpTools` can reuse this agent's live MCP runtime (the client
    * is captured in the executor closure) instead of reconnecting the servers.
    * Only tools carrying `mcpInfo` are included; builtin tools are excluded.
@@ -3966,19 +3954,19 @@ export class duyaAgent {
   }
 
   /**
-   * 获取当前工作目录
+   * 鑾峰彇褰撳墠宸ヤ綔鐩綍
    */
   getWorkingDirectory(): string | undefined {
     return this.workingDirectory;
   }
 
   /**
-   * 设置工作目录
+   * 璁剧疆宸ヤ綔鐩綍
    */
   setWorkingDirectory(directory: string): void {
     this.workingDirectory = directory;
     // PromptSystem reads workingDirectory fresh on every streamChat via
-    // _buildSystemPrompt → buildContext, so no separate sync needed.
+    // _buildSystemPrompt 鈫?buildContext, so no separate sync needed.
   }
 
   /**
@@ -4001,7 +3989,7 @@ export class duyaAgent {
   /**
    * Plan 487: set the host-level standing permission switch. Called by
    * the IPC `agent:reinit-provider` handler in phase 2 whenever the user
-   * persists a new value via Settings. Throws on invalid input — callers
+   * persists a new value via Settings. Throws on invalid input 鈥?callers
    * must validate against `LOCAL_TOOL_PERMISSIONS` from `@duya/agent`.
    */
   setHostToolPermission(value: LocalToolPermission): void {
@@ -4010,14 +3998,14 @@ export class duyaAgent {
   }
 
   /**
-   * 获取会话信息
+   * 鑾峰彇浼氳瘽淇℃伅
    */
   getSessionInfo(): SessionInfo {
     return { ...this.sessionInfo };
   }
 
   /**
-   * 添加用户消息
+   * 娣诲姞鐢ㄦ埛娑堟伅
    */
   addMessage(message: Message): void {
     const withTimestamp: Message = {
@@ -4039,8 +4027,7 @@ export class duyaAgent {
   }
 
   /**
-   * 检查是否应该进行压缩
-   */
+   * 妫€鏌ユ槸鍚﹀簲璇ヨ繘琛屽帇缂?   */
   shouldCompact(): boolean {
     return this.compactionController.shouldCompact();
   }
@@ -4052,7 +4039,7 @@ export class duyaAgent {
    * boundary projection. System content from legacy system messages and
    * compaction reinjected context is extracted into PromptSegments, then
    * merged into the system prompt. The resulting messages array contains
-   * only user/assistant/tool roles — no system messages.
+   * only user/assistant/tool roles 鈥?no system messages.
    *
    * Returns the projected model messages; it does not mutate `this.messages`,
    * which remains the durable persistence projection derived from the
@@ -4088,7 +4075,7 @@ export class duyaAgent {
     //
     // Ensure-present semantics: pending blocks move into
     // `promptContextBlocks` on first injection; every streaming projection
-    // afterwards re-injects any block the working array lost — which is
+    // afterwards re-injects any block the working array lost 鈥?which is
     // exactly what a mid-run compaction re-projection does to transient
     // runtime context. Dedup by content hash makes this idempotent.
     // Non-streaming callers (side questions) pass no flag and skip this.
@@ -4130,14 +4117,14 @@ export class duyaAgent {
       : (systemPromptContent || systemFromProjection);
 
     logger.info(
-      `[Agent] projectModelMessages: ${context.messages.length} agent messages → ${messages.length} model messages, ${systemSegments.length} system segments`,
+      `[Agent] projectModelMessages: ${context.messages.length} agent messages 鈫?${messages.length} model messages, ${systemSegments.length} system segments`,
     );
 
     return { systemPromptContent: merged, messages };
   }
 
   /**
-   * Plan 486 §2.3: apply the provider thread boundary to a request message
+   * Plan 486 搂2.3: apply the provider thread boundary to a request message
    * array in place, at the per-request LLM call site:
    *  1. Prefix user messages that carry a live `replyToId` (this turn's quote
    *     reply or fork) with `[In reply to <id>: "<quote>"]`, rendered from the
@@ -4176,16 +4163,18 @@ export class duyaAgent {
 
     for (let i = 0; i < messages.length; i += 1) {
       const source = (projected as readonly AgentMessage[])[i] ?? messages[i];
-      const cleaned = withoutThreadMetadata(source);
-      if (cleaned !== messages[i]) {
-        messages[i] = cleaned as Message;
+      if (!source || typeof source !== 'object') continue;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { threadMeta: _, ...cleaned } = source as unknown as Record<string, unknown>;
+      const cleanedMsg = cleaned as unknown as Message;
+      if (cleanedMsg !== messages[i]) {
+        messages[i] = cleanedMsg;
       }
     }
   }
 
   /**
-   * 获取当前上下文统计信息
-   */
+   * 鑾峰彇褰撳墠涓婁笅鏂囩粺璁′俊鎭?   */
   getContextStats() {
     return this.compactionManager.getStats(this.messages);
   }
@@ -4193,7 +4182,7 @@ export class duyaAgent {
   /**
    * Estimated tokens of the system prompt + tool definitions of the last
    * LLM request (excluding message history). 0 until the first streamChat
-   * call builds a prompt — callers should fall back to their own system
+   * call builds a prompt 鈥?callers should fall back to their own system
    * prompt estimate when 0.
    */
   getSystemContextTokensEstimate(): number {
@@ -4201,9 +4190,9 @@ export class duyaAgent {
   }
 
   /**
-   * Rough character→token estimate for the system prompt + tool-definition
+   * Rough character鈫抰oken estimate for the system prompt + tool-definition
    * surface, using the same CJK-aware heuristic as tokenBudget
-   * (CJK ≈ 2.5 chars/token, ASCII ≈ 4 chars/token). Only the provider
+   * (CJK 鈮?2.5 chars/token, ASCII 鈮?4 chars/token). Only the provider
    * contract fields (name/description/input_schema) are counted.
    */
   private _estimateSystemAndToolsTokens(systemPrompt: string, tools: Tool[]): number {
@@ -4221,8 +4210,8 @@ export class duyaAgent {
   }
 
   /**
-   * 使用新的 CompactionManager 压缩消息历史
-   * 单一 grok 式策略: session_memory
+   * 浣跨敤鏂扮殑 CompactionManager 鍘嬬缉娑堟伅鍘嗗彶
+   * 鍗曚竴 grok 寮忕瓥鐣? session_memory
    */
   async compact(options?: CompactOptions): Promise<{
     strategy: string;
@@ -4231,7 +4220,7 @@ export class duyaAgent {
     removedCount: number;
   }> {
     if (this.messages.length === 0) {
-      // Plan 422: align with grok-build — an empty timeline is a hard error,
+      // Plan 422: align with grok-build 鈥?an empty timeline is a hard error,
       // not a silent no-op. The pre-flight check inside CompactionManager.compact
       // enforces the same invariant; we let it throw here so the worker emits a
       // `compact:error` SSE event instead of `compact:done { strategy: 'none' }`,
@@ -4241,7 +4230,7 @@ export class duyaAgent {
 
     const compactEntry = await this.compactionController.compactProactive({
       ...(options ?? {}),
-      // Public entry point serves /compact and worker commands — always manual
+      // Public entry point serves /compact and worker commands 鈥?always manual
       // unless the caller says otherwise, so loop guards never block a user.
       trigger: options?.trigger ?? 'manual',
     });
@@ -4278,9 +4267,9 @@ export class duyaAgent {
  *
  * Shape mirrors the other Message rows the renderer knows how to read
  * back (`MessageItem.messageToActionItems`):
- *   - `role: 'system'` — hooks aren't user/assistant/tool; `system` is
+ *   - `role: 'system'` 鈥?hooks aren't user/assistant/tool; `system` is
  *     the closest neutral slot that already renders.
- *   - `msg_type: 'hook_invocation'` — discriminator the renderer uses.
+ *   - `msg_type: 'hook_invocation'` 鈥?discriminator the renderer uses.
  *   - `tool_name` carries the hook event name (PreToolUse, PostToolUse,
  *     UserPromptSubmit, ...) so existing tool-name consumers stay
  *     unaware and the hook-specific fields live in `tool_input`.

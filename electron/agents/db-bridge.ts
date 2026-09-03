@@ -21,6 +21,8 @@ import { resolvePermissionProfile } from '../db/permission-resolver';
 import type { PermissionProfile } from '../lib/permission-profile';
 import { getCoreStores } from '../db/core-connection';
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
+import { getSessionManager } from './session-manager.js';
+import { getChannelBackgroundWakes } from '../wake/channels';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
 import type { NewEvent, AttachmentWithData } from '../db/core';
 import {
@@ -447,10 +449,60 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
         const before = messageLog.getCount(sessionId);
         messageLog.appendBatch(events);
         const after = messageLog.getCount(sessionId);
+
+        // Broadcast to all renderer windows (Plan 483 P2)
+        // Each renderer checks if the sessionId matches its active session and refreshes
+        const broadcastMessages = events.map((e) => storedEventToIpcMessage(e));
+        getSessionManager().broadcastSessionEvent('message:new', {
+          sessionId,
+          messages: broadcastMessages,
+        });
+
         return { success: true, count: after - before };
       } catch (err) {
         getLogger().error('message:append failed', err instanceof Error ? err : new Error(String(err)), { sessionId }, LogComponent.AgentCommunicator);
         return { success: false, count: 0, reason: 'transaction_failed' };
+      }
+    }
+
+    // Plan 488 P2.1: channel:deliver routes a SendMessage with input.channel
+    // through ChannelBackgroundWakes.deliverToChannel (handles failure wake).
+    case 'channel:deliver': {
+      const sessionId = p.sessionId as string;
+      const channelAddress = p.channelAddress as string;
+      const outbound = p.outbound as {
+        content: string;
+        url?: string;
+        caption?: string;
+      };
+
+      if (!sessionId || !channelAddress || !outbound) {
+        return { success: false, reason: 'invalid_channel_deliver_payload' };
+      }
+
+      try {
+        const kind: 'text' | 'attachment' = outbound.url ? 'attachment' : 'text';
+        await getChannelBackgroundWakes().deliverToChannel(
+          sessionId,
+          sessionId,
+          channelAddress,
+          {
+            kind,
+            content: outbound.content,
+            url: outbound.url,
+            caption: outbound.caption,
+          },
+        );
+        return { success: true };
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        getLogger().error(
+          'channel:deliver failed',
+          err instanceof Error ? err : new Error(reason),
+          { sessionId, channelAddress },
+          LogComponent.AgentCommunicator,
+        );
+        return { success: false, reason };
       }
     }
 

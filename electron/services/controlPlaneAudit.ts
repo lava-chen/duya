@@ -67,6 +67,8 @@ export type AuditEventKind =
   | 'channel.test_send'
   // `duya channel send` — live push to an IM channel (Plan 200 R3).
   | 'channel.send'
+  // 488 P2.3: `duya channel disconnect`
+  | 'channel.disconnect'
   // `duya gateway` secret reload + generic rpc (Plan 200 P4).
   | 'gateway.reload_secrets'
   | 'gateway.rpc';

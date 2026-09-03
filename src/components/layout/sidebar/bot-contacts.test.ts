@@ -6,6 +6,7 @@ import {
   deriveBotContactHue,
   deriveBotIdFromName,
   deriveBotPlaceholderThreadId,
+  partitionBotContacts,
   resolveBotOpenThreadId,
   type BotSource,
 } from './bot-contacts';
@@ -121,6 +122,62 @@ describe('deriveBotIdFromName (grok-style create flow)', () => {
   it('never produces an id longer than the 48-char base + suffix', () => {
     const id = deriveBotIdFromName('a'.repeat(80), []);
     expect(id.length).toBeLessThanOrEqual(48);
+  });
+});
+
+describe('partitionBotContacts (plan 483 P2)', () => {
+  const contacts = buildBotContacts(
+    [
+      { id: 'alpha', name: 'Alpha', title: '', description: '' },
+      { id: 'beta', name: 'Beta', title: '', description: '' },
+      { id: 'gamma', name: 'Gamma', title: '', description: '' },
+    ],
+    [],
+  );
+
+  it('keeps everything unpinned with no pinned ids', () => {
+    const { pinned, unpinned, hidden } = partitionBotContacts(contacts, []);
+    expect(pinned).toHaveLength(0);
+    expect(unpinned.map((c) => c.agentId)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(hidden).toHaveLength(0);
+  });
+
+  it('orders the pinned rail by pinnedIds, rest stay unpinned', () => {
+    const { pinned, unpinned } = partitionBotContacts(contacts, ['gamma', 'alpha']);
+    expect(pinned.map((c) => c.agentId)).toEqual(['gamma', 'alpha']);
+    expect(pinned.every((c) => c.isPinned === true)).toBe(true);
+    expect(unpinned.map((c) => c.agentId)).toEqual(['beta']);
+    expect(unpinned.every((c) => c.isPinned === false)).toBe(true);
+  });
+
+  it('drops pinned ids that have no matching contact', () => {
+    const { pinned } = partitionBotContacts(contacts, ['missing', 'alpha']);
+    expect(pinned.map((c) => c.agentId)).toEqual(['alpha']);
+  });
+
+  it('separates hidden bots and stamps isHidden', () => {
+    const { pinned, unpinned, hidden } = partitionBotContacts(
+      contacts,
+      ['alpha'],
+      ['gamma'],
+    );
+    expect(hidden.map((c) => c.agentId)).toEqual(['gamma']);
+    expect(hidden.every((c) => c.isHidden === true)).toBe(true);
+    expect(pinned.map((c) => c.agentId)).toEqual(['alpha']);
+    expect(unpinned.map((c) => c.agentId)).toEqual(['beta']);
+    // A hidden bot never leaks into pinned even if its id is pinned.
+    const { pinned: pinned2, hidden: hidden2 } = partitionBotContacts(
+      contacts,
+      ['gamma'],
+      ['gamma'],
+    );
+    expect(pinned2).toHaveLength(0);
+    expect(hidden2.map((c) => c.agentId)).toEqual(['gamma']);
+  });
+
+  it('does not mutate the input contacts array', () => {
+    partitionBotContacts(contacts, ['alpha'], ['gamma']);
+    expect(contacts.every((c) => c.isPinned === undefined && c.isHidden === undefined)).toBe(true);
   });
 });
 

@@ -34,7 +34,7 @@ import {
   readGatewaySettingFromStore,
 } from '../config/gateway-setting-adapter';
 import { getConfigStore } from '../config/store-instance';
-import { listConfigAgents, upsertConfigAgent, deleteConfigAgent } from '../config/agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, updateBotProfileIdentity } from '../config/agents';
 import {
   getWeixinAccounts,
   upsertWeixinAccount,
@@ -58,6 +58,7 @@ import { uploadAsset as conductorUploadAsset, uploadProjectAsset as conductorUpl
 import { captureWebsiteSnapshot } from '../conductor/link-snapshot-service';
 import { prepareCanvasDocument, syncCanvasDocument } from '../conductor/document-service';
 import { getCoreStores } from '../db/core-connection';
+import { storeConnectorCredential } from '../channels/agent-session-channels';
 import { restoreFilesForEvents } from '../services/file-snapshot-restore';
 import { resolvePermissionProfile } from '../db/permission-resolver';
 import { CapabilityDao } from '../services/providers/capability-dao';
@@ -1097,6 +1098,25 @@ export function registerDbHandlers(): void {
     `).run(channelType, offsetKey, offsetValue, offsetType, now);
   });
 
+  // ==================== Secret Store Handlers (Plan 488 P3.1) ====================
+  // Handles secret-request from bot: UI collects the secret and stores it via this IPC.
+
+  ipcMain.handle('secret:store', async (_event, agentId: string, platform: string, field: string, value: string) => {
+    try {
+      storeConnectorCredential(agentId, platform, field, value);
+      getLogger().info('[secret:store] stored credential', {
+        agentId,
+        platform,
+        field,
+      }, LogComponent.AgentProcess);
+      return { ok: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      getLogger().error('[secret:store] failed', new Error(message), { agentId, platform, field }, LogComponent.AgentProcess);
+      return { ok: false, error: message };
+    }
+  });
+
   // ==================== Project Group Handlers ====================
 
   ipcMain.handle('db:project:getGroups', () => {
@@ -1320,6 +1340,9 @@ export function registerDbHandlers(): void {
     const store = getConfigStore();
     return store.getByPath('agents') ?? {};
   });
+  ipcMain.handle('config:agents:listBots', () => {
+    return listBots();
+  });
   ipcMain.handle('config:agents:create', (_event, id: string, input: unknown) => {
     return upsertConfigAgent(id, input as Parameters<typeof upsertConfigAgent>[1]);
   });
@@ -1329,6 +1352,11 @@ export function registerDbHandlers(): void {
   });
   ipcMain.handle('config:agents:delete', (_event, id: string) => {
     return deleteConfigAgent(id);
+  });
+  // Plan 483 P2: sidebar "Edit Bot" — writes the runtime identity
+  // (profile.json), never config.toml.
+  ipcMain.handle('config:agents:updateBotProfile', (_event, id: string, input: unknown) => {
+    return updateBotProfileIdentity(id, input as Parameters<typeof updateBotProfileIdentity>[1]);
   });
 
   ipcMain.handle('db:agentProfile:update', (_event, id: string, data: Record<string, unknown>) => {

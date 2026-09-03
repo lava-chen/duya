@@ -307,6 +307,39 @@ async function sendChannel(
   }
 }
 
+// 488 P2.3: channel connect/disconnect operations
+export interface ChannelDisconnectResultDTO {
+  ok: boolean;
+  platform: string;
+  error?: string;
+}
+
+async function disconnectChannel(
+  format: OutputFormat,
+  platform: string,
+): Promise<ExitCode> {
+  if (!platform) {
+    process.stderr.write('usage: duya channel disconnect --platform <platform>\n');
+    return 64;
+  }
+  try {
+    const client = await CliApiClient.connect();
+    const result = await client.post<ChannelDisconnectResultDTO>('/v1/channels/disconnect', {
+      platform,
+    });
+    if (format === 'json') {
+      process.stdout.write(renderJson(result) + '\n');
+    } else if (result.ok) {
+      process.stdout.write(`Disconnected ${result.platform}\n`);
+    } else {
+      process.stderr.write(`Disconnect failed: ${result.error ?? 'unknown error'}\n`);
+    }
+    return result.ok ? 0 : 1;
+  } catch (err) {
+    return reportError(err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public surface (consumed by descriptors.ts)
 // ---------------------------------------------------------------------------
@@ -345,5 +378,11 @@ export const runChannelCommand = {
     }
     if (!text) text = typeof ctx.options.text === 'string' ? ctx.options.text : '';
     return sendChannel(ctx.format, channelId, text, platform, chatId, filePath);
+  },
+  // 488 P2.3: channel disconnect
+  disconnect: (ctx: CliSubcommandContext): Promise<ExitCode> => {
+    const platform =
+      typeof ctx.options.platform === 'string' ? ctx.options.platform : undefined;
+    return disconnectChannel(ctx.format, platform ?? '');
   },
 };

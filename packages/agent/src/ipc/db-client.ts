@@ -208,7 +208,7 @@ export const messageDb = {
     sendDbRequest('session:loadMessages', { sessionId }),
 };
 
-// ==================== Turn Review Operations ====================
+
 
 export const turnReviewDb = {
   save: (data: {
@@ -436,6 +436,23 @@ export const channelDb = {
     offsetValue: string,
     offsetType = 'long_polling'
   ) => sendDbRequest('channel:setOffset', { channelType, offsetKey, offsetValue, offsetType }),
+
+  /**
+   * Plan 488 P2.1: deliver a SendMessage payload to an external channel via the
+   * registered ChannelTransport (Discord, Slack, etc.).
+   *
+   * Used by SendMessageTool when the bot invocation includes a "channel" address
+   * token (e.g. "slack:C12345"). The agent subprocess never imports the electron
+   * channel-delivery module directly — it goes through db-bridge IPC which calls
+   * ChannelBackgroundWakes.deliverToChannel (handles failure wake queue).
+   *
+   * Returns { success: true } on success or { success: false, reason } on failure.
+   */
+  deliver: (input: {
+    sessionId: string;
+    channelAddress: string;
+    outbound: { content: string; url?: string; caption?: string };
+  }) => sendDbRequest('channel:deliver', input) as Promise<{ success: boolean; reason?: string }>,
 };
 
 // ==================== Attachment Operations (parsed_document) ====================

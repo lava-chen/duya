@@ -2480,7 +2480,7 @@ export function deleteModelCapability(modelName: string): boolean {
 // Mailbox Types & CRUD (Plan 202 — AgentMailbox PR1)
 // =============================================================================
 
-export type MailboxKind = 'queued' | 'followup' | 'background_notification';
+export type MailboxKind = 'queued' | 'followup' | 'background_notification' | 'agent_dm';
 export type MailboxStatus = 'pending' | 'observed' | 'applied' | 'cancelled';
 export type MailboxApplyMode = 'promote_to_user_message' | 'runtime_instruction' | 'tool_guard'
   | 'permission_context' | 'interrupt_signal' | 'deferred_to_next_turn';
@@ -2544,6 +2544,7 @@ const KIND_PRIORITY: Record<MailboxKind, number> = {
   queued: 100,
   followup: 100,
   background_notification: 100,
+  agent_dm: 100,
 };
 
 // Plan 328 decision 9: CLI standalone mode abandons session persistence.

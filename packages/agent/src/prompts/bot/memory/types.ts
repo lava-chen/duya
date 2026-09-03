@@ -7,7 +7,7 @@
  * `memory_tier_index` table is only a query cache).
  */
 
-import type { MemoryTier, TierEntryKind } from '../../memory-state/tierConflicts.js'
+import type { MemoryTier, TierEntryKind } from '../../../memory-state/tierConflicts.js'
 
 /** One memory entry as read from the file manifest, ready to render. */
 export interface TierMemoryEntry {

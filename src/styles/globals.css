@@ -1772,6 +1772,241 @@ html[data-backdrop] .sidebar-panel-inner {
   margin: 0.25rem 0;
 }
 
+/* ── Bot contacts (plan 483) ────────────────────────────────────────────
+   Telegram-style rows in the sidebar Bots section. Mirrors the
+   `.thread-item` geometry (same radius, padding, hover/active surfaces)
+   but with a character avatar + two-line body + trailing activity. */
+.bot-contact-item {
+  box-sizing: border-box;
+  position: relative;
+  border: 0;
+  border-radius: 0.35rem;
+  text-align: left;
+  padding: 0.2rem 0.5rem;
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+.bot-contact-item:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.bot-contact-item.active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Hidden (restore) view: dimmed, clearly non-primary. */
+.bot-contact-item.hidden {
+  opacity: 0.55;
+}
+.bot-contact-item.hidden:hover {
+  opacity: 0.85;
+}
+
+.bot-contact-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.bot-contact-name {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: inherit;
+}
+
+.bot-contact-pin-indicator {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.bot-contact-desc {
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bot-contact-trailing {
+  position: relative;
+  flex-shrink: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  transition: opacity 0.15s ease;
+}
+
+.bot-contact-time {
+  font-size: 0.72rem;
+  color: var(--muted);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bot-contact-busy-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: bot-busy-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes bot-busy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Hover action buttons overlay the trailing area (same replace-not-overlap
+   trick as `.thread-item-actions-hover`). */
+.bot-contact-actions-hover {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.bot-contact-item:hover .bot-contact-actions-hover,
+.bot-contact-item:focus-within .bot-contact-actions-hover,
+.bot-contact-actions-hover.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bot-contact-item:hover .bot-contact-trailing,
+.bot-contact-item:focus-within .bot-contact-trailing,
+.bot-contact-item:has(.bot-contact-actions-hover.open) .bot-contact-trailing {
+  opacity: 0;
+}
+
+.bot-contact-pin-btn,
+.bot-contact-menu-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  padding: 0.15rem;
+}
+
+.bot-contact-pin-btn:hover,
+.bot-contact-menu-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Restore button on hidden rows (always visible, unlike hover actions). */
+.bot-contact-restore-btn {
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0.15rem;
+}
+
+.bot-contact-restore-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Pinned rail + hidden group labels inside the Bots section. */
+.bot-pinned-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  padding: 0.4rem 0.5rem 0.15rem;
+}
+
+.bot-pinned-group .bot-contact-item,
+.bot-hidden-group .bot-contact-item {
+  margin-top: 0;
+}
+
+/* Bot dropdown menu (mirrors `.thread-dropdown-menu`). */
+.bot-dropdown-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.25rem;
+}
+
+.bot-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0.3rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+.bot-dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.bot-dropdown-item.danger {
+  color: #ef4444;
+}
+
+.bot-dropdown-item.danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.bot-dropdown-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+
 .sub-agent-back-btn {
   display: inline-flex;
   align-items: center;
@@ -14510,6 +14745,32 @@ html.compact .page-frame-inner {
   color: var(--text);
 }
 .sidebar-section-view-all:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+
+/* "Create the first bot" CTA inside the empty Bots section (plan 483 P1.2).
+   Distinct from the plain "view all" row so the primary action stands out. */
+.sidebar-section-create {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.35rem 0.75rem;
+  margin: 0.15rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease;
+}
+.sidebar-section-create:hover {
+  background: var(--surface-hover);
+}
+.sidebar-section-create:focus-visible {
   outline: 2px solid var(--focus, var(--accent));
   outline-offset: 2px;
 }

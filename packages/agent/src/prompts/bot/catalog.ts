@@ -26,8 +26,8 @@
  *                        the file manifest via the bot context loader
  *   automations        — listCrons IPC exists (db-client.ts:850); per-agent
  *                        binding waits on 405/476 cron schema
- *   channels           — connector half exists (Apps section); channel-list
- *                        half waits on a main→agent snapshot (P2.5/476)
+ *   channels           — ✅ REAL (P2.4): channel-list from
+ *                        agents/<id>/channels/ via readAgentChannelSnapshots
  *   botRoster          — ✅ REAL (P2.3, static part): other [agents.<id>]
  *                        entries via readConfigAgents (loader.ts);
  *                        DM rules text waits on 477 tool names
@@ -42,6 +42,7 @@ import type { BotSectionDef, BotPromptContext } from './framework.js'
 import { renderBotIdentity } from './identity.js'
 import { renderBotRoster } from './roster.js'
 import { renderBotCommsRules } from './commsRules.js'
+import { renderBotChannels } from './channels.js'
 import {
   BOT_MEMORY_OWN_SECTION,
   BOT_MEMORY_USER_SECTION,
@@ -99,7 +100,7 @@ export const BOT_CHANNELS_SECTION: BotSectionDef = {
   name: 'botChannels',
   description: 'Connected message channels + connector manifests (P2.5/476).',
   budgetChars: 1600,
-  compute: pending,
+  compute: renderBotChannels,
 }
 
 export const BOT_ROSTER_SECTION: BotSectionDef = {

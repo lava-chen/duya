@@ -75,6 +75,17 @@ export function readThreadMeta(message: unknown): ThreadMeta | undefined {
   return asThreadMeta(metadata[THREAD_METADATA_KEY]);
 }
 
+/**
+ * Returns a copy of the object without thread metadata (threadMeta field).
+ * Used when compacting messages to strip thread context.
+ */
+export function withoutThreadMetadata<T extends Record<string, unknown>>(obj: T): T {
+  if (!obj) return obj;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { [THREAD_METADATA_KEY]: _, ...rest } = obj;
+  return rest as T;
+}
+
 /** True when the message belongs to the branched layer. */
 export function isBranchedMessage(message: unknown): boolean {
   return readThreadMeta(message)?.branched === true;

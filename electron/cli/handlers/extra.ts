@@ -27,6 +27,7 @@ import { ipcMessageToNewEvent } from '../../ipc/core-db-adapters';
 import { syncBundledSkills } from '../../../packages/agent/src/skills/skillsSync';
 import { appendAuditEvent, type AuditEvent } from '../../services/controlPlaneAudit';
 import { requestChannelSend } from '../../gateway/message-bus';
+import { disconnectChannel } from '../../channels/agent-session-channels';
 import { listChannelDirectoryWithBindings } from '../../gateway/channel-directory';
 
 // ---------------------------------------------------------------------------
@@ -420,6 +421,62 @@ export async function handleChannelSend(
       ok: false,
       platform: target.platform,
       platformChatId: target.platformChatId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// 488 P2.3: channel disconnect — removes bot channel config and credentials
+export async function handleChannelDisconnect(
+  req: IncomingMessage,
+  res: ServerResponse,
+  correlationId?: string,
+): Promise<void> {
+  let body: Record<string, unknown>;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    sendJson(res, 400, { error: { code: 'invalid_request', message: err instanceof Error ? err.message : String(err) } });
+    return;
+  }
+  const platform = asString(body.platform);
+  if (!platform) {
+    sendJson(res, 400, { error: { code: 'missing_arg', message: 'platform required' } });
+    return;
+  }
+
+  // TODO 488: support explicit --agent-id flag in CLI for multi-agent scenarios.
+  // For now, derive agentId from the primary non-deleted session's agentProfileId.
+  // This is a best-effort for single-agent setups.
+  let agentId: string | null = null;
+  try {
+    const { sessions } = getCoreStores();
+    const allSessions = sessions.list();
+    const primarySession = allSessions.find(s => s.status !== 'deleted' && s.agentProfileId);
+    agentId = primarySession?.agentProfileId ?? null;
+  } catch {
+    // ignore lookup errors — fall through to null
+  }
+
+  if (!agentId) {
+    sendJson(res, 400, { error: { code: 'no_agent', message: 'No active agent found. Pass --agent-id explicitly (future).' } });
+    return;
+  }
+
+  try {
+    disconnectChannel(agentId, platform);
+    await recordAudit(
+      req,
+      correlationId,
+      'channel.disconnect',
+      platform,
+      `agent=${agentId}`,
+    );
+    sendJson(res, 200, { ok: true, platform });
+  } catch (err) {
+    sendJson(res, 502, {
+      ok: false,
+      platform,
       error: err instanceof Error ? err.message : String(err),
     });
   }

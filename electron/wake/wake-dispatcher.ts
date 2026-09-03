@@ -46,6 +46,7 @@ import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { createTurnEpochState } from '../../packages/agent/src/wake/epoch'
 import { getCoreStores } from '../db/core-connection'
 import { runWakePromptInExistingSession } from './wake-run'
+import { reviveForInbound } from './channels'
 import { getLogger, LogComponent } from '../logging/logger'
 
 export interface WakeDispatcherDeps {
@@ -297,6 +298,21 @@ async function drain(sessionId: string): Promise<void> {
           itemEpoch: epoch,
           currentEpoch: turnEpochs.current(sessionId),
         }, LogComponent.Automation)
+        continue
+      }
+
+      // 488 Plan B: connector.inbound items are handled by the channel system
+      // via reviveForInbound which builds the rich [inbound] prompt from stored
+      // envelopes. Fire-and-forget — reviveForInbound acquires its own lock via
+      // runWakePromptInExistingSession (no deadlock risk). Errors are logged
+      // inside reviveForInbound and do not wedge the drain loop.
+      if (dequeued.item.source === 'connector.inbound') {
+        void reviveForInbound(sessionId).catch((err) => {
+          getLogger().warn('WakeDispatcher: reviveForInbound threw', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          }, LogComponent.AgentProcess)
+        })
         continue
       }
 

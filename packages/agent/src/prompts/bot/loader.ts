@@ -10,6 +10,7 @@
  */
 
 import * as path from 'path'
+import { readdir, readFile, stat } from 'fs/promises'
 import { readConfigAgents } from '../../agent-profile/config-agents.js'
 import { readBotProfileIdentity } from '../../agent-profile/bot-profile-reader.js'
 import type { CustomAgentPromptConfig } from '../../agent-profile/config-agents.js'
@@ -23,6 +24,7 @@ import {
   readUserTierEntries,
 } from './memory/tierReader.js'
 import type { BotMemoryContext } from './memory/types.js'
+import type { ChannelSnapshot } from '../../channels/types.js'
 
 /**
  * Is this profile a config-driven bot? A "bot" session is one running a
@@ -150,6 +152,9 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
     new Map([[agentId, botName], ...roster.map((r) => [r.id, r.name] as const)]),
   )
   if (memory) ctx.memory = memory
+  // Plan 488 P2.4: read channel snapshots from agents/<agentId>/channels/
+  const channels = await readAgentChannelSnapshots(agentId)
+  if (channels.length > 0) ctx.channels = channels
   return ctx
 }
 
@@ -197,4 +202,65 @@ function duyaRootForMemory(): string | null {
   const override = process.env.DUYA_MEMORY_ROOT
   if (override) return path.dirname(override)
   return getDuyaRoot()
+}
+/**
+ * Read channel snapshots for an agent from the file store (Plan 488 P2.4).
+ *
+ * Path: `~/.duya/agents/<agentId>/channels/<platform>/connection.json`
+ *
+ * Note: this reads connection.json but does NOT check for credentials
+ * (connector-secrets) - that check requires the electron main process.
+ * All returned channels have status 'configured' (connection exists).
+ */
+async function readAgentChannelSnapshots(agentId: string): Promise<ChannelSnapshot[]> {
+  const duyaRoot = getDuyaRoot()
+  if (!duyaRoot) return []
+
+  const channelsDir = path.join(duyaRoot, 'agents', agentId, 'channels')
+
+  let platforms: string[]
+  try {
+    platforms = await readdir(channelsDir)
+  } catch {
+    return []
+  }
+
+  const snapshots: ChannelSnapshot[] = []
+
+  for (const platform of platforms) {
+    // Skip hidden files/dirs and non-directories
+    if (platform.startsWith('.')) continue
+
+    const platformDir = path.join(channelsDir, platform)
+    try {
+      const statResult = await stat(platformDir)
+      if (!statResult.isDirectory()) continue
+    } catch {
+      continue
+    }
+
+    // Read connection.json for this platform
+    const configPath = path.join(platformDir, 'connection.json')
+    try {
+      const raw = await readFile(configPath, 'utf8')
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      if (
+        parsed !== null &&
+        typeof parsed === 'object' &&
+        'label' in parsed &&
+        typeof (parsed as { label?: unknown }).label === 'string'
+      ) {
+        snapshots.push({
+          platform,
+          chat: '', // Chat ID resolved at delivery time
+          label: (parsed as { label: string }).label,
+          status: 'configured' as const,
+        })
+      }
+    } catch {
+      // Skip malformed or missing connection.json
+    }
+  }
+
+  return snapshots
 }

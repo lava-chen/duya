@@ -26,6 +26,8 @@ import { getProviderStore } from '../services/providers/provider-store-electron'
 import { getConfigStore } from '../config/store-instance';
 import { toLegacyApiProvider } from '../../src/lib/providers/legacy';
 import type { ChannelAdapterEntry } from '../config/schema';
+import { wakeForInbound } from '../wake/channels';
+import type { ChannelAddress, ChannelInboundEnvelope } from '../../packages/agent/src/channels/types';
 
 const GATEWAY_SESSION_KEY = '__gateway_session_states__';
 
@@ -493,7 +495,14 @@ export function handleGatewayMessage(
     }
 
     case 'gateway:inbound': {
-      // Forward inbound message from Gateway to Agent Server and receive SSE stream
+      // 488 Plan B: enqueue the inbound wake and return immediately.
+      // The dispatcher drain handles it asynchronously via reviveForInbound,
+      // which calls runWakePromptInExistingSession → POST to agent server →
+      // SSE stream → gateway:outbound forwarding (unchanged).
+      //
+      // The SSE forwarding that was previously inline here (HTTP POST + SSE
+      // handlers) is now handled by reviveForInbound. This avoids blocking the
+      // gateway:inbound handler while waiting for the SSE stream.
       const inboundMsg = msg as {
         sessionId: string;
         prompt: string;
@@ -505,7 +514,7 @@ export function handleGatewayMessage(
 
       const port = getAgentServerPort();
       if (!port) {
-        getLogger().error('Agent Server not running, cannot forward gateway:inbound', undefined, { sessionId: inboundMsg.sessionId }, LogComponent.Gateway);
+        getLogger().error('Agent Server not running, cannot enqueue gateway:inbound', undefined, { sessionId: inboundMsg.sessionId }, LogComponent.Gateway);
         break;
       }
 
@@ -513,57 +522,19 @@ export function handleGatewayMessage(
       const platform = inboundMsg.platform;
       const platformChatId = inboundMsg.platformChatId;
 
-      // Generate a meaningful title from the first inbound message.
-      // This is fire-and-forget and must not block the SSE forwarding below.
+      // Generate a meaningful title from the first inbound message (fire-and-forget).
       maybeUpdateGatewaySessionTitle(sessionId, inboundMsg.prompt, platform);
 
       const providerConfig = getCachedProviderConfig();
       if (providerConfig) {
-        console.log('[Main] gateway:inbound: using cached provider config, provider:', providerConfig.provider, 'model:', providerConfig.model || '(empty)');
+        console.log('[Main] gateway:inbound: enqueuing, provider:', providerConfig.provider, 'model:', providerConfig.model || '(empty)');
       } else {
         console.warn('[Main] gateway:inbound: no active provider configured');
       }
 
-      // Accumulate text from chat:text events
-      let accumulatedText = '';
-      let sseBuffer = '';
-      // Tracks whether the agent stream reached a terminal event. When the SSE
-      // connection dies without one (agent-server crash/restart), the gateway
-      // subprocess's StreamHandler would otherwise wait forever for chat:done
-      // and never finalize — the user gets no reply and no error. Emit a
-      // chat:error on abnormal teardown so the channel at least learns the
-      // turn failed instead of hanging silently.
-      let terminalReceived = false;
-      const markTerminal = () => { terminalReceived = true; };
-
-      // Fallback for abnormal stream teardown: if the SSE connection ends
-      // without a done/error frame (agent-server crash, restart, or the HTTP
-      // request failing outright), the gateway subprocess would hang waiting
-      // for chat:done. Notify it with a chat:error so the channel user learns
-      // the turn failed. Guarded so the error is emitted once.
-      let fallbackSent = false;
-      const sendFallbackError = (reason: string) => {
-        if (fallbackSent || terminalReceived) return;
-        fallbackSent = true;
-        getLogger().error('[gateway:inbound] SSE stream ended without terminal event', new Error(reason), { sessionId }, LogComponent.Gateway);
-        sendToGatewayProcess({
-          type: 'gateway:outbound',
-          sessionId,
-          platform,
-          platformChatId,
-          event: {
-            type: 'chat:error',
-            message: `Agent stream disconnected before completion (${reason})`,
-          },
-        });
-      };
-
+      // Update gateway session metadata (workspace + permission profile).
       const workingDirectory = prepareGatewayWorkspace(getOrBuildInitConfig());
       try {
-        // Repair sessions created before the gateway workspace contract was
-        // introduced. More importantly, keep UI metadata aligned with the
-        // top-level cwd passed to the worker below and restore the fixed
-        // channel permission profile for legacy rows.
         updateGatewaySessionMeta(sessionId, {
           working_directory: workingDirectory,
           permission_profile: GATEWAY_PERMISSION_PROFILE,
@@ -576,157 +547,69 @@ export function handleGatewayMessage(
         );
       }
 
-      const body = JSON.stringify(buildGatewayInboundChatRequest({
-        inbound: inboundMsg,
-        providerConfig,
-        workingDirectory,
-      }));
+      // 488 Plan B: enqueue the connector.inbound wake via wakeForInbound.
+      // wakeForInbound stores the envelope in inboundEnvelopeStore, calls
+      // enqueueInboundWake, and calls notifySessionIdle to kick the dispatcher.
+      const address: ChannelAddress = {
+        platform,
+        chat: platformChatId,
+      };
+      const envelope: ChannelInboundEnvelope = {
+        address,
+        sender: 'unknown', // gateway manager doesn't expose sender identity
+        text: inboundMsg.prompt,
+        reaction: null,
+      };
+      wakeForInbound(sessionId, envelope);
 
-      const req = require('http').request(
-        {
-          method: 'POST',
-          hostname: '127.0.0.1',
-          port,
-          path: `/sessions/${sessionId}/chat`,
-          headers: {
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(body),
-            'Accept': 'text/event-stream',
-          },
+      getLogger().debug('[gateway:inbound] enqueued via wakeForInbound', {
+        sessionId,
+        platform,
+        platformChatId,
+        promptLength: inboundMsg.prompt.length,
+      }, LogComponent.Gateway);
+      break;
+    }
+
+    // 488 P3.2: reaction inbound — when a user reacts to a bot message in a channel
+    case 'gateway:reaction': {
+      const reactionMsg = msg as {
+        sessionId: string;
+        platform: string;
+        platformChatId: string;
+        platformMsgId: string;
+        emoji: string;
+        userId: string;
+        removed?: boolean;
+      };
+
+      const logger = getLogger();
+      logger.info('[gateway:reaction] enqueuing reaction wake', {
+        sessionId: reactionMsg.sessionId,
+        platform: reactionMsg.platform,
+        platformChatId: reactionMsg.platformChatId,
+        platformMsgId: reactionMsg.platformMsgId,
+        emoji: reactionMsg.emoji,
+        userId: reactionMsg.userId,
+        removed: reactionMsg.removed ?? false,
+      }, LogComponent.Gateway);
+
+      const address: ChannelAddress = {
+        platform: reactionMsg.platform as ChannelAddress['platform'],
+        chat: reactionMsg.platformChatId,
+      };
+
+      const envelope: ChannelInboundEnvelope = {
+        address,
+        sender: reactionMsg.userId,
+        text: '',
+        reaction: {
+          emoji: reactionMsg.emoji,
+          messageQuote: reactionMsg.platformMsgId,
         },
-        (res: http.IncomingMessage) => {
-          res.on('data', (chunk: Buffer) => {
-            sseBuffer += chunk.toString();
-            const lines = sseBuffer.split('\n');
-            sseBuffer = lines.pop() || '';
+      };
 
-            for (const line of lines) {
-              if (!line.startsWith('data: ')) continue;
-              const data = line.slice(6);
-              try {
-                const event = JSON.parse(data);
-
-                // Handle different event types
-                if (event.type === 'text') {
-                  const content = event.data?.content || '';
-                  accumulatedText += content;
-                  // Forward text event to Gateway immediately
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: { type: 'chat:text', content },
-                  });
-                } else if (event.type === 'thinking') {
-                  const content = event.data?.content || '';
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: { type: 'chat:thinking', content },
-                  });
-                } else if (event.type === 'done') {
-                  markTerminal();
-                  getLogger().debug('[gateway:inbound] done event received', {
-                    sessionId,
-                    accumulatedLength: accumulatedText.length,
-                  }, LogComponent.Gateway);
-
-                  // Send final content with accumulated text
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: {
-                      type: 'chat:done',
-                      finalContent: accumulatedText,
-                    },
-                  });
-                } else if (event.type === 'error') {
-                  markTerminal();
-                  const message = event.data?.message || 'Agent error';
-                  getLogger().error('[gateway:inbound] Agent error', new Error(message), { sessionId }, LogComponent.Gateway);
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: { type: 'chat:error', message },
-                  });
-                } else if (event.type === 'turn_start') {
-                  const data = (event.data ?? {}) as { turnCount?: number };
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: {
-                      type: 'chat:status',
-                      status: `Turn ${data.turnCount ?? ''}`,
-                    },
-                  });
-                } else if (event.type === 'tool_use') {
-                  const data = (event.data ?? {}) as { id?: string; name?: string; input?: unknown };
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: {
-                      type: 'chat:tool_use',
-                      toolUseId: data.id,
-                      toolName: data.name,
-                      toolInput: data.input,
-                    },
-                  });
-                } else if (event.type === 'tool_result') {
-                  const data = (event.data ?? {}) as { id?: string; result?: string; duration_ms?: number };
-                  sendToGatewayProcess({
-                    type: 'gateway:outbound',
-                    sessionId,
-                    platform,
-                    platformChatId,
-                    event: {
-                      type: 'chat:tool_result',
-                      toolUseId: data.id,
-                      toolResult: data.result,
-                      toolDurationMs: data.duration_ms,
-                    },
-                  });
-                }
-              } catch (e) {
-                // Ignore parse errors for partial SSE data
-              }
-            }
-          });
-
-          // Fallback for abnormal stream teardown (see sendFallbackError above).
-          res.on('end', () => {
-            getLogger().debug('[gateway:inbound] SSE stream ended', { sessionId }, LogComponent.Gateway);
-            if (!terminalReceived) {
-              sendFallbackError('connection ended without terminal event');
-            }
-          });
-          res.on('close', () => {
-            if (!terminalReceived) {
-              sendFallbackError('connection closed before completion');
-            }
-          });
-        }
-      );
-
-      req.on('error', (err: Error) => {
-        getLogger().error('Failed to forward gateway:inbound to Agent Server', err, { sessionId }, LogComponent.Gateway);
-        sendFallbackError(err.message);
-      });
-
-      req.write(body);
-      req.end();
-
-      getLogger().debug('Forwarded gateway:inbound to Agent Server', { sessionId, promptLength: inboundMsg.prompt.length }, LogComponent.Gateway);
+      wakeForInbound(reactionMsg.sessionId, envelope);
       break;
     }
 

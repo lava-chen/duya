@@ -1,3 +1,6 @@
+// Keep the named-import form so esbuild treats `app` the same as every other
+// module that pulls from `electron`. main.ts handles the module-load ordering
+// issue (see the comment near `acquireSingleInstanceLock` in main.ts).
 import { app } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
