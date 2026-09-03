@@ -16,7 +16,14 @@ export type {
   BotPromptContext,
   BotSectionDef,
   BotRosterEntry,
+  BotSnapshotKey,
+  BotRenderOptions,
 } from './framework.js'
+export {
+  computeBotContentHash,
+  botSectionCacheKey,
+  countTimelineCompactions,
+} from './epoch.js'
 export {
   BOT_SECTION_CATALOG,
   registerBotSectionCatalog,
