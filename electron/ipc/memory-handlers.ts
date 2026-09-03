@@ -12,7 +12,7 @@ import { ipcMain } from 'electron';
 import type { MemoryEntry } from '../src/types';
 import { getLogger, LogComponent } from '../logging/logger';
 import { getDb } from '../memory-state/db';
-import { parseCanonicalFile } from '../../packages/agent/src/memory-state/memory_entries_rebuild';
+import { parseCanonicalFile } from '../../packages/agent/src/memory-state/canonical_file';
 import {
   listSystemLog,
   type ListSystemLogOpts,

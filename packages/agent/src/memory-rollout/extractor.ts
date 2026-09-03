@@ -34,7 +34,7 @@ import { STAGE1_USER_PROMPT_TEMPLATE, STAGE1_SYSTEM_PROMPT } from './prompt.js';
 import { loadPolicy, assembleStage1Prompt } from './stage1_prompt_loader.js';
 import { writeRolloutProjection, redactCredentials } from './writer.js';
 import { messageDb } from '../ipc/db-client.js';
-import { parseCanonicalFile } from '../memory-state/memory_entries_rebuild.js';
+import { parseCanonicalFile } from '../memory-state/canonical_file.js';
 import { writeSystemLog } from '../memory-state/system_log.js';
 import {
   TASK_OUTCOMES,
