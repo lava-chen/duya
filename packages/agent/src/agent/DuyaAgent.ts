@@ -1408,6 +1408,8 @@ export class duyaAgent {
           authStyle: this.authStyle,
           provider: this.provider,
           sessionId: this.sessionId, // Pass sessionId for task persistence
+          // Plan 481: bot identity for identity-bound tools (update_state).
+          agentProfileId: options?.agentProfileId ?? null,
           workingDirectory: this.workingDirectory, // Pass working directory for tool execution
           language: this.language, // Propagate language preference to sub-agents
           agentDefinitions: {
