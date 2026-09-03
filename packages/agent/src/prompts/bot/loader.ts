@@ -9,11 +9,20 @@
  * as `readConfigAgents()`).
  */
 
+import * as path from 'path'
 import { readConfigAgents } from '../../agent-profile/config-agents.js'
 import { readBotProfileIdentity } from '../../agent-profile/bot-profile-reader.js'
 import type { CustomAgentPromptConfig } from '../../agent-profile/config-agents.js'
 import type { AgentProfile } from '../../agent-profile/types.js'
+import { getDuyaRoot } from '../../memory-state/memory_paths.js'
 import type { BotPromptConfig, BotPromptContext, BotRosterEntry } from './framework.js'
+import {
+  readJoinedProjects,
+  readOwnTierEntries,
+  readProjectTierEntries,
+  readUserTierEntries,
+} from './memory/tierReader.js'
+import type { BotMemoryContext } from './memory/types.js'
 
 /**
  * Is this profile a config-driven bot? A "bot" session is one running a
@@ -132,5 +141,60 @@ export async function loadBotPromptContext(agentId?: string): Promise<BotPromptC
   if (roster.length > 0) {
     ctx.agentDirectory = roster
   }
+
+  // Plan 479 P2.1: tiered memory from the file manifest. The duya root is
+  // the memory root's parent; DUYA_MEMORY_ROOT overrides only the memory
+  // tree, so derive the root from the memory root to stay override-safe.
+  const memory = loadBotMemoryContext(
+    agentId,
+    new Map([[agentId, botName], ...roster.map((r) => [r.id, r.name] as const)]),
+  )
+  if (memory) ctx.memory = memory
   return ctx
+}
+
+/**
+ * Read the three memory tiers from the file manifest and resolve
+ * `[via <name>]` attribution through the roster. Returns null when all
+ * tiers are empty — sections then omit themselves.
+ */
+export function loadBotMemoryContext(
+  agentId: string,
+  writerNames: Map<string, string>,
+): BotMemoryContext | null {
+  const duyaRoot = duyaRootForMemory()
+  if (!duyaRoot) return null
+
+  const own = readOwnTierEntries(duyaRoot, agentId)
+  const user = readUserTierEntries(duyaRoot)
+  const joinedProjects = readJoinedProjects(duyaRoot, agentId)
+  const project = readProjectTierEntries(duyaRoot, joinedProjects)
+
+  const withNames = (entries: BotMemoryContext['own']): BotMemoryContext['own'] =>
+    entries.map((e) => ({
+      ...e,
+      writerName: e.writerId ? writerNames.get(e.writerId) ?? e.writerId : undefined,
+    }))
+
+  const memory: BotMemoryContext = {
+    own: withNames(own),
+    user: withNames(user),
+    project: withNames(project),
+    joinedProjects,
+  }
+  if (memory.own.length === 0 && memory.user.length === 0 && memory.project.length === 0) {
+    return null
+  }
+  return memory
+}
+
+/**
+ * Resolve the duya root for memory reads. `DUYA_MEMORY_ROOT` (test/alt-home
+ * override) points at the memory tree, so the duya root is its parent;
+ * otherwise the standard `~/.duya`.
+ */
+function duyaRootForMemory(): string | null {
+  const override = process.env.DUYA_MEMORY_ROOT
+  if (override) return path.dirname(override)
+  return getDuyaRoot()
 }

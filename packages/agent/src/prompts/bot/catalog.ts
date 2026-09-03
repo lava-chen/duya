@@ -21,8 +21,9 @@
  *   spotlight          — waits on 476 lane/wake semantics
  *   userIdentity       — timezone already present via environment section; user
  *                        full name waits on init-payload field (P2.0)
- *   memory             — single-tier summary injection exists in legacy
- *                        dynamic sections; tiered/frozen waits on 479
+ *   memory             — ✅ REAL (479 P2.1): three tier sections
+ *                        (memoryOwn/memoryUser/memoryProject) render from
+ *                        the file manifest via the bot context loader
  *   automations        — listCrons IPC exists (db-client.ts:850); per-agent
  *                        binding waits on 405/476 cron schema
  *   channels           — connector half exists (Apps section); channel-list
@@ -41,6 +42,11 @@ import type { BotSectionDef, BotPromptContext } from './framework.js'
 import { renderBotIdentity } from './identity.js'
 import { renderBotRoster } from './roster.js'
 import { renderBotCommsRules } from './commsRules.js'
+import {
+  BOT_MEMORY_OWN_SECTION,
+  BOT_MEMORY_USER_SECTION,
+  BOT_MEMORY_PROJECT_SECTION,
+} from './memory/sections.js'
 
 /**
  * Placeholder compute: always null (omit). Swapped for a real renderer by
@@ -78,12 +84,9 @@ export const BOT_USER_IDENTITY_SECTION: BotSectionDef = {
   compute: pending,
 }
 
-export const BOT_MEMORY_SECTION: BotSectionDef = {
-  name: 'botMemory',
-  description: 'Tiered agent/user/project memory recall (479).',
-  budgetChars: 4000,
-  compute: pending,
-}
+export const BOT_MEMORY_OWN_DEF = BOT_MEMORY_OWN_SECTION
+export const BOT_MEMORY_USER_DEF = BOT_MEMORY_USER_SECTION
+export const BOT_MEMORY_PROJECT_DEF = BOT_MEMORY_PROJECT_SECTION
 
 export const BOT_AUTOMATIONS_SECTION: BotSectionDef = {
   name: 'botAutomations',
@@ -126,7 +129,9 @@ export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_COMMS_RULES_SECTION,
   BOT_SPOTLIGHT_SECTION,
   BOT_USER_IDENTITY_SECTION,
-  BOT_MEMORY_SECTION,
+  BOT_MEMORY_OWN_SECTION,
+  BOT_MEMORY_USER_SECTION,
+  BOT_MEMORY_PROJECT_SECTION,
   BOT_AUTOMATIONS_SECTION,
   BOT_CHANNELS_SECTION,
   BOT_ROSTER_SECTION,
