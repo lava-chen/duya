@@ -23,6 +23,7 @@ import type { Message } from '../types.js';
 import type { MessageContent } from '../types.js';
 import type { EnhancedCompactionResult } from '../compact/CompactionManager.js';
 import { estimateMessagesTokens } from '../compact/tokenBudget.js';
+import { logger } from '../utils/logger.js';
 import {
   findSafeCompactionBoundary,
   MessageTimeline,
@@ -60,6 +61,18 @@ export interface MessageCompactionControllerOptions {
    * reload does not resurrect them as ghost rows.
    */
   readonly onCompacted?: (compactedMessageIds: readonly string[]) => void;
+  /**
+   * Plan 475 P2.1: injects bot-scoped system sections into the compaction
+   * entry's `reinjectedSystemMessages` so history-level bot state that lived
+   * in the compacted range (pending wake/DM summaries, automation reminders)
+   * survives into the post-compaction system prompt segments. Called only
+   * when a compaction entry is actually created. Sections that duplicate the
+   * per-turn system prompt (identity/roster, Plan 474 §7.6 tail wiring) must
+   * NOT be returned here — those are rebuilt every turn and would duplicate.
+   * Returning an empty array is a no-op. A thrown error is logged and the
+   * compaction proceeds without the extra sections.
+   */
+  readonly postSummarySections?: () => string[] | Promise<string[]>;
 }
 
 /**
@@ -129,6 +142,7 @@ export class MessageCompactionController {
   private readonly idGenerator: () => string;
   private readonly clock: () => number;
   private readonly onCompacted?: (compactedMessageIds: readonly string[]) => void;
+  private readonly postSummarySections?: () => string[] | Promise<string[]>;
 
   constructor(options: MessageCompactionControllerOptions) {
     this.timeline = options.timeline;
@@ -136,6 +150,7 @@ export class MessageCompactionController {
     this.idGenerator = options.idGenerator ?? defaultIdGenerator;
     this.clock = options.clock ?? defaultClock;
     this.onCompacted = options.onCompacted;
+    this.postSummarySections = options.postSummarySections;
   }
 
   /**
@@ -209,10 +224,10 @@ export class MessageCompactionController {
    * it to the timeline. Returns `null` when the result carries no compaction
    * marker (strategy returned early without compacting).
    */
-  private applyCompactionResult(
+  private async applyCompactionResult(
     result: EnhancedCompactionResult,
     inputMessages: Message[],
-  ): CompactionEntry | null {
+  ): Promise<CompactionEntry | null> {
     const markerIndex = result.messages.findIndex(isCompactionMarker);
 
     // No marker → strategy returned the input unchanged (e.g. conversation
@@ -334,6 +349,20 @@ export class MessageCompactionController {
       ...legacySystemReinjected,
       ...reinjectedSystemMessages,
     ]
+    // Plan 475 P2.1: bot-scoped post-summary sections (history-level state
+    // lost with the compacted range — pending wake/DM summaries, automation
+    // reminders). Failure-isolated: a broken hook must never fail the
+    // compaction, matching the Plan 474 tail-wiring error posture.
+    if (this.postSummarySections) {
+      try {
+        const botSections = await this.postSummarySections();
+        combinedReinjected.push(...botSections.filter((s) => typeof s === 'string' && s.length > 0));
+      } catch (err) {
+        logger.warn(
+          `[Compaction] postSummarySections skipped: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (combinedReinjected.length > 0) {
       entry.reinjectedSystemMessages = combinedReinjected
     }
