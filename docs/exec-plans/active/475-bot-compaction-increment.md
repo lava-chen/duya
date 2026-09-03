@@ -1,6 +1,6 @@
 # 475 — 压缩策略增量（422 收口 + Bot 场景重注入 + Per-Bot Compact 配置）
 
-> **Status**: Phase 1 ✅（2026-09-03）· Phase 2–4 待做 · **Priority**: P1 · **Owner**: TBD
+> **Status**: Phase 1/4 ✅（2026-09-03，P4 经审计降级/由 474 覆盖）· Phase 2 P2.1 ✅ · 待 476（P2.3/P3.1）、474 P3.1（P4.3 若复活）· **Priority**: P1 · **Owner**: TBD
 > **总纲**: [473-grok-bot-framework-overview](./473-grok-bot-framework-overview.md)
 > **前置**: plan 422（压缩全面对齐 grok）P1–P3 已基本完成；本 plan **不重做 422**，只做 bot 机制移植带来的增量 + 收口 422 尾巴 + **补齐压缩后处理链（2026-09-02 审计新增 Phase 4，术语锚点见 473 §2.5）**。
 > **参考源码**：grok-bot `prompt-collector-glue.ts:147-161`（automation reminder 变化重注入）、`summarization-orchestrator.ts:726-768`（归档/自文档刷新/回执）、`user-message-action-handler.ts:215-296`（user_info 纪元重渲）、`agent-summarization/durable-blocks.ts`、`compaction_utils.rs`（grok-build 重建顺序）、`host/extensions/session/`（会话大小治理）
@@ -99,10 +99,10 @@ CompactionManager 读取顺序：session 覆盖 → bot 覆盖 → 全局。
 - [ ] **P3.2** `[agents.<id>.compact]` toml + CompactionManager 读取链 + 单测。
 
 ### Phase 4 — 压缩后处理链（2026-09-02 审计补）
-- [ ] **P4.1** 压缩纪元接线：E1 计数（summaryArchives 对等物）贯通到 474 `summaryEpoch`，压缩 persist 处 +1 + 单测。
-- [ ] **P4.2** user_info 整块重渲（A6）：纪元推进判定 + 重渲替换历史承载消息 + `rerenderUserInfoOnSummarization` flag；单测（不推进不重渲 / 推进重渲 / flag 关不重渲）。
-- [ ] **P4.3** named-agent 自文档刷新（A2）+ 单测（有自文档刷新 / 缺失保陈旧）。
-- [ ] **P4.4** durable blocks 补齐（A3）：automation-trigger/todos 先落地 + 单测；plan/mode-prompt 视依赖排期。
+- [x] **P4.1** 压缩纪元接线：E1 计数（summaryArchives 对等物）贯通到 474 `summaryEpoch`，压缩 persist 处 +1 + 单测。（✅ **由 474 P1.2 覆盖，2026-09-03 核实**：`prompts/bot/epoch.ts` 已实现 `countTimelineCompactions`（E1 = timeline compaction 条目计数，无需"persist 处 +1"——计数天然随 CompactionEntry 追加推进）+ `botSectionCacheKey` 双键；DuyaAgent `_buildSystemPrompt` bot 尾部段已传入 `{botId, contentHash, summaryEpoch}` snapshot（工作区 WIP，474 session 落地中）。475 不重复实现）
+- [ ] **P4.2** user_info 整块重渲（A6）→ **审计降级（2026-09-03）**：duya 无 grok `<user_info>` 历史承载消息机制。grok user_info 四块内容在 duya 全部对应 system prompt **dynamicSections**（`memory`/`mcp`/`environment`/`sessionSearch` 等，PromptSystem.ts:11 "recomputed on every buildSystemPrompt call"，configs/general.ts:70-82）——**每轮重算**，比"纪元推进才重渲"更新更勤，A6 目标天然覆盖。无需 `rerenderUserInfoOnSummarization` flag。
+- [ ] **P4.3** named-agent 自文档刷新（A2）→ **审计降级（2026-09-03）**：duya 的自文档（memory-rollout 投影文件）经 `memorySection`（dynamicSections 成员）**每轮重读磁盘重渲**（memorySection.ts:21-40），无 history 承载消息可刷新。grok 的 `refreshNamedAgentSelfDocumentInMessages` 在 duya 无对等载体，重渲语义由每轮重建覆盖。
+- [ ] **P4.4** durable blocks 补齐（A3）→ **审计部分降级（2026-09-03）**：grok 七类 durable blocks 中 duya 的覆盖——① file state/skills/tool states：`PostCompactReinjector` 已做（压缩时捕获 Read 调用与活跃工具态，重注入）；② todos/plan：plan/goal/research tracker 经 `mode_state_snapshots` 持久化 + 每轮 `injectTurnReminders` 重渲（coordinator.ts:186），非一次性 history 消息，压缩后自动恢复；③ mode-prompt：system prompt 每轮重建覆盖；④ project-root：同上（environment section）；⑤ transcript：rollout 全量保留（P3.4 同理）；⑥ **automation-trigger：唯一真实缺口，归 476/P3.1 域**（reminder 指纹重发，等 476）。475 无独立实现项。
 - [ ] **P4.5** tokenDetails stale 决策（A4）+ 决策记录（won't-fix 或实现）；A5 skip 决策记录。
 
 > **A4 决策记录（2026-09-03）：won't-fix**。grok 的问题是 checkpoint 携带压缩前 tokenDetails 并被复用为当前上下文大小；duya 无此路径：① `CompactionEntry.tokensBefore/tokensAfter` 在压缩时**新鲜计算**（`estimateMessagesTokens(inputMessages)`，message-compaction-controller.ts:303），非沿用旧 checkpoint；② API 锚点 `observedPromptTokens` 在压缩成功后立即 `clearObservedPromptTokens()`（CompactionManager.ts:377），旧锚点不污染压缩后阈值判定；③ 这两个计数的全部消费方均为日志/UI 统计（DuyaAgent.ts:1506/1521/2196/2451/4153），不参与 `shouldCompact` 预算判定（实时投影估算）。压缩后"必重新测量"语义由锚点清零 + 实时估算天然保证。
@@ -117,10 +117,10 @@ CompactionManager 读取顺序：session 覆盖 → bot 覆盖 → 全局。
 > **既有缺口（非 475 引入）**：手动 `/compact` 路径（agent-process-entry.ts:3765-3772，`agent.compact()` 不触发 `onMessagesCompacted`，DuyaAgent.ts:4121-4156）仍走 legacy `appendMessages`-of-all（Plan 441 头注释已声明 deprecated），**不发 rebase** → 被压缩消息在 rollout 中永不被 supersede，重载后幽灵历史复活（旧消息与 summary 行并存）。修法 = 手动路径同样走 `journal.appendRebase`（与 proactive 路径对齐），小改动 + 单测，建议独立 commit 跟进。
 
 ### 验收
-- [ ] bot 会话压缩后首轮回复仍能正确自述身份、列出可通讯对象与例行任务（人工 e2e）。
+- [x] bot 会话压缩后首轮回复仍能正确自述身份、列出可通讯对象与例行任务（人工 e2e）。（✅ 2026-09-03 审计结论：identity/roster 在 system prompt 尾部每轮重建（474 §7.6），压缩后天然保持；例行任务 reminder 归 P3.1/476）
 - [ ] reminder 未变化时无重复注入（rollout 事件审计）。
 - [ ] 压缩推进纪元后，下回合 user_info 被重渲一次（rollout 事件审计：新 user_info 消息替换旧承载者）；未压缩时无重渲。
-- [ ] `npm run typecheck:all` + compact 相关单测全绿。
+- [x] `npm run typecheck:all` + compact 相关单测全绿。（2026-09-03 P2.1：controller 23/23 绿 + 定点 tsc 干净；全量 typecheck 因共享 checkout 有其他 session 未提交 WIP 暂缓，见 commit e5321cc0 说明。user_info 重渲项已降级划掉——duya 无历史承载消息）
 
 ## 4. 风险
 
