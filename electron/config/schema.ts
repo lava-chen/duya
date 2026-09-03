@@ -138,6 +138,30 @@ export interface CustomAgentToolsConfig {
   deny?: string[];
 }
 
+/** Plan 474 §2.4: structured prompt persona — overrides the registry
+ *  fallback for prompt rendering only (runtime profile.json still wins). */
+export interface CustomAgentPromptIdentityConfig {
+  name?: string;
+  description?: string;
+  /** How the bot speaks (tone/style hint rendered by the botIdentity section). */
+  voice?: string;
+}
+
+/** Plan 474 §2.4: section gating. Unknown section names are ignored
+ *  (forward compatible with sections landing via 476/479/481). */
+export interface CustomAgentPromptSectionsConfig {
+  /** Whitelist: when non-empty, only these registered sections render. */
+  enable?: string[];
+  /** Blacklist: these sections never render; wins over enable. */
+  disable?: string[];
+}
+
+/** Plan 474 §2.4: `[agents.<id>.prompt]` table (bot system-prompt config). */
+export interface CustomAgentPromptConfig {
+  sections?: CustomAgentPromptSectionsConfig;
+  identity?: CustomAgentPromptIdentityConfig;
+}
+
 export interface CustomAgentConfig {
   /** Display name (falls back to the map key). */
   name?: string;
@@ -153,6 +177,8 @@ export interface CustomAgentConfig {
   tools?: CustomAgentToolsConfig;
   /** Plugin / mcp references enabled for this agent (e.g. 'mcp:github'). */
   plugins?: string[];
+  /** Bot system-prompt section config (Plan 474 P3.2). Preserved as-is on upsert. */
+  prompt?: CustomAgentPromptConfig;
 }
 
 /**

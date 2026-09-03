@@ -16,6 +16,30 @@ export interface CustomAgentToolsConfig {
   deny?: string[];
 }
 
+/** Plan 474 §2.4: structured prompt persona — overrides the registry
+ *  fallback for prompt rendering only (runtime profile.json still wins). */
+export interface CustomAgentPromptIdentityConfig {
+  name?: string;
+  description?: string;
+  /** How the bot speaks (tone/style hint rendered by the botIdentity section). */
+  voice?: string;
+}
+
+/** Plan 474 §2.4: section gating. Unknown section names are ignored
+ *  (forward compatible with sections landing via 476/479/481). */
+export interface CustomAgentPromptSectionsConfig {
+  /** Whitelist: when non-empty, only these registered sections render. */
+  enable?: string[];
+  /** Blacklist: these sections never render; wins over enable. */
+  disable?: string[];
+}
+
+/** Plan 474 §2.4: `[agents.<id>.prompt]` table. */
+export interface CustomAgentPromptConfig {
+  sections?: CustomAgentPromptSectionsConfig;
+  identity?: CustomAgentPromptIdentityConfig;
+}
+
 export interface CustomAgentConfig {
   name?: string;
   description?: string;
@@ -24,6 +48,8 @@ export interface CustomAgentConfig {
   agents_md?: string;
   tools?: CustomAgentToolsConfig;
   plugins?: string[];
+  /** Bot system-prompt section config (Plan 474 P3.2). */
+  prompt?: CustomAgentPromptConfig;
 }
 
 /** Base tool profiles -> allow/deny pattern lists (subset of legacy tool_profiles). */
