@@ -15,6 +15,9 @@
  *   botIdentity        — ✅ REAL (P2.1): name/description via
  *                        [agents.<id>] (424 read side, loader.ts);
  *                        avatar/title/update_state wait on 485/481
+ *   botCommsRules      — ✅ REAL (P2.2): messaging rules with duya
+ *                        terminology; send_to_agent tool name referenced
+ *                        from SendToAgentTool's constant (477 placeholder)
  *   spotlight          — waits on 476 lane/wake semantics
  *   userIdentity       — timezone already present via environment section; user
  *                        full name waits on init-payload field (P2.0)
@@ -37,6 +40,7 @@
 import type { BotSectionDef, BotPromptContext } from './framework.js'
 import { renderBotIdentity } from './identity.js'
 import { renderBotRoster } from './roster.js'
+import { renderBotCommsRules } from './commsRules.js'
 
 /**
  * Placeholder compute: always null (omit). Swapped for a real renderer by
@@ -50,6 +54,14 @@ export const BOT_IDENTITY_SECTION: BotSectionDef = {
   description: 'Bot persona: name/description + self-edit hint (485 P2.2 adds avatar/title).',
   budgetChars: 800,
   compute: renderBotIdentity,
+}
+
+export const BOT_COMMS_RULES_SECTION: BotSectionDef = {
+  name: 'botCommsRules',
+  description:
+    'Messaging rules: async send_to_agent delivery, no ack ping-pong, no user wake, quiet-work silence (P2.2; tool names 477).',
+  budgetChars: 1200,
+  compute: renderBotCommsRules,
 }
 
 export const BOT_SPOTLIGHT_SECTION: BotSectionDef = {
@@ -111,6 +123,7 @@ export const BOT_REMOTE_BOX_SECTION: BotSectionDef = {
 /** Canonical assembly order of bot sections (after the basic prompt). */
 export const BOT_SECTION_CATALOG: readonly BotSectionDef[] = [
   BOT_IDENTITY_SECTION,
+  BOT_COMMS_RULES_SECTION,
   BOT_SPOTLIGHT_SECTION,
   BOT_USER_IDENTITY_SECTION,
   BOT_MEMORY_SECTION,

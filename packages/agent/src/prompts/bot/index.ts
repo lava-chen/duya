@@ -27,10 +27,23 @@ export {
   botSectionCacheKey,
   countTimelineCompactions,
 } from './epoch.js'
+export { renderBotCommsRules } from './commsRules.js'
+export {
+  PROFILE_UPDATE_ENVELOPE_TAG,
+  PROFILE_UPDATE_ENVELOPE_VERSION,
+  buildProfileUpdateEnvelope,
+  parseProfileUpdateEnvelope,
+  detectProfileUpdate,
+  mergeProfileUpdate,
+  getLatestProfileUpdate,
+  isProfileUpdateFolded,
+} from './profileUpdate.js'
+export type { ProfileUpdate, ProfileBaseline } from './profileUpdate.js'
 export {
   BOT_SECTION_CATALOG,
   registerBotSectionCatalog,
   BOT_IDENTITY_SECTION,
+  BOT_COMMS_RULES_SECTION,
   BOT_SPOTLIGHT_SECTION,
   BOT_USER_IDENTITY_SECTION,
   BOT_MEMORY_SECTION,
