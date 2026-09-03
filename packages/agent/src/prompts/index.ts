@@ -90,6 +90,16 @@ export {
   botSectionCacheKey,
   countTimelineCompactions,
 } from './bot/index.js'
+export { renderBotCommsRules } from './bot/index.js'
+export {
+  buildProfileUpdateEnvelope,
+  parseProfileUpdateEnvelope,
+  detectProfileUpdate,
+  mergeProfileUpdate,
+  getLatestProfileUpdate,
+  isProfileUpdateFolded,
+} from './bot/index.js'
+export type { ProfileUpdate, ProfileBaseline } from './bot/index.js'
 export { createBotPromptAssembly } from './bot/index.js'
 export {
   registerBotSectionCatalog,

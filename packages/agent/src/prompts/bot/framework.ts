@@ -209,6 +209,38 @@ export class BotPromptAssembly {
     this.snapshotCache.clear()
   }
 
+  /**
+   * Per-section render inspection (Plan 474 G2): measures what each
+   * registered section actually renders under the given context — after
+   * gating, budget, and omission — without changing what `render` /
+   * `renderSections` produce. Shares the frozen-snapshot cache, so calling
+   * this before/after a real render costs nothing extra.
+   */
+  async inspectSections(
+    ctx: BotPromptContext,
+    options?: BotRenderOptions,
+  ): Promise<BotSectionSnapshot[]> {
+    const enable = ctx.promptConfig?.sections?.enable
+    const disable = ctx.promptConfig?.sections?.disable
+    const out: BotSectionSnapshot[] = []
+    for (const name of this.order) {
+      if (disable?.includes(name)) continue
+      if (enable !== undefined && enable.length > 0 && !enable.includes(name)) continue
+      const def = this.sections.get(name)
+      if (!def) continue
+      const content = await this.renderSection(def, ctx, options?.snapshot)
+      out.push({
+        name,
+        chars: content?.length ?? 0,
+        omitted: !content,
+        budgetChars: def.budgetChars,
+        truncated:
+          content !== null && def.budgetChars !== undefined && content.length > def.budgetChars,
+      })
+    }
+    return out
+  }
+
   private async assemble(
     ctx: BotPromptContext,
     opts: { includeBasic: boolean; snapshot?: BotSnapshotKey },
@@ -282,4 +314,18 @@ export class BotPromptAssembly {
       this.snapshotCache.delete(oldest)
     }
   }
+}
+
+/** One section's measured render (Plan 474 G2 debug output). */
+export interface BotSectionSnapshot {
+  /** Section name. */
+  name: string
+  /** Rendered character count (0 when omitted). */
+  chars: number
+  /** True when the section rendered nothing (null/empty). */
+  omitted: boolean
+  /** Declared budget, when the section has one. */
+  budgetChars?: number
+  /** True when the budget marker was appended (rendered longer than budget). */
+  truncated: boolean
 }

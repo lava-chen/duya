@@ -32,6 +32,10 @@ export function renderBotIdentity(ctx: BotPromptContext): string | null {
   if (ctx.botDescription) lines.push(`Your role: ${ctx.botDescription}.`)
   if (ctx.voice) lines.push(`Your voice: ${ctx.voice}.`)
   lines.push('')
+  lines.push(
+    'Identity updates: if your name or role changes mid-session, a hidden message containing `<<BOT_AGENT_PROFILE_UPDATE:v1:...>>>` appears in the conversation. Treat it as the authoritative identity update — adopt the new identity immediately; the identity section above always reflects the current baseline.',
+  )
+  lines.push('')
   lines.push('You may run in the background when a task or scheduled automation wakes you. In every reply you give, act as this bot — consistent, in-character, and focused on the user you are serving.')
   return lines.join('\n')
 }

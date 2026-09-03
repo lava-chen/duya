@@ -38,6 +38,11 @@ import {
   isBotAgentProfile,
   computeBotContentHash,
   countTimelineCompactions,
+  buildProfileUpdateEnvelope,
+  detectProfileUpdate,
+  isProfileUpdateFolded,
+  mergeProfileUpdate,
+  type ProfileBaseline,
 } from '../prompts/index.js';
 import type { BotPromptAssembly } from '../prompts/index.js';
 import { getAgentsMdManager } from '../agentsmd/index.js';
@@ -142,6 +147,7 @@ import {
   type RuntimeContextAgentMessage,
   type AgentMessage,
 } from '../message/index.js';
+import { AgentMessageFactory } from '../message/message-factories.js';
 // Plan 486: thread/fork branched-layer helpers
 import {
   THREAD_METADATA_KEY,
@@ -3172,13 +3178,22 @@ export class duyaAgent {
         // the bot context (profile/roster/reserved slots) plus the compaction
         // epoch (compaction-entry count). Same keys reuse the cached
         // per-section render verbatim; either key changing re-renders.
+        const summaryEpoch = countTimelineCompactions(this.timeline.snapshot());
         const botSections = await this.getBotAssembly().renderSections(botContext, {
           snapshot: {
             botId: appliedProfile.id,
             contentHash: computeBotContentHash(botContext),
-            summaryEpoch: countTimelineCompactions(this.timeline.snapshot()),
+            summaryEpoch,
           },
         });
+        // Plan 474 §2.2/P3.1: identity change announcement + compaction
+        // folding. (1) When the current identity differs from what the
+        // model was last told, append a hidden profile-update envelope.
+        // (2) When a compaction persisted since the last turn, fold the
+        // announced baseline: the identity section now renders the merged
+        // view (profile.json is re-read every turn), so the history
+        // envelope no longer needs to survive compaction.
+        this._syncBotProfileBaseline(appliedProfile.id, botContext, summaryEpoch);
         if (botSections) {
           systemPromptContent = systemPromptContent
             ? `${systemPromptContent}\n\n${botSections}`
@@ -3193,6 +3208,79 @@ export class duyaAgent {
     }
 
     return systemPromptContent;
+  }
+
+  /**
+   * Bot profile baseline (Plan 474 §2.2/P3.1): the identity the model has
+   * last been told about, per bot id. Seeded lazily from the first context
+   * load so an already-running session does not announce a "change" from a
+   * cold undefined baseline.
+   */
+  private botProfileBaselines = new Map<
+    string,
+    { baseline: ProfileBaseline; summaryEpoch: number }
+  >();
+
+  private _syncBotProfileBaseline(
+    botId: string,
+    ctx: { botName?: string; botDescription?: string },
+    summaryEpoch: number,
+  ): void {
+    try {
+      const state = this.botProfileBaselines.get(botId);
+      if (!state) {
+        // First sight this session: adopt the current identity silently.
+        this.botProfileBaselines.set(botId, {
+          baseline: { name: ctx.botName, description: ctx.botDescription },
+          summaryEpoch,
+        });
+        return;
+      }
+
+      // Compaction folding (§2.2): summaryEpoch advanced → the newest
+      // announced update is folded into the baseline; no re-announcement —
+      // the identity section re-rendered this turn already carries the
+      // merged view (profile.json is re-read every turn).
+      const baseline =
+        summaryEpoch > state.summaryEpoch
+          ? { ...state.baseline, foldedUntil: undefined }
+          : state.baseline;
+
+      const update = detectProfileUpdate(
+        baseline,
+        { name: ctx.botName, description: ctx.botDescription },
+      );
+      if (update && !isProfileUpdateFolded(baseline, update)) {
+        const envelope = buildProfileUpdateEnvelope(update);
+        const message = new AgentMessageFactory().createRuntimeContextMessage({
+          source: 'custom',
+          content: envelope,
+          visibility: 'hidden',
+          metadata: {
+            botProfileUpdate: true,
+            changedAt: update.changedAt,
+          },
+        });
+        const appended = this._appendRuntimeContextToTimeline(
+          message as unknown as RuntimeContextAgentMessage,
+        );
+        if (appended) {
+          logger.info(
+            `[Agent] bot profile update announced (id=${botId}, changedAt=${update.changedAt})`,
+          );
+        }
+      }
+
+      this.botProfileBaselines.set(botId, {
+        baseline: mergeProfileUpdate(baseline, update),
+        summaryEpoch,
+      });
+    } catch (err) {
+      // Envelope bookkeeping must never break the system prompt build.
+      logger.warn(
+        `[Agent] bot profile baseline sync skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
