@@ -36,6 +36,28 @@ export { sanitizeCompactedHistory, validateCompactedHistory, fitCompactedToBudge
 // Summary quality guard
 export { cleanSummaryText, isDegenerateSummary, MIN_SUMMARY_CHARS } from './summaryGuard.js'
 
+// Summary retry ladder (Plan 495 G4, grok self-summary alignment)
+export {
+  MAX_SUMMARY_RETRIES,
+  TOOL_MESSAGE_DROP_THRESHOLD,
+  classifySummaryError,
+  appendShorterOutputInstruction,
+  reduceSummaryInputs,
+  summarizeWithRetryLadder,
+  type SummaryErrorKind,
+  type SummaryRetryContext,
+  type SummaryRetryOutcome,
+} from './summaryRetry.js'
+
+// Background prefire (Plan 495 G1, grok two-pass alignment)
+export { BackgroundPrefire, isPrefixFingerprint, type PrefireConfig } from './BackgroundPrefire.js'
+
+// Image-parts compaction trigger (Plan 495 G2, grok alignment)
+export {
+  IMAGE_COMPACTION_TRIGGER_COUNT,
+  countImagePartsInMessages,
+} from './imageParts.js'
+
 // Failure classification + suppression (grok-aligned 5-state machine)
 export {
   classifyCompactFailure,
