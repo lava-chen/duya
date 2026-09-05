@@ -493,6 +493,34 @@ export function storedEventToIpcMessage(event: StoredEvent): MessageRow | null {
 }
 
 /**
+ * Map a single in-memory NewEvent to the old `messages` row shape.
+ *
+ * Used by the db-bridge `message:append` broadcast: the events have just
+ * been handed to MessageLog.appendBatch and never round-tripped through
+ * the rollout file, so `payload` is still a plain object. Feeding them
+ * straight into `storedEventToIpcMessage` would JSON.parse("[object
+ * Object]"), throw, and silently broadcast null rows — which the
+ * BotDirectChatView realtime merge drops (plan 489 P0.3 regression:
+ * SendMessage landed in the DB but only appeared after a refresh).
+ *
+ * seq has not been assigned at broadcast time (appendBatch assigns it
+ * during storage), so a -1 sentinel is used; the renderer cursor
+ * (useBotDirectTranscript) tolerates it and the next refresh re-reads
+ * authoritative seq values.
+ */
+export function newEventToIpcMessage(event: NewEvent): MessageRow | null {
+  return storedEventToIpcMessage({
+    id: event.id,
+    sessionId: event.sessionId,
+    seq: -1,
+    turnId: event.turnId ?? null,
+    kind: 'assistant',
+    payload: JSON.stringify(event.payload),
+    createdAt: event.createdAt,
+  });
+}
+
+/**
  * Map StoredEvent[] to old `messages` row shape[] (snake_case).
  *
  * Parses all payloads, projects the full timeline via

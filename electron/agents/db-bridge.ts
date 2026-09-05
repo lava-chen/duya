@@ -32,6 +32,7 @@ import {
   ipcSessionToUpdate,
   coreSessionToIpcRow,
   ipcMessageToNewEvent,
+  newEventToIpcMessage,
   storedEventToIpcMessage,
   storedEventsToIpcMessages,
   serializeMessageContent,
@@ -498,7 +499,12 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
 
         // Broadcast to all renderer windows (Plan 483 P2)
         // Each renderer checks if the sessionId matches its active session and refreshes
-        const broadcastMessages = events.map((e) => storedEventToIpcMessage(e));
+        // newEventToIpcMessage: these events are in-memory (object payload, no seq
+        // yet) — storedEventToIpcMessage expects rollout-file rows and would
+        // JSON.parse("[object Object]") into null, silencing the realtime merge.
+        const broadcastMessages = events
+          .map((e) => newEventToIpcMessage(e))
+          .filter((m) => m !== null);
         getSessionManager().broadcastSessionEvent('message:new', {
           sessionId,
           messages: broadcastMessages,
