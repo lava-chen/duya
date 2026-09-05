@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { rewriteAppMentionTokens } from './app-connection-ipc';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { rewriteAppMentionTokens, getAppConnectionAPI } from './app-connection-ipc';
 
 describe('rewriteAppMentionTokens (Plan 450 Phase G)', () => {
   const connected = [
@@ -116,5 +116,46 @@ describe('rewriteAppMentionTokens (Plan 450 Phase G)', () => {
     const result = rewriteAppMentionTokens('@github x', [{ id: 'github' }]);
     expect(result.content).toBe('[@github](app://github) x');
     expect(result.mentionedProviders).toEqual(['github']);
+  });
+});
+
+describe('getAppConnectionAPI.onConnected (Plan 498)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns null when electronAPI is unavailable', () => {
+    vi.stubGlobal('window', {} as unknown as Window & typeof globalThis);
+    expect(getAppConnectionAPI()).toBeNull();
+  });
+
+  it('subscribes to app-connection:connected and unsubscribes via the returned disposer', () => {
+    let registered: ((data: unknown) => void) | null = null;
+    const removeListener = vi.fn();
+    const on = vi.fn((cb: (data: unknown) => void) => {
+      registered = cb;
+      return () => {
+        removeListener();
+      };
+    });
+    vi.stubGlobal('window', {
+      electronAPI: {
+        appConnection: {
+          onConnected: on,
+        },
+      },
+    } as unknown as Window & typeof globalThis);
+
+    const api = getAppConnectionAPI();
+    expect(api).not.toBeNull();
+    const callback = vi.fn();
+    const disposer = api!.onConnected(callback);
+
+    expect(on).toHaveBeenCalledTimes(1);
+    registered!({ provider: 'notion', connectionId: 'conn-1' });
+    expect(callback).toHaveBeenCalledWith({ provider: 'notion', connectionId: 'conn-1' });
+
+    disposer();
+    expect(removeListener).toHaveBeenCalledTimes(1);
   });
 });
