@@ -964,6 +964,11 @@ export interface AppConnectionAPI {
   approveTool: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   revokeToolApproval: (provider: string, toolAlias: string) => Promise<{ success: boolean; error?: string }>
   listToolApprovals: () => Promise<{ success: boolean; data?: string[]; error?: string }>
+  /**
+   * Plan 498: fired in every window after `appConnection:connect` succeeds so
+   * a pending connector auth card can flip to "connected" and resume the agent.
+   */
+  onConnected: (callback: (data: { provider: string; connectionId: string | null }) => void) => () => void
 }
 
 export interface TerminalAPI {
@@ -2412,6 +2417,14 @@ const electronAPI: ElectronAPI = {
     revokeToolApproval: (provider: string, toolAlias: string) =>
       ipcRenderer.invoke('appConnection:revokeToolApproval', provider, toolAlias),
     listToolApprovals: () => ipcRenderer.invoke('appConnection:listToolApprovals'),
+    onConnected: (callback: (data: { provider: string; connectionId: string | null }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { provider: string; connectionId: string | null }) =>
+        callback(data);
+      ipcRenderer.on('app-connection:connected', handler);
+      return () => {
+        ipcRenderer.removeListener('app-connection:connected', handler);
+      };
+    },
   },
   terminal: {
     spawn: (params) => ipcRenderer.invoke('terminal:spawn', params),
