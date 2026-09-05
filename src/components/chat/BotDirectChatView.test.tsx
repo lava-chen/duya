@@ -73,8 +73,10 @@ vi.mock('@/components/icons', () => ({
   ArrowUpIcon: () => null,
   CopyIcon: () => null,
   CheckIcon: () => null,
+  ThumbsUpIcon: () => null,
   DotsThreeIcon: () => null,
   ChatCircleIcon: () => null,
+  ChevronDownIcon: () => null,
   BrainIcon: () => null,
   CaretRightIcon: () => null,
   WrenchIcon: () => null,
@@ -172,6 +174,7 @@ const baseProps = {
 beforeEach(() => {
   vi.clearAllMocks();
   permissionMocks.pendingPermission = null;
+  window.localStorage.removeItem('duya:bot-chat:thumbs-up');
 });
 
 describe('BotDirectChatView', () => {
@@ -206,11 +209,29 @@ describe('BotDirectChatView', () => {
     expect(container.querySelector('.bot-chat-row__name')).toBeNull();
     expect(rows[0].querySelector('.bot-chat-bubble--user')).not.toBeNull();
     expect(rows[2].querySelector('.bot-chat-bubble--assistant')).not.toBeNull();
-    // Both roles get a hover-action anchor (copy).
-    expect(rows[0].querySelector('.bot-message-action')).not.toBeNull();
-    expect(rows[2].querySelector('.bot-message-action')).not.toBeNull();
+    // Rakazo parity: both roles get the hover overlay (time + pill).
+    expect(rows[0].querySelector('.bot-message-hover-metadata')).not.toBeNull();
+    expect(rows[2].querySelector('.bot-message-hover-metadata')).not.toBeNull();
+    expect(rows[0].querySelector('.bot-message-hover-pill')).not.toBeNull();
     expect(screen.getByText('你好')).toBeDefined();
     expect(screen.getByText('在的')).toBeDefined();
+  });
+
+  it('persists a thumbs-up reaction and shows the badge below the bubble', () => {
+    const messages: Message[] = [
+      msg({ id: 'r1', role: 'assistant', content: '可反应' }),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    const btn = screen.getByLabelText('Add thumbs-up');
+    fireEvent.click(btn);
+    expect(btn.getAttribute('aria-pressed')).toBe('true');
+    expect(container.querySelector('.bot-chat-thumbs-badge')).not.toBeNull();
+    const stored = JSON.parse(
+      window.localStorage.getItem('duya:bot-chat:thumbs-up') || '[]',
+    ) as string[];
+    expect(stored).toContain('r1');
   });
 
   it('inserts a date separator when the calendar day changes', () => {

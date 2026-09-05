@@ -16,7 +16,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import type { Message } from '@/types/message';
 
 const mocks = vi.hoisted(() => ({
   botDirectGetTranscript: vi.fn(),
@@ -26,7 +25,10 @@ const mocks = vi.hoisted(() => ({
   }) => void),
 }));
 
-vi.mock('@/lib/ipc-client', () => ({
+vi.mock('@/lib/ipc-client', async (importOriginal) => ({
+  // Keep the real module: the realtime merge converts broadcast rows via
+  // the actual dbMessageToMessage (snake_case MessageRow → camel IpcMessage).
+  ...(await importOriginal<typeof import('@/lib/ipc-client')>()),
   getBotDirectTranscriptIPC: (sessionId: string) =>
     mocks.botDirectGetTranscript(sessionId),
 }));
@@ -70,22 +72,22 @@ describe('useBotDirectTranscript', () => {
   });
 
   it('loads the bot-direct transcript via IPC on mount', async () => {
-    const fetched: Message[] = [
+    const fetched: Array<Record<string, unknown>> = [
       {
         id: 'm1',
         role: 'user',
         content: 'hi',
-        timestamp: 1,
+        createdAt: 1,
         source: 'user',
-      } as Message,
+      },
       {
         id: 'm2',
         role: 'assistant',
         content: 'reply',
-        timestamp: 2,
+        createdAt: 2,
         msgType: 'text',
         source: 'send_message',
-      } as Message,
+      },
     ];
     mocks.botDirectGetTranscript.mockResolvedValueOnce({
       messages: fetched,
@@ -103,6 +105,8 @@ describe('useBotDirectTranscript', () => {
     });
     expect(mocks.botDirectGetTranscript).toHaveBeenCalledWith('bot:test1:abc');
     expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0].timestamp).toBe(1);
+    expect(result.current.messages[1].timestamp).toBe(2);
     expect(result.current.isLoading).toBe(false);
     expect(result.current.error).toBeNull();
   });
@@ -172,11 +176,12 @@ describe('useBotDirectTranscript', () => {
       captured!({
         sessionId: 'bot:test1:abc',
         messages: [
-          // Visible — appended
-          { id: 'new1', role: 'assistant', content: 'reply', timestamp: 3, source: 'send_message' },
+          // Real broadcast shape: snake_case MessageRow (db-bridge →
+          // newEventToIpcMessage). Visible — appended.
+          { id: 'new1', role: 'assistant', content: 'reply', created_at: 3, source: 'send_message' },
           // Hidden — must be discarded
-          { id: 't1', role: 'assistant', content: '', msgType: 'tool_use', source: 'tool_use', toolName: 'Read' },
-          { id: 'th1', role: 'assistant', content: 'plan', msgType: 'thinking', source: 'thinking' },
+          { id: 't1', role: 'assistant', content: '', msg_type: 'tool_use', source: 'tool_use', tool_name: 'Read' },
+          { id: 'th1', role: 'assistant', content: 'plan', msg_type: 'thinking', source: 'thinking' },
           { id: 's1', role: 'system', content: 'sys', source: 'system' },
           { id: 'sc1', role: 'assistant', content: 'scratch', source: 'scratchpad' },
         ],
@@ -185,6 +190,10 @@ describe('useBotDirectTranscript', () => {
     expect(result.current.messages).toHaveLength(1);
     expect(result.current.messages[0].id).toBe('new1');
     expect(result.current.messages[0].source).toBe('send_message');
+    // The snake_case row must land with a valid numeric timestamp —
+    // reading camelCase `createdAt` off the raw row yields undefined and
+    // crashed date separators with RangeError: Invalid time value.
+    expect(result.current.messages[0].timestamp).toBe(3);
   });
 
   it('drops incoming rows that belong to a different session', () => {
@@ -208,7 +217,7 @@ describe('useBotDirectTranscript', () => {
       captured!({
         sessionId: 'bot:other:def', // different session
         messages: [
-          { id: 'x1', role: 'user', content: 'nope', timestamp: 9, source: 'user' },
+          { id: 'x1', role: 'user', content: 'nope', created_at: 9, source: 'user' },
         ],
       });
     });
@@ -227,7 +236,7 @@ describe('useBotDirectTranscript', () => {
     });
     mocks.botDirectGetTranscript.mockResolvedValueOnce({
       messages: [
-        { id: 'd1', role: 'user', content: 'hi', timestamp: 1, source: 'user' },
+        { id: 'd1', role: 'user', content: 'hi', createdAt: 1, source: 'user' },
       ],
       parsedDocuments: [],
     });
@@ -238,8 +247,8 @@ describe('useBotDirectTranscript', () => {
       captured!({
         sessionId: 'bot:test1:abc',
         messages: [
-          { id: 'd1', role: 'user', content: 'hi', timestamp: 1, source: 'user' },
-          { id: 'd2', role: 'assistant', content: 'reply', timestamp: 2, source: 'send_message' },
+          { id: 'd1', role: 'user', content: 'hi', created_at: 1, source: 'user' },
+          { id: 'd2', role: 'assistant', content: 'reply', created_at: 2, source: 'send_message' },
         ],
       });
     });
@@ -255,7 +264,7 @@ describe('useBotDirectTranscript', () => {
       messages:
         sid === 'bot:test1:abc'
           ? [{ id: 'a', role: 'user', content: 'first', timestamp: 1, source: 'user' }]
-          : [{ id: 'b', role: 'user', content: 'second', timestamp: 2, source: 'user' }],
+          : [{ id: 'b', role: 'user', content: 'second', createdAt: 2, source: 'user' }],
       parsedDocuments: [],
     }));
     const { result, rerender } = renderHook(
