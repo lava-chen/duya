@@ -92,6 +92,11 @@ export interface BotPromptContext {
   channels?: ChannelSnapshot[]
   /** Plan 479 tiered memory (memoryOwn/memoryUser/memoryProject sections). */
   memory?: BotMemoryContext
+  /**
+   * Absolute shard paths for the memory usage guidance section (479
+   * activation): this bot's own memory dir and its shared-user shard.
+   */
+  memoryRoots?: { own?: string; userShard?: string }
   /** @deprecated reserved — 476/409 automations (Automations section). */
   automations?: unknown
   /** @deprecated reserved — MCP server list (MCP section). */

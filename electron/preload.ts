@@ -610,12 +610,12 @@ export interface AgentProfileAPI {
   delete: (id: string) => Promise<boolean>
 }
 
-/** Per-bot channel bindings (plan 488). Credentials are write-only. */
+/** Per-bot channel bindings (gateway profile routes). Credentials untouched. */
 export interface BotChannelsAPI {
-  manifests: () => Promise<{ manifests: Array<Record<string, unknown>> }>
-  list: (agentId: string) => Promise<{ channels?: Array<{ platform: string; label: string; status: 'configured' }>; error?: string }>
-  connect: (agentId: string, input: { platform: string; label?: string; credential: string }) => Promise<{ ok: boolean; platform?: string; error?: string }>
-  disconnect: (agentId: string, platform: string) => Promise<{ ok: boolean; platform?: string; error?: string }>
+  manifests: () => Promise<{ platforms: Array<Record<string, unknown>> }>
+  list: (agentId: string) => Promise<{ routes?: Array<Record<string, unknown>>; error?: string }>
+  connect: (agentId: string, input: { platform: string; chatId?: string; threadId?: string; label?: string }) => Promise<{ ok: boolean; error?: string }>
+  disconnect: (agentId: string, platform: string, chatId?: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 export interface ConfigAgentsAPI {
@@ -2242,10 +2242,10 @@ const electronAPI: ElectronAPI = {
   botChannels: {
     manifests: () => ipcRenderer.invoke('botChannels:manifests'),
     list: (agentId: string) => ipcRenderer.invoke('botChannels:list', agentId),
-    connect: (agentId: string, input: { platform: string; label?: string; credential: string }) =>
+    connect: (agentId: string, input: { platform: string; chatId?: string; threadId?: string; label?: string }) =>
       ipcRenderer.invoke('botChannels:connect', agentId, input),
-    disconnect: (agentId: string, platform: string) =>
-      ipcRenderer.invoke('botChannels:disconnect', agentId, platform),
+    disconnect: (agentId: string, platform: string, chatId?: string) =>
+      ipcRenderer.invoke('botChannels:disconnect', agentId, platform, chatId),
   },
   configAgents: {
     list: () => ipcRenderer.invoke('config:agents:list'),

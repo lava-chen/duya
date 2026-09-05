@@ -25,6 +25,14 @@ export interface WakeRunOptions {
   agentProfileId?: string
 }
 
+/** What the wake runner reports back to the dispatcher (477 P4.3). */
+export interface WakeRunOutcome {
+  /** Joined assistant text of the run ('' when the run failed/produced none). */
+  output: string
+  /** Raw SSE events observed during the run (for send_to_agent detection). */
+  events: Array<{ type: string; data?: unknown }>
+}
+
 /**
  * POST a hidden wake prompt to an existing session. Best-effort: logs and
  * swallows failures so the caller (idle-dispatcher) never throws for a
@@ -40,11 +48,11 @@ export async function runWakePromptInExistingSession(
   sessionId: string,
   prompt: string,
   opts?: WakeRunOptions,
-): Promise<void> {
+): Promise<WakeRunOutcome> {
   const port = getAgentServerPort()
   if (!port) {
     getLogger().warn('Wake run skipped: agent server not running', { sessionId }, LogComponent.Automation)
-    return
+    return { output: '', events: [] }
   }
 
   // Resolve provider/model the same way cron does (default LLM provider).
@@ -53,7 +61,7 @@ export async function runWakePromptInExistingSession(
     resolved = resolveCronProvider(undefined)
   } catch {
     getLogger().warn('Wake run skipped: no provider configured', { sessionId }, LogComponent.Automation)
-    return
+    return { output: '', events: [] }
   }
 
   // Prefer the session's own working directory when it exists.
@@ -71,7 +79,7 @@ export async function runWakePromptInExistingSession(
     reason: 'background_notification',
   }, LogComponent.Automation)
 
-  await runPromptInSession({
+  return await runPromptInSession({
     sessionId,
     prompt,
     workingDirectory,
@@ -89,4 +97,6 @@ export async function runWakePromptInExistingSession(
       wakeRun: true,
     },
   })
+    .then((result) => ({ output: result.output, events: result.events }))
+    .catch(() => ({ output: '', events: [] }))
 }

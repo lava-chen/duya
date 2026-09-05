@@ -1,30 +1,36 @@
 /**
- * Bot channel binding IPC client (plan 488).
+ * Bot channel binding IPC client.
  *
- * Thin wrapper over the `botChannels` preload API. Each bot (agent) binds its
- * own channels — `agents/<agentId>/channels/<platform>/connection.json` — and
- * credentials live only in the main-process secret store (write-only here).
+ * A binding is a gateway profile route: (platform[, chatId]) → this bot's
+ * config-agent id. Inbound gateway messages (telegram/weixin/feishu/qq/…)
+ * on the bound platform/chat run with the bot's persona. Platform
+ * credentials live in the gateway's own channel config and are not touched
+ * here.
  */
 
-export interface BotChannelManifest {
+export interface GatewayPlatformInfo {
   platform: string;
-  displayName: string;
-  blurb: string;
-  credentialLabel: string;
-  availability: 'available' | 'coming-soon';
-  connectGuide?: string;
+  enabled: boolean;
+  hasCredentials: boolean;
 }
 
-export interface BotChannelConnection {
+export interface BotChannelRoute {
+  name?: string;
   platform: string;
-  label: string;
-  status: 'configured';
+  /** Bot config-agent id the channel is bound to. */
+  profile: string;
+  /** Present on chat-level routes; absent on platform-default routes. */
+  chatId?: string;
+  threadId?: string;
+  enabled?: boolean;
 }
 
 export interface BotChannelConnectInput {
   platform: string;
+  /** Omit to bind the whole platform (default route for every chat). */
+  chatId?: string;
+  threadId?: string;
   label?: string;
-  credential: string;
 }
 
 type ElectronAPI = NonNullable<typeof window.electronAPI>;
@@ -33,15 +39,15 @@ function api(): ElectronAPI['botChannels'] {
   return window.electronAPI.botChannels;
 }
 
-export async function listBotChannelManifests(): Promise<BotChannelManifest[]> {
-  const { manifests } = await api().manifests();
-  return manifests as unknown as BotChannelManifest[];
+export async function listGatewayPlatformInfo(): Promise<GatewayPlatformInfo[]> {
+  const res = (await api().manifests()) as unknown as { platforms?: GatewayPlatformInfo[] };
+  return res.platforms ?? [];
 }
 
-export async function listBotChannels(agentId: string): Promise<BotChannelConnection[]> {
-  const res = await api().list(agentId);
+export async function listBotChannelRoutes(agentId: string): Promise<BotChannelRoute[]> {
+  const res = (await api().list(agentId)) as { routes?: BotChannelRoute[]; error?: string };
   if (res.error) throw new Error(res.error);
-  return res.channels ?? [];
+  return res.routes ?? [];
 }
 
 export async function connectBotChannel(
@@ -52,7 +58,11 @@ export async function connectBotChannel(
   if (!res.ok) throw new Error(res.error ?? 'connect_failed');
 }
 
-export async function disconnectBotChannel(agentId: string, platform: string): Promise<void> {
-  const res = await api().disconnect(agentId, platform);
+export async function disconnectBotChannel(
+  agentId: string,
+  platform: string,
+  chatId?: string,
+): Promise<void> {
+  const res = await api().disconnect(agentId, platform, chatId);
   if (!res.ok) throw new Error(res.error ?? 'disconnect_failed');
 }

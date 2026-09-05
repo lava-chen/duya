@@ -29,7 +29,7 @@ import {
   readProjectTierEntries,
   readJoinedProjects,
 } from '../memory/tierReader.js'
-import { BOT_MEMORY_OWN_SECTION, BOT_MEMORY_USER_SECTION, BOT_MEMORY_PROJECT_SECTION } from '../memory/sections.js'
+import { BOT_MEMORY_OWN_SECTION, BOT_MEMORY_USAGE_SECTION, BOT_MEMORY_USER_SECTION, BOT_MEMORY_PROJECT_SECTION } from '../memory/sections.js'
 import { createBotPromptAssembly, computeBotContentHash, type BotPromptContext } from '../index.js'
 import { getMemorySection } from '../../sections/dynamic/memorySection.js'
 import type { BotMemoryContext, TierMemoryEntry } from '../memory/types.js'
@@ -210,20 +210,64 @@ describe('tierReader', () => {
     expect(user[0]).toMatchObject({ tier: 'user', kind: 'note', dedupeKey: 'person:alice', writerId: '' })
   })
 
-  it('reads project entries only for joined ids from projects.json', () => {
+  it('reads per-writer user shards from agents/<id>/user with the tierWriter frontmatter', () => {
+    // Exactly what electron/memory-state/tierWriter.ts writes for
+    // update_state (target memory, scope user): canonical_key/claim_type/
+    // scope_id vocabulary, not the phase-3 tier/kind/dedupe_key one.
+    write(
+      'agents/botB/user/pref-tea-1234abcd.md',
+      ['---', 'memory_id: m3', 'canonical_key: pref:tea', 'claim_type: profile', 'scope: user', 'scope_id: botB', 'project_id: null', 'status: active', 'importance: normal', 'updated_at: 2026-09-04T00:00:00Z', '---', '', 'User prefers tea.'].join('\n'),
+    )
+    const user = readUserTierEntries(root)
+    expect(user).toHaveLength(1)
+    expect(user[0]).toMatchObject({ tier: 'user', kind: 'profile', dedupeKey: 'pref:tea', writerId: 'botB' })
+    // No heading in tierWriter files — the fact line itself becomes the title.
+    expect(user[0].title).toBe('User prefers tea.')
+  })
+
+  it('reads project shards from projects/<id>/agents/<writer> attributed to the shard owner', () => {
     write('agents/botA/state/projects.json', JSON.stringify(['p1']))
     write(
-      'memory/projects/p1/notes.md',
-      ['---', 'tier: project', 'kind: note', 'dedupe_key: proj:fact', 'status: active', 'project_id: p1', 'updated_at: 2026-09-01T00:00:00Z', '---', '', 'Project fact.'].join('\n'),
+      'projects/p1/agents/botB/conv-1234abcd.md',
+      ['---', 'memory_id: m4', 'canonical_key: proj:convention', 'claim_type: log', 'scope: project', 'scope_id: botB', 'project_id: p1', 'status: active', 'importance: normal', 'updated_at: 2026-09-04T00:00:00Z', '---', '', 'Deploys freeze on Fridays.'].join('\n'),
     )
     write(
-      'memory/projects/p2/notes.md',
-      ['---', 'tier: project', 'kind: note', 'dedupe_key: proj:other', 'status: active', 'project_id: p2', 'updated_at: 2026-09-01T00:00:00Z', '---', '', 'Not joined.'].join('\n'),
+      'projects/p2/agents/botB/other-1234abcd.md',
+      ['---', 'memory_id: m5', 'canonical_key: proj:other', 'claim_type: log', 'scope: project', 'scope_id: botB', 'project_id: p2', 'status: active', 'importance: normal', 'updated_at: 2026-09-04T00:00:00Z', '---', '', 'Not joined.'].join('\n'),
     )
     expect(readJoinedProjects(root, 'botA')).toEqual(['p1'])
     const project = readProjectTierEntries(root, readJoinedProjects(root, 'botA'))
     expect(project).toHaveLength(1)
-    expect(project[0].projectId).toBe('p1')
+    expect(project[0]).toMatchObject({ tier: 'project', kind: 'log', projectId: 'p1', writerId: 'botB' })
+  })
+})
+
+describe('memoryUsage guidance (479 activation)', () => {
+  it('renders for every bot session, even without memory content', async () => {
+    const assembly = createBotPromptAssembly()
+    const out = await assembly.renderSections({ botAgentId: 'botA', botName: 'Alpha' })
+    expect(out).toContain('# Memory')
+    expect(out).toContain('update_state')
+    expect(out).toContain('your own memory first, then shared user memory')
+    // Content sections stay omitted — only the guidance renders.
+    expect(out).not.toContain('## Own memory')
+    expect(out).not.toContain('## Shared user memory')
+  })
+
+  it('includes the concrete shard paths from memoryRoots', () => {
+    const out = BOT_MEMORY_USAGE_SECTION.compute!({
+      botAgentId: 'botA',
+      memoryRoots: { own: '/root/agents/botA/memory', userShard: '/root/agents/botA/user' },
+    })
+    expect(out).toContain('/root/agents/botA/memory')
+    expect(out).toContain('/root/agents/botA/user')
+  })
+
+  it('sits before the content sections in catalog order', () => {
+    const names = createBotPromptAssembly().listSections()
+    expect(names).toContain('memoryUsage')
+    expect(names.indexOf('memoryUsage')).toBeLessThan(names.indexOf('memoryOwn'))
+    expect(names.indexOf('memoryUsage')).toBeLessThan(names.indexOf('memoryUser'))
   })
 })
 

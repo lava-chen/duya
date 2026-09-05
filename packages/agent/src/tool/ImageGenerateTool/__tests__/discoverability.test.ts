@@ -13,6 +13,8 @@ import { extractToolNamesFromSearchResult } from '../../../agent/tool-search-dis
 import { ToolSearchTool } from '../../ToolSearchTool/ToolSearchTool.js';
 import { IMAGE_GENERATE_TOOL_NAME } from '../ImageGenerateTool.js';
 import { isToolVisible, type ToolVisibilityConstraints } from '../../../agent-profile/ToolFilter.js';
+import { applyBotToolset } from '../../../agent-profile/bot-toolset.js';
+import type { AgentProfile } from '../../../agent-profile/types.js';
 
 const NO_CONSTRAINTS: ToolVisibilityConstraints = {
   disabledTools: [],
@@ -35,6 +37,22 @@ function sampleToolSearchResult(name: string, exposure: string, summary: string,
     description,
     '',
   ].join('\n');
+}
+
+function botConstraints(allowedTools?: string[]): ToolVisibilityConstraints {
+  const profile = applyBotToolset({
+    id: 'test-bot',
+    name: 'Test Bot',
+    role: 'assistant',
+    allowedTools: allowedTools ?? [],
+    disallowedTools: [],
+    createdAt: 0,
+    updatedAt: 0,
+  } as AgentProfile);
+  return {
+    profileAllowedPatterns: profile.allowedTools,
+    profileDisallowedPatterns: profile.disallowedTools,
+  };
 }
 
 describe('image_generate discoverability', () => {
@@ -96,5 +114,21 @@ describe('image_generate discoverability', () => {
       'Generate an image from a text prompt.',
     );
     expect(extractToolNamesFromSearchResult(sample)).toEqual([IMAGE_GENERATE_TOOL_NAME]);
+  });
+
+  // 2026-09-05: image_generate joined BOT_TOOLSET (grok static-surface
+  // parity) — bots see it from turn one via exact-name promotion; plain
+  // profiles still reach it only through tool_search.
+  it('is promoted from turn one on a bot profile (BOT_TOOLSET membership)', () => {
+    const registry = createBuiltinRegistry();
+    const constraints = botConstraints(['*']);
+    expect(
+      isToolVisible(
+        IMAGE_GENERATE_TOOL_NAME,
+        registry.getExposeMode(IMAGE_GENERATE_TOOL_NAME),
+        new Set(),
+        constraints,
+      ),
+    ).toBe(true);
   });
 });

@@ -61,7 +61,18 @@ export type WakePayload =
   | { kind: 'automation'; jobKey: string; fireKey: string; name?: string; quiet?: boolean }
   | { kind: 'inbound'; envelopeId: string; text?: string }
   | { kind: 'broadcast'; broadcastId: string; text: string }
-  | { kind: 'dm'; clientMsgId: string; fromAgentId: string; text: string; priority?: boolean }
+  | {
+      kind: 'dm'
+      clientMsgId: string
+      fromAgentId: string
+      fromAgentName?: string
+      text: string
+      priority?: boolean
+      /** Plan 477 P4.1 — sender intent (drives wake prompt + auto-return). */
+      intent?: string
+      /** Plan 477 P4.2 — computed bot→bot hop depth (dispatcher-enforced). */
+      hops?: number
+    }
   | { kind: 'user'; text: string; messageId?: string }
 
 /** Dedupe key of an item (the queue collapses on it). */

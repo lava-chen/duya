@@ -38,9 +38,19 @@ describe('botCommsRules (P2.2)', () => {
     expect(renderBotCommsRules({})).toBeNull()
   })
 
-  it('stays within its 2000-char budget', () => {
+  it('stays within its budget', () => {
     const text = renderBotCommsRules({ botAgentId: 'alpha' })!
-    expect(text.length).toBeLessThanOrEqual(2000)
+    // 1500 (pre-style-port) + ~2900 for the grok "Reply length and shape" port.
+    expect(text.length).toBeLessThanOrEqual(4600)
+  })
+
+  it('renders the reply length and shape style rules (grok 0.18 port)', () => {
+    const text = renderBotCommsRules({ botAgentId: 'alpha' })!
+    expect(text).toContain('## Reply length and shape')
+    expect(text).toContain('Match their length')
+    expect(text).toContain('two to four separate SendMessage calls')
+    expect(text).toContain('Prose, not outlines')
+    expect(text).toContain('"Done —" or "Fixed —"')
   })
 
   it('is registered in the factory catalog and renders through the assembly', async () => {

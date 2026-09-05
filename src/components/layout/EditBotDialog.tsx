@@ -1,34 +1,24 @@
 "use client";
 
 /**
- * EditBotDialog — grok-style bot identity editing (Plan 483 P2).
+ * EditBotDialog — bot identity editing (Plan 483 P2; avatar revised
+ * 2026-09-05: image upload + color circle, shape tokens removed).
  *
- * Edits the runtime identity of an existing bot: name, description and
- * avatar character (shape × color). Writes go through
- * `config:agents:updateBotProfile` → `agents/<id>/profile.json` (the
- * runtime identity source, plan 485 §2.4), so sidebar + settings reflect
- * the change without rewriting config.toml.
+ * Edits the runtime identity of an existing bot: name, description, avatar
+ * (uploaded image via the main-process file dialog, or a color token for
+ * the initial circle). Form state and the save path live in
+ * `useBotContactForm` (shared with the bot-settings side panel, P2.1c);
+ * this component owns the modal chrome and the Escape/overlay dismissal.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
-import { updateBotIdentity, updateConfigAgent } from "@/lib/agent-profile-ipc";
-import { listProvidersIPC } from "@/lib/ipc-client";
-import {
-  buildBotModelGroups,
-  findRawModelInGroups,
-  prefixedToRaw,
-} from "@/lib/bot-model-options";
-import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
+import { useBotContactForm } from "@/hooks/use-bot-contact-form";
 import { BotModelField } from "./BotModelField";
-import {
-  BOT_AVATAR_COLORS,
-  BOT_AVATAR_SHAPES,
-  type BotAvatarShape,
-} from "@/lib/bot-avatar";
+import { BOT_AVATAR_COLORS } from "@/lib/bot-avatar";
 import { BotCharacterAvatar } from "./sidebar/BotCharacterAvatar";
 import type { BotContact } from "./sidebar/bot-contacts";
 
@@ -43,35 +33,28 @@ export interface EditBotDialogProps {
 
 export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDialogProps) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [shape, setShape] = useState<BotAvatarShape>("blob");
-  const [color, setColor] = useState("blue");
-  const [model, setModel] = useState("");
-  const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const nameRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    if (isOpen && contact) {
-      setName(contact.name);
-      setDescription(contact.description ?? "");
-      setShape((contact.avatarShape as BotAvatarShape) ?? "blob");
-      setColor(contact.avatarColor ?? "blue");
-      setModel(contact.model ?? "");
-      setSubmitting(false);
-      setError(null);
-      setTimeout(() => nameRef.current?.focus(), 80);
-      // Load model options (best-effort; failure must not block saving).
-      setModelsLoading(true);
-      listProvidersIPC()
-        .then((providers) => setModelGroups(buildBotModelGroups(providers)))
-        .catch(() => setModelGroups([]))
-        .finally(() => setModelsLoading(false));
-    }
-  }, [isOpen, contact]);
+  const {
+    name,
+    setName,
+    description,
+    setDescription,
+    color,
+    setColor,
+    avatarUrl,
+    avatarBusy,
+    uploadAvatar,
+    removeAvatar,
+    model,
+    setModel,
+    modelGroups,
+    modelsLoading,
+    submitting,
+    error,
+    canSubmit,
+    extraModelOption,
+    nameRef,
+    save,
+  } = useBotContactForm({ active: isOpen, contact, onSaved });
 
   useEffect(() => {
     if (!isOpen) return;
@@ -84,40 +67,10 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
 
   if (!isOpen || !contact) return null;
 
-  const canSubmit = name.trim().length > 0 && !submitting;
-
-  // If the configured model is no longer exposed by any provider, keep a
-  // synthetic option so the select never shows a blank value and saving
-  // without touching the field preserves the configured model.
-  const configuredModel = contact.model ?? "";
-  const extraModelOption =
-    configuredModel && !findRawModelInGroups(configuredModel, modelGroups)
-      ? configuredModel
-      : undefined;
-
   const handleSave = async () => {
-    if (!canSubmit) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      // Identity first (profile.json), then the model (config.toml) — if the
-      // identity write fails we must not leave the config half-updated.
-      await updateBotIdentity(contact.agentId, {
-        name: name.trim(),
-        description: description.trim() || undefined,
-        avatarShape: shape,
-        avatarColor: color,
-      });
-      await updateConfigAgent(contact.agentId, {
-        name: name.trim(),
-        description: description.trim() || undefined,
-        model: model.trim() ? prefixedToRaw(model.trim()) : undefined,
-      });
-      onSaved(contact.agentId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setSubmitting(false);
-    }
+    // The hook resets `submitting` in its finally block, so closing on
+    // success never leaves a stuck pending state behind.
+    if (await save()) onCancel();
   };
 
   return (
@@ -186,44 +139,45 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
           {t("bot.create.avatar")}
         </div>
         <div className="flex items-center gap-3 mb-3">
-          <BotCharacterAvatar name={name || "?"} agentId="preview" avatarShape={shape} avatarColor={color} size={34} />
-          <div className="flex flex-wrap gap-1.5">
-            {BOT_AVATAR_SHAPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setShape(s)}
-                aria-label={s}
-                className="rounded-md p-1 transition-colors"
-                style={{
-                  background: shape === s ? "var(--surface-hover)" : "transparent",
-                  outline: shape === s ? "2px solid var(--accent)" : "none",
-                }}
-              >
-                <BotCharacterAvatar name={s} agentId={s} avatarShape={s} avatarColor={color} size={20} />
-              </button>
-            ))}
+          <BotCharacterAvatar
+            name={name || "?"}
+            agentId={contact?.agentId ?? "preview"}
+            avatarUrl={avatarUrl}
+            avatarColor={color}
+            size={34}
+          />
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void uploadAvatar()}>
+              {avatarUrl ? t("bot.avatar.replace") : t("bot.avatar.upload")}
+            </Button>
+            {avatarUrl && (
+              <Button variant="secondary" size="sm" disabled={avatarBusy} onClick={() => void removeAvatar()}>
+                {t("bot.avatar.remove")}
+              </Button>
+            )}
           </div>
         </div>
-        <div className="flex flex-wrap gap-1.5 mb-5">
-          {BOT_AVATAR_COLORS.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              onClick={() => setColor(c.id)}
-              aria-label={c.label}
-              title={c.label}
-              className="rounded-full transition-transform"
-              style={{
-                width: 18,
-                height: 18,
-                backgroundColor: c.value,
-                outline: color === c.id ? "2px solid var(--text)" : "none",
-                outlineOffset: 1,
-              }}
-            />
-          ))}
-        </div>
+        {!avatarUrl && (
+          <div className="flex flex-wrap gap-1.5 mb-5">
+            {BOT_AVATAR_COLORS.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setColor(c.id)}
+                aria-label={c.label}
+                title={c.label}
+                className="rounded-full transition-transform"
+                style={{
+                  width: 18,
+                  height: 18,
+                  backgroundColor: c.value,
+                  outline: color === c.id ? "2px solid var(--text)" : "none",
+                  outlineOffset: 1,
+                }}
+              />
+            ))}
+          </div>
+        )}
 
         {error && (
           <div className="text-sm mb-3" style={{ color: "var(--error, #ef4444)" }}>

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Thread } from '@/stores/conversation-store';
+import type { Message } from '@/types/message';
 import {
   buildBotContacts,
   deriveBotAvatarLabel,
@@ -7,6 +8,8 @@ import {
   deriveBotIdFromName,
   deriveBotPlaceholderThreadId,
   partitionBotContacts,
+  peekBotMessagePreview,
+  previewTextFromContent,
   resolveBotOpenThreadId,
   type BotSource,
 } from './bot-contacts';
@@ -41,13 +44,13 @@ describe('buildBotContacts (plan 483 P1.2)', () => {
     expect(reviewer?.boundThreadId).toBeNull();
   });
 
-  it('carries avatar character tokens through', () => {
+  it('carries avatar color and image url through', () => {
     const contacts = buildBotContacts(
-      [{ id: 'fe', name: 'FE', title: 'UI', description: '', avatarShape: 'hex', avatarColor: 'blue' }],
+      [{ id: 'fe', name: 'FE', title: 'UI', description: '', avatarColor: 'blue', avatarUrl: 'duya-file:///a/avatar.png?v=1' }],
       [],
     );
-    expect(contacts[0].avatarShape).toBe('hex');
     expect(contacts[0].avatarColor).toBe('blue');
+    expect(contacts[0].avatarUrl).toBe('duya-file:///a/avatar.png?v=1');
     expect(contacts[0].title).toBe('UI');
   });
 
@@ -61,6 +64,16 @@ describe('buildBotContacts (plan 483 P1.2)', () => {
     expect(contacts).toHaveLength(1);
     expect(contacts[0].boundThreadId).toBe('bot:fe:session-new');
     expect(contacts[0].lastActivity).toBe(300);
+  });
+
+  it('binds the bare 2-part persistent session (plan 477 P3.1 `bot:<agentId>`)', () => {
+    const threads: Thread[] = [
+      makeThread({ id: 'bot:fe', updatedAt: 500 }),
+      makeThread({ id: 'bot:other', updatedAt: 900 }),
+    ];
+    const contacts = buildBotContacts([{ id: 'fe', name: 'FE', title: '', description: '' }], threads);
+    expect(contacts[0].boundThreadId).toBe('bot:fe');
+    expect(contacts[0].lastActivity).toBe(500);
   });
 
   it('sorts contacts by display name case-insensitively', () => {
@@ -217,5 +230,164 @@ describe('avatar helpers', () => {
     expect(deriveBotAvatarLabel('  前端专家')).toBe('前');
     expect(deriveBotAvatarLabel('   ')).toBe('·');
     expect(deriveBotAvatarLabel('')).toBe('·');
+  });
+});
+
+describe('previewTextFromContent (plan 483 P1.4)', () => {
+  it('returns plain string content unchanged', () => {
+    expect(previewTextFromContent('Hello, world!')).toBe('Hello, world!');
+  });
+
+  it('joins text blocks from a ContentBlock[] array', () => {
+    const content = [
+      { type: 'image', url: 'https://example.com/x.png' },
+      { type: 'text', text: 'first line' },
+      { type: 'text', text: 'second line' },
+    ];
+    expect(previewTextFromContent(content)).toBe('first line\nsecond line');
+  });
+
+  it('returns empty string for nullish / non-array / non-string input', () => {
+    expect(previewTextFromContent(undefined)).toBe('');
+    expect(previewTextFromContent(42 as unknown as string)).toBe('');
+    expect(previewTextFromContent({ not: 'a string or array' } as unknown as string)).toBe('');
+  });
+});
+
+describe('peekBotMessagePreview (plan 483 P1.4, rakazo parity)', () => {
+  function userMessage(overrides: Partial<Message>): Message {
+    return {
+      id: 'm',
+      role: 'user',
+      content: 'fallback',
+      timestamp: 1000,
+      ...overrides,
+    };
+  }
+  function assistantMessage(overrides: Partial<Message>): Message {
+    return {
+      id: 'm',
+      role: 'assistant',
+      content: 'fallback',
+      timestamp: 1000,
+      ...overrides,
+    };
+  }
+
+  it('returns null for empty / missing transcripts', () => {
+    expect(peekBotMessagePreview(undefined)).toBeNull();
+    expect(peekBotMessagePreview([])).toBeNull();
+  });
+
+  it('returns the latest user message text', () => {
+    const messages: Message[] = [
+      userMessage({ id: '1', content: 'first', timestamp: 100 }),
+      userMessage({ id: '2', content: 'second', timestamp: 200 }),
+    ];
+    expect(peekBotMessagePreview(messages)).toEqual({
+      text: 'second',
+      timestamp: 200,
+    });
+  });
+
+  it('prefers displayContent over content for user rows', () => {
+    const messages: Message[] = [
+      userMessage({
+        id: '1',
+        content: 'system-prefix hidden context body',
+        displayContent: 'show this',
+        timestamp: 100,
+      }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('show this');
+  });
+
+  it('hides optimistic / failed rows (status sending/failed) and falls through to next', () => {
+    const messages: Message[] = [
+      userMessage({ id: '1', content: 'persisted', timestamp: 100 }),
+      userMessage({ id: '2', content: 'in flight', timestamp: 200, status: 'sending' }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('persisted');
+  });
+
+  it('only includes assistant messages when source === "send_message"', () => {
+    const messages: Message[] = [
+      assistantMessage({ id: '1', content: 'scratchpad text', source: 'scratchpad', timestamp: 100 }),
+      assistantMessage({ id: '2', content: 'tool_use text', source: 'tool_use', timestamp: 200 }),
+      assistantMessage({ id: '3', content: 'voice', source: 'send_message', timestamp: 300 }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('voice');
+  });
+
+  it('falls back to the legacy assistant + text convention when source is absent', () => {
+    const messages: Message[] = [
+      assistantMessage({ id: '1', content: 'thinking', msgType: 'thinking', timestamp: 100 }),
+      assistantMessage({ id: '2', content: 'plain', msgType: 'text', timestamp: 200 }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('plain');
+  });
+
+  it('skips compact boundaries, task notifications, and tool/system rows', () => {
+    const messages: Message[] = [
+      {
+        id: 'b',
+        role: 'assistant',
+        content: 'boundary',
+        timestamp: 50,
+        isCompactBoundary: true,
+      },
+      {
+        id: 't',
+        role: 'tool',
+        content: 'tool result',
+        timestamp: 60,
+        msgType: 'tool_result',
+      },
+      {
+        id: 's',
+        role: 'system',
+        content: 'task notification',
+        timestamp: 70,
+        isTaskNotification: true,
+      },
+      userMessage({ id: 'u', content: 'user prompt', timestamp: 80 }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('user prompt');
+  });
+
+  it('trims and collapses internal whitespace in the preview', () => {
+    const messages: Message[] = [
+      userMessage({
+        id: '1',
+        content: '  hello\n\nworld  \n\n  again  ',
+        timestamp: 100,
+      }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('hello world again');
+  });
+
+  it('caps long text at 240 chars and appends an ellipsis', () => {
+    const long = 'a'.repeat(500);
+    const messages: Message[] = [
+      userMessage({ id: '1', content: long, timestamp: 100 }),
+    ];
+    const snap = peekBotMessagePreview(messages);
+    expect(snap).not.toBeNull();
+    expect(snap!.text.length).toBeLessThanOrEqual(240);
+    expect(snap!.text.endsWith('…')).toBe(true);
+  });
+
+  it('skips bot→bot DM marker cards (source=agent_dm) so intent text does not leak', () => {
+    const messages: Message[] = [
+      assistantMessage({
+        id: '1',
+        content: 'intent: ask the user about deadlines',
+        source: 'agent_dm',
+        agentDmMeta: { direction: 'sent', peerId: 'b2', peerName: 'bot-2' },
+        timestamp: 100,
+      }),
+      userMessage({ id: '2', content: 'real user prompt', timestamp: 200 }),
+    ];
+    expect(peekBotMessagePreview(messages)?.text).toBe('real user prompt');
   });
 });

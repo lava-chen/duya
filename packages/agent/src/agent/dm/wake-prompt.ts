@@ -14,6 +14,35 @@ import {
 import { clampAgentMessage } from "./envelope.js";
 
 /**
+ * Intent-specific action paragraph (plan 477 P4.1, mirrors rakazo's
+ * intent-driven wake prompts). `fromName`/`fromId` personalize the reply
+ * instructions; `clientMsgId` lets the receiver thread its reply via
+ * SendToAgent's replyToMessageId so the dispatcher can chain hop counts.
+ */
+function intentActionParagraph(
+  intent: AgentDmEnvelope["intent"],
+  fromName: string,
+  fromId: string,
+  clientMsgId: string,
+): string {
+  const replyHow = `reply to ${fromName} with SendToAgent (their id: ${fromId}, replyToMessageId: ${clientMsgId})`;
+  switch (intent) {
+    case "request":
+      return `This is a request. Complete it. Your final written response will be AUTOMATICALLY returned to ${fromName} as the result — you do not need to call SendToAgent just to deliver the outcome. Use ${replyHow} only for a useful interim question or status update. Sending does not end your turn: continue independent work after a useful update.`;
+    case "question":
+      return `This is a question. Answer it. Your final written response will be AUTOMATICALLY returned to ${fromName} as the answer — do not call SendToAgent just to deliver it. Use ${replyHow} only for a useful interim status or follow-up question.`;
+    case "result":
+      return `This is the result of an earlier request you made. Review it and act on it if needed — no reply is expected unless something is off.`;
+    case "status":
+      return `This is a status update. Acknowledge only if something needs your attention; otherwise continue your current work.`;
+    case "fyi":
+      return `This is an FYI. No reply is expected and staying silent is fine — act only if it genuinely affects your current work.`;
+    default:
+      return `If it needs a reply or an action, handle it: ${replyHow}, which reaches them on a later turn — not a live back-and-forth — and use SendMessage to tell your user only when you have a real result to share.`;
+  }
+}
+
+/**
  * Build the wake prompt injected when an agent receives an inbound DM.
  *
  * This is the "cue" that marks the incoming message as coming from another
@@ -25,7 +54,7 @@ import { clampAgentMessage } from "./envelope.js";
 export function buildAgentInboundWakePrompt(
   envelope: AgentDmEnvelope,
 ): string {
-  const { from, text, images = [], priority = false } = envelope;
+  const { from, text, images = [], priority = false, intent, clientMsgId } = envelope;
   const lines: string[] = [];
 
   // Cue line
@@ -36,11 +65,11 @@ export function buildAgentInboundWakePrompt(
   // Priority vs normal message
   if (priority) {
     lines.push(
-      "This is a PRIORITY instruction from another assistant — not the user typing here. It interrupted your previous non-user work. Drop conflicting in-flight work and follow it now. Your user can already see it in this chat.",
+      "This is a PRIORITY instruction from another assistant — not the user typing here. It interrupted your previous non-user work. Drop conflicting in-flight work and follow it now. The message is visible in your chat as an agent-message card.",
     );
   } else {
     lines.push(
-      "This is another assistant reaching out — not the user typing here. It arrived asynchronously, and your user can already see it in this chat.",
+      "This is another assistant reaching out — not the user typing here. It arrived asynchronously, and it is visible in your chat as an agent-message card.",
     );
   }
 
@@ -67,7 +96,7 @@ export function buildAgentInboundWakePrompt(
 
   lines.push("");
   lines.push(
-    `If it needs a reply or an action, handle it: reply to ${from.name} with SendToAgent (their id: ${from.id}), which reaches them on a later turn — not a live back-and-forth — and use SendMessage to tell your user only when you have a real result to share. If it is just an FYI with nothing for you to do, it is fine to stay silent — no need to reply just to acknowledge it.`,
+    intentActionParagraph(intent, from.name, from.id, clientMsgId),
   );
 
   return lines.join("\n");

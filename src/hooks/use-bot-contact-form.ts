@@ -1,0 +1,195 @@
+"use client";
+
+/**
+ * use-bot-contact-form — shared edit-form state for a bot's runtime
+ * identity (name, description, avatar, model).
+ *
+ * Extracted from EditBotDialog so the dialog and the bot-settings side
+ * panel (plan 483 P2.1c) render the same fields over the same save path:
+ * identity → `agents/<id>/profile.json` (updateBotIdentity), then model →
+ * config.toml (updateConfigAgent) — the runtime identity source from
+ * plan 485 §2.4.
+ *
+ * The avatar image is NOT part of the form save: upload/remove are
+ * immediate main-process actions (dialog + copy + profile write) exposed
+ * through `uploadAvatar` / `removeAvatar`, which refresh the contact via
+ * `onSaved` when they succeed.
+ *
+ * The form seeds once per contact id while `active`. It deliberately does
+ * NOT re-seed when the contact object identity changes: merged contact
+ * lists are rebuilt on thread updates, and re-seeding on every rebuild
+ * would wipe in-progress edits while the bound session is streaming.
+ */
+
+import { useEffect, useRef, useState } from "react";
+import {
+  updateBotIdentity,
+  updateConfigAgent,
+  uploadBotAvatar,
+  clearBotAvatar,
+} from "@/lib/agent-profile-ipc";
+import { listProvidersIPC } from "@/lib/ipc-client";
+import {
+  buildBotModelGroups,
+  findRawModelInGroups,
+  prefixedToRaw,
+} from "@/lib/bot-model-options";
+import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
+import type { BotContact } from "@/components/layout/sidebar/bot-contacts";
+
+export interface UseBotContactFormOptions {
+  /** Seeds the form and loads model options; false holds defaults. */
+  active: boolean;
+  /** The bot being edited (null until the host resolves it). */
+  contact: BotContact | null;
+  /** Called after a successful save / avatar change (hosts reload their contact lists). */
+  onSaved?: (agentId: string) => void;
+}
+
+export function useBotContactForm({ active, contact, onSaved }: UseBotContactFormOptions) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [color, setColor] = useState("blue");
+  /** Current avatar image URL (live state; seeds from the contact). */
+  const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const [model, setModel] = useState("");
+  const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  // Which contact the current field values belong to. Guard both the seed
+  // effect and `save` so a closed/reset host never writes a half-seeded
+  // form back to config.
+  const seededForRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      // Re-arm so the next activation seeds fresh values (dialog reopen).
+      seededForRef.current = null;
+      return;
+    }
+    if (!contact || seededForRef.current === contact.agentId) return;
+    seededForRef.current = contact.agentId;
+    setName(contact.name);
+    setDescription(contact.description ?? "");
+    setColor(contact.avatarColor ?? "blue");
+    setAvatarUrl(contact.avatarUrl);
+    setModel(contact.model ?? "");
+    setSubmitting(false);
+    setError(null);
+    setTimeout(() => nameRef.current?.focus(), 80);
+    // Load model options (best-effort; failure must not block saving).
+    setModelsLoading(true);
+    listProvidersIPC()
+      .then((providers) => setModelGroups(buildBotModelGroups(providers)))
+      .catch(() => setModelGroups([]))
+      .finally(() => setModelsLoading(false));
+  }, [active, contact]);
+
+  const canSubmit =
+    name.trim().length > 0 &&
+    !submitting &&
+    !!contact &&
+    seededForRef.current === contact.agentId;
+
+  // If the configured model is no longer exposed by any provider, keep a
+  // synthetic option so the select never shows a blank value and saving
+  // without touching the field preserves the configured model.
+  const configuredModel = contact?.model ?? "";
+  const extraModelOption =
+    configuredModel && !findRawModelInGroups(configuredModel, modelGroups)
+      ? configuredModel
+      : undefined;
+
+  const save = async (): Promise<boolean> => {
+    if (!contact || !canSubmit) return false;
+    setSubmitting(true);
+    setError(null);
+    try {
+      // Identity first (profile.json), then the model (config.toml) — if the
+      // identity write fails we must not leave the config half-updated.
+      await updateBotIdentity(contact.agentId, {
+        name: name.trim(),
+        description: description.trim() || undefined,
+        avatarColor: color,
+      });
+      await updateConfigAgent(contact.agentId, {
+        name: name.trim(),
+        description: description.trim() || undefined,
+        model: model.trim() ? prefixedToRaw(model.trim()) : undefined,
+      });
+      onSaved?.(contact.agentId);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /** Open the file dialog and install the picked image as the bot's avatar. */
+  const uploadAvatar = async (): Promise<boolean> => {
+    if (!contact || avatarBusy) return false;
+    setAvatarBusy(true);
+    setError(null);
+    try {
+      const result = await uploadBotAvatar(contact.agentId);
+      if (result) {
+        setAvatarUrl(result.avatarUrl);
+        onSaved?.(contact.agentId);
+      }
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  /** Remove the avatar image; the colored initial circle takes over. */
+  const removeAvatar = async (): Promise<boolean> => {
+    if (!contact || avatarBusy) return false;
+    setAvatarBusy(true);
+    setError(null);
+    try {
+      await clearBotAvatar(contact.agentId);
+      setAvatarUrl(undefined);
+      onSaved?.(contact.agentId);
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      return false;
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  return {
+    name,
+    setName,
+    description,
+    setDescription,
+    color,
+    setColor,
+    avatarUrl,
+    avatarBusy,
+    uploadAvatar,
+    removeAvatar,
+    model,
+    setModel,
+    modelGroups,
+    modelsLoading,
+    submitting,
+    error,
+    canSubmit,
+    extraModelOption,
+    nameRef,
+    save,
+  };
+}
+
+export type BotContactForm = ReturnType<typeof useBotContactForm>;

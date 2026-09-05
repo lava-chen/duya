@@ -29,6 +29,20 @@ export interface SendMessageCardMeta {
   secret?: { label: string; connector: string; field: string };
 }
 
+/** Plan 477 P4.4: bot→bot DM marker payload (round-trips via message
+ *  metadata.agentDm → MessageRow.agent_dm_meta). */
+export interface AgentDmCardMeta {
+  direction: 'sent' | 'received';
+  peerId: string;
+  peerName: string;
+  /** Raw DM body without the "→ peer: " transcript prefix (plan 497). */
+  text?: string;
+  intent?: string | null;
+  priority?: boolean;
+  hops?: number;
+  clientMsgId?: string;
+}
+
 export interface ContentBlock {
   type: string;
   [key: string]: unknown;
@@ -81,6 +95,9 @@ export interface Message {
 
   /** Plan 489 P2.2: SendMessage card payload for bot-direct card rendering. */
   sendMessageMeta?: SendMessageCardMeta | null;
+
+  /** Plan 477 P4.4: bot→bot DM marker payload for marker card rendering. */
+  agentDmMeta?: AgentDmCardMeta | null;
 
   /** Plan 491 P1.2: Sequence number for entry ledger ordering.
    *  Used for windowed replay on reconnection (afterSeq cursor). */

@@ -50,6 +50,11 @@ export default defineConfig({
     extensions: ['.mjs', '.mts', '.ts', '.tsx', '.js', '.jsx', '.json'],
     alias: [
       { find: '@', replacement: path.resolve(__dirname, './src') },
+      // Pin better-sqlite3 to the root-managed copy. packages/agent pins
+      // v11 (no node-24 prebuilt exists), so its package-local duplicate
+      // loads with a stale NODE_MODULE_VERSION; the root copy is the one
+      // the ensure-sqlite-abi pretest swaps per runtime.
+      { find: /^better-sqlite3$/, replacement: path.resolve(__dirname, './node_modules/better-sqlite3') },
       // Resolve workspace plugin-core from THIS checkout (worktree-safe;
       // the node_modules junction pins the primary checkout).
       { find: '@duya/plugin-core', replacement: PLUGIN_CORE_ROOT },

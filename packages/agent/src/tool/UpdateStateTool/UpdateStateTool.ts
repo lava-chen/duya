@@ -8,6 +8,17 @@
  * a bot can only write its own shard — shared facts are written as
  * corrections into the writer's own shard (newest-wins dedupe).
  *
+ * Plan 481 amendment (profile.set / avatar.set, 2026-09-05): the identity
+ * subactions from the original T1 scope. target=profile|avatar write the
+ * bot's runtime identity in `agents/<id>/profile.json` (Plan 485 §2.4
+ * single identity source) through the bot-identity IPC bridge. grok
+ * parity: profile.set takes name and/or description; title is host-managed
+ * (485 §2.4) and NOT model-editable. avatar.set takes a color token
+ * (colored initial-circle avatar) and/or an image path — typically the
+ * absolute path returned by image_generate; the main process copies the
+ * file into the bot's agent directory (validated extension/size/magic
+ * bytes). avatar.clear resets to the default avatar.
+ *
  * Tier mapping (Plan 479 store):
  *   (memory, agent)   → tier 'agent'    — the bot's own memory
  *   (memory, user)    → tier 'user'     — the bot's shard of the user tier
@@ -15,7 +26,9 @@
  *
  * Permission matrix (Plan 481 §3): own tier = allow; user/project writes
  * and project membership actions = ask (executor's checkPermissions stage,
- * plan 419 bus); invalid combinations = deny.
+ * plan 419 bus); invalid combinations = deny. Identity subactions are
+ * always self-scoped (the tool writes the CALLING bot's profile only —
+ * there is no agentId parameter) → allow without confirmation.
  */
 
 import type { ToolResult, Tool, ToolUseContext } from '../../types.js';
@@ -47,6 +60,17 @@ export interface MemoryTierWritePayload {
   kind: TierEntryKind;
 }
 
+/** Payload sent over the bot-identity bridge (profile.set / avatar.set). */
+export interface BotIdentityPatchPayload {
+  actorAgentId: string;
+  subaction: 'profile.set' | 'avatar.set' | 'avatar.clear';
+  name?: string;
+  description?: string;
+  /** avatar.set: absolute path of an image file to install as the avatar. */
+  avatarImagePath?: string;
+  avatarColor?: string;
+}
+
 export interface MemoryTierBridgeResponse {
   success: boolean;
   result?: unknown;
@@ -58,17 +82,26 @@ export type MemoryTierBridge = (
   context?: ToolUseContext,
 ) => Promise<MemoryTierBridgeResponse>;
 
+export type BotIdentityBridge = (
+  payload: BotIdentityPatchPayload,
+  context?: ToolUseContext,
+) => Promise<MemoryTierBridgeResponse>;
+
 // ============================================================
 // Input resolution — shared by checkPermissions and execute
 // ============================================================
 
 export interface UpdateStateInput {
-  target: 'memory' | 'project';
+  target: 'memory' | 'project' | 'profile' | 'avatar';
   scope: 'agent' | 'user' | 'project';
-  action: 'write' | 'forget' | 'create' | 'join' | 'leave';
+  action: 'write' | 'forget' | 'create' | 'join' | 'leave' | 'set' | 'clear';
   project?: string;
   fact?: string;
   kind?: string;
+  name?: string;
+  description?: string;
+  avatarImagePath?: string;
+  avatarColor?: string;
 }
 
 export type ResolvedOperation =
@@ -79,6 +112,23 @@ export type ResolvedOperation =
       /** ask vs allow at the permission stage. */
       sharedLayer: boolean;
       /** create/join/leave are structured no-ops until 479 Phase 3. */
+      membership: boolean;
+      fact: string;
+      dedupeKey: string;
+    }
+  | {
+      ok: true;
+      /** Identity subactions route to the bot-identity bridge, not tiers. */
+      identity: {
+        subaction: 'profile.set' | 'avatar.set' | 'avatar.clear';
+        name?: string;
+        description?: string;
+        avatarImagePath?: string;
+        avatarColor?: string;
+      };
+      tier: MemoryTier;
+      needsProject: boolean;
+      sharedLayer: boolean;
       membership: boolean;
       fact: string;
       dedupeKey: string;
@@ -99,8 +149,75 @@ export function resolveUpdateStateOperation(input: unknown): ResolvedOperation {
   const scope = raw.scope;
   const action = raw.action;
 
+  // ── Identity subactions (Plan 481 amendment: profile.set / avatar.*) ──
+  // Self-scoped: no scope/project, routed to the bot-identity bridge.
+  if (target === 'profile' || target === 'avatar') {
+    if (scope !== undefined && scope !== 'agent') {
+      return { ok: false, code: 'INVALID_INPUT', message: "Identity updates are self-scoped: scope must be 'agent' or omitted." };
+    }
+    if (target === 'profile') {
+      if (action !== 'set') {
+        return { ok: false, code: 'INVALID_INPUT', message: "target='profile' only supports action='set'." };
+      }
+      const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 64) : '';
+      const description = typeof raw.description === 'string' ? raw.description.trim().slice(0, 300) : '';
+      if (!name && !description) {
+        return { ok: false, code: 'INVALID_INPUT', message: 'profile.set requires a name and/or description to change.' };
+      }
+      return {
+        ok: true,
+        identity: {
+          subaction: 'profile.set',
+          ...(name ? { name } : {}),
+          ...(description ? { description } : {}),
+        },
+        tier: 'agent',
+        needsProject: false,
+        sharedLayer: false,
+        membership: false,
+        fact: '',
+        dedupeKey: '',
+      };
+    }
+    // target === 'avatar'
+    if (action !== 'set' && action !== 'clear') {
+      return { ok: false, code: 'INVALID_INPUT', message: "target='avatar' supports action='set' or 'clear'." };
+    }
+    if (action === 'clear') {
+      return {
+        ok: true,
+        identity: { subaction: 'avatar.clear' },
+        tier: 'agent',
+        needsProject: false,
+        sharedLayer: false,
+        membership: false,
+        fact: '',
+        dedupeKey: '',
+      };
+    }
+    const imagePath = typeof raw.avatarImagePath === 'string' ? raw.avatarImagePath.trim() : '';
+    const color = typeof raw.avatarColor === 'string' ? raw.avatarColor.trim() : '';
+    if (!imagePath && !color) {
+      return { ok: false, code: 'INVALID_INPUT', message: 'avatar.set requires avatarImagePath and/or avatarColor.' };
+    }
+    return {
+      ok: true,
+      identity: {
+        subaction: 'avatar.set',
+        ...(imagePath ? { avatarImagePath: imagePath.slice(0, 1024) } : {}),
+        ...(color ? { avatarColor: color } : {}),
+      },
+      tier: 'agent',
+      needsProject: false,
+      sharedLayer: false,
+      membership: false,
+      fact: '',
+      dedupeKey: '',
+    };
+  }
+
   if (target !== 'memory' && target !== 'project') {
-    return { ok: false, code: 'INVALID_INPUT', message: "target must be 'memory' or 'project'." };
+    return { ok: false, code: 'INVALID_INPUT', message: "target must be 'memory', 'project', 'profile' or 'avatar'." };
   }
   if (scope !== 'agent' && scope !== 'user' && scope !== 'project') {
     return { ok: false, code: 'INVALID_INPUT', message: "scope must be 'agent', 'user' or 'project'." };
@@ -196,7 +313,7 @@ function structuredResult(
 export class UpdateStateTool implements Tool {
   readonly name = UPDATE_STATE_TOOL_NAME;
 
-  readonly description = `Persist or retract durable facts in your long-term memory (update_state).
+  readonly description = `Persist or retract durable facts in your long-term memory (update_state), and update your own identity (name, description, avatar).
 
 - target='memory', scope='agent': your own private memory (default choice). Allowed without confirmation.
 - target='memory', scope='user': your shard of the user-level shared memory. Requires user confirmation.
@@ -204,6 +321,9 @@ export class UpdateStateTool implements Tool {
 - action='write' stores a short fact (≤ ${MAX_FACT_CHARS} chars); re-writing the same fact updates it (newest wins).
 - action='forget' retracts a previously stored fact (pass its exact text).
 - action='create'/'join'/'leave' manage project membership (target='project' + project id).
+- target='profile', action='set': change YOUR OWN display name and/or description (one-line role). Pass name and/or description. Only your own profile — you cannot edit other agents here.
+- target='avatar', action='set': change your avatar. Pass avatarColor (one of black|brown|red|orange|yellow|green|cyan|blue|violet|magenta|gray) for a colored initial-circle avatar, and/or avatarImagePath with the ABSOLUTE path of an image file (e.g. the path returned by image_generate) to use an image avatar. The image must already exist on disk; it is copied and validated for you.
+- target='avatar', action='clear': back to the default avatar.
 
 Write durable, self-contained facts (preferences, decisions, corrections). Do not store secrets, transient state, or conversation logs.`;
 
@@ -212,18 +332,18 @@ Write durable, self-contained facts (preferences, decisions, corrections). Do no
     properties: {
       target: {
         type: 'string',
-        enum: ['memory', 'project'],
-        description: "What to update: 'memory' stores a fact, 'project' manages project memory/membership.",
+        enum: ['memory', 'project', 'profile', 'avatar'],
+        description: "What to update: 'memory' stores a fact, 'project' manages project memory/membership, 'profile' your own name/description, 'avatar' your avatar.",
       },
       scope: {
         type: 'string',
         enum: ['agent', 'user', 'project'],
-        description: "Where it lands: 'agent' = your private memory, 'user' = shared user memory, 'project' = project memory (requires project).",
+        description: "Where it lands: 'agent' = your private memory, 'user' = shared user memory, 'project' = project memory (requires project). Omit for profile/avatar (always self).",
       },
       action: {
         type: 'string',
-        enum: ['write', 'forget', 'create', 'join', 'leave'],
-        description: "'write'/'forget' store or retract facts; 'create'/'join'/'leave' manage project membership.",
+        enum: ['write', 'forget', 'create', 'join', 'leave', 'set', 'clear'],
+        description: "'write'/'forget' store or retract facts; 'create'/'join'/'leave' manage project membership; 'set' applies a profile or avatar change; 'clear' resets the avatar.",
       },
       project: {
         type: 'string',
@@ -237,6 +357,23 @@ Write durable, self-contained facts (preferences, decisions, corrections). Do no
         type: 'string',
         enum: ['profile', 'log', 'note'],
         description: "Entry kind. Defaults to 'note'; use 'profile' for durable identity/preference facts.",
+      },
+      name: {
+        type: 'string',
+        description: "profile set: your new display name. Omit to keep the current name.",
+      },
+      description: {
+        type: 'string',
+        description: "profile set: your new one-line role description. Omit to keep the current one.",
+      },
+      avatarImagePath: {
+        type: 'string',
+        description: 'avatar set: ABSOLUTE path of an image file (png/jpg/jpeg/webp/gif/svg, ≤5MB) to install as your avatar — e.g. the path returned by image_generate. Pass one or both of avatarImagePath/avatarColor.',
+      },
+      avatarColor: {
+        type: 'string',
+        enum: ['black', 'brown', 'red', 'orange', 'yellow', 'green', 'cyan', 'blue', 'violet', 'magenta', 'gray'],
+        description: 'avatar set: the avatar color token (colored initial circle). Pass one or both of avatarImagePath/avatarColor.',
       },
     },
     required: ['target', 'scope', 'action'],
@@ -289,9 +426,49 @@ Write durable, self-contained facts (preferences, decisions, corrections). Do no
         success: false,
         error: {
           code: 'NO_IDENTITY',
-          message: 'No agent identity is bound to this session; memory writes require a bot profile.',
+          message: 'No agent identity is bound to this session; memory/identity writes require a bot profile.',
         },
       }, true);
+    }
+
+    // ── Identity subactions: route to the bot-identity bridge ──
+    // (Plan 481 amendment: profile.set / avatar.set / avatar.clear)
+    if ('identity' in resolved && resolved.identity) {
+      const identityBridge = this.resolveIdentityBridge(context);
+      if (!identityBridge) {
+        return structuredResult(this.name, {
+          success: false,
+          error: {
+            code: 'NO_BRIDGE',
+            message: 'Bot identity bridge is not available in this runtime.',
+          },
+        }, true);
+      }
+      try {
+        const response = await identityBridge(
+          { actorAgentId, ...resolved.identity },
+          context,
+        );
+        if (!response.success) {
+          return structuredResult(this.name, {
+            success: false,
+            error: response.error ?? { code: 'BRIDGE_ERROR', message: 'Identity update failed.' },
+          }, true);
+        }
+        return structuredResult(this.name, {
+          success: true,
+          subaction: resolved.identity.subaction,
+          outcome: response.result,
+        });
+      } catch (err) {
+        return structuredResult(this.name, {
+          success: false,
+          error: {
+            code: 'BRIDGE_ERROR',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }, true);
+      }
     }
 
     if (resolved.membership) {
@@ -381,6 +558,31 @@ Write durable, self-contained facts (preferences, decisions, corrections). Do no
     }
     return null;
   }
+
+  /**
+   * Identity bridge resolution (profile.set / avatar.*): same injected
+   * double pattern as the memory bridge; the live path routes the
+   * 'bot-identity:rpc' channel to the main-process profile.json writer
+   * (electron/config updateBotProfileIdentity).
+   */
+  private resolveIdentityBridge(context?: ToolUseContext): BotIdentityBridge | null {
+    if (injectedIdentityBridge) return injectedIdentityBridge;
+    if (context?.ipcRequest) {
+      return async (payload, ctx) => {
+        const response = await ctx!.ipcRequest!(
+          'bot-identity:rpc',
+          { subaction: payload.subaction, payload },
+          { timeout: 15_000 },
+        );
+        return {
+          success: response.success,
+          result: response.data,
+          error: response.error,
+        };
+      };
+    }
+    return null;
+  }
 }
 
 let injectedBridge: MemoryTierBridge | null = null;
@@ -388,6 +590,13 @@ let injectedBridge: MemoryTierBridge | null = null;
 /** Install a test bridge (Plan 481 harness pattern; pass null to reset). */
 export function setMemoryTierBridge(bridge: MemoryTierBridge | null): void {
   injectedBridge = bridge;
+}
+
+let injectedIdentityBridge: BotIdentityBridge | null = null;
+
+/** Install a test identity bridge (profile.set / avatar.*); null resets. */
+export function setBotIdentityBridge(bridge: BotIdentityBridge | null): void {
+  injectedIdentityBridge = bridge;
 }
 
 export const updateStateTool = new UpdateStateTool();

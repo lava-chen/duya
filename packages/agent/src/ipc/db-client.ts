@@ -210,6 +210,64 @@ export const messageDb = {
 
 
 
+// ==================== SendMessage side-state Operations ====================
+// Plan 489 P0.2: persist interaction state for card-shaped SendMessage (widget /
+// cursor-agent / secret-request) in the three legacy-main-DB side tables.
+// `messageId` is the id returned by messageDb.append. All helpers are best-effort:
+// a write failure resolves to { success: false } rather than rejecting, so the
+// tool's main send path is never blocked by state persistence.
+
+export const sendMessageStateDb = {
+  createWidgetPending: (data: {
+    id: string;
+    messageId: string;
+    sessionId: string;
+    botAgentId: string;
+    prompt: string;
+    widgetJson: string;
+    createdAt: number;
+  }) => sendDbRequest('sendMessageState:createWidgetPending', data),
+
+  updateWidgetResponse: (data: {
+    messageId: string;
+    status: 'pending' | 'answered' | 'dismissed';
+    customAnswer?: string | null;
+    answeredAt?: number | null;
+  }) => sendDbRequest('sendMessageState:updateWidgetResponse', data),
+
+  upsertCursorAgentRun: (data: {
+    id: string;
+    messageId: string;
+    sessionId: string;
+    bcId: string;
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+    createdAt: number;
+    updatedAt: number;
+  }) => sendDbRequest('sendMessageState:upsertCursorAgentRun', data),
+
+  updateCursorAgentRun: (data: {
+    messageId: string;
+    status: 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+    updatedAt: number;
+  }) => sendDbRequest('sendMessageState:updateCursorAgentRun', data),
+
+  createSecretPending: (data: {
+    id: string;
+    messageId: string;
+    sessionId: string;
+    label: string;
+    connector: string;
+    field: string;
+    createdAt: number;
+  }) => sendDbRequest('sendMessageState:createSecretPending', data),
+
+  markSecretProvided: (data: {
+    messageId: string;
+    status: 'provided' | 'dismissed';
+    providedAt?: number | null;
+  }) => sendDbRequest('sendMessageState:markSecretProvided', data),
+};
+
 export const turnReviewDb = {
   save: (data: {
     id: string;
@@ -918,6 +976,20 @@ export const configDb = {
   providerActivate: (id: string) => sendDbRequest('config:provider:activate', { id }),
   agentGetSettings: () => sendDbRequest('config:agent:getSettings', {}),
   agentSetSettings: (patch: Record<string, unknown>) => sendDbRequest('config:agent:setSettings', patch),
+
+  /**
+   * Plan 492 P4.2: agent-side CreateAgent/UpdateAgent tool persistence.
+   * Routes to the db-bridge config:agents:create / config:agents:update
+   * cases, which own the config.toml `[agents.<id>]` write in the main
+   * process (the agent subprocess never mutates the config store).
+   * create returns the ACTUAL id — the requested name is slugified and
+   * allocateBotId may suffix it on collision.
+   */
+  agentCreate: (data: { name: string; description?: string }) =>
+    sendDbRequest('config:agents:create', data) as Promise<{ id: string; name: string }>,
+
+  agentUpdate: (data: { agentId: string; name?: string; description?: string }) =>
+    sendDbRequest('config:agents:update', data) as Promise<{ id: string; name: string }>,
   visionGet: () => sendDbRequest('config:vision:get', {}),
   visionSet: (patch: Record<string, unknown>) => sendDbRequest('config:vision:set', patch),
   outputStylesGet: () => sendDbRequest('config:outputStyles:get', {}),

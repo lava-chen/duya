@@ -9,6 +9,7 @@ import {
   GlobeIcon,
   ChalkboardIcon,
   TerminalIcon,
+  GearSixIcon,
   type IconProps,
 } from "@/components/icons";
 import type { TranslationKey } from "@/i18n";
@@ -16,6 +17,7 @@ import { FileTreePanel } from "./FileTreePanel";
 import { TerminalPanel } from "./TerminalPanel";
 import { BrowserPanel } from "./BrowserPanel";
 import { FilePreviewPanel } from "./FilePreviewPanel";
+import { BotSettingsPanel } from "./BotSettingsPanel";
 
 // Heavy, low-frequency panels are lazy-loaded so their dependencies
 // (conductor canvas engine, diff viewer, office suite) stay out of the
@@ -31,7 +33,7 @@ const OfficePanel = lazy(() =>
   import("./OfficePanel").then((m) => ({ default: m.OfficePanel }))
 );
 
-export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office";
+export type PageId = "files" | "preview" | "review" | "conductor" | "terminal" | "browser" | "office" | "bot-settings";
 
 export interface PageTab {
   id: string;
@@ -152,6 +154,20 @@ export const PAGE_REGISTRY: Record<PageId, PageDescriptor> = {
     preferredWidth: 760,
     defaultExpanded: false,
     component: OfficePanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
+  },
+  "bot-settings": {
+    id: "bot-settings",
+    labelKey: "panel.botSettings",
+    icon: GearSixIcon,
+    // One tab per bot: openOrActivatePage dedups on the params agentId, so
+    // repeated header clicks on the same bot activate the existing tab.
+    // Not in EMPTY_LAUNCHER_ORDER — it is only opened programmatically.
+    multiInstance: true,
+    available: true,
+    minWidth: 320,
+    preferredWidth: 360,
+    defaultExpanded: false,
+    component: BotSettingsPanel as ComponentType<{ tab: PageTab; embedded: boolean }>,
   },
 };
 

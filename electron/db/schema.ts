@@ -1,4 +1,5 @@
 import { getLogger, LogComponent } from '../logging/logger';
+import { createSendMessageStateTables } from './sendMessageState';
 
 // Use type-only import to avoid bundling better-sqlite3 in the schema module
 type BetterSqlite3Db = import('better-sqlite3').Database;
@@ -487,6 +488,11 @@ export function initializeSchema(db: BetterSqlite3Db): void {
   `);
   const now = Date.now();
   insertCanvas.run('default', '工作台', null, '{}', 0, now, now);
+
+  // Plan 489 P0.2 — SendMessage card side-state tables (widget / cursor-agent /
+  // secret-request). Idempotent self-repair, reused by migration 55 so fresh and
+  // legacy DBs converge on the same shape.
+  createSendMessageStateTables(db);
 
   runMigrations(db);
 }
@@ -2597,6 +2603,16 @@ const migrations: Migration[] = [
       db.exec(
         'CREATE INDEX IF NOT EXISTS idx_agent_profiles_deleted_at ON agent_profiles(deleted_at) WHERE deleted_at IS NOT NULL',
       );
+    },
+  },
+  {
+    // Plan 489 P0.2 — SendMessage card side-state tables. Idempotent (CREATE
+    // TABLE IF NOT EXISTS), no-op on DBs already repaired by the self-repair
+    // region in initializeSchema.
+    id: 55,
+    name: 'add_send_message_card_side_state',
+    migrate(db: BetterSqlite3Db): void {
+      createSendMessageStateTables(db);
     },
   },
 ];

@@ -71,6 +71,22 @@ export interface Message {
   source?: string | null;
   /** Plan 489 P2.2: SendMessage card payload (parsed from send_message_meta). */
   sendMessageMeta?: SendMessageCardMeta | null;
+  /** Plan 477 P4.4: bot→bot DM marker payload (parsed from agent_dm_meta). */
+  agentDmMeta?: AgentDmCardMeta | null;
+}
+
+/** Plan 477 P4.4: bot→bot DM marker card descriptor (metadata.agentDm).
+ *  Mirrors `@/types/message` AgentDmCardMeta (kept in sync). */
+export interface AgentDmCardMeta {
+  direction: 'sent' | 'received'
+  peerId: string
+  peerName: string
+  /** Raw DM body without the "→ peer: " transcript prefix (plan 497). */
+  text?: string
+  intent?: string | null
+  priority?: boolean
+  hops?: number
+  clientMsgId?: string
 }
 
 export interface Provider {
@@ -172,7 +188,7 @@ interface DbThread {
   pinned: number
 }
 
-interface DbMessage {
+export interface DbMessage {
   id: string
   session_id: string
   role: 'user' | 'assistant' | 'system' | 'tool'
@@ -201,6 +217,8 @@ interface DbMessage {
   source?: string | null
   /** Plan 489 P2.2: SendMessage card payload (JSON), from metadata.sendMessage. */
   send_message_meta?: string | null
+  /** Plan 477 P4.4: bot→bot DM marker payload (JSON), mirrors MessageRow.agent_dm_meta. */
+  agent_dm_meta?: string | null
 }
 
 // Backend returns camelCase (via maskProvider in agent-communicator.ts)
@@ -284,7 +302,46 @@ function dbThreadToThread(db: DbThread | null | undefined): Thread | null {
   }
 }
 
-function dbMessageToMessage(db: DbMessage): Message {
+/**
+ * Plan 497 legacy heal for agent_dm marker rows persisted before `agentDm`
+ * joined the metadata whitelist: rebuild a degraded card meta from the
+ * transcript row itself. Sender markers are assistant rows ("→ peer: text"),
+ * receiver markers user rows ("peer: text"); the peer ID falls back to the
+ * display name (chips group correctly; the overlay resolves what it can).
+ */
+function synthesizeLegacyAgentDmMeta(db: DbMessage): AgentDmCardMeta | null {
+  if (db.source !== 'agent_dm') return null;
+  const raw = typeof db.content === 'string' ? db.content.trim() : '';
+  if (!raw) return null;
+  const direction: AgentDmCardMeta['direction'] = db.role === 'assistant' ? 'sent' : 'received';
+  let body = raw;
+  let peerName = '';
+  const arrowPrefix = '→ ';
+  if (raw.startsWith(arrowPrefix)) body = raw.slice(arrowPrefix.length);
+  const sep = body.indexOf(': ');
+  if (sep > 0 && sep <= 60) {
+    peerName = body.slice(0, sep);
+    body = body.slice(sep + 2);
+  } else {
+    peerName = 'unknown';
+  }
+  return {
+    direction,
+    peerId: peerName,
+    peerName,
+    text: body,
+  };
+}
+
+/**
+ * DbMessage (snake_case wire row) → renderer-facing Message. Shared by the
+ * fetch paths AND the `message:new` realtime broadcast, whose payload rows
+ * are the same MessageRow shape (db-bridge → newEventToIpcMessage) and
+ * MUST be converted before any consumer reads camelCase fields — reading
+ * `m.createdAt` on an unconverted row yields `undefined`, which later
+ * explodes as `RangeError: Invalid time value` in Intl date formatting.
+ */
+export function dbMessageToMessage(db: DbMessage): Message {
   let attachments: FileAttachment[] | null = null;
   if (db.attachments) {
     try {
@@ -336,6 +393,21 @@ function dbMessageToMessage(db: DbMessage): Message {
           }
         })()
       : null,
+    agentDmMeta: db.agent_dm_meta
+      ? (() => {
+          try {
+            return JSON.parse(db.agent_dm_meta) as AgentDmCardMeta;
+          } catch {
+            return null;
+          }
+        })()
+      : // Plan 497 legacy heal: rows persisted before `agentDm` joined the
+        // metadata whitelist lost their card payload on round-trip. Rebuild a
+        // degraded meta from the transcript row (role encodes direction, the
+        // content prefix carries the peer display name); peerId falls back to
+        // that name, so chips group correctly and the overlay resolves what
+        // it can.
+        synthesizeLegacyAgentDmMeta(db),
     // Surface the user-facing prompt (with pasted-content markers).
     // Falls back to `content` for legacy rows that pre-date the
     // `display_content` column — those rows had the prompt stored in
@@ -511,6 +583,28 @@ export async function replaceMessagesIPC(
 export async function getMessagesBySessionIPC(sessionId: string): Promise<Message[]> {
   const dbMessages = await window.electronAPI!.message!.getBySession(sessionId) as DbMessage[]
   return dbMessages.map(dbMessageToMessage)
+}
+
+/**
+ * Plan 489 P0.1 / 497 — bot-direct visible sources, renderer mirror of
+ * `@duya/agent/message` `BOT_DIRECT_VISIBLE_SOURCES`. The canonical filter
+ * lives in the main-process projection; this copy guards INGESTION points
+ * that receive raw broadcast rows (App's `message:new` handler) so hidden
+ * sources (tool_use / thinking / system / scratchpad / wake prompts) never
+ * enter the visible conversation store in the first place.
+ */
+export const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
+  'send_message',
+  'user',
+  'reaction',
+  'agent_dm',
+]);
+
+export function isBotDirectVisibleSource(source: string | null | undefined): boolean {
+  // Absent source on a broadcast row means the row was persisted before the
+  // classifier existed — not visible by the same rule the projection uses.
+  if (!source) return false;
+  return BOT_DIRECT_VISIBLE_SOURCES.has(source);
 }
 
 /**
