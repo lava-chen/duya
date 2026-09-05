@@ -10,7 +10,7 @@
  * {@link AppConnectionStatusDTO}. Tokens never cross IPC.
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain, BrowserWindow } from 'electron';
 import * as http from 'http';
 import { getDatabase } from '../db/connection';
 import { getLogger, LogComponent } from '../logging/logger';
@@ -112,6 +112,21 @@ function getErrorCode(error: unknown): string {
   return 'internal';
 }
 
+/**
+ * Plan 498: broadcast a successful (re-)authorization to every renderer
+ * window. The chat view matches this against its pending
+ * `connector_auth_required` request so the auth card flips to its real
+ * "connected" state and the agent is resumed with a retry turn — covering
+ * both the card-initiated flow and a reconnect from the settings page.
+ */
+function broadcastConnectionConnected(provider: string, connectionId: string | null): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('app-connection:connected', { provider, connectionId });
+    }
+  }
+}
+
 export function registerAppConnectionHandlers(): void {
   const logger = getLogger();
 
@@ -190,6 +205,7 @@ export function registerAppConnectionHandlers(): void {
       const provider = payload.provider;
       try {
         const dto = await getReadyAppConnectionService().connect(provider, payload.scopes);
+        broadcastConnectionConnected(provider, dto?.id ?? null);
         return { success: true, data: dto };
       } catch (err) {
         const errorCode = getErrorCode(err);

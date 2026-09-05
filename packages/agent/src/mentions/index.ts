@@ -128,6 +128,13 @@ export function buildAppsSystemSection(
     .map(([id, { label, tools }]) => `- [${label}](app://${id}): ${tools.join(', ')}`)
     .join('\n');
 
+  // Plan 498: "help the user connect" contract, aligned with grok-bot's
+  // connector system-prompt section (system-prompt.ts:185-186, 165, 191,
+  // 245). DuYA's model cannot install connectors itself — the user connects
+  // from Settings or through the auth card — so the model's role is: prefer
+  // connectors over browser workarounds, name missing services plainly,
+  // point at the real connect path, never fabricate authorization links,
+  // and never bypass a service whose authorization is pending.
   return [
     '## Apps (Connectors)',
     'Apps (Connectors) can be explicitly triggered in user messages in the format `[@App-Name](app://<provider-id>)`. Apps can also be triggered implicitly whenever the context suggests an installed app would help.',
@@ -135,6 +142,12 @@ export function buildAppsSystemSection(
     'Do not call list_mcp_resources or similar for apps — use the tools listed above or tool_search.',
     'Connected apps this session:',
     appLines,
+    'Helping the user connect apps:',
+    "- A connected app's tools are the best way to reach that service — structured data instead of a browser session that rots. Prefer them over browser or computer-use tools for services that have a connector above.",
+    '- When a task needs a service that is NOT in the list above: name the service in plain text and ask the user to connect it in Settings → Extensions → Connections. Never compose or paste an install or authorization URL.',
+    '- Do not reach a service through the browser or other workarounds while its authorization is pending, and do not quietly bypass a failing connector — say so and let the user connect or re-authorize instead.',
+    "- If an app tool call fails with an authorization error, a re-authorization card is shown to the user automatically: finish unrelated work, then end your turn — a follow-up message will arrive so you can re-issue the call with the same arguments. Don't paste a link or re-run the call meanwhile.",
+    '- When a recurring task would benefit from a service that is not connected, surface that connector to the user instead of silently working around it.',
   ].join('\n');
 }
 

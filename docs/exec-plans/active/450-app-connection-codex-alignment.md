@@ -76,11 +76,11 @@
       重播最后一次 pending 事件（page remount 兑容）
 - [x] renderer `ConnectorAuthRequiredCard` 组件 + ChatView 装配；“去重新授权”复用
       Plan 312 的 `appConnection:connect` OAuth loopback
-- [ ] **B3 重试**：代码中连接成功后只清掉卡片，下次用户消息才能重试原调用——
-      Plan 450 原始设计的“自动重试一次”留作后续选代点（需在 worker 记最后一次工具调用
-      载荷，OAuth 成功后重发）。**变通**：现有 agent loop 在 tool_result 携带 error
-      后会重启一轮 model call，模型会自动看到错误并自己重试——跳过原设计意图的“一次性”逻辑，
-      负面仅为“可能跑到不同工具上”，不是“撞永远”。当前卡片 UX 足够。
+- [x] **B3 重试**：已由 [Plan 498](./498-connector-auth-resume-card.md) 实现——
+      授权完成后 main 广播 `app-connection:connected`，卡片翻转为真实 connected 态并
+      通过 `handleSend` 自动发送本地化恢复消息（流进行中自动落 mailbox），模型重发
+      失败调用（同参数）。原"worker 记最后一次工具调用载荷"方案不再需要：恢复 turn
+      里模型仍持有原始调用上下文，按 provider 去重保证只恢复一次。
 
 - [ ] **E 目录缓存**：留作后续优化；当前 remote-mcp tools/list 调用频率低（只 reload 时拉），
       临时没有必要启动目录缓存。代码中 8KB 预算 + exposure 门足够避免重复拉取导致的
