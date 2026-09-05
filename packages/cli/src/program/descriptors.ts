@@ -451,6 +451,35 @@ const subChannelSend: CliSubcommand = {
   run: (ctx) => runChannelCommand.send(ctx),
 };
 
+const subChannelDisconnect: CliSubcommand = {
+  description: 'Unbind a platform. With --agent, targets that bot\'s channel binding (plan 488); otherwise uses the primary agent.',
+  write: true,
+  options: [
+    { flags: '--platform <platform>', description: 'Platform to disconnect (required)' },
+    { flags: '--agent <agentId>', description: 'Agent id for per-bot bindings' },
+  ],
+  run: (ctx) => runChannelCommand.disconnect(ctx),
+};
+
+const subChannelBindings: CliSubcommand = {
+  description: 'List the channels bound to a bot (agents/<agentId>/channels/, plan 488).',
+  options: [{ flags: '--agent <agentId>', description: 'Agent id (required)' }],
+  run: (ctx) => runChannelCommand.bindings(ctx),
+};
+
+const subChannelConnect: CliSubcommand = {
+  description: 'Bind a platform to a bot (plan 488). Credential comes from DUYA_CHANNEL_TOKEN (default), --token-env <VAR>, or --stdin — never an argv flag.',
+  write: true,
+  options: [
+    { flags: '--agent <agentId>', description: 'Agent id (required)' },
+    { flags: '--platform <platform>', description: 'Platform to connect (required)' },
+    { flags: '--label <label>', description: 'Human-readable label for the binding' },
+    { flags: '--token-env <var>', description: 'Env var holding the credential (default DUYA_CHANNEL_TOKEN)' },
+    { flags: '--stdin', description: 'Read the credential from stdin instead of an env var' },
+  ],
+  run: (ctx) => runChannelCommand.connect(ctx),
+};
+
 const subCronList: CliSubcommand = {
   description: 'List all scheduled jobs (id / name / schedule / nextRunAt / lastRunAt / lastError)',
   run: (ctx) => runCronCommand.list(ctx),
@@ -1169,6 +1198,9 @@ export const CLI_DESCRIPTORS = defineDescriptors([
       test: subChannelTest,
       'send-test': subChannelSendTest,
       send: subChannelSend,
+      disconnect: subChannelDisconnect,
+      bindings: subChannelBindings,
+      connect: subChannelConnect,
     },
   },
   {

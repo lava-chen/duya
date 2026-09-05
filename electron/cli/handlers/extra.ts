@@ -133,6 +133,10 @@ function asBool(v: unknown): boolean {
   return v === true || v === 'true' || v === 1 || v === '1';
 }
 
+// Exported for sibling handler modules (bot-channels.ts) that share the
+// same request-parsing / audit conventions.
+export { sendJson, readJsonBody, asString, recordAudit, getUserDataDir };
+
 // ---------------------------------------------------------------------------
 // message send
 // ---------------------------------------------------------------------------
@@ -445,17 +449,18 @@ export async function handleChannelDisconnect(
     return;
   }
 
-  // TODO 488: support explicit --agent-id flag in CLI for multi-agent scenarios.
-  // For now, derive agentId from the primary non-deleted session's agentProfileId.
-  // This is a best-effort for single-agent setups.
-  let agentId: string | null = null;
-  try {
-    const { sessions } = getCoreStores();
-    const allSessions = sessions.list();
-    const primarySession = allSessions.find(s => s.status !== 'deleted' && s.agentProfileId);
-    agentId = primarySession?.agentProfileId ?? null;
-  } catch {
-    // ignore lookup errors — fall through to null
+  // Explicit --agent wins; fall back to the primary non-deleted session's
+  // agentProfileId (best-effort for single-agent setups).
+  let agentId = asString(body.agentId) ?? null;
+  if (!agentId) {
+    try {
+      const { sessions } = getCoreStores();
+      const allSessions = sessions.list();
+      const primarySession = allSessions.find(s => s.status !== 'deleted' && s.agentProfileId);
+      agentId = primarySession?.agentProfileId ?? null;
+    } catch {
+      // ignore lookup errors — fall through to null
+    }
   }
 
   if (!agentId) {

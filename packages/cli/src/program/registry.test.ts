@@ -176,7 +176,7 @@ describe('error message helpers', () => {
     const cron = CLI_DESCRIPTORS.find((d) => d.name === 'cron');
     expect(cron).toBeDefined();
     expect(listSubcommandNames(cron!)).toBe(
-      'list | info | create | update | delete | run | enable | disable | runs | logs',
+      'list | info | create | update | delete | run | enable | disable | runs | dedupe | logs',
     );
   });
 });
