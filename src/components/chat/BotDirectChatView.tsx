@@ -12,8 +12,11 @@
  * self-contained: it does not run any ChatView hooks and receives the
  * transcript via props.
  *
- * Geometry and behavior borrowed from grok's transcript:
- *   - full-pane transcript column (screenshot 2026-09-05), 22px row gap
+ * Geometry and behavior borrowed from grok's transcript, hover overlay
+ * and row rhythm aligned with rakazo (apps/web Shell.tsx, 2026-09-05):
+ *   - full-pane transcript column, rakazo pt-9 rhythm (36px row top
+ *     padding that doubles as the landing lane for the previous row's
+ *     hanging hover overlay)
  *   - user rows right-aligned (`margin-inline-start: auto`), bot left
  *   - consecutive same-role messages group; group-start rows carry the
  *     bot avatar + name (grok keeps the header-only avatar; the plan
@@ -40,10 +43,12 @@ import { BotToolCallRow } from "./BotToolCallRow";
 import { BotThinkingRow } from "./BotThinkingRow";
 import { BotTypingIndicator } from "./BotTypingIndicator";
 import { AgentDmMarker } from "./bot/AgentDmMarker";
+import { ChevronDownIcon } from "@/components/icons";
 import { useTranslation } from "@/hooks/useTranslation";
 import type { Message } from "@/types/message";
 
 import { useBotContacts } from "@/components/layout/sidebar/use-bot-contacts";
+import { useOptionalPanel } from "@/hooks/usePanel";
 import { BotCharacterAvatar } from "@/components/layout/sidebar/BotCharacterAvatar";
 import { resolveBotAgentId } from "./bot/chat-mode";
 import { useBotDirectTranscript } from "./bot/use-bot-direct-transcript";
@@ -53,7 +58,11 @@ import {
   type BotModelPreference,
 } from "./bot/model-preference";
 import { mergeInFlightOptimisticMessages } from "@/stores/conversation-store";
-import { BotMessageAction } from "./BotMessageAction";
+import {
+  BotMessageHoverBar,
+  BotThumbsBadge,
+  useMessageThumbsUp,
+} from "./BotMessageHoverBar";
 import { BotSendCard } from "./BotSendCard";
 // Plan 494: bot-direct renders its own permission/ask cards — ChatView
 // (and its PermissionPrompt sheet) is not mounted in this mode.
@@ -172,15 +181,22 @@ function SendCardRow({
   message: Message;
   onOptionClick?: (option: string) => void;
 }) {
+  const [thumbsUp, toggleThumbsUp] = useMessageThumbsUp(message.id);
   return (
     <div className="bot-chat-row bot-chat-row--assistant" data-role="assistant">
-      <BotMessageAction
+      <BotMessageHoverBar
+        timestamp={message.timestamp}
         textToCopy={typeof message.content === 'string' ? message.content : undefined}
-      >
+        messageId={message.id}
+        thumbsUp={thumbsUp}
+        onToggleThumbsUp={toggleThumbsUp}
+      />
+      <div className="bot-chat-row__stack">
         <div className="bot-chat-bubble bot-chat-bubble--assistant bot-chat-bubble--card">
           <BotSendCard message={message} onOptionClick={onOptionClick} />
         </div>
-      </BotMessageAction>
+        {thumbsUp && <BotThumbsBadge onRemove={toggleThumbsUp} />}
+      </div>
     </div>
   );
 }
@@ -236,9 +252,7 @@ export function BotDirectChatView({
   const { allContacts: contacts, reload: reloadContacts } = useBotContacts();
   // Soft dependency: the panel may be absent (tests, standalone renders);
   // the header button then just stays inert instead of crashing the view.
-  // Soft dependency note (plan 494): the parallel bot-settings panel wires
-  // an identity button here via useOptionalPanel; that surface lands with
-  // its own registry change and is kept out of this commit.
+  const { openOrActivatePage } = useOptionalPanel() ?? { openOrActivatePage: null };
   const agentId = resolveBotAgentId(sessionId);
 
   // The bot-settings panel saves through its own contact list; this event
@@ -441,6 +455,8 @@ export function BotDirectChatView({
         <BotBubbleRow
           key={row.message.id}
           role={row.role}
+          messageId={row.message.id}
+          timestamp={row.message.timestamp}
           text={row.text}
         />
       ) : (
@@ -504,9 +520,19 @@ export function BotDirectChatView({
   return (
     <div className="bot-chat-view">
       <header className="bot-chat-header">
-        <span
+        <button
+          type="button"
           className="bot-chat-header__identity"
           title={subtitle || undefined}
+          onClick={() => {
+            if (!contact || !openOrActivatePage) return;
+            openOrActivatePage("bot-settings", {
+              agentId: contact.agentId,
+              title: botName,
+            });
+          }}
+          disabled={!contact}
+          aria-label={t("panel.botSettings")}
         >
           <span className="bot-chat-header__avatar">
             <BotCharacterAvatar
@@ -518,11 +544,21 @@ export function BotDirectChatView({
             />
           </span>
           <span className="bot-chat-header__name">{botName}</span>
-        </span>
+        </button>
         {busy && <small className="bot-chat-header__working">{t("bot.chat.working")}</small>}
       </header>
 
-      <div className="bot-chat-transcript" ref={transcriptRef} role="log" aria-live="off" onScroll={handleScroll}>
+      {/* Scroll wrapper hosts the bottom fade overlay: the overlay must be
+          a sibling of the scroll container (not a child) so it stays pinned
+          to the visible bottom edge and does not scroll with content. */}
+      <div className="bot-chat-transcript-wrap">
+        <div
+          className="bot-chat-transcript"
+          ref={transcriptRef}
+          role="log"
+          aria-live="off"
+          onScroll={handleScroll}
+        >
         {rows.length === 0 && answeredAsks.length === 0 && !busy ? (
           <div className="bot-chat-empty">
             <BotCharacterAvatar
@@ -563,8 +599,15 @@ export function BotDirectChatView({
           ))}
 
         {busy && <BotTypingIndicator />}
+        </div>
 
-        {/* Plan 491 P0.4: jump to latest capsule */}
+        {/* Bottom fade — dissolves the scroll boundary while scrolled up.
+            Sibling of the scroll container: pinned to the visible bottom
+            edge, never scrolls, and the jump button paints above it. */}
+        {isScrolledUp && <div className="bot-chat-scroll-fade" aria-hidden="true" />}
+
+        {/* Plan 491 P0.4: jump to latest — plain circle + chevron-down
+            (2026-09-05 restyle: capsule + label replaced). */}
         {isScrolledUp && (
           <button
             className="bot-chat-jump-to-latest"
@@ -577,8 +620,7 @@ export function BotDirectChatView({
             }}
             aria-label="Jump to latest"
           >
-            <span className="bot-chat-jump-to-latest__icon">↓</span>
-            <span>Jump to latest</span>
+            <ChevronDownIcon size={16} strokeWidth={2} />
           </button>
         )}
       </div>

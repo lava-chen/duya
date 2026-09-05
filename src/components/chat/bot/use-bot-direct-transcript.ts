@@ -24,13 +24,14 @@
  * cannot regress by a future refactor of conversation-store.
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { getBotDirectTranscriptIPC } from '@/lib/ipc-client';
-import type { Message as IpcMessage } from '@/lib/ipc-client';
+import { getBotDirectTranscriptIPC, dbMessageToMessage, type DbMessage as DbMessageRow, type Message as IpcMessage } from '@/lib/ipc-client';
 import type { Message } from '@/types/message';
 
 const BOT_DIRECT_VISIBLE_SOURCES: ReadonlySet<string> = new Set([
   'send_message',
   'user',
+  // Plan 477 P4.4: bot→bot DM marker cards (sent + received directions).
+  'agent_dm',
 ]);
 
 function isBotDirectVisible(source: string | null | undefined): boolean {
@@ -71,6 +72,7 @@ function ipcMessageToUiMessage(m: IpcMessage): Message {
     attachments: m.attachments ?? undefined,
     source: m.source ?? null,
     sendMessageMeta: m.sendMessageMeta ?? null,
+    agentDmMeta: m.agentDmMeta ?? null,
   };
 }
 
@@ -144,9 +146,13 @@ export function useBotDirectTranscript(
       const incoming: Message[] = [];
       for (const raw of payload.messages) {
         if (!raw || typeof raw !== 'object') continue;
-        const m = raw as IpcMessage;
+        // The broadcast payload rows are snake_case MessageRow (same shape
+        // as the fetch path) — convert before reading camelCase fields,
+        // otherwise `createdAt` (and every other mapped field) is
+        // undefined and the row later crashes Intl date separators.
+        const m = ipcMessageToUiMessage(dbMessageToMessage(raw as DbMessageRow));
         if (!isBotDirectVisible(m.source)) continue;
-        incoming.push(ipcMessageToUiMessage(m));
+        incoming.push(m);
       }
       if (incoming.length === 0) return;
       // Plan 491 P1.2: track lastSeq from incoming messages. The IPC wire

@@ -20,7 +20,7 @@
  */
 
 import React from 'react';
-import { BotBubbleText } from './BotBubbleText';
+import { MarkdownRenderer } from './MarkdownRenderer';
 import type { Message, SendMessageCardMeta } from '@/types/message';
 
 interface BotSendCardProps {
@@ -142,7 +142,11 @@ export function BotSendCard({ message, onOptionClick }: BotSendCardProps) {
 
   return (
     <div className="bot-send-card" data-card={message.msgType}>
-      {caption && <BotBubbleText text={caption} />}
+      {caption && (
+        <MarkdownRenderer className="prose prose-sm dark:prose-invert max-w-none bot-bubble-markdown">
+          {caption}
+        </MarkdownRenderer>
+      )}
       {message.msgType === 'attachment' && <AttachmentBody meta={meta} />}
       {message.msgType === 'widget' && (
         <WidgetBody meta={meta} onOptionClick={onOptionClick} />
