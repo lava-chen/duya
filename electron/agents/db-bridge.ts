@@ -6,6 +6,7 @@
  */
 
 import { randomUUID } from 'crypto';
+import { BrowserWindow } from 'electron';
 import { getDatabase } from '../ipc/db-handlers';
 import { getProviderStore } from '../services/providers/provider-store-electron';
 import { getConfigStore } from '../config/store-instance';
@@ -23,6 +24,7 @@ import { getCoreStores } from '../db/core-connection';
 import { notifySessionIdle, advanceUserTurn } from '../wake/wake-dispatcher';
 import { getSessionManager } from './session-manager.js';
 import { getChannelBackgroundWakes } from '../wake/channels';
+import { parseAgentIdFromBotSession } from '../wake/bot-session-id';
 import { type MailboxKind, type MailboxApplyMode, type MailboxStatus, type CheckpointType } from '../db/core';
 import type { NewEvent, AttachmentWithData } from '../db/core';
 import {
@@ -200,6 +202,50 @@ export async function dispatchDbAction(action: string, payload: unknown): Promis
       const { sessions } = getCoreStores();
       const session = sessions.get(p.id as string);
       return session ? coreSessionToIpcRow(session) : undefined;
+    }
+
+    case 'session:ensureBot': {
+      // Plan 477 P3.1 / 491 P1.2 — lazily materialize a bot's persistent
+      // session (`bot:<agentId>`) on first user chat. Mirrors the exact
+      // get-or-create shape of agent-dm-dispatcher's defaultBotSessionCreator
+      // so wake-created and chat-created rows converge on the same canonical
+      // row (idempotent, no config validation — a misconfigured bot surfaces
+      // as a profile-resolution error in the worker, same as wake runs).
+      const { sessions } = getCoreStores();
+      const sessionId = p.sessionId as string;
+      const agentId = parseAgentIdFromBotSession(sessionId);
+      if (!agentId) {
+        return { ok: false, reason: 'not-a-bot-session' };
+      }
+      const existing = sessions.get(sessionId);
+      if (existing) {
+        return { ok: true, created: false, session: coreSessionToIpcRow(existing) };
+      }
+      const created = sessions.create({
+        id: sessionId,
+        title: agentId,
+        status: 'active',
+        mode: 'chat',
+        permissionMode: 'auto',
+        agentType: 'bot',
+        agentName: agentId,
+        agentProfileId: agentId,
+        extensions: { source: 'bot' },
+      });
+      // The row was created outside any renderer action (the agent-server
+      // fork asked for it), so the normal renderer→main sync path never
+      // fires. Broadcast so the session list picks the thread up without a
+      // manual refresh — same rationale as createCronSessionRow.
+      try {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send('sync:threads-changed');
+          }
+        }
+      } catch {
+        // Headless boot / CLI bootstrap has no windows — best-effort.
+      }
+      return { ok: true, created: true, session: coreSessionToIpcRow(created) };
     }
 
     case 'session:update': {

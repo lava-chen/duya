@@ -153,6 +153,9 @@ Plans in `active/` are being executed with clear phases and checkpoints.
 | [486-message-threads](./active/486-message-threads.md) | 消息 thread/fork 分支层：replyToId + branched + thread 聚合读 | P1 | Planning |
 | [487-host-persistent-tool-permission](./active/487-host-persistent-tool-permission.md) | Host 持久化工具权限 | P1 | Planning |
 | [488-bot-channel-integration](./active/488-bot-channel-integration.md) | Bot Channel 接入：外部消息平台绑定（Discord/Slack）+ `[inbound]` 唤醒 + 出站发送 | P1 | Planning |
+| [490-bot-toolset-turn-tool-alignment](./active/490-bot-toolset-turn-tool-alignment.md) | Bot 工具集对齐 Grok TurnToolFactories:CreateAgent / UpdateAgent / ReactToMessage / UpdateTodos / WebSearch / CopyToBox 等接入(对比 grok-bot `turn-toolset.ts` 逐工厂建档) | P0 | Planning |
+| [491-bot-chat-messaging-feel](./active/491-bot-chat-messaging-feel.md) | Bot 聊天"发消息感"体感对齐：消息相位机（sending/sent/failed/queued）+ 流式渲染节流（rAF 合帧/memo）+ 会话状态机（thinking/tool/streaming 驱动 typing）+ seq 游标补发衔接 489 P0.3 + 发送路径解耦（483 P2.5）+ 状态/内容双切片 | P0 | Planning |
+| [492-bot-to-bot-grok-parity](./active/492-bot-to-bot-grok-parity.md) | Bot 间交互 grok 全面对齐：契约层接线（buildAgentMessagingSystemPrompt 死代码激活）+ priority DM 抢占闭环（decidePreemption/DmPreemptionTracker 接线 + redrive）+ 透明性（bot-direct 视图可见 agent DM）+ CreateAgent/UpdateAgent + 478 群聊增补修正 | P0 | Planning |
 
 ### CLI / Cron
 

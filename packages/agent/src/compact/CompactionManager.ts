@@ -198,9 +198,26 @@ export class CompactionManager {
     return this.budget.maxTokens
   }
 
+  /**
+   * Rewrite the compaction budget to a new context window. Called on
+   * runtime model switches (DuyaAgent streamChat drift detection) so a move
+   * to a larger-window model (e.g. 200k → 1M) raises the threshold instead
+   * of staying pinned at the original window.
+   *
+   * Non-positive values are ignored (guards the constructor default path).
+   * systemPromptTokens / reservedTokens from the original config are
+   * preserved across the rebuild. A real budget change also clears 'size'
+   * suppression — a window change is exactly the budget change it waits for.
+   */
   updateMaxTokens(maxTokens: number): void {
-    // No-op — maxTokens is now immutable in TokenBudgetManager.
-    // The model-switch path should recreate CompactionManager with the new limit.
+    if (!Number.isFinite(maxTokens) || maxTokens <= 0) return;
+    if (maxTokens === this.budget.maxTokens) return;
+    this.budget = new TokenBudgetManager({
+      maxTokens,
+      systemPromptTokens: this.config.systemPromptTokens ?? 8000,
+      reservedTokens: this.config.reserveTokens ?? 16_384,
+    });
+    this.suppression.clearOnBudgetChange();
   }
 
   /**

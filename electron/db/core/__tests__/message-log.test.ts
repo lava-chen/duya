@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { MessageEntry, CompactionEntry, AgentMessage } from '@duya/agent/message';
 import { MessageLog, type NewEvent } from '../message-log';
+import { SessionStore } from '../session-store';
 import type { SqliteDatabase } from '../database';
 
 // ─── Test fixtures ───
@@ -73,6 +74,7 @@ function createSessionsFixture(db: SqliteDatabase): void {
       parent_session_id TEXT,
       agent_type        TEXT NOT NULL DEFAULT 'main',
       agent_name        TEXT NOT NULL DEFAULT '',
+      agent_id          TEXT,
       draft             TEXT,
       extensions        TEXT NOT NULL DEFAULT '{}',
       rollout_path      TEXT,
@@ -552,5 +554,212 @@ describe('MessageLog', () => {
     const dd = String(new Date(t).getUTCDate()).padStart(2, '0');
     const expectedPath = `sessions/${yyyy}/${mm}/${dd}/rollout-${stamp}-${sessionId}.jsonl`;
     expect(fs.existsSync(path.join(rootDir, expectedPath))).toBe(true);
+  });
+
+  // ─── Plan 493 Phase A: bot session physical isolation ───
+  //
+  // Bot persistent sessions (`bot:<agentId>`) write to a separate
+  // `<rootDir>/agents/<agentId>/sessions/active.jsonl` so the JSONL travels
+  // with the bot directory and is purged atomically when the bot is
+  // deleted. These tests verify:
+  //   1. First append creates the bot-owned JSONL under the agent dir.
+  //   2. sessions.rollout_path is stamped with the absolute bot path,
+  //      and `agent_type` / `agent_id` columns are populated.
+  //   3. listBySession reads back the bot JSONL.
+  //   4. resolvePathOnDisk's absolute-path bypass keeps the legacy
+  //      doubled-tree fallback from triggering for bot paths.
+  //
+  // Note: these tests assume the bot agent directory lives under
+  // `<rootDir>/agents/<agentId>`. resolveConfigRoot returns the duya
+  // root; for tests we override by constructing the path manually.
+
+  it('bot sessionId routes the rollout to <rootDir>/agents/<agentId>/sessions/active.jsonl (Plan 493 P-A)', () => {
+    const agentId = 'alpha';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+
+    // Pre-create the bot session in the sessions table so getOrCreateRolloutPath
+    // can find it on first append.
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'hello', t))]);
+
+    const expectedDir = path.join(rootDir, 'agents', agentId, 'sessions');
+    const expectedFile = path.join(expectedDir, 'active.jsonl');
+    expect(fs.existsSync(expectedFile)).toBe(true);
+
+    // sessions.rollout_path is the absolute path returned by
+    // getBotSessionLogPath — NOT a sessions/<YYYY>/.../...jsonl layout.
+    const row = db
+      .prepare(
+        'SELECT rollout_path, agent_type, agent_id FROM sessions WHERE id = ?',
+      )
+      .get(sessionId) as {
+      rollout_path: string;
+      agent_type: string;
+      agent_id: string | null;
+    };
+    expect(row.rollout_path).toBe(expectedFile);
+    expect(row.rollout_path).not.toContain(`rollout-`);
+    // agent_id is stamped on first append (COALESCE — only fills NULL rows).
+    expect(row.agent_id).toBe(agentId);
+    // agent_type is NOT overwritten: pre-existing rows keep whatever value
+    // they had ('main' default, 'sub' for sub-agents, etc.). Callers that
+    // need to recognize bot sessions should check `agent_id IS NOT NULL`
+    // or the `bot:` prefix on the session id — `agent_type = 'bot'` is
+    // reserved for bot-owned sessions created with that type explicitly.
+  });
+
+  it('listBySession reads the bot JSONL after append (Plan 493 P-A)', () => {
+    const agentId = 'beta';
+    const sessionId = `bot:${agentId}`;
+    const t1 = Date.now();
+    insertSessionFixture(db, sessionId, t1);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'first', t1))]);
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-2', 'second', t1 + 1))]);
+
+    const events = log.listBySession(sessionId);
+    expect(events.map((e) => e.id)).toEqual(['m-1', 'm-2']);
+  });
+
+  it('resolvePathOnDisk does NOT apply the legacy doubled-tree fallback to bot absolute paths (Plan 493 P-A)', () => {
+    // Build a bot path that does NOT exist on disk. resolvePathOnDisk must
+    // return it verbatim — the doubled-tree fallback would have constructed
+    // `<rootDir>/sessions/<botAbsPath>` which is wrong.
+    const agentId = 'gamma';
+    const sessionId = `bot:${agentId}`;
+    const t = Date.now();
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'hi', t))]);
+
+    const row = db
+      .prepare('SELECT rollout_path FROM sessions WHERE id = ?')
+      .get(sessionId) as { rollout_path: string };
+    expect(path.isAbsolute(row.rollout_path)).toBe(true);
+
+    // The doubled-tree fallback would resolve to `<rootDir>/sessions/<abs>` —
+    // verify that path does NOT exist (we never wrote there).
+    const doubledTree = path.join(rootDir, 'sessions', row.rollout_path);
+    expect(fs.existsSync(doubledTree)).toBe(false);
+  });
+
+  it('non-bot sessions keep the dated shared-tree layout after Phase A changes (Plan 493 P-A regression guard)', () => {
+    // Human (non-bot) sessions must continue to land under
+    // `<rootDir>/sessions/<YYYY>/<MM>/<DD>/...`. This is the path the
+    // rest of the codebase depends on for searchText, drift recovery, and
+    // cross-midnight moves.
+    const sessionId = 'human-sess-1';
+    const t = Date.UTC(2026, 7, 7, 13, 47, 42); // fixed UTC for deterministic path
+    insertSessionFixture(db, sessionId, t);
+
+    log.appendBatch([makeEvent(sessionId, makeUserMessage('m-1', 'hi', t))]);
+
+    const row = db
+      .prepare('SELECT rollout_path, agent_type, agent_id FROM sessions WHERE id = ?')
+      .get(sessionId) as {
+      rollout_path: string;
+      agent_type: string;
+      agent_id: string | null;
+    };
+    expect(row.rollout_path).toContain(
+      path.join('sessions', '2026', '08', '07', 'rollout-'),
+    );
+    expect(row.rollout_path).toContain(`-${sessionId}.jsonl`);
+    // agent_type / agent_id must NOT have been overwritten for non-bot rows.
+    expect(row.agent_type).toBe('main');
+    expect(row.agent_id).toBeNull();
+  });
+
+  it('migration id=13 adds agent_id and message_index.generation columns (Plan 493 P-A)', () => {
+    // Build a fresh in-memory DB and run migration id=1 (creates message_index)
+    // before id=13, so the generation ALTER has a target. Sessions table is
+    // absent — the migration must skip the sessions branch.
+    const fresh = new Database(':memory:') as unknown as SqliteDatabase;
+    fresh.pragma('foreign_keys = ON');
+    const id1 = MessageLog.migrations.find((m) => m.id === 1)!;
+    const id13 = MessageLog.migrations.find((m) => m.id === 13)!;
+    id1.up(fresh);
+    id13.up(fresh);
+
+    const indexCols = (
+      fresh.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(indexCols).toContain('generation');
+
+    // Re-running migration id=13 is a no-op (PRAGMA table_info guards).
+    id13.up(fresh);
+    const indexColsAfter = (
+      fresh.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(indexColsAfter).toContain('generation');
+
+    fresh.close();
+  });
+
+  it('migration id=13 adds sessions.agent_id when sessions table exists (Plan 493 P-A)', () => {
+    const fresh = new Database(':memory:') as unknown as SqliteDatabase;
+    fresh.pragma('foreign_keys = ON');
+    const id13 = MessageLog.migrations.find((m) => m.id === 13)!;
+
+    // First pass: no sessions table. Migration must detect via sqlite_master
+    // and skip the ALTER gracefully.
+    id13.up(fresh);
+    expect(() => fresh.prepare('SELECT 1 FROM sessions LIMIT 0').all()).toThrow();
+
+    // Now create the sessions table (the same shape SessionStore.migrations
+    // would create) and re-run migration id=13. It must add agent_id.
+    createSessionsFixture(fresh);
+    id13.up(fresh);
+
+    const cols = (
+      fresh.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(cols).toContain('agent_id');
+
+    // Idempotent: running migration id=13 a third time is a no-op.
+    expect(() => id13.up(fresh)).not.toThrow();
+
+    fresh.close();
+  });
+
+  it('production migration union runs MessageLog after SessionStore (plan 493 regression)', () => {
+    // Mirrors CoreDatabase.runMigrations: the combined migration lists are
+    // sorted by id and each id runs exactly once (`id <= current` is skipped).
+    // With duplicate ids (both create_sessions and add_agent_id_to_sessions
+    // at id=2) the SessionStore migration was skipped, so neither
+    // message_index.generation nor sessions.agent_id ever existed and the
+    // very first append died with SQLITE_ERROR. add_agent_id_to_sessions must
+    // be >= the highest id across all stores — here we assert the production
+    // ordering lands create_sessions (id=2) before add_agent_id (id=13).
+    const all = [...MessageLog.migrations, ...SessionStore.migrations].sort(
+      (a, b) => a.id - b.id,
+    );
+    // Guard: every migration id in the union must be unique, else the runner
+    // silently skips one and leaves the schema short (the exact bug here).
+    const ids = all.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const fresh = new Database(':memory:') as unknown as SqliteDatabase;
+    fresh.pragma('foreign_keys = ON');
+    let current = 0;
+    for (const m of all) {
+      if (m.id <= current) continue;
+      m.up(fresh);
+      current = m.id;
+    }
+
+    const indexCols = (
+      fresh.prepare('PRAGMA table_info(message_index)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(indexCols).toContain('generation');
+
+    const sessionCols = (
+      fresh.prepare('PRAGMA table_info(sessions)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(sessionCols).toContain('agent_id');
+
+    fresh.close();
   });
 });

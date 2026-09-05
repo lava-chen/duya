@@ -332,6 +332,8 @@ const en = {
   // Context-compaction record row: collapsed verb plus a compacted-count
   // tail; the expanded card shows the summary text verbatim.
   'streaming.toolAction.compact.collapsed': 'Context compacted',
+  'streaming.toolAction.compact.inProgress': 'Compacting context...',
+  'streaming.toolAction.compact.failed': 'Context compaction failed',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} message',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} messages',
 
@@ -1279,6 +1281,7 @@ const en = {
   'bot.actions.options': 'Bot options',
   'bot.actions.deleteConfirm': 'Delete bot "{{name}}"? Its conversations are kept.',
   'bot.actions.showHidden': 'Show hidden bots ({{count}})',
+  'bot.actions.hideFromList': 'Hide hidden bot list',
   'bot.actions.noHidden': 'No hidden bots',
   'bot.pinnedLabel': 'Pinned',
   'bot.hiddenLabel': 'Hidden',
@@ -1302,6 +1305,8 @@ const en = {
   'bot.chat.working': 'Working…',
   'bot.chat.placeholder': 'Send a message to this bot',
   'bot.chat.placeholderUnbound': 'This bot has no persistent session yet',
+  'bot.chat.attach': 'Attach',
+  'bot.chat.removeAttachment': 'Remove attachment',
   'bot.chat.send': 'Send',
   'bot.chat.stop': 'Stop',
   'sidebar.section.newSection': 'New section',

@@ -1,0 +1,1344 @@
+/*
+ * bot.css — Bot Direct Chat UI (plan 483 P2.1 + P2.1b style alignment).
+ * Telegram-style 1:1 transcript; fills the same main column the
+ * workspace ChatView occupies; full-pane transcript with 22px row
+ * gaps; bubbles hug content, capped at min(88%, 640px).
+ *
+ * P2.1b (2026-09-04): visual alignment with the user-provided grok
+ * screenshot + grok-bot 0.18 recovered workspace CSS:
+ *   - bubbles: symmetric 18px radius (no tail corners), assistant =
+ *     elevated surface, user = high-contrast ivory (dark) / ink (light)
+ *   - composer: grok prompt-shell structure (field on top, actions row
+ *     below, circular contrast send button)
+ *   - header: centered identity, no divider
+ *   - all hardcoded lime colors replaced with theme tokens
+ *
+ * Bot-scoped custom properties (defined here, consumed below). Both
+ * themes must keep readable contrast for bubbles, composer and menus.
+ */
+
+.bot-chat-view {
+  /* High-contrast pair: user bubble + send button share it. Dark theme
+     inverts to ivory-on-ink; light theme to ink-on-ivory. */
+  --bot-contrast-bg: #242424;
+  --bot-contrast-fg: #fafafa;
+  /* Assistant bubble: subtle elevation over --main-bg. */
+  --bot-bubble-assistant-bg: var(--surface-solid);
+  --bot-bubble-assistant-fg: var(--text);
+  /* Composer shell + hover surfaces. */
+  --bot-shell-bg: color-mix(in srgb, var(--text) 4%, var(--main-bg));
+  --bot-shell-border: var(--border);
+  /* Elevated popover / menu surface (hover toolbar, context menu). */
+  --bot-popover-bg: var(--surface-solid);
+  --bot-popover-border: var(--border);
+  --bot-popover-fg: var(--text);
+  --bot-popover-fg-muted: var(--muted);
+  --bot-popover-hover-bg: var(--surface-hover);
+  /* Code blocks inside bubbles. */
+  --bot-code-bg: color-mix(in srgb, var(--text) 6%, var(--main-bg));
+  --bot-code-border: var(--border-weak);
+  --bot-code-fg: var(--text);
+
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--main-bg);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .bot-chat-view {
+  --bot-contrast-bg: #ecece8;
+  --bot-contrast-fg: #242424;
+}
+
+.bot-chat-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+  min-height: 56px;
+  /* Identity sits LEFT after the back button (screenshot standard:
+     header title left-aligned, not centered). */
+  padding: 0.5rem 3.5rem 0.5rem 3.25rem;
+  /* No divider: the screenshot keeps the chat surface continuous. */
+  background: transparent;
+}
+
+.bot-chat-header__back {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.bot-chat-header__back:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.bot-chat-header__avatar {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bot-chat-header__identity {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.bot-chat-header__name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bot-chat-header__subtitle {
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bot-chat-header__working {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.72rem;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.bot-chat-transcript {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 1.25rem 0;
+}
+
+.bot-chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 100%;
+  min-height: 240px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.bot-chat-empty__name {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bot-chat-empty__desc {
+  font-size: 0.85rem;
+  color: var(--muted);
+  max-width: 420px;
+}
+
+/* Transcript rows follow the full pane width (screenshot standard
+   2026-09-05: bubbles stretch with the pane; the per-bubble cap lives
+   on .bot-message-action / .bot-chat-bubble). */
+.bot-chat-transcript > * {
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+}
+
+/* Date separator (grok sand-transcript-time-separator). */
+.bot-chat-date-separator {
+  margin-top: 22px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 0.7rem;
+  user-select: none;
+}
+
+.bot-chat-row {
+  display: flex;
+  align-items: flex-end;
+  margin-top: 22px;
+}
+
+.bot-chat-row--user {
+  justify-content: flex-end;
+}
+
+.bot-chat-row--assistant {
+  justify-content: flex-start;
+}
+
+/* Bubble — symmetric 18px radius per grok/screenshot (no tail corners).
+   The size cap lives on .bot-message-action when present (it is the flex
+   item); the bare bubble keeps its own cap for rows without an anchor. */
+.bot-chat-bubble {
+  max-width: min(88%, 640px);
+  padding: 0.55rem 0.9rem;
+  border-radius: 18px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+.bot-chat-row--assistant .bot-chat-bubble {
+  background: var(--bot-bubble-assistant-bg);
+  color: var(--bot-bubble-assistant-fg);
+  /* Subtle light outline per screenshot standard (assistant bubble
+     carries a faint border over the dark surface). */
+  border: 1px solid var(--border);
+}
+
+.bot-chat-row--user .bot-chat-bubble {
+  background: var(--bot-contrast-bg);
+  color: var(--bot-contrast-fg);
+}
+
+/* Slim status rows for tool_use / thinking / hook messages. */
+.bot-chat-status-row {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 22px;
+}
+
+.bot-chat-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 0.6rem;
+  background: var(--surface);
+  border: 1px solid var(--border-weak);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+/* Typing indicator — assistant-bubble styled pill (grok
+   sand-message-typing: elevated fill + matching outline, small dots). */
+.bot-chat-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 22px;
+  padding: 0.7rem 0.9rem;
+  border-radius: 18px;
+  background: var(--bot-bubble-assistant-bg);
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+
+/* The transcript column rule (`> * { width: 100% }`) stretches direct
+   children; keep the typing pill compact. */
+.bot-chat-transcript > .bot-chat-typing {
+  width: fit-content;
+}
+
+.bot-chat-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: bot-typing-bounce 1.2s ease-in-out infinite;
+}
+
+.bot-chat-typing span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.bot-chat-typing span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bot-typing-bounce {
+  0%, 60%, 100% {
+    transform: translateY(0);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Composer — grok sand-prompt-shell structure: rounded shell with the
+   field on top and an actions row below (attach left, send right).
+   Full pane width, matching the transcript (screenshot 2026-09-05). */
+.bot-chat-composer {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0.5rem 1.25rem 0.9rem;
+  background: var(--main-bg);
+}
+
+.bot-chat-composer__shell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 9px;
+  background: var(--bot-shell-bg);
+  border: 1px solid var(--bot-shell-border);
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  /* Anchors the reused SlashCommandPopover (absolute bottom-full) and the
+     ModelProviderSelector flyout to the composer shell. */
+  position: relative;
+}
+
+/* Actions row below the field: plus/attach left, model + send right (grok
+   sand-prompt-actions-row, mirroring the session MessageInput toolbar). */
+.bot-chat-composer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+/* Left group (plus button + quick attach) / right group (model selector +
+   send). Both stay on one row when narrow by letting the model selector
+   shrink; the selector's own trigger truncates long model names. */
+.bot-chat-composer__actions-left,
+.bot-chat-composer__actions-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: visible;
+}
+
+.bot-chat-composer__actions-right {
+  flex-shrink: 1;
+  justify-content: flex-end;
+}
+
+/* Attachment chips row above the input (files picked via + / attach). */
+.bot-chat-composer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 2px 4px 6px;
+}
+
+.bot-chat-composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 200px;
+  padding: 0.15rem 0.45rem;
+  border-radius: 8px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.72rem;
+}
+
+.bot-chat-composer__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-chat-composer__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.bot-chat-composer__chip-remove:hover {
+  color: var(--text);
+}
+
+.bot-chat-composer__hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  user-select: none;
+  padding-left: 4px;
+}
+
+/* Wrapper for the mirror + textarea (textarea sits directly in the shell
+   column; the wrapper only anchors the invisible mirror). */
+.bot-chat-composer__input-area {
+  position: relative;
+  min-width: 0;
+}
+
+/* Invisible mirror div — same font/padding as textarea, measures scrollHeight
+   for the auto-resize trick. */
+.bot-chat-composer__mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  visibility: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  padding: 8px 10px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.bot-chat-composer__input {
+  box-sizing: border-box;
+  width: 100%;
+  height: auto;
+  min-height: 36px;
+  max-height: 120px;
+  resize: none;
+  overflow: hidden;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+.bot-chat-composer__input::placeholder {
+  color: var(--muted);
+}
+
+.bot-chat-composer__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bot-chat-composer__hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+  user-select: none;
+}
+
+/* Attach button (plus/paperclip) — bottom-left circle. */
+.bot-chat-composer__attach {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.bot-chat-composer__attach:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.bot-chat-composer__attach:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Send / stop — circular contrast button (grok sand-prompt-send:
+   --sand-fill-primary circle), bottom-right. */
+.bot-chat-composer__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bot-contrast-bg);
+  color: var(--bot-contrast-fg);
+  cursor: pointer;
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.bot-chat-composer__send:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.bot-chat-composer__send:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.bot-chat-composer__send--stop {
+  background: var(--error);
+  color: #ffffff;
+}
+
+.bot-chat-composer__send--stop:hover {
+  filter: brightness(1.08);
+}
+
+.sub-agent-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.4rem 0.5rem;
+  margin: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  align-self: flex-start;
+}
+
+.sub-agent-back-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* ============================================================================
+   BotBubbleText — inline markdown renderer
+   ========================================================================== */
+
+.bot-bubble-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+
+/* Paragraphs */
+.bot-bubble-paragraph {
+  margin: 0;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bot-bubble-paragraph + .bot-bubble-paragraph {
+  margin-top: 0.5rem;
+}
+
+/* Headings */
+.bot-bubble-heading {
+  margin: 0.5rem 0 0.25rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.bot-bubble-heading--1 { font-size: 1.15rem; }
+.bot-bubble-heading--2 { font-size: 1rem; }
+.bot-bubble-heading--3 { font-size: 0.9rem; }
+
+/* Lists */
+.bot-bubble-list {
+  margin: 0.35rem 0;
+  padding-left: 1.4rem;
+  list-style: disc;
+}
+
+.bot-bubble-list--ordered {
+  list-style: decimal;
+}
+
+.bot-bubble-list li {
+  line-height: 1.55;
+  margin-bottom: 0.15rem;
+}
+
+/* Blockquote */
+.bot-bubble-blockquote {
+  margin: 0.4rem 0;
+  padding: 0.2rem 0 0.2rem 0.8rem;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Horizontal rule */
+.bot-bubble-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.6rem 0;
+}
+
+/* Inline formatting */
+.bot-bubble-text strong { font-weight: 600; }
+.bot-bubble-text em { font-style: italic; }
+.bot-bubble-text s { text-decoration: line-through; color: var(--muted); }
+
+.bot-bubble-inline-code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82em;
+  background: var(--bot-code-bg);
+  border: 1px solid var(--bot-code-border);
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+  color: var(--bot-code-fg);
+}
+
+.bot-bubble-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.bot-bubble-link:hover {
+  color: var(--accent);
+  filter: brightness(1.15);
+}
+
+/* ============================================================================
+   BotCodeBlock — code block with syntax highlighting + copy button
+   ========================================================================== */
+
+.bot-code-block {
+  background: var(--bot-code-bg);
+  border: 1px solid var(--bot-code-border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.82rem;
+  line-height: 1.6;
+}
+
+.bot-code-block__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bot-popover-bg);
+  border-bottom: 1px solid var(--bot-code-border);
+}
+
+.bot-code-block__lang {
+  font-size: 0.72rem;
+  color: var(--bot-popover-fg-muted);
+  text-transform: lowercase;
+}
+
+.bot-code-block__copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--bot-popover-fg-muted);
+  background: transparent;
+  border: 1px solid var(--bot-popover-border);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 0.12s, background-color 0.12s, border-color 0.12s;
+}
+
+.bot-code-block__copy:hover {
+  color: var(--bot-popover-fg);
+  background: var(--bot-popover-hover-bg);
+  border-color: var(--accent);
+}
+
+.bot-code-block__scroll {
+  overflow-x: auto;
+  padding: 10px 14px;
+}
+
+.bot-code-block__pre {
+  margin: 0;
+  color: var(--bot-code-fg);
+  white-space: pre;
+}
+
+.bot-code-block__pre code {
+  font-family: inherit;
+}
+
+/* Syntax token colors */
+.tok-keyword  { color: #c9c3ee; }
+.tok-string    { color: #b8d994; }
+.tok-comment   { color: #6a7a62; font-style: italic; }
+.tok-number    { color: #e8b98a; }
+.tok-line      { display: block; }
+
+/* ============================================================================
+   BotMessageAction — hover action anchor + context menu
+   Inspired by grok-bot TranscriptCardActionAnchor
+   ========================================================================== */
+
+.bot-message-action {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: min(88%, 640px);
+}
+
+/* Hover action toolbar — appears bottom-right of the bubble it wraps. */
+.bot-message-hover-actions {
+  position: absolute;
+  right: 0;
+  bottom: -30px;
+  z-index: 10;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bot-popover-bg);
+  border: 1px solid var(--bot-popover-border);
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.bot-message-action:hover .bot-message-hover-actions,
+.bot-message-action:focus-within .bot-message-hover-actions,
+.bot-message-action--menu-open .bot-message-hover-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bot-message-hover-actions__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 4px 7px;
+  color: var(--bot-popover-fg-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  transition: color 0.12s, background-color 0.12s;
+}
+
+.bot-message-hover-actions__btn:hover,
+.bot-message-hover-actions__btn:focus-visible {
+  color: var(--bot-popover-fg);
+  background: var(--bot-popover-hover-bg);
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Context menu — appears on More button click */
+.bot-message-context-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 150px;
+  padding: 4px;
+  background: var(--bot-popover-bg);
+  border: 1px solid var(--bot-popover-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.bot-message-context-menu--above {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.bot-message-context-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 0.8rem;
+  color: var(--bot-popover-fg);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.1s, color 0.1s;
+}
+
+.bot-message-context-menu__item:hover,
+.bot-message-context-menu__item:focus-visible {
+  background: var(--bot-popover-hover-bg);
+  color: var(--bot-popover-fg);
+  outline: none;
+}
+
+/* ============================================================================
+   BotBubbleRow — message row: avatar + bubble + hover actions
+   ========================================================================== */
+
+/* ============================================================================
+   BotToolCallRow — expandable tool call accordion
+   Inspired by grok-bot TranscriptToolCallRow / sand-outline-item
+   ========================================================================== */
+
+.bot-tool-row {
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weak);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.bot-tool-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background-color 0.1s;
+}
+
+.bot-tool-row__toggle:hover {
+  background: var(--surface-hover);
+}
+
+.bot-tool-row__icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.bot-tool-icon--pending,
+.bot-tool-icon--running {
+  color: var(--muted);
+  animation: bot-icon-spin 1s linear infinite;
+}
+
+.bot-tool-icon--done    { color: var(--accent); }
+.bot-tool-icon--failed  { color: var(--error); }
+.bot-tool-icon--aborted { color: var(--muted); }
+
+@keyframes bot-icon-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.bot-tool-row__name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.78rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-tool-row__preview {
+  flex: 1;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bot-tool-row__chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.bot-tool-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+/* Expanded detail section */
+.bot-tool-row__detail {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.bot-tool-row__detail-section + .bot-tool-row__detail-section {
+  margin-top: 10px;
+}
+
+.bot-tool-row__detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.bot-tool-row__detail-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.bot-tool-row__copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border-weak);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+
+.bot-tool-row__copy-btn:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.bot-tool-row__result-badge {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.bot-tool-row__result-badge--done {
+  background: var(--bot-popover-hover-bg);
+  color: var(--accent);
+}
+.bot-tool-row__result-badge--failed { background: var(--bot-popover-hover-bg); color: var(--error); }
+
+.bot-tool-row__detail-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bot-code-bg);
+  border-radius: 6px;
+  color: var(--bot-code-fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+/* ============================================================================
+   BotThinkingRow — expandable AI thinking / reasoning accordion
+   Inspired by grok-bot TranscriptThinkingRow / sand-outline-item
+   ========================================================================== */
+
+.bot-thinking-row {
+  margin-top: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-weak);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+
+.bot-thinking-row__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: background-color 0.1s;
+}
+
+.bot-thinking-row__toggle:hover {
+  background: var(--surface-hover);
+}
+
+.bot-thinking-row__icon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.bot-thinking-row__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.bot-thinking-row__preview {
+  flex: 1;
+  color: var(--muted);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.bot-thinking-row__chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.bot-thinking-row__chevron--open {
+  transform: rotate(90deg);
+}
+
+.bot-thinking-row__detail {
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.bot-thinking-row__detail-pre {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bot-code-bg);
+  border-radius: 6px;
+  color: var(--bot-code-fg);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.78rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-y: auto;
+  max-height: 300px;
+}
+
+/* Plan 491 P0.1: message delivery phase states */
+.bot-chat-bubble--sending {
+  opacity: 0.7;
+}
+
+.bot-chat-bubble--failed {
+  border-left: 3px solid var(--color-error, #ef4444);
+}
+
+.bot-chat-bubble--queued {
+  opacity: 0.8;
+  font-style: italic;
+}
+
+.bot-chat-bubble__sending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-muted, #9ca3af);
+}
+
+.bot-chat-bubble__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-muted, #e5e7eb);
+  border-top-color: var(--accent, #3b82f6);
+  border-radius: 50%;
+  animation: bot-chat-bubble__spin 0.8s linear infinite;
+}
+
+@keyframes bot-chat-bubble__spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.bot-chat-bubble__sending-text {
+  font-size: 12px;
+}
+
+/* Plan 491 P0.3: BotTypingIndicator different session phase states */
+.bot-chat-typing--thinking,
+.bot-chat-typing--tool,
+.bot-chat-typing--waiting,
+.bot-chat-typing--error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+}
+
+.bot-chat-typing--thinking {
+  background: var(--bg-surface-elevated, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+}
+
+.bot-chat-typing--tool {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+  color: var(--accent, #3b82f6);
+}
+
+.bot-chat-typing--waiting {
+  background: var(--bg-warning, rgba(245, 158, 11, 0.1));
+  color: var(--warning, #f59e0b);
+}
+
+.bot-chat-typing--error {
+  background: var(--bg-error, rgba(239, 68, 68, 0.1));
+  color: var(--error, #ef4444);
+}
+
+.bot-chat-typing__text {
+  font-size: 12px;
+}
+
+.bot-chat-typing__thinking-dots {
+  animation: bot-chat-typing__pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bot-chat-typing__pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+/* Plan 491 P0.4: jump to latest capsule */
+.bot-chat-jump-to-latest {
+  position: absolute;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--accent, #3b82f6);
+  color: white;
+  border: none;
+  border-radius: 20px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 10;
+  animation: bot-chat-jump-to-latest__fadeIn 0.2s ease-out;
+}
+
+.bot-chat-jump-to-latest:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.bot-chat-jump-to-latest__icon {
+  font-size: 16px;
+}
+
+@keyframes bot-chat-jump-to-latest__fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Plan 491 P0.4: overflow-anchor for scroll anchoring */
+.bot-chat-transcript {
+  overflow-anchor: auto;
+}
+
+/* Plan 491 P2.2: BotNoticeCard — inline notice for failure/compact/mode switch */
+.bot-notice-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  margin: 8px 0;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  max-width: 100%;
+}
+
+.bot-notice-card--error {
+  background: var(--bg-error, rgba(239, 68, 68, 0.08));
+  color: var(--error, #ef4444);
+  border-left: 3px solid var(--error, #ef4444);
+}
+
+.bot-notice-card--compact {
+  background: var(--bg-surface-elevated, #f3f4f6);
+  color: var(--text-muted, #6b7280);
+  border-left: 3px solid var(--border, #e5e7eb);
+}
+
+.bot-notice-card--mode-switch {
+  background: var(--accent-bg, rgba(59, 130, 246, 0.08));
+  color: var(--accent, #3b82f6);
+  border-left: 3px solid var(--accent, #3b82f6);
+}
+
+.bot-notice-card__icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+
+.bot-notice-card__content {
+  flex: 1;
+  min-width: 0;
+}
+
+.bot-notice-card__message {
+  font-weight: 500;
+}
+
+.bot-notice-card__details {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-top: 2px;
+}
+
+.bot-notice-card__time {
+  font-size: 11px;
+  opacity: 0.6;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bot-notice-card__action {
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.8;
+  transition: opacity 0.15s;
+}
+
+.bot-notice-card__action:hover {
+  opacity: 1;
+}
+
+/* Plan 491 P2.3: bubble hover timestamp */
+.bot-chat-bubble__timestamp {
+  display: none;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.bot-chat-bubble:hover .bot-chat-bubble__timestamp {
+  display: inline;
+}
+
+/* Plan 491 P2.3: session phase indicator for bot messages */
+.bot-chat-bubble--phase-thinking {
+  border-left: 3px solid var(--thinking, #8b5cf6);
+}
+
+.bot-chat-bubble--phase-tool {
+  border-left: 3px solid var(--accent, #3b82f6);
+}
+
+.bot-chat-bubble--phase-streaming {
+  border-left: 3px solid var(--streaming, #22c55e);
+}
+
+.bot-chat-bubble--phase-waiting_approval {
+  border-left: 3px solid var(--warning, #f59e0b);
+}
+
+.bot-chat-bubble--phase-error {
+  border-left: 3px solid var(--error, #ef4444);
+}
+
+/* Phase badge in bubble corner */
+.bot-chat-bubble--phase-thinking::before {
+  content: '...';
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--thinking, #8b5cf6);
+}
+
+/* Plan 491 P2.4: UnreadDivider — marks boundary between read and unread messages */
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  margin: 8px 0;
+}
+
+.unread-divider__line {
+  flex: 1;
+  height: 1px;
+  background: var(--border, #e5e7eb);
+}
+
+.unread-divider__content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.unread-divider__text {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--accent, #3b82f6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.unread-divider__action {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.unread-divider__action:hover {
+  background: var(--accent, #3b82f6);
+  color: white;
+}

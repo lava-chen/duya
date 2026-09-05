@@ -27,6 +27,17 @@ src/**/*.js.map
 !src/**/*.stories.tsx
 !src/**/*.stories.ts
 
+# Same in-place emit, but for workspace packages and electron/ (no tracked
+# hand-written .js exists there — all source is TS).
+electron/**/*.js
+electron/**/*.js.map
+electron/**/*.d.ts
+electron/**/*.d.ts.map
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+
 # Storybook
 .storybook/
 storybook-static/
@@ -170,3 +181,5 @@ probe-desktop-capture*.png
 
 # WorkBuddy project data (local memory, not source)
 .workbuddy/
+.tmp-diag.ps1
+.tmp-kill.ps1

@@ -9,9 +9,55 @@ vi.mock('@/hooks/useTranslation', () => ({
 }));
 
 // Icons barrel pulls in @tabler/icons-react (heap heavy in tests).
+// Mock every icon the bot chat import chain touches.
 vi.mock('@/components/icons', () => ({
   ArrowLeftIcon: () => null,
+  PaperclipIcon: () => null,
+  ArrowUpIcon: () => null,
+  CopyIcon: () => null,
+  CheckIcon: () => null,
+  DotsThreeIcon: () => null,
+  ChatCircleIcon: () => null,
+  BrainIcon: () => null,
+  CaretRightIcon: () => null,
+  WrenchIcon: () => null,
+  XCircleIcon: () => null,
+  CircleNotchIcon: () => null,
+  // BotComposer chain (useSlashCommands / ModelProviderSelector /
+  // SlashCommandPopover) imports these icons too.
+  PlusIcon: () => null,
+  XIcon: () => null,
+  TerminalIcon: () => null,
+  QuestionIcon: () => null,
+  GlobeSimpleIcon: () => null,
+  ClockCounterClockwiseIcon: () => null,
+  ListChecksIcon: () => null,
+  FeatherIcon: () => null,
+  PlugIcon: () => null,
+  ChalkboardIcon: () => null,
+  ArrowsInLineVerticalIcon: () => null,
+  TelescopeIcon: () => null,
+  TargetArrowIcon: () => null,
+  EyeIcon: () => null,
+  MousePointerClickIcon: () => null,
+  CaretDownIcon: () => null,
+  SpinnerGapIcon: () => null,
+  GearSixIcon: () => null,
+  CubeIcon: () => null,
+  CaretLeftIcon: () => null,
+  RepeatIcon: () => null,
 }));
+
+// Composer fetches providers via the preload IPC bridge, which is absent in
+// jsdom — stub just that call so the model picker stays empty instead of
+// logging errors, while keeping the rest of ipc-client intact.
+vi.mock('@/lib/ipc-client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ipc-client')>();
+  return {
+    ...actual,
+    listProvidersIPC: () => Promise.resolve([]),
+  };
+});
 
 // Bot contacts hook: return a fixed contact with a bound session so the
 // composer is enabled and the header shows identity fields.
@@ -33,7 +79,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/components/layout/sidebar/use-bot-contacts', () => ({
-  useBotContacts: () => ({ contacts: mocks.contacts, loading: false, reload: mocks.reload }),
+  // Mirror the real hook's return shape (allContacts; pinned/unpinned/hidden).
+  useBotContacts: () => ({
+    allContacts: mocks.contacts,
+    pinned: [],
+    unpinned: [],
+    hidden: [],
+    loading: false,
+    reload: mocks.reload,
+  }),
 }));
 
 import { BotDirectChatView } from './BotDirectChatView';
@@ -71,7 +125,7 @@ describe('BotDirectChatView', () => {
     expect(screen.getAllByText('ghost').length).toBeGreaterThan(0);
   });
 
-  it('renders user and assistant text bubbles with group starts', () => {
+  it('renders user and assistant bubbles without per-row avatar/name', () => {
     const messages: Message[] = [
       msg({ id: 'm1', role: 'user', content: '你好' }),
       msg({ id: 'm2', role: 'user', content: '还在吗' }),
@@ -82,14 +136,47 @@ describe('BotDirectChatView', () => {
     );
     const rows = container.querySelectorAll('.bot-chat-row');
     expect(rows.length).toBe(3);
-    expect(rows[0].getAttribute('data-group-start')).toBe('true');
-    // Consecutive user message is NOT a group start.
-    expect(rows[1].getAttribute('data-group-start')).toBeNull();
-    expect(rows[2].getAttribute('data-group-start')).toBe('true');
-    // Group-start assistant row carries avatar + name gutter.
-    expect(rows[2].querySelector('.bot-chat-row__name')?.textContent).toBe('测试 Bot');
+    // Grok standard: rows carry no avatar/name — identity lives in the header.
+    expect(container.querySelector('.bot-chat-row__avatar')).toBeNull();
+    expect(container.querySelector('.bot-chat-row__name')).toBeNull();
+    expect(rows[0].querySelector('.bot-chat-bubble--user')).not.toBeNull();
+    expect(rows[2].querySelector('.bot-chat-bubble--assistant')).not.toBeNull();
+    // Both roles get a hover-action anchor (copy).
+    expect(rows[0].querySelector('.bot-message-action')).not.toBeNull();
+    expect(rows[2].querySelector('.bot-message-action')).not.toBeNull();
     expect(screen.getByText('你好')).toBeDefined();
     expect(screen.getByText('在的')).toBeDefined();
+  });
+
+  it('inserts a date separator when the calendar day changes', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const morning = new Date();
+    morning.setHours(9, 0, 0, 0);
+    const messages: Message[] = [
+      msg({ id: 'd1', role: 'user', content: '昨天', timestamp: morning.getTime() - day }),
+      msg({ id: 'd2', role: 'assistant', content: '嗯', timestamp: morning.getTime() - day + 1000 }),
+      msg({ id: 'd3', role: 'user', content: '今天', timestamp: morning.getTime() }),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    const separators = container.querySelectorAll('.bot-chat-date-separator');
+    expect(separators.length).toBe(2);
+    // Separator text is a non-empty localized date.
+    expect((separators[0].textContent || '').length).toBeGreaterThan(0);
+  });
+
+  it('keeps one separator for consecutive same-day messages', () => {
+    const t0 = new Date();
+    t0.setHours(9, 0, 0, 0);
+    const messages: Message[] = [
+      msg({ id: 's1', role: 'user', content: 'a', timestamp: t0.getTime() }),
+      msg({ id: 's2', role: 'assistant', content: 'b', timestamp: t0.getTime() + 5000 }),
+    ];
+    const { container } = render(
+      <BotDirectChatView {...baseProps} messages={messages} />,
+    );
+    expect(container.querySelectorAll('.bot-chat-date-separator').length).toBe(1);
   });
 
   it('renders tool_use messages as status chips, not bubbles', () => {
@@ -120,7 +207,8 @@ describe('BotDirectChatView', () => {
         messages={[]}
       />,
     );
-    const input = screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement;
+    // Unbound sessions get the placeholderUnbound label (exact aria-label).
+    const input = screen.getByLabelText('bot.chat.placeholderUnbound') as HTMLTextAreaElement;
     expect(input.disabled).toBe(true);
     expect(input.placeholder).toBe('bot.chat.placeholderUnbound');
   });
@@ -130,7 +218,7 @@ describe('BotDirectChatView', () => {
     const input = screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: '  hello  ' } });
     fireEvent.click(screen.getByLabelText('bot.chat.send'));
-    expect(baseProps.onSend).toHaveBeenCalledWith('hello');
+    expect(baseProps.onSend).toHaveBeenCalledWith({ text: 'hello' });
     expect((screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement).value).toBe('');
   });
 
@@ -139,7 +227,7 @@ describe('BotDirectChatView', () => {
     const input = screen.getByLabelText('bot.chat.placeholder') as HTMLTextAreaElement;
     fireEvent.change(input, { target: { value: 'hi' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
-    expect(baseProps.onSend).toHaveBeenCalledWith('hi');
+    expect(baseProps.onSend).toHaveBeenCalledWith({ text: 'hi' });
     expect(input.value).toBe('');
     fireEvent.change(input, { target: { value: 'line1' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });

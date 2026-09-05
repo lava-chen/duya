@@ -1,0 +1,1604 @@
+/*
+ * workspace.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ============================================
+   File Tree Panel Styles
+   ============================================ */
+
+.panel-zone {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+/* ============================================
+   Sidebar Panel (Multi-Tab) Styles
+   ============================================ */
+
+.sidebar-panel {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.sidebar-panel-inner {
+  display: flex;
+  height: 100%;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--main-bg);
+  border-left: 1px solid var(--border);
+}
+
+.sidebar-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Browser guests are stateful. Keep every browser tab mounted so switching
+   tabs restores its own page instead of constructing a fresh webview. */
+.sidebar-panel-browser-tab {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.sidebar-panel-browser-tab.active {
+  display: block;
+}
+
+/* File tree panel (embedded inside the sidebar panel) */
+.file-tree-panel-embedded {
+  display: flex;
+  height: 100%;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+.file-tree-search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.file-tree-search {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-tree-search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.file-tree-search-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px 0 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--main-bg);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.file-tree-search-input:focus {
+  border-color: var(--accent);
+}
+
+.file-tree-search-input::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.file-tree-refresh-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.file-tree-refresh-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.file-tree-refresh-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.file-tree-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 2px 0;
+}
+
+.file-tree-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+.file-tree-empty {
+  padding: 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* File Tree Component Styles */
+.file-tree {
+  font-size: 13px;
+  user-select: none;
+}
+
+.file-tree-folder {
+  margin: 0;
+}
+
+.file-tree-folder-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.file-tree-folder-header:hover {
+  background: var(--surface-hover);
+}
+
+.file-tree-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.file-tree-caret svg {
+  transition: transform 0.15s ease;
+}
+
+.file-tree-caret-expanded svg {
+  transform: rotate(90deg);
+}
+
+.file-tree-folder-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.file-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-tree-folder-children {
+  margin-left: 16px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.file-tree-file {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.file-tree-file:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.file-tree-file-selected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.file-tree-file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+/* Inline rename input */
+.file-tree-file-renaming,
+.file-tree-folder-renaming {
+  background: var(--surface);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.file-tree-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--main-bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+}
+
+/* Resize Handle */
+.resize-handle {
+  width: 4px;
+  background: transparent;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 10;
+  transition: background-color 0.2s ease;
+}
+
+.resize-handle:hover {
+  background: var(--accent-soft);
+}
+
+.resize-handle-bar {
+  width: 2px;
+  height: 40px;
+  background: var(--border);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+
+.resize-handle:hover .resize-handle-bar,
+.resize-handle:active .resize-handle-bar {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* Chat header — session title bar above the transcript */
+.chat-header {
+  display: flex;
+  flex-shrink: 0;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--main-bg);
+}
+
+.chat-header-inner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 48px;
+  min-width: 0;
+}
+
+.chat-header-title-area {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 10px;
+}
+
+.chat-header-title {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.chat-header-title:hover {
+  color: var(--text);
+}
+
+.chat-header-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-header-title-input {
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-input, var(--bg-elevated));
+  border: 1px solid var(--accent-soft, var(--border));
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  min-width: 160px;
+  max-width: 420px;
+}
+
+.chat-header-project {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  flex-shrink: 1;
+  min-width: 0;
+  line-height: 1;
+  opacity: 0.95;
+}
+.chat-header-project-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+/* Right-side actions cluster: menu (⋯) + sidebar toggle. */
+.chat-header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  padding: 0;
+}
+
+.chat-header-btn:hover,
+.chat-header-btn.active {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.04));
+  color: var(--text);
+}
+
+.chat-header-sidebar-trigger {
+  color: var(--text-muted);
+}
+
+.chat-header-menu-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.chat-header-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 220px;
+  padding: 6px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.chat-header-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.chat-header-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-header-menu-item:hover {
+  background: var(--surface-hover, var(--bg-hover, rgba(255, 255, 255, 0.04)));
+}
+
+.chat-header-menu-item.has-submenu {
+  position: relative;
+}
+
+.chat-header-menu-item.danger {
+  color: var(--danger, #ef4444);
+}
+
+.chat-header-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-header-menu-shortcut {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.chat-header-menu-caret {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.chat-header-submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 6px);
+  min-width: 180px;
+  padding: 6px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* File Tree Context Menu */
+.file-tree-context-menu {
+  min-width: 180px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.375rem;
+  animation: contextMenuFadeIn 0.1s ease-out;
+}
+
+@keyframes contextMenuFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.file-tree-context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.8125rem;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.file-tree-context-menu-item:hover {
+  background: var(--surface-hover);
+}
+
+.file-tree-context-menu-item.danger {
+  color: var(--error);
+}
+
+.file-tree-context-menu-item.danger:hover {
+  background: var(--error-soft);
+}
+
+.file-tree-context-menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.file-tree-context-menu-item:hover .file-tree-context-menu-icon {
+  color: var(--text);
+}
+
+.file-tree-context-menu-item.danger .file-tree-context-menu-icon {
+  color: var(--error);
+}
+
+.file-tree-context-menu-label {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.file-tree-context-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.375rem 0.25rem;
+}
+
+/* Channel icons - invert to white in dark mode */
+.channel-icon {
+  filter: none;
+}
+
+[data-theme="dark"] .channel-icon {
+  filter: brightness(0) invert(1);
+}
+
+/* ============================================
+   Compact Mode Styles
+   ============================================ */
+
+html.compact .app-sidebar {
+  padding: 0.6rem 0.5rem;
+  gap: 0.6rem;
+}
+
+html.compact .sidebar-primary-link {
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+html.compact .thread-item {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+html.compact .project-group-header {
+  padding: 0.15rem 0.5rem;
+}
+
+html.compact .sidebar-bottom {
+  gap: 0.15rem;
+}
+
+html.compact .sidebar-settings {
+  padding: 0.3rem 0.5rem;
+}
+
+html.compact .settings-page-content {
+  padding: 1rem !important;
+}
+
+html.compact .settings-section {
+  padding: 1rem 1.5rem;
+}
+
+html.compact .settings-row {
+  padding: 0.75rem 1rem;
+}
+
+html.compact .app-header {
+  height: 2.6rem;
+  padding: 0.5rem 1rem;
+}
+
+html.compact .app-content {
+  padding: 0.6rem 0.75rem 0.75rem;
+}
+
+html.compact .chat-header {
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+html.compact .chat-header-inner {
+  min-height: 42px;
+}
+
+html.compact .app-content:has(.chat-view) {
+  padding: 0;
+}
+
+html.compact .app-content:has(.settings-page-content) {
+  padding: 0;
+}
+
+html.compact .message-content {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+html.compact .message-content p {
+  margin-bottom: 0.5rem;
+}
+
+html.compact .message-content ul,
+html.compact .message-content ol {
+  margin-bottom: 0.5rem;
+  padding-left: 1.1rem;
+}
+
+html.compact .message-content li {
+  margin-bottom: 0.25rem;
+  line-height: 1.5;
+}
+
+html.compact .hero-card {
+  padding: 0.7rem 0.85rem;
+}
+
+html.compact .hero-card h1 {
+  font-size: 1.1rem;
+}
+
+html.compact .composer-card {
+  padding: 0.5rem;
+  gap: 0.5rem;
+}
+
+html.compact .surface-card {
+  padding: 0.65rem 0.75rem;
+}
+
+html.compact .page {
+  gap: 0.6rem;
+}
+
+html.compact .welcome-content {
+  padding: 1.5rem;
+}
+
+html.compact .welcome-header {
+  margin-bottom: 1.5rem;
+}
+
+html.compact .welcome-header h1 {
+  font-size: 2rem;
+}
+
+html.compact .welcome-actions {
+  margin-bottom: 1.5rem;
+}
+
+html.compact .welcome-input-container {
+  margin-bottom: 1.5rem;
+}
+
+html.compact .settings-card {
+  margin-bottom: 1rem;
+}
+
+html.compact .skill-card-item {
+  padding: 0.6rem;
+}
+
+html.compact .skills-title {
+  font-size: 1.5rem;
+}
+
+html.compact .skills-section-wrapper {
+  gap: 1.5rem;
+}
+
+html.compact .gateway-section {
+  padding: 0.75rem 1rem;
+}
+
+html.compact .gateway-status-card {
+  padding: 0.75rem 1rem;
+}
+
+html.compact .gateway-session-item {
+  padding: 0.4rem 0.5rem;
+}
+
+html.compact .file-tree-folder-header,
+html.compact .file-tree-file {
+  padding: 2px 12px;
+}
+
+html.compact .panel-zone {
+  gap: 0;
+}
+
+/* ============================================
+   Sub-Agent Panel Styles - Connected to Input
+   ============================================ */
+
+/* Wrapper connects panel to input box */
+.sub-agent-panel-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+/* Composer-attached panels should read as controls growing out of the input,
+   not as a second full-width composer. A percentage keeps the relationship
+   intact when the composer narrows in split and expanded workspace layouts.
+   The composer itself is excluded so its width tracks the message column
+   (max-w-[800px] mx-auto in the component) instead of staying at 76%. */
+:where(
+  .sub-agent-panel-wrapper,
+  .permission-prompt-wrapper,
+  .mailbox-panel-wrapper,
+  .streaming-input-bar-wrapper
+) {
+  width: 86%;
+  margin-inline: auto;
+}
+
+/* Panel with rounded top, flat bottom */
+.sub-agent-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  overflow: hidden;
+}
+
+.sub-agent-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  min-height: 36px;
+}
+
+.sub-agent-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  width: 100%;
+}
+
+.sub-agent-header-toggle:hover {
+  color: var(--text);
+}
+
+.sub-agent-robot-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.sub-agent-caret {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.sub-agent-caret.rotate-90 {
+  transform: rotate(90deg);
+}
+
+.sub-agent-header-title {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.sub-agent-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0.75rem;
+}
+
+.sub-agent-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.15rem 0;
+  cursor: default;
+}
+
+.sub-agent-row-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sub-agent-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.sub-agent-status {
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub-agent-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  margin-left: 0.5rem;
+}
+
+.sub-agent-footer {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.7;
+  border-top: 1px solid var(--border);
+}
+
+/* ============================================
+   Permission Prompt Styles - aligned with sub-agent-panel
+   ============================================ */
+
+/* Wrapper - shares "card-on-input" connection with sub-agent-panel */
+.permission-prompt-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+/* Pending card: rounded top, flat bottom — matches the input box (rounded-3xl = 1.5rem).
+   Colors now mirror the composer popover (`--command-menu-*`). */
+.permission-prompt-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--command-menu-bg);
+  border: 1px solid var(--command-menu-border);
+  border-bottom: none;
+  box-shadow: var(--command-menu-shadow);
+  overflow: hidden;
+}
+
+/* Resolved card: fully rounded, slightly muted (no input to bond with) */
+.permission-prompt-panel.resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--command-menu-border);
+  box-shadow: none;
+}
+
+.permission-prompt-wrapper.ask-user-question {
+  margin-bottom: 0;
+  z-index: 22;
+  width: 100%;
+  margin-inline: 0;
+}
+
+.permission-prompt-panel.ask-user-question-panel {
+  border-radius: 1.35rem;
+  border-bottom: 1px solid var(--command-menu-border);
+  background: var(--command-menu-bg);
+}
+
+.ask-question-sheet {
+  padding: 1rem 1.15rem 0.9rem;
+}
+
+.ask-question-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0.05rem 0.6rem;
+}
+
+.ask-question-title {
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 620;
+  letter-spacing: -0.015em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ask-question-pager {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+  user-select: none;
+}
+
+.ask-question-pager-btn {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  height: 1.5rem;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  width: 1.5rem;
+}
+
+.ask-question-pager-btn:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ask-question-pager-btn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.ask-question-pager-count {
+  color: var(--muted);
+  font-size: 0.8rem;
+  min-width: 3.5rem;
+  text-align: center;
+}
+
+.ask-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.ask-question-option-wrap {
+  position: relative;
+}
+
+.ask-question-option {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 0.58rem;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  gap: 0.55rem;
+  min-height: 2.05rem;
+  padding: 0.34rem 0.55rem;
+  text-align: left;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+  width: 100%;
+}
+
+.ask-question-option:hover,
+.ask-question-option.selected {
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset;
+}
+
+html[data-theme="light"] .ask-question-option:hover,
+html[data-theme="light"] .ask-question-option.selected {
+  background: rgba(16, 24, 40, 0.055);
+}
+
+.ask-question-option-number {
+  color: var(--muted);
+  flex: 0 0 1.35rem;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  text-align: right;
+}
+
+.ask-question-option-label {
+  color: var(--text);
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 540;
+  line-height: 1.25;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-question-option.feedback .ask-question-option-label {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.ask-question-recommended {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin-left: 0.35rem;
+}
+
+.ask-question-radio,
+.ask-question-check {
+  align-items: center;
+  border: 1px solid var(--border);
+  color: var(--accent);
+  display: flex;
+  flex: 0 0 auto;
+  height: 1rem;
+  justify-content: center;
+  opacity: 0.7;
+  width: 1rem;
+}
+
+.ask-question-radio {
+  border-radius: 999px;
+}
+
+.ask-question-check {
+  border-radius: 0.28rem;
+}
+
+.ask-question-radio.selected,
+.ask-question-check.selected {
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+.ask-question-radio span {
+  background: var(--accent);
+  border-radius: 999px;
+  height: 0.42rem;
+  width: 0.42rem;
+}
+
+.ask-question-info {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 auto;
+  height: 1.25rem;
+  justify-content: center;
+  opacity: 0.75;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  width: 1.25rem;
+}
+
+.ask-question-info:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  opacity: 1;
+}
+
+.ask-question-description {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  margin: 0.15rem 2.6rem 0.2rem 1.95rem;
+  padding: 0.45rem 0.6rem;
+}
+
+.ask-question-feedback-input {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--text);
+  flex: 1;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.25;
+  margin: 0;
+  min-width: 0;
+  outline: none;
+  padding: 0;
+  width: 100%;
+}
+
+.ask-question-feedback-input::placeholder {
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+}
+
+.ask-question-feedback-input:focus {
+  box-shadow: none;
+}
+
+.ask-question-footer {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.45rem 0.05rem 0;
+}
+
+.ask-question-footer > .ask-question-option.feedback {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ask-question-footer-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.65rem;
+}
+
+.ask-question-dismiss,
+.ask-question-continue {
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 0.86rem;
+  gap: 0.45rem;
+  height: 2rem;
+  padding: 0 0.78rem;
+  transition: background 0.15s ease, color 0.15s ease, opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ask-question-dismiss {
+  background: transparent;
+  color: var(--muted);
+}
+
+.ask-question-dismiss:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.ask-question-continue {
+  background: var(--accent);
+  color: white;
+  font-weight: 620;
+  box-shadow: 0 2px 8px var(--accent-shadow);
+}
+
+.ask-question-continue:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.ask-question-continue:disabled {
+  cursor: default;
+  opacity: 0.45;
+  transform: none;
+}
+
+.ask-question-dismiss kbd,
+.ask-question-continue kbd {
+  border-radius: 0.35rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1;
+  padding: 0.18rem 0.35rem;
+}
+
+.ask-question-dismiss kbd {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ask-question-continue kbd {
+  background: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.permission-prompt-header {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  min-height: 36px;
+  gap: 0.5rem;
+}
+
+.permission-prompt-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.permission-prompt-header-toggle:hover {
+  color: var(--text);
+}
+
+.permission-prompt-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+.permission-prompt-caret {
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.permission-prompt-caret.rotate-90 {
+  transform: rotate(90deg);
+}
+
+.permission-prompt-tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 500;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.35rem;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.permission-prompt-summary {
+  font-size: 0.8rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.permission-prompt-reason {
+  font-size: 0.75rem;
+  color: var(--muted);
+  padding: 0 0.75rem 0.5rem;
+}
+
+.permission-prompt-body {
+  padding: 0 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.permission-prompt-tool-input {
+  margin-top: 0.25rem;
+  overflow: hidden;
+  border-radius: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.permission-prompt-tool-input pre {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 0.5rem 0.75rem;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.75rem;
+  margin: 0;
+  max-height: 10rem;
+}
+
+.permission-prompt-tool-input.expanded pre {
+  max-height: none;
+}
+
+.permission-prompt-expand-btn {
+  width: 100%;
+  border: none;
+  border-top: 1px solid var(--border);
+  padding: 0.25rem 0.5rem;
+  font-size: 0.7rem;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-expand-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.permission-prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.5rem;
+  flex-wrap: wrap;
+}
+
+.permission-prompt-btn {
+  font-size: 0.75rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 0.5rem;
+}
+
+.permission-prompt-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.permission-prompt-btn-primary,
+.permission-prompt-btn-danger {
+  /* Appearance is fully driven by the shared Button variants (primary /
+     danger); no per-state color overrides here so the popover style stays
+     consistent across the app. */
+}
+
+.permission-prompt-status-spinner {
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Auto-mode indicator (small chip above panel body) */
+.permission-prompt-auto-chip {
+  margin: 0.5rem 0.75rem 0;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(94, 109, 255, 0.1);
+  border: 1px solid rgba(94, 109, 255, 0.2);
+  border-radius: 0.35rem;
+}
+
+/* AskUserQuestion options */
+.permission-prompt-questions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0.25rem;
+}
+
+.permission-prompt-question {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.permission-prompt-question-header {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.1rem 0.5rem;
+  align-self: flex-start;
+}
+
+.permission-prompt-question-text {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0;
+}
+
+.permission-prompt-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.permission-prompt-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.permission-prompt-option:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-hover);
+}
+
+.permission-prompt-option.selected {
+  border-color: var(--accent);
+  background: rgba(94, 109, 255, 0.1);
+  color: var(--accent);
+}
+
+.permission-prompt-option-check {
+  font-size: 0.7rem;
+  width: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.permission-prompt-option-star {
+  margin-left: 0.2rem;
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.permission-prompt-other-input {
+  width: 100%;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  outline: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-other-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* ExitPlanMode specific */
+.permission-prompt-plan-card {
+  border: 1px solid rgba(94, 109, 255, 0.3);
+  background: rgba(94, 109, 255, 0.05);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin: 0 0.75rem 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.permission-prompt-plan-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.permission-prompt-plan-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.permission-prompt-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.permission-prompt-plan-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.permission-prompt-plan-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.permission-prompt-plan-list-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.permission-prompt-plan-tool {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.7rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.permission-prompt-feedback-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.permission-prompt-feedback-input {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  outline: none;
+  min-width: 0;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.permission-prompt-feedback-input:focus {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+}
+
+/* Resolved status line (after user decides) */
+.permission-prompt-resolved {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--muted);
+}
+
+.permission-prompt-resolved.allowed {
+  color: var(--accent);
+}
+
+.permission-prompt-resolved.denied {
+  color: #ef4444;
+}

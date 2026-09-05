@@ -284,4 +284,8 @@ const JOURNAL_MESSAGE_FIELDS: readonly string[] = [
   'attachments',
   'viz_spec',
   'sub_agent_id',
+  // Plan 489 P0.1: origin classifier — worker-side explicit tagging (e.g.
+  // SendMessageTool's 'send_message') must survive the journal emit; absent
+  // values are inferred at the IPC boundary (inferMessageSource).
+  'source',
 ];

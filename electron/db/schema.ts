@@ -2554,6 +2554,51 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    // Plan 493 (Phase D): bot soft-delete columns on `agent_profiles`.
+    // `deleted_at` is set when a bot is soft-deleted (Unix ms). `deleted_at IS
+    // NULL` means "live". `deleted_reason` is an optional free-text note from
+    // the caller (e.g. "owner request", "test cleanup"). `deleted_purge_at`
+    // is the scheduled wall-clock time when the bot will be physically
+    // removed (`.deleted/<ts>-<agentId>/` + chat_sessions + message_index).
+    // Default policy: 30 days from soft-delete time.
+    //
+    // NOT NULL DEFAULT 0 on `deleted_at` would force callers to write a
+    // sentinel value; NULL keeps the "live vs deleted" predicate honest
+    // (`WHERE deleted_at IS NULL`). `deleted_purge_at` stays nullable
+    // because live rows have no scheduled purge.
+    //
+    // Each column is added in its own try/catch so the migration is
+    // idempotent on databases that already have one or more of the columns
+    // (e.g. a partially-applied migration after a crash).
+    id: 54,
+    name: 'add_bot_soft_delete_columns_to_agent_profiles',
+    migrate(db: BetterSqlite3Db): void {
+      try {
+        db.exec('ALTER TABLE agent_profiles ADD COLUMN deleted_at INTEGER');
+      } catch {
+        // Column already exists.
+      }
+      try {
+        db.exec('ALTER TABLE agent_profiles ADD COLUMN deleted_reason TEXT');
+      } catch {
+        // Column already exists.
+      }
+      try {
+        db.exec('ALTER TABLE agent_profiles ADD COLUMN deleted_purge_at INTEGER');
+      } catch {
+        // Column already exists.
+      }
+      // Hot path index for the sidebar / drawer / IPC: most queries
+      // filter by `deleted_at IS NULL`. A partial index keeps the index
+      // tight (no rows for already-deleted bots) and avoids an
+      // unconditional scan on every list. The columns are nullable so
+      // SQLite can build a partial index cleanly.
+      db.exec(
+        'CREATE INDEX IF NOT EXISTS idx_agent_profiles_deleted_at ON agent_profiles(deleted_at) WHERE deleted_at IS NOT NULL',
+      );
+    },
+  },
 ];
 
 /**

@@ -28,7 +28,7 @@ import { useStreamingTools } from '@/hooks/useStreamingTools';
 import { useStreamingError } from '@/hooks/useStreamingError';
 import { useConversationStore } from '@/stores/conversation-store';
 import { useContextUsageStore } from '@/stores/context-usage-store';
-import { useCompactionStore, selectCompactionForSession } from '@/stores/compaction-store';
+import { useCompactionStore } from '@/stores/compaction-store';
 import { useMailboxStore } from '@/stores/mailbox-store';
 import { useBusyMessageModeValue } from '@/stores/busy-message-mode-store';
 import { useShallow } from 'zustand/react/shallow';
@@ -190,11 +190,6 @@ export function ChatView({
   }, [saveSettings, settings.defaultThinkingEffort]);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [isCompacting, setIsCompacting] = useState(false);
-  // Live auto-compaction phase pushed by the worker (auto compaction only).
-  // Manual /compact still drives a local 'compacting' state via setIsCompacting.
-  // The 'done'/'error' divider comes from this store so it persists across both
-  // auto and manual paths through the same UI surface.
-  const compactionState = useCompactionStore(selectCompactionForSession(sessionId));
   const [isNameProjectDialogOpen, setIsNameProjectDialogOpen] = useState(false);
   const [gitBaseline, setGitBaseline] = useState<UseGitStatusResult | null>(null);
   // Tracks whether a baseline has been captured for the current round.
@@ -1503,7 +1498,6 @@ export function ChatView({
               onScrollStateChange={handleScrollStateChange}
               sessionId={sessionId}
               onEditSend={handleEditSend}
-              compactionStatus={compactionState.phase}
               nextStepSuggestions={nextStepSuggestions}
               onNextStepSelect={handleNextStepSelect}
             />

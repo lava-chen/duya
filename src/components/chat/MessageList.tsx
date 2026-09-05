@@ -25,7 +25,6 @@ interface MessageListProps {
   error?: string | null;
   sessionId: string;
   onEditSend?: (messageId: string, text: string) => void;
-  compactionStatus?: 'idle' | 'compacting' | 'done' | 'error' | 'degraded';
   /** Predicted follow-up prompts shown as cards at the end of the stream. */
   nextStepSuggestions?: string[];
   onNextStepSelect?: (value: string) => void;
@@ -570,7 +569,6 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
   error,
   sessionId,
   onEditSend,
-  compactionStatus = 'idle',
   nextStepSuggestions,
   onNextStepSelect,
 }, ref) {
@@ -981,7 +979,7 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
 
 
   return (
-    <div ref={containerRef} className="message-list-scroll h-full overflow-y-auto scrollbar-thin pb-32">
+    <div ref={containerRef} className="message-list-scroll h-full overflow-y-auto pb-32 scrollbar-thin">
       <ChatMessageNavigator
         items={navigatorItems}
         activeMessageId={activeMessageId}
@@ -1045,37 +1043,9 @@ export const MessageList = forwardRef<MessageListRef, MessageListProps>(function
           />
         )}
 
-        {/* Compaction status divider */}
-        {compactionStatus !== 'idle' && (
-          <div className="compact-boundary" style={{ opacity: 1 }}>
-            <div className="compact-boundary-line" />
-            <span className="compact-boundary-text" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              {compactionStatus === 'compacting' && (
-                <>
-                  <span
-                    className="inline-block"
-                    style={{
-                      width: '10px',
-                      height: '10px',
-                      border: '1.5px solid var(--muted)',
-                      borderTopColor: 'transparent',
-                      borderRadius: '50%',
-                      animation: 'spin 0.8s linear infinite',
-                    }}
-                  />
-                  <span>Compacting context…</span>
-                </>
-              )}
-              {compactionStatus === 'done' && (
-                <span style={{ color: 'var(--accent, #3b82f6)' }}>Context compacted</span>
-              )}
-              {compactionStatus === 'error' && (
-                <span style={{ color: 'var(--destructive, #ef4444)' }}>Compaction failed</span>
-              )}
-            </span>
-            <div className="compact-boundary-line" />
-          </div>
-        )}
+        {/* Compaction status is rendered inline where it happened via the
+            live streaming `compact` action row (and durably via the
+            persisted `isCompactSummary` message). */}
 
         {/* End-of-turn next-step suggestion cards */}
         {!isStreaming && onNextStepSelect && nextStepSuggestions && nextStepSuggestions.length > 0 && (

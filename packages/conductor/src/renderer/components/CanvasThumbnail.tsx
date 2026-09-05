@@ -45,6 +45,17 @@ function pointOf(node: CanvasElement, u: number, v: number) {
   return { x: node.position.x + u * node.position.w, y: node.position.y + v * node.position.h };
 }
 
+/** A position is only usable when every coordinate is a finite number. */
+function isValidPos(pos: CanvasPosition | undefined): pos is CanvasPosition {
+  if (!pos) return false;
+  return (
+    Number.isFinite(pos.x) &&
+    Number.isFinite(pos.y) &&
+    Number.isFinite(pos.w) &&
+    Number.isFinite(pos.h)
+  );
+}
+
 function elbow(sx: number, sy: number, tx: number, ty: number): Array<[number, number]> {
   if (Math.abs(tx - sx) >= Math.abs(ty - sy)) {
     return [[sx, sy], [tx, sy], [tx, ty]];
@@ -104,10 +115,12 @@ export function CanvasThumbnail({
 
   const items: ThumbItem[] = [];
   for (const e of elements) {
-    items.push({ id: e.id, kind: e.elementKind, pos: e.position, config: e.config ?? {} });
+    if (isValidPos(e.position)) {
+      items.push({ id: e.id, kind: e.elementKind, pos: e.position, config: e.config ?? {} });
+    }
   }
   for (const w of widgets) {
-    if (w.position) {
+    if (isValidPos(w.position)) {
       items.push({ id: w.id, kind: `widget/${w.type}`, pos: w.position, config: w.config ?? {} });
     }
   }
@@ -131,8 +144,17 @@ export function CanvasThumbnail({
   }
   const pad = 0.8;
   minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-  const vbW = maxX - minX;
-  const vbH = maxY - minY;
+  let vbW = maxX - minX;
+  let vbH = maxY - minY;
+  // Defensive: a degenerate bounding box (non-finite or zero size) would
+  // produce an invalid viewBox and spam the console with SVG attribute
+  // errors. Fall back to a neutral box so the SVG stays renderable.
+  if (!Number.isFinite(vbW) || !Number.isFinite(vbH) || vbW <= 0 || vbH <= 0) {
+    minX = 0;
+    minY = 0;
+    vbW = 100;
+    vbH = 100;
+  }
 
   const nodeMap = new Map<string, CanvasElement>();
   for (const e of elements) nodeMap.set(e.id, e);
@@ -215,6 +237,10 @@ export function CanvasThumbnail({
             const sp = get(c.source);
             const tp = get(c.target);
             if (!sp || !tp) return null;
+            if (
+              !Number.isFinite(sp.x) || !Number.isFinite(sp.y) ||
+              !Number.isFinite(tp.x) || !Number.isFinite(tp.y)
+            ) return null;
             const pts = elbow(sp.x, sp.y, tp.x, tp.y);
             const color = typeof c.color === "string" ? c.color : MUTED;
             return (

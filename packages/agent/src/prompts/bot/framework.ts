@@ -96,6 +96,10 @@ export interface BotPromptContext {
   automations?: unknown
   /** @deprecated reserved — MCP server list (MCP section). */
   mcpServers?: unknown
+  /** MCP tools for this bot session (Tool[] — filtered to MCP-owned tools). */
+  mcpTools?: import('../../types.js').Tool[]
+  /** Workspace directory for this bot (default ~/.duya/workspace). */
+  workspace?: string
   /** Voice/tone hint from `[agents.<id>.prompt.identity].voice` (Plan 474 P3.2). */
   voice?: string
   /** Structured prompt config from `[agents.<id>.prompt]` (Plan 474 P3.2). */

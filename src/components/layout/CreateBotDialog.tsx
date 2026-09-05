@@ -11,7 +11,9 @@
  *   - avatar character: shape × color (8 × 11, defaults blob/blue)
  *
  * The id is derived from the name (`deriveBotIdFromName`), never
- * user-authored. Submission goes through `config:agents:create`, which
+ * user-authored; the main process re-allocates a collision-free id against
+ * disk + tombstones and returns the ACTUAL id, which `onCreated` receives.
+ * Submission goes through `config:agents:create`, which
  * seeds the 485 identity layer (profile.json with avatar tokens).
  */
 
@@ -106,13 +108,13 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
     setError(null);
     try {
       const id = deriveBotIdFromName(name, existingIds);
-      await createConfigAgent(id, {
+      const { id: createdId } = await createConfigAgent(id, {
         name: name.trim(),
         description: description.trim() || undefined,
         avatarShape: shape,
         avatarColor: color,
       });
-      onCreated(id);
+      onCreated(createdId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setSubmitting(false);

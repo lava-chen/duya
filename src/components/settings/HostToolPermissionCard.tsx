@@ -16,7 +16,7 @@ import {
   SettingsRow,
   SettingsSegmented,
 } from "@/components/settings/ui";
-import { ShieldIcon, AlertIcon } from "@/components/icons";
+import { AlertIcon } from "@/components/icons";
 
 export type LocalToolPermission = "ask" | "always" | "never";
 
@@ -93,7 +93,6 @@ export function HostToolPermissionCard({
       <SettingsRow
         label={t("settings.hostToolPermission.title")}
         description={t("settings.hostToolPermission.description")}
-        icon={<ShieldIcon />}
       >
         <SettingsSegmented
           value={value}

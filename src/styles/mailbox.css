@@ -1,0 +1,893 @@
+/*
+ * mailbox.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ============================================
+   Image Preview Lightbox (Widget image click)
+   ============================================ */
+
+.image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  cursor: zoom-out;
+}
+
+.image-preview-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.image-preview-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.image-preview-content {
+  max-width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: default;
+}
+
+.image-preview-image {
+  max-width: 90vw;
+  max-height: 85vh;
+  object-fit: contain;
+  border-radius: 8px;
+  user-select: none;
+}
+
+.image-preview-filename {
+  margin-top: 8px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+}
+
+/* ============================================
+   Inline Markdown Images (assistant messages)
+   ============================================ */
+
+.markdown-image-button {
+  display: inline-flex;
+  margin: 0;
+  padding: 0;
+  border: 1px solid hsl(var(--border) / 0.6);
+  border-radius: 16px;
+  background: transparent;
+  cursor: zoom-in;
+  overflow: hidden;
+  transition: border-color 120ms ease, transform 120ms ease;
+  width: 120px;
+  height: 120px;
+  vertical-align: middle;
+}
+
+.markdown-image-button:hover {
+  border-color: hsl(var(--foreground) / 0.3);
+}
+
+.markdown-image-button:active {
+  transform: scale(0.99);
+}
+
+.markdown-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: hsl(var(--muted) / 0.4);
+}
+
+.markdown-video {
+  display: block;
+  width: 100%;
+  max-height: 480px;
+  margin: 0;
+  background: hsl(var(--muted) / 0.4);
+}
+
+/* ============================================
+   Chat Panel Floating Toggle Buttons
+   ============================================ */
+
+.chat-panel-floating-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: auto;
+  padding: 0 8px;
+  height: 44px;
+  background: transparent;
+}
+
+.app-shell-root[data-research-open="true"] .chat-panel-floating-actions {
+  display: none;
+}
+
+/* ============================================
+   Message Input Drag-and-Drop Feedback
+   ============================================ */
+
+.message-input-drop-active {
+  position: relative;
+  box-shadow: inset 0 0 0 2px var(--accent), 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  background-color: var(--accent-soft) !important;
+}
+
+.message-input-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  border-radius: 1.5rem;
+}
+
+.message-input-drop-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: var(--accent);
+  color: var(--accent-foreground, #fff);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+  animation: message-input-drop-fade 120ms ease-out;
+}
+
+@keyframes message-input-drop-fade {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+/* Message font size presets */
+html[data-message-font-size="small"] .prose-sm,
+html[data-message-font-size="small"] .prose {
+  font-size: 13px !important;
+}
+
+html[data-message-font-size="small"] .prose-sm p,
+html[data-message-font-size="small"] .prose p {
+  font-size: inherit !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h1,
+html[data-message-font-size="small"] .prose h1 {
+  font-size: 1.5em !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h2,
+html[data-message-font-size="small"] .prose h2 {
+  font-size: 1.25em !important;
+}
+
+html[data-message-font-size="small"] .prose-sm h3,
+html[data-message-font-size="small"] .prose h3 {
+  font-size: 1.125em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm,
+html[data-message-font-size="large"] .prose {
+  font-size: 17px !important;
+}
+
+html[data-message-font-size="large"] .prose-sm p,
+html[data-message-font-size="large"] .prose p {
+  font-size: inherit !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h1,
+html[data-message-font-size="large"] .prose h1 {
+  font-size: 1.5em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h2,
+html[data-message-font-size="large"] .prose h2 {
+  font-size: 1.25em !important;
+}
+
+html[data-message-font-size="large"] .prose-sm h3,
+html[data-message-font-size="large"] .prose h3 {
+  font-size: 1.125em !important;
+}
+
+/* ============================================
+   Mailbox Panel Styles - Connected to Input (Plan 202)
+   ============================================ */
+
+.mailbox-panel-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+.mailbox-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  overflow: hidden;
+}
+
+.mailbox-panel.resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.mailbox-panel-body {
+  padding: 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 144px;
+  overflow-y: auto;
+}
+
+.mailbox-panel-empty {
+  font-size: 0.75rem;
+  color: var(--muted);
+  text-align: center;
+  padding: 0.5rem;
+  opacity: 0.7;
+}
+
+/* ============================================
+   MailboxBubble — compact single-row queue item
+   Sits inline in .mailbox-panel-body. Designed to
+   match the dark "继续" panel reference: one row
+   per pending instruction, kind chip + content,
+   subtle 2px left accent in the kind color.
+   ============================================ */
+
+.mailbox-bubble {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+  background: transparent;
+  border: none;
+  font-size: 0.8rem;
+  line-height: 1.2;
+  min-width: 0;
+  cursor: default;
+}
+
+.mailbox-bubble--cancelled {
+  opacity: 0.55;
+}
+
+.mailbox-bubble-content {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mailbox-bubble-content--cancelled {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.mailbox-bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  /* Always visible — these are the row's primary actions. */
+}
+
+/* Hover-only action group (e.g. edit) — sits next to the always-visible
+   actions and fades in on hover so it doesn't clutter the row. */
+
+.mailbox-bubble-hover-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.mailbox-bubble:hover .mailbox-bubble-hover-actions,
+.mailbox-bubble:focus-within .mailbox-bubble-hover-actions {
+  opacity: 1;
+}
+
+.mailbox-bubble-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 0.35rem;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.mailbox-bubble-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.mailbox-bubble-action--danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+}
+
+/* Editing state — replaces content + actions with an input + save button */
+
+.mailbox-bubble--editing {
+  gap: 0.4rem;
+}
+
+.mailbox-bubble-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.55rem;
+  font-size: 0.92rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 0.45rem;
+  outline: none;
+}
+
+.mailbox-bubble-save {
+  height: 28px;
+  padding: 0 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--main-bg);
+  background: var(--accent);
+  border: none;
+  border-radius: 0.25rem;
+  cursor: pointer;
+  transition: opacity 0.12s ease;
+}
+
+.mailbox-bubble-save:hover {
+  opacity: 0.9;
+}
+
+/* Mailbox visual refinement: pending rows should read like a thin stack
+   attached to the original input, not a separate table. */
+.mailbox-bubble-actions {
+  gap: 0.3rem;
+}
+
+.mailbox-bubble-action {
+  width: 24px;
+  height: 24px;
+  background: transparent;
+}
+
+.mailbox-bubble-action--guide {
+  width: auto;
+  gap: 0.3rem;
+  padding: 0 0.45rem;
+  font-size: 0.86rem;
+  color: color-mix(in srgb, var(--muted) 86%, var(--text) 14%);
+}
+
+.mailbox-bubble-action:hover {
+  background: color-mix(in srgb, var(--surface-hover) 72%, transparent);
+}
+
+/* Final mailbox alignment with .sub-agent-panel. Keep this block last in the
+   mailbox section so older experimental row styles cannot override it. */
+.mailbox-panel-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+.mailbox-panel {
+  border-radius: 0.75rem 0.75rem 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.mailbox-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0 0.75rem;
+  max-height: 144px;
+  overflow-y: auto;
+}
+
+.mailbox-bubble {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 0;
+  padding: 0.15rem 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.8rem;
+  line-height: 1.2;
+  cursor: default;
+}
+
+.mailbox-bubble:hover {
+  background: transparent;
+}
+
+.mailbox-bubble-content {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.mailbox-bubble-actions,
+.mailbox-bubble-hover-actions {
+  gap: 0.5rem;
+}
+
+.mailbox-bubble-action {
+  width: 22px;
+  height: 22px;
+  border-radius: 0.25rem;
+  background: transparent;
+}
+
+.mailbox-bubble-action--guide {
+  width: auto;
+  height: auto;
+  gap: 0.25rem;
+  padding: 0;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.mailbox-bubble-input {
+  height: 24px;
+  padding: 0 0.4rem;
+  font-size: 0.8rem;
+  border-radius: 0.25rem;
+}
+
+.mailbox-bubble-save {
+  height: 24px;
+  font-size: 0.72rem;
+}
+
+/* ============================================
+   BrowserGroup — collapse consecutive browser
+   actions (e.g. browser_tool with multiple
+   operations) into a single toggle that shows
+   the snapshot / compactSnapshot content and
+   hides the raw JSON behind a "显示原始工具
+   调用输出" button.
+   ============================================ */
+
+.tool-group {
+  width: 100%;
+}
+
+.tool-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0.15rem 0;
+}
+
+.tool-group-fallback {
+  margin: 0.35rem 0.5rem 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  border-radius: 0.35rem;
+}
+
+/* ============================================
+   Streaming Input Bar Styles (Plan 202)
+   ============================================ */
+
+.streaming-input-bar-wrapper {
+  margin-bottom: -1px;
+  position: relative;
+  z-index: 10;
+}
+
+.streaming-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem 0.75rem 0 0;
+  min-height: 36px;
+}
+
+.streaming-input-bar-resolved {
+  border-radius: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.streaming-input-bar-left,
+.streaming-input-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.streaming-input-bar-mid {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.streaming-input-bar-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-selector:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.streaming-input-bar-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  border-radius: 0.35rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.streaming-input-bar-stop-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.streaming-input-bar-stop-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+/* ============================================
+   Right Sidebar Redesign — PanelHeader & Picker
+   ============================================ */
+
+.panel-zone {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.panel-header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  flex-shrink: 0;
+  padding: 0 6px;
+  gap: 4px;
+  background: var(--main-bg);
+  /* No bottom rule: the tab bar and the page header below it share the
+   * same background and read as one continuous header zone, Codex-style. */
+  border-bottom: none;
+}
+
+.panel-header-empty {
+  justify-content: space-between;
+}
+
+.panel-header-empty-text {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding-left: 4px;
+}
+
+.panel-header-tabs {
+  display: flex;
+  /* Hug the tab content (shrink only under pressure) so the "+"
+   * add button sits right after the last tab, Codex-style — instead
+   * of being pushed to the far edge of the bar. */
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 3px;
+  overflow-x: auto;
+}
+
+.panel-header-tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  max-width: 180px;
+}
+
+.panel-header-tab:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Codex-style active tab: soft filled chip with a faint lift shadow, no
+ * outline. Fill uses a text-mix so it stays visible in both themes
+ * (white-alpha fallbacks vanish on the light background). */
+.panel-header-tab.active {
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  color: var(--text);
+  border-color: transparent;
+  box-shadow: 0 1px 3px color-mix(in srgb, black 12%, transparent);
+}
+
+.panel-header-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+
+.panel-header-tab-favicon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 2px;
+}
+
+.panel-header-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.panel-header-tab:hover .panel-header-tab-close,
+.panel-header-tab.active .panel-header-tab-close {
+  opacity: 1;
+}
+
+.panel-header-tab-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Tab drag-to-reorder: the tab being dragged dims; the drop target
+   shows a 2px accent guide on the left or right half the cursor
+   hovers over, signalling the insertion point. */
+.panel-header-tab.dragging {
+  opacity: 0.4;
+}
+
+.panel-header-tab.drop-before::before,
+.panel-header-tab.drop-after::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.panel-header-tab.drop-before::before { left: -3px; }
+.panel-header-tab.drop-after::after  { right: -3px; }
+
+.panel-header-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.panel-header-icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Empty-state header (tabs=0): title + right-aligned actions. */
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.panel-empty-launcher {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 56px 16px 24px;
+  background: var(--main-bg);
+}
+
+.panel-empty-launcher-list {
+  width: min(100%, 360px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transform: translateY(8%);
+}
+
+.panel-empty-launcher-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--chip);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.panel-empty-launcher-row:hover:not(.disabled) {
+  background: var(--surface-hover);
+}
+
+.panel-empty-launcher-row.disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.panel-empty-launcher-main,
+.panel-empty-launcher-meta {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.panel-empty-launcher-main {
+  gap: 10px;
+  font-weight: 600;
+}
+
+.panel-empty-launcher-meta {
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+
+.panel-empty-launcher-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text);
+}
+
+.panel-empty-launcher-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-empty-launcher-shortcut {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.panel-empty-launcher-hint {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+}

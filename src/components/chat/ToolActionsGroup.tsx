@@ -224,16 +224,15 @@ function ToolActionsGroupImpl({
       <button
         type="button"
         onClick={handleToggle}
-        className="flex w-full items-center gap-2 py-1 text-xs rounded-sm hover:bg-muted/30 transition-colors"
+        className="flex w-full items-center gap-2 py-1 pl-2 text-xs rounded-sm border-l-2 border-muted-foreground/30 hover:bg-muted/30 transition-colors"
       >
-        <span className="text-muted-foreground/60 truncate">
-          {collapsedSummary}
-        </span>
-
         <CaretRightIcon
           size={12}
           className={`shrink-0 text-muted-foreground/60 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
+        <span className="text-muted-foreground/60 truncate">
+          {collapsedSummary}
+        </span>
       </button>
 
       <AnimatePresence initial={false}>

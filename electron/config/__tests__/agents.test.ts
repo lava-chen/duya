@@ -4,9 +4,9 @@ import os from 'os';
 import path from 'path';
 import { ConfigStore } from '../store';
 import { _setConfigStoreForTest } from '../store-instance';
-import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent } from '../agents';
+import { listConfigAgents, listBots, upsertConfigAgent, deleteConfigAgent, allocateBotId, collectTakenBotIds, createConfigAgentUnique, softDeleteConfigAgent } from '../agents';
 import { readBotProfile, writeBotProfile } from '../bot-profile';
-import { getBotProfilePath } from '../agent-paths';
+import { getBotProfilePath, getDuyaAgentsRoot, getBotDeletedDir } from '../agent-paths';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'duya-config-agents-'));
@@ -86,9 +86,10 @@ describe('config agents write module', () => {
   it('upsert of a previously-deleted agent re-seeds (new again)', () => {
     upsertConfigAgent('foo', { name: 'Foo' });
     expect(fs.existsSync(getBotProfilePath('foo', dir))).toBe(true);
-    deleteConfigAgent('foo');
-    // Deleting the config entry does not remove the profile dir; re-creating
-    // with the same id keeps the existing runtime identity file untouched.
+    deleteConfigAgent('foo'); // hard delete removes the whole runtime tree
+    expect(fs.existsSync(getBotProfilePath('foo', dir))).toBe(false);
+    // A profile written after the deletion (e.g. restored from backup) is
+    // runtime identity and is never overwritten by the config seed.
     writeBotProfile(getBotProfilePath('foo', dir), { name: 'Foo kept', title: '', description: '' });
     upsertConfigAgent('foo', { name: 'Foo v2' });
     const profile = readBotProfile(getBotProfilePath('foo', dir));
@@ -132,5 +133,81 @@ describe('config agents write module', () => {
     const profile = readBotProfile(getBotProfilePath('gamma', dir));
     expect(profile!.avatarShape).toBe('blob');
     expect(profile!.avatarColor).toBe('orange');
+  });
+});
+
+// Plan 493 follow-up: collision-free bot id allocation (config + disk +
+// tombstones) — the renderer only sees live config ids, so the main process
+// must be the authoritative uniqueness check.
+describe('bot id allocation (collectTakenBotIds / allocateBotId / createConfigAgentUnique)', () => {
+  it('collectTakenBotIds sees config ids even without an agents dir', () => {
+    upsertConfigAgent('foo', { name: 'Foo' });
+    expect(collectTakenBotIds(dir).has('foo')).toBe(true);
+  });
+
+  it('collectTakenBotIds sees on-disk dirs and .deleted tombstone ids', () => {
+    fs.mkdirSync(path.join(getDuyaAgentsRoot(dir), 'live-dir'), { recursive: true });
+    const deleted = path.join(getBotDeletedDir(dir), '1700000000000-tomb');
+    fs.mkdirSync(deleted, { recursive: true });
+    const taken = collectTakenBotIds(dir);
+    expect(taken.has('live-dir')).toBe(true);
+    expect(taken.has('tomb')).toBe(true);
+  });
+
+  it('allocateBotId returns the desired id when free', () => {
+    expect(allocateBotId('foo', dir)).toBe('foo');
+  });
+
+  it('allocateBotId suffixes when a stale on-disk dir occupies the id', () => {
+    fs.mkdirSync(path.join(getDuyaAgentsRoot(dir), 'foo'), { recursive: true });
+    const id = allocateBotId('foo', dir);
+    expect(id).toMatch(/^foo-[a-z0-9]{6}$/);
+  });
+
+  it('allocateBotId avoids ids recovered from .deleted tombstones', () => {
+    fs.mkdirSync(path.join(getBotDeletedDir(dir), '1700000000000-foo'), { recursive: true });
+    expect(allocateBotId('foo', dir)).toMatch(/^foo-[a-z0-9]{6}$/);
+  });
+
+  it('allocateBotId avoids soft-deleted config ids', () => {
+    upsertConfigAgent('foo', { name: 'Foo' });
+    softDeleteConfigAgent('foo', { reason: 'test' });
+    expect(allocateBotId('foo', dir)).toMatch(/^foo-[a-z0-9]{6}$/);
+  });
+
+  it('allocateBotId keeps a taken long base inside the 63-char limit', () => {
+    fs.mkdirSync(path.join(getDuyaAgentsRoot(dir), 'a'.repeat(63)), { recursive: true });
+    const id = allocateBotId('a'.repeat(63), dir);
+    expect(id.length).toBeLessThanOrEqual(63);
+    expect(id).toMatch(/^[a-z0-9][a-z0-9-]{0,62}$/);
+  });
+
+  it('createConfigAgentUnique returns the actual id and seeds its profile', () => {
+    fs.mkdirSync(path.join(getDuyaAgentsRoot(dir), 'foo'), { recursive: true });
+    const { id, config } = createConfigAgentUnique('foo', { name: 'Foo' });
+    expect(id).not.toBe('foo');
+    expect(config.name).toBe('Foo');
+    expect(readBotProfile(getBotProfilePath(id, dir))!.name).toBe('Foo');
+  });
+
+  it('deleteConfigAgent removes the whole on-disk tree (hard delete)', () => {
+    upsertConfigAgent('foo', { name: 'Foo' });
+    const agentDir = path.join(getDuyaAgentsRoot(dir), 'foo');
+    expect(fs.existsSync(agentDir)).toBe(true);
+    expect(deleteConfigAgent('foo')).toBe(true);
+    expect(fs.existsSync(agentDir)).toBe(false);
+  });
+
+  it('upsertConfigAgent refuses to resurrect a soft-deleted agent', () => {
+    upsertConfigAgent('foo', { name: 'Foo' });
+    softDeleteConfigAgent('foo');
+    expect(() => upsertConfigAgent('foo', { name: 'Again' })).toThrow(/soft-deleted/);
+  });
+
+  it('listBots hides soft-deleted agents', () => {
+    upsertConfigAgent('alpha', { name: 'Alpha' });
+    upsertConfigAgent('beta', { name: 'Beta' });
+    softDeleteConfigAgent('beta');
+    expect(listBots().map((b) => b.id)).toEqual(['alpha']);
   });
 });
