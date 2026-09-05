@@ -96,6 +96,17 @@ function streamingEventsToActions(events: StreamingEvent[]): ActionItem[] {
         // group / row pipeline renders them through `HookActionRow`.
         actions.push({ kind: 'hook', hook: event.hook });
         break;
+      case 'compact':
+        // Context compaction fires mid-turn. Render it as its own inline
+        // row at the position it happened (same as a tool action).
+        actions.push({
+          kind: 'compact',
+          phase: event.phase,
+          compactedMessageCount: event.compactedMessageCount,
+          strategy: event.strategy,
+          errorMessage: event.errorMessage,
+        });
+        break;
     }
   }
 

@@ -1,0 +1,1673 @@
+/*
+ * preview-drawer.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* =============================================================================
+ * Tool result card (light + dark variants)
+ * Used by ToolActionsGroup.tsx — bash / duya cli / read / AskUserQuestion /
+ * memory / file edit / sub-agent result cards. Light theme uses surface + text
+ * tokens; dark theme keeps the IDE-style #2d2d2d card with neutral text.
+ * ========================================================================== */
+.tool-card {
+  --tool-card-bg: var(--surface);
+  --tool-card-border: var(--border);
+  --tool-card-text: var(--text);
+  --tool-card-muted: var(--muted);
+  --tool-card-subtle: color-mix(in srgb, var(--text) 60%, transparent);
+  --tool-card-faint: color-mix(in srgb, var(--text) 40%, transparent);
+  --tool-card-divider: var(--border);
+}
+
+[data-theme="dark"] .tool-card {
+  --tool-card-bg: #2d2d2d;
+  --tool-card-border: rgba(255, 255, 255, 0.08);
+  --tool-card-text: #e5e5e5;
+  --tool-card-muted: #a3a3a3;
+  --tool-card-subtle: #d4d4d4;
+  --tool-card-faint: #737373;
+  --tool-card-divider: rgba(255, 255, 255, 0.1);
+}
+
+.tool-card {
+  background: var(--tool-card-bg);
+  color: var(--tool-card-text);
+  border: 1px solid var(--tool-card-border);
+}
+
+.tool-card-muted {
+  color: var(--tool-card-muted);
+}
+
+.tool-card-faint {
+  color: var(--tool-card-faint);
+}
+
+.tool-card-subtle {
+  color: var(--tool-card-subtle);
+}
+
+/* =============================================================================
+ * Terminal panel
+ * Used by src/components/layout/panels/TerminalPanel.tsx.
+ * Sizes are tuned for the sidebar panel (220-960px wide).
+ * ========================================================================== */
+.terminal-panel {
+  --terminal-bg: #f5f5f4;
+  --terminal-toolbar-bg: #ebebea;
+  --terminal-border: rgba(0, 0, 0, 0.08);
+  --terminal-muted: rgba(0, 0, 0, 0.55);
+  --terminal-button-hover-bg: rgba(0, 0, 0, 0.05);
+  --terminal-button-hover-color: rgba(0, 0, 0, 0.88);
+  --terminal-scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --terminal-scrollbar-thumb-hover: rgba(0, 0, 0, 0.36);
+  --terminal-suggestion-bg: rgba(245, 245, 245, 0.96);
+  --terminal-suggestion-shadow: rgba(0, 0, 0, 0.12);
+  --terminal-status-ready: rgba(0, 0, 0, 0.86);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--terminal-bg);
+  color: var(--text);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.35;
+  outline: none;
+}
+
+[data-theme="dark"] .terminal-panel {
+  --terminal-bg: #111111;
+  --terminal-toolbar-bg: #181818;
+  --terminal-border: rgba(255, 255, 255, 0.07);
+  --terminal-muted: rgba(255, 255, 255, 0.52);
+  --terminal-button-hover-bg: rgba(255, 255, 255, 0.055);
+  --terminal-button-hover-color: rgba(255, 255, 255, 0.9);
+  --terminal-scrollbar-thumb: rgba(255, 255, 255, 0.28);
+  --terminal-scrollbar-thumb-hover: rgba(255, 255, 255, 0.42);
+  --terminal-suggestion-bg: rgba(24, 24, 24, 0.94);
+  --terminal-suggestion-shadow: rgba(0, 0, 0, 0.24);
+  --terminal-status-ready: rgba(255, 255, 255, 0.86);
+}
+
+.terminal-panel:focus-within {
+  box-shadow: none;
+}
+
+.terminal-panel-toolbar {
+  display: none;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 8px 4px 10px;
+  border-bottom: 1px solid var(--terminal-border);
+  background: var(--terminal-toolbar-bg);
+  font-size: 12px;
+}
+
+.terminal-panel-inline-status {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  left: 12px;
+  max-width: calc(100% - 64px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--terminal-muted);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.terminal-panel-floating-actions {
+  position: absolute;
+  z-index: 3;
+  top: 6px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.terminal-panel:hover .terminal-panel-floating-actions,
+.terminal-panel:focus-within .terminal-panel-floating-actions {
+  opacity: 1;
+}
+
+.terminal-panel-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  color: var(--terminal-muted);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.terminal-panel-status[data-status="ready"] {
+  color: var(--terminal-status-ready);
+  font-weight: 600;
+}
+
+.terminal-panel-status[data-status="exited"],
+.terminal-panel-status[data-status="error"] {
+  color: var(--warning, #f59e0b);
+}
+
+.terminal-panel-status-sep {
+  color: var(--terminal-muted);
+  opacity: 0.5;
+}
+
+.terminal-panel-cwd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--terminal-muted);
+  font-weight: 500;
+}
+
+.terminal-panel-restart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--terminal-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.terminal-panel-restart:hover {
+  border-color: var(--terminal-border);
+  background: var(--terminal-button-hover-bg);
+  color: var(--terminal-button-hover-color);
+}
+
+.terminal-xterm-host {
+  flex: 1;
+  min-height: 0;
+  background: var(--terminal-bg);
+  overflow: hidden;
+  padding: 14px 12px 8px;
+}
+
+.terminal-selection-menu {
+  position: absolute;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 4px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(245, 245, 245, 0.96);
+  color: #222;
+  backdrop-filter: blur(12px);
+}
+
+[data-theme="dark"] .terminal-selection-menu {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(38, 38, 38, 0.96);
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.terminal-selection-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.terminal-selection-menu button:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="dark"] .terminal-selection-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.terminal-xterm-host .xterm {
+  height: 100%;
+  padding: 0;
+}
+
+.terminal-xterm-host .xterm-screen {
+  border: none;
+}
+
+.terminal-suggestion {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--terminal-border);
+  border-radius: 6px;
+  background: var(--terminal-suggestion-bg);
+  color: var(--terminal-muted);
+  font-size: 11px;
+  pointer-events: none;
+  box-shadow: 0 10px 24px var(--terminal-suggestion-shadow);
+}
+
+.terminal-suggestion-key {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--accent-soft, rgba(99, 102, 241, 0.16));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.terminal-suggestion-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-reference-chip-list {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.terminal-reference-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(260px, 100%);
+  height: 24px;
+  gap: 6px;
+  padding: 0 8px 0 5px;
+  border: 1px solid rgba(30, 41, 59, 0.08);
+  border-radius: 6px;
+  background: rgba(241, 245, 249, 0.92);
+  color: #1f2937;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.terminal-reference-chip-wrapper {
+  display: inline-flex;
+  vertical-align: baseline;
+  margin: 0 3px;
+}
+
+.terminal-reference-chip-inline {
+  height: 22px;
+  max-width: 220px;
+  vertical-align: baseline;
+  transform: translateY(3px);
+}
+
+[data-theme="dark"] .terminal-reference-chip {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.terminal-reference-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: currentColor;
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.terminal-reference-chip-remove:hover {
+  background: rgba(0, 0, 0, 0.08);
+  opacity: 1;
+}
+
+[data-theme="dark"] .terminal-reference-chip-remove:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.terminal-reference-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.terminal-reference-chip-meta {
+  flex-shrink: 0;
+  color: #64748b;
+}
+
+[data-theme="dark"] .terminal-reference-chip-meta {
+  color: rgba(255, 255, 255, 0.48);
+}
+
+/* ---------------------------------------------------------------------
+   StartupLanding — branded full-screen overlay shown during the first
+   launch (HTML splash → React tree → DB hydration → session render).
+   Mirrors the look of the anti-FOUC splash in index.html.
+   ------------------------------------------------------------------- */
+
+@keyframes duya-startup-fade-in {
+  from { opacity: 0; transform: scale(0.985); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes duya-startup-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes duya-startup-pulse {
+  0%, 100% { transform: scale(1);    filter: brightness(1); }
+  50%      { transform: scale(1.04); filter: brightness(1.06); }
+}
+
+.duya-startup-landing {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-canvas, #fefdfb);
+  color: var(--text, #1a1a1a);
+  opacity: 1;
+  transition: opacity 200ms ease-out;
+  pointer-events: auto;
+}
+
+.duya-startup-landing[data-phase="fading"],
+.duya-startup-landing[data-visible="false"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.duya-startup-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  animation: duya-startup-fade-in 320ms ease-out both;
+}
+
+.duya-startup-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px var(--accent-shadow, rgba(124, 58, 237, 0.22));
+  background: var(--bg-canvas, #fefdfb);
+  animation: duya-startup-pulse 2.4s ease-in-out infinite;
+}
+.duya-startup-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.duya-startup-name {
+  font-family: "Windsor", "Georgia", "Times New Roman", serif;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  margin-top: 4px;
+}
+
+.duya-startup-spinner {
+  width: 34px;
+  height: 34px;
+  position: relative;
+  margin-top: 10px;
+}
+.duya-startup-spinner::before,
+.duya-startup-spinner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2.5px solid transparent;
+}
+.duya-startup-spinner::before {
+  border-top-color: var(--accent, #7c3aed);
+  border-right-color: var(--accent, #7c3aed);
+  animation: duya-startup-spin 0.9s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  filter: drop-shadow(0 0 6px var(--accent-shadow, rgba(124, 58, 237, 0.5)));
+}
+.duya-startup-spinner::after {
+  border-bottom-color: var(--accent-soft, rgba(124, 58, 237, 0.25));
+  border-left-color: var(--accent-soft, rgba(124, 58, 237, 0.25));
+  animation: duya-startup-spin 1.3s cubic-bezier(0.5, 0, 0.5, 1) infinite reverse;
+}
+
+.duya-startup-status {
+  font-size: 12px;
+  opacity: 0.6;
+  margin-top: 6px;
+  min-height: 16px;
+  letter-spacing: 0.01em;
+  transition: opacity 200ms ease;
+}
+
+.panel-zone {
+  --panel-edge-width: 42px;
+  position: relative;
+  width: var(--panel-zone-width);
+  flex: 0 0 var(--panel-zone-width);
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--main-bg);
+  border-left: 1px solid var(--border);
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.panel-zone-open {
+  width: var(--panel-zone-width);
+  flex-basis: var(--panel-zone-width);
+  background: var(--main-bg);
+  border-left-width: 1px;
+  border-left-color: var(--border);
+}
+
+.panel-zone-closed {
+  width: 0;
+  flex-basis: 0;
+  overflow: visible;
+  background: transparent;
+  border-left-width: 0;
+  border-left-color: transparent;
+}
+
+.panel-edge-toggle {
+  position: absolute;
+  top: 6px;
+  right: 14px;
+  z-index: 4;
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.panel-edge-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.panel-expand-toggle {
+  top: 6px;
+  right: 54px;
+}
+
+.panel-task-toggle.active,
+.workspace-task-toggle.active {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+}
+
+.workspace-task-toggle.has-background-tasks {
+  color: var(--accent);
+}
+
+/* Monospace title variant for command-line previews inside the drawer. */
+.task-card-row-title-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  letter-spacing: -0.01em;
+  word-break: break-all;
+}
+
+.chat-body-row {
+  position: relative;
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+.chat-main-column {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.chat-view .message-list-scroll,
+.chat-view .chat-main-column > .p-4 {
+  transition: padding-right 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.task-card-rail {
+  position: absolute;
+  z-index: 3;
+  top: 16px;
+  right: 16px;
+  bottom: 16px;
+  width: 300px;
+  max-width: min(300px, calc(100% - 16px));
+  pointer-events: auto;
+}
+
+.task-card-shell {
+  display: flex;
+  width: 300px;
+  max-width: 300px;
+  height: 100%;
+  max-height: min(560px, calc(100% - 0px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-solid);
+  box-shadow: none;
+  color: var(--text);
+}
+
+.task-card-header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--border-weak);
+}
+
+.task-card-title {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.task-card-title:hover {
+  color: var(--text);
+}
+
+.task-card-title-caret {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transform: rotate(0deg);
+  transition: transform 160ms ease;
+}
+
+.task-card-title-caret.open {
+  transform: rotate(90deg);
+}
+
+.task-card-title-text {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-card-count,
+.task-card-agent-count,
+.task-card-done-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card-agent-count {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text-muted));
+}
+
+.task-card-done-count {
+  color: color-mix(in srgb, #22c55e 72%, var(--text-muted));
+}
+
+.task-card-list {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.task-card-list-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-card-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-card-section + .task-card-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-weak);
+}
+
+.task-card-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 4px 4px 7px;
+}
+
+.task-card-section-label {
+  color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.task-card-section-action {
+  display: flex;
+  align-items: center;
+}
+
+.task-card-empty {
+  padding: 32px 10px 36px;
+  color: color-mix(in srgb, var(--text-muted) 70%, transparent);
+  font-size: 12px;
+  text-align: center;
+}
+
+.task-card-row {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 4px 7px;
+  transition: background 140ms ease;
+}
+
+.task-card-row:hover {
+  background: color-mix(in srgb, var(--surface-hover) 78%, transparent);
+}
+
+.task-card-agent-row {
+  display: flex;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 10px;
+  padding: 4px 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: background 140ms ease, opacity 140ms ease;
+}
+
+.task-card-agent-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-hover));
+}
+
+.task-card-agent-row:disabled {
+  cursor: default;
+}
+
+.task-card-agent-icon,
+.task-card-agent-state {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-card-agent-status {
+  max-width: 110px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-status {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.task-card-row-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-row-meta,
+.task-card-row-blocked {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--text-muted) 58%, transparent);
+  font-size: 10px;
+}
+
+.task-card-row-blocked {
+  color: color-mix(in srgb, #f97316 76%, var(--text-muted));
+}
+
+.task-card-row-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.task-card-row:hover .task-card-row-actions,
+.task-card-row:focus-within .task-card-row-actions {
+  opacity: 1;
+}
+
+.task-card-row-action {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.task-card-row-action:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.task-card-row-action.danger:hover {
+  color: #ef4444;
+}
+
+.task-card-recap {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px 9px;
+  border-bottom: 1px solid var(--border-weak);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-left: 2px solid var(--accent);
+}
+
+.task-card-recap-icon {
+  margin-top: 2px;
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.task-card-recap-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.task-card-recap-close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.task-card-recap-close:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+@container (max-width: 1464px) {
+  .chat-view.task-card-open .message-list-scroll,
+  .chat-view.task-card-open .chat-main-column > .p-4 {
+    padding-right: 332px;
+  }
+}
+
+@container (max-width: 980px) {
+  .chat-view.task-card-open .message-list-scroll,
+  .chat-view.task-card-open .chat-main-column > .p-4 {
+    padding-right: 0;
+  }
+
+  .task-card-rail {
+    z-index: 45;
+    left: auto;
+    right: 16px;
+    top: 16px;
+    width: min(300px, calc(100% - 32px));
+    max-width: calc(100% - 32px);
+  }
+
+  .task-card-shell {
+    width: 100%;
+    max-width: none;
+  }
+
+}
+
+@container (max-width: 720px) {
+  .task-card-rail {
+    left: 12px;
+    right: 12px;
+    width: auto;
+    max-width: none;
+  }
+}
+
+/* The browser panel needs 460px while chat keeps a 420px minimum. When the
+   workspace is narrower than their combined width (880px), keep chat intact
+   and let the browser float over it. */
+@container (max-width: 879px) {
+  .panel-zone-open[data-page-id="browser"]:not(.panel-zone-expanded) {
+    position: absolute;
+    z-index: 40;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(var(--panel-zone-width), calc(100% - 48px));
+    height: 100%;
+    flex-basis: auto;
+    box-shadow: -16px 0 34px rgba(0, 0, 0, 0.18);
+  }
+
+  .panel-zone-open[data-page-id="browser"]:not(.panel-zone-expanded) .sidebar-panel-inner {
+    width: 100% !important;
+  }
+}
+
+.panel-zone .resize-handle {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 7px;
+}
+
+.panel-zone .resize-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.panel-zone .resize-handle:focus-visible .resize-handle-bar {
+  opacity: 1;
+}
+
+.panel-zone .resize-handle:hover {
+  background: var(--surface-hover);
+}
+
+.panel-zone .resize-handle-bar {
+  height: 100%;
+  border-radius: 0;
+  background: var(--accent);
+}
+
+.panel-zone-resizing,
+.panel-zone-resizing .sidebar-panel-inner {
+  transition: none !important;
+}
+
+.panel-zone-resizing .sidebar-panel-content {
+  pointer-events: none;
+}
+
+.panel-zone-resizing .browser-panel-frame webview {
+  pointer-events: none;
+}
+
+.panel-zone .sidebar-panel-inner {
+  width: var(--panel-content-width);
+  height: 100%;
+  border-left: none;
+  background: var(--main-bg);
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 120ms ease,
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.panel-zone-open .panel-header {
+  position: relative;
+  z-index: 3;
+  justify-content: flex-start;
+  overflow: visible;
+  /* Reserve the right edge for the absolute-positioned sidebar/expand
+     toggles so tabs never scroll beneath them. */
+  padding-right: 94px;
+}
+
+.panel-zone-open .panel-header::after {
+  content: "";
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  width: 94px;
+  height: 100%;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--main-bg) 24%, var(--main-bg));
+}
+
+.file-preview-empty {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.file-preview-empty strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.file-preview-empty span {
+  font-size: 12px;
+}
+
+.file-preview-panel {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+/* Right padding deliberately raised to 20px (was 8px) so the
+ * accented bordered "Open" button on the far right never brushes
+ * the padding edge. Every ancestor from .panel-file-detail up to
+ * .panel-zone clips overflow, so even a 1px overshoot visually
+ * appears as a half-clipped button. 20px absorbs: sub-pixel flex
+ * rounding, the button's 8px border-radius + 1px border, and the
+ * narrow-detail case when PanelFileTreeSplit shows a file tree. */
+.file-preview-toolbar {
+  display: flex;
+  min-height: 40px;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 20px 0 14px;
+  /* Same background as the tab bar above (no rule between them — the
+   * two rows read as one header), but keep the rule BELOW: it separates
+   * the header from the preview canvas. */
+  border-bottom: 1px solid var(--border);
+  background: var(--main-bg);
+  box-sizing: border-box;
+}
+
+.file-preview-title,
+.file-preview-actions {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.file-preview-title {
+  flex: 1 1 auto;
+  gap: 8px;
+  overflow: hidden;
+  color: var(--text);
+}
+
+.file-preview-filetype {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  color: var(--muted);
+}
+
+.file-preview-filename {
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.file-preview-path {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.file-preview-path-root,
+.file-preview-path-segment {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-path-root,
+.file-preview-path-segment {
+  flex: 0 1 auto;
+}
+
+/* Codex-style breadcrumb: all segments share the muted tone; only the
+ * trailing file name steps up to the text color so the eye lands on it. */
+.file-preview-path-file {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.file-preview-path-separator {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  font-size: 12px;
+}
+
+.file-preview-actions {
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  /* Safety margin so the rightmost "Open" button never brushes
+   * against the padding edge of the toolbar. */
+  padding-right: 2px;
+  box-sizing: border-box;
+}
+
+.file-preview-actions > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.file-preview-actions > button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.file-preview-actions > button.active {
+  background: var(--surface-hover);
+  color: var(--accent);
+}
+
+/* "Open" dropdown in the preview toolbar. The trigger is a segmented
+ * control (`.file-preview-open-group`) — IDE action + caret — and the
+ * floating menu is a regular OptionPanel. Icon rotation (180° flip for
+ * the open-state caret) is applied to the SVG directly via className. */
+.file-preview-open-dropdown {
+  position: relative;
+  flex: 0 0 auto;
+  width: max-content;
+}
+
+/* "Open" dropdown panel sits on the editor canvas, which is already
+ * pure white in light mode (--main-bg). The default OptionPanel surface
+ * inherits --sidebar-bg (#fdf8f5, warm cream) — opt back to pure white
+ * here so the floating menu reads as a sheet detached from the page. */
+.file-preview-open-menu {
+  background-color: var(--main-bg, #ffffff);
+}
+
+:root[data-theme="dark"] .file-preview-open-menu {
+  background-color: var(--sidebar-bg, var(--surface-solid));
+}
+
+.file-preview-open-dropdown svg.rotate-180 {
+  transform: rotate(180deg);
+}
+
+/* "Open" trigger group: two buttons fused into one segmented control
+ * (IDE icon + caret). Sits on an accent chip so the primary action
+ * reads at a glance, like VSCode's "open editors" toolbar. */
+.file-preview-open-group {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  overflow: hidden;
+  /* Neutral outlined pill, Codex-style: surface background + hairline
+   * border, no accent tint — the breadcrumb stays the visual anchor. */
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-solid);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 4%, transparent);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.file-preview-open-group:hover {
+  background: var(--surface-hover);
+}
+
+.file-preview-open-group button {
+  display: inline-flex;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.file-preview-open-group .file-preview-open-ide {
+  width: auto;
+  padding: 0 4px 0 10px;
+}
+
+.file-preview-open-label {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* OS shell icon extracted from the IDE executable (see ide-handlers.ts). */
+.file-preview-ide-icon {
+  display: block;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.file-preview-open-group .file-preview-open-caret {
+  width: 20px;
+  border-left: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.file-preview-open-group button:hover {
+  background: var(--surface-hover);
+}
+
+.file-preview-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--main-bg);
+}
+
+.file-preview-state {
+  display: flex;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 9px;
+  padding: 28px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.file-preview-state strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.file-preview-error {
+  color: #e88989;
+}
+
+.file-preview-image-stage {
+  display: grid;
+  min-width: 100%;
+  min-height: 100%;
+  place-items: start center;
+  padding: 18px;
+}
+
+.file-preview-image-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: none;
+  border-radius: 4px;
+  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.24);
+  object-fit: contain;
+}
+
+.file-preview-canvas-pdf {
+  overflow: hidden;
+}
+
+.file-preview-pdf {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  border: 0;
+  background: var(--main-bg);
+}
+
+.file-preview-text {
+  min-height: 100%;
+}
+
+.file-preview-text.code {
+  min-height: 100%;
+}
+
+/* Gutter + code split: the gutter is sticky-left so line numbers stay
+ * put while long lines scroll horizontally (VSCode-style). Both columns
+ * share the same row metrics as CODE_LINE_HEIGHT in FilePreviewPanel. */
+.file-preview-code-scroll {
+  display: flex;
+  align-items: stretch;
+  min-height: 100%;
+}
+
+.file-preview-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  min-width: 52px;
+  padding: 10px 0 40px;
+  /* Seamless gutter: no divider, same background as the code area.
+   * Hover/current-line still surface a subtle highlight so the row is
+   * discoverable on click without a permanent vertical rule. */
+  background: transparent;
+  user-select: none;
+}
+
+.file-preview-line-no {
+  display: block;
+  padding: 0 12px 0 10px;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-size: 12px;
+  font-feature-settings: "tnum";
+  line-height: 20.8px;
+  text-align: right;
+  cursor: default;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.file-preview-line-no:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  cursor: pointer;
+}
+
+.file-preview-line-no.current {
+  color: var(--accent);
+  /* Soft 8% accent sits in between the `.surface-hover` gutter hover
+   * and the 9%+bordered focus bar: noticeable as "you are here" but
+   * not loud. The same percentage is used on `.file-preview-current-line`
+   * so the highlight reads as a single continuous row band across the
+   * gutter + code body (the gutter background is transparent, so the
+   * overlay from the code-body side bleeds under the line number). */
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-weight: 650;
+}
+
+/* Tracks `currentLine` from the canvas click — a single-row highlight
+ * that spans the code body width. Pairs with `.file-preview-line-no.current`
+ * on the gutter side to render one continuous band. Distinct from
+ * `.file-preview-focus-bar` (external trigger, has borders, ~9% + 36%
+ * accent) so the eye can tell "I'm here" from "look here from a tool". */
+.file-preview-current-line {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  transition: top 120ms ease;
+}
+
+.file-preview-code-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.file-preview-focus-bar {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 0;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  pointer-events: none;
+}
+
+/* react-syntax-highlighter already tokenises and wraps lines. We only
+ * need to make the host <pre> fill the scrollable area and keep long
+ * lines on a single horizontal scroll track. The !important rules beat
+ * the inline styles react-syntax-highlighter merges from the theme /
+ * customStyle — without them the gutter and focus bar (which rely on
+ * padding-top 10px and a 20.8px row height) desync from the code rows. */
+.file-preview-text.code pre {
+  position: relative;
+  z-index: 1;
+  margin: 0;
+  min-width: max-content;
+  min-height: 100%;
+  padding: 10px 24px 40px !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  background: transparent !important;
+}
+
+/* Keep the highlighted code text above the focus strip. */
+.file-preview-text.code pre > code {
+  display: block;
+  padding: 0 !important;
+  background: transparent !important;
+  font-family: var(--font-mono, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.file-preview-text.code pre > code .linenumber {
+  display: inline-block;
+  min-width: 32px !important;
+  padding-right: 16px !important;
+  padding-left: 8px !important;
+  text-align: right !important;
+  font-size: 12px;
+  font-feature-settings: "tnum";
+}
+
+.file-preview-text.code pre > code .linenumber,
+.file-preview-text.code pre > code .linenumber + span {
+  user-select: none;
+}
+
+
+.file-preview-markdown {
+  width: min(920px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 30px 0 72px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.78;
+}
+
+.file-preview-truncated {
+  position: sticky;
+  z-index: 3;
+  top: 8px;
+  width: fit-content;
+  margin: 8px auto 0;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, #d7a84b 34%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, #d7a84b 12%, var(--main-bg));
+  color: color-mix(in srgb, #d7a84b 78%, var(--text));
+  font-size: 10px;
+}
+
+.file-preview-ask-duya {
+  position: absolute;
+  z-index: 20;
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: 9px;
+  background: var(--surface-solid);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.file-preview-ask-duya svg {
+  color: var(--accent);
+}
+
+@media (max-width: 980px) {
+  .file-preview-markdown {
+    width: calc(100% - 32px);
+  }
+}
+
+.panel-zone-open .panel-header-tabs {
+  flex: 0 1 auto;
+  max-width: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.panel-header-add-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  z-index: 4;
+  overflow: visible;
+}
+
+.panel-header-add-page.active,
+.panel-header-add-page:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.panel-header-add-page.active {
+  border-color: var(--border);
+}
+
+.panel-add-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  /* The + button sits right after the last tab (near the left edge) —
+   * grow the menu rightward so it doesn't extend past the panel edge. */
+  left: 0;
+  right: auto;
+  z-index: 30;
+  width: 232px;
+  max-width: min(232px, calc(100vw - 28px));
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px;
+  /* Match the input-box settings popup: flat command-menu surface, hairline
+   * border, one soft shadow layer — no heavy elevation. */
+  border: 1px solid var(--command-menu-border);
+  border-radius: 10px;
+  background: var(--command-menu-bg);
+  box-shadow: var(--command-menu-shadow);
+  isolation: isolate;
+}
+
+.panel-add-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.panel-add-menu-row:hover:not(.disabled) {
+  background: var(--surface-hover);
+}
+
+.panel-add-menu-row.disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.panel-add-menu-main,
+.panel-add-menu-meta {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.panel-add-menu-main {
+  gap: 8px;
+  font-weight: 500;
+}
+
+.panel-add-menu-meta {
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--command-menu-muted, var(--muted));
+}
+
+.panel-add-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--command-menu-muted, var(--muted));
+}
+
+.panel-add-menu-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Plain muted text, no chip background — same treatment as the input
+ * popups' shortcut hints. */
+.panel-add-menu-shortcut {
+  color: var(--command-menu-muted, var(--muted));
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.panel-add-menu-hint {
+  color: var(--command-menu-muted, var(--muted));
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.panel-zone-closed .sidebar-panel-inner {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(18px);
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-zone,
+  .panel-zone .sidebar-panel-inner {
+    transition: none;
+  }
+}

@@ -44,16 +44,24 @@ import {
 } from '../../packages/agent/src/wake/queue'
 import type { WakeItem } from '../../packages/agent/src/wake/types'
 import { createTurnEpochState } from '../../packages/agent/src/wake/epoch'
+import { buildAgentInboundWakePrompt } from '../../packages/agent/src/agent/dm/index.js'
 import { getCoreStores } from '../db/core-connection'
 import { runWakePromptInExistingSession } from './wake-run'
 import { reviveForInbound } from './channels'
+import { parseAgentIdFromBotSession } from './bot-session-id'
 import { getLogger, LogComponent } from '../logging/logger'
 
 export interface WakeDispatcherDeps {
   /** Busy/idle truth for a session (session_runtime_locks mirror). */
   isLocked(sessionId: string): boolean
   /** Launch one hidden wake run and resolve when it fully finishes. */
-  runWake(sessionId: string, prompt: string): Promise<void>
+  runWake(sessionId: string, prompt: string, opts?: WakeRunOptions): Promise<void>
+}
+
+/** Per-run options resolved by the dispatcher (477 P3.1). */
+export interface WakeRunOptions {
+  /** Bot profile id for persistent `bot:<agentId>` sessions. */
+  agentProfileId?: string
 }
 
 interface SessionWakeState {
@@ -95,7 +103,7 @@ function currentDeps(): WakeDispatcherDeps {
           return false
         }
       },
-      runWake: (sessionId, prompt) => runWakePromptInExistingSession(sessionId, prompt),
+      runWake: (sessionId, prompt, opts) => runWakePromptInExistingSession(sessionId, prompt, opts),
     }
   }
   return activeDeps
@@ -286,12 +294,19 @@ async function drain(sessionId: string): Promise<void> {
       if (!dequeued) break
       state.queue = dequeued.queue
 
-      // 476 P2.5: skip wakes that a newer user turn superseded while they
-      // were parked. item.turnEpoch was stamped at enqueue; once a user
-      // message advanced the session epoch, this wake is stale — the user
-      // has taken over the conversation and must not be interrupted by it.
+      // 476 P2.5: skip background wakes that a newer user turn superseded
+      // while they were parked. item.turnEpoch was stamped at enqueue; once
+      // a user message advanced the session epoch, a stale background wake
+      // is noise — the user has taken over the conversation. Agent-lane DMs
+      // (477) and user-lane items are NOT dropped: a DM is the bot's own
+      // inbox, so it queues behind the user turn and runs in lane order
+      // instead of being silently lost.
       const epoch = dequeued.item.turnEpoch
-      if (epoch != null && !turnEpochs.isCurrent(sessionId, epoch)) {
+      if (
+        dequeued.item.lane === 'background' &&
+        epoch != null &&
+        !turnEpochs.isCurrent(sessionId, epoch)
+      ) {
         getLogger().debug('Wake skipped: superseded by newer user turn', {
           sessionId,
           source: dequeued.item.source,
@@ -318,8 +333,17 @@ async function drain(sessionId: string): Promise<void> {
 
       const prompt = promptForItem(dequeued.item)
       if (!prompt) continue
+      // 477 P3.1: a bot persistent session (`bot:<agentId>`) runs with the
+      // bot's profile so the woken worker builds the bot toolset and 474
+      // prompt sections. The fixed session id is the binding itself — the
+      // agent id parses straight out of it, no lookup needed.
+      const botAgentId = parseAgentIdFromBotSession(sessionId)
       try {
-        await currentDeps().runWake(sessionId, prompt)
+        await currentDeps().runWake(
+          sessionId,
+          prompt,
+          botAgentId ? { agentProfileId: botAgentId } : undefined,
+        )
       } catch (err) {
         // runWake is best-effort and swallows most failures; this guard is
         // for unexpected throws so one bad item cannot wedge the queue.
@@ -362,9 +386,28 @@ function promptForItem(item: WakeItem): string {
       // arrived). Dispatch = run it as the user's turn.
       return (item.payload.text ?? '').trim() || '[system] Continue with the user request.'
     }
+    case 'dm': {
+      // 477 P3.1: a bot→bot DM wake. The envelope text was persisted in the
+      // mailbox row; rebuild the grok-style inbound cue from the payload so
+      // the receiver understands the message came from another agent (not
+      // the user) and replies via SendToAgent, not SendMessage.
+      const text = (item.payload.text ?? '').trim()
+      const fromId = (item.payload.fromAgentId ?? '').trim()
+      const fromName = (item.payload.fromAgentName ?? '').trim()
+      if (!text || !fromId) return ''
+      return buildAgentInboundWakePrompt({
+        from: { id: fromId, name: fromName || fromId },
+        // The receiver is the session this wake is dispatched to.
+        to: { id: parseAgentIdFromBotSession(item.agentId) ?? item.agentId, name: '' },
+        text,
+        ...(item.payload.priority ? { priority: true } : {}),
+        timestampMs: item.enqueuedAtMs,
+        clientMsgId: item.payload.clientMsgId ?? item.id,
+      })
+    }
     default:
-      // automation (P2.3b) and agent.dm (477) are wired by later phases;
-      // skipping is safe — the source still persists its own state.
+      // automation (P2.3b) is wired by a later phase; skipping is safe —
+      // the source still persists its own state.
       return ''
   }
 }

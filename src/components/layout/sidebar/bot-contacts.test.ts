@@ -109,19 +109,37 @@ describe('deriveBotIdFromName (grok-style create flow)', () => {
     expect(deriveBotIdFromName('  Researcher! ', [])).toBe('researcher');
   });
 
-  it('collapses non-ASCII names to the "bot" base', () => {
-    expect(deriveBotIdFromName('研究员', [])).toBe('bot');
-    expect(deriveBotIdFromName('助手 2号', [])).toBe('bot');
+  it('generic fallback (non-ASCII) ALWAYS carries a random suffix, even when free', () => {
+    // a bare `bot` would be shared by every Chinese bot generation across
+    // delete/recreate cycles — never emitted anymore
+    expect(deriveBotIdFromName('研究员', [])).toMatch(/^bot-[a-f0-9]{6}$/);
+    expect(deriveBotIdFromName('助手 2号', [])).toMatch(/^bot-[a-f0-9]{6}$/);
+    // retries while the suffixed id is also taken
+    let calls = 0;
+    const seq = () => (calls++ === 0 ? 'a1b2c3' : 'fff000');
+    expect(deriveBotIdFromName('研究员', ['bot-a1b2c3'], seq)).toBe('bot-fff000');
   });
 
-  it('resolves collisions with numeric suffixes', () => {
-    expect(deriveBotIdFromName('bot', ['bot'])).toBe('bot-2');
-    expect(deriveBotIdFromName('bot', ['bot', 'bot-2'])).toBe('bot-3');
+  it('resolves collisions with a random hex suffix (never the old predictable bot-2 slot)', () => {
+    expect(deriveBotIdFromName('bot', ['bot'], () => 'a1b2c3')).toBe('bot-a1b2c3');
+    // retries while the suffixed id is also taken
+    let calls = 0;
+    const seq = () => (calls++ === 0 ? 'a1b2c3' : 'fff000');
+    expect(deriveBotIdFromName('bot', ['bot', 'bot-a1b2c3'], seq)).toBe('bot-fff000');
+    // default maker yields 6 lowercase hex chars
+    expect(deriveBotIdFromName('bot', ['bot'])).toMatch(/^bot-[a-f0-9]{6}$/);
   });
 
   it('never produces an id longer than the 48-char base + suffix', () => {
     const id = deriveBotIdFromName('a'.repeat(80), []);
     expect(id.length).toBeLessThanOrEqual(48);
+  });
+
+  it('a colliding 48-char base + suffix stays inside the 63-char id limit', () => {
+    const longBase = 'a'.repeat(80);
+    const id = deriveBotIdFromName(longBase, ['a'.repeat(48)], () => 'a1b2c3');
+    expect(id.length).toBeLessThanOrEqual(63);
+    expect(id).toMatch(/^[a-z0-9][a-z0-9-]{0,62}$/);
   });
 });
 

@@ -21,22 +21,26 @@ import { renderBotIdentity } from '../identity'
 import { createBotPromptAssembly } from '../factory'
 
 describe('botCommsRules (P2.2)', () => {
-  it('renders the async delivery + hard rules for a bot', () => {
+  it('renders user voice + wakes/quiet-work rules for a bot (492 P1.2 trim)', () => {
     const text = renderBotCommsRules({ botAgentId: 'alpha' })
     expect(text).toContain('# Communication rules')
-    expect(text).toContain('`send_to_agent`')
-    expect(text).toContain('No ack ping-pong')
     expect(text).toContain('Never wake the user')
     expect(text).toContain('Quiet work stays quiet')
   })
 
+  it('no longer repeats agent-to-agent rules (single exit in botRoster, 492 P1)', () => {
+    const text = renderBotCommsRules({ botAgentId: 'alpha' })!
+    expect(text).not.toContain('Talking to other agents')
+    expect(text).not.toContain('send_to_agent')
+    expect(text).not.toContain('ack ping-pong')
+  })
   it('returns null without a bot id (non-bot sessions omit it)', () => {
     expect(renderBotCommsRules({})).toBeNull()
   })
 
-  it('stays within its 1200-char budget', () => {
+  it('stays within its 2000-char budget', () => {
     const text = renderBotCommsRules({ botAgentId: 'alpha' })!
-    expect(text.length).toBeLessThanOrEqual(1200)
+    expect(text.length).toBeLessThanOrEqual(2000)
   })
 
   it('is registered in the factory catalog and renders through the assembly', async () => {

@@ -432,6 +432,17 @@ export type StreamingEvent =
       type: 'hook_invocation';
       hook: import('@/types/hooks').HookAction;
       timestamp: number;
+    }
+  | {
+      type: 'compact';
+      phase: 'compacting' | 'done' | 'error';
+      timestamp: number;
+      /** Post-compaction summary text (only on the transient 'done' frame);
+       *  the durable record is the persisted `isCompactSummary` message. */
+      summary?: string;
+      compactedMessageCount?: number;
+      strategy?: string;
+      errorMessage?: string;
     };
 
 interface SessionState {
@@ -489,6 +500,9 @@ interface SessionState {
   idleTimeout: ReturnType<typeof setTimeout> | null;
   textEmitTimeout: ReturnType<typeof setTimeout> | number | null;
   pendingTextEmit: string;
+  /** Plan 491 P0.2: thinking emit throttling (64ms batch) */
+  thinkingEmitTimeout: ReturnType<typeof setTimeout> | number | null;
+  pendingThinkingEmit: string;
   /**
    * Plan 461: per-tool_use-id accumulated raw JSON argument fragments from
    * `tool_use_delta` events. Never persisted; cleared when the authoritative
@@ -573,7 +587,7 @@ interface ResearchSessionState extends ResearchSessionSnapshot {
   listeners: Set<(snapshot: ResearchSessionSnapshot) => void>;
 }
 
-function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage'> {
+function createInitialState(sessionId: string): Omit<SessionState, 'listeners' | 'fieldListeners' | 'streamingEventsListeners' | 'permissionListeners' | 'authRequiredListeners' | 'modeChangedListeners' | 'goalUpdatedListeners' | 'researchUpdatedListeners' | 'dbPersistedListeners' | 'idleTimeout' | 'textEmitTimeout' | 'pendingTextEmit' | 'partialToolInputRaw' | 'partialInputFlushTimer' | 'sendRetryMessage' | 'thinkingEmitTimeout' | 'pendingThinkingEmit'> {
   return {
     sessionId,
     currentStreamId: null,
@@ -872,7 +886,7 @@ class StreamSessionManager {
   private backgroundResumeTemplates = new Map<string, StartStreamParams>();
   private pendingBackgroundResumes = new Set<string>();
   private drainingQueuedSessions = new Set<string>();
-  private textEmitInterval = 300; // Increased from 100ms to reduce UI flickering
+  private textEmitInterval = 64; // Plan 491 P0.2: 15fps throttle (~64ms) // Increased from 100ms to reduce UI flickering
   private idleTimeoutMs = STREAM_IDLE_TIMEOUT_MS;
   private debugIpc = typeof process !== 'undefined' && process.env?.DUYA_DEBUG_IPC === 'true';
 
@@ -920,6 +934,9 @@ class StreamSessionManager {
         idleTimeout: null,
         textEmitTimeout: null,
         pendingTextEmit: '',
+        // Plan 491 P0.2: thinking emit throttle (64ms batch)
+        thinkingEmitTimeout: null,
+        pendingThinkingEmit: '',
         partialToolInputRaw: new Map(),
         partialInputFlushTimer: null,
         sendRetryMessage: null,
@@ -1656,16 +1673,25 @@ class StreamSessionManager {
 
         case 'compact:start':
           // Auto-compaction just fired mid-turn. Mirror into the compaction
-          // store so the renderer's MessageList can swap in a spinner.
+          // store (kept for the manual `/compact` toast + degraded banner)
+          // AND push a transient 'compact' streaming event so the inline
+          // action row renders at the point in the flow where it happened,
+          // like a tool call.
           useCompactionStore.getState().setCompacting(sessionId);
+          this.handleCompactEvent(sessionId, streamId, { phase: 'compacting' });
           break;
 
         case 'compact:done': {
-          const data = event.data as { strategy?: string; tokensRemoved?: number; tokensRetained?: number } | undefined;
+          const data = event.data as { strategy?: string; tokensRemoved?: number; tokensRetained?: number; removedCount?: number } | undefined;
           useCompactionStore.getState().setDone(sessionId, {
             strategy: data?.strategy ?? 'session_memory',
             tokensRemoved: data?.tokensRemoved ?? 0,
             tokensRetained: data?.tokensRetained ?? 0,
+          });
+          this.handleCompactEvent(sessionId, streamId, {
+            phase: 'done',
+            strategy: data?.strategy,
+            compactedMessageCount: data?.removedCount,
           });
           break;
         }
@@ -1673,6 +1699,7 @@ class StreamSessionManager {
         case 'compact:error': {
           const data = event.data as { message?: string } | undefined;
           useCompactionStore.getState().setError(sessionId, data?.message ?? 'Unknown error');
+          this.handleCompactEvent(sessionId, streamId, { phase: 'error', errorMessage: data?.message });
           break;
         }
 
@@ -2054,15 +2081,56 @@ class StreamSessionManager {
   private handleThinkingEvent(sessionId: string, streamId: string, text: string): void {
     const s = this.sessions.get(sessionId);
     if (!s || !this.isCurrentStream(sessionId, streamId)) return;
-    s.streamingThinking = (s.streamingThinking || '') + text;
+
+    // Plan 491 P0.2: throttle thinking emit with 64ms batch
+    // Accumulate thinking for batched emit instead of immediate update
+    s.pendingThinkingEmit = (s.pendingThinkingEmit || '') + text;
+
+    // Update streaming events immediately for accurate event log
     const lastEvent = s.streamingEvents[s.streamingEvents.length - 1];
     if (lastEvent && lastEvent.type === 'thinking') {
       lastEvent.content += text;
     } else {
       s.streamingEvents = [...s.streamingEvents, { type: 'thinking', content: text, timestamp: Date.now() }];
     }
-    this.notifyThinkingListeners(sessionId, s.streamingThinking);
+
+    // Schedule throttled emit for UI updates
+    this.scheduleThinkingEmit(sessionId, streamId);
+
+    this.resetIdleTimeout(sessionId);
+  }
+
+  /**
+   * Record a context-compaction milestone (compact:start / done / error) as a
+   * transient `compact` streaming event, so it renders as an inline action row
+   * at the exact spot in the message flow where the compaction happened —
+   * instead of a single divider pinned to the bottom of the list.
+   */
+  private handleCompactEvent(
+    sessionId: string,
+    streamId: string,
+    info: {
+      phase: 'compacting' | 'done' | 'error';
+      compactedMessageCount?: number;
+      strategy?: string;
+      errorMessage?: string;
+    },
+  ): void {
+    const s = this.sessions.get(sessionId);
+    if (!s || !this.isCurrentStream(sessionId, streamId)) return;
+    s.streamingEvents = [
+      ...s.streamingEvents,
+      {
+        type: 'compact',
+        phase: info.phase,
+        timestamp: Date.now(),
+        compactedMessageCount: info.compactedMessageCount,
+        strategy: info.strategy,
+        errorMessage: info.errorMessage,
+      },
+    ];
     this.notifyStreamingEventsListeners(sessionId);
+    this.notifyListeners(sessionId);
     this.resetIdleTimeout(sessionId);
   }
 
@@ -2962,6 +3030,9 @@ class StreamSessionManager {
       idleTimeout: null,
       textEmitTimeout: null,
       pendingTextEmit: '',
+      // Plan 491 P0.2: thinking emit throttle (64ms batch)
+      thinkingEmitTimeout: null,
+      pendingThinkingEmit: '',
       partialToolInputRaw: new Map(),
       partialInputFlushTimer: null,
       sendRetryMessage: null,
@@ -3110,13 +3181,10 @@ class StreamSessionManager {
     const state = this.sessions.get(sessionId);
     if (!state || !this.isCurrentStream(sessionId, streamId) || state.textEmitTimeout) return;
     // Use requestAnimationFrame for smoother UI updates, synced with browser render cycle
-    state.textEmitTimeout = typeof requestAnimationFrame !== 'undefined'
-      ? requestAnimationFrame(() => {
-          this.flushPendingText(sessionId, streamId);
-        }) as unknown as ReturnType<typeof setTimeout>
-      : setTimeout(() => {
-          this.flushPendingText(sessionId, streamId);
-        }, this.textEmitInterval);
+    // Plan 491 P0.2: Use 64ms setTimeout for 15fps throttle (rAF is 60fps, too fast)
+    state.textEmitTimeout = setTimeout(() => {
+      this.flushPendingText(sessionId, streamId);
+    }, this.textEmitInterval);
   }
 
   private clearTextEmitTimeout(state: SessionState): void {
@@ -3159,6 +3227,41 @@ class StreamSessionManager {
     state.textEmitTimeout = null;
     this.notifyTextListeners(sessionId, newText);
     this.notifyListeners(sessionId);
+  }
+
+  // Plan 491 P0.2: thinking emit throttle (64ms batch)
+  private scheduleThinkingEmit(sessionId: string, streamId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || !this.isCurrentStream(sessionId, streamId) || state.thinkingEmitTimeout) return;
+    state.thinkingEmitTimeout = setTimeout(() => {
+      this.flushPendingThinking(sessionId, streamId);
+    }, this.textEmitInterval);
+  }
+
+  private clearThinkingEmitTimeout(state: SessionState): void {
+    if (state.thinkingEmitTimeout !== null) {
+      if (typeof state.thinkingEmitTimeout === 'number') {
+        cancelAnimationFrame(state.thinkingEmitTimeout);
+      } else {
+        clearTimeout(state.thinkingEmitTimeout);
+      }
+      state.thinkingEmitTimeout = null;
+    }
+  }
+
+  private flushPendingThinking(sessionId: string, streamId: string): void {
+    const state = this.sessions.get(sessionId);
+    if (!state || !this.isCurrentStream(sessionId, streamId)) return;
+    if (!state.pendingThinkingEmit) {
+      state.thinkingEmitTimeout = null;
+      return;
+    }
+    const thinking = state.pendingThinkingEmit;
+    state.streamingThinking = thinking;
+    state.pendingThinkingEmit = '';
+    state.thinkingEmitTimeout = null;
+    this.notifyThinkingListeners(sessionId, thinking);
+    this.notifyStreamingEventsListeners(sessionId);
   }
 
   private clearIdleTimeout(sessionId: string): void {

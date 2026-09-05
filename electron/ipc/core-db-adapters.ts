@@ -27,6 +27,8 @@ import {
   type MessageEntry,
   type CompactionEntry,
   type MessageTimelineEntry,
+  type MessageSource,
+  DEFAULT_MESSAGE_SOURCE,
 } from '@duya/agent/message';
 import type {
   CoreSession,
@@ -82,6 +84,12 @@ export interface MessageRow {
   reply_to_id?: string | null;
   /** Plan 486: true when the row belongs to a thread's branched layer. */
   branched?: boolean | null;
+  /**
+   * Plan 489 P0.1: message origin classifier. Null for legacy rows written
+   * before the classifier existed — those stay hidden from bot-direct views
+   * (see `DEFAULT_MESSAGE_SOURCE` backfill note in @duya/agent/message).
+   */
+  source?: MessageSource | null;
 }
 
 // ─── Content serialization (ported from old db-handlers.ts) ───
@@ -110,6 +118,71 @@ export function serializeDisplayContent(value: unknown, role?: unknown): string 
   if (value === null || value === undefined || value === '') return null;
   return serializeMessageContent(value, role);
 }
+
+// ─── Message source classifier (plan 489 P0.1) ───
+
+/**
+ * Runtime-context msg_type cues that mark system-generated traffic
+ * (mailbox notifications, task notifications, mode/memory/goal summaries,
+ * attachment carries, runtime context injections).
+ */
+const RUNTIME_CONTEXT_MSG_TYPES: ReadonlySet<string> = new Set([
+  'mailbox',
+  'task-notification',
+  'task_notification',
+  'mode',
+  'mode_changed',
+  'memory',
+  'goal_summary',
+  'research_continuation',
+  'attachment',
+  'runtime_context',
+]);
+
+/**
+ * Classify the origin of a flat IPC message DTO (plan 489 P0.1).
+ *
+ * Precedence (highest first):
+ *   1. explicit `source` — wins when it is a known MessageSource value;
+ *     unknown strings are ignored (fall through to inference);
+ *   2. `role` — user → 'user', system → 'system', tool → 'tool_use'
+ *     (a tool_result block is tool traffic regardless of any msg_type hint);
+ *   3. `msg_type` — thinking → 'thinking', tool_use/tool_result →
+ *     'tool_use', runtime-context cues → 'system' (case-insensitive);
+ *   4. default — 'scratchpad' (plain assistant text / everything else).
+ */
+export function inferMessageSource(dto: {
+  role?: string;
+  msg_type?: string;
+  source?: string;
+}): MessageSource {
+  const explicit = dto.source;
+  if (
+    explicit === 'user' ||
+    explicit === 'send_message' ||
+    explicit === 'tool_use' ||
+    explicit === 'thinking' ||
+    explicit === 'scratchpad' ||
+    explicit === 'system' ||
+    explicit === 'channel_mirror'
+  ) {
+    return explicit;
+  }
+
+  if (dto.role === 'user') return 'user';
+  if (dto.role === 'system') return 'system';
+  if (dto.role === 'tool') return 'tool_use';
+
+  const msgType = (dto.msg_type ?? '').toLowerCase();
+  if (msgType === 'thinking') return 'thinking';
+  if (msgType === 'tool_use' || msgType === 'tool_result') return 'tool_use';
+  if (RUNTIME_CONTEXT_MSG_TYPES.has(msgType)) return 'system';
+
+  return DEFAULT_MESSAGE_SOURCE;
+}
+
+/** Test-only alias — keeps the public surface free of `__test__` noise. */
+export const __test__inferMessageSource = inferMessageSource;
 
 // ─── Session adapters ───
 
@@ -263,6 +336,12 @@ interface IpcMessageDTO {
   duration_ms?: number;
   sub_agent_id?: string;
   attachments?: unknown[];
+  /**
+   * Plan 489 P0.1: explicit origin classifier. Honored when it is a known
+   * MessageSource value (SendMessageTool sends 'send_message'); unknown
+   * strings fall through to `inferMessageSource` inference.
+   */
+  source?: string;
   created_at?: number;
   timestamp?: number;
   /**
@@ -306,6 +385,11 @@ export function ipcMessageToNewEvent(
   const parentToolCallId =
     role === 'tool' ? (data.tool_call_id ?? null) : (data.parent_tool_call_id ?? null);
   const displayContent = data.display_content ?? serializeDisplayContent(data.displayContent, role);
+  // Plan 489 P0.1: the adapter OWNS the source classification. Caller
+  // metadata.source is never trusted — the inferred (or explicit) value is
+  // mirrored into metadata.source below (belt-and-suspenders for projector
+  // round-trips that drop the MessageEntry-level field).
+  const source = inferMessageSource(data);
 
   // Persist token_usage plus whitelisted snapshot metadata for round-trip
   // (preImageSha/fileSnapshots drive file restore on session rewind).
@@ -319,6 +403,8 @@ export function ipcMessageToNewEvent(
         )
       : {}),
     ...(data.token_usage ? { token_usage: data.token_usage } : {}),
+    // Adapter-controlled: overrides any caller-supplied metadata.source.
+    source,
   };
 
   // Construct the @duya/ai Message with all flat fields.
@@ -340,6 +426,7 @@ export function ipcMessageToNewEvent(
     duration_ms: data.duration_ms,
     sub_agent_id: data.sub_agent_id,
     attachments: data.attachments,
+    source,
     displayContent: displayContent ?? undefined,
     metadata: Object.keys(persistedMetadata).length > 0 ? persistedMetadata : undefined,
   };
@@ -352,6 +439,7 @@ export function ipcMessageToNewEvent(
     parentId: null,
     createdAt,
     message: agentMessage,
+    source,
   };
 
   return {
@@ -385,7 +473,7 @@ export function storedEventToIpcMessage(event: StoredEvent): MessageRow | null {
   if (messages.length === 0) return null;
   const msg = messages[0];
 
-  return messageToIpcRow(msg, event);
+  return messageToIpcRow(msg, event, (entry as MessageEntry).source);
 }
 
 /**
@@ -404,13 +492,21 @@ export function storedEventsToIpcMessages(events: StoredEvent[]): MessageRow[] {
   // so feeding them in would shift the message↔event pairing below and
   // corrupt seq/createdAt/turnId for every row after the first event.
   const eventById = new Map<string, StoredEvent>();
+  const sourceById = new Map<string, MessageSource>();
   const entries: MessageTimelineEntry[] = [];
   for (const event of events) {
     try {
       const entry = JSON.parse(event.payload) as MessageTimelineEntry;
       if (entry.type !== 'message' && entry.type !== 'compaction') continue;
       entries.push(entry);
-      if (entry.id && !eventById.has(entry.id)) eventById.set(entry.id, event);
+      if (entry.id && !eventById.has(entry.id)) {
+        eventById.set(entry.id, event);
+        // Plan 489 P0.1: preserve the entry-level source classifier so the
+        // projected row carries it (projection drops unknown flat fields).
+        if (entry.type === 'message' && entry.source) {
+          sourceById.set(entry.id, entry.source);
+        }
+      }
     } catch {
       // Skip unparseable payloads
     }
@@ -432,7 +528,7 @@ export function storedEventsToIpcMessages(events: StoredEvent[]): MessageRow[] {
       event = eventById.get(msg.id.slice(0, -':checkpoint'.length));
     }
     if (event) {
-      rows.push(messageToIpcRow(msg, event));
+      rows.push(messageToIpcRow(msg, event, msg.id ? sourceById.get(msg.id) : undefined));
     }
   }
 
@@ -442,8 +538,16 @@ export function storedEventsToIpcMessages(events: StoredEvent[]): MessageRow[] {
 /**
  * Map a projected Message to the old `messages` row shape.
  * Extracts signatures from content blocks and provider_state from metadata.
+ * `entrySource` (plan 489 P0.1) carries the MessageEntry-level classifier
+ * straight from the rollout payload; falls back to the projected message's
+ * own fields for in-memory replays. Legacy rows with no classifier anywhere
+ * map to null and stay hidden from bot-direct views.
  */
-function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
+function messageToIpcRow(
+  msg: Message,
+  event: StoredEvent,
+  entrySource?: MessageSource,
+): MessageRow {
   const content = serializeMessageContent(msg.content, msg.role);
   const displayContent = serializeDisplayContent(msg.displayContent, msg.role);
   const attachments = msg.attachments ? JSON.stringify(msg.attachments) : null;
@@ -488,6 +592,10 @@ function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
   const threadMeta = metadata?.threadMeta as
     | { replyToId?: string; branched?: boolean }
     | undefined;
+  const rowSource =
+    entrySource ??
+    (msg as { source?: MessageSource }).source ??
+    ((metadata?.source as MessageSource | undefined) ?? null);
 
   return {
     id: msg.id ?? event.id,
@@ -516,6 +624,7 @@ function messageToIpcRow(msg: Message, event: StoredEvent): MessageRow {
     text_signature: textSignature,
     reply_to_id: threadMeta?.replyToId ?? null,
     branched: threadMeta?.branched === true ? true : null,
+    source: rowSource,
   };
 }
 

@@ -115,8 +115,50 @@ export type RolloutProcessEvent =
   | TurnStartedEvent
   | SystemContextEvent;
 
+/**
+ * Rotation event (Plan 493, Phase B). Written by `MessageLog.rotateArchive`
+ * when compaction or a manual operator command rotates a bot session's
+ * `active.jsonl` into `archive-<generation>.jsonl` and starts a fresh
+ * `active.jsonl` for the next segment. The event is the audit marker that
+ * bridges two adjacent archive segments; consumers that read the rollout
+ * file linearly can detect the boundary by scanning for `type: 'rotation'`
+ * without consulting the message_index table.
+ *
+ * `archiveFile` is the relative path of the rotated-out file
+ * (`archive-<prevGeneration>.jsonl`, resolved against the bot's
+ * `<agentDir>/sessions/` directory). `newGeneration` is the value stamped
+ * on every message_index row written into the new `active.jsonl`. The
+ * previous generation is implicit: the rotation event is always the LAST
+ * entry in the archive it closes (and the FIRST in the next active file
+ * because rotateArchive writes it as a tail entry on the new active file).
+ *
+ * `reason` is one of `compaction` (auto, triggered by the compact tool
+ * path) or `manual` (operator-driven; reserved for future use — currently
+ * no UI exposes a manual rotate).
+ *
+ * `seqBeforeRotation` is the highest seq number that was written before
+ * the rotation (i.e. the count of rows in the archive that just closed).
+ * It is informational — the projection layer never consults it — but it
+ * makes the audit log self-describing and lets a reader compute the
+ * segment length without scanning the file.
+ */
+export interface RotationEvent {
+  type: 'rotation';
+  id: string;
+  /** Relative path of the file that was rotated OUT (the archive segment). */
+  archiveFile: string;
+  /** Generation stamped on rows written INTO the new active file. */
+  newGeneration: number;
+  /** Why the rotation happened. */
+  reason: 'compaction' | 'manual';
+  /** Highest seq written before the rotation. Informational only. */
+  seqBeforeRotation: number;
+  /** Match rebase id shape (`<event-type>:<sessionId>:<key>:<ts>`) for parser parity. */
+  createdAt: number;
+}
+
 /** Full set of non-message rollout events. */
-export type RolloutEvent = RolloutProcessEvent | RebaseEvent;
+export type RolloutEvent = RolloutProcessEvent | RebaseEvent | RotationEvent;
 
 export type RolloutEventType = RolloutEvent['type'];
 
@@ -136,6 +178,7 @@ export const ROLLOUT_EVENT_TYPES: readonly RolloutEventType[] = [
   'turn_started',
   'system_context',
   'rebase',
+  'rotation',
 ];
 
 /** Type guard: returns true for any rollout-event payload (vs. message/compaction). */
@@ -156,7 +199,8 @@ export function isRolloutEvent(
       t === 'tool_call' ||
       t === 'turn_started' ||
       t === 'system_context' ||
-      t === 'rebase')
+      t === 'rebase' ||
+      t === 'rotation')
   );
 }
 

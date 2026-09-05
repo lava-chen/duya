@@ -9,6 +9,7 @@ import { ToolActionRow } from './rows/ToolActionRow';
 import { ThinkingRow } from './rows/ThinkingRow';
 import { TextRow } from './rows/TextRow';
 import { HookActionRow } from './rows/HookActionRow';
+import { CompactSummary } from '../CompactSummary';
 import type { ActionItem, Segment, ToolAction } from './types';
 import type { AgentProgressEventWithMeta } from '@/hooks/useStreamingAgentProgress';
 import type { TranslationKey } from '@/i18n';
@@ -77,6 +78,24 @@ function renderActionItem(
           sourceLabel={action.sourceLabel}
         />
       );
+    case 'compact':
+      // Context compaction renders inline like a tool row. The 'compacting'
+      // phase shows a spinner; 'done' collapses to the compacted summary and
+      // 'error' shows the failure reason — all sharing ActionRowChrome.
+      return (
+        <CompactSummary
+          key={key}
+          compactedMessageCount={action.compactedMessageCount}
+          status={action.phase === 'compacting' ? 'running' : action.phase === 'error' ? 'error' : 'success'}
+          verbKey={
+            action.phase === 'compacting'
+              ? 'streaming.toolAction.compact.inProgress'
+              : action.phase === 'error'
+                ? 'streaming.toolAction.compact.failed'
+                : 'streaming.toolAction.compact.collapsed'
+          }
+        />
+      );
     default:
       return null;
   }
@@ -132,10 +151,10 @@ function buildGroupStartMap(
   const map = new Map<number, { seg: GroupSegment; size: number }>();
   let actionIdx = 0;
   for (const seg of segments) {
-    // Skip text / widget actions — they're never inside a segment.
+    // Skip text / widget / compact actions — they're never inside a segment.
     while (
       actionIdx < actions.length &&
-      (actions[actionIdx].kind === 'text' || actions[actionIdx].kind === 'widget')
+      (actions[actionIdx].kind === 'text' || actions[actionIdx].kind === 'widget' || actions[actionIdx].kind === 'compact')
     ) {
       actionIdx++;
     }

@@ -432,6 +432,7 @@ export interface PluginCatalogEntry {
   version: string;
   description: string;
   description_zh?: string;
+  displayName_zh?: string;
   shortDescription?: string;
   shortDescription_zh?: string;
   longDescription?: string;

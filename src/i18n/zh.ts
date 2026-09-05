@@ -324,6 +324,8 @@ const zh: Record<TranslationKey, string> = {
   // Context-compaction record row: collapsed verb plus a compacted-count
   // tail; the expanded card shows the summary text verbatim.
   'streaming.toolAction.compact.collapsed': '已对上下文进行压缩',
+  'streaming.toolAction.compact.inProgress': '正在压缩上下文…',
+  'streaming.toolAction.compact.failed': '上下文压缩失败',
   'streaming.toolAction.compact.messagesCompacted.one': '{count} 条消息',
   'streaming.toolAction.compact.messagesCompacted.other': '{count} 条消息',
 
@@ -1268,6 +1270,7 @@ const zh: Record<TranslationKey, string> = {
   'bot.actions.options': 'Bot 选项',
   'bot.actions.deleteConfirm': '删除 Bot "{{name}}"？其对话会保留。',
   'bot.actions.showHidden': '显示已隐藏的 Bot（{{count}}）',
+  'bot.actions.hideFromList': '收起已隐藏 Bot',
   'bot.actions.noHidden': '没有隐藏的 Bot',
   'bot.pinnedLabel': '置顶',
   'bot.hiddenLabel': '已隐藏',
@@ -1291,6 +1294,8 @@ const zh: Record<TranslationKey, string> = {
   'bot.chat.working': '工作中…',
   'bot.chat.placeholder': '给这个 bot 发消息',
   'bot.chat.placeholderUnbound': '这个 bot 还没有常驻会话',
+  'bot.chat.attach': '附件',
+  'bot.chat.removeAttachment': '移除附件',
   'bot.chat.send': '发送',
   'bot.chat.stop': '停止',
 

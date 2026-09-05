@@ -49,15 +49,43 @@ describe('renderBotRoster (P2.3 static part)', () => {
     expect(renderBotRoster({ agentDirectory: [] })).toBeNull()
   })
 
-  it('lists each other bot with id, name and description', () => {
+  it('renders the contract + directory: each bot with id, name and description', () => {
     const out = renderBotRoster({
       agentDirectory: [
         { id: 'alpha', name: 'Alpha', description: '文档助手' },
         { id: 'beta', name: 'Beta' },
       ],
     })
-    expect(out).toContain('`alpha`: Alpha — 文档助手')
-    expect(out).toContain('`beta`: Beta')
+    expect(out).toContain('Alpha (id: alpha) — 文档助手')
+    expect(out).toContain('Beta (id: beta)')
+  })
+
+  it('carries the full inter-agent contract key phrases (492 P1.4)', () => {
+    const out = renderBotRoster({
+      agentDirectory: [{ id: 'alpha', name: 'Alpha' }],
+    })!
+    // Async semantics (two-channel钉死: SendToAgent ≠ SendMessage)
+    expect(out).toContain('Messaging is ASYNCHRONOUS')
+    expect(out).toContain('SendToAgent reaches another agent, SendMessage reaches the user')
+    // Privacy relay
+    expect(out).toContain('never relay their unfiltered words')
+    // Fan-out policy
+    expect(out).toContain('Fan-out policy')
+    expect(out).toContain('only when the user explicitly asked for it')
+    // Capability visibility
+    expect(out).toContain('may not know this capability exists')
+    // Receiving etiquette
+    expect(out).toContain('never ping-pong acknowledgements')
+  })
+
+  it('stays within its 8000-char budget at the 40-entry cap', () => {
+    const many = Array.from({ length: BOT_ROSTER_MAX_ENTRIES }, (_, i) => ({
+      id: `agent-${i}`,
+      name: `Agent ${i}`,
+      description: `Role number ${i} with a reasonably long description`,
+    }))
+    const out = renderBotRoster({ agentDirectory: many })!
+    expect(out.length).toBeLessThanOrEqual(8000)
   })
 
   it('caps the directory at BOT_ROSTER_MAX_ENTRIES', () => {
@@ -128,7 +156,7 @@ name = "Beta"
     const out = await assembly.render(ctx)
     expect(out).toContain('Your identity as a bot')
     expect(out).toContain('Other agents you can reach')
-    expect(out).toContain('`beta`: Beta')
+    expect(out).toContain('Beta (id: beta)')
   })
 
   it('prefers profile.json over config for self identity (485 P2.2)', async () => {

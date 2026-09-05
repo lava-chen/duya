@@ -1,0 +1,662 @@
+/*
+ * code-review.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* ============================================
+   Code Review Workspace
+   ============================================ */
+
+.code-review-panel {
+  --review-muted: color-mix(in srgb, var(--text-muted) 84%, transparent);
+  --review-surface: var(--main-bg);
+  --review-border: var(--border);
+  --review-add: #31c578;
+  --review-remove: #ef6262;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  background: var(--main-bg);
+  color: var(--text);
+}
+
+.code-review-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-height: 34px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--review-border);
+  background: var(--review-surface);
+}
+
+.code-review-scope,
+.code-review-totals,
+.code-review-toolbar-actions,
+.code-review-file-identity {
+  display: flex;
+  align-items: center;
+}
+
+.code-review-scope {
+  min-width: 0;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.code-review-scope-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.code-review-scope-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--review-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+}
+
+.code-review-scope-switch button {
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: var(--review-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.code-review-scope-switch button:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-scope-switch button.is-active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.code-review-scope-label {
+  white-space: nowrap;
+}
+
+/* ── Scope selector dropdown ──────────────────────────────────── */
+
+.code-review-scope-select {
+  height: 28px;
+  max-width: 260px;
+  padding: 0 22px 0 7px;
+  border: 1px solid var(--review-border);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.05);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 256 256'%3E%3Cpath fill='%238b8b8b' d='M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  background-size: 10px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 28px;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  transition: border-color 0.15s ease;
+}
+
+.code-review-scope-select:hover {
+  border-color: var(--border-strong);
+}
+
+.code-review-scope-select:focus-visible {
+  border-color: var(--accent);
+}
+
+.code-review-scope-commit-pickers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.code-review-scope-commit-pickers .code-review-scope-select {
+  max-width: 140px;
+}
+
+.code-review-scope-arrow {
+  color: var(--review-muted);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.code-review-scope-range {
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--review-muted);
+  background: var(--surface-hover);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-totals {
+  gap: 6px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-hover);
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.code-review-file-count {
+  margin-left: 3px;
+  color: var(--review-muted);
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.code-review-toolbar-actions {
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+/* Active-state accent for icon buttons in the review toolbar.
+   Sizing, rounding, and variant colors are handled by IconButton. */
+.code-review-toolbar-actions .is-active {
+  color: var(--accent) !important;
+  background: var(--accent-soft) !important;
+}
+
+.code-review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+
+.code-review-panel.has-file-tree .code-review-workspace {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 30%);
+}
+
+.code-review-main,
+.code-review-file-tree {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.code-review-file-tree {
+  border-left: 1px solid var(--review-border);
+  background: var(--main-bg);
+}
+
+.code-review-file-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px;
+}
+
+.code-review-file-list-item {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.code-review-file-list-item:hover {
+  background: var(--surface-hover);
+}
+
+.code-review-file-list-item.is-selected {
+  background: var(--accent-soft);
+}
+
+.code-review-file-list-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--review-muted);
+}
+
+.code-review-file-list-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-file-list-stats {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-review-file-header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--review-border);
+  background: var(--main-bg);
+}
+
+.code-review-file-identity {
+  min-width: 0;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.code-review-file-identity > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-file-identity > svg {
+  flex: none;
+  color: var(--review-muted);
+}
+
+.code-review-diff-scroll {
+  min-height: 0;
+  overflow: auto;
+  flex: 1;
+  background: var(--main-bg);
+}
+
+.code-review-diff {
+  min-width: max-content;
+  padding-bottom: 20px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 12px;
+  line-height: 21px;
+}
+
+.code-review-hunk {
+  margin: 14px 0;
+  border-top: 1px solid var(--border-weak);
+  border-bottom: 1px solid var(--border-weak);
+}
+
+.code-review-hunk-header {
+  min-height: 27px;
+  padding: 3px 14px;
+  overflow: hidden;
+  color: var(--review-muted);
+  background: color-mix(in srgb, var(--surface-hover) 56%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-review-line {
+  display: grid;
+  grid-template-columns: 46px 20px minmax(0, 1fr);
+  min-height: 21px;
+  color: color-mix(in srgb, var(--text) 92%, transparent);
+}
+
+.code-review-line-number,
+.code-review-line-prefix {
+  user-select: none;
+}
+
+.code-review-line-number {
+  padding-right: 10px;
+  color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+  text-align: right;
+}
+
+.code-review-line-prefix {
+  color: var(--review-muted);
+  text-align: center;
+}
+
+.code-review-line-code {
+  min-width: 0;
+  padding-right: 18px;
+  overflow: hidden;
+  white-space: pre;
+}
+
+.code-review-line.is-wrapped .code-review-line-code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.code-review-line-add {
+  border-left: 3px solid var(--review-add);
+  background: color-mix(in srgb, var(--review-add) 14%, transparent);
+}
+
+.code-review-line-add .code-review-line-prefix,
+.is-add {
+  color: var(--review-add);
+}
+
+.code-review-line-remove {
+  border-left: 3px solid var(--review-remove);
+  background: color-mix(in srgb, var(--review-remove) 13%, transparent);
+}
+
+.code-review-line-remove .code-review-line-prefix,
+.is-remove {
+  color: var(--review-remove);
+}
+
+.code-review-collapsed-lines {
+  display: flex;
+  width: calc(100% - 16px);
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  margin: 2px 8px;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--review-muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.code-review-collapsed-lines:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.code-review-diff-split {
+  min-width: 720px;
+}
+
+.code-review-split-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.code-review-split-row > .code-review-line:first-child {
+  border-right: 1px solid var(--border-weak);
+}
+
+.code-review-line-empty {
+  border-left: 3px solid transparent;
+  background: color-mix(in srgb, var(--surface-hover) 24%, transparent);
+}
+
+.code-review-file-status {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  border-radius: 5px;
+  font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.code-review-file-status.status-modified {
+  color: #f39a49;
+  background: color-mix(in srgb, #f39a49 16%, transparent);
+}
+
+.code-review-file-status.status-added,
+.code-review-file-status.status-untracked {
+  color: var(--review-add);
+  background: color-mix(in srgb, var(--review-add) 15%, transparent);
+}
+
+.code-review-file-status.status-deleted {
+  color: var(--review-remove);
+  background: color-mix(in srgb, var(--review-remove) 14%, transparent);
+}
+
+.code-review-file-status.status-renamed {
+  color: #b68cff;
+  background: color-mix(in srgb, #b68cff 16%, transparent);
+}
+
+.code-review-state,
+.code-review-empty {
+  display: flex;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 24px;
+  color: var(--review-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.code-review-state-error {
+  color: var(--review-remove);
+}
+
+.code-review-diff-notice {
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, #e5a24a 45%, transparent);
+  color: #e5a24a;
+  background: color-mix(in srgb, #e5a24a 10%, transparent);
+  font-size: 12px;
+}
+
+@container (max-width: 720px) {
+  .code-review-toolbar {
+    gap: 4px;
+    padding: 3px 5px;
+  }
+
+  .code-review-file-count {
+    display: none;
+  }
+
+  .code-review-panel.has-file-tree .code-review-workspace {
+    grid-template-columns: minmax(0, 1fr) 188px;
+  }
+
+  .code-review-file-header {
+    padding: 8px 10px;
+  }
+}
+
+.panel-file-split {
+  position: relative;
+  display: flex;
+  width: 100%;
+  /* Lives below the full-width preview toolbar inside the flex-column
+   * panel, so it flexes to the remaining height instead of 100%. */
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--main-bg);
+}
+
+.panel-file-detail {
+  display: flex;
+  /* Minimum detail width so the preview toolbar's accented "Open"
+   * dropdown (≈80px) plus two icon buttons (2×28px) plus gaps and
+   * toolbar side paddings always fit horizontally without clipping.
+   * Without this floor, .panel-file-tree (min-width:220px) would take
+   * priority inside .panel-file-split and collapse the preview area
+   * below the width of its own toolbar → overflow:hidden then clips
+   * the right-half of every button on the actions strip. */
+  min-width: 280px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.panel-file-tree {
+  width: clamp(220px, 20vw, 300px);
+  min-width: 220px;
+  flex: 0 0 clamp(220px, 20vw, 300px);
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+  background: var(--main-bg);
+}
+
+/* The tree's own 40px header only holds a duplicate collapse toggle;
+ * the preview toolbar's tree toggle is always visible, so the row is
+ * dead weight under the full-width header — hide it. */
+.panel-file-tree-header {
+  display: none;
+  align-items: center;
+  justify-content: flex-end;
+  height: 40px;
+  flex: 0 0 40px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-solid) 86%, var(--main-bg));
+}
+
+.panel-file-tree-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #616161;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+[data-theme="dark"] .panel-file-tree-header button {
+  color: #a0a0a0;
+}
+
+.panel-file-tree-header button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+[data-theme="dark"] .panel-file-tree-header button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.panel-file-tree .file-tree-panel-embedded {
+  height: 100%;
+}
+
+.office-toolbar-actions button.active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.chat-view.panel-expanded .workspace-floating-composer {
+  position: fixed;
+  z-index: 90;
+  bottom: 18px;
+}
+
+.chat-view.panel-expanded .chat-composer-shell.workspace-floating-composer {
+  left: var(--app-sidebar-width);
+  right: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0 22px;
+  pointer-events: none;
+}
+
+.chat-view.panel-expanded .chat-composer-shell.workspace-floating-composer > div {
+  width: 76%;
+  max-width: 800px;
+  margin: 0;
+  pointer-events: auto;
+}
+
+.chat-view.panel-expanded .welcome-message-input.workspace-floating-composer {
+  left: calc(var(--app-sidebar-width) + 22px);
+  right: 22px;
+  width: auto !important;
+  max-width: 800px;
+  margin-inline: auto;
+  pointer-events: auto;
+}
+
+.chat-view.panel-expanded .workspace-floating-composer .message-input-surface {
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34), 0 0 0 1px color-mix(in srgb, var(--border) 86%, transparent);
+}
+
+.workspace-floating-composer-expanded {
+  position: absolute;
+  z-index: 90;
+  bottom: 18px;
+}
+
+.chat-composer-shell.workspace-floating-composer-expanded {
+  right: 0;
+  left: 0;
+  display: flex;
+  justify-content: center;
+  padding: 0 22px;
+  pointer-events: none;
+}
+
+.chat-composer-shell.workspace-floating-composer-expanded > div {
+  width: 76%;
+  max-width: 800px;
+  margin: 0;
+  pointer-events: auto;
+}
+
+.welcome-message-input.workspace-floating-composer-expanded {
+  right: 22px;
+  left: 22px;
+  width: auto !important;
+  max-width: 800px;
+  margin-inline: auto;
+  pointer-events: auto;
+}
+
+.workspace-floating-composer-expanded .message-input-surface {
+  background-color: var(--surface-solid) !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px var(--border) !important;
+}

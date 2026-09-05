@@ -1,4 +1,5 @@
 import { logger } from '../utils/logger.js';
+import type { MCPExposureMode, CatalogGuardMode } from '../config/tool-exposure.js';
 
 /**
  * Plan 480 P2.4 — warn-only visibility guard (灰度前半，§8.3).
@@ -49,4 +50,56 @@ export function readUndeclaredCallStats(): Record<string, number> {
 /** Reset counters (tests / turn boundaries). */
 export function resetUndeclaredCallStats(): void {
   undeclaredCallCounts.clear();
+}
+
+/**
+ * Plan 480 §8.3 — pure visibility-guard decision, extracted from
+ * DuyaAgent.guardedCanUseTool so the policy is unit-testable and the
+ * grayscale harness can replay it without spinning the agent loop.
+ *
+ * Under `exposure = 'catalog'` the request's tools array deliberately omits
+ * MCP tools. A model that calls a real tool name directly (name seen in the
+ * catalog directory) is "undeclared":
+ *   - `reject: true`  (enforce) → caller returns a structured denial.
+ *   - `reject: false` (warn)    → caller still executes but records the call
+ *                                (the warn-only telemetry sink above).
+ * In `full`/`search` exposure the guard is disabled (no undeclared concept).
+ *
+ * The exact denial message is exported as a constant so DuyaAgent and any
+ * test assert on a single source of truth (the harness verifies the loop
+ * returns this verbatim under enforce).
+ */
+export interface CatalogVisibilityGuardInput {
+  exposure: MCPExposureMode;
+  catalogGuard: CatalogGuardMode;
+  /** Tool names present in the current request's tools array. */
+  declaredTools: ReadonlySet<string>;
+  /** The tool name the model is trying to call. */
+  toolName: string;
+}
+
+export interface CatalogVisibilityGuardResult {
+  undeclared: boolean;
+  reject: boolean;
+  message?: string;
+}
+
+export const CATALOG_VISIBILITY_DENIAL_MESSAGE = (toolName: string): string =>
+  `Tool \`${toolName}\` is not in this request's tool list (catalog exposure). ` +
+  `Read its schema with \`tool_schema\` first, then invoke it via \`tool_invoke\`. ` +
+  `Direct calls to undeclared tools are rejected.`;
+
+export function evaluateCatalogVisibilityGuard(
+  input: CatalogVisibilityGuardInput,
+): CatalogVisibilityGuardResult {
+  const guardEnabled = input.exposure === 'catalog';
+  if (!guardEnabled) return { undeclared: false, reject: false };
+  if (input.declaredTools.has(input.toolName)) {
+    return { undeclared: false, reject: false };
+  }
+  return {
+    undeclared: true,
+    reject: input.catalogGuard === 'enforce',
+    message: CATALOG_VISIBILITY_DENIAL_MESSAGE(input.toolName),
+  };
 }

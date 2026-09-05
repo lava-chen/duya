@@ -800,19 +800,6 @@ body {
   outline-offset: 2px;
 }
 
-/* Scrollbar — minimal */
-.orb-session-stream::-webkit-scrollbar {
-  width: 6px;
-}
-
-.orb-session-stream::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.orb-session-stream::-webkit-scrollbar-thumb {
-  background: var(--orb-border);
-  border-radius: 3px;
-}
 .orb-mention-check {
   margin-left: auto;
   color: var(--accent);

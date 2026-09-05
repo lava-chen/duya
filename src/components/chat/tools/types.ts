@@ -45,7 +45,21 @@ export type ActionItem =
   | { kind: 'tool'; tool: ToolAction; streamingToolOutput?: string }
   | { kind: 'text'; content: string }
   | { kind: 'widget'; content: string; sourceMessageId?: string; sourceLabel?: string }
-  | { kind: 'hook'; hook: HookAction };
+  | { kind: 'hook'; hook: HookAction }
+  | {
+      kind: 'compact';
+      phase: CompactionStreamPhase;
+      compactedMessageCount?: number;
+      strategy?: string;
+      errorMessage?: string;
+    };
+
+/**
+ * Lifecycle state of a context compaction while it streams inline. Unlike
+ * the persisted `isCompactSummary` message (which holds the full summary),
+ * `done` carries only the counts surfaced by the `compact:done` SSE frame.
+ */
+export type CompactionStreamPhase = 'compacting' | 'done' | 'error';
 
 /**
  * One element of a Segment's run. Tool actions render through

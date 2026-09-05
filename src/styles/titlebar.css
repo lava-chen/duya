@@ -1,0 +1,538 @@
+/*
+ * titlebar.css — extracted from src/styles/globals.css (domain split).
+ * Do not edit the ordering of rules within this file; the entry file
+ * imports domain files in cascade order.
+ */
+/* Settings sidebar styles - Compact outline style */
+.sidebar-back-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin: 0 0.5rem;
+  border-radius: 0.375rem;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  text-decoration: none;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
+}
+
+.sidebar-back-link svg {
+  width: 16px !important;
+  height: 16px !important;
+  flex-shrink: 0;
+}
+
+.sidebar-back-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sidebar-settings-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  margin: 0 0.5rem;
+  border: 0;
+  border-radius: 0.375rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  width: calc(100% - 1rem);
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  text-align: left;
+  line-height: 1.4;
+}
+
+.sidebar-settings-link svg {
+  width: 16px !important;
+  height: 16px !important;
+  flex-shrink: 0;
+  display: block;
+  stroke-width: 1.5;
+}
+
+/* Icon container for consistent alignment */
+.sidebar-settings-link .nav-icon,
+.sidebar-back-link .nav-icon,
+.sidebar-settings .nav-icon {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-settings-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.sidebar-settings-link.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.app-main-wrapper {
+  flex: 1;
+  /* Match the new MIN_CHAT_WIDTH so the main column can shrink alongside
+     the chat area on small screens. */
+  min-width: min(420px, 100%);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar-bg);
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  background: var(--sidebar-bg);
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+  border-top-left-radius: 1rem;
+  overflow: hidden;
+}
+
+.app-main-inner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--main-bg);
+  border-radius: 0;
+  border-top-left-radius: 1rem;
+  overflow: hidden;
+}
+
+.app-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+.app-status-bar:has(> *) {
+  height: 24px;
+  min-height: 24px;
+  background: var(--main-bg);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Electron draggable title bar region */
+.titlebar-drag-region {
+  height: 44px;
+  width: 100%;
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  background: var(--sidebar-bg);
+}
+
+/* Spacer for sidebar width */
+.titlebar-spacer {
+  width: 260px;
+  flex-shrink: 0;
+}
+
+/* Title bar brand (logo + text) */
+.titlebar-brand {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  padding-left: 1.6rem;
+  padding-bottom: 4px;
+  -webkit-app-region: no-drag;
+  height: 100%;
+}
+
+/* macOS: reserve space for traffic lights (close/minimize/maximize buttons) */
+.titlebar-drag-region.is-mac .titlebar-brand {
+  padding-left: 80px;
+}
+
+/* Windows: keep original padding */
+.titlebar-drag-region.is-win .titlebar-brand {
+  padding-left: 1.6rem;
+}
+
+.titlebar-logo {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.titlebar-brand-text {
+  font-family: "Windsor", "Georgia", "Times New Roman", serif;
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.02em;
+  line-height: 1;
+  display: block;
+}
+
+/* Title bar content area - aligns with app-main */
+.titlebar-content-area {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+  padding-left: 0;
+  padding-right: 1rem;
+}
+
+.titlebar-thread-title {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.titlebar-project-name {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Make sure buttons in the drag region are clickable */
+.titlebar-drag-region button,
+.titlebar-drag-region a,
+.titlebar-drag-region input,
+.titlebar-drag-region select {
+  -webkit-app-region: no-drag;
+}
+
+/* Title bar right actions */
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 1rem;
+  height: 100%;
+  pointer-events: auto;
+  margin-left: auto;
+}
+
+/* Windows: reserve space for window controls (min/max/close) on the right */
+.titlebar-drag-region.is-win .titlebar-actions {
+  padding-right: 140px;
+}
+
+/* macOS: no right-side window controls needed */
+.titlebar-drag-region.is-mac .titlebar-actions {
+  padding-right: 1rem;
+}
+
+.titlebar-action-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-foreground, white);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.app-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--main-bg);
+}
+
+/* When conductor panel is open, shrink chat max-width containers */
+.app-shell-root[data-conductor-open="true"] .chat-view .max-w-\[800px\],
+.app-shell-root[data-conductor-open="true"] .chat-view .max-w-\[750px\],
+.app-shell-root[data-conductor-open="true"] .chat-view .chat-header-inner {
+  max-width: min(800px, 55vw) !important;
+}
+
+/* When research panel is open, keep the composer's right edge clear of the
+   panel so the Bypass / Send buttons don't crash into the sidebar. */
+.app-shell-root[data-research-open="true"] .chat-view .max-w-\[800px\],
+.app-shell-root[data-research-open="true"] .chat-view .max-w-\[750px\],
+.app-shell-root[data-research-open="true"] .chat-view .chat-header-inner {
+  max-width: min(800px, calc(100% - 24px)) !important;
+}
+
+.app-header {
+  height: 3.2rem;
+  border-bottom: 1px solid var(--border);
+  padding: 0.68rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: transparent;
+  backdrop-filter: blur(12px);
+}
+
+.header-meta {
+  min-width: 0;
+}
+
+.header-title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.header-subtitle {
+  margin: 0.12rem 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.app-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.95rem 1rem 1rem;
+}
+
+/* Chat page: no padding, flex child handles its own scroll */
+.app-content:has(.chat-view) {
+  padding: 0;
+}
+
+/* Settings page: flex child handles its own scroll */
+.app-content:has(.settings-page-content) {
+  padding: 0;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.hero-card {
+  border: 1px solid var(--border);
+  border-radius: 0.92rem;
+  padding: 0.9rem 1rem;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+}
+
+.hero-card.compact {
+  padding: 0.82rem 0.94rem;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+  padding: 0.26rem 0.55rem;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.hero-card h1 {
+  margin: 0.56rem 0 0;
+  font-size: 1.2rem;
+}
+
+.hero-card p {
+  margin: 0.4rem 0 0;
+  color: var(--muted);
+  line-height: 1.52;
+  max-width: 70ch;
+}
+
+.composer-card {
+  border: 1px solid var(--border);
+  border-radius: 0.88rem;
+  padding: 0.62rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.65rem;
+  background: var(--surface);
+}
+
+.composer-icon {
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 0.64rem;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.composer-label {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.composer-placeholder {
+  margin: 0.12rem 0 0;
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.composer-send {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid transparent;
+  border-radius: 0.58rem;
+  display: grid;
+  place-items: center;
+  color: #ffffff;
+  cursor: pointer;
+  background: linear-gradient(140deg, #5f71ff, #7385ff);
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.workspace-grid.triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.surface-card {
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  padding: 0.84rem 0.88rem;
+  background: var(--surface);
+  backdrop-filter: blur(20px);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-family: var(--font-mono), "Cascadia Mono", "Consolas", monospace;
+}
+
+.card-head p {
+  margin: 0;
+}
+
+.pill-list {
+  margin-top: 0.62rem;
+  display: grid;
+  gap: 0.46rem;
+}
+
+.status-list {
+  margin-top: 0.65rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.status-item {
+  border: 1px solid var(--border);
+  border-radius: 0.62rem;
+  padding: 0.5rem 0.55rem;
+  background: var(--chip);
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.status-title {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.status-detail {
+  margin: 0.22rem 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.status-chip {
+  padding: 0.14rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  background: transparent;
+}
+
+.status-chip.active {
+  color: var(--text);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.skill-card h2 {
+  margin: 0.68rem 0 0;
+  font-size: 0.95rem;
+}
+
+.skill-card p {
+  margin: 0.34rem 0 0;
+  font-size: 0.83rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.skill-icon {
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 0.7rem;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
