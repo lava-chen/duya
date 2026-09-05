@@ -278,4 +278,66 @@ describe('extractDurableToolIds: finalAssistantText', () => {
     ]);
     expect(ids.finalAssistantText).toBe('新回答');
   });
+
+  it('counts persisted isCompactSummary messages', () => {
+    const ids = extractDurableToolIds([
+      { id: 'u1', role: 'user', content: 'hi', timestamp: 0 },
+      {
+        id: 'c1',
+        role: 'assistant',
+        isCompactSummary: true,
+        compactedMessageCount: 3,
+        content: 'summarized',
+        timestamp: 1,
+      },
+      {
+        id: 'c2',
+        role: 'assistant',
+        isCompactSummary: true,
+        content: 'summarized again',
+        timestamp: 2,
+      },
+    ]);
+    expect(ids.compactedCount).toBe(2);
+  });
+});
+
+describe('compact streaming events', () => {
+  function evCompact(
+    phase: 'compacting' | 'done' | 'error',
+  ): StreamingEvent {
+    return { type: 'compact', phase, timestamp: 0 } as StreamingEvent;
+  }
+
+  it('drops covered done/error compact events but keeps a live compacting one', () => {
+    const events: StreamingEvent[] = [
+      evText('text'),
+      evCompact('compacting'),
+      evCompact('done'),
+      evCompact('error'),
+      evText('more'),
+    ];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(),
+      toolResultIds: new Set(),
+      compactedCount: 2,
+    });
+    // No durable tool/text coverage, so only compact cleanup applies.
+    const compactPhases = out
+      .filter((e) => e.type === 'compact')
+      .map((e) => (e as { phase: string }).phase);
+    // first 'done' + first 'error' removed (up to compactedCount=2),
+    // the trailing 'compacting' is saved.
+    expect(compactPhases).toEqual(['compacting']);
+    expect(out).toHaveLength(3);
+  });
+
+  it('returns events unchanged when compactedCount is omitted', () => {
+    const events: StreamingEvent[] = [evCompact('done'), evText('x')];
+    const out = subtractDurableStreamingEvents(events, {
+      toolUseIds: new Set(),
+      toolResultIds: new Set(),
+    });
+    expect(out).toBe(events);
+  });
 });
