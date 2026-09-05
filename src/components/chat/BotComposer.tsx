@@ -68,6 +68,15 @@ interface BotComposerProps {
   onSend: (payload: BotComposerSendPayload) => void;
   onStop?: () => void;
   placeholder?: string;
+  /** Persisted per-bot model preference (raw model id, no `[provider] ` prefix). */
+  initialModel?: string;
+  initialProviderId?: string;
+  /** Persisted per-bot thinking-effort level. */
+  initialEffort?: string;
+  /** Reports a user model pick (raw model id) so the parent can persist it. */
+  onModelChange?: (model: string, providerId?: string) => void;
+  /** Reports a user effort pick so the parent can persist it. */
+  onEffortChange?: (effort: string | undefined) => void;
 }
 
 /**
@@ -148,6 +157,11 @@ export function BotComposer({
   onSend,
   onStop,
   placeholder,
+  initialModel,
+  initialProviderId,
+  initialEffort,
+  onModelChange,
+  onEffortChange,
 }: BotComposerProps) {
   const { t } = useTranslation();
   // Plan 491 P2.1: Use bot draft hook for persistence per botId
@@ -168,7 +182,7 @@ export function BotComposer({
   // Model / provider / effort state — mirrors MessageInput's selector wiring.
   // ---------------------------------------------------------------------------
   const [selectedModel, setSelectedModel] = useState<string>('');
-  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(undefined);
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(initialEffort);
   const [availableModels, setAvailableModels] = useState<ModelOption[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [hasProvider, setHasProvider] = useState(false);
@@ -297,6 +311,30 @@ export function BotComposer({
     [providers, availableModels],
   );
 
+  // Restore the persisted model preference once providers/models are loaded:
+  // rebuild the prefixed id from the stored raw model + provider, and select
+  // it only if the provider still exposes that model (otherwise leave unset).
+  useEffect(() => {
+    if (selectedModel) return;
+    if (!initialModel) return;
+    const provider =
+      providerGroups.find((g) => g.id === initialProviderId) ??
+      providers.find((p) => p.id === initialProviderId);
+    if (!provider) return;
+    const prefixed = `[${provider.name}] ${initialModel}`;
+    if (providerGroups.some((g) => g.models.some((m) => m.id === prefixed))) {
+      setSelectedModel(prefixed);
+    }
+  }, [selectedModel, initialModel, initialProviderId, providerGroups, providers]);
+
+  // Restore the persisted effort once the preference loads (initial prop is
+  // undefined on first render because the parent reads localStorage async).
+  useEffect(() => {
+    if (initialEffort !== undefined && selectedEffort === undefined) {
+      setSelectedEffort(initialEffort);
+    }
+  }, [initialEffort, selectedEffort]);
+
   // Raw model id (no provider prefix) used to resolve thinking-effort options.
   const rawSelectedModelId = useMemo(() => {
     const match = selectedModel.match(/^\[([^\]]+)\]\s*(.+)$/);
@@ -315,13 +353,18 @@ export function BotComposer({
     [t, rawSelectedModelId, selectedModelCapability],
   );
 
-  const handleModelChange = useCallback((modelId: string) => {
+  const handleModelChange = useCallback((modelId: string, providerId?: string) => {
     setSelectedModel(modelId);
-  }, []);
+    const match = modelId.match(/^\[([^\]]+)\]\s*(.+)$/);
+    const rawModel = match ? match[2] : modelId;
+    onModelChange?.(rawModel, providerId ?? modelProviderMap.get(modelId));
+  }, [onModelChange, modelProviderMap]);
 
   const handleEffortChange = useCallback((value: string | null) => {
-    setSelectedEffort(value || undefined);
-  }, []);
+    const effort = value || undefined;
+    setSelectedEffort(effort);
+    onEffortChange?.(effort);
+  }, [onEffortChange]);
 
   // ---------------------------------------------------------------------------
   // Plus-button context popover — reuses the session's SlashCommandPopover.

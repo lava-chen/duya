@@ -460,6 +460,8 @@ function mapIpcMessagesToStore(messages: IpcMessage[]): Message[] {
     durationMs: m.durationMs ?? undefined,
     subAgentId: m.subAgentId ?? undefined,
     attachments: m.attachments ?? undefined,
+    source: m.source ?? undefined,
+    sendMessageMeta: m.sendMessageMeta ?? undefined,
   }));
 }
 

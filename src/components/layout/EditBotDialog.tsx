@@ -15,7 +15,15 @@ import { XIcon } from "@/components/icons";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
-import { updateBotIdentity } from "@/lib/agent-profile-ipc";
+import { updateBotIdentity, updateConfigAgent } from "@/lib/agent-profile-ipc";
+import { listProvidersIPC } from "@/lib/ipc-client";
+import {
+  buildBotModelGroups,
+  findRawModelInGroups,
+  prefixedToRaw,
+} from "@/lib/bot-model-options";
+import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
+import { BotModelField } from "./BotModelField";
 import {
   BOT_AVATAR_COLORS,
   BOT_AVATAR_SHAPES,
@@ -39,6 +47,9 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
   const [description, setDescription] = useState("");
   const [shape, setShape] = useState<BotAvatarShape>("blob");
   const [color, setColor] = useState("blue");
+  const [model, setModel] = useState("");
+  const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -49,9 +60,16 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
       setDescription(contact.description ?? "");
       setShape((contact.avatarShape as BotAvatarShape) ?? "blob");
       setColor(contact.avatarColor ?? "blue");
+      setModel(contact.model ?? "");
       setSubmitting(false);
       setError(null);
       setTimeout(() => nameRef.current?.focus(), 80);
+      // Load model options (best-effort; failure must not block saving).
+      setModelsLoading(true);
+      listProvidersIPC()
+        .then((providers) => setModelGroups(buildBotModelGroups(providers)))
+        .catch(() => setModelGroups([]))
+        .finally(() => setModelsLoading(false));
     }
   }, [isOpen, contact]);
 
@@ -68,16 +86,32 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
 
   const canSubmit = name.trim().length > 0 && !submitting;
 
+  // If the configured model is no longer exposed by any provider, keep a
+  // synthetic option so the select never shows a blank value and saving
+  // without touching the field preserves the configured model.
+  const configuredModel = contact.model ?? "";
+  const extraModelOption =
+    configuredModel && !findRawModelInGroups(configuredModel, modelGroups)
+      ? configuredModel
+      : undefined;
+
   const handleSave = async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
+      // Identity first (profile.json), then the model (config.toml) — if the
+      // identity write fails we must not leave the config half-updated.
       await updateBotIdentity(contact.agentId, {
         name: name.trim(),
         description: description.trim() || undefined,
         avatarShape: shape,
         avatarColor: color,
+      });
+      await updateConfigAgent(contact.agentId, {
+        name: name.trim(),
+        description: description.trim() || undefined,
+        model: model.trim() ? prefixedToRaw(model.trim()) : undefined,
       });
       onSaved(contact.agentId);
     } catch (err) {
@@ -138,6 +172,14 @@ export function EditBotDialog({ isOpen, contact, onCancel, onSaved }: EditBotDia
             border: "1px solid var(--border)",
             color: "var(--text)",
           }}
+        />
+
+        <BotModelField
+          value={model}
+          groups={modelGroups}
+          loading={modelsLoading}
+          onChange={setModel}
+          extraOption={extraModelOption}
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>

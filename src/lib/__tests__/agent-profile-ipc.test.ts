@@ -3,7 +3,12 @@
  * DB main profiles with config-driven custom agents.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { listMainAgentProfiles, listCustomAgents } from '../agent-profile-ipc';
+import {
+  listMainAgentProfiles,
+  listCustomAgents,
+  createConfigAgent,
+  updateConfigAgent,
+} from '../agent-profile-ipc';
 
 describe('agent-profile-ipc (Plan 424)', () => {
   beforeEach(() => {
@@ -14,6 +19,8 @@ describe('agent-profile-ipc (Plan 424)', () => {
         },
         configAgents: {
           list: vi.fn(),
+          create: vi.fn(),
+          update: vi.fn(),
         },
       },
     });
@@ -72,5 +79,32 @@ describe('agent-profile-ipc (Plan 424)', () => {
     expect(custom.userVisible).toBe(true);
     expect(custom.defaultModel).toBe('anthropic/claude-sonnet-4-20250514');
     expect(custom.allowedTools).toEqual(['file:*']);
+  });
+
+  describe('createConfigAgent / updateConfigAgent model passthrough', () => {
+    it('forwards the raw model to configAgents.create', async () => {
+      (window.electronAPI.configAgents.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'my-bot' });
+      const result = await createConfigAgent('my-bot', {
+        name: 'My Bot',
+        model: 'glm-4',
+      });
+      expect(result.id).toBe('my-bot');
+      expect(window.electronAPI.configAgents.create).toHaveBeenCalledWith('my-bot', {
+        name: 'My Bot',
+        model: 'glm-4',
+      });
+    });
+
+    it('forwards an unset model as undefined to configAgents.update', async () => {
+      (window.electronAPI.configAgents.update as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      await updateConfigAgent('my-bot', {
+        name: 'My Bot',
+        model: undefined,
+      });
+      expect(window.electronAPI.configAgents.update).toHaveBeenCalledWith('my-bot', {
+        name: 'My Bot',
+        model: undefined,
+      });
+    });
   });
 });

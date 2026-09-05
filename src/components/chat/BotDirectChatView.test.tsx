@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // Translation returns the key so assertions match i18n keys directly.
 vi.mock('@/hooks/useTranslation', () => ({
@@ -188,6 +188,46 @@ describe('BotDirectChatView', () => {
     );
     expect(container.querySelectorAll('.bot-chat-bubble').length).toBe(0);
     expect(screen.getByText('Read')).toBeDefined();
+  });
+
+  // Plan 489 P0.3 — wired (IPC present) path. The view is driven by
+  // `useBotDirectTranscript`, which feeds the source-filtered projection
+  // (send_message | user). Even when the unfiltered `messages` prop still
+  // carries a tool_use row, the merge drops non-user local rows, so only
+  // SendMessage/user content surfaces.
+  it('shows only send_message rows once the source projection is wired', async () => {
+    const fetchTranscript = vi.fn().mockResolvedValue([
+      {
+        id: 'sm1',
+        role: 'assistant',
+        content: 'SendMessage bubble',
+        msg_type: 'text',
+        source: 'send_message',
+        created_at: 1,
+      },
+    ]);
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      message: { botDirectGetTranscript: fetchTranscript },
+      onMessageNew: () => () => {},
+    };
+    try {
+      const messages: Message[] = [
+        msg({ id: 'sm1', role: 'assistant', content: 'SendMessage bubble', msgType: 'text', source: 'send_message' }),
+        // A tool_use row leaked in via the unfiltered store — must not render.
+        msg({ id: 'tool1', role: 'assistant', content: '', msgType: 'tool_use', toolName: 'Read', source: 'tool_use' }),
+      ];
+      const { container } = render(
+        <BotDirectChatView {...baseProps} messages={messages} />,
+      );
+      await waitFor(() => {
+        expect(screen.getByText('SendMessage bubble')).toBeDefined();
+      });
+      // The SendMessage row renders as a bubble; the leaked tool row does not.
+      expect(screen.queryByText('Read')).toBeNull();
+      expect(container.querySelectorAll('.bot-chat-bubble').length).toBeGreaterThan(0);
+    } finally {
+      delete (window as unknown as { electronAPI?: unknown }).electronAPI;
+    }
   });
 
   it('shows the typing indicator while streaming and swap send for stop', () => {

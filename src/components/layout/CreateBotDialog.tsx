@@ -23,6 +23,10 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useTranslation } from "@/hooks/useTranslation";
 import { createConfigAgent } from "@/lib/agent-profile-ipc";
+import { listProvidersIPC } from "@/lib/ipc-client";
+import { buildBotModelGroups } from "@/lib/bot-model-options";
+import type { ProviderModelGroup } from "@/components/chat/ModelProviderSelector";
+import { BotModelField } from "./BotModelField";
 import type { TranslationKey } from "@/i18n";
 import {
   BOT_AVATAR_COLORS,
@@ -66,6 +70,9 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
   const [description, setDescription] = useState("");
   const [shape, setShape] = useState<BotAvatarShape>("blob");
   const [color, setColor] = useState("blue");
+  const [model, setModel] = useState("");
+  const [modelGroups, setModelGroups] = useState<ProviderModelGroup[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
@@ -76,9 +83,16 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
       setDescription("");
       setShape("blob");
       setColor("blue");
+      setModel("");
       setSubmitting(false);
       setError(null);
       setTimeout(() => nameRef.current?.focus(), 80);
+      // Load model options (best-effort; failure must not block creation).
+      setModelsLoading(true);
+      listProvidersIPC()
+        .then((providers) => setModelGroups(buildBotModelGroups(providers)))
+        .catch(() => setModelGroups([]))
+        .finally(() => setModelsLoading(false));
     }
   }, [isOpen]);
 
@@ -111,6 +125,7 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
       const { id: createdId } = await createConfigAgent(id, {
         name: name.trim(),
         description: description.trim() || undefined,
+        model: model.trim() || undefined,
         avatarShape: shape,
         avatarColor: color,
       });
@@ -204,6 +219,13 @@ export function CreateBotDialog({ isOpen, onCancel, onCreated, existingIds }: Cr
             border: "1px solid var(--border)",
             color: "var(--text)",
           }}
+        />
+
+        <BotModelField
+          value={model}
+          groups={modelGroups}
+          loading={modelsLoading}
+          onChange={setModel}
         />
 
         <div className="text-sm font-medium mb-1.5" style={{ color: "var(--text)" }}>

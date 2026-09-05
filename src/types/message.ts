@@ -1,6 +1,33 @@
 // message.ts - Chat message and session types
 
-export type MsgType = 'text' | 'tool_use' | 'tool_result' | 'thinking' | 'viz' | 'hook_invocation';
+export type MsgType =
+  | 'text'
+  | 'tool_use'
+  | 'tool_result'
+  | 'thinking'
+  | 'viz'
+  | 'hook_invocation'
+  // Plan 489 P2.2: SendMessageTool card message kinds.
+  | 'attachment'
+  | 'widget'
+  | 'cursor-agent'
+  | 'secret-request';
+
+/** Plan 489 P2.2: SendMessageTool card payload (round-trips via message
+ *  metadata.sendMessage → rollout → MessageRow.send_message_meta). */
+export interface SendMessageCardMeta {
+  /** text-type images (re-attached file:// or https:// urls). */
+  images?: Array<{ url: string; alt?: string }>;
+  /** attachment-type target. */
+  url?: string;
+  alt?: string;
+  /** widget-type choice prompt (options 1-6). */
+  widget?: { prompt: string; options: string[] };
+  /** cursor-agent run reference. */
+  bcId?: string;
+  /** secret-request descriptor (value never persisted). */
+  secret?: { label: string; connector: string; field: string };
+}
 
 export interface ContentBlock {
   type: string;
@@ -51,6 +78,9 @@ export interface Message {
    *  Messages with source 'send_message' or 'user' are visible in bot-direct view.
    *  Other sources ('tool_use', 'thinking', 'scratchpad', 'system') are filtered out. */
   source?: string | null;
+
+  /** Plan 489 P2.2: SendMessage card payload for bot-direct card rendering. */
+  sendMessageMeta?: SendMessageCardMeta | null;
 
   /** Plan 491 P1.2: Sequence number for entry ledger ordering.
    *  Used for windowed replay on reconnection (afterSeq cursor). */

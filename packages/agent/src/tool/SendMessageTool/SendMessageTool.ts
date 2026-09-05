@@ -335,7 +335,9 @@ function buildTextMessage(input: Record<string, unknown>, sessionId: string): Bu
       metadata: {
         source: 'send_message',
         reply_to: input.reply_to,
-        images: images && images.length > 0 ? images : undefined,
+        // Plan 489 P2.2 — card payload rides under metadata.sendMessage so
+        // the persistence whitelist can round-trip it as one key.
+        ...(images && images.length > 0 ? { sendMessage: { images } } : {}),
       },
       created_at: Date.now(),
     },
@@ -355,9 +357,8 @@ function buildAttachmentMessage(input: Record<string, unknown>, sessionId: strin
       source: 'send_message',
       metadata: {
         source: 'send_message',
-        url: input.url,
-        alt: input.alt,
         reply_to: input.reply_to,
+        sendMessage: { url: input.url, alt: input.alt },
       },
       created_at: Date.now(),
     },
@@ -378,8 +379,8 @@ function buildWidgetMessage(input: Record<string, unknown>, sessionId: string): 
       source: 'send_message',
       metadata: {
         source: 'send_message',
-        widget,
         reply_to: input.reply_to,
+        sendMessage: { widget },
       },
       created_at: Date.now(),
     },
@@ -399,8 +400,8 @@ function buildCursorAgentMessage(input: Record<string, unknown>, sessionId: stri
       source: 'send_message',
       metadata: {
         source: 'send_message',
-        bcId: input.bcId,
         reply_to: input.reply_to,
+        sendMessage: { bcId: input.bcId },
       },
       created_at: Date.now(),
     },
@@ -421,8 +422,8 @@ function buildSecretRequestMessage(input: Record<string, unknown>, sessionId: st
       source: 'send_message',
       metadata: {
         source: 'send_message',
-        secret,
         reply_to: input.reply_to,
+        sendMessage: { secret },
       },
       created_at: Date.now(),
     },
