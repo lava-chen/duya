@@ -41,6 +41,8 @@ export interface GatewayInitConfig {
   autoStart: boolean;
   proxyUrl?: string;
   proxyConfig?: GatewayProxyConfig;
+  /** Profile routing rules ((platform, chatId, threadId) → profile), most-specific-first. */
+  profileRoutes?: unknown;
   // Legacy fields (for backward compatibility with lifecycle.ts)
   tempDir?: string;
   gatewayWorkerTempDir?: string;
