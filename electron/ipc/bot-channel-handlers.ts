@@ -12,7 +12,7 @@
 import { ipcMain } from 'electron';
 
 import { getLogger, LogComponent } from '../logging/logger';
-import { getDatabase } from './db-handlers';
+import { getLiveConfigAgent } from '../config/agents';
 import {
   disconnectChannel,
   listAgentChannels,
@@ -32,11 +32,12 @@ function findManifest(platform: string) {
   return CONNECTOR_MANIFESTS.find((m) => m.platform === platform) ?? null;
 }
 
+/**
+ * Bots are registered in the config store (`config:agents:*`, plan 485's
+ * `agents/<agentId>/` layout) — NOT the legacy `agent_profiles` table.
+ */
 function agentExists(agentId: string): boolean {
-  const db = getDatabase();
-  if (!db) return false;
-  const row = db.prepare('SELECT id FROM agent_profiles WHERE id = ?').get(agentId);
-  return !!row;
+  return getLiveConfigAgent(agentId) !== undefined;
 }
 
 export function registerBotChannelHandlers(): void {

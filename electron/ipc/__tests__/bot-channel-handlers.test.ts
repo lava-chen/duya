@@ -12,9 +12,8 @@ const mocks = vi.hoisted(() => ({
   captured: {
     handle: new Map<string, (event: unknown, ...args: unknown[]) => unknown | Promise<unknown>>(),
   },
-  db: {
-    get: vi.fn(),
-  },
+  agentLookup: vi.fn(),
+  responses: [],
   channels: {
     listAgentChannels: vi.fn(),
     storeConnectorCredential: vi.fn(),
@@ -33,10 +32,8 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../db-handlers', () => ({
-  getDatabase: () => ({
-    prepare: () => ({ get: mocks.db.get }),
-  }),
+vi.mock('../../config/agents', () => ({
+  getLiveConfigAgent: (id: string) => mocks.agentLookup(id),
 }));
 
 vi.mock('../../logging/logger', () => ({
@@ -68,7 +65,7 @@ async function invokeHandler(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.db.get.mockReset();
+  mocks.agentLookup.mockReset();
   registerBotChannelHandlers();
 });
 
@@ -86,13 +83,13 @@ describe('botChannels:list', () => {
   });
 
   it('reports agent_not_found for an unknown agent', async () => {
-    mocks.db.get.mockReturnValue(undefined);
+    mocks.agentLookup.mockReturnValue(undefined);
     const res = (await invokeHandler('botChannels:list', {}, 'bot-x')) as { error?: string };
     expect(res.error).toBe('agent_not_found');
   });
 
   it('returns the agent channel connections', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     mocks.channels.listAgentChannels.mockReturnValue([
       { platform: 'discord', label: 'Discord', status: 'configured' },
     ]);
@@ -106,7 +103,7 @@ describe('botChannels:list', () => {
 
 describe('botChannels:connect', () => {
   it('rejects an unknown platform', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     const res = (await invokeHandler('botChannels:connect', {}, 'bot-x', {
       platform: 'telegram',
       credential: 'tok',
@@ -116,7 +113,7 @@ describe('botChannels:connect', () => {
   });
 
   it('rejects a missing credential', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     const res = (await invokeHandler('botChannels:connect', {}, 'bot-x', {
       platform: 'discord',
       credential: '   ',
@@ -126,7 +123,7 @@ describe('botChannels:connect', () => {
   });
 
   it('stores the credential and writes metadata on success', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     const res = (await invokeHandler('botChannels:connect', {}, 'bot-x', {
       platform: 'discord',
       label: 'My Server',
@@ -138,7 +135,7 @@ describe('botChannels:connect', () => {
   });
 
   it('falls back to the manifest display name when no label is given', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await invokeHandler('botChannels:connect', {}, 'bot-x', {
       platform: 'slack',
       credential: 'tok',
@@ -149,7 +146,7 @@ describe('botChannels:connect', () => {
 
 describe('botChannels:disconnect', () => {
   it('rejects an unknown platform', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     const res = (await invokeHandler('botChannels:disconnect', {}, 'bot-x', 'telegram')) as {
       ok: boolean;
       error?: string;
@@ -159,7 +156,7 @@ describe('botChannels:disconnect', () => {
   });
 
   it('calls disconnectChannel on success', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     const res = (await invokeHandler('botChannels:disconnect', {}, 'bot-x', 'discord')) as {
       ok: boolean;
     };

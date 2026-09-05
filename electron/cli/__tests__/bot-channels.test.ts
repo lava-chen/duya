@@ -7,10 +7,11 @@
  * mocked the same way.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 
 const mocks = vi.hoisted(() => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-  db: { get: vi.fn() },
+  agentLookup: vi.fn(),
   responses: [] as Array<{ status: number; body: unknown }>,
   body: {} as Record<string, unknown>,
   audit: vi.fn(),
@@ -41,10 +42,8 @@ vi.mock('../handlers/extra', () => ({
   recordAudit: mocks.audit,
 }));
 
-vi.mock('../../ipc/db-handlers', () => ({
-  getDatabase: () => ({
-    prepare: () => ({ get: mocks.db.get }),
-  }),
+vi.mock('../../config/agents', () => ({
+  getLiveConfigAgent: (id: string) => mocks.agentLookup(id),
 }));
 
 vi.mock('../../logging/logger', () => ({
@@ -68,29 +67,30 @@ import {
   handleAgentChannelDisconnect,
 } from '../handlers/bot-channels';
 
-type FakeRes = Record<string, unknown>;
+type FakeReq = IncomingMessage;
+type FakeRes = ServerResponse;
 
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.responses.length = 0;
   mocks.body = {};
-  mocks.db.get.mockReset();
+  mocks.agentLookup.mockReset();
 });
 
 describe('handleAgentChannelList', () => {
   it('404s for an unknown agent', async () => {
-    mocks.db.get.mockReturnValue(undefined);
-    await handleAgentChannelList({} as FakeRes, {} as FakeRes, 'bot-x');
+    mocks.agentLookup.mockReturnValue(undefined);
+    await handleAgentChannelList({} as unknown as FakeReq, {} as unknown as FakeRes, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(404);
     expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('agent_not_found');
   });
 
   it('returns the bound channels without credentials', async () => {
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     mocks.channels.listAgentChannels.mockReturnValue([
       { platform: 'discord', label: 'My Server', status: 'configured' },
     ]);
-    await handleAgentChannelList({} as FakeRes, {} as FakeRes, 'bot-x');
+    await handleAgentChannelList({} as unknown as FakeReq, {} as unknown as FakeRes, 'bot-x');
     const { status, body } = mocks.responses[0]!;
     expect(status).toBe(200);
     const channels = (body as { channels: Array<{ platform: string; label: string }> }).channels;
@@ -99,8 +99,8 @@ describe('handleAgentChannelList', () => {
 });
 
 describe('handleAgentChannelConnect', () => {
-  const req = {} as FakeRes;
-  const res = {} as FakeRes;
+  const req = {} as unknown as FakeReq;
+  const res = {} as unknown as FakeRes;
 
   it('rejects an invalid JSON body', async () => {
     mocks.body = Promise.reject(new Error('bad json')) as unknown as Record<string, unknown>;
@@ -110,14 +110,14 @@ describe('handleAgentChannelConnect', () => {
 
   it('404s for an unknown agent', async () => {
     mocks.body = { platform: 'discord', credential: 'tok' };
-    mocks.db.get.mockReturnValue(undefined);
+    mocks.agentLookup.mockReturnValue(undefined);
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(404);
   });
 
   it('rejects an unknown platform', async () => {
     mocks.body = { platform: 'telegram', credential: 'tok' };
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(400);
     expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('unknown_platform');
@@ -125,7 +125,7 @@ describe('handleAgentChannelConnect', () => {
 
   it('rejects a missing credential', async () => {
     mocks.body = { platform: 'discord' };
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelConnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(400);
     expect((mocks.responses[0]?.body as { error: { code: string } }).error.code).toBe('missing_credential');
@@ -133,7 +133,7 @@ describe('handleAgentChannelConnect', () => {
 
   it('stores the credential, writes metadata, and audits', async () => {
     mocks.body = { platform: 'discord', credential: 'tok-1', label: 'Main' };
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelConnect(req, res, 'corr-1', 'bot-x');
     expect(mocks.responses[0]?.status).toBe(200);
     expect(mocks.channels.storeConnectorCredential).toHaveBeenCalledWith('bot-x', 'discord', 'token', 'tok-1');
@@ -143,19 +143,19 @@ describe('handleAgentChannelConnect', () => {
 });
 
 describe('handleAgentChannelDisconnect', () => {
-  const req = {} as FakeRes;
-  const res = {} as FakeRes;
+  const req = {} as unknown as FakeReq;
+  const res = {} as unknown as FakeRes;
 
   it('rejects an unknown platform', async () => {
     mocks.body = { platform: 'irc' };
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelDisconnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(400);
   });
 
   it('disconnects and audits', async () => {
     mocks.body = { platform: 'slack' };
-    mocks.db.get.mockReturnValue({ id: 'bot-x' });
+    mocks.agentLookup.mockReturnValue({ id: 'bot-x' });
     await handleAgentChannelDisconnect(req, res, undefined, 'bot-x');
     expect(mocks.responses[0]?.status).toBe(200);
     expect(mocks.channels.disconnectChannel).toHaveBeenCalledWith('bot-x', 'slack');

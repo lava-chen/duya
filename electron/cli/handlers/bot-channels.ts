@@ -21,7 +21,7 @@ import {
   recordAudit,
   sendJson,
 } from './extra';
-import { getDatabase } from '../../ipc/db-handlers';
+import { getLiveConfigAgent } from '../../config/agents';
 import {
   disconnectChannel,
   listAgentChannels,
@@ -37,11 +37,11 @@ function findManifest(platform: string) {
   return CONNECTOR_MANIFESTS.find((m) => m.platform === platform) ?? null;
 }
 
+/**
+ * Bots live in the config store (`config:agents:*`), not `agent_profiles`.
+ */
 function agentExists(agentId: string): boolean {
-  const db = getDatabase();
-  if (!db) return false;
-  const row = db.prepare('SELECT id FROM agent_profiles WHERE id = ?').get(agentId);
-  return !!row;
+  return getLiveConfigAgent(agentId) !== undefined;
 }
 
 /** GET /v1/agents/:agentId/channels */
