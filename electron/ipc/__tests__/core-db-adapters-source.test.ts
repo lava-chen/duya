@@ -27,6 +27,7 @@ import * as path from 'node:path';
 import { MessageLog, SessionStore, type NewEvent, type SqliteDatabase } from '../../db/core';
 import {
   ipcMessageToNewEvent,
+  newEventToIpcMessage,
   storedEventToIpcMessage,
 } from '../core-db-adapters';
 
@@ -326,5 +327,46 @@ describe.skipIf(!nativeSqliteAvailable)('Plan 489 P0.1 — message source classi
       .filter((r) => r.source === 'send_message' || r.source === 'user');
 
     expect(visible.map((r) => r.id)).toEqual(['m-bd-u', 'm-bd-sm']);
+  });
+});
+
+// ─── NewEvent → MessageRow broadcast adapter (no sqlite required) ──────
+
+/**
+ * Plan 489 P0.3 realtime regression: the db-bridge `message:append`
+ * broadcast maps freshly-built NewEvents (object payload, no seq yet) to
+ * MessageRows. These adapters are pure — no DB access — so they run even
+ * when the better-sqlite3 native module is on the Electron ABI.
+ */
+describe('Plan 489 P0.3 — NewEvent broadcast adapter', () => {
+  it('newEventToIpcMessage maps in-memory events (object payload) to visible rows', () => {
+    // Simulates the db-bridge message:append broadcast path: the events
+    // were just built by ipcMessageToNewEvent and handed to appendBatch —
+    // their payload is still an OBJECT (no rollout-file round-trip, no
+    // seq assigned yet).
+    const event = ipcMessageToNewEvent(
+      'sess-1',
+      { ...makeAssistantDTO('m-rt-sm', 40), source: 'send_message' } as never,
+    );
+
+    const row = newEventToIpcMessage(event);
+    expect(row).not.toBeNull();
+    expect(row!.id).toBe('m-rt-sm');
+    expect(row!.session_id).toBe('sess-1');
+    expect(row!.source).toBe('send_message');
+    expect(row!.seq_index).toBe(-1); // sentinel — seq assigned at storage time
+  });
+
+  it('newEventToIpcMessage never broadcasts a null row for send_message traffic', () => {
+    // Regression lock: feeding a NewEvent (object payload) to
+    // storedEventToIpcMessage JSON.parses "[object Object]" and returns
+    // null — this is exactly what silenced the message:new realtime
+    // merge in BotDirectChatView (refresh-only transcripts).
+    const event = ipcMessageToNewEvent(
+      'sess-1',
+      { ...makeAssistantDTO('m-rt-null', 41), source: 'send_message' } as never,
+    );
+    expect(storedEventToIpcMessage(event as never)).toBeNull();
+    expect(newEventToIpcMessage(event)).not.toBeNull();
   });
 });
